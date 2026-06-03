@@ -3,7 +3,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import os, json
+    import os, json, math
 
     # __omp_display is injected by runner.py before the prelude executes; it
     # mirrors IPython's display() semantics with the same MIME bundle output.
@@ -385,6 +385,40 @@ if "__omp_prelude_loaded__" not in globals():
             raise RuntimeError("tool bridge is unavailable in this kernel")
         return (base.rstrip("/"), token, session)
 
+    def _bridge_call(name: str, args: dict):
+        """POST one request to the host tool bridge and return its `value`."""
+        import urllib.request, urllib.error
+        base, token, session = _tool_proxy_from_env()
+        _run_id_getter = globals().get("__omp_current_run_id__")
+        _run_id = _run_id_getter() if callable(_run_id_getter) else globals().get("__omp_run_id__")
+        payload = json.dumps(
+            {"session": session, "run": _run_id, "name": name, "args": args}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{base}/v1/tool",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                body = resp.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"bridge call {name!r}: non-JSON response: {body[:200]!r}"
+            ) from None
+        if not isinstance(data, dict) or not data.get("ok"):
+            msg = (data or {}).get("error") if isinstance(data, dict) else None
+            raise RuntimeError(msg or f"bridge call {name!r} failed")
+        return data.get("value")
+
     class _ToolCallable:
         """Invokes one host-side tool via the loopback HTTP bridge."""
 
@@ -397,7 +431,6 @@ if "__omp_prelude_loaded__" not in globals():
             return f"<tool.{self._name}>"
 
         def __call__(self, args=None, /, **kwargs):
-            import urllib.request, urllib.error
             if args is None:
                 merged: dict = {}
             elif isinstance(args, dict):
@@ -409,36 +442,7 @@ if "__omp_prelude_loaded__" not in globals():
             merged.update(kwargs)
             if "_i" not in merged:
                 merged["_i"] = "py prelude"
-            base, token, session = _tool_proxy_from_env()
-            _run_id_getter = globals().get("__omp_current_run_id__")
-            _run_id = _run_id_getter() if callable(_run_id_getter) else globals().get("__omp_run_id__")
-            payload = json.dumps(
-                {"session": session, "run": _run_id, "name": self._name, "args": merged}
-            ).encode("utf-8")
-            req = urllib.request.Request(
-                f"{base}/v1/tool",
-                data=payload,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {token}",
-                },
-            )
-            try:
-                with urllib.request.urlopen(req) as resp:
-                    body = resp.read()
-            except urllib.error.HTTPError as exc:
-                body = exc.read()
-            try:
-                data = json.loads(body)
-            except json.JSONDecodeError:
-                raise RuntimeError(
-                    f"tool.{self._name}: bridge returned non-JSON response: {body[:200]!r}"
-                ) from None
-            if not isinstance(data, dict) or not data.get("ok"):
-                msg = (data or {}).get("error") if isinstance(data, dict) else None
-                raise RuntimeError(msg or f"tool.{self._name} failed")
-            return data.get("value")
+            return _bridge_call(self._name, merged)
 
     class _ToolProxy:
         """`tool.<name>(args)` proxy mirroring the JS runtime bridge."""
@@ -458,3 +462,159 @@ if "__omp_prelude_loaded__" not in globals():
             return f"<tool proxy session={session}>" if session else "<tool proxy unavailable>"
 
     tool = _ToolProxy()
+
+    def llm(prompt, *, model="default", system=None, schema=None):
+        """Oneshot, stateless LLM call against a model tier.
+
+        `model` selects a tier: "smol", "default" (the session's active model),
+        or "slow". Pass `system` for a system prompt. Pass a JSON-Schema dict
+        as `schema` to force a structured response; the parsed object is then
+        returned instead of the completion text.
+        """
+        args = {"prompt": prompt, "model": model}
+        if system is not None:
+            args["system"] = system
+        if schema is not None:
+            args["schema"] = schema
+        res = _bridge_call("__llm__", args)
+        text = res.get("text") if isinstance(res, dict) else res
+        return json.loads(text) if schema is not None else text
+
+    def agent(prompt, *, agent_type="task", model=None, context=None, label=None, schema=None):
+        """Run a subagent and return its final output.
+
+        `agent_type` selects the subagent definition (default "task"). Pass
+        `model` to override that agent's model, `context` for shared background,
+        `label` for the output artifact id, and `schema` to request structured
+        JSON output; when `schema` is supplied the parsed object is returned.
+        """
+        args = {"prompt": prompt}
+        if agent_type is not None:
+            args["agentType"] = agent_type
+        if model is not None:
+            args["model"] = model
+        if context is not None:
+            args["context"] = context
+        if label is not None:
+            args["label"] = label
+        if schema is not None:
+            args["schema"] = schema
+        res = _bridge_call("__agent__", args)
+        text = res.get("text") if isinstance(res, dict) else res
+        return json.loads(text) if schema is not None else text
+
+    def _concurrency_limit():
+        """Worker-pool ceiling from the host ``task.maxConcurrency`` setting.
+
+        An eval fan-out runs as wide as a ``task`` batch would. Returns ``0`` for
+        unbounded (run every item at once); falls back to ``0`` if the host
+        bridge is unreachable.
+        """
+        try:
+            snap = _bridge_call("__concurrency__", {}) or {}
+            n = int(snap.get("limit") or 0)
+        except Exception:
+            return 0
+        return n if n > 0 else 0
+
+    def _pool_map(items, fn):
+        """Run ``fn`` over ``items`` through a bounded thread pool.
+
+        Preserves input order, barriers until every task settles, and raises the
+        lowest-index exception if any task failed. Each task runs inside a copy
+        of the submitting thread's context so the ``_CURRENT_RID`` ContextVar
+        propagates and bridge calls (agent(), tool.*, etc.) keep working. The
+        pool width tracks ``task.maxConcurrency`` (0 = run every item at once).
+        """
+        import concurrent.futures, contextvars
+        items = list(items)
+        if not items:
+            return []
+        limit = _concurrency_limit()
+        workers = min(limit, len(items)) if limit > 0 else len(items)
+        results = [None] * len(items)
+        errors = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {}
+            for i, item in enumerate(items):
+                ctx = contextvars.copy_context()
+                futures[pool.submit(ctx.run, fn, item)] = i
+            for fut in concurrent.futures.as_completed(futures):
+                i = futures[fut]
+                try:
+                    results[i] = fut.result()
+                except BaseException as exc:  # noqa: BLE001 - propagate to caller
+                    errors[i] = exc
+        if errors:
+            raise errors[min(errors)]
+        return results
+
+    def parallel(thunks):
+        """Run zero-arg callables through a bounded pool, preserving input order.
+
+        Barriers until all finish; re-raises the lowest-index exception if any
+        thunk raised. Pool width tracks the task tool's ``task.maxConcurrency``.
+        """
+        thunks = list(thunks)
+        for t in thunks:
+            if not callable(t):
+                raise TypeError("parallel() expects an iterable of zero-arg callables")
+        return _pool_map(thunks, lambda t: t())
+
+    def pipeline(items, *stages):
+        """Map items left-to-right through one-arg stage callables.
+
+        Every item clears stage N before any item enters stage N+1 (barrier per
+        stage). Stage 1 receives the original item; later stages receive the
+        previous stage's result. Pool width tracks ``task.maxConcurrency``.
+        """
+        current = list(items)
+        for stage in stages:
+            if not callable(stage):
+                raise TypeError("pipeline() stages must be callables")
+            current = _pool_map(current, stage)
+        return current
+
+    def log(message):
+        """Emit a status ``log`` event for TUI rendering."""
+        _emit_status("log", message=str(message))
+        return None
+
+    def phase(title):
+        """Record the current readable phase and emit a status ``phase`` event."""
+        globals()["__omp_current_phase__"] = str(title)
+        _emit_status("phase", title=str(title))
+        return None
+
+    class _Budget:
+        """Live view of the host Goal Mode token budget via the host bridge."""
+
+        @property
+        def total(self):
+            snap = _bridge_call("__budget__", {})
+            return (snap or {}).get("total")
+
+        @property
+        def hard(self):
+            snap = _bridge_call("__budget__", {})
+            return bool((snap or {}).get("hard"))
+
+        def spent(self):
+            snap = _bridge_call("__budget__", {})
+            return int((snap or {}).get("spent") or 0)
+
+        def remaining(self):
+            snap = _bridge_call("__budget__", {}) or {}
+            total = snap.get("total")
+            if total is None:
+                return math.inf
+            return max(0, total - int(snap.get("spent") or 0))
+
+        def __repr__(self):
+            try:
+                snap = _bridge_call("__budget__", {}) or {}
+                return f"<budget total={snap.get('total')} spent={snap.get('spent')}>"
+            except Exception:
+                return "<budget unavailable>"
+
+    budget = _Budget()

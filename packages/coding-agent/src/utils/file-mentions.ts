@@ -359,9 +359,7 @@ export async function generateFileMentionMessages(
 			const normalized = snapshotStore ? normalizeToLF(content) : content;
 			let { output, lineCount } = buildTextOutput(normalized);
 			if (snapshotStore) {
-				const tag = snapshotStore.recordContiguous(absolutePath, 1, normalized.split("\n"), {
-					fullText: normalized,
-				});
+				const tag = snapshotStore.record(absolutePath, normalized);
 				output = `${formatHashlineHeader(resolvedPath, tag)}\n${formatNumberedLines(output)}`;
 			}
 			files.push({ path: resolvedPath, content: output, lineCount });

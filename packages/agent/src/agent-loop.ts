@@ -17,6 +17,8 @@ import {
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	createHarmonyAuditEvent,
+	detectHarmonyLeakInAssistantMessage,
+	extractHarmonyRemoved,
 	type HarmonyDetection,
 	type HarmonyRecoveredToolCall,
 	isHarmonyLeakMitigationTarget,
@@ -441,6 +443,27 @@ interface StepCounter {
 	count: number;
 }
 
+function normalizeMaxToolCallsPerTurn(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value)) return undefined;
+	const normalized = Math.trunc(value);
+	return normalized > 0 ? normalized : undefined;
+}
+
+function cloneAssistantMessageForToolCallCap(message: AssistantMessage): AssistantMessage {
+	return {
+		...message,
+		content: message.content.map(block => {
+			if (block.type === "toolCall") {
+				return { ...block, arguments: structuredClone(block.arguments) };
+			}
+			return { ...block };
+		}),
+		stopReason: "toolUse",
+		errorMessage: undefined,
+		errorStatus: undefined,
+	};
+}
+
 async function runLoopBody(
 	currentContext: AgentContext,
 	newMessages: AgentMessage[],
@@ -562,9 +585,23 @@ async function runLoopBody(
 				return;
 			}
 
-			// Check for tool calls
-			const toolCalls = message.content.filter(c => c.type === "toolCall");
-			hasMoreToolCalls = toolCalls.length > 0;
+			// Run tools whenever the turn carries tool_use blocks AND was not truncated.
+			// `stop_reason` is provider metadata that never goes back on the wire, so it
+			// does not gate continuation validity: replaying a tool_use turn with the
+			// tool_results appended is accepted whether the turn ended on `tool_use` or
+			// `end_turn` (adaptive/interleaved-thinking Opus routinely emits tool calls
+			// under `end_turn`; verified against the live Anthropic API). The only
+			// continuation hazard is a thinking block carrying a stale/invalid signature,
+			// which `transformMessages` already neutralizes — it strips the signature on
+			// non-`toolUse` turns and the encoder downgrades the unsigned block to text,
+			// which the API accepts. So treat `stop` (end_turn/pause_turn) the same as
+			// `toolUse`. `length` (max_tokens) is the one reason we must NOT run: the
+			// trailing tool_use may be truncated with incomplete arguments — those calls
+			// are abandoned below. (`error`/`aborted` already returned above.)
+			type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+			const toolCalls = message.content.filter((c): c is ToolCallContent => c.type === "toolCall");
+			const runnableStop = message.stopReason === "toolUse" || message.stopReason === "stop";
+			hasMoreToolCalls = runnableStop && toolCalls.length > 0;
 
 			const toolResults: ToolResultMessage[] = [];
 			if (hasMoreToolCalls) {
@@ -584,6 +621,26 @@ async function runLoopBody(
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
+				}
+			} else if (toolCalls.length > 0) {
+				// Turn ended on a non-runnable reason (`length` truncation) but left
+				// toolCall blocks behind. The trailing call's arguments may be incomplete,
+				// so don't execute or continue — pair each with a placeholder result to keep
+				// the tool_use/tool_result contract valid for any later request that
+				// replays this turn. When the truncation was `length`, surface an actionable
+				// hint so the model doesn't loop by re-emitting the same oversized payload
+				// (e.g. 1000+ line `write` content blowing past the model's output cap).
+				const skipReason = message.stopReason === "length" ? "length" : "skipped";
+				for (const toolCall of toolCalls) {
+					const result = createAbortedToolResult(toolCall, stream, skipReason);
+					currentContext.messages.push(result);
+					newMessages.push(result);
+					toolResults.push(result);
+					recordSkippedTool(telemetry, {
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						status: "skipped",
+					});
 				}
 			}
 
@@ -681,11 +738,18 @@ async function streamAssistantResponse(
 	const dynamicReasoning = config.getReasoning?.();
 	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
 	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
-	const requestSignal = harmonyAbortController
-		? signal
-			? AbortSignal.any([signal, harmonyAbortController.signal])
-			: harmonyAbortController.signal
-		: signal;
+	const maxToolCallsPerTurn = normalizeMaxToolCallsPerTurn(config.maxToolCallsPerTurn);
+	const toolCallCapAbortController = maxToolCallsPerTurn === undefined ? undefined : new AbortController();
+	const requestSignals: AbortSignal[] = [];
+	if (signal) requestSignals.push(signal);
+	if (harmonyAbortController) requestSignals.push(harmonyAbortController.signal);
+	if (toolCallCapAbortController) requestSignals.push(toolCallCapAbortController.signal);
+	const requestSignal =
+		requestSignals.length === 0
+			? undefined
+			: requestSignals.length === 1
+				? requestSignals[0]
+				: AbortSignal.any(requestSignals);
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	const effectiveToolChoice = dynamicToolChoice ?? config.toolChoice;
@@ -747,6 +811,26 @@ async function streamAssistantResponse(
 			let addedPartial = false;
 
 			const responseIterator = response[Symbol.asyncIterator]();
+			let completedToolCalls = 0;
+			let cappedMessage: AssistantMessage | undefined;
+			let capFinalized = false;
+
+			const finishCappedAssistantMessage = async (): Promise<AssistantMessage | undefined> => {
+				if (!cappedMessage) return undefined;
+				responseIterator.return?.()?.catch(() => {});
+				if (!capFinalized) {
+					if (addedPartial) {
+						context.messages[context.messages.length - 1] = cappedMessage;
+					} else {
+						context.messages.push(cappedMessage);
+						stream.push({ type: "message_start", message: { ...cappedMessage } });
+					}
+					stream.push({ type: "message_end", message: cappedMessage });
+					await finishChat(cappedMessage);
+					capFinalized = true;
+				}
+				return cappedMessage;
+			};
 
 			// Set up a single abort race: register the abort listener once for the whole
 			// stream and reuse the same race promise for every iterator.next() instead of
@@ -772,6 +856,10 @@ async function streamAssistantResponse(
 					if (abortRacePromise) {
 						const result = await Promise.race([responseIterator.next(), abortRacePromise]);
 						if (result === ABORTED) {
+							if (toolCallCapAbortController?.signal.aborted) {
+								const capped = await finishCappedAssistantMessage();
+								if (capped) return capped;
+							}
 							responseIterator.return?.()?.catch(() => {});
 							const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 							await finishChat(aborted);
@@ -782,6 +870,10 @@ async function streamAssistantResponse(
 						next = await responseIterator.next();
 					}
 					if (requestSignal?.aborted) {
+						if (toolCallCapAbortController?.signal.aborted) {
+							const capped = await finishCappedAssistantMessage();
+							if (capped) return capped;
+						}
 						const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
 						await finishChat(aborted);
 						return aborted;
@@ -822,12 +914,32 @@ async function streamAssistantResponse(
 									assistantMessageEvent: event,
 									message: { ...partialMessage },
 								});
+								if (event.type === "toolcall_end" && maxToolCallsPerTurn !== undefined) {
+									completedToolCalls++;
+									if (completedToolCalls >= maxToolCallsPerTurn) {
+										cappedMessage = cloneAssistantMessageForToolCallCap(partialMessage);
+										toolCallCapAbortController?.abort();
+										const capped = await finishCappedAssistantMessage();
+										if (capped) return capped;
+									}
+								}
 							}
 							break;
 
 						case "done":
 						case "error": {
 							const finalMessage = await response.result();
+							if (harmonyMitigationEnabled) {
+								const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
+								if (detection) {
+									const removed = extractHarmonyRemoved(finalMessage, detection);
+									if (addedPartial) {
+										context.messages.pop();
+										addedPartial = false;
+									}
+									throw new HarmonyLeakInterruption(detection, removed);
+								}
+							}
 							if (addedPartial) {
 								context.messages[context.messages.length - 1] = finalMessage;
 							} else {
@@ -847,6 +959,16 @@ async function streamAssistantResponse(
 			}
 
 			const trailing = await response.result();
+			if (harmonyMitigationEnabled) {
+				const detection = detectHarmonyLeakInAssistantMessage(trailing);
+				if (detection) {
+					if (addedPartial) {
+						context.messages.pop();
+						addedPartial = false;
+					}
+					throw new HarmonyLeakInterruption(detection, extractHarmonyRemoved(trailing, detection));
+				}
+			}
 			await finishChat(trailing);
 			return trailing;
 		});
@@ -1241,10 +1363,17 @@ async function executeToolCalls(
 function createAbortedToolResult(
 	toolCall: Extract<AssistantMessage["content"][number], { type: "toolCall" }>,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
-	reason: "aborted" | "error",
+	reason: "aborted" | "error" | "skipped" | "length",
 	errorMessage?: string,
 ): ToolResultMessage {
-	const message = reason === "aborted" ? "Tool execution was aborted" : "Tool execution failed due to an error";
+	const message =
+		reason === "aborted"
+			? "Tool execution was aborted"
+			: reason === "length"
+				? "Tool call was not executed because the assistant hit its output token limit (stop_reason: length) before the arguments could complete; the recorded arguments are truncated and unsafe to run. Do NOT retry by re-emitting the same large payload — split the work into several smaller tool calls (e.g. for `write`/`edit`, write the first chunk then append the rest with subsequent `edit` insert ops, or break the file into multiple `write` targets)"
+				: reason === "skipped"
+					? "Tool call was not executed because the assistant ended its turn"
+					: "Tool execution failed due to an error";
 	const result: AgentToolResult<any> = {
 		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
 		details: {},

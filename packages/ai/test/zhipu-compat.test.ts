@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { zhipuCodingPlanModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 import { detectOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
 import type { Model } from "@oh-my-pi/pi-ai/types";
 
@@ -21,6 +22,11 @@ const baseModel: Omit<Model<"openai-completions">, "provider" | "baseUrl"> = {
 	reasoning: true,
 };
 
+const originalFetch = global.fetch;
+
+afterEach(() => {
+	global.fetch = originalFetch;
+});
 function zhipuByProvider(): Model<"openai-completions"> {
 	return {
 		...baseModel,
@@ -76,5 +82,26 @@ describe("openai-completions compat — zhipu-coding-plan branch", () => {
 		expect(resolved.thinkingFormat).toBe("openai");
 		// Untouched fields still come from the zhipu branch.
 		expect(resolved.reasoningContentField).toBe("reasoning_content");
+	});
+});
+
+describe("zhipu-coding-plan model discovery", () => {
+	it("uses the dedicated Coding Plan endpoint by default", async () => {
+		let requestedUrl = "";
+		const mockFetch = async (input: string | Request | URL): Promise<Response> => {
+			requestedUrl = input instanceof Request ? input.url : String(input);
+			return new Response(JSON.stringify({ data: [{ id: "glm-5.1", name: "GLM-5.1" }] }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+		global.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+
+		const options = zhipuCodingPlanModelManagerOptions({ apiKey: "test-key" });
+		expect(typeof options.fetchDynamicModels).toBe("function");
+		const models = await options.fetchDynamicModels?.();
+
+		expect(requestedUrl).toBe("https://open.bigmodel.cn/api/coding/paas/v4/models");
+		expect(models?.[0]?.id).toBe("glm-5.1");
+		expect(models?.[0]?.baseUrl).toBe("https://open.bigmodel.cn/api/coding/paas/v4");
 	});
 });

@@ -123,9 +123,15 @@ describe("model thinking metadata", () => {
 		});
 		// Opus 4.6 has no real xhigh level — pi-ai aliases XHigh to Anthropic's "max".
 		expect(mapEffortToAnthropicAdaptiveEffort(opus46, Effort.XHigh)).toBe("max");
-		// Opus 4.7 on Messages API sends the new literal "xhigh" level.
-		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.XHigh)).toBe("xhigh");
-		// Bedrock Converse is not the Messages API, so xhigh is not available there yet.
+		// Opus 4.7+ on the Messages API exposes the full five-tier scale, so pi-ai
+		// shifts each user-facing effort up one notch and the top tier reaches "max".
+		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.Minimal)).toBe("low");
+		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.Low)).toBe("medium");
+		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.Medium)).toBe("high");
+		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.High)).toBe("xhigh");
+		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.XHigh)).toBe("max");
+		// Bedrock Converse keeps the four-tier legacy mapping; xhigh aliases to "max".
+		expect(mapEffortToAnthropicAdaptiveEffort(opus47Bedrock, Effort.High)).toBe("high");
 		expect(mapEffortToAnthropicAdaptiveEffort(opus47Bedrock, Effort.XHigh)).toBe("max");
 		expect(() => mapEffortToAnthropicAdaptiveEffort(sonnet46, Effort.XHigh)).toThrow(/not supported/);
 	});

@@ -162,49 +162,78 @@ export function resolveVenvPath(cwd: string): string | undefined {
 }
 
 /**
- * Resolve Python runtime including executable path, environment, and venv detection.
+ * Apply a venv-style PATH/VIRTUAL_ENV layout onto a fresh copy of `baseEnv` for
+ * the interpreter living in `binDir`.
  */
-export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime {
+function applyVenvEnv(
+	baseEnv: Record<string, string | undefined>,
+	venvPath: string,
+	binDir: string,
+): Record<string, string | undefined> {
 	const env = { ...baseEnv };
-	const venvPath = env.VIRTUAL_ENV ?? resolveVenvPath(cwd);
+	env.VIRTUAL_ENV = venvPath;
+	const pathKey = resolvePathKey(env);
+	const currentPath = env[pathKey];
+	env[pathKey] = currentPath ? `${binDir}${path.delimiter}${currentPath}` : binDir;
+	return env;
+}
 
+function venvBinDir(venvPath: string): string {
+	return process.platform === "win32" ? path.join(venvPath, "Scripts") : path.join(venvPath, "bin");
+}
+
+/**
+ * Enumerate candidate Python runtimes in priority order: an active/project venv,
+ * the managed `~/.omp/python-env`, then the system interpreter on PATH. Every
+ * candidate that physically exists is returned so callers can probe each in turn
+ * rather than committing to the first — a managed env left behind by a removed
+ * `uv` install no longer shadows a working system Python.
+ */
+export function enumeratePythonRuntimes(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime[] {
+	const runtimes: PythonRuntime[] = [];
+	const seen = new Set<string>();
+	const push = (runtime: PythonRuntime): void => {
+		if (seen.has(runtime.pythonPath)) return;
+		seen.add(runtime.pythonPath);
+		runtimes.push(runtime);
+	};
+
+	const venvPath = baseEnv.VIRTUAL_ENV ?? resolveVenvPath(cwd);
 	if (venvPath) {
-		env.VIRTUAL_ENV = venvPath;
-		const binDir = process.platform === "win32" ? path.join(venvPath, "Scripts") : path.join(venvPath, "bin");
+		const binDir = venvBinDir(venvPath);
 		const pythonCandidate = path.join(binDir, process.platform === "win32" ? "python.exe" : "python");
 		if (fs.existsSync(pythonCandidate)) {
-			const pathKey = resolvePathKey(env);
-			const currentPath = env[pathKey];
-			env[pathKey] = currentPath ? `${binDir}${path.delimiter}${currentPath}` : binDir;
-			return {
-				pythonPath: pythonCandidate,
-				env,
-				venvPath,
-			};
+			push({ pythonPath: pythonCandidate, env: applyVenvEnv(baseEnv, venvPath, binDir), venvPath });
 		}
 	}
 
 	const managed = resolveManagedPythonCandidate();
 	if (fs.existsSync(managed.pythonPath)) {
-		env.VIRTUAL_ENV = managed.venvPath;
-		const pathKey = resolvePathKey(env);
-		const currentPath = env[pathKey];
-		const managedBin =
-			process.platform === "win32" ? path.join(managed.venvPath, "Scripts") : path.join(managed.venvPath, "bin");
-		env[pathKey] = currentPath ? `${managedBin}${path.delimiter}${currentPath}` : managedBin;
-		return {
+		const managedBin = path.dirname(managed.pythonPath);
+		push({
 			pythonPath: managed.pythonPath,
-			env,
+			env: applyVenvEnv(baseEnv, managed.venvPath, managedBin),
 			venvPath: managed.venvPath,
-		};
+		});
 	}
 
-	const pythonPath = $which("python") ?? $which("python3");
-	if (!pythonPath) {
+	const systemPath = $which("python") ?? $which("python3");
+	if (systemPath) {
+		push({ pythonPath: systemPath, env: { ...baseEnv } });
+	}
+
+	return runtimes;
+}
+
+/**
+ * Resolve the highest-priority Python runtime. Prefer {@link enumeratePythonRuntimes}
+ * when you can probe candidates; this returns only the first one and throws when
+ * no interpreter exists.
+ */
+export function resolvePythonRuntime(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime {
+	const [runtime] = enumeratePythonRuntimes(cwd, baseEnv);
+	if (!runtime) {
 		throw new Error("Python executable not found on PATH");
 	}
-	return {
-		pythonPath,
-		env,
-	};
+	return runtime;
 }

@@ -59,13 +59,13 @@ The tool returns a single text content block plus structured `details`.
 - If related questions exist, a `## Related` bullet list follows.
 - If search queries exist, a `Search queries: <n>` section follows, capped to the first 3 queries and 120 chars each.
 
-Failure output is not thrown at the tool boundary when at least one provider was attempted. Instead the tool returns:
+Failure output is not thrown at the tool boundary when providers are unavailable or provider attempts fail. Instead the tool returns:
 
 - `content[0].text = "Error: ..."`
 - `details.response.provider = <last attempted provider> | "none"`
 - `details.error = ...`
 
-Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argument into `executeSearch()`, so provider cancellation is only available to internal callers that place `signal` inside `SearchQueryParams`.
+Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `executeSearch()`, and `executeSearch()` passes it to providers. If the signal is aborted during fallback handling, `throwIfAborted(signal)` rethrows the cancellation instead of returning an `"Error: ..."` text result.
 
 ## Flow
 1. `WebSearchTool.execute()` in `packages/coding-agent/src/web/search/index.ts` delegates directly to `executeSearch()`.
@@ -80,11 +80,11 @@ Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argume
    - `systemPrompt` from `packages/coding-agent/src/prompts/tools/web-search.md`.
 6. On the first successful `SearchResponse`, `formatForLLM()` renders answer/sources/citations/related/search-queries into one text block and returns it with `details.response`.
 7. If a provider throws, `executeSearch()` records the error and tries the next provider. There is no provider-level parallel fan-out; fallback is sequential.
-8. After all candidates fail, `formatProviderError()` normalizes the last error:
+8. After all candidates fail, `formatProviderError()` normalizes each error:
    - Anthropic `404` becomes `Anthropic web search returned 404 (model or endpoint not found).`
    - `401`/`403` become `<Provider> authorization failed ...` except Z.AI, which preserves its raw message.
    - other `SearchProviderError`s surface `error.message`.
-9. If more than one provider was attempted, the final message is `All web search providers failed (<labels>). Last error: <message>`; otherwise it is just the normalized last error.
+9. If more than one provider was attempted, the final message is `All web search providers failed: <provider/error>; ...`; otherwise it is just the normalized last error.
 
 ## Modes / Variants
 - **Provider selection**
@@ -121,7 +121,11 @@ Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argume
     - `limit` / `num_search_results`: `params.numSearchResults ?? params.limit`, clamped to `1..20`, default `10`.
     - Output: `sources`, `requestId`.
   - **Anthropic** — `packages/coding-agent/src/web/search/providers/anthropic.ts`
-    - Availability: `findAnthropicAuth()` from `@oh-my-pi/pi-ai`.
+    - Availability: `ANTHROPIC_SEARCH_API_KEY` env var, otherwise `authStorage.hasAuth("anthropic")`; search credentials come from `authStorage.getApiKey("anthropic")` when no search-specific key is set.
+    - Env overrides specific to search (do not affect chat completions):
+      - `ANTHROPIC_SEARCH_API_KEY` — highest-priority search auth; overrides `ANTHROPIC_API_KEY` / OAuth / `ANTHROPIC_FOUNDRY_API_KEY` for the search call only.
+      - `ANTHROPIC_SEARCH_BASE_URL` — search-only base URL for either `ANTHROPIC_SEARCH_API_KEY` or fallback Anthropic credentials; overrides `ANTHROPIC_BASE_URL` (and `FOUNDRY_BASE_URL` in Foundry mode); defaults to `https://api.anthropic.com`.
+      - `ANTHROPIC_SEARCH_MODEL` — search model; defaults to `claude-haiku-4-5`.
     - Querying: Claude Messages API with web-search tool enabled.
     - `max_tokens` and `temperature` pass through.
     - `limit` and `num_search_results` are collapsed together before dispatch: `num_results = params.numSearchResults ?? params.limit`.
@@ -145,8 +149,8 @@ Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argume
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include parsed free-text `answer`, `sources`, `requestId`.
   - **Exa** — `packages/coding-agent/src/web/search/providers/exa.ts`
-    - Availability: always true unless settings explicitly disable `exa.enabled` or `exa.enableSearch`; the adapter can use public MCP even without `EXA_API_KEY`.
-    - Querying: with `EXA_API_KEY`, POST `https://api.exa.ai/search`; otherwise call MCP tool `web_search_exa`.
+    - Availability: env or `agent.db` credential for `exa`; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`.
+    - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key.
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output: synthesized `answer` from up to 3 result summaries, `sources`, `requestId`.
   - **Parallel** — `packages/coding-agent/src/web/search/providers/parallel.ts`, `packages/coding-agent/src/web/parallel.ts`
@@ -185,7 +189,7 @@ Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argume
   - Uses a module-global preferred-provider setting in the same file.
   - `packages/coding-agent/src/tools/index.ts` gates tool availability behind `session.settings.get("web_search.enabled")`.
 - Background work / cancellation
-  - Many provider adapters accept `AbortSignal`, but `WebSearchTool.execute()` does not pass its `_signal` into `executeSearch()`. Internal callers can still use cancellation by calling `runSearchQuery()` / `executeSearch()` with `signal` embedded in params.
+  - Many provider adapters accept `AbortSignal`; `WebSearchTool.execute()` passes the tool call signal into `executeSearch()`, which forwards it as `params.signal` to providers and rethrows cancellation during fallback.
 
 ## Limits & Caps
 - Provider auto-order length: 14 providers (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/provider.ts`).
@@ -203,7 +207,7 @@ Streaming: none. `WebSearchTool.execute()` does not forward its `_signal` argume
 
 ## Errors
 - Tool-level no-provider case returns a normal tool result with `Error: No web search provider configured.`; it does not throw.
-- Tool-level all-failed case also returns a normal tool result with `Error: ...`; failures are summarized from the last attempted provider.
+- Tool-level all-failed case also returns a normal tool result with `Error: ...`; the message is either the single normalized provider error or a semicolon-separated summary of all failed providers.
 - Provider adapters usually throw `SearchProviderError(provider, message, status)` for HTTP or protocol failures.
 - Availability probes intentionally swallow lookup errors and report `false` in many providers via `isApiKeyAvailable()`.
 - Per-provider notable failures:

@@ -9,10 +9,11 @@
  */
 import * as path from "node:path";
 import { applyEdits } from "./apply";
-import { HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { resolveBlockEdits } from "./block";
+import { HL_FILE_HASH_LENGTH, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
 import { parsePatch, parsePatchStreaming } from "./parser";
 import { Tokenizer } from "./tokenizer";
-import type { ApplyResult, Edit, SplitOptions } from "./types";
+import type { ApplyResult, BlockResolver, Edit, SplitOptions } from "./types";
 
 // Pure classification — single shared tokenizer is safe.
 const TOKENIZER = new Tokenizer();
@@ -56,7 +57,7 @@ function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const body = stripApplyPatchPathNoise(line.slice(HL_FILE_PREFIX.length).trim());
 	if (body.length === 0) return null;
-	const match = /^(\S+?)(?:#([0-9A-Fa-f]{3}))?\s*$/.exec(body);
+	const match = new RegExp(`^(\\S+?)(?:#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}))?\\s*$`).exec(body);
 	if (match === null) return null;
 	const path = normalizeHashlinePath(match[1], cwd);
 	if (path.length === 0) return null;
@@ -95,7 +96,7 @@ function parseHashlineHeaderLine(line: string, cwd?: string): RawSection | null 
 		const recovered = tryParseRecoveryHeader(trimmed, cwd);
 		if (recovered !== null) return recovered;
 		throw new Error(
-			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}TAG with a 3-hex snapshot tag; got ${JSON.stringify(trimmed)}.`,
+			`Input header must be ${HL_FILE_PREFIX}PATH or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}TAG with a ${HL_FILE_HASH_LENGTH}-hex content-hash tag; got ${JSON.stringify(trimmed)}.`,
 		);
 	}
 
@@ -159,7 +160,7 @@ function splitRawSections(input: string, options: SplitOptions = {}): RawSection
 		if (/^@@\s+[-+]?\d+,\d+\s+[-+]?\d+,\d+\s+@@/.test(firstTrimmed)) {
 			throw new Error(
 				"unified-diff hunk header (`@@ -N,M +N,M @@`) is not valid in hashline. " +
-					"File sections start with `¶path#HASH`; hunks are bare `A B` lines.",
+					"File sections start with `¶path#HASH`; use `replace`, `delete`, or `insert` ops.",
 			);
 		}
 		const preview = JSON.stringify(firstLine.slice(0, 120));
@@ -244,14 +245,16 @@ export class PatchSection {
 	}
 
 	/**
-	 * True when at least one edit anchors to concrete file content. Pure BOF/EOF
-	 * literal inserts do not count: those are safe to apply to files that don't
-	 * yet exist.
+	 * True when at least one edit anchors to concrete file content. Pure
+	 * `insert head:` / `insert tail:` literal inserts do not count: those are
+	 * safe to apply to files that don't yet exist.
 	 */
 	get hasAnchorScopedEdit(): boolean {
 		return this.edits.some(edit => {
-			if (edit.kind === "delete" || edit.kind === "repeat") return true;
-			return edit.cursor.kind === "before_anchor";
+			if (edit.kind === "delete") return true;
+			// A `replace block N:` edit is anchored to concrete content on line N.
+			if (edit.kind === "block") return true;
+			return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 		});
 	}
 
@@ -263,10 +266,11 @@ export class PatchSection {
 				lines.add(edit.anchor.line);
 				continue;
 			}
-			if (edit.kind === "repeat") {
-				for (let line = edit.range.start.line; line <= edit.range.end.line; line++) lines.add(line);
+			if (edit.kind === "block") {
+				lines.add(edit.anchor.line);
+				continue;
 			}
-			if (edit.cursor.kind === "before_anchor") {
+			if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") {
 				lines.add(edit.cursor.anchor.line);
 			}
 		}
@@ -279,10 +283,14 @@ export class PatchSection {
 	 * {@link Patcher} owns tag validation and recovery; reach for this
 	 * method directly when you've already validated the file content and
 	 * just want the result.
+	 *
+	 * `blockResolver` resolves any `replace block N:` edits against `text`; an
+	 * unresolvable block throws (this is the final, authoritative preview path).
 	 */
-	applyTo(text: string): ApplyResult {
+	applyTo(text: string, blockResolver?: BlockResolver): ApplyResult {
 		const { edits, warnings } = this.parse();
-		const result = applyEdits(text, [...edits]);
+		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, { onUnresolved: "throw" });
+		const result = applyEdits(text, resolved);
 		// Preserve parse warnings so consumers don't need to call `parse()`
 		// separately.
 		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
@@ -297,10 +305,15 @@ export class PatchSection {
 	 * or a per-token parse error mid-stream) does not throw or emit a phantom
 	 * empty-payload edit. Intended for incremental diff previews; the writer
 	 * path should always use {@link applyTo}.
+	 *
+	 * `blockResolver` resolves any `replace block N:` edits against `text`; an
+	 * unresolvable block is silently dropped so a half-written file does not
+	 * throw mid-stream.
 	 */
-	applyPartialTo(text: string): ApplyResult {
+	applyPartialTo(text: string, blockResolver?: BlockResolver): ApplyResult {
 		const { edits, warnings } = parsePatchStreaming(this.diff);
-		const result = applyEdits(text, [...edits]);
+		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, { onUnresolved: "drop" });
+		const result = applyEdits(text, resolved);
 		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
 		return merged && merged.length > 0
 			? { ...result, warnings: merged }

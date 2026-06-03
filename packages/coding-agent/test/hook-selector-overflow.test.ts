@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { HookSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/hook-selector";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
@@ -30,5 +30,193 @@ describe("HookSelectorComponent", () => {
 		for (const line of lines) {
 			expect(visibleWidth(Bun.stripANSI(line))).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("wraps outlined option text without omitting the tail", () => {
+		const options = [
+			"Option A: Move to OMP-native only by migrating reusable shared AI instructions into .omp/AGENTS.md, .omp/rules, .omp/skills, and .omp/agents while deliberately not creating a root .github directory.",
+			"Option B: Keep dual support by migrating canonical instructions into .omp while also maintaining a root .github/copilot-instructions.md compatibility bridge for editors that do not understand OMP resources yet.",
+		];
+		const component = new HookSelectorComponent(
+			"Which migration stance should be used?",
+			options,
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0 },
+		);
+
+		const width = 72;
+		const lines = component.render(width);
+		const plain = lines.map(line => Bun.stripANSI(line)).join("\n");
+		const normalizedPlain = plain.replace(/[\u2500-\u257f]/g, " ").replace(/\s+/g, " ");
+		expect(normalizedPlain).toContain("not creating a root .github directory");
+		expect(normalizedPlain).toContain("do not understand OMP resources yet");
+		for (const line of lines) {
+			expect(visibleWidth(Bun.stripANSI(line))).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("renders option descriptions as separate wrapped rows", () => {
+		const options = [
+			{
+				label: "Use existing local credentials",
+				description:
+					"Authenticate via the provider keys and OAuth state already configured under ~/.omp without opening a new browser-based setup flow.",
+			},
+			{
+				label: "Set up Oh My Pi in terminal",
+				description:
+					"Launch the local terminal UI to add provider keys, select models, and keep the current editor session waiting for the configured credentials.",
+			},
+		];
+		const component = new HookSelectorComponent(
+			"How should authentication continue?",
+			options,
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0 },
+		);
+
+		const width = 76;
+		const lines = component.render(width);
+		const plainLines = lines.map(line => Bun.stripANSI(line));
+		const normalizedPlain = plainLines
+			.join("\n")
+			.replace(/[\u2500-\u257f]/g, " ")
+			.replace(/\s+/g, " ");
+		const labelLineIndex = plainLines.findIndex(line => line.includes("Use existing local credentials"));
+		const descriptionLineIndex = plainLines.findIndex(line => line.includes("Authenticate via the provider keys"));
+		expect(labelLineIndex).toBeGreaterThanOrEqual(0);
+		expect(descriptionLineIndex).toBeGreaterThan(labelLineIndex);
+		expect(normalizedPlain).toContain("without opening a new browser-based setup flow");
+		expect(normalizedPlain).toContain("keep the current editor session waiting for the configured credentials");
+		for (const line of lines) {
+			expect(visibleWidth(Bun.stripANSI(line))).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("counts description rows toward the visible row cap", () => {
+		const component = new HookSelectorComponent(
+			"Which setup path should be used?",
+			[
+				{ label: "Path A", description: "Reuse existing credentials." },
+				{ label: "Path B", description: "Authorize a provider in the browser." },
+				{ label: "Path C", description: "Edit provider keys manually." },
+				{ label: "Path D", description: "Continue with offline-only tools." },
+			],
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0, maxVisible: 4 },
+		);
+
+		const plain = component
+			.render(76)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(plain).toContain("Path A");
+		expect(plain).toContain("Reuse existing credentials.");
+		expect(plain).toContain("Path B");
+		expect(plain).toContain("Authorize a provider in the browser.");
+		expect(plain).not.toContain("Path C");
+		expect(plain).toContain("(1/4)");
+	});
+
+	it("counts wrapped outlined rows toward the visible row cap", () => {
+		const options = [
+			"Option A: Use the existing terminal session and preserve the current credentials while the setup prompt remains open for the editor.",
+			"Option B: Open a browser authorization flow and wait for the provider callback before returning to the editor.",
+			"Option C: Edit the local provider configuration file manually and retry the current request afterward.",
+			"Option D: Continue without provider access and keep only offline tools enabled for the session.",
+		];
+		const component = new HookSelectorComponent(
+			"Which setup path should be used?",
+			options,
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0, maxVisible: 3 },
+		);
+
+		const plainLines = component.render(50).map(line => Bun.stripANSI(line));
+		const plain = plainLines.join("\n");
+		expect(plain).toContain("Option A");
+		expect(plain).not.toContain("Option B");
+		expect(plain).toContain("(1/4)");
+		for (const line of plainLines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(50);
+		}
+	});
+
+	it("filters options by description text", () => {
+		const component = new HookSelectorComponent(
+			"Which setup path should be used?",
+			[
+				{ label: "Path A", description: "Reuse the credentials already available in the environment." },
+				{ label: "Path B", description: "Launch a browser flow to authorize a new provider account." },
+				{ label: "Path C", description: "Open the local settings file and edit provider keys manually." },
+				{ label: "Path D", description: "Skip provider setup and continue with offline-only tools." },
+			],
+			() => {},
+			() => {},
+			{ outline: true, maxVisible: 3 },
+		);
+
+		for (const key of "browser") {
+			component.handleInput(key);
+		}
+
+		const plain = component
+			.render(76)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(plain).toContain("Path B");
+		expect(plain).toContain("Launch a browser flow");
+		expect(plain).not.toContain("Path A");
+	});
+
+	it("skips disabled options during keyboard navigation", () => {
+		let selected: string | undefined;
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["First", "Disabled", "Third"],
+			option => {
+				selected = option;
+			},
+			() => {},
+			{ disabledIndices: [1] },
+		);
+
+		component.handleInput("j");
+		component.handleInput("\n");
+
+		expect(selected).toBe("Third");
+	});
+
+	it("does not select disabled options", () => {
+		let selected: string | undefined;
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["Disabled"],
+			option => {
+				selected = option;
+			},
+			() => {},
+			{ disabledIndices: [0] },
+		);
+
+		component.handleInput("\n");
+
+		expect(selected).toBeUndefined();
+	});
+
+	it("renders disabled options dimmed", () => {
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["First", "Disabled"],
+			() => {},
+			() => {},
+			{ disabledIndices: [1] },
+		);
+
+		expect(component.render(80).join("\n")).toContain(theme.fg("dim", "Disabled"));
 	});
 });

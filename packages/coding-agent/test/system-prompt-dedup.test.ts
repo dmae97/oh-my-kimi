@@ -2,9 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	buildSystemPrompt,
 	loadProjectContextFiles,
@@ -37,28 +34,25 @@ describe("SYSTEM.md prompt assembly", () => {
 		fs.mkdirSync(systemDir, { recursive: true });
 		fs.writeFileSync(path.join(systemDir, "SYSTEM.md"), systemPrompt);
 
-		const { session } = await createAgentSession({
+		const { systemPrompt: renderedPrompt } = await buildSystemPrompt({
 			cwd: projectDir,
-			agentDir: projectDir,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated(),
-			systemPrompt: [systemPrompt],
-			disableExtensionDiscovery: true,
-			skills: [],
+			customPrompt: systemPrompt,
 			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
+			skills: [],
+			rules: [],
+			toolNames: [],
+			workspaceTree: {
+				rootPath: projectDir,
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
 		});
 
-		try {
-			const formatted = session.formatSessionAsText();
-			const matches = formatted.match(new RegExp(escapeRegExp(systemPrompt), "g")) ?? [];
-			expect(matches).toHaveLength(1);
-		} finally {
-			await session.dispose();
-		}
+		const promptText = renderedPrompt.join("\n\n");
+		const matches = promptText.match(new RegExp(escapeRegExp(systemPrompt), "g")) ?? [];
+		expect(matches).toHaveLength(1);
 	});
 
 	it("prefers project SYSTEM.md over user SYSTEM.md", async () => {

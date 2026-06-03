@@ -1,5 +1,4 @@
-import { constants } from "node:fs";
-import { access, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader } from "@oh-my-pi/hashline";
@@ -9,11 +8,14 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { LocalProtocolOptions } from "../internal-urls/local-protocol";
+import { InternalUrlRouter } from "../internal-urls/router";
+import type { InternalResource, ResolveContext } from "../internal-urls/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
-import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../session/streaming-output";
+import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead, truncateLine } from "../session/streaming-output";
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
@@ -28,10 +30,12 @@ import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
+	expandDelimitedPathEntries,
 	hasGlobPathChars,
 	isLineInRanges,
 	type LineRange,
 	parseLineRanges,
+	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
 	splitPathAndSel,
@@ -91,29 +95,6 @@ export const SINGLE_FILE_MATCHES = 200;
 const INTERNAL_TOTAL_CAP = 2000;
 
 /**
- * Detect a `,` that is not inside a `{…}` brace expansion. Used to catch
- * `paths: ["a,b"]` mistakes where the caller flattened multiple entries
- * into a single string instead of passing a JSON array of strings.
- */
-function containsTopLevelComma(entry: string): boolean {
-	let depth = 0;
-	for (let i = 0; i < entry.length; i++) {
-		const ch = entry[i];
-		if (ch === "\\" && i + 1 < entry.length) {
-			i++;
-			continue;
-		}
-		if (ch === "{") depth++;
-		else if (ch === "}") {
-			if (depth > 0) depth--;
-		} else if (ch === "," && depth === 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/**
  * Parsed `paths` entry — a path (possibly archive-shaped) plus an optional
  * line-range selector peeled off the trailing `:N-M` (or `:N+K`, `:N,M`, …)
  * chunk via {@link splitPathAndSel}.
@@ -142,9 +123,6 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 			}
 			clean = split.path;
 			ranges = parsed;
-		}
-		if (containsTopLevelComma(clean)) {
-			throw new ToolError('paths is an array — pass ["a", "b"] not ["a,b"]');
 		}
 		specs.push({ original: entry, clean, ranges });
 	}
@@ -258,6 +236,343 @@ async function resolveArchiveSearchPaths(
 	return { resolvedPaths, displayMap, displaySet, unreadable, cleanup };
 }
 
+interface VirtualSearchResource {
+	path: string;
+	content: string;
+	ranges?: readonly LineRange[];
+}
+
+interface InternalSearchInputResolution {
+	paths: string[];
+	resolvedPathsByInput: string[];
+	virtualResources: VirtualSearchResource[];
+	virtualPathSet: Set<string>;
+	virtualInputIndexes: Set<number>;
+	immutableSourcePaths: Set<string>;
+	virtualScopePath?: string;
+}
+
+interface IndexedContentLines {
+	lines: string[];
+	starts: number[];
+}
+
+const INTERNAL_URL_DISPLAY_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const OMP_ROOT_URL_RE = /^omp:\/\/\/?$/i;
+
+function normalizeSearchLine(line: string): string {
+	return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
+
+function splitSearchLines(content: string): string[] {
+	const lines = content.split("\n");
+	if (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	return lines.map(normalizeSearchLine);
+}
+
+function indexSearchLines(content: string): IndexedContentLines {
+	const rawLines = content.split("\n");
+	if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+		rawLines.pop();
+	}
+	const lines: string[] = [];
+	const starts: number[] = [];
+	let offset = 0;
+	for (const rawLine of rawLines) {
+		starts.push(offset);
+		lines.push(normalizeSearchLine(rawLine));
+		offset += rawLine.length + 1;
+	}
+	return { lines, starts };
+}
+
+function findLineIndex(starts: readonly number[], offset: number): number {
+	if (starts.length === 0) return -1;
+	let low = 0;
+	let high = starts.length - 1;
+	while (low <= high) {
+		const mid = Math.floor((low + high) / 2);
+		if (starts[mid] <= offset) {
+			low = mid + 1;
+		} else {
+			high = mid - 1;
+		}
+	}
+	return Math.max(0, high);
+}
+
+function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefined): boolean {
+	return !ranges || isLineInRanges(lineNumber, ranges);
+}
+
+function makeContextLine(lines: readonly string[], lineIndex: number): { lineNumber: number; line: string } {
+	const { text } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
+	return { lineNumber: lineIndex + 1, line: text };
+}
+
+function makeVirtualMatch(
+	resource: VirtualSearchResource,
+	lines: readonly string[],
+	lineIndex: number,
+	contextBefore: number,
+	contextAfter: number,
+): GrepMatch {
+	const lineNumber = lineIndex + 1;
+	const { text, wasTruncated } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
+	const match: GrepMatch = {
+		path: resource.path,
+		lineNumber,
+		line: text,
+	};
+	if (wasTruncated) match.truncated = true;
+
+	if (contextBefore > 0) {
+		const before: NonNullable<GrepMatch["contextBefore"]> = [];
+		const start = Math.max(0, lineIndex - contextBefore);
+		for (let idx = start; idx < lineIndex; idx++) {
+			const contextLineNumber = idx + 1;
+			if (lineAllowed(contextLineNumber, resource.ranges)) {
+				before.push(makeContextLine(lines, idx));
+			}
+		}
+		if (before.length > 0) match.contextBefore = before;
+	}
+
+	if (contextAfter > 0) {
+		const after: NonNullable<GrepMatch["contextAfter"]> = [];
+		const end = Math.min(lines.length - 1, lineIndex + contextAfter);
+		for (let idx = lineIndex + 1; idx <= end; idx++) {
+			const contextLineNumber = idx + 1;
+			if (lineAllowed(contextLineNumber, resource.ranges)) {
+				after.push(makeContextLine(lines, idx));
+			}
+		}
+		if (after.length > 0) match.contextAfter = after;
+	}
+
+	return match;
+}
+
+function compileVirtualRegex(pattern: string, ignoreCase: boolean, multiline: boolean): RegExp {
+	const flags = `${ignoreCase ? "i" : ""}${multiline ? "gm" : ""}`;
+	try {
+		return new RegExp(pattern, flags);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new ToolError(`Invalid regex: ${message.replace(/^Invalid regular expression:\s*/i, "")}`);
+	}
+}
+
+function searchVirtualResourceLines(
+	resource: VirtualSearchResource,
+	regex: RegExp,
+	contextBefore: number,
+	contextAfter: number,
+	maxCount: number,
+): { matches: GrepMatch[]; totalMatches: number; limitReached: boolean } {
+	const lines = splitSearchLines(resource.content);
+	const matches: GrepMatch[] = [];
+	let totalMatches = 0;
+	let limitReached = false;
+
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+		const lineNumber = lineIndex + 1;
+		if (!lineAllowed(lineNumber, resource.ranges)) continue;
+		regex.lastIndex = 0;
+		if (!regex.test(lines[lineIndex] ?? "")) continue;
+		totalMatches++;
+		if (matches.length >= maxCount) {
+			limitReached = true;
+			continue;
+		}
+		matches.push(makeVirtualMatch(resource, lines, lineIndex, contextBefore, contextAfter));
+	}
+
+	return { matches, totalMatches, limitReached };
+}
+
+function searchVirtualResourceMultiline(
+	resource: VirtualSearchResource,
+	regex: RegExp,
+	contextBefore: number,
+	contextAfter: number,
+	maxCount: number,
+): { matches: GrepMatch[]; totalMatches: number; limitReached: boolean } {
+	const indexed = indexSearchLines(resource.content);
+	const matches: GrepMatch[] = [];
+	const matchedLines = new Set<number>();
+	let totalMatches = 0;
+	let limitReached = false;
+
+	while (true) {
+		const match = regex.exec(resource.content);
+		if (match === null) break;
+		const lineIndex = findLineIndex(indexed.starts, match.index);
+		if (lineIndex >= 0) {
+			const lineNumber = lineIndex + 1;
+			if (!matchedLines.has(lineNumber) && lineAllowed(lineNumber, resource.ranges)) {
+				matchedLines.add(lineNumber);
+				totalMatches++;
+				if (matches.length >= maxCount) {
+					limitReached = true;
+				} else {
+					matches.push(makeVirtualMatch(resource, indexed.lines, lineIndex, contextBefore, contextAfter));
+				}
+			}
+		}
+		if (match[0].length === 0) {
+			regex.lastIndex++;
+		}
+	}
+
+	return { matches, totalMatches, limitReached };
+}
+
+function searchVirtualResources(
+	resources: readonly VirtualSearchResource[],
+	pattern: string,
+	ignoreCase: boolean,
+	multiline: boolean,
+	contextBefore: number,
+	contextAfter: number,
+	maxCount: number,
+): GrepResult {
+	if (resources.length === 0) {
+		return { matches: [], totalMatches: 0, filesWithMatches: 0, filesSearched: 0, limitReached: false };
+	}
+	const regex = compileVirtualRegex(pattern, ignoreCase, multiline);
+	const matches: GrepMatch[] = [];
+	const filesWithMatches = new Set<string>();
+	let totalMatches = 0;
+	let limitReached = false;
+
+	for (const resource of resources) {
+		const remaining = Math.max(maxCount - matches.length, 0);
+		const resourceResult = multiline
+			? searchVirtualResourceMultiline(resource, regex, contextBefore, contextAfter, remaining)
+			: searchVirtualResourceLines(resource, regex, contextBefore, contextAfter, remaining);
+		if (resourceResult.totalMatches > 0) {
+			filesWithMatches.add(resource.path);
+		}
+		totalMatches += resourceResult.totalMatches;
+		limitReached = limitReached || resourceResult.limitReached;
+		matches.push(...resourceResult.matches);
+	}
+
+	return {
+		matches,
+		totalMatches,
+		filesWithMatches: filesWithMatches.size,
+		filesSearched: resources.length,
+		limitReached,
+	};
+}
+
+function mergeGrepResults(left: GrepResult, right: GrepResult, maxCount: number): GrepResult {
+	if (left.matches.length === 0) return right;
+	if (right.matches.length === 0) return left;
+	const combinedMatches = [...left.matches, ...right.matches];
+	const matches = combinedMatches.length > maxCount ? combinedMatches.slice(0, maxCount) : combinedMatches;
+	return {
+		matches,
+		totalMatches: left.totalMatches + right.totalMatches,
+		filesWithMatches: new Set(matches.map(match => match.path)).size,
+		filesSearched: left.filesSearched + right.filesSearched,
+		limitReached: left.limitReached || right.limitReached || matches.length < combinedMatches.length,
+	};
+}
+
+async function expandVirtualInternalResource(
+	rawPath: string,
+	resource: InternalResource,
+	internalRouter: InternalUrlRouter,
+	context: ResolveContext,
+	ranges: readonly LineRange[] | undefined,
+): Promise<VirtualSearchResource[]> {
+	if (OMP_ROOT_URL_RE.test(rawPath)) {
+		const completions = await internalRouter.complete("omp", "");
+		if (completions && completions.length > 0) {
+			const resources: VirtualSearchResource[] = [];
+			const seen = new Set<string>();
+			for (const completion of completions) {
+				if (seen.has(completion.value)) continue;
+				seen.add(completion.value);
+				const docUrl = `omp://${completion.value}`;
+				const doc = await internalRouter.resolve(docUrl, context);
+				if (!doc.sourcePath) {
+					resources.push({ path: docUrl, content: doc.content, ranges });
+				}
+			}
+			if (resources.length > 0) return resources;
+		}
+	}
+
+	return [{ path: rawPath, content: resource.content, ranges }];
+}
+
+async function resolveInternalSearchInputs(opts: {
+	pathSpecs: readonly SearchPathSpec[];
+	resolvedPaths: string[];
+	cwd: string;
+	settings: unknown;
+	signal?: AbortSignal;
+	archiveDisplayMap: ReadonlyMap<string, string>;
+	localProtocolOptions?: LocalProtocolOptions;
+}): Promise<InternalSearchInputResolution> {
+	const internalRouter = InternalUrlRouter.instance();
+	const paths = opts.resolvedPaths.slice();
+	const virtualResources: VirtualSearchResource[] = [];
+	const virtualPathSet = new Set<string>();
+	const virtualInputIndexes = new Set<number>();
+	const immutableSourcePaths = new Set<string>();
+	let virtualScopePath: string | undefined;
+	const context: ResolveContext = {
+		cwd: opts.cwd,
+		settings: opts.settings,
+		signal: opts.signal,
+		localProtocolOptions: opts.localProtocolOptions,
+	};
+
+	for (let idx = 0; idx < paths.length; idx++) {
+		const rawPath = paths[idx];
+		if (!rawPath || opts.archiveDisplayMap.has(rawPath) || !internalRouter.canHandle(rawPath)) {
+			continue;
+		}
+		if (hasGlobPathChars(rawPath)) {
+			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
+		}
+		const resource = await internalRouter.resolve(rawPath, context);
+		if (resource.sourcePath) {
+			paths[idx] = resource.sourcePath;
+			if (resource.immutable) {
+				immutableSourcePaths.add(path.resolve(resource.sourcePath));
+			}
+			continue;
+		}
+
+		const ranges = opts.pathSpecs[idx]?.ranges;
+		const expanded = await expandVirtualInternalResource(rawPath, resource, internalRouter, context, ranges);
+		virtualInputIndexes.add(idx);
+		for (const virtual of expanded) {
+			virtualResources.push(virtual);
+			virtualPathSet.add(virtual.path);
+		}
+		virtualScopePath = virtualScopePath ? `${virtualScopePath}, ${rawPath}` : rawPath;
+	}
+
+	return {
+		resolvedPathsByInput: paths,
+		paths: paths.filter((_, idx) => !virtualInputIndexes.has(idx)),
+		virtualResources,
+		virtualPathSet,
+		virtualInputIndexes,
+		immutableSourcePaths,
+		virtualScopePath,
+	};
+}
+
 export interface SearchToolDetails {
 	truncation?: TruncationResult;
 	fileLimitReached?: number;
@@ -323,7 +638,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const rawEntries = toPathList(rawPaths);
+			const rawEntries = await expandDelimitedPathEntries(toPathList(rawPaths), this.session.cwd);
 			const pathSpecs = parsePathSpecs(rawEntries);
 			const paths = pathSpecs.map(spec => spec.clean);
 			const {
@@ -334,6 +649,17 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				cleanup: cleanupArchiveScratch,
 			} = await resolveArchiveSearchPaths(paths, this.session.cwd);
 			try {
+				const internalResolution = await resolveInternalSearchInputs({
+					pathSpecs,
+					resolvedPaths,
+					cwd: this.session.cwd,
+					settings: this.session.settings,
+					signal,
+					archiveDisplayMap,
+					localProtocolOptions: this.session.localProtocolOptions,
+				});
+				const searchablePaths = internalResolution.paths;
+				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
 				// Build the per-file line-range filter (keyed by absolute path) now that
 				// archive entries have been materialized to scratch files. Plain entries
 				// resolve through `resolveReadPath`; archive entries are keyed by the
@@ -342,10 +668,12 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				for (let idx = 0; idx < pathSpecs.length; idx++) {
 					const spec = pathSpecs[idx];
 					if (!spec.ranges) continue;
-					const resolved = resolvedPaths[idx];
+					if (virtualInputIndexes.has(idx)) continue;
+					const resolved = internalResolution.resolvedPathsByInput[idx];
+					if (!resolved) continue;
 					if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
 						// Non-archive entry; ensure the cleaned path resolves to a regular file.
-						const absKey = path.resolve(resolveReadPath(spec.clean, this.session.cwd));
+						const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
 						const stats = await stat(absKey).catch(() => null);
 						if (!stats) {
 							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
@@ -361,7 +689,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 				}
 
-				if (archiveUnreadable.length > 0 && resolvedPaths.length === archiveUnreadable.length) {
+				if (archiveUnreadable.length > 0 && searchablePaths.length === archiveUnreadable.length) {
 					// All inputs were archive selectors we couldn't materialize; surface the
 					// reason instead of a downstream "path not found" from the scope resolver.
 					throw new ToolError(
@@ -377,22 +705,58 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 				const effectiveMultiline = patternHasNewline;
 
-				const scope = await resolveToolSearchScope({
-					rawPaths: resolvedPaths,
-					cwd: this.session.cwd,
-					internalUrlAction: "search",
-					trackImmutableSources: true,
-					surfaceExactFilePaths: true,
-					multipathStatHint: " (`paths` entries must each exist relative to cwd)",
-				});
-				const { searchPath, isDirectory, multiTargets, exactFilePaths, missingPaths, immutableSourcePaths } = scope;
-				// When the only input was an archive selector, surface that selector instead
-				// of the temp scratch path the resolver substituted in.
-				const scopePath =
-					resolvedPaths.length === 1 && archiveDisplayMap.get(searchPath)
-						? (archiveDisplayMap.get(searchPath) as string)
-						: scope.scopePath;
-				if (missingPaths.length > 0 && missingPaths.length === resolvedPaths.length) {
+				let searchPath: string;
+				let scopePath: string;
+				let globFilter: string | undefined;
+				let isDirectory: boolean;
+				let multiTargets: ResolvedSearchTarget[] | undefined;
+				let exactFilePaths: string[] | undefined;
+				let missingPaths: string[];
+				const immutableSourcePaths = new Set(internalResolution.immutableSourcePaths);
+				if (searchablePaths.length > 0) {
+					const scope = await resolveToolSearchScope({
+						rawPaths: searchablePaths,
+						cwd: this.session.cwd,
+						internalUrlAction: "search",
+						trackImmutableSources: true,
+						surfaceExactFilePaths: true,
+						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
+						settings: this.session.settings,
+						signal,
+						localProtocolOptions: this.session.localProtocolOptions,
+					});
+					searchPath = scope.searchPath;
+					isDirectory = scope.isDirectory;
+					multiTargets = scope.multiTargets;
+					exactFilePaths = scope.exactFilePaths;
+					missingPaths = scope.missingPaths;
+					globFilter = scope.globFilter;
+					for (const immutablePath of scope.immutableSourcePaths) {
+						immutableSourcePaths.add(immutablePath);
+					}
+					// When the only input was an archive selector, surface that selector instead
+					// of the temp scratch path the resolver substituted in.
+					const physicalScopePath =
+						searchablePaths.length === 1 && archiveDisplayMap.get(searchPath)
+							? (archiveDisplayMap.get(searchPath) as string)
+							: scope.scopePath;
+					scopePath = internalResolution.virtualScopePath
+						? `${physicalScopePath}, ${internalResolution.virtualScopePath}`
+						: physicalScopePath;
+				} else {
+					searchPath = this.session.cwd;
+					scopePath = internalResolution.virtualScopePath ?? ".";
+					globFilter = undefined;
+					isDirectory = false;
+					multiTargets = undefined;
+					exactFilePaths = undefined;
+					missingPaths = [];
+				}
+				if (
+					missingPaths.length > 0 &&
+					missingPaths.length === searchablePaths.length &&
+					virtualResources.length === 0
+				) {
 					const archiveHint =
 						archiveUnreadable.length > 0
 							? ` (archive members were not searchable: ${archiveUnreadable.join(", ")})`
@@ -401,34 +765,78 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						`Path not found: ${missingPaths.join(", ")}; pass each path as its own array element${archiveHint}`,
 					);
 				}
-				const { globFilter } = scope;
 				const baseDisplayMode = resolveFileDisplayMode(this.session);
 
 				const effectiveOutputMode = GrepOutputMode.Content;
-				// Multi-scope = more than one file may match. We fetch up to
-				// INTERNAL_TOTAL_CAP matches from native grep, then in JS group by
-				// file, apply a per-file cap (so one hot file doesn't crowd the
-				// window), and round-robin emit from up to DEFAULT_FILE_LIMIT files.
-				const isMultiScope = isDirectory || Boolean(exactFilePaths) || Boolean(multiTargets);
+				const isMultiScope =
+					isDirectory ||
+					Boolean(exactFilePaths) ||
+					Boolean(multiTargets) ||
+					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
 
 				// Run grep
-				let result: GrepResult;
+				let result: GrepResult = {
+					matches: [],
+					totalMatches: 0,
+					filesWithMatches: 0,
+					filesSearched: 0,
+					limitReached: false,
+				};
 				try {
-					if (exactFilePaths || multiTargets) {
-						const matches: GrepMatch[] = [];
-						let limitReached = false;
-						let totalMatches = 0;
-						let filesSearched = 0;
-						const targets = exactFilePaths
-							? exactFilePaths.map(filePath => ({ basePath: filePath, glob: undefined as string | undefined }))
-							: (multiTargets ?? []);
-						for (const target of targets) {
-							const targetResult = await grep(
+					if (searchablePaths.length > 0) {
+						if (exactFilePaths || multiTargets) {
+							const matches: GrepMatch[] = [];
+							let limitReached = false;
+							let totalMatches = 0;
+							let filesSearched = 0;
+							const targets = exactFilePaths
+								? exactFilePaths.map(filePath => ({
+										basePath: filePath,
+										glob: undefined as string | undefined,
+									}))
+								: (multiTargets ?? []);
+							for (const target of targets) {
+								const targetResult = await grep(
+									{
+										pattern: normalizedPattern,
+										path: target.basePath,
+										glob: target.glob,
+										ignoreCase,
+										multiline: effectiveMultiline,
+										hidden: true,
+										gitignore: useGitignore,
+										cache: false,
+										maxCount: INTERNAL_TOTAL_CAP,
+										contextBefore: normalizedContextBefore,
+										contextAfter: normalizedContextAfter,
+										maxColumns: DEFAULT_MAX_COLUMN,
+										mode: effectiveOutputMode,
+									},
+									undefined,
+								);
+								limitReached = limitReached || Boolean(targetResult.limitReached);
+								totalMatches += targetResult.totalMatches;
+								filesSearched += targetResult.filesSearched;
+								for (const match of targetResult.matches) {
+									const absolute = path.resolve(target.basePath, match.path);
+									const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
+									matches.push({ ...match, path: rebased });
+								}
+							}
+							result = {
+								matches,
+								totalMatches: exactFilePaths ? matches.length : totalMatches,
+								filesWithMatches: new Set(matches.map(match => match.path)).size,
+								filesSearched: exactFilePaths ? exactFilePaths.length : filesSearched,
+								limitReached,
+							};
+						} else {
+							result = await grep(
 								{
 									pattern: normalizedPattern,
-									path: target.basePath,
-									glob: target.glob,
+									path: searchPath,
+									glob: globFilter,
 									ignoreCase,
 									multiline: effectiveMultiline,
 									hidden: true,
@@ -442,41 +850,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								},
 								undefined,
 							);
-							limitReached = limitReached || Boolean(targetResult.limitReached);
-							totalMatches += targetResult.totalMatches;
-							filesSearched += targetResult.filesSearched;
-							for (const match of targetResult.matches) {
-								const absolute = path.resolve(target.basePath, match.path);
-								const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
-								matches.push({ ...match, path: rebased });
-							}
 						}
-						result = {
-							matches,
-							totalMatches: exactFilePaths ? matches.length : totalMatches,
-							filesWithMatches: new Set(matches.map(match => match.path)).size,
-							filesSearched: exactFilePaths ? exactFilePaths.length : filesSearched,
-							limitReached,
-						};
-					} else {
-						result = await grep(
-							{
-								pattern: normalizedPattern,
-								path: searchPath,
-								glob: globFilter,
-								ignoreCase,
-								multiline: effectiveMultiline,
-								hidden: true,
-								gitignore: useGitignore,
-								cache: false,
-								maxCount: INTERNAL_TOTAL_CAP,
-								contextBefore: normalizedContextBefore,
-								contextAfter: normalizedContextAfter,
-								maxColumns: DEFAULT_MAX_COLUMN,
-								mode: effectiveOutputMode,
-							},
-							undefined,
-						);
 					}
 				} catch (err) {
 					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {
@@ -484,6 +858,16 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					throw err;
 				}
+				const virtualResult = searchVirtualResources(
+					virtualResources,
+					normalizedPattern,
+					ignoreCase,
+					effectiveMultiline,
+					normalizedContextBefore,
+					normalizedContextAfter,
+					INTERNAL_TOTAL_CAP,
+				);
+				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
 				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
@@ -522,7 +906,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 
 				const formatPath = (filePath: string): string =>
-					archiveDisplaySet.has(filePath)
+					archiveDisplaySet.has(filePath) || virtualPathSet.has(filePath)
 						? filePath
 						: formatResultPath(filePath, isDirectory, searchPath, this.session.cwd);
 
@@ -610,19 +994,17 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					matchesByFile.get(relativePath)!.push(match);
 				}
 				const displayLines: string[] = [];
-				const hashContexts = new Map<string, { absolutePath: string; tag?: string }>();
-				const snapshotStore = baseDisplayMode.hashLines ? getFileSnapshotStore(this.session) : undefined;
+				const hashContexts = new Map<string, { tag: string }>();
 				if (baseDisplayMode.hashLines) {
 					for (const relativePath of fileList) {
-						if (archiveDisplaySet.has(relativePath)) continue;
+						if (archiveDisplaySet.has(relativePath) || virtualPathSet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
 						if (immutableSourcePaths.has(absoluteFilePath)) continue;
-						try {
-							await access(absoluteFilePath, constants.R_OK);
-							hashContexts.set(relativePath, { absolutePath: absoluteFilePath });
-						} catch {
-							// Best-effort: if the file disappeared between grep and render, fall back to plain line output.
-						}
+						// Mint a whole-file content tag so any anchor validates while the
+						// file is unchanged; over-cap / unreadable files get no tag (and
+						// therefore plain, non-editable line output).
+						const tag = await recordFileSnapshot(this.session, absoluteFilePath);
+						if (tag) hashContexts.set(relativePath, { tag });
 					}
 				}
 				const renderMatchesForFile = (relativePath: string): { model: string[]; display: string[] } => {
@@ -641,43 +1023,38 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						}
 						return nextWidth;
 					}, 0);
-					const cacheEntries: Array<readonly [number, string]> = [];
 					let lastEmittedLine: number | undefined;
 					const gutterPad = " ".repeat(lineNumberWidth + 1);
 					for (const match of fileMatches) {
-						const pushLine = (lineNumber: number, line: string, isMatch: boolean, recordable: boolean) => {
+						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
 								modelOut.push("...");
 								displayOut.push(`${gutterPad}│...`);
 							}
 							modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 							displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
-							if (recordable) cacheEntries.push([lineNumber, line] as const);
 							lastEmittedLine = lineNumber;
 						};
 						if (match.contextBefore) {
 							for (const ctx of match.contextBefore) {
-								pushLine(ctx.lineNumber, ctx.line, false, true);
+								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
-						pushLine(match.lineNumber, match.line, true, !match.truncated);
+						pushLine(match.lineNumber, match.line, true);
 						if (match.truncated) {
 							linesTruncated = true;
 						}
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {
-								pushLine(ctx.lineNumber, ctx.line, false, true);
+								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
-					if (cacheEntries.length > 0 && hashContext) {
-						const tag = snapshotStore?.recordSparse(hashContext.absolutePath, cacheEntries);
-						if (tag) hashContext.tag = tag;
-					}
 					return { model: modelOut, display: displayOut };
 				};
-				if (isDirectory) {
+				const useGroupedOutput = isDirectory || isMultiScope;
+				if (useGroupedOutput) {
 					const grouped = formatGroupedFiles(fileList, relativePath => {
 						const rendered = renderMatchesForFile(relativePath);
 						const hashContext = hashContexts.get(relativePath);
@@ -911,6 +1288,10 @@ export const searchToolRenderer = {
 										.slice(2)
 										.trimEnd()
 										.replace(/\s+\([^)]*\)\s*$/, "");
+									if (INTERNAL_URL_DISPLAY_RE.test(raw)) {
+										contextDir = "";
+										return uiTheme.fg("accent", line);
+									}
 									const isDirectory = raw.endsWith("/");
 									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
 									if (isDirectory) {

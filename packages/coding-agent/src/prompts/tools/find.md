@@ -2,7 +2,7 @@ Finds files and directories using fast pattern matching that works with any code
 
 <instruction>
 - `paths` is required and accepts an array of globs, files, or directories
-- Pass multiple targets as **separate array elements** (`paths: ["a", "b"]`), NEVER as a single comma-joined string (`paths: ["a,b"]` is rejected)
+- Pass multiple targets as **separate array elements** (`paths: ["a", "b"]`).
 - `gitignore` defaults to `true` and hides files matched by `.gitignore`. Set `gitignore: false` to find `.env*`, `*.log`, freshly-created build outputs, or anything else your repo ignores
 - `hidden` defaults to `true`; combine with `gitignore: false` to surface dotfiles that are also gitignored
 - `limit` is clamped to 1-200 (default 200). Narrow the pattern instead of raising the limit

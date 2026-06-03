@@ -32,13 +32,29 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { APP_NAME, adjustHsv, getProjectDir, hsvToRgb, isEnoent, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
+import {
+	APP_NAME,
+	adjustHsv,
+	formatNumber,
+	getProjectDir,
+	hsvToRgb,
+	isEnoent,
+	logger,
+	postmortem,
+	prompt,
+	setProjectDir,
+} from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
+import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
+	ContextUsage,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
@@ -57,17 +73,18 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
+import type { ShakeMode } from "../session/shake-types";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import { formatPhaseDisplayName } from "../tools/todo-write";
+import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo-write";
 import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
@@ -80,7 +97,7 @@ import { DynamicBorder } from "./components/dynamic-border";
 import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
-import type { HookSelectorComponent } from "./components/hook-selector";
+import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent, type LspServerInfo as WelcomeLspServerInfo } from "./components/welcome";
@@ -90,6 +107,7 @@ import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
+import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -115,7 +133,15 @@ import {
 	onThemeChange,
 	theme,
 } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
+import type {
+	CompactionQueuedMessage,
+	InteractiveModeContext,
+	InteractiveModeInitOptions,
+	InteractiveSelectorDialogOptions,
+	SubmittedUserInput,
+	TodoItem,
+	TodoPhase,
+} from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
@@ -187,6 +213,8 @@ function formatHudNoteMarker(count: number): string {
 type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
 
 const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
+const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
+const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
 
 function parseGoalSubcommand(args: string): { sub: GoalSubcommand | undefined; rest: string } {
 	const trimmed = args.trim();
@@ -198,6 +226,10 @@ function parseGoalSubcommand(args: string): { sub: GoalSubcommand | undefined; r
 		return { sub: first as GoalSubcommand, rest: match[2]?.trim() ?? "" };
 	}
 	return { sub: undefined, rest: trimmed };
+}
+
+function formatContextTokenCount(value: number): string {
+	return formatNumber(Math.max(0, Math.round(value))).toLowerCase();
 }
 
 /** Options for creating an InteractiveMode instance (for future API use) */
@@ -228,6 +260,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusContainer: Container;
 	todoContainer: Container;
 	btwContainer: Container;
+	omfgContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -248,6 +281,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
+	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -307,6 +341,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
+	readonly #omfgController: OmfgController;
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
 	readonly #eventController: EventController;
@@ -360,6 +395,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusContainer = new Container();
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
+		this.omfgContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -367,7 +403,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		this.editor.onAutocompleteUpdate = () => {
-			this.ui.requestRender();
+			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
 		};
 		this.#syncEditorMaxHeight();
 		this.#resizeHandler = () => {
@@ -378,6 +414,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			this.historyStorage = HistoryStorage.open();
 			this.editor.setHistoryStorage(this.historyStorage);
+			this.historyStorage.setSessionResolver(() => this.sessionManager.getSessionId());
 		} catch (error) {
 			logger.warn("History storage unavailable", { error: String(error) });
 		}
@@ -421,6 +458,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
+		this.#omfgController = new OmfgController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
@@ -430,7 +468,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
 
-	async init(): Promise<void> {
+	playWelcomeIntro(): void {
+		this.#welcomeComponent?.playIntro(() => this.ui.requestRender());
+	}
+	async init(options: InteractiveModeInitOptions = {}): Promise<void> {
 		if (this.isInitialized) return;
 
 		this.keybindings = logger.time("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
@@ -488,7 +529,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.addChild(new Spacer(1));
 			this.ui.addChild(this.#welcomeComponent);
 			this.ui.addChild(new Spacer(1));
-			this.#welcomeComponent.playIntro(() => this.ui.requestRender());
+			if (!options.suppressWelcomeIntro) {
+				this.playWelcomeIntro();
+			}
 
 			// Add changelog if provided
 			if (this.#changelogMarkdown) {
@@ -513,6 +556,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.btwContainer);
+		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -529,6 +573,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
 		this.#observerRegistry.onChange(() => {
 			this.statusLine.setSubagentCount(this.#observerRegistry.getActiveSubagentCount());
+			// Auto-checkmark todos whose matching subagent just succeeded, then
+			// re-render so the running override (the static "live" glyph when a
+			// subagent is doing the work for a still-pending todo) updates as
+			// subagents start, finish, or fail.
+			this.#reconcileTodosWithSubagents();
+			this.#syncTodoAutoClearTimer();
+			this.#renderTodoList();
 			this.ui.requestRender();
 		});
 
@@ -612,6 +663,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
 		this.session.setSlashCommands(fileCommands);
+	}
+
+	/**
+	 * Re-point the process and every cwd-derived cache at `newCwd` after the
+	 * active session's working directory changed (`/move` relocation or resuming
+	 * a session from another project). The SessionManager's cwd MUST already
+	 * reflect `newCwd` before this is called.
+	 */
+	async applyCwdChange(newCwd: string): Promise<void> {
+		setProjectDir(newCwd);
+		// Re-scope project settings (`.claude/settings.yml` etc.) to the new
+		// directory in place so the active session and every settings reader pick
+		// up the destination project's configuration.
+		if (isSettingsInitialized()) {
+			await settings.reloadForCwd(newCwd);
+		}
+		// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
+		// the next prompt sees everything scoped to the new project directory.
+		clearClaudePluginRootsCache();
+		resetCapabilities();
+		await this.refreshSlashCommandState(newCwd);
+		await this.session.refreshSshTool({ activateIfAvailable: true });
+		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		this.statusLine.invalidate();
+		this.updateEditorTopBorder();
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {
@@ -839,6 +915,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#pendingSubmissionDispose = undefined;
 		}
 		this.editor.setText("");
+		this.ui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 		return submission;
@@ -949,7 +1026,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.renderSessionContext(context);
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string): string {
+	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
 		const checkbox = theme.checkbox;
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
 		switch (todo.status) {
@@ -960,8 +1037,100 @@ export class InteractiveMode implements InteractiveModeContext {
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
 			default:
+				if (matched) {
+					return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
+				}
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		}
+	}
+
+	#getActiveSubagentDescriptions(): string[] {
+		const out: string[] = [];
+		for (const session of this.#observerRegistry.getSessions()) {
+			if (session.kind !== "subagent") continue;
+			if (session.status !== "active") continue;
+			const candidate =
+				session.description?.trim() || session.progress?.description?.trim() || session.label?.trim();
+			if (candidate) out.push(candidate);
+		}
+		return out;
+	}
+
+	/**
+	 * Auto-complete any pending/in_progress todo whose content matches a
+	 * subagent that has finished successfully. Fires on every observer
+	 * `onChange` so the visual state stays in sync with subagent lifecycle
+	 * without requiring the agent to issue a follow-up `todo_write`. Failed
+	 * and aborted subagents are intentionally NOT auto-completed — those
+	 * stay open so the user (or the next agent turn) can decide what to do.
+	 *
+	 * Idempotent: only flips open tasks, never re-touches completed ones.
+	 */
+	#reconcileTodosWithSubagents(): void {
+		const completedDescs: string[] = [];
+		for (const session of this.#observerRegistry.getSessions()) {
+			if (session.kind !== "subagent") continue;
+			if (session.status !== "completed") continue;
+			const candidate =
+				session.description?.trim() || session.progress?.description?.trim() || session.label?.trim();
+			if (candidate) completedDescs.push(candidate);
+		}
+		if (completedDescs.length === 0) return;
+
+		let mutated = false;
+		const next: TodoPhase[] = this.todoPhases.map(phase => ({
+			name: phase.name,
+			tasks: phase.tasks.map(task => {
+				if (task.status !== "pending" && task.status !== "in_progress") return task;
+				if (!todoMatchesAnyDescription(task.content, completedDescs)) return task;
+				mutated = true;
+				return { ...task, status: "completed" as const };
+			}),
+		}));
+		if (!mutated) return;
+		this.todoPhases = next;
+		this.session.setTodoPhases(next);
+	}
+
+	#cancelTodoAutoClearTimer(): void {
+		if (!this.#todoAutoClearTimer) return;
+		clearTimeout(this.#todoAutoClearTimer);
+		this.#todoAutoClearTimer = undefined;
+	}
+
+	#isClosedTodo(task: TodoItem): boolean {
+		return task.status === "completed" || task.status === "abandoned";
+	}
+
+	#hasClosedTodos(phases: TodoPhase[]): boolean {
+		return phases.some(phase => phase.tasks.some(task => this.#isClosedTodo(task)));
+	}
+
+	#removeClosedTodos(phases: TodoPhase[]): TodoPhase[] {
+		const next: TodoPhase[] = [];
+		for (const phase of phases) {
+			const tasks = phase.tasks.filter(task => !this.#isClosedTodo(task));
+			if (tasks.length > 0) next.push({ name: phase.name, tasks });
+		}
+		return next;
+	}
+
+	#syncTodoAutoClearTimer(): void {
+		this.#cancelTodoAutoClearTimer();
+		const delaySeconds = this.settings.get("tasks.todoClearDelay");
+		if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || !this.#hasClosedTodos(this.todoPhases)) return;
+		if (delaySeconds === 0) {
+			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
+			return;
+		}
+
+		this.#todoAutoClearTimer = setTimeout(() => {
+			this.#todoAutoClearTimer = undefined;
+			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
+			this.#renderTodoList();
+			this.ui.requestRender();
+		}, delaySeconds * 1000);
+		this.#todoAutoClearTimer.unref?.();
 	}
 
 	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
@@ -975,29 +1144,32 @@ export class InteractiveMode implements InteractiveModeContext {
 	#renderTodoList(): void {
 		this.todoContainer.clear();
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
-		if (phases.length === 0) {
-			return;
-		}
-
+		if (phases.length === 0) return;
 		const indent = "  ";
 		const hook = theme.tree.hook;
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
+
+		const activeDescs = this.#getActiveSubagentDescriptions();
+		// A pending todo "lights up" (accent + running glyph) when an in-flight
+		// subagent is doing its work, matched by normalized content overlap.
+		const isMatched = (todo: TodoItem): boolean =>
+			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		if (!this.todoExpanded) {
 			const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
 			const activePhase = phases[activeIdx];
 			if (!activePhase) return;
+			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
+
 			lines.push(
 				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
 			);
-			const visibleTasks = activePhase.tasks.slice(0, 5);
-			visibleTasks.forEach((todo, index) => {
+			visible.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix));
+				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
 			});
-			if (visibleTasks.length < activePhase.tasks.length) {
-				const remaining = activePhase.tasks.length - visibleTasks.length;
-				lines.push(theme.fg("muted", `${indent}  ${hook} +${remaining} more`));
+			if (hiddenOpenCount > 0) {
+				lines.push(theme.fg("muted", `${indent}  ${hook} +${hiddenOpenCount} more`));
 			}
 			this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 			return;
@@ -1007,7 +1179,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			lines.push(`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`);
 			phase.tasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix));
+				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
 			});
 		});
 
@@ -1016,6 +1188,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #loadTodoList(): Promise<void> {
 		this.todoPhases = this.session.getTodoPhases();
+		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 	}
 
@@ -1487,6 +1660,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		return `up/down navigate  enter select  ${externalEditorKey.toLowerCase()} open in editor  esc cancel`;
 	}
 
+	#getPlanApprovalContextUsage(): ContextUsage | undefined {
+		const executionModel = this.#planModePreviousModelState?.model ?? this.session.model;
+		const contextWindow = executionModel?.contextWindow;
+		if (typeof contextWindow === "number") {
+			return this.session.getContextUsage({ contextWindow });
+		}
+		return this.session.getContextUsage();
+	}
+
+	#formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
+		if (contextUsage?.tokens == null) {
+			return "Approve and keep context";
+		}
+		const tokens = formatContextTokenCount(contextUsage.tokens);
+		const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
+		return `Approve and keep context (~${tokens} / ${contextWindow})`;
+	}
+
+	#isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
+		return contextUsage?.percent != null && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
+	}
+
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
@@ -1537,6 +1732,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	async #applyPlanExecutionModel(entry: ResolvedRoleModel | undefined): Promise<void> {
+		if (!entry) return;
+		try {
+			await this.session.applyRoleModel(entry);
+			this.statusLine.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(`Continuing with ${entry.role}: ${entry.model.name || entry.model.id}`);
+		} catch (error) {
+			this.showWarning(
+				`Could not switch to the ${entry.role} model: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
 	async #approvePlan(
 		planContent: string,
 		options: {
@@ -1545,6 +1754,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			title: string;
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
+			executionModel?: ResolvedRoleModel;
 		},
 	): Promise<void> {
 		await renameApprovedPlanFile({
@@ -1625,6 +1835,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return;
 		}
+
+		await this.#applyPlanExecutionModel(options.executionModel);
 
 		// Approved plans land in a fresh (or compacted) session whose first user-visible
 		// turn is the synthetic plan-approved prompt — that path bypasses the
@@ -1936,20 +2148,49 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.#renderPlanPreview(planContent, { append: true });
+		const contextUsage = this.#getPlanApprovalContextUsage();
+		const keepContextLabel = this.#formatKeepContextLabel(contextUsage);
+		const keepContextDisabled = this.#isKeepContextDisabled(contextUsage);
+
+		// Model-tier slider: let the operator pick which configured role model
+		// (smol/default/slow/…) executes the approved plan. The slider always starts
+		// on the `default` tier so execution defaults to the default model no matter
+		// which model drove the planning conversation. Left/right move it from there;
+		// hidden when fewer than two role models resolve — a lone tier is no choice.
+		// `selectedTierIndex` tracks the live slider position.
+		const cycle = this.session.getRoleModelCycle(this.session.settings.get("cycleOrder"));
+		const defaultTierIndex = cycle ? cycle.models.findIndex(entry => entry.role === "default") : -1;
+		const startTierIndex = defaultTierIndex >= 0 ? defaultTierIndex : (cycle?.currentIndex ?? 0);
+		let selectedTierIndex = startTierIndex;
+		const slider: HookSelectorSlider | undefined =
+			cycle && cycle.models.length > 1
+				? {
+						caption: "continue with",
+						index: startTierIndex,
+						segments: cycle.models.map(entry => ({
+							label: entry.role,
+							color: MODEL_ROLES[entry.role as ModelRole]?.color,
+							detail: entry.model.name || entry.model.id,
+						})),
+						onChange: index => {
+							selectedTierIndex = index;
+						},
+					}
+				: undefined;
+		const helpText = slider ? `${this.#getPlanReviewHelpText()}  ◂/▸ model` : this.#getPlanReviewHelpText();
+
 		const choice = await this.showHookSelector(
 			"Plan mode - next step",
-			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
+			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
 			{
-				helpText: this.#getPlanReviewHelpText(),
+				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
+				disabledIndices: keepContextDisabled ? [PLAN_KEEP_CONTEXT_OPTION_INDEX] : undefined,
 			},
+			{ slider },
 		);
 
-		if (
-			choice === "Approve and execute" ||
-			choice === "Approve and compact context" ||
-			choice === "Approve and keep context"
-		) {
+		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
 				const latestPlanContent = await this.#readPlanFile(planFilePath);
@@ -1957,12 +2198,24 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
 				}
+				// Capture the operator's tier choice and hand it to #approvePlan, which
+				// applies it AFTER #exitPlanMode. #exitPlanMode restores
+				// #planModePreviousModelState (the model from before plan mode), so
+				// applying the slider choice any earlier would be silently reverted —
+				// the bug that made "continue with slow" keep executing on the default
+				// model. Deferred application also survives newSession()/compaction.
+				// `cycle.currentIndex` is exactly that restored model, so any chosen tier
+				// differing from it needs an explicit executionModel — this also covers
+				// leaving the slider on its `default` anchor while planning ran elsewhere.
+				const executionModel =
+					cycle && selectedTierIndex !== cycle.currentIndex ? cycle.models[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					finalPlanFilePath,
 					title: details.title,
 					preserveContext: choice !== "Approve and execute",
 					compactBeforeExecute: choice === "Approve and compact context",
+					executionModel,
 				});
 			} catch (error) {
 				this.showError(
@@ -2035,6 +2288,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation = undefined;
 		}
 		this.#cleanupMicAnimation();
+		this.#cancelTodoAutoClearTimer();
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();
@@ -2085,18 +2339,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			logger.warn("Failed to save session draft", { error: String(err) });
 		}
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();
 
-		if (this.isInitialized) {
-			this.ui.requestRender(true);
-		}
-
-		// Wait for any pending renders to complete
-		// requestRender() uses process.nextTick(), so we wait one tick
-		await new Promise(resolve => process.nextTick(resolve));
-
+		// Do not force a final render during teardown: disposed session/UI state can
+		// collapse to an empty frame, clearing the viewport and leaving the parent
+		// shell prompt at row 0. Stop from the last committed frame so the terminal
+		// hands Bash the cursor immediately after visible OMP content.
 		// Drain any in-flight Kitty key release events before stopping.
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		await this.ui.terminal.drainInput(1000);
@@ -2145,7 +2396,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		nextEditor.onAutocompleteUpdate = () => {
-			this.ui.requestRender();
+			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
 		};
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {
@@ -2406,6 +2657,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#prepareSessionSwitch(): void {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.#planReviewContainer = undefined;
 	}
@@ -2422,6 +2674,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleForkCommand(): Promise<void> {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		return this.#commandController.handleForkCommand();
 	}
 
@@ -2557,6 +2810,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleHandoffCommand(customInstructions);
 	}
 
+	handleShakeCommand(mode: ShakeMode): Promise<void> {
+		return this.#commandController.handleShakeCommand(mode);
+	}
+
 	executeCompaction(
 		customInstructionsOrOptions?: string | CompactOptions,
 		isAuto?: boolean,
@@ -2607,6 +2864,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleResumeSession(sessionPath: string): Promise<void> {
 		this.#btwController.dispose();
+		this.#omfgController.dispose();
 		this.resetObserverRegistry();
 		return this.#selectorController.handleResumeSession(sessionPath);
 	}
@@ -2660,12 +2918,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleEscape();
 	}
 
+	handleOmfgCommand(complaint: string): Promise<void> {
+		return this.#omfgController.start(complaint);
+	}
+
+	hasActiveOmfg(): boolean {
+		return this.#omfgController.hasActiveRequest();
+	}
+
+	handleOmfgEscape(): boolean {
+		return this.#omfgController.handleEscape();
+	}
+
 	cycleThinkingLevel(): void {
 		this.#inputController.cycleThinkingLevel();
 	}
 
-	cycleRoleModel(options?: { temporary?: boolean }): Promise<void> {
-		return this.#inputController.cycleRoleModel(options);
+	cycleRoleModel(direction?: "forward" | "backward"): Promise<void> {
+		return this.#inputController.cycleRoleModel(direction);
 	}
 
 	toggleToolOutputExpansion(): void {
@@ -2697,6 +2967,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
+		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}
@@ -2736,10 +3007,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showHookSelector(
 		title: string,
-		options: string[],
-		dialogOptions?: ExtensionUIDialogOptions,
+		options: ExtensionUISelectItem[],
+		dialogOptions?: InteractiveSelectorDialogOptions,
+		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
-		return this.#extensionUiController.showHookSelector(title, options, dialogOptions);
+		return this.#extensionUiController.showHookSelector(title, options, dialogOptions, extra);
 	}
 
 	hideHookSelector(): void {

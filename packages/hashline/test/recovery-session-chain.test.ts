@@ -21,8 +21,8 @@ function seedTwoSnapshots(): { store: InMemorySnapshotStore; v0Text: string; v1T
 	v1Lines[4] = "L5-CHANGED";
 	const v0Text = `${v0Lines.join("\n")}\n`;
 	const v1Text = `${v1Lines.join("\n")}\n`;
-	const h0 = store.recordContiguous(PATH, 1, v0Text.split("\n"), { fullText: v0Text });
-	const h1 = store.recordContiguous(PATH, 1, v1Text.split("\n"), { fullText: v1Text });
+	const h0 = store.record(PATH, v0Text);
+	const h1 = store.record(PATH, v1Text);
 	return { store, v0Text, v1Text, h0, h1 };
 }
 
@@ -33,7 +33,7 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		// rewrote. Replaying onto current would overwrite "L5-CHANGED" with
 		// payload the model authored against the stale "L5". That is
 		// corruption, not recovery.
-		const { edits } = parsePatch("5 5\n|L5-MODEL");
+		const { edits } = parsePatch("replace 5..5:\n|L5-MODEL");
 
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -51,7 +51,7 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		// merge fails (patch context includes the rewritten line 5), but the
 		// replay fallback is safe because the model's anchor still names the
 		// same logical content.
-		const { edits } = parsePatch("3 3\n|L3-MODEL");
+		const { edits } = parsePatch("replace 3..3:\n|L3-MODEL");
 
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,

@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/hashline",
-	"version": "15.5.10",
+	"version": "15.8.3",
 	"description": "Hashline: a compact, line-anchored patch language and applier. Pluggable FS/IO so it works over disk, in-memory, or any custom backend.",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -28,12 +28,13 @@
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
-		"test": "bun test",
+		"test": "bun test --parallel",
 		"fix": "biome check --write --unsafe .",
 		"fmt": "biome format --write ."
 	},
 	"dependencies": {
-		"diff": "catalog:"
+		"diff": "catalog:",
+		"lru-cache": "catalog:"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

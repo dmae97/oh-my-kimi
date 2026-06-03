@@ -235,23 +235,27 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 
 function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
 	if (!diff) return "";
-	// Hunk-aware truncation keeps the change rows themselves visible. Tail-mode
-	// pins the visible window to the bottom of the diff so newly streamed
-	// hunks stay on screen as more arrives, instead of leaving the user stuck
-	// staring at the head of the file while the tail scrolls offscreen.
-	const {
-		text: truncatedDiff,
-		hiddenHunks,
-		hiddenLines,
-	} = truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, EDIT_STREAMING_PREVIEW_LINES, { fromTail: true });
+	// "Cursor" tail window: pin the last EDIT_STREAMING_PREVIEW_LINES rows to the
+	// bottom of the diff so freshly streamed changes stay on screen, and accept
+	// the trailing rows "from the back" once the diff outgrows the window. The
+	// whole-file diff is recomputed on every streamed chunk and its Myers
+	// alignment is not monotonic in payload length, so a hunk-aware window that
+	// kept whole change segments gained and lost rows tick to tick — the box
+	// stuttered, and the earlier high-water fix traded that for a half-empty
+	// rectangle. A strict fixed-height window keeps the box steady and always
+	// full of real diff context instead of blank padding.
+	const allLines = diff.replace(/\n+$/u, "").split("\n");
+	const hiddenLines = Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
+	const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
 	let text = "\n\n";
-	if (hiddenHunks > 0 || hiddenLines > 0) {
+	if (hiddenLines > 0) {
+		const hiddenHunks = getDiffStats(allLines.slice(0, hiddenLines).join("\n")).hunks;
 		const remainder: string[] = [];
 		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
-		if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
+		remainder.push(`${hiddenLines} more lines`);
 		text += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
 	}
-	text += renderDiffColored(truncatedDiff, { filePath: rawPath });
+	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
 	text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
 }
@@ -312,7 +316,7 @@ const MISSING_APPLY_PATCH_END_ERROR = "The last line of the patch must be '*** E
 
 function normalizeHashlineInputPreviewPath(rawPath: string): string {
 	const trimmed = rawPath.trim();
-	const hashStart = /#[0-9a-fA-F]{3}$/u.exec(trimmed)?.index;
+	const hashStart = /#[0-9a-fA-F]{4}$/u.exec(trimmed)?.index;
 	const withoutHash = hashStart === undefined ? trimmed : trimmed.slice(0, hashStart);
 	if (withoutHash.length < 2) return withoutHash;
 	const first = withoutHash[0];

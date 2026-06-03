@@ -93,12 +93,43 @@ export interface Terminal {
 	setProgress(active: boolean): void;
 
 	/**
+	 * Returns whether the native terminal viewport is at the scrollback tail when
+	 * the host exposes that state. `undefined` means the terminal cannot report it.
+	 *
+	 * `ProcessTerminal` deliberately does not implement this — no real terminal
+	 * can answer it truthfully:
+	 *
+	 * - POSIX terminals expose no scrollback-position API at all.
+	 * - Every modern Windows terminal host (Windows Terminal, VS Code, Tabby,
+	 *   Hyper, Alacritty, WezTerm, JetBrains, …) fronts console apps through
+	 *   ConPTY, where kernel32's `GetConsoleScreenBufferInfo` describes the
+	 *   pseudo-console buffer. That buffer is pinned to the visible grid —
+	 *   scrollback lives in the host UI, invisible to console APIs
+	 *   (microsoft/terminal#10191) — so a probe reads "at bottom" no matter
+	 *   where the user scrolled. Trusting it let streaming-time rebuilds emit
+	 *   `\x1b[3J` and yank scrolled readers: #1635 (Windows Terminal), #1746
+	 *   (Tabby and other ConPTY hosts). No env var distinguishes these hosts
+	 *   (Tabby sets none), so trust cannot be conditional on the environment.
+	 * - Legacy conhost (the only non-ConPTY host) keeps a real scrollback
+	 *   buffer, but its window follows the output cursor: a probe comparing
+	 *   `srWindow.Bottom` against `dwSize.Y - 1` reads "scrolled up" for a user
+	 *   following live output until all ~9001 buffer rows fill, permanently
+	 *   blocking checkpoint scrollback reconciliation.
+	 *
+	 * The renderer treats a missing implementation / `undefined` as "unknown":
+	 * live mutations defer destructive rebuilds and reconcile native scrollback
+	 * at explicit checkpoints (prompt submit), where the user's keystroke has
+	 * already pinned the host viewport to the bottom. Only test terminals
+	 * (xterm.js-backed) implement this with a real answer.
+	 */
+	isNativeViewportAtBottom?(): boolean | undefined;
+
+	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
-
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
 }

@@ -69,6 +69,27 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("\t");
 	});
 
+	it("renders the pending call as a bordered block with the command in the body", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderCall(
+			{ command: "sleep 30" },
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
+		const lines = Bun.stripANSI(component.render(60).join("\n")).split("\n");
+		// A block frames the command: a header bar, the command row, and a bottom border.
+		expect(lines.length).toBeGreaterThanOrEqual(3);
+		const header = lines[0]!;
+		const body = lines.slice(1, -1).join("\n");
+		// The header carries the title only; the command lives inside the framed body
+		// (not inline on the status line as the old one-liner preview rendered it).
+		expect(header).toContain("Bash");
+		expect(header).not.toContain("sleep 30");
+		expect(body).toContain("$ sleep 30");
+	});
+
 	it("shows the effective timeout from result details when it differs from call args", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
@@ -104,6 +125,52 @@ describe("bashToolRenderer", () => {
 		// Notice text must not appear in the output region — the styled label is the
 		// only place wall time is shown so users don't read it twice.
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
+	});
+	it("renders the exit status in the footer and strips the textual exit notice for failed commands", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "boom\n\nWall time: 0.02 seconds\n\nCommand exited with code 1" }],
+				details: { timeoutSeconds: 300, wallTimeMs: 20, exitCode: 1 },
+				isError: true,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "false" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		// The footer carries the styled stats including the non-zero exit status.
+		expect(rendered).toContain("Wall: 0.02s");
+		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).toContain("Exit: 1");
+		// Both the exit-code and wall-time notices are folded into the footer, not
+		// echoed verbatim in the output region.
+		expect(rendered).not.toContain("Command exited with code 1");
+		expect(rendered).not.toContain("Wall time: 0.02 seconds");
+		// The command's own output still shows.
+		expect(rendered).toContain("boom");
+	});
+
+	it("omits the status footer for a successful command", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "ok\n\nWall time: 0.02 seconds" }],
+				details: { timeoutSeconds: 300, wallTimeMs: 20 },
+				isError: false,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "true" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("Wall: 0.02s");
+		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).not.toContain("Exit:");
 	});
 
 	it("bypasses truncation/styling for SIXEL lines", async () => {

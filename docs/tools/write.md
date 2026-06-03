@@ -1,6 +1,6 @@
 # write
 
-> Create or overwrite a file, archive entry, or SQLite row.
+> Create or overwrite a file, writable internal resource, archive entry, SQLite row, or merge-conflict resolution.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/write.ts`
@@ -16,8 +16,8 @@
 ## Inputs
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `string` | Yes | Target path. Plain file path writes a filesystem file. `archive.ext:inner/path` writes an archive entry for `.tar`, `.tar.gz`, `.tgz`, or `.zip`. `db.sqlite:table` inserts a row. `db.sqlite:table:key` updates or deletes a row. |
-| `content` | `string` | Yes | Full replacement file content, archive entry content, or SQLite row payload. SQLite non-delete writes must parse as a JSON5 object. Empty or whitespace-only content deletes a SQLite row when `path` includes a row key. |
+| `path` | `string` | Yes | Target path. Plain file path writes a filesystem file. Writable internal URLs are delegated to their handler. `archive.ext:inner/path` writes an archive entry for `.tar`, `.tar.gz`, `.tgz`, or `.zip`. `db.sqlite:table` inserts a row. `db.sqlite:table:key` updates or deletes a row. `conflict://<id>` resolves a recorded merge conflict. |
+| `content` | `string` | Yes | Full replacement file content, archive entry content, internal-resource content, conflict replacement, or SQLite row payload. SQLite non-delete writes must parse as a JSON5 object. Empty or whitespace-only content deletes a SQLite row when `path` includes a row key. |
 
 Worked examples:
 
@@ -40,35 +40,41 @@ content: "{name: 'Ada', active: true}"
 Single-shot result.
 
 - Success always returns a text block.
-  - Plain file write: `Successfully wrote <bytes> bytes to <relative-path>`.
-  - Archive write: `Successfully wrote <bytes> bytes to <relative-archive-path>:<entry-path>`.
+  - Plain file write: `Successfully wrote <chars> bytes to <relative-path>` (the count is `cleanContent.length`, not encoded byte length).
+  - Internal URL write: `Successfully wrote <chars> bytes to <url>`.
+  - Archive write: `Successfully wrote <chars> bytes to <relative-archive-path>:<entry-path>`.
   - SQLite write: one of `Inserted row into <table>`, `Updated row '<key>' in <table>`, `No row updated ...`, `Deleted row ...`, `No row deleted ...`.
+  - Conflict resolution: conflict-specific success text, with fresh hashline snapshot headers when applicable.
 - If hashline prefixes were copied from `read` output and stripped first, the first text block gets an extra note.
-- Plain file writes may also return `details.diagnostics` plus `details.meta.diagnostics` when LSP diagnostics-on-write is enabled.
+- In hashline display mode, plain file writes (including ACP bridge writes) and conflict resolutions prepend a fresh `¶<relative-path>#TAG` header so the next `edit` has a current snapshot tag without an extra `read`. Bulk conflict resolutions append a `Snapshots:` block listing one header per successfully written file.
+- Plain file writes may also return `details.diagnostics` plus `details.meta.diagnostics` when LSP diagnostics-on-write is enabled, and `details.madeExecutable` when a newly written shebang file is chmodded executable.
 - SQLite writes use `toolResult(...).sourcePath(...)`, so `details.meta.sourcePath` points at the database file.
-- Archive writes return empty `details`.
+- Archive and internal URL writes return empty `details`.
 
 ## Flow
 1. `WriteTool.execute()` in `packages/coding-agent/src/tools/write.ts` strips pasted `¶PATH#HASH` headers and `LINE:` hashline prefixes from `content` when the session is in hashline display mode.
-2. It calls `#resolveArchiveWritePath()` first. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/tools/archive-reader.ts`, checks candidate archive files on disk, and falls back to the longest matching archive suffix even when the archive file does not exist yet.
-3. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
+2. If `path` is an internal URL whose handler exposes `write`, the tool delegates directly to `handler.write(...)` and returns.
+3. `conflict://...` paths are handled next by the merge-conflict resolver. Scope reads such as `conflict://<id>/ours` are rejected as read-only; writable conflict URIs must omit the scope.
+4. It calls `#resolveArchiveWritePath()` next. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/tools/archive-reader.ts`, checks candidate archive files on disk, and falls back to the longest matching archive suffix even when the archive file does not exist yet.
+5. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
    - The parent directory of the archive file is created with `fs.mkdir(..., { recursive: true })`.
    - `.zip` archives are read with `fflate.unzipSync()`, the target entry is replaced in an in-memory map, and the archive is rewritten with `fflate.zipSync()` + `Bun.write()`.
    - `.tar`, `.tar.gz`, and `.tgz` archives are read with `Bun.Archive`, existing entries are copied into an object map, the target entry is replaced, and `Bun.Archive.write()` rewrites the archive.
    - `invalidateFsScanAfterWrite()` runs on the archive file path.
-4. If the path is not treated as an archive, `execute()` calls `#resolveSqliteWritePath()`. That uses `parseSqlitePathCandidates()` and `isSqliteFile()` from `packages/coding-agent/src/tools/sqlite-reader.ts`. Existing non-SQLite files suppress the SQLite path interpretation.
-5. SQLite writes call `enforcePlanModeWrite(..., { op: "update" })`, then `#writeSqliteRow()`.
+6. If the path is not treated as an archive, `execute()` calls `#resolveSqliteWritePath()`. That uses `parseSqlitePathCandidates()` and `isSqliteFile()` from `packages/coding-agent/src/tools/sqlite-reader.ts`. Existing non-SQLite files suppress the SQLite path interpretation.
+7. SQLite writes call `enforcePlanModeWrite(..., { op: "update" })`, then `#writeSqliteRow()`.
    - The database must already exist; missing DBs throw `SQLite database '<path>' not found`.
    - The tool opens `new Database(..., { create: false, strict: true })` and sets `PRAGMA busy_timeout = 3000`.
    - Whitespace-only `content` with a row key deletes a row.
    - Non-empty `content` is parsed with `Bun.JSON5.parse()`, must be a JSON object, and is routed to insert/update helpers from `packages/coding-agent/src/tools/sqlite-reader.ts`.
    - `invalidateFsScanAfterWrite()` runs on the DB path and the connection is closed in `finally`.
-6. Otherwise the tool treats `path` as a plain filesystem file.
+8. Otherwise the tool treats `path` as a plain filesystem file.
    - `enforcePlanModeWrite(..., { op: "create" })` runs before path resolution.
    - Existing files are checked by `assertEditableFile()` to block overwriting detected generated files.
-   - The session’s writethrough callback writes content. With LSP enabled and `lsp.formatOnWrite` / `lsp.diagnosticsOnWrite` settings on, `createLspWritethrough()` may format content, sync it through LSP servers, save it, and collect diagnostics. Otherwise `writethroughNoop()` writes directly with `Bun.write()` or `file.write()`.
+   - ACP bridge writeTextFile is tried first when available; otherwise the session’s writethrough callback writes content. With LSP enabled and `lsp.formatOnWrite` / `lsp.diagnosticsOnWrite` settings on, `createLspWritethrough()` may format content, sync it through LSP servers, save it, and collect diagnostics. Otherwise `writethroughNoop()` writes directly with `Bun.write()` or `file.write()`.
+   - `maybeMarkExecutableForShebang()` may chmod the file executable when content starts with `#!`.
    - `invalidateFsScanAfterWrite()` runs on the file path.
-7. The tool returns a text result and optional diagnostics metadata.
+9. The tool returns a text result and optional diagnostics / executable metadata.
 
 ## Modes / Variants
 ### Plain file path
@@ -136,6 +142,8 @@ content: ""
   - Rewrites entire archive files when writing an archive entry.
   - Creates parent directories for archive files only.
   - Mutates existing SQLite databases; never creates a new SQLite DB.
+  - Resolves conflict markers in files for `conflict://...` writes.
+  - May chmod a shebang file executable after a successful plain-file write.
 - Subprocesses / native bindings
   - Uses Bun SQLite bindings via `bun:sqlite`.
   - Uses Bun archive APIs and lazily imports `fflate` for ZIP reads/writes.
@@ -152,6 +160,7 @@ content: ""
 - Generated-file detection reads at most `CHECK_BYTE_COUNT = 1024` bytes and `HEADER_LINE_LIMIT = 40` header lines from an existing file in `packages/coding-agent/src/tools/auto-generated-guard.ts`.
 - SQLite writes set `PRAGMA busy_timeout = 3000`.
 - LSP writethrough uses a `5_000` ms operation timeout in `runLspWritethrough()` and may schedule a deferred diagnostics fetch with `AbortSignal.timeout(25_000)` in `scheduleDeferredDiagnosticsFetch()`.
+- Shebang executable handling depends on host filesystem chmod support.
 
 ## Errors
 - Invalid archive subpaths throw `ToolError` with messages such as:
@@ -165,6 +174,7 @@ content: ""
 - Missing SQLite DBs surface as `SQLite database '<path>' not found`.
 - SQLite content errors are model-visible `ToolError`s, including invalid JSON5, non-object payloads, unknown columns, non-scalar values, empty update objects, composite primary keys, and `WITHOUT ROWID` tables.
 - Existing plain files may be rejected by `assertEditableFile()` when they look generated.
+- Conflict scope writes such as `conflict://<id>/ours` are rejected as read-only; invalid conflict IDs or missing conflict history surface as `ToolError`s from the conflict resolver.
 - Archive read/write failures and unexpected SQLite exceptions are wrapped in `ToolError(error.message)`.
 - If no LSP server matches or LSP formatting/diagnostics times out, file writes still fall back to writing content; diagnostics may be omitted.
 
@@ -173,5 +183,5 @@ content: ""
 - SQLite detection declines when an existing file with a `.sqlite` / `.db` suffix is present but does not have SQLite magic bytes; then the path falls back to a plain file write.
 - ZIP entry content is encoded with `new TextEncoder().encode(content)` in `#writeArchiveEntry()`. Non-ZIP archive writes pass the string directly to `Bun.Archive.write()`.
 - The prompt forbids two common anti-patterns: using `write` for routine edits that should use `edit`, and creating `*.md` / `README` files unless explicitly requested. It also forbids emojis unless requested.
-- Plain file writes report byte count using `cleanContent.length`, which is UTF-16 code units in JS, not an on-disk byte measurement.
+- Plain file and internal URL writes report `cleanContent.length` as “bytes”, which is UTF-16 code units in JS, not an on-disk byte measurement.
 - `stripWriteContent()` only removes hashline prefixes when the session’s file display mode has `hashLines` enabled; otherwise content is written unchanged.

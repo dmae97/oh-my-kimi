@@ -129,8 +129,18 @@ export function signalListLabel(signals: readonly HarmonySignal[]): string {
  * (`C`/`G`/`S`/`B`/`R`/`T`). Bare `M` does not trip — this document, its
  * tests, and bug reports legitimately carry the marker.
  *
+ * The `tool_arg` surface is held to a stricter rule. A tool argument is
+ * arbitrary file/data content that can legitimately carry the marker, a
+ * channel word, harmony control tokens, or a non-Latin script run (editing
+ * these very fixtures does exactly that). The only robust leak signal there
+ * is content trailing the structurally-valid parse, so a `tool_arg` detection
+ * additionally requires the `T` co-signal. Absent a `parsedEnd` boundary `T`
+ * is never set, so `tool_arg` scanning stays inert and a legitimate codex tool
+ * call is never hard-aborted. `assistant_text`/`assistant_thinking` keep the
+ * base rule.
+ *
  * `parsedEnd`, when supplied, marks the byte at which a structurally valid
- * tool-argument parse ends; markers strictly after it set the `T` co-signal.
+ * tool-argument parse ends; markers at or past it set the `T` co-signal.
  * `contentIndex`/`toolName`/`toolCallId` flow through to the returned
  * detection for downstream auditing.
  */
@@ -177,6 +187,12 @@ export function detectHarmonyLeak(
 	}
 
 	if (signals.length === 0) return undefined;
+	// Tool arguments are data: they can legitimately embed the marker, a channel
+	// word, harmony control tokens, or a non-Latin script run. Only a marker
+	// trailing the structurally-valid parse (`T`) is a reliable leak signal, so
+	// refuse to trip a `tool_arg` detection without it. Without a `parsedEnd`
+	// boundary `T` is never set and the surface stays inert.
+	if (surface === "tool_arg" && !signals.some(s => s.classes.includes("T"))) return undefined;
 	signals.sort((a, b) => a.start - b.start || a.end - b.end);
 	return {
 		surface,
@@ -187,8 +203,20 @@ export function detectHarmonyLeak(
 	};
 }
 
-/** Scan an assistant message's content blocks; return the first detection. */
-export function detectHarmonyLeakInAssistantMessage(message: AssistantMessage): HarmonyDetection | undefined {
+/**
+ * Scan an assistant message's content blocks; return the first detection.
+ *
+ * `toolArgParseEnd`, when supplied, resolves the byte offset at which a tool
+ * call's structurally-valid argument parse ends (the `T` co-signal in
+ * {@link detectHarmonyLeak}). Callers that can parse a tool's argument DSL pass
+ * it to enable `tool_arg` leak detection; omitting it keeps that surface inert
+ * — the safe default the agent loop relies on, since it cannot bound a streamed
+ * tool DSL and must never hard-abort a legitimate tool call.
+ */
+export function detectHarmonyLeakInAssistantMessage(
+	message: AssistantMessage,
+	toolArgParseEnd?: (toolCall: ToolCall) => number | undefined,
+): HarmonyDetection | undefined {
 	for (let i = 0; i < message.content.length; i++) {
 		const block = message.content[i];
 		if (block.type === "text") {
@@ -204,6 +232,7 @@ export function detectHarmonyLeakInAssistantMessage(message: AssistantMessage): 
 					contentIndex: i,
 					toolName: block.name,
 					toolCallId: block.id,
+					parsedEnd: toolArgParseEnd?.(block),
 				});
 				if (d) return d;
 			}
@@ -230,7 +259,7 @@ export function recoverHarmonyToolCall(
 ): HarmonyRecoveredToolCall | undefined {
 	if (detection.surface !== "tool_arg" || detection.contentIndex === undefined) return undefined;
 	const block = message.content[detection.contentIndex];
-	if (!block || block.type !== "toolCall") return undefined;
+	if (block?.type !== "toolCall") return undefined;
 
 	const config = RECOVERY_REGISTRY[block.name];
 	if (!config) return undefined;

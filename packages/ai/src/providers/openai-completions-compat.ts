@@ -208,6 +208,11 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
+		// Only Kimi's native hosts (Moonshot / Kimi-code, matched by `isMoonshotKimi`)
+		// speak the z.ai binary `thinking: { type }` field. Kimi reached through
+		// OpenAI-compatible proxies — Fireworks' Fire Pass router, OpenCode's gateway,
+		// etc. — drives reasoning via OpenAI-style `reasoning_effort`
+		// (low|medium|high|xhigh|max|none), so those stay on the "openai" path.
 		thinkingFormat:
 			isZai || isZhipu || isMoonshotKimi
 				? "zai"

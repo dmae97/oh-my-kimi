@@ -65,7 +65,7 @@ If omitted, it resolves:
 - `sessionManager`: `SessionManager.create(cwd)` (file-backed)
 - skills/context files/prompt templates/slash commands/extensions/custom TS commands
 - built-in tools via `createTools(...)`
-- MCP tools (enabled by default)
+- MCP tools (enabled by default; Exa MCP servers are folded into native Exa integration, and browser automation MCP servers are filtered when the built-in browser tool is enabled)
 - LSP integration (enabled by default)
 - `eventBus`: new `EventBus()` unless supplied
 
@@ -171,10 +171,12 @@ If restore fails, `modelFallbackMessage` explains fallback.
 
 `AuthStorage.getApiKey(...)` resolves in this order:
 
-1. runtime override (`setRuntimeApiKey`)
-2. stored credentials in `agent.db`
-3. provider environment variables
-4. custom-provider resolver fallback (if configured)
+1. runtime override (`setRuntimeApiKey`, used by CLI `--api-key`)
+2. config-sourced API key override (`models.yml` provider `apiKey`)
+3. stored API-key credential in `agent.db` / broker-backed storage
+4. stored OAuth credential, including refresh when needed
+5. provider environment variables
+6. custom-provider resolver fallback
 
 ## Event subscription model
 
@@ -239,7 +241,7 @@ Related APIs:
 
 ```ts
 const { session } = await createAgentSession({
-  toolNames: ["read", "grep", "find", "write"],
+  toolNames: ["read", "search", "find", "write"],
   requireYieldTool: true,
 });
 ```
@@ -318,7 +320,7 @@ Use `setToolUIContext(...)` only if your embedder provides UI capabilities that 
   - `options.hasUI === true` (interactive TUI), **and**
   - the `lsp.diagnosticsOnWrite` setting is enabled.
 
-  Print / script / RPC / ACP invocations (`hasUI=false`) skip the warmup entirely: they don't render the warmup status indicator and typically finish before the language servers would stabilize, so warming them just spends CPU parsing big `initialize` responses concurrently with the LLM stream consumer and jitters perceived latency. Tools that actually need an LSP server still spin one up on demand through `getOrCreateClient()` — only the *startup* warmup is skipped. The returned `lspServers` field in `CreateAgentSessionResult` is therefore `undefined` (not an empty array) whenever the warmup branch was bypassed.
+  Print / script / RPC / ACP invocations (`hasUI=false`) skip the warmup entirely: they don't render the warmup status indicator and typically finish before the language servers would stabilize, so warming them just spends CPU parsing big `initialize` responses concurrently with the LLM stream consumer and jitters perceived latency. Tools that actually need an LSP server still spin one up on demand through `getOrCreateClient()` — only the _startup_ warmup is skipped. The returned `lspServers` field in `CreateAgentSessionResult` is therefore `undefined` (not an empty array) whenever the warmup branch was bypassed.
 
 ## Minimal controlled embed example
 
@@ -345,7 +347,7 @@ const { session } = await createAgentSession({
   modelRegistry,
   settings,
   sessionManager: SessionManager.inMemory(),
-  toolNames: ["read", "grep", "find", "edit", "write"],
+  toolNames: ["read", "search", "find", "edit", "write"],
   enableMCP: false,
   enableLsp: true,
 });

@@ -3,7 +3,7 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import { settings } from "../../config/settings";
@@ -29,12 +29,14 @@ import {
 import type { InteractiveModeContext } from "../../modes/types";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import {
 	isImageProviderPreference,
 	isSearchProviderPreference,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 } from "../../tools";
+import { shortenPath } from "../../tools/render-utils";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
@@ -252,7 +254,7 @@ export class SelectorController {
 				break;
 			case "thinkingLevel":
 			case "defaultThinkingLevel":
-				this.ctx.session.setThinkingLevel(value as ThinkingLevel, true);
+				this.ctx.session.setThinkingLevel(value as ConfiguredThinkingLevel, true);
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
 				break;
@@ -403,10 +405,18 @@ export class SelectorController {
 				this.ctx.session.modelRegistry,
 				this.ctx.session.scopedModels,
 				async (model, role, thinkingLevel, selector) => {
+					// `auto` is session-global: never baked into a per-role model value
+					// (it can't round-trip through `model:<level>`). Apply it to the session
+					// separately and persist via `defaultThinkingLevel`.
+					const isAuto = thinkingLevel === AUTO_THINKING;
+					const concreteThinking = isAuto ? undefined : thinkingLevel;
 					try {
 						if (role === null) {
-							// Temporary: update agent state but don't persist to settings
+							// Temporary: update agent state but don't persist the model to settings
 							await this.ctx.session.setModelTemporary(model);
+							if (isAuto) {
+								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+							}
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
 							this.ctx.showStatus(`Temporary model: ${selector ?? model.id}`);
@@ -416,10 +426,13 @@ export class SelectorController {
 							// Default: update agent state and persist
 							await this.ctx.session.setModel(model, role, {
 								selector,
-								thinkingLevel,
+								thinkingLevel: concreteThinking,
+								persist: true,
 							});
-							if (thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit) {
-								this.ctx.session.setThinkingLevel(thinkingLevel);
+							if (isAuto) {
+								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+							} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+								this.ctx.session.setThinkingLevel(concreteThinking);
 							}
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
@@ -429,8 +442,11 @@ export class SelectorController {
 							// Other roles (smol, slow): just update settings, not current model
 							this.ctx.settings.setModelRole(
 								role,
-								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, thinkingLevel),
+								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, concreteThinking),
 							);
+							if (isAuto) {
+								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+							}
 							const roleInfo = getRoleInfo(role, settings);
 							const roleLabel = roleInfo?.name ?? role;
 							this.ctx.showStatus(`${roleLabel} model: ${selector ?? model.id}`);
@@ -704,12 +720,22 @@ export class SelectorController {
 			this.ctx.sessionManager.getCwd(),
 			this.ctx.sessionManager.getSessionDir(),
 		);
+		// Current folder has no sessions: preload the global list so the picker
+		// can open straight into all-projects scope instead of dead-ending.
+		let allSessions: SessionInfo[] | undefined;
+		let startInAllScope = false;
+		if (sessions.length === 0) {
+			allSessions = await SessionManager.listAll();
+			startInAllScope = allSessions.length > 0;
+		}
+		const historyStorage = this.ctx.historyStorage;
+		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
 		this.showSelector(done => {
 			const selector = new SessionSelectorComponent(
 				sessions,
-				async sessionPath => {
+				async (session: SessionInfo) => {
 					done();
-					await this.handleResumeSession(sessionPath);
+					await this.handleResumeSession(session.path);
 				},
 				() => {
 					done();
@@ -718,19 +744,25 @@ export class SelectorController {
 				() => {
 					void this.ctx.shutdown();
 				},
-				async (session: SessionInfo) => {
-					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-						return false;
-					}
-					const storage = new FileSessionStorage();
-					try {
-						await storage.deleteSessionWithArtifacts(session.path);
-						return true;
-					} catch (err) {
-						throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
-							cause: err,
-						});
-					}
+				{
+					onDelete: async (session: SessionInfo) => {
+						if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+							return false;
+						}
+						const storage = new FileSessionStorage();
+						try {
+							await storage.deleteSessionWithArtifacts(session.path);
+							return true;
+						} catch (err) {
+							throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
+								cause: err,
+							});
+						}
+					},
+					historyMatcher,
+					loadAllSessions: () => SessionManager.listAll(),
+					allSessions,
+					startInAllScope,
 				},
 			);
 			selector.setOnRequestRender(() => this.ctx.ui.requestRender());
@@ -786,8 +818,17 @@ export class SelectorController {
 	async handleResumeSession(sessionPath: string): Promise<void> {
 		this.#clearTransientSessionUi();
 
-		// Switch session via AgentSession (emits hook and tool session events)
+		const previousCwd = this.ctx.sessionManager.getCwd();
+		// Switch session via AgentSession (emits hook and tool session events). The
+		// SessionManager adopts the resumed session's own cwd when it differs.
 		await this.ctx.session.switchSession(sessionPath);
+		const newCwd = this.ctx.sessionManager.getCwd();
+		const movedProject = normalizePathForComparison(newCwd) !== normalizePathForComparison(previousCwd);
+		if (movedProject) {
+			// Resumed a session from another project: re-point the process and every
+			// cwd-derived cache at it before rendering.
+			await this.ctx.applyCwdChange(newCwd);
+		}
 		this.#refreshSessionTerminalTitle();
 		this.ctx.updateEditorBorderColor();
 
@@ -795,7 +836,7 @@ export class SelectorController {
 		this.ctx.chatContainer.clear();
 		this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
-		this.ctx.showStatus("Resumed session");
+		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
 	}
 
 	async handleSessionDeleteCommand(): Promise<void> {
@@ -904,7 +945,15 @@ export class SelectorController {
 
 	async #handleOAuthLogout(providerId: string): Promise<void> {
 		try {
-			await this.ctx.session.modelRegistry.authStorage.logout(providerId);
+			const authStorage = this.ctx.session.modelRegistry.authStorage;
+			if (!authStorage.has(providerId)) {
+				const source = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
+				const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
+				this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+				return;
+			}
+
+			await authStorage.logout(providerId);
 			await this.ctx.session.modelRegistry.refresh();
 			this.ctx.chatContainer.addChild(new Spacer(1));
 			this.ctx.chatContainer.addChild(
@@ -913,6 +962,12 @@ export class SelectorController {
 			this.ctx.chatContainer.addChild(
 				new Text(theme.fg("dim", `Credentials removed from ${getAgentDbPath()}`), 1, 0),
 			);
+			const remainingSource = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
+			if (remainingSource) {
+				this.ctx.chatContainer.addChild(
+					new Text(theme.fg("warning", `${providerId} is still authenticated via ${remainingSource}`), 1, 0),
+				);
+			}
 			this.ctx.ui.requestRender();
 		} catch (error: unknown) {
 			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -933,10 +988,10 @@ export class SelectorController {
 			await this.#refreshOAuthProviderAuthState();
 			const oauthProviders = getOAuthProviders();
 			const loggedInProviders = oauthProviders.filter(provider =>
-				this.ctx.session.modelRegistry.authStorage.hasAuth(provider.id),
+				this.ctx.session.modelRegistry.authStorage.has(provider.id),
 			);
 			if (loggedInProviders.length === 0) {
-				this.ctx.showStatus("No OAuth providers logged in. Use /login first.");
+				this.ctx.showStatus("No stored provider credentials to log out. Remove env or config auth at its source.");
 				return;
 			}
 		}

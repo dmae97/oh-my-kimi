@@ -69,6 +69,14 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * compute returned `null` because args are still too partial).
 	 */
 	renderStreamingFallback(args: Args, uiTheme: Theme): string;
+	/**
+	 * Project the (potentially partial) args onto the plain text the edit
+	 * introduces into files — added lines without patch grammar — so stream
+	 * matchers (TTSR rules) can run source-level patterns against real content
+	 * instead of the mode-specific wire format. Returns `undefined` when the
+	 * args don't yet carry any content.
+	 */
+	matcherDigest(args: Args): string | undefined;
 }
 
 // -----------------------------------------------------------------------------
@@ -161,6 +169,28 @@ function groupApplyPatchEntriesByPath(entries: readonly ApplyPatchEntry[]): Map<
 	return groups;
 }
 
+/**
+ * Extract the lines a patch-style payload adds (`+` prefix, excluding `+++ `
+ * file headers), stripped of the prefix. When the text carries no added lines,
+ * returns the whole text if `fallbackToWhole` (full-content payloads such as a
+ * `create` op), otherwise an empty string (grammar-only payloads).
+ */
+function extractAddedLines(text: string, fallbackToWhole: boolean): string {
+	let added: string | undefined;
+	let lineStart = 0;
+	while (lineStart <= text.length) {
+		let lineEnd = text.indexOf("\n", lineStart);
+		if (lineEnd === -1) lineEnd = text.length;
+		if (text.charCodeAt(lineStart) === 43 /* + */ && !text.startsWith("+++ ", lineStart)) {
+			const line = text.slice(lineStart + 1, lineEnd);
+			added = added === undefined ? line : `${added}\n${line}`;
+		}
+		lineStart = lineEnd + 1;
+	}
+	if (added === undefined) return fallbackToWhole ? text : "";
+	return added;
+}
+
 // -----------------------------------------------------------------------------
 // Strategies
 // -----------------------------------------------------------------------------
@@ -196,6 +226,16 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	renderStreamingFallback() {
 		return "";
 	},
+	matcherDigest(args) {
+		const edits = args?.edits;
+		if (!Array.isArray(edits)) return undefined;
+		let digest: string | undefined;
+		for (const edit of edits) {
+			if (typeof edit?.new_text !== "string") continue;
+			digest = digest === undefined ? edit.new_text : `${digest}\n${edit.new_text}`;
+		}
+		return digest;
+	},
 };
 
 interface PatchArgs {
@@ -224,6 +264,19 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 	},
 	renderStreamingFallback() {
 		return "";
+	},
+	matcherDigest(args) {
+		const edits = args?.edits;
+		if (!Array.isArray(edits)) return undefined;
+		let digest: string | undefined;
+		for (const edit of edits) {
+			if (typeof edit?.diff !== "string") continue;
+			// `create` ops carry full file content in `diff` with no +/- markers;
+			// pass that content through whole.
+			const added = extractAddedLines(edit.diff, true);
+			digest = digest === undefined ? added : `${digest}\n${added}`;
+		}
+		return digest;
 	},
 };
 
@@ -314,8 +367,14 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	},
 	async computeDiffPreview(args, ctx) {
 		if (typeof args.input !== "string" || args.input.length === 0) return null;
-		const input = trimTrailingPartialLine(args.input, ctx.isStreaming);
-		if (input.length === 0) return null;
+		// Unlike apply_patch, hashline previews flow through `applyPartialTo`,
+		// whose streaming-tolerant parser (`parsePatchStreaming` → `endStreaming`)
+		// drops a payload-less trailing op and projects a partially-typed payload
+		// line onto the file as it grows. Trimming the trailing partial line here
+		// would instead strip the sole payload of a single-op `replace`/`insert`
+		// for almost the entire stream, collapsing the preview to "No changes" and
+		// rendering a blank box. Feed the raw in-flight text straight through.
+		const input = args.input;
 		ctx.signal.throwIfAborted();
 
 		let sections: readonly HashlineInputSection[];
@@ -347,12 +406,17 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 			const section = sectionsToProcess[i];
 			const result = await computeHashlineSectionDiff(section, ctx.cwd, ctx.snapshots, {
 				streaming: ctx.isStreaming,
+				skipHashValidation: ctx.isStreaming === true,
 			});
 			ctx.signal.throwIfAborted();
-			// In a multi-section preview, ignore parse/apply errors from the
-			// last section: it's still streaming and the partial op may not
-			// parse yet. Earlier sections are stable and stay rendered.
-			if (sectionsToProcess.length > 1 && i === trailingProcessedIndex && "error" in result) {
+			// Ignore parse/apply errors from the trailing (actively-typed)
+			// section while streaming: a mid-typed op may transiently resolve to
+			// "No changes" or an out-of-bounds anchor, and surfacing that would
+			// wipe the already-stable previews (or, for a lone section, the prior
+			// good frame). Returning no entry preserves the last preview. Earlier
+			// sections, and every section once args are complete, stay rendered so
+			// real errors still reach the model.
+			if ((ctx.isStreaming || sectionsToProcess.length > 1) && i === trailingProcessedIndex && "error" in result) {
 				continue;
 			}
 			previews.push(toPerFilePreview(section.path, result));
@@ -366,6 +430,12 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		// unparseable trailing chunk renders as "no preview yet" rather
 		// than a sigil dump.
 		return "";
+	},
+	matcherDigest(args) {
+		const input = args?.input;
+		if (typeof input !== "string") return undefined;
+		// Body rows are `+TEXT`; headers and op lines are grammar, never content.
+		return extractAddedLines(input, false);
 	},
 };
 
@@ -418,6 +488,12 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 	},
 	renderStreamingFallback() {
 		return "";
+	},
+	matcherDigest(args) {
+		const input = args?.input;
+		if (typeof input !== "string") return undefined;
+		// Envelope markers and `@@` hunk headers are grammar, never content.
+		return extractAddedLines(input, false);
 	},
 };
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {

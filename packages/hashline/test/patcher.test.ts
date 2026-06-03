@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { InMemoryFilesystem, InMemorySnapshotStore, MismatchError, Patch, Patcher } from "@oh-my-pi/hashline";
+import {
+	computeFileHash,
+	HEADTAIL_DRIFT_WARNING,
+	InMemoryFilesystem,
+	InMemorySnapshotStore,
+	MismatchError,
+	Patch,
+	Patcher,
+} from "@oh-my-pi/hashline";
 
 const PATH = "a.ts";
 
@@ -11,40 +19,149 @@ describe("Patcher snapshot tag integrity", () => {
 		expect(() => new Patcher(options)).toThrow(/requires a SnapshotStore/);
 	});
 
-	it("applies when the section tag resolves to a matching snapshot", async () => {
+	it("applies when the section tag is the live file's content hash", async () => {
 		const fs = new InMemoryFilesystem([[PATH, "before\n"]]);
 		const snapshots = new InMemorySnapshotStore();
-		const tag = snapshots.recordContiguous(PATH, 1, ["before", ""], { fullText: "before\n" });
+		const tag = snapshots.record(PATH, "before\n");
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\n1 1\n+after`));
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\nreplace 1..1:\n+after`));
 
 		expect(result.sections[0]?.op).toBe("update");
-		expect(result.sections[0]?.fileHash).toMatch(/^[0-9A-F]{3}$/);
+		expect(result.sections[0]?.fileHash).toMatch(/^[0-9A-F]{4}$/);
 		expect(result.sections[0]?.fileHash).not.toBe(tag);
 		expect(fs.get(PATH)).toBe("after\n");
 	});
 
-	it("normalizes lowercase section tags while parsing", () => {
-		const section = Patch.parseSingle(`¶${PATH}#0a3\n1 1\n+after`);
+	it("validates any anchor purely from the content hash, even with no recorded snapshot", async () => {
+		// The core fix: the tag fingerprints the WHOLE file. An edit anchored at
+		// a line the model never saw recorded applies whenever the live file
+		// still hashes to the tag — no stored snapshot is consulted.
+		const content = "l1\nl2\nl3\nl4\nl5\n";
+		const fs = new InMemoryFilesystem([[PATH, content]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = computeFileHash(content);
+		// Store is intentionally empty: byHash(tag) === null.
+		expect(snapshots.byHash(PATH, tag)).toBeNull();
+		const patcher = new Patcher({ fs, snapshots });
 
-		expect(section.fileHash).toBe("0A3");
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\nreplace 3..3:\n+L3`));
+
+		expect(result.sections[0]?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("l1\nl2\nL3\nl4\nl5\n");
 	});
 
-	it("rejects a wrapped tag whose slot now holds unrelated content", async () => {
-		const fs = new InMemoryFilesystem([[PATH, "target\n"]]);
-		const snapshots = new InMemorySnapshotStore();
-		for (let index = 0; index < 10; index++) {
-			snapshots.recordContiguous(PATH, 1, [`warmup ${index}`]);
-		}
-		const staleTag = snapshots.recordContiguous(PATH, 1, ["target", ""], { fullText: "target\n" });
-		for (let index = 0; index < 4096; index++) {
-			snapshots.recordContiguous(PATH, 1, [`unrelated ${index}`]);
-		}
-		const patcher = new Patcher({ fs, snapshots });
-		const patch = Patch.parse(`¶${PATH}#${staleTag}\n1 1\n|changed`);
+	it("normalizes lowercase section tags while parsing", () => {
+		const section = Patch.parseSingle(`¶${PATH}#1a2b\nreplace 1..1:\n+after`);
 
-		await expect(patcher.apply(patch)).rejects.toBeInstanceOf(MismatchError);
-		expect(fs.get(PATH)).toBe("target\n");
+		expect(section.fileHash).toBe("1A2B");
+	});
+
+	it("refuses with mismatch when the recorded version no longer matches live content", async () => {
+		const fs = new InMemoryFilesystem([[PATH, "drifted\n"]]);
+		const snapshots = new InMemorySnapshotStore();
+		// Tag was minted from "before\n" but the live file is "drifted\n".
+		const tag = snapshots.record(PATH, "before\n");
+		const patcher = new Patcher({ fs, snapshots });
+
+		try {
+			await patcher.apply(Patch.parse(`¶${PATH}#${tag}\nreplace 1..1:\n+after`));
+			throw new Error("expected MismatchError");
+		} catch (error) {
+			expect(error).toBeInstanceOf(MismatchError);
+			const message = (error as MismatchError).displayMessage;
+			// Hash WAS observed for this path, so we land on the "file changed" branch.
+			expect(message).toMatch(/file changed between read and edit/);
+			expect(message).toMatch(/Section is bound to #/);
+		}
+		// Disk untouched — refusal must never leave a partial write.
+		expect(fs.get(PATH)).toBe("drifted\n");
+	});
+
+	it("refuses with a 'not from this session' diagnostic when the tag was never recorded for this path", async () => {
+		const fs = new InMemoryFilesystem([[PATH, "current\n"]]);
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+		// A 4-hex tag that is neither the live content hash nor a recorded
+		// version — equivalent to the model fabricating it or carrying it over
+		// from a prior session.
+		const live = computeFileHash("current\n");
+		const bogus = live === "FFFF" ? "0000" : "FFFF";
+
+		try {
+			await patcher.apply(Patch.parse(`¶${PATH}#${bogus}\nreplace 1..1:\n+after`));
+			throw new Error("expected MismatchError");
+		} catch (error) {
+			expect(error).toBeInstanceOf(MismatchError);
+			const message = (error as MismatchError).displayMessage;
+			expect(message).toMatch(new RegExp(`hash #${bogus} is not from this session`));
+			expect(message).toMatch(/never invent the tag/);
+			// Still surfaces the current hash so the model can pivot to a re-read.
+			expect(message).toMatch(/current file hashes to #[0-9A-F]{4}/);
+		}
+		expect(fs.get(PATH)).toBe("current\n");
+	});
+});
+
+describe("Patcher mandatory snapshot tag policy", () => {
+	it("rejects a hashless head/tail insert — the tag is required on every section", async () => {
+		const fs = new InMemoryFilesystem([[PATH, "a\nb\n"]]);
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`¶${PATH}\ninsert tail:\n+c`))).rejects.toThrow(
+			/Missing hashline snapshot tag.*use the write tool/s,
+		);
+		expect(fs.get(PATH)).toBe("a\nb\n");
+	});
+
+	it("still hard-rejects an anchored edit that omits the snapshot tag", async () => {
+		const fs = new InMemoryFilesystem([[PATH, "a\nb\n"]]);
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`¶${PATH}\nreplace 1..1:\n+X`))).rejects.toThrow(
+			/Missing hashline snapshot tag/,
+		);
+	});
+
+	it("rejects a tagged edit whose target file does not exist (create with write instead)", async () => {
+		const fs = new InMemoryFilesystem();
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`¶ghost.ts#1A2B\ninsert tail:\n+c`))).rejects.toThrow(
+			/File not found.*use the write tool/is,
+		);
+	});
+
+	it("applies a head/tail insert with a stale tag and warns instead of hard-failing", async () => {
+		const content = "a\nb\n";
+		const fs = new InMemoryFilesystem([[PATH, content]]);
+		const snapshots = new InMemorySnapshotStore();
+		const live = computeFileHash(content);
+		const stale = live === "0000" ? "FFFF" : "0000";
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${stale}\ninsert tail:\n+c`));
+
+		const section = result.sections[0];
+		expect(section?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("a\nb\nc\n");
+		expect(section?.warnings).toContain(HEADTAIL_DRIFT_WARNING);
+	});
+
+	it("does not warn when a head/tail insert carries the live tag", async () => {
+		const content = "a\nb\n";
+		const fs = new InMemoryFilesystem([[PATH, content]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, content);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\ninsert tail:\n+c`));
+
+		const section = result.sections[0];
+		expect(section?.op).toBe("update");
+		expect(section?.warnings ?? []).not.toContain(HEADTAIL_DRIFT_WARNING);
 	});
 });

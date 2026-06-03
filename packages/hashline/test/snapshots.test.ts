@@ -1,86 +1,88 @@
 import { describe, expect, it } from "bun:test";
-import { InMemorySnapshotStore } from "@oh-my-pi/hashline";
+import { computeFileHash, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 
 const PATH = "/tmp/__hashline-snapshots__.ts";
-const TAG_RE = /^[0-9A-F]{3}$/;
-
-function nextHex(tag: string): string {
-	return ((Number.parseInt(tag, 16) + 1) & 0xfff).toString(16).toUpperCase().padStart(3, "0");
-}
+const OTHER = "/tmp/__hashline-other__.ts";
+const TAG_RE = /^[0-9A-F]{4}$/;
 
 describe("InMemorySnapshotStore", () => {
-	it("reuses a prior tag when that snapshot is a content-matching superset", () => {
+	it("derives the tag from whole-file content (matches computeFileHash)", () => {
 		const store = new InMemorySnapshotStore();
-		const tag = store.recordContiguous(PATH, 1, ["L1", "L2", "L3"]);
-
+		const text = "L1\nL2\nL3\n";
+		const tag = store.record(PATH, text);
 		expect(tag).toMatch(TAG_RE);
-		expect(store.recordContiguous(PATH, 2, ["L2"])).toBe(tag);
-		expect(store.recordSparse(PATH, [[3, "L3"]])).toBe(tag);
+		expect(tag).toBe(computeFileHash(text));
 	});
 
-	it("picks the newest matching superset", () => {
+	it("fuses repeated reads of identical content onto one tag", () => {
 		const store = new InMemorySnapshotStore();
-		const older = store.recordSparse(PATH, [
-			[1, "L1"],
-			[2, "L2"],
-		]);
-		const newer = store.recordSparse(PATH, [
-			[2, "L2"],
-			[3, "L3"],
-		]);
-
-		expect(older).toMatch(TAG_RE);
-		expect(newer).toMatch(TAG_RE);
-		expect(newer).not.toBe(older);
-		expect(store.recordSparse(PATH, [[2, "L2"]])).toBe(newer);
+		const text = "alpha\nbeta\ngamma\n";
+		const first = store.record(PATH, text);
+		const second = store.record(PATH, text);
+		expect(second).toBe(first);
+		// One head, byHash resolves to the same full text.
+		expect(store.head(PATH)?.hash).toBe(first);
+		expect(store.byHash(PATH, first)?.text).toBe(text);
 	});
 
-	it("scrambles slot tags so the first and next tags are not predictable counters", () => {
+	it("mints a new tag when content changes and retains the prior version", () => {
 		const store = new InMemorySnapshotStore();
-		const first = store.recordContiguous(PATH, 1, ["value 0"]);
-		const second = store.recordContiguous(PATH, 1, ["value 1"]);
-
-		expect(first).toMatch(TAG_RE);
-		expect(second).toMatch(TAG_RE);
-		expect(first).not.toBe("000");
-		expect(second).not.toBe(nextHex(first));
+		const v1 = "one\ntwo\n";
+		const v2 = "one\ntwo\nthree\n";
+		const tag1 = store.record(PATH, v1);
+		const tag2 = store.record(PATH, v2);
+		expect(tag2).not.toBe(tag1);
+		// Head is the latest; the older version is still resolvable by its tag.
+		expect(store.head(PATH)?.hash).toBe(tag2);
+		expect(store.byHash(PATH, tag1)?.text).toBe(v1);
+		expect(store.byHash(PATH, tag2)?.text).toBe(v2);
 	});
 
-	it("pushes new views into distinct ring slots", () => {
+	it("promotes a re-observed older version back to head", () => {
 		const store = new InMemorySnapshotStore();
-		const first = store.recordContiguous(PATH, 1, ["one"]);
-		const second = store.recordContiguous(PATH, 1, ["two"]);
-
-		expect(first).toMatch(TAG_RE);
-		expect(second).toMatch(TAG_RE);
-		expect(second).not.toBe(first);
-		expect(store.head(PATH)?.get(1)).toBe("two");
-		expect(store.byHash(PATH, first)?.get(1)).toBe("one");
-		expect(store.byHash(PATH, second)?.get(1)).toBe("two");
+		const v1 = "x\n";
+		const v2 = "y\n";
+		const tag1 = store.record(PATH, v1);
+		store.record(PATH, v2);
+		// File reverts to v1 content: recording it again makes v1 the head.
+		expect(store.record(PATH, v1)).toBe(tag1);
+		expect(store.head(PATH)?.hash).toBe(tag1);
 	});
 
-	it("rejects cross-path lookups even when the tag slot is occupied", () => {
-		const store = new InMemorySnapshotStore();
-		const tag = store.recordContiguous(PATH, 1, ["one"]);
-
-		expect(store.byHash("/tmp/other.ts", tag)).toBeNull();
+	it("bounds per-path history to maxVersionsPerPath (oldest dropped)", () => {
+		const store = new InMemorySnapshotStore({ maxVersionsPerPath: 2 });
+		const tagA = store.record(PATH, "A\n");
+		const tagB = store.record(PATH, "B\n");
+		const tagC = store.record(PATH, "C\n");
+		// Only the two newest versions survive.
+		expect(store.byHash(PATH, tagC)?.text).toBe("C\n");
+		expect(store.byHash(PATH, tagB)?.text).toBe("B\n");
+		expect(store.byHash(PATH, tagA)).toBeNull();
 	});
 
-	it("wraps after 4096 pushes and byHash returns the new slot occupant", () => {
+	it("bounds tracked paths to maxPaths (cold path evicted)", () => {
+		const store = new InMemorySnapshotStore({ maxPaths: 1 });
+		const tag = store.record(PATH, "first\n");
+		store.record(OTHER, "second\n");
+		// Recording OTHER evicted PATH from the LRU.
+		expect(store.byHash(PATH, tag)).toBeNull();
+		expect(store.head(PATH)).toBeNull();
+	});
+
+	it("rejects cross-path lookups", () => {
 		const store = new InMemorySnapshotStore();
-		const first = store.recordContiguous(PATH, 1, ["value 0"]);
-		let previous = first;
+		const tag = store.record(PATH, "shared\n");
+		expect(store.byHash(OTHER, tag)).toBeNull();
+	});
 
-		for (let index = 1; index < 4096; index++) {
-			const tag = store.recordContiguous(PATH, 1, [`value ${index}`]);
-			expect(tag).toMatch(TAG_RE);
-			expect(tag).not.toBe(previous);
-			previous = tag;
-		}
-		const wrapped = store.recordContiguous(PATH, 1, ["value 4096"]);
-
-		expect(wrapped).toBe(first);
-		expect(store.byHash(PATH, first)?.get(1)).toBe("value 4096");
-		expect(store.byHash(PATH, previous)?.get(1)).toBe("value 4095");
+	it("invalidate drops one path; clear drops everything", () => {
+		const store = new InMemorySnapshotStore();
+		const tagA = store.record(PATH, "A\n");
+		const tagB = store.record(OTHER, "B\n");
+		store.invalidate(PATH);
+		expect(store.byHash(PATH, tagA)).toBeNull();
+		expect(store.byHash(OTHER, tagB)?.text).toBe("B\n");
+		store.clear();
+		expect(store.byHash(OTHER, tagB)).toBeNull();
 	});
 });

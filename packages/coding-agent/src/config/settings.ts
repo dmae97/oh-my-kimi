@@ -365,6 +365,29 @@ export class Settings {
 		return cloned;
 	}
 
+	/**
+	 * Re-scope this instance to a new working directory *in place*: reload the
+	 * project layer (`.claude/settings.yml` etc.) from `cwd`, re-resolve
+	 * path-scoped settings against it, and re-fire side-effect hooks (theme,
+	 * symbols, tab width, …). Global settings and runtime overrides are preserved.
+	 *
+	 * Unlike {@link cloneForCwd}, this mutates the live instance, so every holder
+	 * (the `settings` proxy, the active session, controllers) observes the new
+	 * project scope without swapping references — used when the process changes
+	 * directory mid-run (`/move`, cross-project resume). No-op when `cwd` is
+	 * already the current scope.
+	 */
+	async reloadForCwd(cwd: string): Promise<void> {
+		const normalized = path.normalize(cwd);
+		if (normalized === this.#cwd) return;
+		this.#cwd = normalized;
+		if (this.#persist) {
+			this.#project = await this.#loadProjectSettings();
+		}
+		this.#rebuildMerged();
+		this.#fireAllHooks();
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Accessors
 	// ─────────────────────────────────────────────────────────────────────────
@@ -663,6 +686,16 @@ export class Settings {
 			raw["edit.mode"] = "hashline";
 		}
 
+		// compaction.strategy: removed local-model shake-summary mode; plain shake
+		// keeps the same mechanical artifact-backed reduction without background CPU.
+		const compactionObj = raw.compaction as Record<string, unknown> | undefined;
+		if (compactionObj?.strategy === "shake-summary") {
+			compactionObj.strategy = "shake";
+		}
+		if (raw["compaction.strategy"] === "shake-summary") {
+			raw["compaction.strategy"] = "shake";
+		}
+
 		// statusLine: rename "plan_mode" segment to "mode"
 		const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
 		if (statusLineObj) {
@@ -690,6 +723,18 @@ export class Settings {
 			const memoryRoot = (memoryBackendObj ?? {}) as Record<string, unknown>;
 			memoryRoot.backend = next;
 			raw.memory = memoryRoot;
+		}
+
+		// Rename the legacy local `mnemosyne` memory backend to `mnemopi`.
+		// - `memory.backend: "mnemosyne"` now selects the renamed backend.
+		// - the top-level `mnemosyne` settings object becomes `mnemopi`.
+		// Idempotent: skips the object move once `mnemopi` is materialised.
+		if (memoryBackendObj && memoryBackendObj.backend === "mnemosyne") {
+			memoryBackendObj.backend = "mnemopi";
+		}
+		if ("mnemosyne" in raw && !("mnemopi" in raw)) {
+			raw.mnemopi = raw.mnemosyne;
+			delete raw.mnemosyne;
 		}
 
 		// hindsight: dynamicBankId/agentName -> scoping enum + bankId

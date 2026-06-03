@@ -439,6 +439,20 @@ def fetch_ref(repo_dir: Path, ref: str, *, token: str | None, safe_directory: Pa
         )
 
 
+def fetch_pr_head(
+    repo_dir: Path,
+    pr_number: int,
+    *,
+    token: str | None,
+    safe_directory: Path | None = None,
+) -> None:
+    """Fetch `refs/pull/<n>/head` into FETCH_HEAD for detached PR review worktrees."""
+    if pr_number <= 0:
+        raise ValueError(f"invalid PR number: {pr_number!r}")
+    args = ["fetch", "origin", f"pull/{pr_number}/head"]
+    _check(_run_git(args, cwd=repo_dir, token=token, safe_directory=safe_directory), ["git", *args])
+
+
 @dataclass(slots=True, frozen=True)
 class PushResult:
     head: str
@@ -646,6 +660,7 @@ __all__ = [
     "HeadDriftError",
     "PushResult",
     "clone",
+    "fetch_pr_head",
     "fetch_prune",
     "fetch_ref",
     "inspect_dirty_state",

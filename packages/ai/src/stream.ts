@@ -61,6 +61,7 @@ import type {
 } from "./types";
 import { AssistantMessageEventStream } from "./utils/event-stream";
 import { isFoundryEnabled } from "./utils/foundry";
+import { withRequestDebugFetch } from "./utils/request-debug";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -295,42 +296,50 @@ export function stream<TApi extends Api>(
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): AssistantMessageEventStream {
+	const requestOptions = withRequestDebugFetch(options as StreamOptions | undefined) as
+		| OptionsForApi<TApi>
+		| undefined;
+
 	// Check custom API registry first (extension-provided APIs like "vertex-claude-api")
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
-		return customApiProvider.stream(model, context, options as StreamOptions);
+		return customApiProvider.stream(model, context, requestOptions as StreamOptions);
 	}
 
 	if (isGitLabDuoModel(model)) {
-		const apiKey = (options as StreamOptions | undefined)?.apiKey || getEnvApiKey(model.provider);
+		const apiKey = (requestOptions as StreamOptions | undefined)?.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
 			throw new Error(`No API key for provider: ${model.provider}`);
 		}
 		return streamGitLabDuo(model, context, {
-			...(options as SimpleStreamOptions | undefined),
+			...(requestOptions as SimpleStreamOptions | undefined),
 			apiKey,
 		});
 	}
 
 	// Vertex AI uses Application Default Credentials, not API keys
 	if (model.api === "google-vertex") {
-		return streamGoogleVertex(model as Model<"google-vertex">, context, options as GoogleVertexOptions);
+		return streamGoogleVertex(model as Model<"google-vertex">, context, requestOptions as GoogleVertexOptions);
 	} else if (model.api === "bedrock-converse-stream") {
 		// Bedrock doesn't have any API keys instead it sources credentials from standard AWS env variables or from given AWS profile.
-		return streamBedrock(model as Model<"bedrock-converse-stream">, context, (options || {}) as BedrockOptions);
+		return streamBedrock(
+			model as Model<"bedrock-converse-stream">,
+			context,
+			(requestOptions || {}) as BedrockOptions,
+		);
 	}
 
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+	const apiKey = requestOptions?.apiKey || getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
 	const providerOptions = isGoogleVertexAuthenticatedModel(model)
 		? {
-				...options,
+				...requestOptions,
 				apiKey: "vertex-adc",
-				fetch: createVertexAuthenticatedFetch(options as StreamOptions | undefined),
+				fetch: createVertexAuthenticatedFetch(requestOptions as StreamOptions | undefined),
 			}
-		: { ...options, apiKey };
+		: { ...requestOptions, apiKey };
 
 	const api: Api = model.api;
 	switch (api) {
@@ -430,10 +439,13 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	const retryApiKey = options?.onAuthError ? (options.apiKey ?? getEnvApiKey(model.provider)) : undefined;
+	const requestOptions = withRequestDebugFetch(options);
+	const retryApiKey = requestOptions?.onAuthError
+		? (requestOptions.apiKey ?? getEnvApiKey(model.provider))
+		: undefined;
 	if (retryApiKey) {
 		const outer = new AssistantMessageEventStream();
-		const onAuthError = options!.onAuthError!;
+		const onAuthError = requestOptions!.onAuthError!;
 		const runAttempt = async (apiKey: string, captureAuthFailure: boolean): Promise<AuthRetryFailure | undefined> => {
 			const bufferedEvents: AssistantMessageEvent[] = [];
 			let emittedReplayUnsafeEvent = false;
@@ -443,7 +455,7 @@ export function streamSimple<TApi extends Api>(
 			};
 
 			try {
-				const inner = streamSimple(model, context, { ...options, apiKey, onAuthError: undefined });
+				const inner = streamSimple(model, context, { ...requestOptions, apiKey, onAuthError: undefined });
 				for await (const event of inner) {
 					if (!emittedReplayUnsafeEvent && event.type === "start") {
 						bufferedEvents.push(event);
@@ -519,26 +531,26 @@ export function streamSimple<TApi extends Api>(
 	// extension-registered APIs can't accidentally override a configured
 	// pi-native transport.
 	if (model.transport === "pi-native") {
-		return streamPiNative(model, context, options);
+		return streamPiNative(model, context, requestOptions);
 	}
 
 	// Check custom API registry (extension-provided APIs)
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
-		return customApiProvider.streamSimple(model, context, options);
+		return customApiProvider.streamSimple(model, context, requestOptions);
 	}
 
 	// Vertex AI uses Application Default Credentials, not API keys
 	if (model.api === "google-vertex") {
-		const providerOptions = mapOptionsForApi(model, options, undefined);
+		const providerOptions = mapOptionsForApi(model, requestOptions, undefined);
 		return stream(model, context, providerOptions);
 	} else if (model.api === "bedrock-converse-stream") {
 		// Bedrock doesn't have any API keys instead it sources credentials from standard AWS env variables or from given AWS profile.
-		const providerOptions = mapOptionsForApi(model, options, undefined);
+		const providerOptions = mapOptionsForApi(model, requestOptions, undefined);
 		return stream(model, context, providerOptions);
 	}
 
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+	const apiKey = requestOptions?.apiKey || getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
@@ -546,7 +558,7 @@ export function streamSimple<TApi extends Api>(
 	// GitLab Duo - wraps Anthropic/OpenAI behind GitLab AI Gateway direct access tokens
 	if (isGitLabDuoModel(model)) {
 		return streamGitLabDuo(model, context, {
-			...options,
+			...requestOptions,
 			apiKey,
 		});
 	}
@@ -555,9 +567,9 @@ export function streamSimple<TApi extends Api>(
 	if (isKimiModel(model)) {
 		// Pass raw SimpleStreamOptions - streamKimi handles mapping internally
 		return streamKimi(model as Model<"openai-completions">, context, {
-			...options,
+			...requestOptions,
 			apiKey,
-			format: options?.kimiApiFormat ?? "anthropic",
+			format: requestOptions?.kimiApiFormat ?? "anthropic",
 		});
 	}
 
@@ -565,13 +577,12 @@ export function streamSimple<TApi extends Api>(
 	if (isSyntheticModel(model)) {
 		// Pass raw SimpleStreamOptions - streamSynthetic handles mapping internally
 		return streamSynthetic(model as Model<"openai-completions">, context, {
-			...options,
+			...requestOptions,
 			apiKey,
-			format: options?.syntheticApiFormat ?? "openai", // Default to OpenAI format
+			format: requestOptions?.syntheticApiFormat ?? "openai", // Default to OpenAI format
 		});
 	}
-
-	const providerOptions = mapOptionsForApi(model, options, apiKey);
+	const providerOptions = mapOptionsForApi(model, requestOptions, apiKey);
 	return stream(model, context, providerOptions);
 }
 
@@ -639,7 +650,7 @@ export function mapAnthropicToolChoice(choice?: ToolChoice): AnthropicOptions["t
 	return undefined;
 }
 
-function mapGoogleToolChoice(
+export function mapGoogleToolChoice(
 	choice?: ToolChoice,
 ): GoogleOptions["toolChoice"] | GoogleGeminiCliOptions["toolChoice"] | GoogleVertexOptions["toolChoice"] {
 	if (!choice) return undefined;
@@ -648,7 +659,16 @@ function mapGoogleToolChoice(
 		if (choice === "auto" || choice === "none" || choice === "any") return choice;
 		return undefined;
 	}
-	return "any";
+	// Named-tool routing on Google: emit an `ANY`-mode allow-list of one entry,
+	// mirroring the Anthropic mapper that returns `{type: "tool", name}`.
+	if (choice.type === "tool") {
+		return choice.name ? { mode: "ANY", allowedFunctionNames: [choice.name] } : undefined;
+	}
+	if (choice.type === "function") {
+		const name = "function" in choice ? choice.function?.name : choice.name;
+		return name ? { mode: "ANY", allowedFunctionNames: [name] } : undefined;
+	}
+	return undefined;
 }
 
 function mapOpenAiToolChoice(choice?: ToolChoice): OpenAICompletionsOptions["toolChoice"] {
@@ -707,6 +727,7 @@ function mapOptionsForApi<TApi extends Api>(
 		initiatorOverride: options?.initiatorOverride,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
+		taskBudget: options?.taskBudget,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
 		streamFirstEventTimeoutMs: options?.streamFirstEventTimeoutMs,
@@ -716,6 +737,7 @@ function mapOptionsForApi<TApi extends Api>(
 		onResponse: options?.onResponse,
 		onSseEvent: options?.onSseEvent,
 		execHandlers: options?.execHandlers,
+		fetch: options?.fetch,
 	};
 
 	switch (model.api) {

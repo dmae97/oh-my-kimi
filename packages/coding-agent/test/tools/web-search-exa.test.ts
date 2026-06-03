@@ -1,12 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { runSearchQuery } from "../../src/web/search";
 import {
 	buildExaRequestBody,
+	ExaProvider,
 	normalizeSearchType,
 	searchExa,
 	synthesizeAnswer,
 } from "../../src/web/search/providers/exa";
+
+async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-exa-auth-"));
+	const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
+	try {
+		return await run(authStorage);
+	} finally {
+		authStorage.close();
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+}
 
 // ────────────────────────────────────────────────────────────
 // Unit tests for pure helpers (no mocking needed)
@@ -351,242 +366,65 @@ describe("searchExa", () => {
 		expect(result.answer).toContain("**Has URL**: real summary");
 	});
 
-	it("uses Exa MCP when API key is missing", async () => {
+	it("requires Exa credentials before starting a search", async () => {
 		delete process.env.EXA_API_KEY;
-		const fetchSpy = vi.fn(async (_input, _init, _next) => {
-			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "mcp-1", result: makeMockExaResponse() }), {
+		const fetchSpy = vi.fn(async () => {
+			return new Response(JSON.stringify(makeMockExaResponse()), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
 		});
 		using _hook = hookFetch(fetchSpy);
 
-		const result = await searchExa({ query: "no key" });
-		expect(result.provider).toBe("exa");
-		expect(result.sources).toHaveLength(3);
-
-		const calledUrl = String(fetchSpy.mock.calls[0][0]);
-		expect(calledUrl).toContain("https://mcp.exa.ai/mcp");
-		expect(calledUrl).toContain("tools=web_search_exa");
-		expect(calledUrl).not.toContain("exaApiKey=");
-	});
-
-	it("accepts MCP structuredContent search payloads when API key is missing", async () => {
-		delete process.env.EXA_API_KEY;
-		using _hook = hookFetch(async () => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-structured",
-					result: { structuredContent: makeMockExaResponse() },
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-
-		const result = await searchExa({ query: "structured payload" });
-		expect(result.provider).toBe("exa");
-		expect(result.sources).toHaveLength(3);
-		expect(result.answer).toContain("**Page Alpha**: Alpha is about X.");
-	});
-
-	it("accepts MCP text content JSON payloads when API key is missing", async () => {
-		delete process.env.EXA_API_KEY;
-		const payload = makeMockExaResponse();
-		const fetchSpy = vi.fn(async (_input, _init, _next) => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-content",
-					result: {
-						content: [{ type: "text", text: JSON.stringify(payload) }],
-					},
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-		using _hook = hookFetch(fetchSpy);
-
-		const result = await searchExa({ query: "content payload" });
-		expect(result.provider).toBe("exa");
-		expect(result.sources).toHaveLength(3);
-		expect(result.answer).toContain("**Page Beta**: Beta covers Y.");
-
-		const calledUrl = String(fetchSpy.mock.calls[0][0]);
-		expect(calledUrl).not.toContain("exaApiKey=");
-	});
-
-	it("accepts MCP text content plain-text payloads when API key is missing", async () => {
-		delete process.env.EXA_API_KEY;
-		const payloadText = [
-			"Title: Plain Alpha",
-			"URL: https://plain-alpha.com",
-			"Author: Alpha Author",
-			"Published Date: 2024-01-02",
-			"Text: Alpha snippet",
-			"",
-			"Title: Plain Beta",
-			"URL: https://plain-beta.com",
-			"Text: Beta snippet",
-		].join("\n");
-		const fetchSpy = vi.fn(async (_input, _init, _next) => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-content-plain-text",
-					result: { content: [{ type: "text", text: payloadText }] },
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-		using _hook = hookFetch(fetchSpy);
-
-		const result = await searchExa({ query: "plain text content payload" });
-		expect(result.provider).toBe("exa");
-		expect(result.sources).toHaveLength(2);
-		expect(result.sources[0]).toMatchObject({
-			title: "Plain Alpha",
-			url: "https://plain-alpha.com",
-			author: "Alpha Author",
-			snippet: "Alpha snippet",
-			publishedDate: "2024-01-02",
-		});
-		expect(result.sources[1]).toMatchObject({
-			title: "Plain Beta",
-			url: "https://plain-beta.com",
-			snippet: "Beta snippet",
-		});
-		expect(result.answer).toBeUndefined();
-
-		const calledUrl = String(fetchSpy.mock.calls[0][0]);
-		expect(calledUrl).not.toContain("exaApiKey=");
-	});
-
-	it("splits MCP plain-text records with CRLF line endings", async () => {
-		delete process.env.EXA_API_KEY;
-		const payloadText = [
-			"Title: CRLF Alpha",
-			"URL: https://crlf-alpha.com",
-			"Text: First result",
-			"",
-			"Title: CRLF Beta",
-			"URL: https://crlf-beta.com",
-			"Text: Second result",
-		].join("\r\n");
-		using _hook = hookFetch(async () => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-content-crlf",
-					result: { content: [{ type: "text", text: payloadText }] },
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-
-		const result = await searchExa({ query: "crlf payload" });
-		expect(result.provider).toBe("exa");
-		expect(result.sources).toHaveLength(2);
-		expect(result.sources[0]?.url).toBe("https://crlf-alpha.com");
-		expect(result.sources[1]?.url).toBe("https://crlf-beta.com");
-	});
-
-	it("keeps 'Title:' lines inside Text body when parsing MCP plain-text content", async () => {
-		delete process.env.EXA_API_KEY;
-		const payloadText = [
-			"Title: Plain Alpha",
-			"URL: https://plain-alpha.com",
-			"Text: Alpha line 1",
-			"Title: heading inside body",
-			"Alpha line 2",
-			"",
-			"Title: Plain Beta",
-			"URL: https://plain-beta.com",
-			"Text: Beta snippet",
-		].join("\n");
-		using _hook = hookFetch(async () => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-content-embedded-title",
-					result: { content: [{ type: "text", text: payloadText }] },
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-
-		const result = await searchExa({ query: "embedded title line" });
-		expect(result.provider).toBe("exa");
-		expect(result.sources).toHaveLength(2);
-		expect(result.sources[0]?.snippet).toContain("Title: heading inside body");
-		expect(result.sources[0]?.snippet).toContain("Alpha line 2");
-	});
-
-	it("runSearchQuery with provider=exa succeeds without EXA_API_KEY for MCP plain text content", async () => {
-		delete process.env.EXA_API_KEY;
-		const payloadText = [
-			"Title: Result One",
-			"URL: https://result-one.com",
-			"Text: First plain-text result",
-			"",
-			"Title: Result Two",
-			"URL: https://result-two.com",
-			"Text: Second plain-text result",
-		].join("\n");
-		using _hook = hookFetch(async () => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-tool-plain-text",
-					result: { content: [{ type: "text", text: payloadText }] },
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-
-		const result = await runSearchQuery({ query: "provider exa plain text", provider: "exa" });
-		expect(result.details.error).toBeUndefined();
-		expect(result.details.response.provider).toBe("exa");
-		expect(result.details.response.sources).toHaveLength(2);
-	});
-
-	it("runSearchQuery with provider=exa succeeds without EXA_API_KEY for MCP structuredContent", async () => {
-		delete process.env.EXA_API_KEY;
-		using _hook = hookFetch(async () => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-tool",
-					result: { structuredContent: makeMockExaResponse() },
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-
-		const result = await runSearchQuery({ query: "provider exa", provider: "exa" });
-		expect(result.details.error).toBeUndefined();
-		expect(result.details.response.provider).toBe("exa");
-		expect(result.content[0]?.text).toContain("3 sources");
-	});
-
-	it("throws clear error when MCP content payload is not parseable JSON", async () => {
-		delete process.env.EXA_API_KEY;
-		using _hook = hookFetch(async () => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-bad-content",
-					result: {
-						content: [{ type: "text", text: "not-json" }],
-					},
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		});
-
-		await expect(searchExa({ query: "bad content" })).rejects.toThrow(
-			"Exa MCP search returned unexpected response shape.",
+		await expect(searchExa({ query: "no key" })).rejects.toThrow(
+			"Exa credentials not found. Set EXA_API_KEY or login with 'omp /login exa'.",
 		);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("uses AuthStorage credentials when EXA_API_KEY is unset", async () => {
+		delete process.env.EXA_API_KEY;
+		let receivedKey: string | undefined;
+		using _hook = hookFetch((_url, init) => {
+			receivedKey = (init?.headers as Record<string, string> | undefined)?.["x-api-key"];
+			return new Response(JSON.stringify(makeMockExaResponse()), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		await withLocalAuthStorage(async authStorage => {
+			authStorage.setRuntimeApiKey("exa", "stored-key-xyz");
+			const result = await searchExa({ query: "from auth storage", authStorage });
+			expect(result.provider).toBe("exa");
+			expect(result.sources).toHaveLength(3);
+		});
+		expect(receivedKey).toBe("stored-key-xyz");
+	});
+
+	it("reports unavailable without EXA_API_KEY or stored credentials", async () => {
+		delete process.env.EXA_API_KEY;
+		const available = await withLocalAuthStorage(authStorage =>
+			Promise.resolve(new ExaProvider().isAvailable(authStorage)),
+		);
+		expect(available).toBe(false);
+	});
+
+	it("reports available with EXA_API_KEY", async () => {
+		process.env.EXA_API_KEY = "test-key-123";
+		const available = await withLocalAuthStorage(authStorage =>
+			Promise.resolve(new ExaProvider().isAvailable(authStorage)),
+		);
+		expect(available).toBe(true);
+	});
+
+	it("reports available when AuthStorage holds a credential", async () => {
+		delete process.env.EXA_API_KEY;
+		const available = await withLocalAuthStorage(authStorage => {
+			authStorage.setRuntimeApiKey("exa", "stored-key");
+			return Promise.resolve(new ExaProvider().isAvailable(authStorage));
+		});
+		expect(available).toBe(true);
 	});
 
 	it("throws SearchProviderError on non-ok HTTP response", async () => {

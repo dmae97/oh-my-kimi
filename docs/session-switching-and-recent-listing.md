@@ -31,15 +31,15 @@ It focuses on current implementation behavior, including fallback paths and cave
 There are two different listing pipelines:
 
 1. `getRecentSessions(sessionDir, limit)` (welcome/summary view)
-   - Reads only a 4KB prefix (`readTextPrefix(..., 4096)`) from each file.
+   - Reads only a 4KB prefix (`readTextPrefix(..., 4096)` or equivalent direct read for file storage) from each file.
    - Parses header + earliest user text preview.
    - Returns lightweight `RecentSessionInfo` with lazy `name` and `timeAgo` getters.
    - Sorts by file `mtime` descending.
 
 2. `SessionManager.list(...)` / `SessionManager.listAll()` (resume pickers and ID matching)
-   - Reads full session files.
+   - Reads the same 4KB prefix per file, not the full JSONL file.
    - Builds `SessionInfo` objects (`id`, `cwd`, `title`, `messageCount`, `firstMessage`, `allMessagesText`, timestamps).
-   - Drops sessions with zero `message` entries.
+   - Uses prefix parsing plus marker counting; later messages beyond the prefix may not be present in `allMessagesText`.
    - Sorts by `modified` descending.
 
 ### Metadata fallback behavior
@@ -52,8 +52,8 @@ For recent summaries (`RecentSessionInfo`):
 
 For `SessionInfo` list entries:
 
-- `title` is `header.title` or latest compaction `shortSummary`
-- `firstMessage` is first user message text or `"(no messages)"`
+- `title` is `header.title` or the last compaction `shortSummary` seen in the 4KB prefix
+- `firstMessage` is first user message text discoverable from the prefix or `"(no messages)"`
 
 ## `--continue` resolution and terminal breadcrumb preference
 
@@ -80,10 +80,10 @@ Breadcrumb writes are best-effort and non-fatal.
 1. Path-like value (contains `/`, `\\`, or ends with `.jsonl`)
    - direct `SessionManager.open(sessionArg, parsed.sessionDir)`
 
-2. ID prefix value
-   - find match in `SessionManager.list(cwd, sessionDir)` by `id.startsWith(sessionArg)`
-   - if no local match and `sessionDir` is not forced, try `SessionManager.listAll()`
-   - first match is used (no ambiguity prompt)
+2. Resume key value
+   - `resolveResumableSession(...)` searches local sessions first, then all sessions when `sessionDir` is not forced
+   - matching is case-insensitive and accepts `id` prefix, full JSONL filename prefix, or the session-id suffix after the timestamp
+   - first match in modified-descending order is used (no ambiguity prompt)
 
 Cross-project match behavior:
 
@@ -134,17 +134,18 @@ Flow:
 
 - arrow/page navigation
 - Enter to select
+- Delete to delete after confirmation
 - Esc to cancel
 - Ctrl+C to exit
 - fuzzy search across session id/title/cwd/first message/all messages/path
 
 Empty-list render behavior:
 
-- renders a message instead of crashing
-- Enter on empty does nothing (no callback)
+- renders `No sessions in current folder. Press Tab to view all.`
+- Enter/Delete on empty do nothing (no callback)
 - Esc/Ctrl+C still work
 
-Caveat: UI text says `Press Tab to view all`, but this component currently has no Tab handler and current wiring only lists current-scope sessions.
+Caveat: the empty-state UI mentions Tab, but this component currently has no Tab handler and current wiring only lists current-scope sessions.
 
 ## Runtime switch execution (`AgentSession.switchSession`)
 
@@ -237,6 +238,6 @@ Switch/open can still throw on true I/O failures (permission errors, rewrite fai
 
 ### ID prefix matching caveats
 
-- ID matching uses `startsWith` and takes first match in sorted list.
-- No ambiguity UI if multiple sessions share prefix.
-- `SessionManager.list(...)` excludes sessions with zero messages, so those sessions are not resumable via ID match/list picker.
+- Matching uses `startsWith` on the lowercased session id, lowercased JSONL filename, and lowercased id suffix after the filename timestamp.
+- First match in modified-descending order wins; there is no ambiguity UI if multiple sessions share a prefix.
+- Prefix-listing metadata is intentionally lightweight, so search text may not include messages outside the first 4KB of the session file.

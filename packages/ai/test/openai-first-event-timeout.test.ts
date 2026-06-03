@@ -285,9 +285,15 @@ async function expectDelayedRequestSetupSucceeds(
 	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; content: unknown[] }>,
 	responseFactory: () => Response,
 ): Promise<void> {
+	// The watchdog must cover request setup (connection + first byte). We simulate
+	// a realistic ~30ms setup latency, but keep the budget far larger so the
+	// scheduler jitter of a loaded CI box (where this stream races dozens of other
+	// parallel test processes) can never trip the watchdog on a request that is
+	// supposed to succeed. The complementary firing tests pin the budget < latency
+	// case with their own short timeouts, so the contrast is preserved.
 	global.fetch = createDelayedFetch(30, responseFactory);
 
-	const result = await run(50);
+	const result = await run(5_000);
 
 	expect(result.stopReason).toBe("stop");
 	expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
@@ -318,6 +324,71 @@ describe("OpenAI-family first-event timeouts", () => {
 			"OpenAI responses stream timed out while waiting for the first event",
 			createOpenAIResponsesSuccessResponse,
 		);
+	});
+
+	it("lets PI_OPENAI_STREAM_IDLE_TIMEOUT_MS widen OpenAI responses first-event request setup", async () => {
+		const previousOpenAIIdleTimeout = Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+		const previousGenericFirstEventTimeout = Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		const timeoutHeaders: string[] = [];
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "1500";
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		global.fetch = createDelayedFetch(30, createOpenAIResponsesSuccessResponse, (input, init) => {
+			timeoutHeaders.push(getRequestHeader(input, init, "X-Stainless-Timeout") ?? "");
+		});
+
+		try {
+			const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+				apiKey: "test-key",
+			}).result();
+
+			expect(result.stopReason).toBe("stop");
+			expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
+			expect(timeoutHeaders).toContain("1");
+		} finally {
+			if (previousOpenAIIdleTimeout === undefined) {
+				delete Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = previousOpenAIIdleTimeout;
+			}
+			if (previousGenericFirstEventTimeout === undefined) {
+				delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousGenericFirstEventTimeout;
+			}
+		}
+	});
+
+	it("honors PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS even when caller pins streamIdleTimeoutMs", async () => {
+		const previousOpenAIFirstEventTimeout = Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		const previousGenericFirstEventTimeout = Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		const timeoutHeaders: string[] = [];
+		Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = "1500";
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		global.fetch = createDelayedFetch(30, createOpenAIResponsesSuccessResponse, (input, init) => {
+			timeoutHeaders.push(getRequestHeader(input, init, "X-Stainless-Timeout") ?? "");
+		});
+
+		try {
+			const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+				apiKey: "test-key",
+				streamIdleTimeoutMs: 5_000,
+			}).result();
+
+			expect(result.stopReason).toBe("stop");
+			expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
+			expect(timeoutHeaders).toContain("1");
+		} finally {
+			if (previousOpenAIFirstEventTimeout === undefined) {
+				delete Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousOpenAIFirstEventTimeout;
+			}
+			if (previousGenericFirstEventTimeout === undefined) {
+				delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousGenericFirstEventTimeout;
+			}
+		}
 	});
 
 	it("times out OpenAI responses streams that only emit no-progress status events", async () => {

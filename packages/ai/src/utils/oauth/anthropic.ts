@@ -9,9 +9,16 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
+const BOOTSTRAP_URL = "https://api.anthropic.com/api/claude_cli/bootstrap";
+const CLAUDE_CODE_BOOTSTRAP_MODEL = "claude-opus-4-8";
+const CLAUDE_CODE_BOOTSTRAP_USER_AGENT = "claude-code/2.1.160";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
-const SCOPES = "org:create_api_key user:profile user:inference";
+// Scopes required for direct OAuth-token inference (user:inference) plus account/session management.
+// platform.claude.com/oauth/authorize issues console tokens (org:create_api_key only) and does not
+// grant user:inference — the claude.ai endpoint is required for direct inference access.
+const SCOPES =
+	"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 function formatErrorDetails(error: unknown): string {
 	if (error instanceof Error) {
@@ -30,12 +37,17 @@ function formatErrorDetails(error: unknown): string {
 	return String(error);
 }
 
-async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
+async function postJson(
+	url: string,
+	body: Record<string, string | number>,
+	extraHeaders?: Record<string, string>,
+): Promise<string> {
 	const response = await fetch(url, {
 		method: "POST",
 		headers: {
+			// No Accept header: CC omits it on OAuth token requests.
+			...extraHeaders,
 			"Content-Type": "application/json",
-			Accept: "application/json",
 		},
 		body: JSON.stringify(body),
 		signal: AbortSignal.timeout(30_000),
@@ -51,15 +63,21 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
 /**
  * Decoded shape of Anthropic's `/v1/oauth/token` response (both
  * `authorization_code` exchange and `refresh_token` refresh return the same
- * envelope). The `account` block is inlined alongside the tokens, so we can
- * surface `accountId` / `email` on {@link OAuthCredentials} without a separate
- * `/api/oauth/profile` round-trip.
+ * envelope). Newer responses inline `account`; older/stale credentials can
+ * recover the same identity from `/api/claude_cli/bootstrap`.
  */
 interface AnthropicTokenResponse {
 	access_token: string;
 	refresh_token: string;
 	expires_in: number;
 	account?: { uuid?: string; email_address?: string };
+}
+
+interface AnthropicBootstrapResponse {
+	oauth_account?: {
+		account_uuid?: string;
+		account_email?: string;
+	};
 }
 
 function parseOAuthTokenResponse(responseBody: string, operation: string): AnthropicTokenResponse {
@@ -89,6 +107,53 @@ function extractAccountFromTokenResponse(data: AnthropicTokenResponse): {
 		accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
 		email: typeof emailAddress === "string" && emailAddress.length > 0 ? emailAddress : undefined,
 	};
+}
+
+async function fetchBootstrapIdentity(accessToken: string): Promise<{ accountId?: string; email?: string }> {
+	const url = `${BOOTSTRAP_URL}?entrypoint=cli&model=${encodeURIComponent(CLAUDE_CODE_BOOTSTRAP_MODEL)}`;
+	const response = await fetch(url, {
+		method: "GET",
+		headers: {
+			Accept: "application/json, text/plain, */*",
+			Authorization: `Bearer ${accessToken}`,
+			"Content-Type": "application/json",
+			"User-Agent": CLAUDE_CODE_BOOTSTRAP_USER_AGENT,
+			"anthropic-beta": "oauth-2025-04-20",
+		},
+		signal: AbortSignal.timeout(30_000),
+	});
+	const responseBody = await response.text();
+	if (!response.ok) {
+		throw new Error(`HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`);
+	}
+	let data: AnthropicBootstrapResponse;
+	try {
+		data = JSON.parse(responseBody) as AnthropicBootstrapResponse;
+	} catch (error) {
+		throw new Error(
+			`Anthropic bootstrap returned invalid JSON. url=${url}; body=${responseBody}; details=${formatErrorDetails(error)}`,
+		);
+	}
+	const accountUuid = data.oauth_account?.account_uuid;
+	const accountEmail = data.oauth_account?.account_email;
+	return {
+		accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
+		email: typeof accountEmail === "string" && accountEmail.length > 0 ? accountEmail : undefined,
+	};
+}
+
+async function resolveAccountIdentity(data: AnthropicTokenResponse): Promise<{ accountId?: string; email?: string }> {
+	const identity = extractAccountFromTokenResponse(data);
+	if (identity.accountId && identity.email) return identity;
+	try {
+		const bootstrap = await fetchBootstrapIdentity(data.access_token);
+		return {
+			accountId: identity.accountId ?? bootstrap.accountId,
+			email: identity.email ?? bootstrap.email,
+		};
+	} catch {
+		return identity;
+	}
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
@@ -152,7 +217,7 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 		}
 
 		const tokenData = parseOAuthTokenResponse(responseBody, "token exchange");
-		const { accountId, email } = extractAccountFromTokenResponse(tokenData);
+		const { accountId, email } = await resolveAccountIdentity(tokenData);
 
 		return {
 			refresh: tokenData.refresh_token,
@@ -178,17 +243,25 @@ export async function loginAnthropic(ctrl: OAuthController): Promise<OAuthCreden
 export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
 	let responseBody: string;
 	try {
-		responseBody = await postJson(TOKEN_URL, {
-			grant_type: "refresh_token",
-			client_id: CLIENT_ID,
-			refresh_token: refreshToken,
-		});
+		responseBody = await postJson(
+			TOKEN_URL,
+			{
+				grant_type: "refresh_token",
+				client_id: CLIENT_ID,
+				refresh_token: refreshToken,
+			},
+			{
+				// CC sends these on refresh but not on the initial code exchange
+				"anthropic-beta": "oauth-2025-04-20",
+				"User-Agent": "anthropic-sdk-typescript/0.94.0 userOAuthProvider",
+			},
+		);
 	} catch (error) {
 		throw new Error(`Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`);
 	}
 
 	const data = parseOAuthTokenResponse(responseBody, "token refresh");
-	const { accountId, email } = extractAccountFromTokenResponse(data);
+	const { accountId, email } = await resolveAccountIdentity(data);
 
 	return {
 		refresh: data.refresh_token || refreshToken,

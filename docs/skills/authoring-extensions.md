@@ -73,24 +73,28 @@ export default function myExtension(pi: ExtensionAPI) {
 }
 ```
 
-## Discovery path
+## Discovery paths
 
-omp discovers extension modules in this order:
+omp loads extension modules from these sources:
 
-1. **Project-scoped auto-discovery** — `<cwd>/.omp/extensions/`
-2. **User-scoped auto-discovery** — `~/.omp/agent/extensions/`
-3. **Marketplace-installed plugins** — `~/.omp/plugins/node_modules/` (extensions shipped inside installed plugin packages)
-4. **CLI flag** — `omp --extension ./my-ext.ts` (also `-e`; `--hook` is treated as an alias)
-5. **Settings `extensions` array** — paths listed in `~/.omp/agent/config.yml` or `<cwd>/.omp/settings.json`
+1. Native `.omp` locations discovered through the capability system:
+   - `<cwd>/.omp/extensions/`
+   - `~/.omp/agent/extensions/`
+   - legacy extension paths listed in `.omp/settings.json#extensions` or `~/.omp/agent/settings.json#extensions`
+2. Marketplace-installed plugins from the OMP and Claude plugin registries.
+3. Explicit configured paths passed by the CLI (`omp --extension ./my-ext.ts`, also `-e`; `--hook` is treated as an alias) and by the `extensions:` setting in config.
 
-Within each scope, de-duplication is by resolved absolute path — first seen wins.
+The runtime de-duplicates by resolved absolute path — first seen wins.
 
 When a path points to a directory, omp resolves the entry point in this order:
 
 1. `package.json` with `omp.extensions` (or legacy `pi.extensions`) field
 2. `index.ts`
 3. `index.js`
-4. One-level scan for `*.ts` / `*.js` files and subdir `index.*` / `package.json` manifests
+
+When scanning an `extensions/` directory, omp also loads direct `*.ts`/`*.js` files and one-level subdirectories that have `index.ts`, `index.js`, or a manifest.
+
+Extension packages can also bundle sibling capability directories. When a package is loaded through `extensions:` or `--extension`/`-e`, the `omp-plugins` provider discovers its `skills/`, `hooks/pre|post/`, `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json`.
 
 ## package.json manifest
 
@@ -215,20 +219,15 @@ Extensions are a strict superset of hooks. New authoring should use `ExtensionAP
 
 ## Debugging
 
-Start omp with `--log-level debug` to see extension load messages:
+Start omp with `--log-level debug` to see extension load diagnostics:
 
 ```
 omp --log-level debug
 ```
 
-Watch for lines like:
+Failed extension loads are logged with their path and error. Loaded extensions may also emit their own debug logs via `pi.logger`.
 
-```
-[extension-loader] loading /home/you/.omp/agent/extensions/my-ext.ts
-[extension-loader] loaded: my-ext (1 tool, 1 command, 2 handlers)
-```
-
-To temporarily disable a specific extension by name without removing the file:
+To temporarily disable a specific extension module by name without removing the file:
 
 ```yaml
 # ~/.omp/agent/config.yml

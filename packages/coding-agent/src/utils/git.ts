@@ -189,11 +189,7 @@ function formatCommandFailure(
 	return `git ${args.join(" ")} failed with exit code ${result.exitCode}`;
 }
 
-async function runCommand(
-	cwd: string,
-	args: readonly string[],
-	options: CommandOptions = {},
-): Promise<GitCommandResult> {
+async function git(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<GitCommandResult> {
 	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : [...args]);
 	const child = Bun.spawn(["git", ...commandArgs], {
 		cwd,
@@ -248,7 +244,7 @@ async function runChecked(
 	options: CommandOptions = {},
 ): Promise<GitCommandResult> {
 	ensureAvailable();
-	const result = await runCommand(cwd, args, options);
+	const result = await git(cwd, args, options);
 	if (result.exitCode !== 0) {
 		throw new GitCommandError(args, result);
 	}
@@ -269,7 +265,7 @@ async function tryText(
 	options: CommandOptions = {},
 ): Promise<string | undefined> {
 	ensureAvailable();
-	const result = await runCommand(cwd, args, options);
+	const result = await git(cwd, args, options);
 	if (result.exitCode !== 0) return undefined;
 	return result.stdout;
 }
@@ -709,7 +705,7 @@ export const diff = Object.assign(
 	async function diff(cwd: string, options: DiffOptions = {}): Promise<string> {
 		const args = buildDiffArgs(options);
 		if (options.allowFailure) {
-			return (await runCommand(cwd, args, { env: options.env, readOnly: true, signal: options.signal })).stdout;
+			return (await git(cwd, args, { env: options.env, readOnly: true, signal: options.signal })).stdout;
 		}
 		return runText(cwd, args, { env: options.env, readOnly: true, signal: options.signal });
 	},
@@ -741,7 +737,7 @@ export const diff = Object.assign(
 			if (options.cached) args.push("--cached");
 			args.push("--quiet");
 			if (options.files?.length) args.push("--", ...options.files);
-			const result = await runCommand(cwd, args, { readOnly: true, signal: options.signal });
+			const result = await git(cwd, args, { readOnly: true, signal: options.signal });
 			if (result.exitCode === 0) return false;
 			if (result.exitCode === 1) return true;
 			throw new GitCommandError(args, result);
@@ -757,7 +753,7 @@ export const diff = Object.assign(
 			if (options.binary) args.push("--binary");
 			args.push(base, headRef);
 			if (options.allowFailure) {
-				return (await runCommand(cwd, args, { readOnly: true, signal: options.signal })).stdout;
+				return (await git(cwd, args, { readOnly: true, signal: options.signal })).stdout;
 			}
 			return runText(cwd, args, { readOnly: true, signal: options.signal });
 		},
@@ -789,7 +785,7 @@ export const status = Object.assign(
 	{
 		/** Parsed status counts (staged, unstaged, untracked). */
 		async summary(cwd: string, signal?: AbortSignal): Promise<GitStatusSummary | null> {
-			const result = await runCommand(cwd, ["status", "--porcelain"], { readOnly: true, signal });
+			const result = await git(cwd, ["status", "--porcelain"], { readOnly: true, signal });
 			if (result.exitCode !== 0) return null;
 			return parseStatusPorcelain(result.stdout);
 		},
@@ -950,7 +946,7 @@ export const branch = {
 	async current(cwd: string, signal?: AbortSignal): Promise<string | null> {
 		const headState = await resolveHead(cwd);
 		if (headState?.kind === "ref") return headState.branchName ?? headState.ref;
-		const result = await runCommand(cwd, ["symbolic-ref", "--short", "HEAD"], { readOnly: true, signal });
+		const result = await git(cwd, ["symbolic-ref", "--short", "HEAD"], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
 		return result.stdout.trim() || null;
 	},
@@ -966,7 +962,7 @@ export const branch = {
 			}
 		}
 		for (const remoteRef of ["origin/HEAD", "upstream/HEAD"]) {
-			const result = await runCommand(cwd, ["rev-parse", "--abbrev-ref", remoteRef], { readOnly: true, signal });
+			const result = await git(cwd, ["rev-parse", "--abbrev-ref", remoteRef], { readOnly: true, signal });
 			if (result.exitCode !== 0) continue;
 			const branchName = stripRemotePrefix(result.stdout.trim());
 			if (branchName) return branchName;
@@ -995,7 +991,7 @@ export const branch = {
 		name: string,
 		options: { force?: boolean; signal?: AbortSignal } = {},
 	): Promise<boolean> {
-		const result = await runCommand(cwd, ["branch", options.force === false ? "-d" : "-D", name], {
+		const result = await git(cwd, ["branch", options.force === false ? "-d" : "-D", name], {
 			signal: options.signal,
 		});
 		return result.exitCode === 0;
@@ -1038,7 +1034,7 @@ export const remote = {
 	 * needs to resolve, not paper over.
 	 */
 	async add(cwd: string, name: string, url: string, signal?: AbortSignal): Promise<void> {
-		const result = await runCommand(cwd, ["remote", "add", name, url], { signal });
+		const result = await git(cwd, ["remote", "add", name, url], { signal });
 		if (result.exitCode === 0) return;
 		if (REMOTE_ALREADY_EXISTS.test(result.stderr)) {
 			const existing = await remote.url(cwd, name, signal);
@@ -1059,7 +1055,7 @@ export const ref = {
 		if (refName === "HEAD") return (await head.sha(cwd, signal)) !== null;
 		const repository = await resolveRepository(cwd);
 		if (repository && refName.startsWith("refs/")) return (await readRef(repository, refName)) !== null;
-		const result = await runCommand(cwd, ["show-ref", "--verify", "--quiet", refName], { readOnly: true, signal });
+		const result = await git(cwd, ["show-ref", "--verify", "--quiet", refName], { readOnly: true, signal });
 		return result.exitCode === 0;
 	},
 
@@ -1068,7 +1064,7 @@ export const ref = {
 		if (refName === "HEAD") return head.sha(cwd, signal);
 		const repository = await resolveRepository(cwd);
 		if (repository && refName.startsWith("refs/")) return readRef(repository, refName);
-		const result = await runCommand(cwd, ["rev-parse", refName], { readOnly: true, signal });
+		const result = await git(cwd, ["rev-parse", refName], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
 		return result.stdout.trim() || null;
 	},
@@ -1150,7 +1146,7 @@ export const worktree = {
 		const args = ["worktree", "remove"];
 		if (options.force ?? true) args.push("-f");
 		args.push(worktreePath);
-		const result = await runCommand(cwd, args, { signal: options.signal });
+		const result = await git(cwd, args, { signal: options.signal });
 		return result.exitCode === 0;
 	},
 
@@ -1186,7 +1182,7 @@ export const patch = {
 
 	/** Check if a patch file can be applied cleanly. */
 	async canApply(cwd: string, patchPath: string, options: Omit<PatchOptions, "check"> = {}): Promise<boolean> {
-		const result = await runCommand(cwd, buildApplyArgs(patchPath, { ...options, check: true }), {
+		const result = await git(cwd, buildApplyArgs(patchPath, { ...options, check: true }), {
 			env: options.env,
 			readOnly: true,
 			signal: options.signal,
@@ -1261,9 +1257,15 @@ export async function clone(url: string, targetDir: string, options: CloneOption
 	const absoluteTarget = path.resolve(targetDir);
 	await fs.promises.mkdir(path.dirname(absoluteTarget), { recursive: true });
 
-	const args = ["clone", "--depth", "1"];
+	// `git clone --depth 1 --single-branch` only fetches the tip of the target
+	// branch, so any subsequent `git checkout <sha>` for a non-tip commit fails
+	// with "reference is not a tree". When the caller pinned a specific SHA we
+	// fall back to a full clone so the object is guaranteed to be present.
+	const shallow = !options.sha;
+	const args = ["clone"];
+	if (shallow) args.push("--depth", "1");
 	if (options.ref) args.push("--branch", options.ref, "--single-branch");
-	else args.push("--single-branch");
+	else if (shallow) args.push("--single-branch");
 	args.push(url, absoluteTarget);
 
 	try {
@@ -1273,7 +1275,7 @@ export async function clone(url: string, targetDir: string, options: CloneOption
 				await checkout(absoluteTarget, options.sha, options.signal);
 			} catch {
 				await fs.promises.rm(absoluteTarget, { force: true, recursive: true });
-				throw new Error(`Failed to checkout SHA ${options.sha} - shallow clone may not contain this commit`);
+				throw new Error(`Failed to checkout SHA ${options.sha} in cloned repository ${url}`);
 			}
 		}
 	} catch (err) {
@@ -1340,7 +1342,7 @@ export const ls = {
 
 	/** List submodule paths (recursive). */
 	async submodules(cwd: string, signal?: AbortSignal): Promise<string[]> {
-		const output = await runCommand(cwd, ["submodule", "--quiet", "foreach", "--recursive", "echo $sm_path"], {
+		const output = await git(cwd, ["submodule", "--quiet", "foreach", "--recursive", "echo $sm_path"], {
 			readOnly: true,
 			signal,
 		});
@@ -1375,14 +1377,14 @@ export const head = {
 	async sha(cwd: string, signal?: AbortSignal): Promise<string | null> {
 		const headState = await head.resolve(cwd);
 		if (headState?.commit) return headState.commit;
-		const result = await runCommand(cwd, ["rev-parse", "HEAD"], { readOnly: true, signal });
+		const result = await git(cwd, ["rev-parse", "HEAD"], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
 		return result.stdout.trim() || null;
 	},
 
 	/** Abbreviated HEAD commit SHA. */
 	async short(cwd: string, length = 7, signal?: AbortSignal): Promise<string | null> {
-		const result = await runCommand(cwd, ["rev-parse", `--short=${length}`, "HEAD"], { readOnly: true, signal });
+		const result = await git(cwd, ["rev-parse", `--short=${length}`, "HEAD"], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
 		return result.stdout.trim() || null;
 	},
@@ -1397,7 +1399,7 @@ export const repo = {
 	async root(cwd: string, signal?: AbortSignal): Promise<string | null> {
 		const repository = await resolveRepository(cwd);
 		if (repository) return repository.repoRoot;
-		const result = await runCommand(cwd, ["rev-parse", "--show-toplevel"], { readOnly: true, signal });
+		const result = await git(cwd, ["rev-parse", "--show-toplevel"], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
 		return result.stdout.trim() || null;
 	},

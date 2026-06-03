@@ -350,6 +350,7 @@ def test_gh_post_comment_propagates_github_error(db: Database, tmp_path: Path) -
 def test_gh_open_pr_requires_template_sections(db: Database, tmp_path: Path) -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(500))
     bindings, loop, t = _bindings(db, tmp_path, transport)
+    db.set_issue_classification(bindings.issue_key, "bug")
     try:
         tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
         with pytest.raises(RpcCommandError) as exc:
@@ -682,6 +683,348 @@ def _pr_bindings(
     )
     db.set_issue_classification(bindings.issue_key, "bug")
     return bindings, loop, thread
+
+
+def _review_bindings(
+    db: Database, tmp_path: Path, transport: httpx.MockTransport
+) -> tuple[ToolBindings, asyncio.AbstractEventLoop, threading.Thread]:
+    github = GitHubClient("token", transport=transport)
+    loop, thread = _make_loop_in_background()
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=99,
+        title="contributor PR",
+        body="body",
+        state="open",
+        author="alice",
+        labels=(),
+        is_pull_request=True,
+    )
+    workspace = _stub_workspace(tmp_path)
+    workspace.issue_number = 99
+    bindings = ToolBindings(
+        db=db,
+        github=github,
+        git_transport=LocalGitTransport(token=None),
+        repo=_stub_repo(),
+        issue=issue,
+        workspace=workspace,
+        loop=loop,
+        author_name="robomp-bot",
+        author_email="robomp-bot@example.invalid",
+        inbound_thread_number=99,
+        inbound_is_pr=True,
+        review_mode=True,
+    )
+    db.upsert_issue(
+        key=bindings.issue_key,
+        repo="octo/widget",
+        number=99,
+        state="reviewing",
+        branch=bindings.workspace.branch,
+        session_dir=str(bindings.workspace.session_dir),
+        pr_number=99,
+    )
+    return bindings, loop, thread
+
+
+def test_fetch_pr_returns_premise_and_changed_files(db: Database, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octo/widget/pulls/99":
+            return httpx.Response(
+                200,
+                json={
+                    "number": 99,
+                    "html_url": "https://github.com/octo/widget/pull/99",
+                    "title": "Fix crash",
+                    "body": "Fixes #42",
+                    "head": {"ref": "fix-crash", "repo": {"full_name": "alice/widget"}},
+                    "base": {"ref": "main"},
+                    "state": "open",
+                    "user": {"login": "alice"},
+                },
+            )
+        if request.url.path == "/repos/octo/widget/pulls/99/files":
+            return httpx.Response(
+                200,
+                json=[{"filename": "src/app.py", "status": "modified", "additions": 5, "deletions": 2}],
+            )
+        return httpx.Response(404, json={"message": "unrouted"})
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "fetch_pr")
+        result = tool.execute({}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert "Fix crash" in result
+    assert "#42" in result
+    assert "`src/app.py` (modified, +5/-2)" in result
+
+
+def test_classify_pr_applies_review_labels_and_persists_rank(db: Database, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=[{"name": label} for label in captured["body"]["labels"]])
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "classify_pr")
+        result = tool.execute(
+            {
+                "rank": "review:p1",
+                "type": "fix",
+                "area": ["tool", "unknown"],
+                "provider": "provider:openai",
+                "rationale": "fixes the tool crash with a scoped guard",
+            },
+            _ctx(),
+        )
+    finally:
+        _stop_loop(loop, t)
+
+    assert "review:p1" in result
+    assert captured["path"].endswith("/issues/99/labels")
+    assert captured["body"]["labels"] == ["triaged", "review:p1", "fix", "tool", "providers", "provider:openai"]
+    row = db.get_issue(bindings.issue_key)
+    assert row is not None and row.classification == "review:p1"
+
+
+def test_classify_pr_rejects_bad_rank(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "classify_pr")
+        with pytest.raises(RpcCommandError):
+            tool.execute({"rank": "prio:p1", "type": "fix", "rationale": "wrong namespace"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+
+def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Database, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reviews"):
+            captured["path"] = request.url.path
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": 44,
+                    "user": {"login": "robomp-bot"},
+                    "body": captured["body"]["body"],
+                    "state": "COMMENTED",
+                    "submitted_at": "t",
+                },
+            )
+        return httpx.Response(404, json={"message": "unrouted"})
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
+        submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
+        staged = stage_tool.execute(
+            {
+                "path": "src/app.py",
+                "line": 12,
+                "side": "RIGHT",
+                "start_line": 10,
+                "start_side": "RIGHT",
+                "body": "blocking: this dereferences cfg before the guard.",
+            },
+            _ctx(),
+        )
+        assert "staged_count=1" in staged
+        rows = db.list_staged_review_comments(bindings.issue_key)
+        assert len(rows) == 1
+        assert rows[0].path == "src/app.py"
+
+        result = submit_tool.execute({"body": "review:p1 — one blocking issue", "event": "APPROVE"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert "submitted PR review" in result
+    assert captured["path"].endswith("/pulls/99/reviews")
+    assert captured["body"] == {
+        "body": "review:p1 — one blocking issue",
+        "event": "COMMENT",
+        "comments": [
+            {
+                "path": "src/app.py",
+                "line": 12,
+                "side": "RIGHT",
+                "body": "blocking: this dereferences cfg before the guard.",
+                "start_line": 10,
+                "start_side": "RIGHT",
+            }
+        ],
+    }
+    assert db.list_staged_review_comments(bindings.issue_key) == []
+
+
+def test_submit_pr_review_posts_summary_only_when_no_staged_comments(db: Database, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"id": 45, "user": {"login": "robomp-bot"}, "body": "ok", "state": "COMMENTED", "submitted_at": "t"},
+        )
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
+        result = tool.execute({"body": "lgtm — scoped fix"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert "comments=0" in result
+    assert captured["body"]["event"] == "COMMENT"
+    assert captured["body"]["comments"] == []
+
+
+def test_submit_pr_review_failure_keeps_staged_comments(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _review_bindings(
+        db,
+        tmp_path,
+        httpx.MockTransport(lambda _request: httpx.Response(422, json={"message": "Validation failed"})),
+    )
+    try:
+        stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
+        submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "finding"}, _ctx())
+        with pytest.raises(RpcCommandError):
+            submit_tool.execute({"body": "summary"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    rows = db.list_staged_review_comments(bindings.issue_key)
+    assert len(rows) == 1
+    assert rows[0].path == "src/app.py"
+
+
+def test_review_tools_reject_outside_review_mode(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
+        with pytest.raises(RpcCommandError):
+            tool.execute({"path": "x.py", "line": 1, "body": "nit"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+
+def test_review_mode_rejects_push_and_open_pr_before_repo_commands(db: Database, tmp_path: Path) -> None:
+    calls: list[list[str] | tuple[str, ...]] = []
+
+    def record_repo_command(_bindings: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None):
+        del timeout
+        calls.append(cmd)
+        raise AssertionError("repo command must not run in review mode")
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    try:
+        original = host_tools._run_repo_command
+        host_tools._run_repo_command = record_repo_command  # type: ignore[assignment]
+        push = next(x for x in build(bindings) if x.name == "gh_push_branch")
+        open_pr = next(x for x in build(bindings) if x.name == "gh_open_pr")
+        with pytest.raises(RpcCommandError):
+            push.execute({}, _ctx())
+        with pytest.raises(RpcCommandError):
+            open_pr.execute({"title": "t", "body": "invalid"}, _ctx())
+    finally:
+        host_tools._run_repo_command = original  # type: ignore[assignment]
+        _stop_loop(loop, t)
+
+    assert calls == []
+
+
+def test_impl_gate_rejects_unauthorized_proposal_before_repo_commands(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str] | tuple[str, ...]] = []
+
+    def record_repo_command(_bindings: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None):
+        del timeout
+        calls.append(cmd)
+        raise AssertionError("repo command must not run before implementation authorization")
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    db.set_issue_classification(bindings.issue_key, "proposal")
+    monkeypatch.setattr(host_tools, "_run_repo_command", record_repo_command)
+    try:
+        push = next(x for x in build(bindings) if x.name == "gh_push_branch")
+        open_pr = next(x for x in build(bindings) if x.name == "gh_open_pr")
+        with pytest.raises(RpcCommandError) as push_exc:
+            push.execute({}, _ctx())
+        with pytest.raises(RpcCommandError) as pr_exc:
+            open_pr.execute({"title": "fix: x", "body": "invalid"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    for msg in (str(push_exc.value), str(pr_exc.value)):
+        assert "classified `proposal`" in msg
+        assert "OWNER or allowlisted maintainer" in msg
+        assert "gh_post_comment" in msg
+    assert calls == []
+    rows = db._conn.execute(
+        "SELECT tool, error FROM tool_calls WHERE tool IN ('gh_push_branch', 'gh_open_pr') ORDER BY id"
+    ).fetchall()
+    assert [row["tool"] for row in rows] == ["gh_push_branch", "gh_open_pr"]
+    assert all("classified `proposal`" in row["error"] for row in rows)
+
+
+def test_impl_gate_allows_authorized_proposal_to_reach_pr_validation(db: Database, tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    db.set_issue_classification(bindings.issue_key, "proposal")
+    bindings = replace(bindings, impl_authorized=True)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
+        with pytest.raises(RpcCommandError) as exc:
+            tool.execute({"title": "fix: x", "body": ""}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    msg = str(exc.value)
+    assert "requires a non-empty 'body'" in msg
+    assert "OWNER or allowlisted maintainer" not in msg
+
+
+def test_impl_gate_allows_bug_without_directive_to_reach_pr_validation(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    db.set_issue_classification(bindings.issue_key, "bug")
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
+        with pytest.raises(RpcCommandError) as exc:
+            tool.execute({"title": "fix: x", "body": ""}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    msg = str(exc.value)
+    assert "requires a non-empty 'body'" in msg
+    assert "OWNER or allowlisted maintainer" not in msg
+
+
+def test_impl_gate_allows_existing_proposal_pr_to_reach_pr_validation(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    db.set_issue_classification(bindings.issue_key, "proposal")
+    db.set_issue_pr(bindings.issue_key, 7)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
+        with pytest.raises(RpcCommandError) as exc:
+            tool.execute({"title": "fix: x", "body": ""}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    msg = str(exc.value)
+    assert "requires a non-empty 'body'" in msg
+    assert "OWNER or allowlisted maintainer" not in msg
 
 
 def test_classify_issue_on_pr_thread_is_noop(db: Database, tmp_path: Path) -> None:
@@ -1021,6 +1364,7 @@ def test_gh_push_branch_rejects_wrong_identity(db: Database, tmp_path: Path) -> 
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         with pytest.raises(RpcCommandError) as exc:
             tool.execute({}, _ctx())
@@ -1139,6 +1483,7 @@ def test_gh_open_pr_rejects_wrong_identity_before_push_or_pr(db: Database, tmp_p
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
         body = "## Repro\nrepro\n\n## Cause\ncause\n\n## Fix\nfix\n\n## Verification\nran tests\n\nFixes #42\n"
         with pytest.raises(RpcCommandError) as exc:
@@ -1259,6 +1604,7 @@ def test_gh_push_branch_rejects_invalid_identity_scan_range(db: Database, tmp_pa
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         with pytest.raises(RpcCommandError) as exc:
             tool.execute({}, _ctx())
@@ -1284,6 +1630,7 @@ def test_gh_push_branch_rejects_invalid_identity_scan_range(db: Database, tmp_pa
 def test_gh_open_pr_requires_closes_keyword(db: Database, tmp_path: Path) -> None:
     """gh_open_pr refuses if the body has the four sections but no Fixes/Closes/Resolves keyword."""
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
+    db.set_issue_classification(bindings.issue_key, "bug")
     try:
         tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
         body = "## Repro\nrepro\n\n## Cause\ncause\n\n## Fix\nfix\n\n## Verification\nran tests\n"
@@ -1316,6 +1663,7 @@ def test_gh_open_pr_refuses_failed_bun_check_before_push_or_pr(
         )
 
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    db.set_issue_classification(bindings.issue_key, "bug")
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
     fake_bun = fakebin / "bun"
@@ -1455,6 +1803,7 @@ def test_gh_push_branch_rejects_dirty_worktree(db: Database, tmp_path: Path) -> 
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         with pytest.raises(RpcCommandError) as exc:
             tool.execute({}, _ctx())
@@ -1602,6 +1951,7 @@ def test_gh_push_branch_runs_fix_and_check_before_pushing(
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         result = tool.execute({}, _ctx())
     finally:
@@ -1735,6 +2085,7 @@ def test_gh_push_branch_force_with_lease_recovers_after_amend(db: Database, tmp_
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         tool.execute({}, _ctx())
 
@@ -1913,6 +2264,7 @@ def test_gh_push_branch_aborts_on_failed_bun_check(
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         with pytest.raises(RpcCommandError) as exc:
             tool.execute({}, _ctx())
@@ -2068,6 +2420,7 @@ def test_gh_push_branch_skip_checks_bypasses_failing_bun_check(
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         result = tool.execute({"skip_checks": True}, _ctx())
     finally:
@@ -2205,6 +2558,7 @@ def test_gh_push_branch_skip_checks_still_refuses_dirty_worktree(
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         with pytest.raises(RpcCommandError) as exc:
             tool.execute({"skip_checks": True}, _ctx())
@@ -2371,6 +2725,7 @@ def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
         body = "## Repro\nrepro\n\n## Cause\ncause\n\n## Fix\nfix\n\n## Verification\nran tests\n\nFixes #42\n"
         result = tool.execute({"title": "fix: x", "body": body}, _ctx())
@@ -2544,6 +2899,7 @@ def test_gh_open_pr_refuses_dirty_worktree_before_fix(
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         push_tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
         with pytest.raises(RpcCommandError) as exc:
             push_tool.execute({}, _ctx())
@@ -2727,6 +3083,7 @@ def test_gh_open_pr_skips_fix_when_no_script(db: Database, tmp_path: Path, monke
             branch=ws.branch,
             session_dir=str(ws.session_dir),
         )
+        db.set_issue_classification(bindings.issue_key, "bug")
         tool = next(x for x in build(bindings) if x.name == "gh_open_pr")
         body = "## Repro\nrepro\n\n## Cause\ncause\n\n## Fix\nfix\n\n## Verification\nran tests\n\nFixes #42\n"
         result = tool.execute({"title": "fix: x", "body": body}, _ctx())

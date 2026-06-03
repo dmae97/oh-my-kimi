@@ -272,8 +272,8 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
-			const existing = this.#storage.existsSync(this.#path) ? this.#storage.readTextSync(this.#path) : "";
-			this.#storage.writeTextSync(this.#path, `${existing}${line}`);
+			// O(1) chunked append — see MemorySessionStorage.appendChunkSync.
+			this.#storage.appendChunkSync(this.#path, line);
 		} catch (err) {
 			throw this.#recordError(err);
 		}
@@ -302,8 +302,26 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 	}
 }
 
+/**
+ * Mirror entry stored per path. Chunks accumulate via O(1) `push` on
+ * `appendChunkSync`; readers materialise into a single string lazily.
+ * `byteLen` is kept in sync so `statSync` is O(1) (and returns true UTF-8
+ * bytes, not character count).
+ */
+interface MirrorEntry {
+	chunks: string[];
+	byteLen: number;
+	mtimeMs: number;
+}
+
+function materialiseMirror(entry: MirrorEntry): string {
+	if (entry.chunks.length === 0) return "";
+	if (entry.chunks.length === 1) return entry.chunks[0];
+	return entry.chunks.join("");
+}
+
 export class MemorySessionStorage implements SessionStorage {
-	#files = new Map<string, { content: string; mtimeMs: number }>();
+	#files = new Map<string, MirrorEntry>();
 
 	ensureDirSync(_dir: string): void {
 		// No-op for in-memory storage.
@@ -314,20 +332,40 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	writeTextSync(path: string, content: string): void {
-		this.#files.set(path, { content, mtimeMs: Date.now() });
+		this.#files.set(path, {
+			chunks: content.length === 0 ? [] : [content],
+			byteLen: Buffer.byteLength(content, "utf-8"),
+			mtimeMs: Date.now(),
+		});
+	}
+
+	/**
+	 * Internal O(1) append used by {@link MemorySessionStorageWriter}. Lazily
+	 * creates the entry. External callers should go through `openWriter()`
+	 * rather than touching the mirror directly.
+	 */
+	appendChunkSync(path: string, chunk: string): void {
+		let entry = this.#files.get(path);
+		if (!entry) {
+			entry = { chunks: [], byteLen: 0, mtimeMs: Date.now() };
+			this.#files.set(path, entry);
+		}
+		entry.chunks.push(chunk);
+		entry.byteLen += Buffer.byteLength(chunk, "utf-8");
+		entry.mtimeMs = Date.now();
 	}
 
 	readTextSync(path: string): string {
 		const entry = this.#files.get(path);
 		if (!entry) throw new Error(`File not found: ${path}`);
-		return entry.content;
+		return materialiseMirror(entry);
 	}
 
 	statSync(path: string): SessionStorageStat {
 		const entry = this.#files.get(path);
 		if (!entry) throw new Error(`File not found: ${path}`);
 		return {
-			size: entry.content.length,
+			size: entry.byteLen,
 			mtimeMs: entry.mtimeMs,
 			mtime: new Date(entry.mtimeMs),
 		};
@@ -353,13 +391,35 @@ export class MemorySessionStorage implements SessionStorage {
 	readText(path: string): Promise<string> {
 		const entry = this.#files.get(path);
 		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		return Promise.resolve(entry.content);
+		return Promise.resolve(materialiseMirror(entry));
 	}
 
 	readTextPrefix(path: string, maxBytes: number): Promise<string> {
 		const entry = this.#files.get(path);
 		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		return Promise.resolve(entry.content.slice(0, maxBytes));
+		if (entry.chunks.length === 0 || maxBytes <= 0) return Promise.resolve("");
+
+		// Walk chunks until the byte budget is exhausted. Avoids materialising
+		// the full mirror just to slice a prefix — bounded work for big files.
+		let accumulatedBytes = 0;
+		const out: string[] = [];
+		for (const chunk of entry.chunks) {
+			const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+			if (accumulatedBytes + chunkBytes <= maxBytes) {
+				out.push(chunk);
+				accumulatedBytes += chunkBytes;
+				if (accumulatedBytes === maxBytes) break;
+				continue;
+			}
+			// Boundary chunk: slice in byte space and decode. Result MAY be
+			// shorter than the budget if a multi-byte codepoint straddles the
+			// boundary — matches `peekFile` semantics (partial decode at cap).
+			const remainingBytes = maxBytes - accumulatedBytes;
+			const utf8 = Buffer.from(chunk, "utf-8");
+			out.push(utf8Decoder.decode(utf8.subarray(0, remainingBytes)));
+			break;
+		}
+		return Promise.resolve(out.join(""));
 	}
 
 	writeText(path: string, content: string): Promise<void> {

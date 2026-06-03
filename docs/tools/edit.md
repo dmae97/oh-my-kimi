@@ -7,8 +7,8 @@
 - Model-facing prompt: `packages/hashline/src/prompt.md`
 - Key collaborators:
   - `packages/coding-agent/src/utils/edit-mode.ts` — selects active edit mode
-  - `packages/hashline/src/grammar.lark` — hashline grammar
-  - `packages/hashline/src/format.ts` — sigils and header constants (`¶`, `#`, `@@`, `+`, `&`, `,`)
+  - `packages/hashline/src/grammar.lark` — canonical constrained-decoding grammar
+  - `packages/hashline/src/format.ts` — sigils and header constants (`¶`, `#`, `+`, `replace`, `delete`, `insert`)
   - `packages/hashline/src/input.ts` — parses `¶PATH#TAG` sections
   - `packages/hashline/src/tokenizer.ts` / `packages/hashline/src/parser.ts` — tokenizes and parses ops
   - `packages/hashline/src/apply.ts` — applies parsed edits to file text
@@ -22,37 +22,47 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `input` | `string` | Yes | One or more file sections. Anchored sections start with `¶PATH#TAG`; hashless `¶PATH` is allowed only for new-file creation or BOF/EOF-only inserts. Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
+| `input` | `string` | Yes | One or more file sections. Anchored sections must start with `¶PATH#TAG`; `TAG` is the four-hex snapshot tag emitted by the latest `read`/`search`/`write`/successful `edit`. Optional `*** Begin Patch` / `*** End Patch` envelope is ignored if present. |
 
 Patch language inside `input`:
 
-- **File header**: `¶PATH#TAG` (or `¶PATH` for new-file / virtual-only hunks). `TAG` is three uppercase-hex chars minted by the session snapshot store.
-- **Hunk header**: bare `A B` selects original lines A..B. Two numbers are REQUIRED — single-line ranges are written `A A` (`5 5`), not `5`. The range separator is normally whitespace; the parser also silently accepts `A-B`, `A..B`, and `A…B` (unicode ellipsis). Virtual variants `BOF` and `EOF` target positions before line 1 / after the last line.
-- **Body rows** (one per line, immediately under the hunk header):
-  - `+TEXT` — add the literal line `TEXT` verbatim, including all leading whitespace.
-  - `+` alone — add one blank line.
-  - `&A..B` — re-emit original file lines A..B. Use this to keep some of the lines you selected. `&A` is accepted as `&A..A`.
-- **Semantics**:
-  - The new content of the selected range is just the body rows top-to-bottom.
-  - **Empty body deletes the range entirely.**
-  - `BOF` / `EOF` with empty body is a no-op (nothing to insert).
+- **File header**: `¶PATH#TAG`. `TAG` is four uppercase-hex chars minted by the session snapshot store.
+- **Operations**:
+  - `replace N..M:` — replace original lines N..M with the body rows below.
+  - `replace block N:` — replace the whole tree-sitter block beginning on line N (its header line through its closing line) with the body rows. The line span is resolved at apply time from the file's parse tree; point N at the line that opens the construct. Errors (and steers to `replace N..M:`) when the language is unsupported, line N is blank or a closing delimiter, no node begins there, or the resolved block has a syntax error.
+  - `delete N..M` — delete original lines N..M. No body.
+  - `delete block N` — delete the whole tree-sitter block beginning on line N (resolved like `replace block N`). No body. Same resolution failure modes and `delete N..M` fallback.
+  - `insert before N:` — insert body rows immediately before line N.
+  - `insert after N:` — insert body rows immediately after line N.
+  - `insert head:` — insert body rows at the start of the file.
+  - `insert tail:` — insert body rows at the end of the file.
+- **Body rows**:
+  - Only body-bearing headers end in `:`.
+  - Every body row is `+TEXT`; `+` alone adds a blank line.
+  - `delete` never has body rows.
+  - There is no repeat row kind. To keep a line, leave it out of every range; split edits into multiple hunks when needed.
+  - `-` rows are invalid. Literal text beginning with `-` or `+` must be written as `+-text` / `++text`.
 
 Anchors come from `read`/`search` output. `read` emits a `¶PATH#TAG` header from the session snapshot store and lines as `LINE:TEXT`; copy the header into the edit section and copy only the line number into hunk headers.
 
 ### Tolerated input shapes (lenient parsing)
 
-Because models reproduce nearby shapes (`read` output, `apply_patch` envelopes, unified-diff hunks), the parser is liberal about a handful of harmless variants:
+The canonical grammar is strict, but the hand parser accepts a few non-dangerous variants:
 
-- `A` (bare single number) — REJECTED. The parser throws `single-number hunk header "A" is no longer accepted`. Spell single-line ranges as `A A`.
-- `A-B`, `A..B`, `A…B` — accepted as `A B` (any of hyphen, double-dot, or unicode ellipsis works as a silent separator).
-- `&A` — accepted as `&A..A`.
-- Bare body rows with no `+`/`&` prefix are auto-prepended with `+` and a `BARE_BODY_AUTO_PIPED_WARNING` is appended, BUT only when every row in that block is uniformly bare. Mixed `+`/raw blocks still throw.
-- `+&A..B` rows (model mistakenly prefixed a repeat with `+`) are silently rerouted as `&A..B` repeats with `PLUS_PREFIXED_REPEAT_WARNING`.
-- Identical-range hunks in the same patch are coalesced last-wins with `REPLACE_PAIR_COALESCED_WARNING`.
-- An overlapping bare hunk followed by a concrete hunk is treated as a stale "before then after" pair; the bare hunk is dropped with `REPLACE_PAIR_COALESCED_OVERLAP_WARNING`.
+- `replace N:` — accepted as `replace N..N:`.
+- `delete N` — accepted as single-line delete.
+- Missing trailing colon on `replace` or `insert` — accepted.
+- `replace N-M:`, `replace N…M:`, and `replace N M:` — accepted as `replace N..M:`.
+- Bare body rows with no `+` prefix are auto-prepended with `+` and a `BARE_BODY_AUTO_PIPED_WARNING` is appended.
 - `*** Begin Patch` / `*** End Patch` envelopes are silently consumed. `*** Abort` terminates parsing silently — ops parsed before the marker still apply, no warning surfaced.
-- `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` apply_patch sentinels throw an `apply_patch sentinel … is not valid in hashline` error.
-- `@@`-bracketed hunk headers (whether the apply_patch `@@ context @@` form or the unified-diff `@@ -N,M +N,M @@` shape) are rejected with an explicit "drop the `@@ ... @@` brackets" message — hashline hunks are bare `A B` lines.
+- Some malformed `¶` headers are recovered after stripping apply-patch path noise such as `Update File:` / `Add File:` and extra `***`, but the recovered header still needs a valid four-hex tag for the patcher to apply it.
+- `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** Move to:` apply_patch sentinels inside the diff body throw an `apply_patch sentinel … is not valid in hashline` error.
+- `@@`-bracketed hunk headers are rejected with guidance to write a verb header.
+- Bare `N` and bare `N M` / `N..M` headers are rejected with guidance to write `replace` or `delete`.
+- `delete N..M:` and any body rows under `delete` / `delete block` are rejected.
+- Empty `replace` / `insert` / `replace block` hunks are rejected.
+- `-` body rows are rejected with `MINUS_ROW_REJECTED`.
+- `replace block N:` / `delete block N` require a wired tree-sitter resolver; `replace block` additionally needs at least one `+TEXT` body row, while `delete block` takes none. An unresolvable block (unsupported language, blank/closing-delimiter line, no node beginning on N, or a syntax error in the resolved block) is rejected on the apply/final-preview path; the streaming preview silently drops it instead.
 
 ## Outputs
 - Single-shot tool result; hashline mode does not use a `resolve` preview/apply handshake.
@@ -80,7 +90,7 @@ Warnings:
 Reference file (the exact shape `read` returns):
 
 ```text
-¶a.ts#0A3
+¶a.ts#0A3B
 1:const X = "a";
 2:const Y = X;
 3:
@@ -92,91 +102,96 @@ Reference file (the exact shape `read` returns):
 Replace line 1 with two lines:
 
 ```text
-¶a.ts#0A3
-1
+¶a.ts#0A3B
+replace 1..1:
 +const X = "b";
 +export const Y = X;
 ```
 
-Insert BELOW line 5 (keep line 5, add after):
+Insert below line 5:
 
 ```text
-¶a.ts#0A3
-5
-&5
+¶a.ts#0A3B
+insert after 5:
 +console.log(X + Y);
 ```
 
-Insert ABOVE line 5 (add before, keep line 5):
+Insert above line 5:
 
 ```text
-¶a.ts#0A3
-5
+¶a.ts#0A3B
+insert before 5:
 +console.log(X + Y);
-&5
 ```
 
 Delete lines 4..5 entirely:
 
 ```text
-¶a.ts#0A3
-4 5
+¶a.ts#0A3B
+delete 4..5
 ```
 
 Insert at start and end of file:
 
 ```text
-¶a.ts#0A3
-BOF
+¶a.ts#0A3B
+insert head:
 +// header
-EOF
+insert tail:
 +// trailer
 ```
 
 Multi-file:
 
 ```text
-¶src/a.ts#0A3
-4
+¶src/a.ts#0A3B
+replace 4..4:
 +const enabled = true;
-¶src/b.ts#1F7
-20
+¶src/b.ts#1F7C
+delete 20
 ```
 
 ## Limits & Caps
-- File snapshot tags are exactly three uppercase-hex chars minted by the per-session snapshot store.
+- File snapshot tags are exactly four uppercase-hex chars minted by the per-session snapshot store.
 - The visible mismatch report shows 2 lines of context on each side (`MISMATCH_CONTEXT`) in `packages/hashline/src/messages.ts`.
 - Stale-anchor recovery uses `fuzzFactor: 0` in `packages/hashline/src/recovery.ts`.
-- `HL_FILE_PREFIX` is `¶`, `HL_PAYLOAD_REPLACE` is `+`, `HL_PAYLOAD_REPEAT` is `&`, `HL_RANGE_SEP` is `..` (repeat-row bodies only), and `HL_FILE_HASH_SEP` is `#` (`packages/hashline/src/format.ts`). Hunk headers carry no sigil; the range is just two whitespace-separated line numbers.
+- `HL_FILE_PREFIX` is `¶`, `HL_PAYLOAD_REPLACE` is `+`, `HL_RANGE_SEP` is `..`, `HL_FILE_HASH_SEP` is `#`, and hunk keyword constants are `replace` / `delete` / `insert` (`packages/hashline/src/format.ts`).
 
 ## Errors
 - Missing section header:
   - `input must begin with "¶PATH#HASH" on the first non-blank line for anchored edits; got: ...`
-- Missing tag for anchored edit:
+- Missing tag for any section:
   - `Missing hashline snapshot tag for anchored edit to <path>; use ¶<path>#tag from your latest read/search output.`
 - Stray payload line:
-  - `line N: payload line has no preceding hunk header. Use an \`A B\` (or \`BOF\` / \`EOF\`) line above the body. Got "...".`
-- Raw body row with no `+` / `&` prefix in a mixed-prefix block:
-  - `line N: payload row in a hashline hunk must start with + or &A..B. Got "...".`
+  - `line N: payload line has no preceding hunk header. Use \`replace N..M:\`, \`delete N..M\`, or \`insert before|after|head|tail:\` above the body. Got "...".`
+- Minus row:
+  - ``line N: `-` rows are not valid; hashline ranges already name the lines being changed. To insert a literal line starting with `-`, write `+-…`.``
+- Empty body-bearing hunk:
+  - `line N: \`replace N..M:\` needs at least one \`+TEXT\` body row. To delete lines, use \`delete N..M\`.`
+  - `line N: \`insert\` needs at least one \`+TEXT\` body row.`
+  - `line N: \`replace block N:\` needs at least one \`+TEXT\` body row. To delete a block, use \`delete N..M\` with the block's line range.`
+- Unresolvable `replace block N:` (apply / final-preview path only):
+  - `line N: \`replace block X:\` could not resolve a syntactic block beginning on line X. The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. Use \`replace X..M:\` with the block's explicit end line instead.`
+- Delete with body:
+  - `line N: \`delete N..M\` does not take body rows. Remove the body, or use \`replace N..M:\`.`
+  - `line N: \`delete block N\` does not take body rows. Remove the body, or use \`replace block N:\` to replace the block.`
 - Range out of order:
   - `line N: range A..B ends before it starts.`
 - Overlapping hunks on the same anchor:
   - `line N: anchor line X is already targeted by another hunk on line Y. Issue ONE hunk per range; payload is only the final desired content, never a before/after pair.`
 - apply_patch / unified-diff contamination:
-  - `line N: apply_patch sentinel "*** …" is not valid in hashline. File sections start with \`¶path#HASH\` (no \`Update File:\` / \`Add File:\` keyword). Hunks are bare \`A B\` lines with \`+TEXT\` / \`&A..B\` body rows.`
-  - `line N: unified-diff hunk header (\`@@ -N,M +N,M @@\`) is not valid in hashline. Hashline hunks are bare \`A B\` lines (or \`BOF\` / \`EOF\` keywords).`
-  - `line N: \`@@\`-bracketed hunk header "@@ …" is not valid in hashline. Drop the \`@@ ... @@\` brackets and write the range directly: \`5 7\` (\`BOF\` / \`EOF\` for virtual positions).`
-  - `line N: single-number hunk header "N" is no longer accepted. Spell single-line ranges as \`N N\` (two numbers); hashline hunks are bare \`A B\` lines (or \`BOF\` / \`EOF\`).`
+  - `line N: apply_patch sentinel "*** …" is not valid in hashline. File sections start with \`¶path#HASH\` (no \`Update File:\` / \`Add File:\` keyword). Use \`replace N..M:\`, \`delete N..M\`, or \`insert before|after|head|tail:\` ops.`
+  - `line N: unified-diff hunk header (\`@@ -N,M +N,M @@\`) is not valid in hashline. Use \`replace N..M:\`, \`delete N..M\`, or \`insert before|after|head|tail:\` ops.`
+  - `line N: \`@@\`-bracketed hunk header "@@ …" is not valid in hashline. Drop the \`@@ ... @@\` brackets and write a verb header such as \`replace N..M:\`.`
+  - `line N: hunk headers need a verb. Use \`replace N..N:\` to replace, or \`delete N\` to delete.`
+  - `line N: bare range hunk header "N M" is not valid. Hunk headers need a verb: write \`replace N..M:\` or \`delete N..M\`.`
 - Out-of-range anchor:
   - `Line N does not exist (file has M lines)`
-- Stale snapshot tag throws `MismatchError`. The error contains re-read guidance and nearby current file lines as `*LINE:TEXT` / ` LINE:TEXT`.
+- Stale snapshot tag: the `Patcher` first attempts snapshot-based recovery. When recovery cannot prove a valid result it throws `MismatchError`, which distinguishes recognized-but-drifted hashes from never-recorded hashes. The error includes the current file hash plus context around each anchor.
 - No-op edit:
   - `Edits to <path> parsed and applied cleanly, but produced no change: your body row(s) are byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor first.`
 - Recovery failure is silent internally: if cache-based merge cannot prove a valid result, the mismatch error is surfaced unchanged.
 
 ## Warnings
-- `Detected two identical-range hashline hunks; kept only the second hunk. …` (`REPLACE_PAIR_COALESCED_WARNING`)
-- `Detected an overlapping bare hashline hunk immediately followed by a concrete hunk; dropped the earlier bare hunk. …` (`REPLACE_PAIR_COALESCED_OVERLAP_WARNING`)
-- `Auto-prefixed bare body row(s) with +. Always start payload rows with +TEXT (literal) or &A..B (repeat) …` (`BARE_BODY_AUTO_PIPED_WARNING`)
-- `A body row started with `+&A..B`. `+` (literal text) and `&A..B` (repeat) are sibling row kinds …` (`PLUS_PREFIXED_REPEAT_WARNING`)
+- `Auto-prefixed bare body row(s) with +. Body rows must be +TEXT literal lines …` (`BARE_BODY_AUTO_PIPED_WARNING`)
 - Recovery banners: `RECOVERY_EXTERNAL_WARNING`, `RECOVERY_SESSION_CHAIN_WARNING`, `RECOVERY_SESSION_REPLAY_WARNING` (`packages/hashline/src/messages.ts`).

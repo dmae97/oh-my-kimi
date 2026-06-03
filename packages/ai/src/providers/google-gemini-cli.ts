@@ -47,7 +47,12 @@ import {
 export type { GoogleThinkingLevel };
 
 export interface GoogleGeminiCliOptions extends StreamOptions {
-	toolChoice?: "auto" | "none" | "any";
+	/**
+	 * Tool selection mode. String forms map directly to Gemini
+	 * `FunctionCallingConfigMode`. The object form forces a single named tool —
+	 * `mode: "ANY"` is wire-required when `allowedFunctionNames` is set.
+	 */
+	toolChoice?: "auto" | "none" | "any" | { mode: "ANY"; allowedFunctionNames: [string, ...string[]] };
 	/**
 	 * Thinking/reasoning configuration.
 	 * - Gemini 2.x models: use `budgetTokens` to set the thinking budget
@@ -212,6 +217,7 @@ interface CloudCodeAssistRequest {
 		toolConfig?: {
 			functionCallingConfig: {
 				mode: FunctionCallingConfigMode;
+				allowedFunctionNames?: string[];
 			};
 		};
 	};
@@ -745,11 +751,19 @@ export function buildRequest(
 		const convertedTools = convertTools(context.tools, model);
 		request.tools = isAntigravity ? normalizeAntigravityTools(convertedTools) : convertedTools;
 		if (options.toolChoice) {
-			request.toolConfig = {
-				functionCallingConfig: {
-					mode: mapToolChoice(options.toolChoice),
-				},
-			};
+			const choice = options.toolChoice;
+			if (typeof choice === "string") {
+				request.toolConfig = {
+					functionCallingConfig: { mode: mapToolChoice(choice) },
+				};
+			} else {
+				request.toolConfig = {
+					functionCallingConfig: {
+						mode: "ANY",
+						allowedFunctionNames: [...choice.allowedFunctionNames],
+					},
+				};
+			}
 		}
 	}
 

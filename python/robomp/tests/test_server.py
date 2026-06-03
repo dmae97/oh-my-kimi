@@ -888,20 +888,20 @@ def test_webhook_rate_limits_unknown_submitter_at_default_cap(rate_limited_setti
     assert states == ["queued", "queued", "skipped"]
 
 
-def test_webhook_unmapped_pr_comment_queues_with_pr_key_and_counts_budget(
+def test_webhook_incoming_pr_comment_without_directive_skips_without_counting_budget(
     rate_limited_settings: Settings,
 ) -> None:
     app = create_app(rate_limited_settings)
     with TestClient(app) as client:
-        queued = _post_pr_issue_comment(
+        skipped = _post_pr_issue_comment(
             client,
             delivery="pr-unmapped",
             user="stranger",
             pr_number=900,
             association="NONE",
         )
-        assert queued.status_code == 202
-        assert queued.json()["state"] == "queued"
+        assert skipped.status_code == 202
+        assert skipped.json()["state"] == "skipped"
 
         states = []
         for i in range(3):
@@ -921,8 +921,8 @@ def test_webhook_unmapped_pr_comment_queues_with_pr_key_and_counts_budget(
 
     assert unmapped is not None
     assert unmapped.issue_key == "octo/widget#900"
-    assert unmapped.last_error is None
-    assert states == ["queued", "skipped", "skipped"]
+    assert "incoming PR comments ignored" in (unmapped.last_error or "")
+    assert states == ["queued", "queued", "skipped"]
 
 
 def test_webhook_contributor_gets_higher_cap(rate_limited_settings: Settings) -> None:
@@ -1500,7 +1500,7 @@ def test_webhook_directive_on_unknown_issue_is_queued_with_metadata(env) -> None
     assert row is not None
     assert row.state == "queued"
     directive = row.payload.get("_robomp_directive")
-    assert directive == {"body": "please refactor X", "author": "can1357", "pragmas": []}
+    assert directive == {"body": "please refactor X", "author": "can1357", "pragmas": [], "authorizes_impl": True}
 
 
 def test_webhook_maintainer_bypasses_rate_limit(
@@ -1554,6 +1554,7 @@ class _RecordingSandbox:
         clone_url: str,
         default_branch: str,
         existing_branch=None,
+        pr_head: int | None = None,
         author_name: str = "",
         author_email: str = "",
         slot_uid: int | None = None,
@@ -1565,6 +1566,7 @@ class _RecordingSandbox:
                 "title": title,
                 "default_branch": default_branch,
                 "existing_branch": existing_branch,
+                "pr_head": pr_head,
                 "slot_uid": slot_uid,
             }
         )
@@ -1581,7 +1583,7 @@ class _RecordingSandbox:
 
         wid = f"{repo.replace('/', '__')}__{number}"
         return _W(
-            branch=existing_branch or f"farm/auto/{wid}",
+            branch=existing_branch or (f"review/pr-{pr_head}" if pr_head is not None else f"farm/auto/{wid}"),
             session_dir=self.tmp_root / wid / "session",
             context_dir=self.tmp_root / wid / "context",
             repo_dir=self.tmp_root / wid / "repo",
@@ -1820,6 +1822,198 @@ async def test_handle_pr_conversation_repairs_missing_pr_mapping_from_branch(
     row = db.get_issue("octo/widget#42")
     assert row is not None
     assert row.pr_number == 900
+    close_database()
+
+
+async def test_handle_pr_conversation_skips_review_workspace_rows(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    from robomp import tasks
+    from robomp.github_client import GitHubClient, PullRequestInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    db.upsert_issue(
+        key="octo/widget#900",
+        repo="octo/widget",
+        number=900,
+        state="reviewing",
+        branch="review/pr-900",
+        pr_number=900,
+    )
+
+    async def _get_pull_request(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return PullRequestInfo(
+            repo="octo/widget",
+            number=900,
+            html_url="https://github.com/octo/widget/pull/900",
+            head_ref="contrib/fix",
+            base_ref="main",
+            state="open",
+            author="alice",
+            head_repo="alice/widget",
+        )
+
+    monkeypatch.setattr(GitHubClient, "get_pull_request", _get_pull_request)
+
+    payload = {
+        "action": "created",
+        "issue": {
+            "number": 900,
+            "user": {"login": "alice"},
+            "pull_request": {"url": "https://api.github.com/repos/octo/widget/pulls/900"},
+        },
+        "comment": {"user": {"login": "can1357"}, "body": "@robomp-bot please re-review", "id": 12},
+        "repository": {"full_name": "octo/widget"},
+        "_robomp_directive": {"body": "please re-review", "author": "can1357"},
+    }
+    await tasks.handle_pr_conversation(
+        settings=settings,
+        db=db,
+        github=GitHubClient("t"),
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,
+        payload=payload,
+        delivery_id="test-pr-review-row",
+    )
+
+    assert stub_run_task == []
+    assert sandbox.ensure_calls == []
+    close_database()
+
+
+async def test_review_pr_retries_when_ranked_but_not_submitted(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    from robomp import tasks
+    from robomp.github_client import GitHubClient, IssueInfo, PullRequestInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=900,
+        title="Fix parser",
+        body="body",
+        state="open",
+        author="alice",
+        labels=("triaged", "review:p1"),
+        is_pull_request=True,
+    )
+    pr = PullRequestInfo(
+        repo="octo/widget",
+        number=900,
+        html_url="https://github.com/octo/widget/pull/900",
+        head_ref="alice/fix-parser",
+        base_ref="main",
+        state="open",
+        author="alice",
+        head_repo="alice/widget",
+    )
+
+    async def _get_repo(self, repo_full: str):
+        assert repo_full == "octo/widget"
+        return repo
+
+    async def _get_issue(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return issue
+
+    async def _get_pull_request(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return pr
+
+    monkeypatch.setattr(GitHubClient, "get_repo", _get_repo)
+    monkeypatch.setattr(GitHubClient, "get_issue", _get_issue)
+    monkeypatch.setattr(GitHubClient, "get_pull_request", _get_pull_request)
+
+    await tasks.review_pr(
+        settings=settings,
+        db=db,
+        github=GitHubClient("t"),
+        sandbox=sandbox,
+        git_transport=LocalGitTransport(token=None),
+        payload={"pull_request": {"number": 900}, "repository": {"full_name": "octo/widget"}},
+        delivery_id="d-review-retry",
+    )
+
+    assert len(stub_run_task) == 1
+    assert stub_run_task[0]["task_kind"] == "review_pr"
+    assert sandbox.ensure_calls[0]["pr_head"] == 900
+    close_database()
+
+
+async def test_review_pr_skips_after_submitted_review(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    from robomp import tasks
+    from robomp.github_client import GitHubClient, IssueInfo, PullRequestInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    key = issue_key("octo/widget", 900)
+    db.log_tool_call(issue_key=key, tool="submit_pr_review", args={"body": "done"}, result={"review_id": 12})
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=900,
+        title="Fix parser",
+        body="body",
+        state="open",
+        author="alice",
+        labels=("triaged", "review:p1"),
+        is_pull_request=True,
+    )
+    pr = PullRequestInfo(
+        repo="octo/widget",
+        number=900,
+        html_url="https://github.com/octo/widget/pull/900",
+        head_ref="alice/fix-parser",
+        base_ref="main",
+        state="open",
+        author="alice",
+        head_repo="alice/widget",
+    )
+
+    async def _get_repo(self, repo_full: str):
+        assert repo_full == "octo/widget"
+        return repo
+
+    async def _get_issue(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return issue
+
+    async def _get_pull_request(self, repo_full: str, number: int):
+        assert repo_full == "octo/widget"
+        assert number == 900
+        return pr
+
+    monkeypatch.setattr(GitHubClient, "get_repo", _get_repo)
+    monkeypatch.setattr(GitHubClient, "get_issue", _get_issue)
+    monkeypatch.setattr(GitHubClient, "get_pull_request", _get_pull_request)
+
+    await tasks.review_pr(
+        settings=settings,
+        db=db,
+        github=GitHubClient("t"),
+        sandbox=sandbox,
+        git_transport=LocalGitTransport(token=None),
+        payload={"pull_request": {"number": 900}, "repository": {"full_name": "octo/widget"}},
+        delivery_id="d-review-skip",
+    )
+
+    assert stub_run_task == []
+    assert sandbox.ensure_calls == []
     close_database()
 
 

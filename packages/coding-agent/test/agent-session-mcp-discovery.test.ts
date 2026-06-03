@@ -228,6 +228,51 @@ describe("AgentSession MCP discovery", () => {
 		expect(session.systemPrompt).toEqual(["tools:read"]);
 	});
 
+	it("activates all new MCP tools when activateAll is true, even with discovery off", async () => {
+		const readTool = createBasicTool("read", "Read");
+		const toolRegistry = new Map([[readTool.name, readTool]]);
+		const agent = new Agent({
+			initialState: {
+				model: createModel(),
+				systemPrompt: ["initial"],
+				tools: [readTool],
+				messages: [],
+			},
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "mcp.discoveryMode": false }),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: false,
+			rebuildSystemPrompt: async toolNames => ({
+				systemPrompt: [`tools:${toolNames.join(",")}`],
+			}),
+		});
+		sessions.push(session);
+
+		// Start with only non-MCP tools active — no MCP tools in registry.
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+		expect(session.getSelectedMCPToolNames()).toEqual([]);
+
+		// Load MCP tools via activateAll path (simulating ACP client provisioning).
+		await session.refreshMCPTools(
+			[
+				createMcpCustomTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]),
+				createMcpCustomTool("mcp__slack_send_message", "slack", "send_message", "Send a Slack message", [
+					"channel",
+					"text",
+				]),
+			],
+			{ activateAll: true },
+		);
+
+		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search", "mcp__slack_send_message"]);
+		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search", "mcp__slack_send_message"]);
+		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search,mcp__slack_send_message"]);
+	});
+
 	it("preserves directly activated MCP tools across refreshes in discovery mode", async () => {
 		const readTool = createBasicTool("read", "Read");
 		const docsSearchTool = createMcpTool("mcp__docs_search", "docs", "search", "Search internal docs", ["query"]);

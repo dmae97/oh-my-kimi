@@ -49,11 +49,12 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
+	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
-	getStreamFirstEventTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
@@ -169,7 +170,7 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
-type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
+type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string; lastParseLen?: number });
 
 export interface OpenAICodexWebSocketDebugStats {
 	fullContextRequests: number;
@@ -602,7 +603,7 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		: requestAbortController.signal;
 	const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 	const websocketIdleTimeoutMs = options?.streamIdleTimeoutMs ?? getCodexWebSocketIdleTimeoutMs();
-	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
+	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 	const websocketFirstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getCodexWebSocketFirstEventTimeoutMs();
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,
@@ -1215,7 +1216,11 @@ function handleToolCallArgumentsDelta(
 	if (currentItem?.type !== "function_call" || currentBlock?.type !== "toolCall") return;
 	const delta = (rawEvent as { delta?: string }).delta || "";
 	currentBlock.partialJson += delta;
-	currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+	const throttled = parseStreamingJsonThrottled(currentBlock.partialJson, currentBlock.lastParseLen ?? 0);
+	if (throttled) {
+		currentBlock.arguments = throttled.value;
+		currentBlock.lastParseLen = throttled.parsedLen;
+	}
 	stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta, partial: output });
 }
 
@@ -1229,6 +1234,8 @@ function handleToolCallArgumentsDone(
 	if (typeof args === "string") {
 		currentBlock.partialJson = args;
 		currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+		delete (currentBlock as { partialJson?: string }).partialJson;
+		delete (currentBlock as { lastParseLen?: number }).lastParseLen;
 	}
 }
 
@@ -1307,6 +1314,13 @@ function handleOutputItemDone(
 			name: item.name,
 			arguments: parseStreamingJson(item.arguments || "{}"),
 		};
+		if (runtime.currentBlock?.type === "toolCall") {
+			// Persist the authoritative final args on the stored block; the throttled
+			// delta parser may have left currentBlock.arguments stale (often `{}`).
+			runtime.currentBlock.arguments = toolCall.arguments;
+			delete (runtime.currentBlock as { partialJson?: string }).partialJson;
+			delete (runtime.currentBlock as { lastParseLen?: number }).lastParseLen;
+		}
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 		return;
@@ -2046,6 +2060,8 @@ class CodexWebSocketConnection {
 	#streamObserver?: (event: RawSseEvent) => void;
 	#heartbeatInterval: NodeJS.Timeout | undefined;
 	#removePongListener?: () => void;
+	#handshakeHeaders?: Headers;
+	#debugResponseLog?: RequestDebugResponseLog;
 	/**
 	 * Wall-clock of the most recent inbound activity on this socket — any
 	 * decoded message, any pong, or the moment the handshake completed. Used
@@ -2189,6 +2205,7 @@ class CodexWebSocketConnection {
 			// the liveness clock — what matters for reuse health is that the upstream
 			// is still talking to us, not that every frame is well-formed.
 			this.#lastInboundAt = Date.now();
+			this.#writeDebugWebSocketFrame(event.data);
 			try {
 				const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf-8");
 				if (!text) return;
@@ -2256,6 +2273,19 @@ class CodexWebSocketConnection {
 		}
 
 		try {
+			const debugSession = isRequestDebugEnabled()
+				? await createRequestDebugSession({
+						protocol: "websocket",
+						method: "POST",
+						url: this.#url,
+						headers: this.#headers,
+						body: request,
+					})
+				: undefined;
+			this.#debugResponseLog = debugSession
+				? await debugSession.openResponseLog("WebSocket 101 Switching Protocols", this.#handshakeHeaders)
+				: undefined;
+
 			const requestPayload = JSON.stringify(request);
 			notifyCodexWebSocketOutbound(onSseEvent, request, requestPayload);
 			try {
@@ -2336,14 +2366,35 @@ class CodexWebSocketConnection {
 			if (signal) {
 				signal.removeEventListener("abort", onAbort);
 			}
+			const debugResponseLog = this.#debugResponseLog;
+			this.#debugResponseLog = undefined;
+			await debugResponseLog?.close();
 		}
 	}
 
 	#captureHandshakeHeaders(socket: Bun.WebSocket, openEvent?: Event): void {
-		if (!this.#onHandshakeHeaders) return;
 		const headers = extractCodexWebSocketHandshakeHeaders(socket, openEvent);
 		if (!headers) return;
-		this.#onHandshakeHeaders(headers);
+		this.#handshakeHeaders = headers;
+		this.#onHandshakeHeaders?.(headers);
+	}
+
+	#writeDebugWebSocketFrame(data: unknown): void {
+		const log = this.#debugResponseLog;
+		if (!log) return;
+		if (typeof data === "string") {
+			log.write(data);
+			return;
+		}
+		if (data instanceof Uint8Array) {
+			log.write(data);
+			return;
+		}
+		if (data instanceof ArrayBuffer) {
+			log.write(new Uint8Array(data));
+			return;
+		}
+		log.write(String(data));
 	}
 
 	#startHeartbeat(socket: Bun.WebSocket): void {

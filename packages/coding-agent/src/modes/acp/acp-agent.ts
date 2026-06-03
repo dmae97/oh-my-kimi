@@ -47,7 +47,11 @@ import { logger, VERSION } from "@oh-my-pi/pi-utils";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
+import {
+	type ExtensionUIContext,
+	type ExtensionUIDialogOptions,
+	getExtensionUISelectOptionLabel,
+} from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { buildSkillPromptMessage, getSkillSlashCommandName } from "../../extensibility/skills";
@@ -64,7 +68,7 @@ import {
 	type UsageStatistics,
 } from "../../session/session-manager";
 import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
-import { parseThinkingLevel } from "../../thinking";
+import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	buildToolCallStartUpdate,
@@ -266,7 +270,7 @@ async function elicitFromAcpClient(
 			finish(undefined);
 		});
 	const response = await promise;
-	if (!response || response.action !== "accept" || !response.content) {
+	if (response?.action !== "accept" || !response.content) {
 		return undefined;
 	}
 	return response.content.value;
@@ -302,7 +306,7 @@ export function createAcpExtensionUiContext(
 				getSessionId(),
 				"select",
 				title,
-				{ type: "string", enum: options },
+				{ type: "string", enum: options.map(getExtensionUISelectOptionLabel) },
 				dialogOptions,
 			);
 			return typeof value === "string" ? value : undefined;
@@ -1274,7 +1278,9 @@ export class AcpAgent implements Agent {
 			name: "Thinking",
 			category: "thought_level",
 			type: "select",
-			currentValue: this.#toThinkingConfigValue(session.thinkingLevel),
+			currentValue: this.#toThinkingConfigValue(
+				session.model?.reasoning ? this.#getConfiguredThinkingLevel(session) : undefined,
+			),
 			options: this.#buildThinkingOptions(session),
 		});
 		return configOptions;
@@ -1305,11 +1311,19 @@ export class AcpAgent implements Agent {
 	#buildThinkingOptions(session: AgentSession): Array<{ value: string; name: string; description?: string }> {
 		return [
 			{ value: THINKING_OFF, name: "Off" },
+			{ value: AUTO_THINKING, name: "Auto", description: "Auto-detect per prompt (low–xhigh)" },
 			...session.getAvailableThinkingLevels().map(level => ({
 				value: level,
 				name: level,
 			})),
 		];
+	}
+	#getConfiguredThinkingLevel(session: AgentSession): string | undefined {
+		const configuredThinkingLevel = (session as { configuredThinkingLevel?: () => string | undefined })
+			.configuredThinkingLevel;
+		return typeof configuredThinkingLevel === "function"
+			? configuredThinkingLevel.call(session)
+			: session.thinkingLevel;
 	}
 
 	#toThinkingConfigValue(value: string | undefined): string {
@@ -1325,7 +1339,7 @@ export class AcpAgent implements Agent {
 	}
 
 	#setThinkingLevelById(session: AgentSession, value: string): void {
-		const thinkingLevel = parseThinkingLevel(value);
+		const thinkingLevel = parseConfiguredThinkingLevel(value);
 		if (!thinkingLevel) {
 			throw new Error(`Unknown ACP thinking level: ${value}`);
 		}
@@ -1971,7 +1985,7 @@ export class AcpAgent implements Agent {
 		}
 		if (servers.length === 0) {
 			record.mcpManager = undefined;
-			await record.session.refreshMCPTools([]);
+			await record.session.refreshMCPTools([], { activateAll: true });
 			return;
 		}
 
@@ -1998,7 +2012,7 @@ export class AcpAgent implements Agent {
 		}
 
 		record.mcpManager = manager;
-		await record.session.refreshMCPTools(result.tools);
+		await record.session.refreshMCPTools(result.tools, { activateAll: true });
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {
@@ -2017,11 +2031,16 @@ export class AcpAgent implements Agent {
 				headers: this.#toNameValueMap(server.headers),
 			};
 		}
-		return {
-			type: "sse",
-			url: server.url,
-			headers: this.#toNameValueMap(server.headers),
-		};
+		if (server.type === "sse") {
+			return {
+				type: "sse",
+				url: server.url,
+				headers: this.#toNameValueMap(server.headers),
+			};
+		}
+		// The experimental ACP-channel transport (`type: "acp"`) is not advertised in
+		// `mcpCapabilities`, so a spec-compliant client never sends it; reject defensively.
+		throw new Error(`Unsupported MCP server transport: ${server.type}`);
 	}
 
 	#toNameValueMap(values: Array<{ name: string; value: string }>): { [name: string]: string } {

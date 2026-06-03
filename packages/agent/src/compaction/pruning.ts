@@ -6,20 +6,26 @@ import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type { AgentMessage } from "../types";
 import { estimateTokens } from "./compaction";
 import type { SessionEntry, SessionMessageEntry } from "./entries";
+import {
+	collectToolCallsById,
+	isProtectedToolResult,
+	isSkillReadToolResult,
+	type ProtectedToolMatcher,
+} from "./tool-protection";
 
 export interface PruneConfig {
 	/** Keep the most recent tool output tokens intact. */
 	protectTokens: number;
 	/** Only prune if total savings meets this threshold. */
 	minimumSavings: number;
-	/** Tool names that should never be pruned. */
-	protectedTools: string[];
+	/** Tool-result protection matchers. String entries protect every result from that tool; predicates may inspect the paired tool call. */
+	protectedTools: ProtectedToolMatcher[];
 }
 
 export const DEFAULT_PRUNE_CONFIG: PruneConfig = {
 	protectTokens: 40_000,
 	minimumSavings: 20_000,
-	protectedTools: ["skill", "read"],
+	protectedTools: ["skill", isSkillReadToolResult],
 };
 
 export interface PruneResult {
@@ -49,6 +55,7 @@ export function pruneToolOutputs(entries: SessionEntry[], config: PruneConfig = 
 	let prunedCount = 0;
 
 	const candidates: Array<{ entry: SessionMessageEntry; tokens: number }> = [];
+	const toolCallsById = collectToolCallsById(entries);
 
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
@@ -56,7 +63,7 @@ export function pruneToolOutputs(entries: SessionEntry[], config: PruneConfig = 
 		if (!message) continue;
 
 		const tokens = estimateTokens(message as AgentMessage);
-		const isProtected = config.protectedTools.includes(message.toolName);
+		const isProtected = isProtectedToolResult(message, toolCallsById.get(message.toolCallId), config.protectedTools);
 
 		if (message.prunedAt !== undefined) {
 			accumulatedTokens += tokens;

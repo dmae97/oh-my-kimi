@@ -77,7 +77,6 @@ The returned tool result is not the final rewind. `AgentSession` waits until `tu
 - `ToolError("No active checkpoint.")` — thrown when no checkpoint state is present.
 - `ToolError("Report cannot be empty.")` — thrown when the trimmed report is empty.
 - Missing checkpoint entry IDs during apply do not fail the tool call; `#applyRewind()` catches the error, logs `Rewind branch checkpoint missing, falling back to root`, and branches from root.
-- If the agent turn is aborted while a checkpoint is active, `AgentSession` clears checkpoint state rather than applying a delayed rewind.
 
 ## Notes
 - Checkpoint selection is implicit. `rewind` always targets the single `#checkpointState` captured by the last successful `checkpoint`; there is no checkpoint list, label, or ID parameter.

@@ -35,9 +35,15 @@ export interface TodoPhase {
 	tasks: TodoItem[];
 }
 
+export interface TodoCompletionTransition {
+	phase: string;
+	content: string;
+}
+
 export interface TodoWriteToolDetails {
 	phases: TodoPhase[];
 	storage: "session" | "memory";
+	completedTasks?: TodoCompletionTransition[];
 }
 
 // =============================================================================
@@ -97,6 +103,31 @@ function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ name: phase.name, tasks: phase.tasks.map(cloneTask) }));
 }
 
+function todoTransitionKey(phase: string, content: string): string {
+	return `${phase}\u0000${content}`;
+}
+
+function getCompletionTransitions(previous: TodoPhase[], updated: TodoPhase[]): TodoCompletionTransition[] {
+	const previousStatuses = new Map<string, TodoStatus>();
+	for (const phase of previous) {
+		for (const task of phase.tasks) {
+			previousStatuses.set(todoTransitionKey(phase.name, task.content), task.status);
+		}
+	}
+
+	const transitions: TodoCompletionTransition[] = [];
+	for (const phase of updated) {
+		for (const task of phase.tasks) {
+			if (task.status !== "completed") continue;
+			const previousStatus = previousStatuses.get(todoTransitionKey(phase.name, task.content));
+			if (previousStatus && previousStatus !== "completed") {
+				transitions.push({ phase: phase.name, content: task.content });
+			}
+		}
+	}
+	return transitions;
+}
+
 function normalizeInProgressTask(phases: TodoPhase[]): void {
 	const orderedTasks = phases.flatMap(phase => phase.tasks);
 	if (orderedTasks.length === 0) return;
@@ -137,6 +168,70 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 	}
 
 	return [];
+}
+
+/**
+ * Pick the actionable window of tasks to display in the sticky todo panel.
+ *
+ * Returns up to `maxVisible` open (pending / in_progress) tasks in their
+ * original phase order, plus the count of remaining open tasks not shown so
+ * the caller can render a `+N more` hint. When every task in `tasks` is
+ * closed (completed or abandoned), returns the trailing `maxVisible` tasks
+ * with `hiddenOpenCount = 0`, so the panel keeps useful context until the
+ * active-phase pointer advances on the next `todo_write`.
+ *
+ * Task identity and order are preserved — this is a slice, never a sort.
+ */
+export function selectStickyTodoWindow(
+	tasks: TodoItem[],
+	maxVisible = 5,
+): { visible: TodoItem[]; hiddenOpenCount: number } {
+	const openTasks = tasks.filter(t => t.status === "pending" || t.status === "in_progress");
+	if (openTasks.length > 0) {
+		const visible = openTasks.slice(0, maxVisible);
+		return { visible, hiddenOpenCount: openTasks.length - visible.length };
+	}
+	const start = Math.max(0, tasks.length - maxVisible);
+	return { visible: tasks.slice(start), hiddenOpenCount: 0 };
+}
+
+/** Minimum overlap (after normalization) required for a substring match.
+ * Picked at six chars to admit single-word identifiers like "review" /
+ * "Sonnet" without admitting tiny common substrings like "test" / "fix"
+ * that would collide across unrelated todos. */
+const TODO_DESCRIPTION_MIN_OVERLAP = 6;
+
+function normalizeForTodoMatch(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim();
+}
+
+/**
+ * Report whether `content` likely names the same work as any entry in
+ * `descriptions`. Used by the sticky todo panel to light up a pending todo
+ * when an in-flight subagent is doing the work for it, without requiring
+ * the caller to flip the todo's status.
+ *
+ * Matching is normalize-then-equal first (lowercased; punctuation and
+ * whitespace runs both collapsed to a single space; trimmed), with a
+ * substring fallback in either direction so minor wording drift
+ * ("Sonnet #2: bug scan" vs "Sonnet #2") still links up. The substring
+ * fallback requires at least {@link TODO_DESCRIPTION_MIN_OVERLAP} chars on
+ * the contained side.
+ */
+export function todoMatchesAnyDescription(content: string, descriptions: readonly string[]): boolean {
+	const target = normalizeForTodoMatch(content);
+	if (!target) return false;
+	for (const desc of descriptions) {
+		const candidate = normalizeForTodoMatch(desc);
+		if (!candidate) continue;
+		if (target === candidate) return true;
+		if (target.length >= TODO_DESCRIPTION_MIN_OVERLAP && candidate.includes(target)) return true;
+		if (candidate.length >= TODO_DESCRIPTION_MIN_OVERLAP && target.includes(candidate)) return true;
+	}
+	return false;
 }
 
 function resolveTaskOrError(
@@ -513,13 +608,16 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoWriteToolDetails>> {
 		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
-		const { phases: updated, errors } = applyParams(previousPhases, params);
+		const { phases: updated, errors } = applyParams(clonePhases(previousPhases), params);
+		const completedTasks = getCompletionTransitions(previousPhases, updated);
 		this.session.setTodoPhases?.(updated);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
+		const details: TodoWriteToolDetails = { phases: updated, storage };
+		if (completedTasks.length > 0) details.completedTasks = completedTasks;
 
 		return {
 			content: [{ type: "text", text: formatSummary(updated, errors) }],
-			details: { phases: updated, storage },
+			details,
 			isError: errors.length > 0 ? true : undefined,
 		};
 	}
@@ -603,16 +701,55 @@ function noteMarker(count: number, uiTheme: Theme): string {
 	return uiTheme.fg("dim", chalk.italic(` \u207a${toSuperscript(count)}`));
 }
 
-function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string): string {
+export const TODO_WRITE_STRIKE_HOLD_FRAMES = 2;
+export const TODO_WRITE_STRIKE_REVEAL_FRAMES = 12;
+export const TODO_WRITE_STRIKE_TOTAL_FRAMES = TODO_WRITE_STRIKE_HOLD_FRAMES + TODO_WRITE_STRIKE_REVEAL_FRAMES;
+const EMPTY_COMPLETION_KEYS = new Set<string>();
+const STRIKE_START = "\x1b[9m";
+const STRIKE_END = "\x1b[29m";
+
+function strikethroughText(text: string): string {
+	return `${STRIKE_START}${text}${STRIKE_END}`;
+}
+
+function partialStrikethrough(text: string, visibleChars: number): string {
+	if (visibleChars <= 0) return text;
+	const chars = [...text];
+	if (visibleChars >= chars.length) return strikethroughText(text);
+	return `${strikethroughText(chars.slice(0, visibleChars).join(""))}${chars.slice(visibleChars).join("")}`;
+}
+
+function strikeRevealCount(text: string, frame: number | undefined): number | undefined {
+	if (frame === undefined) return undefined;
+	if (frame <= TODO_WRITE_STRIKE_HOLD_FRAMES) return 0;
+	const chars = [...text];
+	if (chars.length === 0) return undefined;
+	const revealFrame = Math.min(frame - TODO_WRITE_STRIKE_HOLD_FRAMES, TODO_WRITE_STRIKE_REVEAL_FRAMES);
+	return Math.ceil((chars.length * revealFrame) / TODO_WRITE_STRIKE_REVEAL_FRAMES);
+}
+
+function formatTodoLine(
+	item: TodoItem,
+	uiTheme: Theme,
+	prefix: string,
+	completionKeys: Set<string>,
+	frame: number | undefined,
+): string {
 	const checkbox = uiTheme.checkbox;
 	const marker = noteMarker(item.notes?.length ?? 0, uiTheme);
 	switch (item.status) {
-		case "completed":
-			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(item.content)}`) + marker;
+		case "completed": {
+			const revealCount = completionKeys.has(item.content) ? strikeRevealCount(item.content, frame) : undefined;
+			const content =
+				revealCount === undefined
+					? strikethroughText(item.content)
+					: partialStrikethrough(item.content, revealCount);
+			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${content}`) + marker;
+		}
 		case "in_progress":
 			return uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${item.content}`) + marker;
 		case "abandoned":
-			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(item.content)}`) + marker;
+			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${strikethroughText(item.content)}`) + marker;
 		default:
 			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`) + marker;
 	}
@@ -658,6 +795,16 @@ export const todoWriteToolRenderer = {
 		_args?: TodoWriteRenderArgs,
 	): Component {
 		const phases = (result.details?.phases ?? []).filter(phase => phase.tasks.length > 0);
+		const completedTasks = result.details?.completedTasks ?? [];
+		const completionKeysByPhase = new Map<string, Set<string>>();
+		for (const task of completedTasks) {
+			let keys = completionKeysByPhase.get(task.phase);
+			if (!keys) {
+				keys = new Set<string>();
+				completionKeysByPhase.set(task.phase, keys);
+			}
+			keys.add(task.content);
+		}
 		const allTasks = phases.flatMap(phase => phase.tasks);
 		const header = renderStatusLine(
 			{ icon: "success", title: "Todo Write", meta: [`${allTasks.length} tasks`] },
@@ -668,29 +815,45 @@ export const todoWriteToolRenderer = {
 			return new Text(`${header}\n${uiTheme.fg("dim", fallback)}`, 0, 0);
 		}
 
-		const { expanded } = options;
-		const lines: string[] = [header];
-		for (let p = 0; p < phases.length; p++) {
-			const phase = phases[p];
-			if (phases.length > 1) {
-				lines.push(uiTheme.fg("accent", chalk.bold(`  ${formatPhaseDisplayName(phase.name, p + 1)}`)));
-			}
-			const treeLines = renderTreeList(
-				{
-					items: phase.tasks,
-					expanded,
-					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-					itemType: "todo",
-					renderItem: todo => formatTodoLine(todo, uiTheme, ""),
-				},
-				uiTheme,
-			);
-			for (const line of treeLines) {
-				lines.push(`  ${line}`);
-			}
-		}
-		lines.push(...renderNoteAttachments(phases, uiTheme));
-		return new Text(lines.join("\n"), 0, 0);
+		let cachedKey: string | undefined;
+		let cachedLines: string[] | undefined;
+		return {
+			invalidate(): void {
+				cachedKey = undefined;
+				cachedLines = undefined;
+			},
+			render(width: number): string[] {
+				const { expanded, spinnerFrame } = options;
+				const key = `${expanded ? 1 : 0}:${spinnerFrame ?? -1}:${width}`;
+				if (cachedKey === key && cachedLines) return cachedLines;
+
+				const lines: string[] = [header];
+				for (let p = 0; p < phases.length; p++) {
+					const phase = phases[p];
+					if (phases.length > 1) {
+						lines.push(uiTheme.fg("accent", chalk.bold(`  ${formatPhaseDisplayName(phase.name, p + 1)}`)));
+					}
+					const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
+					const treeLines = renderTreeList(
+						{
+							items: phase.tasks,
+							expanded,
+							maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
+							itemType: "todo",
+							renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
+						},
+						uiTheme,
+					);
+					for (const line of treeLines) {
+						lines.push(`  ${line}`);
+					}
+				}
+				lines.push(...renderNoteAttachments(phases, uiTheme));
+				cachedKey = key;
+				cachedLines = lines;
+				return lines;
+			},
+		};
 	},
 	mergeCallAndResult: true,
 };

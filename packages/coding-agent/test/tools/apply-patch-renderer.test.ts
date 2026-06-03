@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
@@ -13,6 +14,31 @@ async function getUiTheme() {
 	expect(theme).toBeDefined();
 	return theme!;
 }
+
+async function waitForRenderedText(
+	component: ToolExecutionComponent,
+	width: number,
+	expectedText: string,
+): Promise<string> {
+	const deadline = Date.now() + 1_000;
+	let rendered = "";
+	while (Date.now() < deadline) {
+		rendered = Bun.stripANSI(component.render(width).join("\n"));
+		if (rendered.includes(expectedText)) {
+			return rendered;
+		}
+		await Bun.sleep(10);
+	}
+	return rendered;
+}
+
+beforeEach(async () => {
+	await Settings.init({ inMemory: true, cwd: process.cwd() });
+});
+
+afterEach(() => {
+	resetSettingsForTest();
+});
 
 describe("apply_patch rendering", () => {
 	it("registers apply_patch to use the edit renderer", () => {
@@ -118,9 +144,7 @@ describe("apply_patch rendering", () => {
 			expect(before).not.toContain("(preview)");
 
 			component.setArgsComplete();
-			await Bun.sleep(50);
-
-			const after = Bun.stripANSI(component.render(160).join("\n"));
+			const after = await waitForRenderedText(component, 160, "(preview)");
 			expect(after).toContain("(preview)");
 			expect(after).toContain("const value = 2;");
 		} finally {

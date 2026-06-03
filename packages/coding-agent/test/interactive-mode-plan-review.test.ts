@@ -1,15 +1,16 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { Text } from "@oh-my-pi/pi-tui";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
+import type { HookSelectorSlider } from "../src/modes/components/hook-selector";
 import { InteractiveMode } from "../src/modes/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
@@ -27,6 +28,35 @@ const isPlanApprovedCall = (args: unknown[]): boolean =>
 	args[1] !== null &&
 	(args[1] as { synthetic?: boolean }).synthetic === true;
 
+function usageWithInput(input: number): Usage {
+	return {
+		input,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: input,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+}
+
+function assistantWithUsage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "test",
+		usage: usageWithInput(0),
+		stopReason: "stop",
+		timestamp: Date.now(),
+		...overrides,
+	};
+}
+
+function compactNumber(value: number): string {
+	return formatNumber(value).toLowerCase();
+}
+
 describe("InteractiveMode plan review rendering", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -38,10 +68,12 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	beforeEach(async () => {
+		Bun.gc(true);
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-plan-review-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) {
@@ -66,11 +98,20 @@ describe("InteractiveMode plan review rendering", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
-		mode?.stop();
-		await session?.dispose();
-		authStorage?.close();
-		tempDir?.removeSync();
+		const currentMode = mode;
+		const currentSession = session;
+		const currentAuthStorage = authStorage;
+		const currentTempDir = tempDir;
+		mode = undefined as unknown as InteractiveMode;
+		session = undefined as unknown as AgentSession;
+		authStorage = undefined as unknown as AuthStorage;
+		tempDir = undefined as unknown as TempDir;
+		currentMode?.stop();
+		await currentSession?.dispose();
+		currentAuthStorage?.close();
+		currentTempDir?.removeSync();
 		resetSettingsForTest();
+		Bun.gc(true);
 	});
 
 	it("appends each submitted plan review preview to preserve scrollback", async () => {
@@ -127,6 +168,168 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 7320, contextWindow: 10000, percent: 73.2 });
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://APPROVED.md",
+		});
+
+		expect(selector).toHaveBeenCalledWith(
+			"Plan mode - next step",
+			[
+				"Approve and execute",
+				"Approve and compact context",
+				"Approve and keep context (~7.3k / 10k)",
+				"Refine plan",
+			],
+			expect.any(Object),
+			expect.any(Object),
+		);
+	});
+
+	it("ignores aborted zero-usage assistant messages when estimating context usage", () => {
+		session.agent.appendMessage(assistantWithUsage({ usage: usageWithInput(7320), stopReason: "stop" }));
+		session.agent.appendMessage(assistantWithUsage({ usage: usageWithInput(0), stopReason: "aborted" }));
+
+		expect(session.getContextUsage({ contextWindow: 10000 })).toMatchObject({
+			tokens: 7320,
+			contextWindow: 10000,
+			percent: 73.2,
+		});
+	});
+
+	it("measures keep-context approval against the execution model restored after plan mode", async () => {
+		mode.stop();
+		await session.dispose();
+
+		const modelRegistry = new ModelRegistry(authStorage);
+		const executionModel = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		const planModel = modelRegistry.find("anthropic", "claude-opus-4-6");
+		if (!executionModel?.contextWindow || !planModel?.contextWindow) {
+			throw new Error("Expected test models with context windows");
+		}
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model: executionModel,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated({ modelRoles: { plan: `anthropic/${planModel.id}` } }),
+			modelRegistry,
+		});
+		mode = new InteractiveMode(session, "test");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(planModel.id);
+
+		const planFilePath = mode.planModePlanFilePath ?? "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nUse execution context.");
+
+		const tokens = 180000;
+		const contextSpy = vi.spyOn(session, "getContextUsage").mockImplementation(options => {
+			const contextWindow = options?.contextWindow ?? 0;
+			return {
+				tokens,
+				contextWindow,
+				percent: (tokens / contextWindow) * 100,
+			};
+		});
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://APPROVED.md",
+		});
+
+		expect(contextSpy).toHaveBeenCalledWith({ contextWindow: executionModel.contextWindow });
+		expect(selector.mock.calls[0]?.[1]).toEqual([
+			"Approve and execute",
+			"Approve and compact context",
+			`Approve and keep context (~${compactNumber(tokens)} / ${compactNumber(executionModel.contextWindow)})`,
+			"Refine plan",
+		]);
+	});
+
+	it("disables keep-context approval when execution context usage is above ninety-five percent", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nToo much context.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 9600, contextWindow: 10000, percent: 96 });
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://APPROVED.md",
+		});
+
+		expect(selector.mock.calls[0]?.[2]).toEqual(
+			expect.objectContaining({
+				disabledIndices: [2],
+			}),
+		);
+	});
+
+	it("keeps keep-context approval enabled at exactly ninety-five percent", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nAt the threshold.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 9500, contextWindow: 10000, percent: 95 });
+		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://APPROVED.md",
+		});
+
+		expect(selector.mock.calls[0]?.[2]).toEqual(
+			expect.objectContaining({
+				disabledIndices: undefined,
+			}),
+		);
+	});
+
+	it("keeps the keep-context label plain when context usage is unknown", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nDo the thing.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		// Post-compaction: tokens unknown until the next LLM response.
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
 		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Refine plan");
 
 		await mode.handlePlanApproval({
@@ -139,6 +342,7 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(selector).toHaveBeenCalledWith(
 			"Plan mode - next step",
 			["Approve and execute", "Approve and compact context", "Approve and keep context", "Refine plan"],
+			expect.any(Object),
 			expect.any(Object),
 		);
 	});
@@ -158,6 +362,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
 		vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and keep context");
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
@@ -202,6 +407,68 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
 			synthetic: true,
 		});
+	});
+
+	it("executes on the slider-selected tier, surviving #exitPlanMode's model restore", async () => {
+		// Regression: the model-tier slider's choice used to be applied BEFORE
+		// #approvePlan ran. #approvePlan → #exitPlanMode restores the model that
+		// was active before plan mode (#planModePreviousModelState), which silently
+		// reverted the operator's pick — sliding to "slow" still executed on the
+		// default model. The fix defers application until after the plan-mode exit.
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const slow = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const def = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!slow || !def) throw new Error("Expected sonnet + opus to exist in registry");
+
+		// plan === default === the session model: this is what makes plan-mode entry
+		// record a previous-model state for #exitPlanMode to restore. slow differs,
+		// so an early application would be clobbered by that restore.
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const finalPlanFilePath = "local://APPROVED.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nRun this on the slow tier.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+		expect(session.model?.id).toBe(def.id);
+
+		// Keep-context path avoids newSession() so the assertion isolates the
+		// exit-plan-mode restore from session-clear effects.
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let observedSegments: string[] = [];
+		vi.spyOn(mode, "showHookSelector").mockImplementation(
+			async (_title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				const slider = extra?.slider;
+				expect(slider).toBeDefined();
+				observedSegments = slider!.segments.map(segment => segment.label);
+				const slowIndex = slider!.segments.findIndex(segment => segment.label === "slow");
+				expect(slowIndex).toBeGreaterThanOrEqual(0);
+				// Simulate the operator sliding the tier to "slow" before approving.
+				slider!.onChange?.(slowIndex);
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath,
+		});
+
+		expect(observedSegments).toEqual(["default", "slow"]);
+		// The load-bearing assertion: the approved plan executes on the operator's
+		// selected tier, not the restored default.
+		expect(session.model?.id).toBe(slow.id);
 	});
 
 	it("re-enters plan mode on the approved titled artifact after approve-and-execute", async () => {
@@ -506,6 +773,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.getPlanModeState()?.planFilePath).toBe(planFilePath);
 
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
 		const selector = vi.spyOn(mode, "showHookSelector").mockResolvedValue("Approve and keep context");
 		const showError = vi.spyOn(mode, "showError");
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);

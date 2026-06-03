@@ -23,6 +23,7 @@ import type {
 import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
@@ -373,7 +374,9 @@ export class SettingsSelectorComponent extends Container {
 
 		// Special case: inject runtime options for thinking level
 		if (def.path === "defaultThinkingLevel") {
-			options = this.context.availableThinkingLevels.map(level => {
+			// Prepend `auto`; the rest are the model's runtime-supported efforts.
+			const levels: ConfiguredThinkingLevel[] = [AUTO_THINKING, ...this.context.availableThinkingLevels];
+			options = levels.map(level => {
 				const baseOpt = options.find(o => o.value === level);
 				return baseOpt || { value: level, label: level };
 			});

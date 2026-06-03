@@ -1,16 +1,21 @@
 import * as fs from "node:fs/promises";
-import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getRoleInfo } from "../../config/model-registry";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { renderSegmentTrack } from "../../modes/components/segment-track";
+import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
-import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
-import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
+import { isTinyTitleLocalModelKey } from "../../tiny/models";
+import { tinyTitleClient } from "../../tiny/title-client";
+import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
+import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
@@ -24,25 +29,63 @@ function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
+const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
+// A cached model fires its file-load events in a short burst and then goes silent
+// while onnxruntime builds the session; a genuine download keeps streaming progress
+// events for seconds. Only reveal the bar once a still-incomplete event arrives after
+// this grace window, so an already-downloaded model never flashes the bar.
+const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
+
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
 
+	#showTinyTitleDownloadProgress(modelKey: string): void {
+		if (!isTinyTitleLocalModelKey(modelKey) || this.ctx.isBackgrounded) return;
+		const component = new TinyTitleDownloadProgressComponent(modelKey);
+		let added = false;
+		let disposed = false;
+		let removeTimer: NodeJS.Timeout | undefined;
+		const remove = (): void => {
+			if (disposed) return;
+			disposed = true;
+			unsubscribe();
+			if (removeTimer) {
+				clearTimeout(removeTimer);
+				removeTimer = undefined;
+			}
+			if (added) {
+				this.ctx.chatContainer.removeChild(component);
+				this.ctx.ui.requestRender();
+			}
+		};
+		const scheduleRemove = (): void => {
+			if (removeTimer) clearTimeout(removeTimer);
+			removeTimer = setTimeout(remove, TINY_TITLE_PROGRESS_DONE_TTL_MS);
+			removeTimer.unref?.();
+		};
+		let revealAt = 0;
+		const update = (event: TinyTitleProgressEvent): void => {
+			if (disposed || event.modelKey !== modelKey) return;
+			component.update(event);
+			if (revealAt === 0) revealAt = performance.now() + TINY_TITLE_PROGRESS_REVEAL_DELAY_MS;
+			const complete = component.isComplete();
+			// Reveal only for a download still in flight past the grace window. Cache hits
+			// either complete or fall silent (onnx init emits no events) before this fires.
+			if (!added && !complete && performance.now() >= revealAt) {
+				this.ctx.chatContainer.addChild(component);
+				added = true;
+			}
+			if (added) this.ctx.ui.requestRender();
+			if (complete) {
+				if (added) scheduleRemove();
+				else remove();
+			}
+		};
+		const unsubscribe = tinyTitleClient.onProgress(update);
+	}
+
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
-		this.ctx.editor.shouldBypassAutocompleteOnEscape = () =>
-			Boolean(
-				this.ctx.loadingAnimation ||
-					this.ctx.hasActiveBtw() ||
-					this.ctx.session.isStreaming ||
-					this.ctx.session.isCompacting ||
-					this.ctx.session.isGeneratingHandoff ||
-					this.ctx.session.isBashRunning ||
-					this.ctx.session.isEvalRunning ||
-					this.ctx.autoCompactionLoader ||
-					this.ctx.retryLoader ||
-					this.ctx.autoCompactionEscapeHandler ||
-					this.ctx.retryEscapeHandler,
-			);
 		this.ctx.editor.onEscape = () => {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
@@ -54,6 +97,9 @@ export class InputController {
 				return;
 			}
 			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
+				return;
+			}
+			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
 				return;
 			}
 			if (this.ctx.loadingAnimation) {
@@ -103,9 +149,9 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.thinking.cycle", this.ctx.keybindings.getKeys("app.thinking.cycle"));
 		this.ctx.editor.onCycleThinkingLevel = () => this.cycleThinkingLevel();
 		this.ctx.editor.setActionKeys("app.model.cycleForward", this.ctx.keybindings.getKeys("app.model.cycleForward"));
-		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel();
+		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel("forward");
 		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));
-		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel({ temporary: true });
+		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel("backward");
 		this.ctx.editor.setActionKeys(
 			"app.model.selectTemporary",
 			this.ctx.keybindings.getKeys("app.model.selectTemporary"),
@@ -122,12 +168,16 @@ export class InputController {
 		this.ctx.editor.onToggleThinking = () => this.ctx.toggleThinkingBlockVisibility();
 		this.ctx.editor.setActionKeys("app.editor.external", this.ctx.keybindings.getKeys("app.editor.external"));
 		this.ctx.editor.onExternalEditor = () => void this.openExternalEditor();
-		this.ctx.editor.onShowHotkeys = () => this.ctx.handleHotkeysCommand();
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteImage",
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
 		);
 		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
+		this.ctx.editor.setActionKeys(
+			"app.clipboard.pasteTextRaw",
+			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
+		);
+		this.ctx.editor.onPasteTextRaw = () => void this.handleClipboardTextRawPaste();
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.copyPrompt",
 			this.ctx.keybindings.getKeys("app.clipboard.copyPrompt"),
@@ -329,6 +379,7 @@ export class InputController {
 			// Generate session title on first message
 			const hasUserMessages = this.ctx.session.messages.some((m: AgentMessage) => m.role === "user");
 			if (!hasUserMessages && !this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE) {
+				this.#showTinyTitleDownloadProgress(this.ctx.settings.get("providers.tinyModel"));
 				const registry = this.ctx.session.modelRegistry;
 				generateSessionTitle(
 					text,
@@ -547,6 +598,9 @@ export class InputController {
 		if (this.ctx.hasActiveBtw()) {
 			this.ctx.handleBtwEscape();
 		}
+		if (this.ctx.hasActiveOmfg()) {
+			this.ctx.handleOmfgEscape();
+		}
 
 		this.ctx.isBackgrounded = true;
 		const backgroundUiContext = this.ctx.createBackgroundUiContext();
@@ -641,6 +695,19 @@ export class InputController {
 		}
 	}
 
+	async handleClipboardTextRawPaste(): Promise<void> {
+		try {
+			const text = await readTextFromClipboard();
+			if (text) {
+				this.ctx.editor.insertText(text);
+				this.ctx.ui.requestRender();
+				this.ctx.showStatus("No text in clipboard to paste raw");
+			}
+		} catch {
+			this.ctx.showStatus("Failed to paste raw text from clipboard");
+		}
+	}
+
 	createAutocompleteProvider(commands: SlashCommand[], basePath: string): AutocompleteProvider {
 		return createPromptActionAutocompleteProvider({
 			commands,
@@ -701,10 +768,10 @@ export class InputController {
 		}
 	}
 
-	async cycleRoleModel(options?: { temporary?: boolean }): Promise<void> {
+	async cycleRoleModel(direction: "forward" | "backward" = "forward"): Promise<void> {
 		try {
 			const cycleOrder = settings.get("cycleOrder");
-			const result = await this.ctx.session.cycleRoleModels(cycleOrder, options);
+			const result = await this.ctx.session.cycleRoleModels(cycleOrder, direction);
 			if (!result) {
 				this.ctx.showStatus("Only one role model available");
 				return;
@@ -712,27 +779,14 @@ export class InputController {
 
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			const roleLabel = result.role === "default" ? "default" : result.role;
-			const roleLabelStyled = theme.bold(theme.fg("accent", roleLabel));
-			const thinkingStr =
-				result.model.thinking && result.thinkingLevel !== ThinkingLevel.Off
-					? ` (thinking: ${result.thinkingLevel})`
-					: "";
-			const tempLabel = options?.temporary ? " (temporary)" : "";
-			const cycleSeparator = theme.fg("dim", " > ");
-			const cycleLabel = cycleOrder
-				.map(role => {
-					if (role === result.role) {
-						return theme.bold(theme.fg("accent", role));
-					}
-					return theme.fg("muted", role);
-				})
-				.join(cycleSeparator);
-			const orderLabel = ` (cycle: ${cycleLabel})`;
-			this.ctx.showStatus(
-				`Switched to ${roleLabelStyled}: ${result.model.name || result.model.id}${thinkingStr}${tempLabel}${orderLabel}`,
-				{ dim: false },
+			// The status line already reports the resolved model + thinking level, so
+			// the cycle status is just a status-line-style chip track (active role
+			// filled), matching the plan-approval model slider.
+			const track = renderSegmentTrack(
+				cycleOrder.map(role => ({ label: role, color: getRoleInfo(role, settings).color })),
+				cycleOrder.indexOf(result.role),
 			);
+			this.ctx.showStatus(track, { dim: false });
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -749,7 +803,7 @@ export class InputController {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ctx.ui.requestRender();
+		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
 	}
 
 	toggleThinkingBlockVisibility(): void {

@@ -1,11 +1,12 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	dedupeParseErrors,
 	formatCodeFrameLine,
 	formatDiagnostics,
+	formatErrorMessage,
 	formatParseErrors,
 	formatScreenshot,
 	truncateDiffByHunk,
@@ -250,5 +251,34 @@ describe("truncateDiffByHunk", () => {
 		expect(idxLeading).toBeLessThan(idxOld);
 		expect(idxOld).toBeLessThan(idxNew);
 		expect(idxNew).toBeLessThan(idxTrailing);
+	});
+});
+
+describe("formatErrorMessage (F4 sanitization)", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+	it("replaces tabs in error content with spaces", () => {
+		const out = formatErrorMessage("apply_patch failed:\n@@\n-old\tindented\n+new", theme);
+		expect(out).not.toContain("\t");
+	});
+
+	it("truncates very long error messages to keep TUI from overflowing", () => {
+		const longTail = "x".repeat(500);
+		const out = formatErrorMessage(`crash: ${longTail}`, theme);
+		// Strip ANSI escape sequences so we can measure the user-visible length.
+		const ESC = String.fromCharCode(0x1b);
+		const visible = out
+			.split(ESC)
+			.map((s, i) => (i === 0 ? s : s.replace(/^\[[0-9;]*m/, "")))
+			.join("");
+		// LINE truncation cap is 110 chars; account for the "Error: " prefix and
+		// the leading symbol+space.
+		expect(visible.length).toBeLessThan(180);
+	});
+
+	it("falls back to 'Unknown error' for empty/missing input", () => {
+		const out = formatErrorMessage(undefined, theme);
+		expect(out).toContain("Unknown error");
 	});
 });

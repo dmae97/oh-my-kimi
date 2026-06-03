@@ -460,6 +460,7 @@ const USAGE_CACHE_PREFIX = "usage_cache:";
 // each credential's last-known value sticks visible while peers retry. UI
 // data (5h / 7d / monthly limits) is fine being a few minutes stale.
 const USAGE_REPORT_TTL_MS = 5 * 60_000;
+const USAGE_HEADER_INGEST_INTERVAL_MS = 60_000;
 const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
 /**
  * Per-credential cool-down after a usage fetch fails. While this window is
@@ -750,6 +751,7 @@ export class AuthStorage {
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
 	#usageRequestInFlight: Map<string, Promise<UsageReport | null>> = new Map();
+	#usageHeaderIngestAt: Map<string, number> = new Map();
 	#usageReportsInFlight: Map<string, Promise<UsageReport[] | null>> = new Map();
 	#usageFetch: typeof fetch;
 	#usageRequestTimeoutMs: number;
@@ -1393,14 +1395,7 @@ export class AuthStorage {
 		);
 	}
 
-	/**
-	 * Get the OAuth `accountId` for a provider, preferring the credential that is
-	 * session-sticky for `sessionId` when multiple OAuth credentials are configured.
-	 * Falls back to the first OAuth credential when no session preference exists (e.g.
-	 * first call before any `getApiKey` has been issued, or single-credential setups).
-	 * Returns `undefined` when no OAuth credential carries an `accountId`.
-	 */
-	getOAuthAccountId(provider: string, sessionId?: string): string | undefined {
+	#resolveActiveOAuthCredential(provider: string, sessionId?: string): OAuthCredential | undefined {
 		const allCredentials = this.#getCredentialsForProvider(provider);
 		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
 		if (oauthCredentials.length === 0) return undefined;
@@ -1427,7 +1422,18 @@ export class AuthStorage {
 		// filtered array would be off-by-N when any non-OAuth credential precedes the
 		// OAuth ones (e.g. [api_key, oauth_A, oauth_B] stored order).
 		const stickyCredential = sessionPref?.type === "oauth" ? allCredentials[sessionPref.index] : undefined;
-		const preferred = stickyCredential?.type === "oauth" ? stickyCredential : oauthCredentials[0];
+		return stickyCredential?.type === "oauth" ? stickyCredential : oauthCredentials[0];
+	}
+
+	/**
+	 * Get the OAuth `accountId` for a provider, preferring the credential that is
+	 * session-sticky for `sessionId` when multiple OAuth credentials are configured.
+	 * Falls back to the first OAuth credential when no session preference exists (e.g.
+	 * first call before any `getApiKey` has been issued, or single-credential setups).
+	 * Returns `undefined` when no OAuth credential carries an `accountId`.
+	 */
+	getOAuthAccountId(provider: string, sessionId?: string): string | undefined {
+		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId);
 		const accountId = preferred?.accountId;
 		return typeof accountId === "string" && accountId.length > 0 ? accountId : undefined;
 	}
@@ -2113,6 +2119,59 @@ export class AuthStorage {
 
 		this.#usageRequestInFlight.set(cacheKey, promise);
 		return promise;
+	}
+
+	ingestUsageHeaders(
+		provider: Provider,
+		headers: Record<string, string>,
+		options?: { sessionId?: string; baseUrl?: string },
+	): boolean {
+		if (this.#fetchUsageReportsOverride || this.#store.fetchUsageReports) return false;
+
+		const credential = this.#resolveActiveOAuthCredential(provider, options?.sessionId);
+		if (!credential) return false;
+
+		const cacheKey = this.#buildUsageReportCacheKey(
+			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
+		);
+		const now = Date.now();
+		const last = this.#usageHeaderIngestAt.get(cacheKey);
+		if (last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
+
+		const report = this.#usageProviderResolver?.(provider)?.parseRateLimitHeaders?.(headers, now);
+		if (!report) return false;
+
+		const prior = this.#usageCache.getStale<UsageReport | null>(cacheKey)?.value;
+		let merged = report;
+		if (prior && Array.isArray(prior.limits)) {
+			const headerLimitsById = new Map(report.limits.map(limit => [limit.id, limit]));
+			const limits: UsageLimit[] = [];
+			for (const limit of prior.limits) {
+				const replacement = headerLimitsById.get(limit.id);
+				if (replacement) {
+					limits.push(replacement);
+					headerLimitsById.delete(limit.id);
+				} else {
+					limits.push(limit);
+				}
+			}
+			for (const limit of headerLimitsById.values()) {
+				limits.push(limit);
+			}
+			merged = {
+				...prior,
+				fetchedAt: now,
+				limits,
+				metadata: {
+					...(prior.metadata ?? {}),
+					headersUpdatedAt: now,
+				},
+			};
+		}
+
+		this.#usageCache.set(cacheKey, { value: merged, expiresAt: now + USAGE_REPORT_TTL_MS });
+		this.#usageHeaderIngestAt.set(cacheKey, now);
+		return true;
 	}
 
 	#collectUsageRequests(options?: {
@@ -2984,7 +3043,7 @@ export class AuthStorage {
 		if (!prepare) return true;
 		const stored = this.#getStoredCredentials(provider);
 		const selected = stored[selection.index];
-		if (!selected || selected.credential.type !== "oauth") return false;
+		if (selected?.credential.type !== "oauth") return false;
 
 		const prepared = await prepare(selected.id, { signal: options?.signal });
 		if (!prepared) return true;
@@ -2996,7 +3055,7 @@ export class AuthStorage {
 		const latestIndex = latestRows.findIndex(row => row.id === selected.id);
 		if (latestIndex === -1) return false;
 		const latest = latestRows[latestIndex];
-		if (!latest || latest.credential.type !== "oauth") return false;
+		if (latest?.credential.type !== "oauth") return false;
 		selection.index = latestIndex;
 		selection.credential = latest.credential;
 		return true;

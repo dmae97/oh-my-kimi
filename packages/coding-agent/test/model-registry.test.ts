@@ -221,6 +221,39 @@ describe("ModelRegistry", () => {
 			expect(variants.some(variant => variant.selector === "openrouter/z-ai/glm-4.7-20251222:nitro")).toBe(true);
 		});
 
+		test("keeps Perplexity search canonical distinct from non-search Sonar Pro ids", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "perplexity/sonar-pro-search" },
+					{ id: "perplexity/sonar-pro" },
+					{ id: "sonar-pro" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const searchModel = registry.find("demo", "perplexity/sonar-pro-search");
+			const proModel = registry.find("demo", "perplexity/sonar-pro");
+			const bareModel = registry.find("demo", "sonar-pro");
+			if (!searchModel || !proModel || !bareModel) {
+				throw new Error("Perplexity canonical equivalence fixture models were not registered");
+			}
+
+			const searchCanonicalId = registry.getCanonicalId(searchModel);
+			expect(searchCanonicalId).toBe("perplexity/sonar-pro-search");
+			expect(searchCanonicalId).not.toBe(registry.getCanonicalId(proModel));
+			expect(searchCanonicalId).not.toBe(registry.getCanonicalId(bareModel));
+			expect(
+				registry
+					.getCanonicalVariants("perplexity/sonar-pro-search")
+					.some(variant => variant.selector === "demo/perplexity/sonar-pro"),
+			).toBe(false);
+			expect(
+				registry
+					.getCanonicalVariants("perplexity/sonar-pro-search")
+					.some(variant => variant.selector === "demo/sonar-pro"),
+			).toBe(false);
+		});
+
 		test("uses bundled metadata for Ollama cloud aliases in custom local-proxy configs", () => {
 			writeRawModelsJson({
 				ollama: {
@@ -258,7 +291,7 @@ describe("ModelRegistry", () => {
 			});
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			const opusVariants = registry.getCanonicalVariants("claude-opus-4-7");
+			const opusVariants = registry.getCanonicalVariants("claude-opus-4-8");
 			const haikuVariants = registry.getCanonicalVariants("claude-haiku-4-5");
 
 			expect(opusVariants.some(variant => variant.selector === "demo/anthropic/claude-opus-latest")).toBe(true);
@@ -1738,7 +1771,7 @@ describe("ModelRegistry", () => {
 
 			const gemma = registry.find("ollama", "gemma3:4b");
 			expect(gemma?.contextWindow).toBe(131072);
-			expect(gemma?.maxTokens).toBe(8192);
+			expect(gemma?.maxTokens).toBe(32_768);
 			expect(gemma?.input).toEqual(["text"]);
 			expect(gemma?.reasoning).toBe(false);
 		});
@@ -1955,7 +1988,7 @@ describe("ModelRegistry", () => {
 			await registry.refresh();
 			const llama = registry.find("llama.cpp", "qwen35-35b-a3b");
 			expect(llama?.contextWindow).toBe(262144);
-			expect(llama?.maxTokens).toBe(8192);
+			expect(llama?.maxTokens).toBe(32_768);
 			expect(llama?.input).toEqual(["text", "image"]);
 		});
 	});
@@ -2233,6 +2266,56 @@ describe("ModelRegistry", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 
 		expect(registry.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
+	});
+
+	test("loads cached special provider discovery models on startup", () => {
+		const cachedModels: Model[] = [
+			{
+				id: "gemini-3.5-flash-low",
+				name: "Gemini 3.5 Flash Low",
+				api: "google-gemini-cli",
+				provider: "google-antigravity",
+				baseUrl: "https://cloudcode-pa.googleapis.com",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 8_192,
+			},
+			{
+				id: "gemini-3.5-flash",
+				name: "Gemini 3.5 Flash",
+				api: "google-gemini-cli",
+				provider: "google-gemini-cli",
+				baseUrl: "https://cloudcode-pa.googleapis.com",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 16_384,
+			},
+			{
+				id: "gpt-5.4-codex-pro",
+				name: "GPT-5.4 Codex Pro",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://chatgpt.com/backend-api/codex",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 400_000,
+				maxTokens: 128_000,
+			},
+		];
+		for (const cachedModel of cachedModels) {
+			writeModelCache(cachedModel.provider, Date.now(), [cachedModel], true, "", cacheDbPath);
+		}
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+		expect(registry.find("google-antigravity", "gemini-3.5-flash-low")?.maxTokens).toBe(8_192);
+		expect(registry.find("google-gemini-cli", "gemini-3.5-flash")?.maxTokens).toBe(16_384);
+		expect(registry.find("openai-codex", "gpt-5.4-codex-pro")?.maxTokens).toBe(128_000);
 	});
 
 	test("replaces bundled google-vertex models with authoritative Vertex project discovery", () => {

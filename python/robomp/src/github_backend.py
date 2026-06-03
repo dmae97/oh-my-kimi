@@ -8,12 +8,14 @@ dataclasses (`IssueInfo`, `RepoInfo`, …) defined in `github_client`.
 
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 from robomp.github_client import (
     CommentInfo,
     IssueInfo,
     IssueSummary,
+    PullRequestFileInfo,
     PullRequestInfo,
     PullRequestReviewInfo,
     ReactionInfo,
@@ -33,6 +35,8 @@ class GitHubBackend(Protocol):
     async def list_closing_pull_requests(self, repo: str, number: int) -> tuple[int, ...]: ...
 
     async def get_pull_request(self, repo: str, number: int) -> PullRequestInfo: ...
+
+    async def list_pr_files(self, repo: str, pr_number: int) -> list[PullRequestFileInfo]: ...
 
     async def list_issues(
         self,
@@ -75,6 +79,16 @@ class GitHubBackend(Protocol):
     ) -> None: ...
 
     async def add_issue_labels(self, repo: str, number: int, labels: list[str]) -> tuple[str, ...]: ...
+
+    async def submit_pr_review(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str,
+        comments: list[Mapping[str, Any]],
+    ) -> PullRequestReviewInfo: ...
 
     async def add_assignees(self, repo: str, number: int, assignees: list[str]) -> None: ...
 

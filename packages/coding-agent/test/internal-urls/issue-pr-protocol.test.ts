@@ -66,7 +66,16 @@ function issuePayload(number: number, body: string, commentBodies: string[] = []
 	};
 }
 
+interface PrPayloadReview {
+	author: { login: string };
+	body: string;
+	commit: { oid: string };
+	state: string;
+	submittedAt: string;
+}
+
 function prPayload(number: number, body: string) {
+	const reviews: PrPayloadReview[] = [];
 	return {
 		number,
 		title: `PR #${number}`,
@@ -81,9 +90,32 @@ function prPayload(number: number, body: string) {
 		url: `https://github.com/owner/example/pull/${number}`,
 		labels: [],
 		files: [],
-		reviews: [],
+		reviews,
 		comments: [],
 	};
+}
+
+function requestedJsonFields(args: string[]): Set<string> {
+	const jsonIndex = args.indexOf("--json");
+	const fieldsArg = jsonIndex >= 0 ? args[jsonIndex + 1] : undefined;
+	return new Set((fieldsArg ?? "").split(",").filter(Boolean));
+}
+
+function prPayloadWithRequestedFields(args: string[], number: number, body: string) {
+	const payload = prPayload(number, body);
+	const fields = requestedJsonFields(args);
+	if (fields.has("reviews")) {
+		payload.reviews = [
+			{
+				author: { login: "approver" },
+				body: "Approved from the formal review flow.",
+				commit: { oid: "1234567890abcdef1234567890abcdef12345678" },
+				state: "APPROVED",
+				submittedAt: "2026-04-01T12:00:00Z",
+			},
+		];
+	}
+	return payload;
 }
 
 interface DiffFileSpec {
@@ -191,6 +223,22 @@ describe("pr:// protocol handler", () => {
 		expect(second.notes?.[0]).toMatch(/^Cached:/);
 		// Second call is a soft-TTL hit — no further gh invocations.
 		expect(spy).toHaveBeenCalledTimes(2);
+	});
+
+	it("requests and renders formal reviews when comments are enabled", async () => {
+		vi.spyOn(git.github, "json").mockImplementation(async (_cwd, args) => {
+			if (args.includes("/repos/owner/example/pulls/78/comments")) {
+				return [] as never;
+			}
+			return prPayloadWithRequestedFields(args, 78, "pr body") as never;
+		});
+
+		const router = InternalUrlRouter.instance();
+		const resource = await router.resolve("pr://owner/example/78");
+
+		expect(resource.content).toContain("## Reviews (1)");
+		expect(resource.content).toContain("### @approver - 2026-04-01T12:00:00Z [APPROVED]");
+		expect(resource.content).toContain("Approved from the formal review flow.");
 	});
 
 	it("rejects invalid pr:// URLs with a friendly message", async () => {

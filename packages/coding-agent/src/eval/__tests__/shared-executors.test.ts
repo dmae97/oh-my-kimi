@@ -154,6 +154,27 @@ describe("shared eval executors", () => {
 		expect(result.output.trim()).toBe("42");
 	});
 
+	it("treats idleTimeoutMs as an inactivity budget, not a fixed timer", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-js-idle-budget-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-idle-budget:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+
+		// With no wall-clock deadlineMs/timeoutMs and no aborting signal, a cell that
+		// runs well past idleTimeoutMs must still complete: the backend must never
+		// derive a competing fixed timer from the inactivity budget.
+		const result = await executeJs("await Bun.sleep(120); return 'done';", {
+			sessionId,
+			session,
+			sessionFile,
+			idleTimeoutMs: 30,
+		});
+
+		expect(result.cancelled).toBe(false);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("done");
+	});
+
 	it("shares Python state across executePython calls with one session id", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-py-shared-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
@@ -490,6 +511,74 @@ display({"label": "A"})`,
 		});
 		expect(reloaded.exitCode).toBe(0);
 		expect(reloaded.output.trim()).toBe("2");
+	});
+
+	it("links a cyclic local module graph without crashing", async () => {
+		// Regression: the loader used to link()+evaluate() each local module individually
+		// inside the recursive linker callback. On any import cycle that re-entered Bun's
+		// node:vm linker mid-instantiation and segfaulted the process (SIGTRAP,
+		// getImportedModule on a null record) — e.g. `await import("…/edit/streaming.ts")`,
+		// whose relative-import subtree is cyclic. The graph must now link in a single pass.
+		using tempDir = TempDir.createSync("@omp-eval-js-cycle-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-cycle:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+		const alphaPath = path.join(tempDir.path(), "alpha.ts");
+		const betaPath = path.join(tempDir.path(), "beta.ts");
+		const alphaSpec = JSON.stringify(alphaPath);
+		const betaSpec = JSON.stringify(betaPath);
+		await Bun.write(
+			alphaPath,
+			'import { betaName } from "./beta.ts";\nexport const alphaName = "alpha";\nexport function combined() { return alphaName + ":" + betaName; }\n',
+		);
+		await Bun.write(
+			betaPath,
+			'import { alphaName } from "./alpha.ts";\nexport const betaName = "beta";\nexport function viaAlpha() { return alphaName; }\n',
+		);
+
+		const result = await executeJs(
+			`const a = await import(${alphaSpec});\nconst b = await import(${betaSpec});\nreturn [a.combined(), b.viaAlpha()].join("|");`,
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("alpha:beta|alpha");
+	});
+
+	it("loads TypeScript type-only imports in cells and local modules", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-js-type-imports-");
+		const sessionFile = path.join(tempDir.path(), "session.jsonl");
+		const sessionId = `js-type-imports:${crypto.randomUUID()}`;
+		const session = createToolSession(tempDir.path(), sessionFile);
+		const typesPath = path.join(tempDir.path(), "types.ts");
+		const valuesPath = path.join(tempDir.path(), "values.ts");
+		const entryPath = path.join(tempDir.path(), "entry.ts");
+		const typesSpec = JSON.stringify(typesPath);
+		const entrySpec = JSON.stringify(entryPath);
+		await Bun.write(typesPath, "export interface TypeOnly { value: number }\n");
+		await Bun.write(valuesPath, "export interface InlineOnly { value: number }\nexport const imported = 41;\n");
+		await Bun.write(
+			entryPath,
+			[
+				'import type { TypeOnly } from "./types.ts";',
+				'import { type InlineOnly, imported } from "./values.ts";',
+				"export const typeOnly = 1;",
+				"export const inlineType = imported;",
+				"",
+			].join("\n"),
+		);
+
+		const result = await executeJs(
+			`import type { TypeOnly } from ${typesSpec};\nconst mod = await import(${entrySpec});\nreturn mod.typeOnly + mod.inlineType;`,
+			{
+				sessionId,
+				session,
+				sessionFile,
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("42");
 	});
 
 	it("refreshes the Python tool proxy when bridge env appears after kernel warm-up", async () => {

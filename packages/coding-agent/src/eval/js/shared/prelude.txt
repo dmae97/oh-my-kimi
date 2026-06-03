@@ -39,6 +39,93 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		return values.length === 1 ? values[0] : values;
 	};
 
+	const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+	const llm = async (prompt, opts = {}) => {
+		const o = toOptions(opts);
+		const res = await globalThis.__omp_call_tool__("__llm__", { prompt, ...o });
+		const text = res && typeof res === "object" ? res.text : res;
+		return hasOwn(o, "schema") ? JSON.parse(text) : text;
+	};
+
+	const agent = async (prompt, opts = {}) => {
+		const o = toOptions(opts);
+		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...o });
+		const text = res && typeof res === "object" ? res.text : res;
+		return hasOwn(o, "schema") ? JSON.parse(text) : text;
+	};
+
+	// Pool ceiling mirrors the task tool's `task.maxConcurrency` setting so an
+	// eval fan-out runs as wide as a `task` batch would. 0 (and any non-finite
+	// reply) means unbounded — run every item at once.
+	const __concurrencyLimit = async () => {
+		try {
+			const r = await globalThis.__omp_call_tool__("__concurrency__", {});
+			const n = Math.trunc(Number(r && typeof r === "object" ? r.limit : r));
+			return Number.isFinite(n) && n > 0 ? n : 0;
+		} catch {
+			return 0;
+		}
+	};
+
+	const __pool = async (items, fn) => {
+		const list = Array.from(items ?? []);
+		if (list.length === 0) return [];
+		const limit = await __concurrencyLimit();
+		const concurrency = limit > 0 ? Math.min(limit, list.length) : list.length;
+		const results = new Array(list.length);
+		let next = 0;
+		const worker = async () => {
+			while (true) {
+				const index = next++;
+				if (index >= list.length) return;
+				results[index] = await fn(list[index], index);
+			}
+		};
+		await Promise.all(Array.from({ length: concurrency }, () => worker()));
+		return results;
+	};
+
+	const parallel = async thunks =>
+		__pool(thunks, (thunk, index) => {
+			if (typeof thunk !== "function") throw new TypeError("parallel() expects an iterable of functions");
+			return thunk(index);
+		});
+
+	const pipeline = async (items, ...stages) => {
+		let current = Array.from(items ?? []);
+		for (const stage of stages) {
+			if (typeof stage !== "function") throw new TypeError("pipeline() stages must be functions");
+			current = await __pool(current, stage);
+		}
+		return current;
+	};
+
+	const log = message => globalThis.__omp_emit_status__("log", { message: String(message) });
+
+	const phase = title => {
+		globalThis.__omp_phase__ = String(title);
+		globalThis.__omp_emit_status__("phase", { title: String(title) });
+	};
+
+	const __budgetSnap = async () => {
+		const r = await globalThis.__omp_call_tool__("__budget__", {});
+		return r && typeof r === "object" ? r : {};
+	};
+
+	const budget = {
+		total: async () => {
+			const s = await __budgetSnap();
+			return s.total ?? null;
+		},
+		spent: async () => Number((await __budgetSnap()).spent ?? 0),
+		remaining: async () => {
+			const s = await __budgetSnap();
+			return s.total == null ? Infinity : Math.max(0, Number(s.total) - Number(s.spent ?? 0));
+		},
+		hard: async () => Boolean((await __budgetSnap()).hard),
+	};
+
 	const display = value => {
 		globalThis.__omp_display__(value);
 	};
@@ -61,7 +148,15 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.print = consoleBridge.log;
 	globalThis.display = display;
 	globalThis.tool = tool;
+	globalThis.llm = llm;
 	globalThis.output = output;
+	globalThis.agent = agent;
+	globalThis.parallel = parallel;
+	globalThis.pipeline = pipeline;
+	globalThis.log = log;
+	globalThis.phase = phase;
+	globalThis.budget = budget;
+	globalThis.__pool = __pool;
 	globalThis.read = read;
 	globalThis.write = write;
 	globalThis.append = append;

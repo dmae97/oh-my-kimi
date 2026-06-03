@@ -52,9 +52,11 @@ The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plug
 | `owner` | yes | Object with at minimum `owner.name` (string) |
 | `owner.name` | yes | Marketplace owner name |
 | `owner.email` | no | Owner contact email |
-| `description` | no | Short description of the marketplace |
 | `plugins` | yes | Array of plugin entries (see below) |
+| `metadata.description` | no | Short description of the marketplace |
+| `metadata.version` | no | Catalog metadata version string |
 | `metadata.pluginRoot` | no | String prepended to all relative plugin source paths |
+| extra top-level fields | no | Preserved by the parser but not used by marketplace install/runtime logic |
 
 ### Plugin entry fields
 
@@ -67,7 +69,11 @@ The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plug
 | `author` | no | `{ name, email? }` |
 | `homepage` | no | URL |
 | `category` | no | e.g. `development`, `productivity`, `security` |
-| `tags` | no | Array of string tags |
+| `tags` / `keywords` | no | Arrays of string tags/keywords |
+| `repository` | no | Repository URL |
+| `license` | no | License string |
+| `strict` | no | Boolean plugin metadata flag |
+| `commands`, `agents`, `hooks`, `mcpServers`, `lspServers` | no | Capability metadata used by plugin tooling and selectors |
 
 ### Full catalog example
 
@@ -79,7 +85,9 @@ The catalog file lives at either `.omp-plugin/marketplace.json` or `.claude-plug
     "name": "Acme Corp",
     "email": "plugins@acme.example"
   },
-  "description": "Official Acme plugins for oh-my-pi",
+  "metadata": {
+    "description": "Official Acme plugins for oh-my-pi"
+  },
   "plugins": [
     {
       "name": "acme-linter",

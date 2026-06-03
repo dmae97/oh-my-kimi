@@ -1,5 +1,3 @@
-import { constants } from "node:fs";
-import { access } from "node:fs/promises";
 import * as path from "node:path";
 import { formatHashlineHeader } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -8,7 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
@@ -157,6 +155,9 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				rawPaths: params.paths,
 				cwd: this.session.cwd,
 				internalUrlAction: "search",
+				settings: this.session.settings,
+				signal,
+				localProtocolOptions: this.session.localProtocolOptions,
 			});
 			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 
@@ -221,17 +222,14 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			}
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;
-			const hashContexts = new Map<string, { absolutePath: string; tag?: string }>();
-			const snapshotStore = useHashLines ? getFileSnapshotStore(this.session) : undefined;
+			const hashContexts = new Map<string, { tag: string }>();
 			if (useHashLines) {
 				for (const relativePath of fileList) {
 					const absolutePath = path.resolve(this.session.cwd, relativePath);
-					try {
-						await access(absolutePath, constants.R_OK);
-						hashContexts.set(relativePath, { absolutePath });
-					} catch {
-						// Best-effort: if a file disappears between ast-grep and rendering, emit plain line output.
-					}
+					// Whole-file content tag: any anchor validates while the file is
+					// unchanged; over-cap / unreadable files get no tag (plain output).
+					const tag = await recordFileSnapshot(this.session, absolutePath);
+					if (tag) hashContexts.set(relativePath, { tag });
 				}
 			}
 			const outputLines: string[] = [];
@@ -246,7 +244,6 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 					const endLine = match.startLine + lineCount - 1;
 					return Math.max(width, String(match.startLine).length, String(endLine).length);
 				}, 0);
-				const cacheEntries: Array<readonly [number, string]> = [];
 				for (const match of fileMatches) {
 					const matchLines = match.text.split("\n");
 					for (let index = 0; index < matchLines.length; index++) {
@@ -257,7 +254,6 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 							formatMatchLine(lineNumber, line, isMatch, { useHashLines: hashContext !== undefined }),
 						);
 						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
-						cacheEntries.push([lineNumber, line] as const);
 					}
 					if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
 						const serializedMeta = Object.entries(match.metaVariables)
@@ -268,10 +264,6 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						displayOut.push(`  meta: ${serializedMeta}`);
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
-				}
-				if (hashContext && cacheEntries.length > 0) {
-					const tag = snapshotStore?.recordSparse(hashContext.absolutePath, cacheEntries);
-					if (tag) hashContext.tag = tag;
 				}
 				return { model: modelOut, display: displayOut };
 			};

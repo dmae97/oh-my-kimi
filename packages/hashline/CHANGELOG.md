@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+## [15.8.2] - 2026-06-03
+
+### Fixed
+
+- Fixed delimiter-balance boundary repair to also drop a single duplicated structural opener (e.g. a restated `foo(` / `if (x) {` signature line surviving just above the range), not only duplicated closers. Zero-balance duplicates remain untouched.
+
+## [15.8.0] - 2026-06-02
+
+### Fixed
+
+- Fixed hashline replacements that accidentally restated unchanged lines above and below the selected range so they no longer duplicate both boundary lines ([#1664](https://github.com/can1357/oh-my-pi/issues/1664)).
+
+## [15.7.0] - 2026-05-31
+### Added
+
+- Added `replace block N:` and `delete block N` patch syntax to replace or delete the entire syntactic block that begins on line N using tree-sitter-resolved spans
+- Added `BlockResolver` support in `Patcher` and `PatchSection.applyTo`/`applyPartialTo` to wire language-specific block-resolution at apply time
+- Added `resolveBlockEdits` and block edit type definitions to the package API for resolving deferred `replace block` / `delete block` edits
+
+## [15.5.13] - 2026-05-29
+### Breaking Changes
+
+- Changed hashline section tags from 3-hex to 4-hex content-hash tags, so legacy 3-digit tags are no longer valid
+- Changed hashline syntax to verb-based v4: body-bearing ops are `replace N..M:`, `insert before N:`, `insert after N:`, `insert head:`, and `insert tail:`, while bodyless `delete N..M` handles deletion. Removed `>A..B` repeat rows and the old `prepend:` / `append:` virtual insert headers; `-` rows remain rejected with a teaching error.
+
+### Added
+
+- Added `maxPaths` and `maxVersionsPerPath` options to `InMemorySnapshotStore` to bound tracked paths and per-path snapshot history
+- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`replace N..M:` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket counting skips strings, template literals, and comments. Each repair surfaces a `delimiter-balance` warning through `ApplyResult.warnings`.
+
+### Changed
+
+- Changed patch application to accept edits whenever the live file's normalized content hash matches the section tag, even when that anchor was not covered by a stored snapshot
+
+### Removed
+
+- Removed `SnapshotStore.recordContiguous` and `SnapshotStore.recordSparse` in favor of full-file `record(path, fullText)` snapshots
+
+### Fixed
+
+- Fixed hash mismatch rejections caused by CRLF or trailing spaces/tabs by normalizing those characters before computing file-hash tags
+
+## [15.5.12] - 2026-05-29
+
+### Changed
+
+- `InMemorySnapshotStore` now coalesces consecutive same-path reads into one tag whenever their views agree on every shared line. Overlapping or directly abutting range reads extend the existing snapshot's contiguous run in place; reads separated by a gap union into a `SparseSnapshot` spanning both ranges. A disagreeing shared line is treated as "the file changed on disk" and mints a fresh tag, preserving the prior superset-dedup behavior. This stops sequential range reads of an unchanged file (e.g. `:50-100` then `:100-200`, or `:1-100` then `:150-200`) from fragmenting into separate anchors.
+
+## [15.5.11] - 2026-05-29
+
+### Added
+
+- `MismatchError` now distinguishes "hash recognized but file content drifted" from "hash never recorded for this path". The latter (likely fabricated or carried over from a prior session) emits a dedicated `hash #X is not from this session` rejection message with explicit "never invent the tag" guidance. The `MismatchDetails` interface gains an optional `hashRecognized?: boolean` (defaults to `true` for backward compatibility); `MismatchError` exposes it as a readonly field so callers can branch on the cause.
+
 ## [15.5.8] - 2026-05-28
 ### Breaking Changes
 

@@ -121,7 +121,7 @@ describe("openai-completions compatibility", () => {
 		const messages = convertMessages(model, { messages: [assistantMessage] }, compat);
 		const assistant = messages.find(message => message.role === "assistant");
 		expect(assistant).toBeDefined();
-		if (!assistant || assistant.role !== "assistant") {
+		if (assistant?.role !== "assistant") {
 			throw new Error("assistant message missing");
 		}
 		expect(typeof assistant.content).toBe("string");
@@ -549,6 +549,44 @@ describe("kimi model detection via detectCompat", () => {
 			reasoning: true,
 		};
 	}
+	// The z.ai binary `thinking: { type }` field is Kimi's *native* surface
+	// (Moonshot / Kimi-code, matched by isMoonshotKimi). Kimi reached through an
+	// OpenAI-compatible proxy talks to the proxy's API shape, not Moonshot's
+	// backend directly, and those proxies expect the OpenAI-standard
+	// `reasoning_effort`. The generic Kimi model-id match MUST NOT default
+	// proxies to "zai": doing so regressed #827 (opencode-go strips
+	// reasoning_effort under forced tool_choice) and the Fire Pass xhigh capture
+	// (#1199), and would mis-shape 14+ gateways (Fireworks, OpenCode, Kilo,
+	// NVIDIA, Together, Vercel, …). Hosts that genuinely speak zai pin
+	// `compat.thinkingFormat` per catalog entry (e.g. kimi-code, wafer-serverless).
+	it("reserves zai for native Kimi hosts and defaults proxies to OpenAI reasoning_effort", () => {
+		// Native Moonshot surface → z.ai binary thinking.
+		expect(detectCompat(kimiMoonshotModel("kimi-k2.5")).thinkingFormat).toBe("zai");
+
+		// OpenAI-compatible proxies → reasoning_effort ("openai").
+		expect(detectCompat(kimiOpenCodeModel("kimi-k2.6")).thinkingFormat).toBe("openai");
+		const kiloKimi: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "kilo",
+			baseUrl: "https://api.kilo.ai/api/gateway",
+			id: "moonshotai/kimi-k2.6",
+			reasoning: true,
+		};
+		expect(detectCompat(kiloKimi).thinkingFormat).toBe("openai");
+
+		// OpenRouter normalizes reasoning via its own object and keeps precedence
+		// over the generic Kimi id match.
+		const openRouterKimi: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			id: "moonshotai/kimi-k2.6",
+			reasoning: true,
+		};
+		expect(detectCompat(openRouterKimi).thinkingFormat).toBe("openrouter");
+	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side
 	// and reject client-supplied `reasoning_content` ("Extra inputs are not
@@ -640,6 +678,395 @@ describe("kimi model detection via detectCompat", () => {
 		expect(Reflect.get(assistantObject, "reasoning")).toBeUndefined();
 		expect(Reflect.get(assistantObject, "reasoning_content")).toBeUndefined();
 		expect(Reflect.get(assistantObject, "reasoning_text")).toBeUndefined();
+	});
+
+	// #1484: OpenCode Zen's Kimi gateway now 400s with `thinking is enabled but
+	// reasoning_content is missing in assistant tool call message at index N`
+	// when a follow-up request has thinking on but the prior assistant tool-call
+	// turn lacks `reasoning_content`. `buildParams` must reactivate the
+	// `requiresReasoningContentForToolCalls` flag whenever the request itself is
+	// in thinking mode, even though static compat detection leaves it off.
+	it("emits reasoning_content on kimi opencode-go tool-call replays when thinking is enabled", async () => {
+		const model = kimiOpenCodeModel("kimi-k2.6");
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Need to read the file before answering.",
+					// OpenCode Kimi streams reasoning under the `reasoning` field
+					// name; the override must coerce it into `reasoning_content`
+					// when replaying tool-call history.
+					thinkingSignature: "reasoning",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Need to read the file before answering.");
+		// The streamed `reasoning` key must NOT land in the wire body alongside
+		// `reasoning_content`; opencode's strict schema rejects unknown fields.
+		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+	});
+
+	// #1071 regression guard alongside the #1484 fix: with thinking disabled the
+	// override stays off so the gateway's `Extra inputs are not permitted` error
+	// can never reappear on tool-call replays.
+	it("omits reasoning_content on kimi opencode-go tool-call replays when thinking is disabled", async () => {
+		const model = kimiOpenCodeModel("kimi-k2.6");
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Let me check." },
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+		expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+	});
+
+	// #1485 review: `disableReasoningOnForcedToolChoice` strips thinking from
+	// the wire body for Kimi when `toolChoice` is forced, so the per-request
+	// reasoning_content override must back off on the same path or the
+	// thinking-disabled payload reintroduces the #1071 `Extra inputs are not
+	// permitted` failure.
+	it("omits reasoning_content on kimi opencode-go forced-tool turns even when reasoning is requested", async () => {
+		const model = kimiOpenCodeModel("kimi-k2.6");
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Plan first, then call the tool.",
+					thinkingSignature: "reasoning_content",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				// Forced tool choice triggers `disableReasoningOnForcedToolChoice`
+				// for Kimi, suppressing reasoning_effort on the wire body.
+				toolChoice: { type: "tool", name: "read" },
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as {
+			messages: Array<Record<string, unknown>>;
+			reasoning_effort?: unknown;
+		};
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+		expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+		// The forced-tool guard must still strip the request-level thinking
+		// signal so neither end of the wire mentions reasoning.
+		expect(payload.reasoning_effort).toBeUndefined();
+	});
+
+	// #1484 follow-up: DeepSeek V4 on opencode-go exhibits the same gateway
+	// invariant as Kimi (same Zen gateway). DeepSeek emits reasoning under the
+	// `reasoning` signature, so the pre-fix code wrote both `reasoning` and
+	// `reasoning_content` to the wire body. The line-1488 fix in convertMessages
+	// now coerces the replay onto `reasoningContentField` whenever
+	// `allowsSyntheticReasoningContentForToolCalls=false`, so DeepSeek V4
+	// payloads carry only `reasoning_content`.
+	it("emits only reasoning_content on deepseek-v4-flash opencode-go tool-call replays", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			id: "deepseek-v4-flash",
+			reasoning: true,
+		};
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Need to read the file before answering.",
+					thinkingSignature: "reasoning",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Need to read the file before answering.");
+		// DeepSeek's allowsSynthetic=false must keep the stale `reasoning` key
+		// off the wire body so opencode's schema validation does not flag it.
+		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+	});
+
+	// #1484 follow-up: the Zen gateway invariant applies to every opencode-go
+	// model (GLM, Qwen, MiMo, MiniMax, Kimi, DeepSeek). Verify a non-Kimi
+	// non-DeepSeek opencode model also replays reasoning_content when thinking
+	// is enabled, and stays silent when thinking is disabled.
+	it.each([
+		{ id: "glm-5.1", reasoning: "high" as const, expectReplay: true },
+		{ id: "glm-5.1", reasoning: undefined, expectReplay: false },
+		{ id: "qwen3.7-max", reasoning: "high" as const, expectReplay: true },
+		{ id: "mimo-v2-pro", reasoning: "high" as const, expectReplay: true },
+	])("opencode-go/%s reasoning=%s → replay=%s", async ({ id, reasoning, expectReplay }) => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			id,
+			reasoning: true,
+		};
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Plan before acting.",
+					thinkingSignature: "reasoning",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning,
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (expectReplay) {
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Plan before acting.");
+			// The stale streamed `reasoning` key must never land in the wire body.
+			expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+		} else {
+			expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+			expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+			expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+		}
 	});
 
 	it("injects reasoning_content placeholder when kimi-on-moonshot has tool calls without reasoning field", () => {

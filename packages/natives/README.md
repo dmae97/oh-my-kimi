@@ -49,16 +49,32 @@ bun run check
 
 ## Architecture
 
+`@oh-my-pi/pi-natives` publishes a small core package plus generated
+platform-specific optional dependency packages:
+
 ```
 crates/pi-natives/       # Rust source (workspace member)
   src/lib.rs             # N-API exports
   src/sixel.rs           # SIXEL terminal-image encoding
   Cargo.toml             # Rust dependencies
-native/                  # Native addon binaries
-  pi_natives.<platform>-<arch>-modern.node   # x64 modern ISA (AVX2)
-  pi_natives.<platform>-<arch>-baseline.node # x64 baseline ISA
+native/                  # Core loader files and local/CI native build outputs
+  index.js               # Public native export surface
+  loader-state.js        # Platform, ISA variant, and addon resolution
+  embedded-addon.js      # Standalone binary embed stub/generated metadata
+  pi_natives.<platform>-<arch>-modern.node   # x64 modern ISA (local/CI artifact)
+  pi_natives.<platform>-<arch>-baseline.node # x64 baseline ISA (local/CI artifact)
   pi_natives.<platform>-<arch>.node          # non-x64 build artifact
-src/                     # TypeScript wrappers
-  native.ts              # Native addon loader
-  index.ts               # Public API
+npm/<platform>-<arch>/   # Generated at publish time, not committed
+  package.json           # @oh-my-pi/pi-natives-<platform>-<arch>
+  *.node                 # Only that platform's addon binary or x64 ISA variants
+src/                     # TypeScript wrappers and generated declarations source
+  native.ts
+  index.ts
 ```
+
+The published core package contains only the JS loader, declarations, README,
+and `package.json`. Release publishing generates one leaf package per supported
+`os`/`cpu` pair and injects those leaves into the core manifest as pinned
+`optionalDependencies`, so package managers install only the host platform's
+native addon. x64 leaves include every built ISA variant, and the loader keeps
+choosing between `baseline` and `modern` at runtime.

@@ -10,6 +10,7 @@
  */
 
 import { $, Glob } from "bun";
+import { runChangelogFixer } from "./fix-changelogs";
 
 const changelogGlob = new Glob("packages/*/CHANGELOG.md");
 const packageJsonGlob = new Glob("packages/*/package.json");
@@ -305,6 +306,14 @@ async function cmdRelease(version: string): Promise<void> {
 
 	// 5. Update changelogs
 	console.log("Updating CHANGELOGs...");
+	const fixResult = await runChangelogFixer({ since: latestTag });
+	for (const fixed of fixResult.changedFiles) {
+		console.log(
+			`  Fixed ${fixed.path}: ${fixed.promotedItems} promoted, ` +
+				`${fixed.mergedDuplicateHeadings} duplicate heading(s) merged, ` +
+				`${fixed.removedEmptyHeadings} empty heading(s) removed`,
+		);
+	}
 	await updateChangelogsForRelease(version);
 	console.log();
 
@@ -362,8 +371,8 @@ async function cmdRelease(version: string): Promise<void> {
 	} else {
 		console.log("\nTo retry after fixing (repeat until CI passes):");
 		console.log("  git commit -m \"fix: <brief description>\"");
-		console.log("  git push origin main");
-		console.log(`  git tag -f v${version} && git push origin v${version} --force`);
+		console.log(`  git tag -f v${version}`);
+		console.log(`  git push --atomic origin main +refs/tags/v${version}`);
 		console.log("  bun scripts/release.ts watch");
 		process.exit(1);
 	}

@@ -1,8 +1,8 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { Container, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
+import { Container, extractPrintableText, fuzzyFilter, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -13,6 +13,8 @@ const OAUTH_SELECTOR_MAX_VISIBLE = 10;
 export class OAuthSelectorComponent extends Container {
 	#listContainer: Container;
 	#allProviders: OAuthProviderInfo[] = [];
+	#filteredProviders: OAuthProviderInfo[] = [];
+	#searchQuery = "";
 	#selectedIndex: number = 0;
 	#mode: "login" | "logout";
 	#authStorage: AuthStorage;
@@ -65,8 +67,15 @@ export class OAuthSelectorComponent extends Container {
 		this.#validationGeneration += 1;
 		this.#stopSpinner();
 	}
+	#hasSelectableAuth(providerId: string): boolean {
+		return this.#mode === "logout" ? this.#authStorage.has(providerId) : this.#authStorage.hasAuth(providerId);
+	}
+
 	#loadProviders(): void {
-		this.#allProviders = getOAuthProviders();
+		const providers = getOAuthProviders();
+		this.#allProviders =
+			this.#mode === "logout" ? providers.filter(provider => this.#hasSelectableAuth(provider.id)) : providers;
+		this.#filteredProviders = this.#allProviders;
 	}
 
 	#startValidation(): void {
@@ -76,7 +85,7 @@ export class OAuthSelectorComponent extends Container {
 
 		let pending = 0;
 		for (const provider of this.#allProviders) {
-			if (!this.#authStorage.hasAuth(provider.id)) {
+			if (!this.#hasSelectableAuth(provider.id)) {
 				this.#authState.delete(provider.id);
 				continue;
 			}
@@ -142,12 +151,71 @@ export class OAuthSelectorComponent extends Container {
 		if (state === "valid") {
 			return theme.fg("success", ` ${theme.status.success} logged in`);
 		}
-		return this.#authStorage.hasAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+		return this.#hasSelectableAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
 	}
+
+	#isSearchEnabled(): boolean {
+		return this.#allProviders.length > OAUTH_SELECTOR_MAX_VISIBLE;
+	}
+
+	#shouldRenderSearchStatus(): boolean {
+		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
+	}
+
+	#renderStatusLine(total: number): string {
+		const selectedCount = total === 0 ? 0 : this.#selectedIndex + 1;
+		const count =
+			this.#searchQuery.trim() && total !== this.#allProviders.length
+				? `${selectedCount}/${total} of ${this.#allProviders.length}`
+				: `${selectedCount}/${total}`;
+		const suffix = this.#searchQuery.trim() ? `  Search: ${this.#searchQuery}` : "  Type to search";
+		return theme.fg("muted", `  (${count})${suffix}`);
+	}
+
+	#getProviderSearchText(provider: OAuthProviderInfo): string {
+		let text = `${provider.name} ${provider.id}`;
+		if (this.#hasSelectableAuth(provider.id)) {
+			text += " logged in authenticated";
+		}
+		if (!provider.available) {
+			text += " unavailable";
+		}
+		return text;
+	}
+
+	#setSearchQuery(query: string): void {
+		this.#searchQuery = query;
+		this.#filteredProviders = query.trim()
+			? fuzzyFilter(this.#allProviders, query, provider => this.#getProviderSearchText(provider))
+			: this.#allProviders;
+		this.#selectedIndex = 0;
+		this.#statusMessage = undefined;
+		this.#updateList();
+	}
+
+	#handleSearchInput(keyData: string): boolean {
+		if (!this.#isSearchEnabled()) return false;
+
+		if (matchesKey(keyData, "backspace")) {
+			if (this.#searchQuery.length === 0) return false;
+			const chars = [...this.#searchQuery];
+			chars.pop();
+			this.#setSearchQuery(chars.join(""));
+			return true;
+		}
+
+		const printableText = extractPrintableText(keyData);
+		if (printableText === undefined) return false;
+		if (this.#searchQuery.length === 0 && printableText.trim().length === 0) return false;
+
+		this.#setSearchQuery(this.#searchQuery + printableText);
+		return true;
+	}
+
 	#updateList(): void {
 		this.#listContainer.clear();
 
-		const total = this.#allProviders.length;
+		const total = this.#filteredProviders.length;
 		const maxVisible = OAUTH_SELECTOR_MAX_VISIBLE;
 		const startIndex =
 			total <= maxVisible
@@ -156,7 +224,7 @@ export class OAuthSelectorComponent extends Container {
 		const endIndex = Math.min(startIndex + maxVisible, total);
 
 		for (let i = startIndex; i < endIndex; i++) {
-			const provider = this.#allProviders[i];
+			const provider = this.#filteredProviders[i];
 			if (!provider) continue;
 			const isSelected = i === this.#selectedIndex;
 			const isAvailable = provider.available;
@@ -174,16 +242,18 @@ export class OAuthSelectorComponent extends Container {
 			this.#listContainer.addChild(new TruncatedText(line, 0, 0));
 		}
 
-		// Scroll indicator when list is windowed
-		if (startIndex > 0 || endIndex < total) {
-			const scrollInfo = theme.fg("muted", `  (${this.#selectedIndex + 1}/${total})`);
-			this.#listContainer.addChild(new TruncatedText(scrollInfo, 0, 0));
+		// Scroll/search indicator when list is windowed or searchable
+		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+			this.#listContainer.addChild(new TruncatedText(this.#renderStatusLine(total), 0, 0));
 		}
 
-		// Show "no providers" if empty
 		if (total === 0) {
 			const message =
-				this.#mode === "login" ? "No OAuth providers available" : "No OAuth providers logged in. Use /login first.";
+				this.#allProviders.length === 0
+					? this.#mode === "login"
+						? "No OAuth providers available"
+						: "No stored provider credentials to log out"
+					: "No matching providers";
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 0, 0));
 		}
 		if (this.#statusMessage) {
@@ -192,25 +262,38 @@ export class OAuthSelectorComponent extends Container {
 		}
 	}
 	handleInput(keyData: string): void {
+		// Escape or Ctrl+C
+		if (matchesSelectCancel(keyData)) {
+			this.stopValidation();
+			this.#onCancelCallback();
+			return;
+		}
+
+		if (this.#handleSearchInput(keyData)) {
+			return;
+		}
+
 		// Up arrow
-		if (matchesKey(keyData, "up")) {
-			if (this.#allProviders.length > 0) {
-				this.#selectedIndex = this.#selectedIndex === 0 ? this.#allProviders.length - 1 : this.#selectedIndex - 1;
+		if (matchesSelectUp(keyData)) {
+			if (this.#filteredProviders.length > 0) {
+				this.#selectedIndex =
+					this.#selectedIndex === 0 ? this.#filteredProviders.length - 1 : this.#selectedIndex - 1;
 			}
 			this.#statusMessage = undefined;
 			this.#updateList();
 		}
 		// Down arrow
-		else if (matchesKey(keyData, "down")) {
-			if (this.#allProviders.length > 0) {
-				this.#selectedIndex = this.#selectedIndex === this.#allProviders.length - 1 ? 0 : this.#selectedIndex + 1;
+		else if (matchesSelectDown(keyData)) {
+			if (this.#filteredProviders.length > 0) {
+				this.#selectedIndex =
+					this.#selectedIndex === this.#filteredProviders.length - 1 ? 0 : this.#selectedIndex + 1;
 			}
 			this.#statusMessage = undefined;
 			this.#updateList();
 		}
 		// Page up - jump up by one visible page
 		else if (matchesKey(keyData, "pageUp")) {
-			if (this.#allProviders.length > 0) {
+			if (this.#filteredProviders.length > 0) {
 				this.#selectedIndex = Math.max(0, this.#selectedIndex - OAUTH_SELECTOR_MAX_VISIBLE);
 			}
 			this.#statusMessage = undefined;
@@ -218,9 +301,9 @@ export class OAuthSelectorComponent extends Container {
 		}
 		// Page down - jump down by one visible page
 		else if (matchesKey(keyData, "pageDown")) {
-			if (this.#allProviders.length > 0) {
+			if (this.#filteredProviders.length > 0) {
 				this.#selectedIndex = Math.min(
-					this.#allProviders.length - 1,
+					this.#filteredProviders.length - 1,
 					this.#selectedIndex + OAUTH_SELECTOR_MAX_VISIBLE,
 				);
 			}
@@ -229,7 +312,7 @@ export class OAuthSelectorComponent extends Container {
 		}
 		// Enter
 		else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selectedProvider = this.#allProviders[this.#selectedIndex];
+			const selectedProvider = this.#filteredProviders[this.#selectedIndex];
 			if (selectedProvider?.available) {
 				this.#statusMessage = undefined;
 				this.stopValidation();
@@ -238,11 +321,6 @@ export class OAuthSelectorComponent extends Container {
 				this.#statusMessage = "Provider unavailable in this environment.";
 				this.#updateList();
 			}
-		}
-		// Escape or Ctrl+C
-		else if (matchesSelectCancel(keyData)) {
-			this.stopValidation();
-			this.#onCancelCallback();
 		}
 	}
 }

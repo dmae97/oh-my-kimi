@@ -44,8 +44,8 @@ function seed(lines: number, rewrittenLine: number): Fixture {
 	const v0Text = `${v0Lines.join("\n")}\n`;
 	const v1Text = `${v1Lines.join("\n")}\n`;
 	const store = new InMemorySnapshotStore();
-	const h0 = store.recordContiguous(PATH, 1, v0Text.split("\n"), { fullText: v0Text });
-	store.recordContiguous(PATH, 1, v1Text.split("\n"), { fullText: v1Text });
+	const h0 = store.record(PATH, v0Text);
+	store.record(PATH, v1Text);
 	return { store, v1Text, h0 };
 }
 

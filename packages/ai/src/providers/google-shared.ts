@@ -59,7 +59,12 @@ export type GoogleThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LO
  * `google-gemini-cli` uses a different transport and request shape — do not extend this for it.
  */
 export interface GoogleSharedStreamOptions extends StreamOptions {
-	toolChoice?: "auto" | "none" | "any";
+	/**
+	 * Tool selection mode. String forms map directly to Gemini
+	 * `FunctionCallingConfigMode`. The object form forces a single named tool
+	 * — `mode: "ANY"` is wire-required when `allowedFunctionNames` is set.
+	 */
+	toolChoice?: "auto" | "none" | "any" | { mode: "ANY"; allowedFunctionNames: [string, ...string[]] };
 	thinking?: {
 		enabled: boolean;
 		budgetTokens?: number;
@@ -690,11 +695,21 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	};
 
 	if (context.tools && context.tools.length > 0 && options.toolChoice) {
-		config.toolConfig = {
-			functionCallingConfig: {
-				mode: mapToolChoice(options.toolChoice),
-			},
-		};
+		const choice = options.toolChoice;
+		if (typeof choice === "string") {
+			config.toolConfig = {
+				functionCallingConfig: { mode: mapToolChoice(choice) },
+			};
+		} else {
+			// Named-tool routing — `mode: "ANY"` plus an explicit allow-list. The
+			// caller is responsible for ensuring the names exist in `context.tools`.
+			config.toolConfig = {
+				functionCallingConfig: {
+					mode: "ANY",
+					allowedFunctionNames: [...choice.allowedFunctionNames],
+				},
+			};
+		}
 	} else {
 		config.toolConfig = undefined;
 	}

@@ -41,6 +41,15 @@ function getNativesDir() {
 	return path.join(os.homedir(), ".omp", "natives");
 }
 
+function resolveLeafPackageDir(platformTag) {
+	try {
+		const require_ = createRequire(import.meta.url);
+		return path.dirname(require_.resolve(`@oh-my-pi/pi-natives-${platformTag}/package.json`));
+	} catch {
+		return null;
+	}
+}
+
 // =========================================================================
 // Pure helpers — re-exported for unit tests in `packages/natives/test/`.
 // =========================================================================
@@ -114,6 +123,7 @@ export function shouldStageNodeModulesAddon({ platform, isCompiledBinary, native
  *   isCompiledBinary: boolean;
  *   stageFromNodeModules?: boolean;
  *   nativeDir: string;
+ *   leafPackageDir?: string | null;
  *   execDir: string;
  *   versionedDir: string;
  *   userDataDir: string;
@@ -125,6 +135,7 @@ export function resolveLoaderCandidates({
 	isCompiledBinary,
 	stageFromNodeModules = false,
 	nativeDir,
+	leafPackageDir = null,
 	execDir,
 	versionedDir,
 	userDataDir,
@@ -133,6 +144,7 @@ export function resolveLoaderCandidates({
 		path.join(nativeDir, filename),
 		path.join(execDir, filename),
 	]);
+	const leafCandidates = leafPackageDir ? addonFilenames.map(filename => path.join(leafPackageDir, filename)) : [];
 	const compiledCandidates = addonFilenames.flatMap(filename => [
 		path.join(versionedDir, filename),
 		path.join(userDataDir, filename),
@@ -142,9 +154,9 @@ export function resolveLoaderCandidates({
 	if (isCompiledBinary) {
 		releaseCandidates = [...compiledCandidates, ...baseReleaseCandidates];
 	} else if (stageFromNodeModules) {
-		releaseCandidates = [...stagedCandidates, ...baseReleaseCandidates];
+		releaseCandidates = [...stagedCandidates, ...leafCandidates, ...baseReleaseCandidates];
 	} else {
-		releaseCandidates = baseReleaseCandidates;
+		releaseCandidates = [...leafCandidates, ...baseReleaseCandidates];
 	}
 	return [...new Set(releaseCandidates)];
 }
@@ -401,8 +413,8 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 }
 
 /**
- * Mirror `nativeDir/<filename>.node` to `versionedDir/<filename>.node` on Windows
- * installs so the running process keeps its OS-level handle on a versioned
+ * Mirror `leafPackageDir ?? nativeDir` addon binaries to
+ * `versionedDir/<filename>.node` on Windows installs so the running process
  * cache path, never on the `node_modules` copy that bun must overwrite on
  * update. No-op on non-Windows, in workspace dev, and for compiled binaries —
  * see `shouldStageNodeModulesAddon` for the gating rules.
@@ -412,7 +424,7 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 
 	let stagedPath = null;
 	for (const filename of ctx.addonFilenames) {
-		const sourcePath = path.join(ctx.nativeDir, filename);
+		const sourcePath = path.join(ctx.leafPackageDir ?? ctx.nativeDir, filename);
 		const targetPath = path.join(ctx.versionedDir, filename);
 
 		if (fs.existsSync(targetPath)) {
@@ -501,6 +513,7 @@ function initLoaderContext() {
 		env: process.env,
 		importMetaUrl: import.meta.url,
 	});
+	const leafPackageDir = isCompiledBinary ? null : resolveLeafPackageDir(platformTag);
 	const stageFromNodeModules = shouldStageNodeModulesAddon({
 		platform: process.platform,
 		isCompiledBinary,
@@ -516,6 +529,7 @@ function initLoaderContext() {
 		isCompiledBinary,
 		stageFromNodeModules,
 		nativeDir,
+		leafPackageDir,
 		execDir,
 		versionedDir,
 		userDataDir,
@@ -536,6 +550,7 @@ function initLoaderContext() {
 		platformTag,
 		packageVersion,
 		nativeDir,
+		leafPackageDir,
 		versionedDir,
 		isCompiledBinary,
 		stageFromNodeModules,

@@ -212,8 +212,8 @@ describe("ast_edit tool schema", () => {
 				| undefined;
 
 			// Tree-grouped output: `# packages/pkg-…/src/` then `## root.ts#<hash> (1 replacement)`.
-			expect(text).toMatch(/^## root\.ts#[0-9A-F]{3} \(\d+ replacement[s]?\)$/m);
-			expect(text).toMatch(/^## child\.ts#[0-9A-F]{3} \(\d+ replacement[s]?\)$/m);
+			expect(text).toMatch(/^## root\.ts#[0-9A-F]{4} \(\d+ replacement[s]?\)$/m);
+			expect(text).toMatch(/^## child\.ts#[0-9A-F]{4} \(\d+ replacement[s]?\)$/m);
 			expect(text).not.toContain("ignore.js");
 			expect(text).not.toContain("outside.ts");
 			expect(details?.totalReplacements).toBe(2);

@@ -7,7 +7,7 @@ import type {
 	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { AsyncJobManager } from "../async";
@@ -15,6 +15,7 @@ import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
+import { shimmerEnabled } from "../modes/theme/shimmer";
 import { highlightCode, type Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
@@ -129,6 +130,8 @@ export interface BashToolDetails {
 	timeoutSeconds?: number;
 	requestedTimeoutSeconds?: number;
 	wallTimeMs?: number;
+	/** Exit code of a command that ran to completion but failed (non-zero). */
+	exitCode?: number;
 	terminalId?: string;
 	async?: {
 		state: "running" | "completed" | "failed";
@@ -281,17 +284,19 @@ function formatWallTimeNotice(wallTimeMs: number): string {
 	return `Wall time: ${formatWallTimeSeconds(wallTimeMs)} seconds`;
 }
 
+function formatExitCodeNotice(exitCode: number): string {
+	return `Command exited with code ${exitCode}`;
+}
+
 /**
- * Strip the trailing `Wall time: <secs> seconds` notice from text so the TUI
- * can render the wall time via its styled `[Wall: …]` label without echoing
- * the same value verbatim in the output pane.
+ * Strip the trailing occurrence of `notice` (plus a single surrounding newline
+ * on each side) so the TUI can echo the value via a styled footer label
+ * instead of repeating it verbatim in the output pane. The notice is
+ * reconstructed from the same value the result was tagged with, so a literal
+ * sub-string match never strips a coincidental in-output token — only the
+ * exact line we appended in #buildCompletedResult.
  */
-function stripWallTimeNotice(text: string, wallTimeMs: number | undefined): string {
-	if (wallTimeMs === undefined) return text;
-	// Reconstruct the notice from the same value the result was tagged with so
-	// a literal sub-string match never strips a coincidental in-output token —
-	// only the exact line we appended in #buildCompletedResult.
-	const notice = formatWallTimeNotice(wallTimeMs);
+function stripTrailingNotice(text: string, notice: string): string {
 	const idx = text.lastIndexOf(notice);
 	if (idx === -1) return text;
 	let start = idx;
@@ -299,6 +304,16 @@ function stripWallTimeNotice(text: string, wallTimeMs: number | undefined): stri
 	if (text[start - 1] === "\n") start -= 1;
 	if (text[end] === "\n") end += 1;
 	return (text.slice(0, start) + text.slice(end)).trimEnd();
+}
+
+function stripWallTimeNotice(text: string, wallTimeMs: number | undefined): string {
+	if (wallTimeMs === undefined) return text;
+	return stripTrailingNotice(text, formatWallTimeNotice(wallTimeMs));
+}
+
+function stripExitCodeNotice(text: string, exitCode: number | undefined): string {
+	if (exitCode === undefined) return text;
+	return stripTrailingNotice(text, formatExitCodeNotice(exitCode));
 }
 
 /**
@@ -357,7 +372,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return outputText || "(no output)";
 	}
 
-	#buildResultText(result: BashResult | BashInteractiveResult, timeoutSec: number, outputText: string): string {
+	/**
+	 * Throw for outcomes that are *not* a completed command: user/timeout
+	 * aborts and a missing exit status. The foreground and bridge callers plus
+	 * the async job manager rely on these throwing so cancellations surface as
+	 * aborts and jobs are recorded as failed. A definite non-zero exit is a
+	 * completed command that failed; #buildCompletedResult surfaces it as an
+	 * error *result* (carrying execution details) rather than a throw.
+	 */
+	#throwIfUnfinished(result: BashResult | BashInteractiveResult, timeoutSec: number, outputText: string): void {
 		if (result.cancelled) {
 			throw new ToolError(normalizeResultOutput(result) || "Command aborted");
 		}
@@ -367,10 +390,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (result.exitCode === undefined) {
 			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`);
 		}
-		if (result.exitCode !== 0) {
-			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`);
-		}
-		return outputText;
 	}
 
 	#buildCompletedResult(
@@ -383,6 +402,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			wallTimeMs?: number;
 		} = {},
 	): AgentToolResult<BashToolDetails> {
+		const exitCode = result.exitCode;
+		const failedExit = exitCode !== undefined && exitCode !== 0;
+
 		const outputLines = [this.#formatResultOutput(result)];
 		const notices: string[] = [];
 		if (options.wallTimeMs !== undefined) {
@@ -394,7 +416,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			}
 		}
 		if (notices.length > 0) outputLines.push("", ...notices);
+		if (failedExit) outputLines.push("", formatExitCodeNotice(exitCode));
 		const outputText = outputLines.join("\n");
+
+		// Aborts / timeouts / missing-status still propagate as thrown errors.
+		this.#throwIfUnfinished(result, timeoutSec, outputText);
+
 		const details: BashToolDetails = { timeoutSeconds: timeoutSec };
 		if (options.requestedTimeoutSec !== undefined && options.requestedTimeoutSec !== timeoutSec) {
 			details.requestedTimeoutSeconds = options.requestedTimeoutSec;
@@ -405,8 +432,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (options.wallTimeMs !== undefined) {
 			details.wallTimeMs = options.wallTimeMs;
 		}
+		if (failedExit) {
+			details.exitCode = exitCode;
+		}
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
-		this.#buildResultText(result, timeoutSec, outputText);
+		if (failedExit) resultBuilder.error();
 		return resultBuilder.done();
 	}
 
@@ -500,7 +530,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					});
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
+					// Hand the detailed result to the foreground auto-background
+					// waiter (which renders it, footer included) before deciding
+					// the job's terminal state.
 					completion.resolve({ kind: "completed", result: finalResult });
+					if (finalResult.isError === true) {
+						// A non-zero exit is a completed command that failed. Re-enter
+						// the failure path so the job manager records it as failed and
+						// delivers the error text, matching prior throw-based behavior.
+						throw new ToolError(finalText);
+					}
 					await reportProgress(finalText, { async: { state: "completed", jobId, type: "bash" } });
 					return finalText;
 				} catch (error) {
@@ -1007,15 +1046,6 @@ export function getBashEnvForDisplay(args: BashRenderArgs): Record<string, strin
 	return args.env ?? partialEnv;
 }
 
-export function formatBashCommand(args: BashRenderArgs): string {
-	const command = replaceTabs(args.command || "…");
-	const prompt = "$";
-	const cwd = getProjectDir();
-	const displayWorkdir = formatToolWorkingDirectory(args.cwd, cwd);
-	const renderedCommand = [formatBashEnvAssignments(getBashEnvForDisplay(args)), command].filter(Boolean).join(" ");
-	return displayWorkdir ? `${prompt} cd ${displayWorkdir} && ${renderedCommand}` : `${prompt} ${renderedCommand}`;
-}
-
 /**
  * Returns the bash command formatted for the result body: the dim `$ cd … &&`
  * prefix joined with syntax-highlighted command lines. The prefix is applied
@@ -1050,10 +1080,20 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	return {
 		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const renderArgs = toBashRenderArgs(args, config);
-			const cmdText = formatBashCommand(renderArgs);
 			const title = config.resolveTitle(args, options);
-			const text = renderStatusLine({ icon: "pending", title, description: cmdText }, uiTheme);
-			return new Text(text, 0, 0);
+			const cmdLines = formatBashCommandLines(renderArgs, uiTheme);
+			const header = renderStatusLine({ icon: "pending", title }, uiTheme);
+			const outputBlock = new CachedOutputBlock();
+			return {
+				render: (width: number): string[] =>
+					outputBlock.render(
+						{ header, state: "pending", sections: [{ lines: cmdLines }], width, animate: true },
+						uiTheme,
+					),
+				invalidate: () => {
+					outputBlock.invalidate();
+				},
+			};
 		},
 
 		renderResult(
@@ -1087,7 +1127,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					// double-print it alongside the styled warning line below.
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 					const strippedOutput = stripOutputNotice(rawOutput, details?.meta);
-					const output = stripWallTimeNotice(strippedOutput, details?.wallTimeMs);
+					const withoutExit = stripExitCodeNotice(strippedOutput, details?.exitCode);
+					const output = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
 					const displayOutput = output.trimEnd();
 					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
@@ -1105,6 +1146,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
 								: `Timeout: ${timeoutSeconds}s`,
 						);
+					}
+					if (isError && typeof details?.exitCode === "number") {
+						statsParts.push(`Exit: ${details.exitCode}`);
 					}
 					const timeoutLine =
 						statsParts.length > 0
@@ -1162,6 +1206,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
+							animate: options.isPartial && shimmerEnabled(),
 						},
 						uiTheme,
 					);

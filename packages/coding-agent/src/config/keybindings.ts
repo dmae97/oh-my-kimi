@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	type Keybinding,
@@ -10,6 +10,7 @@ import {
 	KeybindingsManager as TuiKeybindingsManager,
 } from "@oh-my-pi/pi-tui";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 
 /**
  * Application-level keybindings (coding agent specific).
@@ -31,6 +32,7 @@ interface AppKeybindings {
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
+	"app.clipboard.pasteTextRaw": true;
 	"app.clipboard.copyLine": true;
 	"app.clipboard.copyPrompt": true;
 	"app.session.new": true;
@@ -54,6 +56,13 @@ export type AppKeybinding = keyof AppKeybindings;
 
 declare module "@oh-my-pi/pi-tui" {
 	interface Keybindings extends AppKeybindings {}
+}
+
+/**
+ * Resolve default image-paste shortcuts for the current terminal platform.
+ */
+export function getDefaultPasteImageKeys(platform: NodeJS.Platform = process.platform): KeyId[] {
+	return platform === "win32" ? ["ctrl+v", "alt+v"] : ["ctrl+v"];
 }
 
 /**
@@ -118,8 +127,12 @@ export const KEYBINDINGS = {
 		description: "Dequeue message",
 	},
 	"app.clipboard.pasteImage": {
-		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
+		defaultKeys: getDefaultPasteImageKeys(),
 		description: "Paste image from clipboard",
+	},
+	"app.clipboard.pasteTextRaw": {
+		defaultKeys: ["ctrl+shift+v", "alt+shift+v"],
+		description: "Paste text from clipboard as raw text (no collapse)",
 	},
 	"app.clipboard.copyLine": {
 		defaultKeys: "alt+shift+l",
@@ -213,6 +226,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	followUp: "app.message.followUp",
 	dequeue: "app.message.dequeue",
 	pasteImage: "app.clipboard.pasteImage",
+	pasteTextRaw: "app.clipboard.pasteTextRaw",
 	copyLine: "app.clipboard.copyLine",
 	copyPrompt: "app.clipboard.copyPrompt",
 	newSession: "app.session.new",
@@ -330,17 +344,29 @@ function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
 	return ordered;
 }
 
+const KEYBINDINGS_YML = "keybindings.yml";
+const KEYBINDINGS_YAML = "keybindings.yaml";
+const LEGACY_KEYBINDINGS_JSON = "keybindings.json";
+
+interface KeybindingsConfigPaths {
+	readPath: string;
+	writeBackPath: string;
+}
+
 /**
  * Load raw config from a file synchronously.
- * Returns parsed JSON or null if file doesn't exist or is invalid.
+ * Returns parsed JSON/YAML or null if file doesn't exist or is invalid.
  */
 function loadRawConfig(filePath: string): unknown {
 	try {
-		if (!existsSync(filePath)) {
-			return null;
+		const content = fs.readFileSync(filePath, "utf-8");
+		if (filePath.endsWith(".json")) {
+			return JSON.parse(content);
 		}
-		const content = readFileSync(filePath, "utf-8");
-		return JSON.parse(content);
+		if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
+			return YAML.parse(content);
+		}
+		throw new Error(`Unsupported keybindings config extension: ${filePath}`);
 	} catch (error) {
 		if (isEnoent(error)) {
 			return null;
@@ -350,34 +376,67 @@ function loadRawConfig(filePath: string): unknown {
 	}
 }
 
+function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): boolean {
+	try {
+		fs.writeFileSync(filePath, YAML.stringify(config, null, 2), "utf-8");
+		logger.debug("Migrated keybindings config", { path: filePath });
+		return true;
+	} catch (error) {
+		logger.warn("Failed to write migrated keybindings config", { path: filePath, error: String(error) });
+		return false;
+	}
+}
+
+function resolveKeybindingsConfigPaths(agentDir: string): KeybindingsConfigPaths {
+	const ymlPath = path.join(agentDir, KEYBINDINGS_YML);
+	if (fs.existsSync(ymlPath)) {
+		return { readPath: ymlPath, writeBackPath: ymlPath };
+	}
+
+	const yamlPath = path.join(agentDir, KEYBINDINGS_YAML);
+	if (fs.existsSync(yamlPath)) {
+		return { readPath: yamlPath, writeBackPath: yamlPath };
+	}
+
+	const jsonPath = path.join(agentDir, LEGACY_KEYBINDINGS_JSON);
+	if (fs.existsSync(jsonPath)) {
+		return { readPath: jsonPath, writeBackPath: ymlPath };
+	}
+
+	return { readPath: ymlPath, writeBackPath: ymlPath };
+}
+
 /**
- * Migrate keybindings config file from old format to new.
- * Reads from agentDir/keybindings.json, migrates old names, and writes back.
+ * Load and migrate keybindings config.
+ * Legacy JSON is read for compatibility, but successful write-back goes to YAML.
  */
-function loadKeybindingsConfig(filePath: string, writeBack: boolean): KeybindingsConfig {
+function loadKeybindingsConfig(
+	filePath: string,
+	writeBackPath: string | undefined,
+): {
+	config: KeybindingsConfig;
+	persistedPath: string;
+} {
 	const rawConfig = loadRawConfig(filePath);
 
 	if (rawConfig === null) {
-		return {};
+		return { config: {}, persistedPath: filePath };
 	}
 
 	const { config: migratedConfig, migrated } = migrateKeybindingNames(rawConfig);
-	if (writeBack && migrated) {
+	const shouldWriteBack = writeBackPath !== undefined && (migrated || writeBackPath !== filePath);
+	if (shouldWriteBack) {
 		const ordered = orderKeybindingsConfig(migratedConfig);
-		try {
-			writeFileSync(filePath, `${JSON.stringify(ordered, null, 2)}\n`, "utf-8");
-			logger.debug("Migrated keybindings config", { path: filePath });
-		} catch (error) {
-			logger.warn("Failed to write migrated keybindings config", { path: filePath, error: String(error) });
-		}
+		const persistedPath = writeKeybindingsConfig(writeBackPath, ordered) ? writeBackPath : filePath;
+		return { config: migratedConfig, persistedPath };
 	}
 
-	return migratedConfig;
+	return { config: migratedConfig, persistedPath: filePath };
 }
 
 function migrateKeybindingsConfigFile(agentDir: string): void {
-	const configPath = path.join(agentDir, "keybindings.json");
-	loadKeybindingsConfig(configPath, true);
+	const { readPath, writeBackPath } = resolveKeybindingsConfigPaths(agentDir);
+	loadKeybindingsConfig(readPath, writeBackPath);
 }
 
 /**
@@ -393,12 +452,13 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	}
 
 	/**
-	 * Create from config file at agentDir/keybindings.json.
+	 * Create from config file at agentDir/keybindings.yml.
+	 * Legacy keybindings.json is migrated to keybindings.yml on load.
 	 */
 	static create(agentDir: string = getAgentDir()): KeybindingsManager {
-		const configPath = path.join(agentDir, "keybindings.json");
-		const userBindings = KeybindingsManager.#loadFromFile(configPath);
-		const manager = new KeybindingsManager(userBindings, configPath);
+		const { readPath, writeBackPath } = resolveKeybindingsConfigPaths(agentDir);
+		const { config: userBindings, persistedPath } = KeybindingsManager.#loadFromFile(readPath, writeBackPath);
+		const manager = new KeybindingsManager(userBindings, persistedPath);
 		// Set globally so getKeybindings() returns this manager
 		setKeybindings(manager);
 		return manager;
@@ -416,7 +476,8 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	 */
 	reload(): void {
 		if (!this.#configPath) return;
-		this.setUserBindings(KeybindingsManager.#loadFromFile(this.#configPath));
+		const { config } = KeybindingsManager.#loadFromFile(this.#configPath);
+		this.setUserBindings(config);
 	}
 
 	/**
@@ -437,8 +498,11 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	/**
 	 * Load user bindings from a file, migrating old names if needed.
 	 */
-	static #loadFromFile(filePath: string): KeybindingsConfig {
-		return loadKeybindingsConfig(filePath, true);
+	static #loadFromFile(
+		filePath: string,
+		writeBackPath?: string,
+	): { config: KeybindingsConfig; persistedPath: string } {
+		return loadKeybindingsConfig(filePath, writeBackPath);
 	}
 }
 

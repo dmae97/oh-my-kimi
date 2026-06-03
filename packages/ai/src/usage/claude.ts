@@ -22,9 +22,9 @@ const CLAUDE_HEADERS = {
 	accept: "application/json, text/plain, */*",
 	"accept-encoding": "gzip, compress, deflate, br",
 	"anthropic-beta":
-		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+		"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
 	"content-type": "application/json",
-	"user-agent": "claude-cli/2.1.63 (external, cli)",
+	"user-agent": "claude-cli/2.1.160 (external, cli)",
 	connection: "keep-alive",
 } as const;
 
@@ -57,6 +57,7 @@ interface ParsedUsageBucket {
 	utilization?: number;
 	resetsAt?: number;
 }
+type ClaudeUnifiedWindow = "5h" | "7d";
 
 interface ClaudeUsageResponse {
 	five_hour?: ClaudeUsageBucket | null;
@@ -80,6 +81,20 @@ function parseBucket(bucket: unknown): ParsedUsageBucket | undefined {
 	if (!isRecord(bucket)) return undefined;
 	const utilization = toNumber(bucket.utilization);
 	const resetsAt = parseIsoTime(typeof bucket.resets_at === "string" ? bucket.resets_at : undefined);
+	if (utilization === undefined && resetsAt === undefined) {
+		return undefined;
+	}
+	return { utilization, resetsAt };
+}
+function parseUnifiedWindow(
+	headers: Record<string, string>,
+	window: ClaudeUnifiedWindow,
+): ParsedUsageBucket | undefined {
+	const prefix = `anthropic-ratelimit-unified-${window}-`;
+	const utilizationFraction = toNumber(headers[`${prefix}utilization`]);
+	const resetSeconds = toNumber(headers[`${prefix}reset`]);
+	const utilization = utilizationFraction === undefined ? undefined : utilizationFraction * 100;
+	const resetsAt = resetSeconds !== undefined && resetSeconds > 0 ? resetSeconds * 1000 : undefined;
 	if (utilization === undefined && resetsAt === undefined) {
 		return undefined;
 	}
@@ -325,6 +340,41 @@ function buildUsageLimit(args: {
 	};
 }
 
+export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
+	const fiveHour = parseUnifiedWindow(headers, "5h");
+	const sevenDay = parseUnifiedWindow(headers, "7d");
+	const limits = [
+		buildUsageLimit({
+			id: "anthropic:5h",
+			label: "Claude 5 Hour",
+			windowId: "5h",
+			windowLabel: "5 Hour",
+			durationMs: FIVE_HOURS_MS,
+			bucket: fiveHour,
+			provider: "anthropic",
+			shared: true,
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d",
+			label: "Claude 7 Day",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: SEVEN_DAYS_MS,
+			bucket: sevenDay,
+			provider: "anthropic",
+			shared: true,
+		}),
+	].filter((limit): limit is UsageLimit => limit !== null);
+
+	if (limits.length === 0) return null;
+	return {
+		provider: "anthropic",
+		fetchedAt: now,
+		limits,
+		metadata: { source: "ratelimit-headers" },
+	};
+}
+
 async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
 	if (params.provider !== "anthropic") return null;
 	const credential = params.credential;
@@ -418,6 +468,7 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 export const claudeUsageProvider: UsageProvider = {
 	id: "anthropic",
 	fetchUsage: fetchClaudeUsage,
+	parseRateLimitHeaders: parseClaudeRateLimitHeaders,
 	supports: params => params.provider === "anthropic" && params.credential.type === "oauth",
 };
 

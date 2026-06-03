@@ -15,7 +15,7 @@ import { createBundledReferenceMap, createReferenceResolver } from "./bundled-re
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 const ANTHROPIC_OAUTH_BETA =
-	"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
+	"claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11";
 
 export interface ModelsDevModel {
 	id?: string;
@@ -870,7 +870,7 @@ export function zhipuCodingPlanModelManagerOptions(
 	config?: ZhipuCodingPlanModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://open.bigmodel.cn/api/paas/v4";
+	const baseUrl = config?.baseUrl ?? "https://open.bigmodel.cn/api/coding/paas/v4";
 	return {
 		providerId: "zhipu-coding-plan",
 		...(apiKey && {
@@ -1218,37 +1218,62 @@ export interface OpenCodeModelManagerConfig {
 	baseUrl?: string;
 }
 
+function normalizeOpenCodeBasePath(baseUrl: string | undefined, fallbackBasePath: string): string {
+	const value = normalizeAnthropicBaseUrl(baseUrl, fallbackBasePath);
+	return value.endsWith("/v1") ? value.slice(0, -3) : value;
+}
+
+function openCodeBaseUrlForApi(api: Api, basePath: string): string {
+	return api === "anthropic-messages" ? basePath : `${basePath}/v1`;
+}
+
 function openCodeModelManagerOptions(
 	providerId: "opencode-go" | "opencode-zen",
-	defaultBaseUrl: string,
+	defaultBasePath: string,
 	config?: OpenCodeModelManagerConfig,
-): ModelManagerOptions<"openai-completions"> {
+): ModelManagerOptions<Api> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? defaultBaseUrl;
+	const basePath = normalizeOpenCodeBasePath(config?.baseUrl, defaultBasePath);
+	const discoveryBaseUrl = openCodeBaseUrlForApi("openai-completions", basePath);
+	const references = createBundledReferenceMap<Api>(providerId);
 	return {
 		providerId,
 		...(apiKey && {
 			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
+				fetchOpenAICompatibleModels<Api>({
 					api: "openai-completions",
 					provider: providerId,
-					baseUrl,
+					baseUrl: discoveryBaseUrl,
 					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const name = toModelName(entry.name, reference?.name ?? defaults.name);
+						if (!reference) {
+							return {
+								...defaults,
+								name,
+							};
+						}
+						return {
+							...reference,
+							id: defaults.id,
+							name,
+							baseUrl: openCodeBaseUrlForApi(reference.api, basePath),
+							contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
+							maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
+						};
+					},
 				}),
 		}),
 	};
 }
 
-export function opencodeZenModelManagerOptions(
-	config?: OpenCodeModelManagerConfig,
-): ModelManagerOptions<"openai-completions"> {
-	return openCodeModelManagerOptions("opencode-zen", "https://opencode.ai/zen/v1", config);
+export function opencodeZenModelManagerOptions(config?: OpenCodeModelManagerConfig): ModelManagerOptions<Api> {
+	return openCodeModelManagerOptions("opencode-zen", "https://opencode.ai/zen", config);
 }
 
-export function opencodeGoModelManagerOptions(
-	config?: OpenCodeModelManagerConfig,
-): ModelManagerOptions<"openai-completions"> {
-	return openCodeModelManagerOptions("opencode-go", "https://opencode.ai/zen/go/v1", config);
+export function opencodeGoModelManagerOptions(config?: OpenCodeModelManagerConfig): ModelManagerOptions<Api> {
+	return openCodeModelManagerOptions("opencode-go", "https://opencode.ai/zen/go", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -2122,25 +2147,23 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 						const reference = resolveReference(defaults.id);
 						const copilotLimits = extractCopilotLimits(entry);
 						// Copilot exposes token limits under capabilities.limits.*.
-						// max_prompt_tokens is the prompt capacity (what OMP calls contextWindow).
-						// max_context_window_tokens is the total window (prompt + output budget)
-						// and must NOT be used for contextWindow — it inflates the limit and
-						// breaks compaction thresholds, overflow detection, and promotion.
-						// The OpenAI-compatible root-level `context_length` field mirrors the
-						// total window (e.g. 400k for gpt-5.4), so Copilot's max_prompt_tokens
-						// (the true prompt budget) must take precedence whenever it is present.
-						const contextWindowFallback = toPositiveNumber(
-							entry.context_length,
-							reference?.contextWindow ?? defaults.contextWindow,
-						);
+						// max_context_window_tokens is the model's total usable window;
+						// max_prompt_tokens is Copilot's prompt/summarization budget and
+						// must only be a fallback when total-window fields are absent.
 						const contextWindow = toPositiveNumber(
-							copilotLimits.maxPromptTokens,
-							reference ? Math.min(contextWindowFallback, reference.contextWindow) : contextWindowFallback,
+							copilotLimits.maxContextWindowTokens,
+							toPositiveNumber(
+								entry.context_length,
+								toPositiveNumber(
+									copilotLimits.maxPromptTokens,
+									reference?.contextWindow ?? defaults.contextWindow,
+								),
+							),
 						);
 						const maxTokens = toPositiveNumber(
-							entry.max_completion_tokens,
+							copilotLimits.maxOutputTokens,
 							toPositiveNumber(
-								copilotLimits.maxOutputTokens,
+								entry.max_completion_tokens,
 								toPositiveNumber(
 									copilotLimits.maxNonStreamingOutputTokens,
 									reference?.maxTokens ?? defaults.maxTokens,
@@ -2448,19 +2471,32 @@ function createOpenCodeApiResolution(
 	};
 }
 
-const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen");
+// OpenCode Zen: models.dev declares minimax-m3-free (and forward-compat
+// minimax-m3) with `provider.npm = "@ai-sdk/anthropic"`, but the Zen gateway
+// only serves them at https://opencode.ai/zen/v1/chat/completions (verified
+// against the live /v1/models response — minimax-m3-free is listed there, and
+// the gateway has no /v1/messages route for it). Without this override the
+// resolver POSTs anthropic-shaped requests to /v1/messages and the UI surfaces
+// raw <invoke>/<|minimax|>/<tool_call> markup (#1617).
+const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen", {
+	"minimax-m3": "openai-completions",
+	"minimax-m3-free": "openai-completions",
+});
 // OpenCode Go: models.dev declares minimax-m2.7 / qwen3.5-plus / qwen3.6-plus
-// with `provider.npm = "@ai-sdk/anthropic"`, but the OpenCode Go gateway only
-// serves them at `https://opencode.ai/zen/go/v1/chat/completions` (verified
-// against https://opencode.ai/zen/go/v1/models and the upstream endpoint
-// table at https://opencode.ai/docs/go/#endpoints — minimax-m2.5 works the
-// same way and lacks an `npm` field on models.dev so it already falls through
-// to the openai-completions default). Without this override the resolver
-// would POST anthropic-style requests to /v1/messages and the gateway would
-// return its `Page Not Found` HTML (issue #887). Override the resolver so
-// regenerating models.json keeps the correct routing.
+// (and now also minimax-m3) with `provider.npm = "@ai-sdk/anthropic"`, but
+// the OpenCode Go gateway only serves them at
+// `https://opencode.ai/zen/go/v1/chat/completions` (verified against
+// https://opencode.ai/zen/go/v1/models and the upstream endpoint table at
+// https://opencode.ai/docs/go/#endpoints — minimax-m2.5 works the same way
+// and lacks an `npm` field on models.dev so it already falls through to the
+// openai-completions default). Without this override the resolver would POST
+// anthropic-style requests to /v1/messages and the gateway would return its
+// `Page Not Found` HTML (issue #887 for the qwen/m2.7 entries; minimax-m3
+// and minimax-m3-free added under #1617 for the same root cause).
 const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go", {
 	"minimax-m2.7": "openai-completions",
+	"minimax-m3": "openai-completions",
+	"minimax-m3-free": "openai-completions",
 	"qwen3.5-plus": "openai-completions",
 	"qwen3.6-plus": "openai-completions",
 });
@@ -2643,9 +2679,16 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	// --- zAI ---
 	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
 	// --- Xiaomi ---
-	anthropicMessagesDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/anthropic", {
+	openAiCompletionsDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/v1", {
 		defaultContextWindow: 262144,
 		defaultMaxTokens: 8192,
+		compat: {
+			supportsStore: false,
+			thinkingFormat: "zai",
+			reasoningContentField: "reasoning_content",
+			requiresReasoningContentForToolCalls: true,
+			allowsSyntheticReasoningContentForToolCalls: false,
+		},
 	}),
 	// --- MiniMax Coding Plan ---
 	openAiCompletionsDescriptor("minimax-coding-plan", "minimax-code", "https://api.minimax.io/v1", {
@@ -2676,13 +2719,18 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 		},
 	),
 	// --- Zhipu Coding Plan ---
-	openAiCompletionsDescriptor("zhipu-coding-plan", "zhipu-coding-plan", "https://open.bigmodel.cn/api/paas/v4", {
-		compat: {
-			thinkingFormat: "zai",
-			reasoningContentField: "reasoning_content",
-			supportsDeveloperRole: false,
+	openAiCompletionsDescriptor(
+		"zhipu-coding-plan",
+		"zhipu-coding-plan",
+		"https://open.bigmodel.cn/api/coding/paas/v4",
+		{
+			compat: {
+				thinkingFormat: "zai",
+				reasoningContentField: "reasoning_content",
+				supportsDeveloperRole: false,
+			},
 		},
-	}),
+	),
 ];
 
 const filterActiveToolCallModels = (_id: string, m: ModelsDevModel): boolean => {

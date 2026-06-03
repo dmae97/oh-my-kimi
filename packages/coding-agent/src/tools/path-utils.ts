@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { InternalUrlRouter } from "../internal-urls";
+import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { ToolError } from "./tool-errors";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -379,6 +379,145 @@ export function hasGlobPathChars(filePath: string): boolean {
 	return GLOB_PATH_CHARS.some(char => filePath.includes(char));
 }
 
+type PathEntrySplitter = (item: string) => { basePath: string };
+
+const TOP_LEVEL_WHITESPACE_RE = /\s/;
+
+type DelimitedPathSplitMode = "comma" | "semicolon" | "whitespace" | "mixed";
+
+function isDelimitedPathSeparator(ch: string, mode: DelimitedPathSplitMode): boolean {
+	if (mode === "comma") return ch === ",";
+	if (mode === "semicolon") return ch === ";";
+	if (mode === "whitespace") return TOP_LEVEL_WHITESPACE_RE.test(ch);
+	return ch === "," || ch === ";" || TOP_LEVEL_WHITESPACE_RE.test(ch);
+}
+
+function hasTopLevelPathDelimiter(entry: string): boolean {
+	let braceDepth = 0;
+	for (let i = 0; i < entry.length; i++) {
+		const ch = entry[i];
+		if (ch === "\\" && i + 1 < entry.length) {
+			i++;
+			continue;
+		}
+		if (ch === "{") {
+			braceDepth++;
+			continue;
+		}
+		if (ch === "}") {
+			if (braceDepth > 0) braceDepth--;
+			continue;
+		}
+		if (braceDepth === 0 && (ch === "," || ch === ";" || TOP_LEVEL_WHITESPACE_RE.test(ch))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function splitTopLevelDelimitedPath(entry: string, mode: DelimitedPathSplitMode): string[] {
+	const parts: string[] = [];
+	let braceDepth = 0;
+	let start = 0;
+	for (let i = 0; i < entry.length; i++) {
+		const ch = entry[i];
+		if (ch === "\\" && i + 1 < entry.length) {
+			i++;
+			continue;
+		}
+		if (ch === "{") {
+			braceDepth++;
+			continue;
+		}
+		if (ch === "}") {
+			if (braceDepth > 0) braceDepth--;
+			continue;
+		}
+		if (braceDepth !== 0 || !isDelimitedPathSeparator(ch, mode)) continue;
+		parts.push(entry.slice(start, i));
+		start = i + 1;
+	}
+	parts.push(entry.slice(start));
+	return parts;
+}
+
+async function delimitedPathPartResolves(entry: string, cwd: string, splitter: PathEntrySplitter): Promise<boolean> {
+	if (isInternalUrlPath(entry)) return true;
+	const peeled = splitPathAndSel(entry).path;
+	const { basePath } = splitter(peeled);
+	const absoluteBasePath = resolveToCwd(basePath, cwd);
+	try {
+		await fs.promises.stat(absoluteBasePath);
+		return true;
+	} catch (err) {
+		if (isEnoent(err)) return false;
+		throw err;
+	}
+}
+
+async function tryDelimitedPathSplit(
+	entry: string,
+	cwd: string,
+	splitter: PathEntrySplitter,
+	mode: DelimitedPathSplitMode,
+	requireAllParts: boolean,
+): Promise<string[] | null> {
+	const rawParts = splitTopLevelDelimitedPath(entry, mode);
+	if (rawParts.length < 2) return null;
+
+	const parts = rawParts.map(normalizePathLikeInput).filter(part => part.length > 0);
+	if (parts.length === 0) return null;
+	if (parts.length < 2 && rawParts.length === parts.length) return null;
+
+	const resolved = await Promise.all(parts.map(part => delimitedPathPartResolves(part, cwd, splitter)));
+	const valid = requireAllParts ? resolved.every(Boolean) : resolved.some(Boolean);
+	return valid ? parts : null;
+}
+
+/**
+ * Split one path-like entry whose multiple targets were flattened into one
+ * string. Existing paths are kept intact, so real filenames containing spaces,
+ * commas, or semicolons win over delimiter recovery.
+ */
+export async function splitDelimitedPathEntry(
+	entry: string,
+	cwd: string,
+	options: { splitter?: PathEntrySplitter } = {},
+): Promise<string[] | null> {
+	const normalizedEntry = normalizePathLikeInput(entry);
+	if (!hasTopLevelPathDelimiter(normalizedEntry)) return null;
+	if (isInternalUrlPath(normalizedEntry)) return null;
+
+	const splitter = options.splitter ?? parseSearchPath;
+	const peeledEntry = splitPathAndSel(normalizedEntry).path;
+	if (!hasGlobPathChars(peeledEntry) && (await delimitedPathPartResolves(normalizedEntry, cwd, splitter))) {
+		return null;
+	}
+
+	return (
+		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "comma", false)) ??
+		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "semicolon", false)) ??
+		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "whitespace", true)) ??
+		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "mixed", true))
+	);
+}
+
+/** Expand delimited entries in-place while preserving unsplit entries. */
+export async function expandDelimitedPathEntries(
+	entries: readonly string[],
+	cwd: string,
+	options: { splitter?: PathEntrySplitter } = {},
+): Promise<string[]> {
+	const expanded: string[] = [];
+	for (const entry of entries) {
+		const normalizedEntry = normalizePathLikeInput(entry);
+		const split = await splitDelimitedPathEntry(normalizedEntry, cwd, options);
+		if (split) expanded.push(...split);
+		else expanded.push(normalizedEntry);
+	}
+	return expanded;
+}
+
 export interface ParsedSearchPath {
 	basePath: string;
 	glob?: string;
@@ -740,6 +879,12 @@ export interface ToolScopeOptions {
 	surfaceExactFilePaths?: boolean;
 	/** Extra hint appended to "Path not found" when stat fails and the user supplied multiple paths. */
 	multipathStatHint?: string;
+	/** Calling session's settings — forwarded to the internal-URL router so caller-aware handlers (issue://, pr://) honor it. */
+	settings?: unknown;
+	/** Caller's abort signal — forwarded to the internal-URL router. */
+	signal?: AbortSignal;
+	/** Calling session's `local://` root mapping — pins resolutions to the calling session. */
+	localProtocolOptions?: LocalProtocolOptions;
 }
 
 export interface ToolScopeResolution {
@@ -763,7 +908,11 @@ export interface ToolScopeResolution {
  */
 export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<ToolScopeResolution> {
 	const { rawPaths: inputs, cwd, internalUrlAction } = opts;
-	const rawPaths = inputs.map(normalizePathLikeInput);
+	const normalizedRawPaths = inputs.map(normalizePathLikeInput);
+	if (normalizedRawPaths.some(rawPath => rawPath.length === 0)) {
+		throw new ToolError("`paths` must contain non-empty paths or globs");
+	}
+	const rawPaths = await expandDelimitedPathEntries(normalizedRawPaths, cwd);
 	if (rawPaths.some(rawPath => rawPath.length === 0)) {
 		throw new ToolError("`paths` must contain non-empty paths or globs");
 	}
@@ -778,7 +927,12 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		if (hasGlobPathChars(rawPath)) {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
-		const resource = await internalRouter.resolve(rawPath);
+		const resource = await internalRouter.resolve(rawPath, {
+			cwd,
+			settings: opts.settings,
+			signal: opts.signal,
+			localProtocolOptions: opts.localProtocolOptions,
+		});
 		if (!resource.sourcePath) {
 			throw new ToolError(`Cannot ${internalUrlAction} internal URL without a backing file: ${rawPath}`);
 		}

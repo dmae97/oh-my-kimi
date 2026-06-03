@@ -23,21 +23,29 @@
  * filesystem configuration.
  */
 import { applyEdits } from "./apply";
-import { formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { hasBlockEdit, resolveBlockEdits } from "./block";
+import { computeFileHash, formatHashlineHeader } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
+import { HEADTAIL_DRIFT_WARNING, missingSnapshotTagMessage } from "./messages";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
-import type { Snapshot, SnapshotStore } from "./snapshots";
-import type { ApplyResult, Edit } from "./types";
+import type { SnapshotStore } from "./snapshots";
+import type { ApplyResult, BlockResolver, Edit } from "./types";
 
 export interface PatcherOptions {
 	/** Storage backend used for all reads and writes. */
 	fs: Filesystem;
 	/** Snapshot store that minted and resolves hashline section tags. Required. */
 	snapshots: SnapshotStore;
+	/**
+	 * Resolves `replace block N:` anchors to concrete line spans via tree-sitter.
+	 * Optional: when omitted, any `replace block N:` edit throws on apply (the
+	 * host did not wire a resolver). Plain line-range ops never need it.
+	 */
+	blockResolver?: BlockResolver;
 }
 
 /** Per-section result returned by {@link Patcher.apply} / {@link Patcher.commit}. */
@@ -97,16 +105,16 @@ export class PreparedSection {
 
 function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 	return edits.some(edit => {
-		if (edit.kind === "delete" || edit.kind === "repeat") return true;
-		return edit.cursor.kind === "before_anchor";
+		if (edit.kind === "delete") return true;
+		// A `replace block N:` edit anchors to concrete content on line N.
+		if (edit.kind === "block") return true;
+		return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 	});
 }
 
-function assertSectionHashAllowed(sectionPath: string, fileHash: string | undefined, edits: readonly Edit[]): void {
-	if (fileHash !== undefined || !hasAnchorScopedEdit(edits)) return;
-	throw new Error(
-		`Missing hashline snapshot tag for anchored edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag\` from your latest read/search output.`,
-	);
+function assertSectionHashPresent(sectionPath: string, fileHash: string | undefined): void {
+	if (fileHash !== undefined) return;
+	throw new Error(missingSnapshotTagMessage(sectionPath));
 }
 
 function recoveryToApplyResult(result: RecoveryResult): ApplyResult {
@@ -116,25 +124,6 @@ function recoveryToApplyResult(result: RecoveryResult): ApplyResult {
 		warnings: result.warnings,
 	};
 }
-
-/**
- * Decide whether `snapshot` proves the live file is byte-for-byte the read
- * the model authored against. Two shapes:
- *   - Full-text snapshot: cheap string equality.
- *   - Sparse snapshot (e.g. selector reads, search hits): every anchor line
- *     must be in the snapshot AND every recorded line must match the live
- *     file. Without this branch, sparse reads can't short-circuit and fall
- *     through to recovery, which declines them as "patcher-owned direct
- *     apply" — yielding a spurious MismatchError on unchanged files.
- */
-function snapshotProvesUnchanged(snapshot: Snapshot, currentText: string, section: PatchSection): boolean {
-	if (snapshot.fullText !== undefined) return snapshot.fullText === currentText;
-	for (const lineNumber of section.collectAnchorLines()) {
-		if (snapshot.get(lineNumber) === undefined) return false;
-	}
-	return snapshot.matchesLiveFile(currentText.split("\n"));
-}
-
 function mergeWarnings(...sources: ReadonlyArray<readonly string[] | undefined>): string[] {
 	const out: string[] = [];
 	for (const source of sources) {
@@ -167,6 +156,7 @@ export class Patcher {
 	readonly fs: Filesystem;
 	readonly snapshots: SnapshotStore;
 	readonly recovery: Recovery;
+	readonly blockResolver: BlockResolver | undefined;
 
 	constructor(options: PatcherOptions) {
 		if (!options.snapshots) {
@@ -175,6 +165,7 @@ export class Patcher {
 		this.fs = options.fs;
 		this.snapshots = options.snapshots;
 		this.recovery = new Recovery(options.snapshots);
+		this.blockResolver = options.blockResolver;
 	}
 
 	/**
@@ -232,13 +223,13 @@ export class Patcher {
 	 */
 	async prepare(section: PatchSection): Promise<PreparedSection> {
 		const { edits, warnings: parseWarnings } = section.parse();
-		assertSectionHashAllowed(section.path, section.fileHash, edits);
+		assertSectionHashPresent(section.path, section.fileHash);
 
 		const canonicalPath = this.fs.canonicalPath(section.path);
 		await this.fs.preflightWrite(section.path);
 		const { exists, rawContent } = await this.#tryRead(section.path);
-		if (!exists && hasAnchorScopedEdit(edits)) {
-			throw new Error(`File not found: ${section.path}`);
+		if (!exists) {
+			throw new Error(`File not found: ${section.path}. Use the write tool to create new files.`);
 		}
 
 		const { bom, text } = stripBom(rawContent);
@@ -324,7 +315,24 @@ export class Patcher {
 	}
 
 	#recordFullSnapshot(canonicalPath: string, normalized: string): string {
-		return this.snapshots.recordContiguous(canonicalPath, 1, normalized.split("\n"), { fullText: normalized });
+		return this.snapshots.record(canonicalPath, normalized);
+	}
+	#mismatchError(
+		section: PatchSection,
+		canonicalPath: string,
+		normalized: string,
+		expected: string,
+		hashRecognized: boolean,
+	): MismatchError {
+		const actualFileHash = this.#recordFullSnapshot(canonicalPath, normalized);
+		return new MismatchError({
+			path: section.path,
+			expectedFileHash: expected,
+			actualFileHash,
+			fileLines: normalized.split("\n"),
+			anchorLines: section.collectAnchorLines(),
+			hashRecognized,
+		});
 	}
 
 	#applyWithRecovery(args: {
@@ -336,29 +344,49 @@ export class Patcher {
 	}): ApplyResult {
 		const { section, canonicalPath, exists, normalized, edits } = args;
 		const expected = exists ? section.fileHash : undefined;
-		if (expected === undefined) return applyEdits(normalized, [...edits]);
+		const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
 
-		const snapshot = this.snapshots.byHash(canonicalPath, expected);
-		if (snapshot && snapshotProvesUnchanged(snapshot, normalized, section)) {
-			return applyEdits(normalized, [...edits]);
-		}
-		if (snapshot) {
-			const recovered = this.recovery.tryRecover({
-				path: canonicalPath,
-				currentText: normalized,
-				fileHash: expected,
-				edits,
-			});
-			if (recovered) return recoveryToApplyResult(recovered);
+		// Resolve `replace block N:` edits to concrete ranges before recovery
+		// runs. Block anchors are expressed against the snapshot the section tag
+		// names, so resolve against that exact text:
+		//   - live content matches the tag (or there is no tag) → resolve against
+		//     the live, normalized content;
+		//   - the file drifted → resolve against the tagged snapshot's text so the
+		//     resulting ranges flow through the 3-way-merge recovery below.
+		// When a block edit needs the tagged snapshot but it is unavailable, the
+		// range cannot be placed safely — reject with a MismatchError (re-read).
+		let resolved: readonly Edit[] = edits;
+		if (hasBlockEdit(edits)) {
+			const baseText =
+				expected === undefined || liveMatches ? normalized : this.snapshots.byHash(canonicalPath, expected)?.text;
+			if (baseText === undefined) {
+				throw this.#mismatchError(section, canonicalPath, normalized, expected ?? "", false);
+			}
+			resolved = resolveBlockEdits(edits, baseText, section.path, this.blockResolver, { onUnresolved: "throw" });
 		}
 
-		const currentHash = this.#recordFullSnapshot(canonicalPath, normalized);
-		throw new MismatchError({
-			path: section.path,
-			expectedFileHash: expected,
-			actualFileHash: currentHash,
-			fileLines: normalized.split("\n"),
-			anchorLines: section.collectAnchorLines(),
+		if (expected === undefined) return applyEdits(normalized, resolved);
+		// Whole-file unchanged → the tag still names the live content, so an
+		// edit anchored at ANY line (displayed or not) is safe to apply.
+		if (liveMatches) return applyEdits(normalized, resolved);
+		// Head/tail-only inserts are position-stable: "start"/"end" cannot move
+		// with content drift, so a stale tag is non-fatal. Apply onto the live
+		// content and warn instead of hard-failing — unlike an anchored
+		// mismatch, which cannot be safely relocated and must reject.
+		if (!hasAnchorScopedEdit(resolved)) {
+			const result = applyEdits(normalized, resolved);
+			return { ...result, warnings: [HEADTAIL_DRIFT_WARNING, ...(result.warnings ?? [])] };
+		}
+		// File drifted: try to replay the edit against the version the tag
+		// names and 3-way-merge it onto the live content.
+		const recovered = this.recovery.tryRecover({
+			path: canonicalPath,
+			currentText: normalized,
+			fileHash: expected,
+			edits: resolved,
 		});
+		if (recovered) return recoveryToApplyResult(recovered);
+		const hashRecognized = this.snapshots.byHash(canonicalPath, expected) !== null;
+		throw this.#mismatchError(section, canonicalPath, normalized, expected, hashRecognized);
 	}
 }

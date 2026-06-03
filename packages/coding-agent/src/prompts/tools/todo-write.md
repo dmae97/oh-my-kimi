@@ -48,3 +48,11 @@ Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, an
 # Append tasks to a phase
 `{"ops":[{"op":"append","phase":"Auth","items":["Handle retries","Run tests"]}]}`
 </examples>
+
+<critical>
+When the user hands you a multi-step plan — a phased todo, a numbered or bulleted checklist, or "N bugs/items/tasks" to work through: 
+- You MUST `init` the list with EVERY item as its own task before doing the work. 
+- Enumerate all of them; 
+- NEVER summarize the plan into fewer tasks, sample "the important ones", drop items, or rely on memory to track the rest. 
+The entire point is to remember every one.
+</critical>

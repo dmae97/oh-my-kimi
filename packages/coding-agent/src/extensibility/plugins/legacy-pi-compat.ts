@@ -1,8 +1,9 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary } from "@oh-my-pi/pi-utils";
+
+const IS_COMPILED_BINARY = isCompiledBinary();
 
 // Canonical scope for in-process pi packages. Plugins published against any of
 // the aliased scopes below (mariozechner's original publish, earendil-works'
@@ -14,10 +15,9 @@ import { isCompiledBinary } from "@oh-my-pi/pi-utils";
 const CANONICAL_PI_SCOPE = "@oh-my-pi";
 
 // Scopes that have historically been used to publish (or alias) the same set
-// of internal pi-* packages. `@oh-my-pi` is intentionally included so that
-// direct imports of the canonical name still flow through `Bun.resolveSync`
-// against the host binary, avoiding a duplicate copy being pulled in from a
-// plugin's own node_modules tree at install time.
+// of internal pi-* packages. `@oh-my-pi` is intentionally included so direct
+// canonical imports still pass through the same host-bundled package resolution
+// path instead of pulling a duplicate copy from plugin node_modules.
 const PI_SCOPE_ALIASES = ["oh-my-pi", "mariozechner", "earendil-works"] as const;
 
 // Internal pi-* package basenames bundled inside the omp binary.
@@ -44,8 +44,6 @@ const LEGACY_PI_IMPORT_SPECIFIER_REGEX = new RegExp(
 	`((?:from\\s+|import\\s*\\(\\s*)["'])(@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/[^"'()\\s]+)?)(["'])`,
 	"g",
 );
-const LEGACY_PI_FILE_PREFIX = "omp-legacy-pi-file:";
-const LEGACY_PI_FILE_NAMESPACE = "omp-legacy-pi-file";
 const resolvedSpecifierFallbacks = new Map<string, string>();
 
 // Extensions that imported `@sinclair/typebox` directly used to resolve against a
@@ -55,20 +53,59 @@ const resolvedSpecifierFallbacks = new Map<string, string>();
 // changes. Submodules like `@sinclair/typebox/compiler` are intentionally not
 // remapped — those expose TypeBox-only APIs the shim does not provide and plugins
 // relying on them must vendor `@sinclair/typebox` directly.
-const TYPEBOX_SPECIFIER = "@sinclair/typebox";
 const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
 
-// In-process compat shim paths. In dev `import.meta.dir` is the source folder of
-// this file, so the dev branches resolve to the real `.ts` source. In compiled
-// binaries `import.meta.dir` collapses to `/$bunfs/root`, so the runtime cannot
-// recover the source layout that way; instead, each shim file is registered as
-// a `--compile` entrypoint in `scripts/build-binary.ts`, which Bun emits into
-// bunfs at a deterministic `--root`-relative path with a `.js` extension. The
-// literals below must stay in sync with that listing — if either path drifts,
-// every legacy plugin loading the shim fails with a missing-module error in
-// release builds (without affecting `bun test`/dev).
-const TYPEBOX_SHIM_PATH = isCompiledBinary()
-	? "/$bunfs/root/packages/coding-agent/src/extensibility/typebox.js"
+// Compat shim and bundled-package paths used in compiled-binary mode. The shim
+// paths must point at files that ship inside the bunfs root; in dev /
+// source-link / installed-package mode the canonical specifier resolves via
+// `Bun.resolveSync` so only the shim files need explicit paths there.
+//
+// `BUNFS_PACKAGE_ROOT` is derived from `import.meta.dir` rather than hardcoded
+// as `/$bunfs/root/packages` so the prefix stays platform-native: on Windows
+// the bunfs mount appears as `<drive>:\~BUN\root\…` (see oven-sh/bun#15766),
+// and a hardcoded POSIX literal would normalize to `\$bunfs\root\…` and fail
+// to resolve. Compiled Bun modules currently report the bunfs root itself from
+// `import.meta.dir`, so appending `packages` lands on the `--root ../..`
+// package directory used by `scripts/build-binary.ts`.
+//
+// Every shim listed below must also be registered as an explicit `--compile`
+// entrypoint in `scripts/build-binary.ts` or release builds fail with
+// missing-module errors. Non-shim bundled packages are resolved via
+// `Bun.resolveSync` (see `resolveCanonicalPiSpecifier`) outside compiled mode,
+// so they keep working when on-disk layout differs from the monorepo tree.
+/**
+ * Compute the bunfs package root from the compiled binary's `import.meta.dir`
+ * (or any stand-in supplied by tests). Bun 1.3 reports the bunfs mount root
+ * (`/$bunfs/root` or `<drive>:\~BUN\root`) for imported modules as well as the
+ * entrypoint, so the normal path is `<root>/packages`.
+ *
+ * The suffix branch preserves correctness if a future Bun release switches to
+ * module-specific `import.meta.dir` values inside compiled binaries, matching
+ * the source layout:
+ * `<bunfs>/packages/coding-agent/src/extensibility/plugins`.
+ *
+ * Exported for tests; production callers use `BUNFS_PACKAGE_ROOT` below.
+ */
+export function __computeBunfsPackageRoot(metaDir: string, pathImpl: typeof path = path): string {
+	const pluginsDirSuffix = pathImpl.join("packages", "coding-agent", "src", "extensibility", "plugins");
+	const normalizedMetaDir = pathImpl.normalize(metaDir);
+	if (normalizedMetaDir.endsWith(pluginsDirSuffix)) {
+		return pathImpl.resolve(metaDir, "..", "..", "..", "..");
+	}
+	return pathImpl.join(metaDir, "packages");
+}
+
+const BUNFS_PACKAGE_ROOT = IS_COMPILED_BINARY ? __computeBunfsPackageRoot(import.meta.dir) : null;
+
+function bunfsPath(...segments: string[]): string {
+	if (!BUNFS_PACKAGE_ROOT) {
+		throw new Error("bunfsPath is only valid in compiled-binary mode");
+	}
+	return path.join(BUNFS_PACKAGE_ROOT, ...segments);
+}
+
+const TYPEBOX_SHIM_PATH = BUNFS_PACKAGE_ROOT
+	? bunfsPath("coding-agent", "src", "extensibility", "typebox.js")
 	: path.resolve(import.meta.dir, "../typebox.ts");
 
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
@@ -79,11 +116,37 @@ const TYPEBOX_SHIM_PATH = isCompiledBinary()
 // plus the borrowed `Type` runtime from the Zod-backed TypeBox shim. Subpath
 // imports such as `@oh-my-pi/pi-ai/utils/oauth` continue to resolve directly
 // against the bundled pi-ai package.
-const LEGACY_PI_AI_SHIM_PATH = isCompiledBinary()
-	? "/$bunfs/root/packages/coding-agent/src/extensibility/legacy-pi-ai-shim.js"
+const LEGACY_PI_AI_SHIM_PATH = BUNFS_PACKAGE_ROOT
+	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-ai-shim.js")
 	: path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
+
+// The coding-agent's own `./src/index.ts` cannot be listed as an extra
+// `bun --compile` entrypoint alongside the CLI entry without breaking binary
+// startup (issue #1474 follow-up). Legacy `@(scope)/pi-coding-agent` root
+// imports therefore resolve through a sibling shim whose distinct file path
+// avoids that collision while re-exporting the canonical package surface.
+const LEGACY_PI_CODING_AGENT_SHIM_PATH = BUNFS_PACKAGE_ROOT
+	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-coding-agent-shim.js")
+	: path.resolve(import.meta.dir, "../legacy-pi-coding-agent-shim.ts");
+
+// Package-root overrides. Shim entries are always applied because they replace
+// (or augment) the canonical surface even in non-compiled installs. The bunfs
+// entries are added only in compiled-binary mode — in dev / source-link /
+// installed-package mode the canonical specifier resolves cleanly through
+// `Bun.resolveSync`, and hardcoding a relative source-tree path would break
+// installs where the bundled packages live at `node_modules/@oh-my-pi/pi-*`
+// rather than `packages/*`.
 const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
+	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
+	...(BUNFS_PACKAGE_ROOT
+		? {
+				[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: bunfsPath("agent", "src", "index.js"),
+				[`${CANONICAL_PI_SCOPE}/pi-natives`]: bunfsPath("natives", "native", "index.js"),
+				[`${CANONICAL_PI_SCOPE}/pi-tui`]: bunfsPath("tui", "src", "index.js"),
+				[`${CANONICAL_PI_SCOPE}/pi-utils`]: bunfsPath("utils", "src", "index.js"),
+			}
+		: {}),
 };
 
 let isLegacyPiSpecifierShimInstalled = false;
@@ -147,129 +210,146 @@ function rewriteLegacyPiImports(source: string): string {
 			} catch {
 				// Resolution failed — typically in compiled binary mode where
 				// Bun.resolveSync cannot walk up from /$bunfs/root to find the
-				// bundled node_modules. Return the original specifier unchanged so
-				// rewriteBareImportsForLegacyExtension can resolve it against the
-				// plugin's own installed peer deps instead.
+				// bundled node_modules. Leave the specifier unchanged so Bun
+				// resolves it natively against the extension's own peer deps.
 				return match;
 			}
 		},
 	);
 }
 
-// Match static `from "..."` / `from '...'` import specifiers.
-const STATIC_IMPORT_SPECIFIER_REGEX = /(from\s+["'])([^"']+)(["'])/g;
-// Match static imports plus dynamic `import("...")` / `import('...')` specifiers.
-const ANY_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])([^"']+)(["'])/g;
+// Match the bare `@sinclair/typebox` import specifier (static + dynamic).
+// Subpath imports like `@sinclair/typebox/compiler` are intentionally excluded —
+// they expose TypeBox-only APIs the Zod-backed shim does not provide.
+const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])(@sinclair\/typebox)(["'])/g;
 
-/** Resolve bare imports against the extension directory before loading mirrored legacy Pi files. */
-function isUrlLikeSpecifier(specifier: string): boolean {
-	// Windows drive-letter paths (e.g. `C:\foo` or `C:/foo`) also match the URL
-	// scheme shape `[A-Za-z][A-Za-z\d+.-]*:`. Treat them as filesystem paths so
-	// `toRewrittenImportSpecifier` converts them to `file://` URLs instead of
-	// emitting raw paths whose `\n`, `\U`, ... get eaten by TS string-literal
-	// escapes inside the mirrored extension file.
-	if (/^[a-zA-Z]:[\\/]/.test(specifier)) return false;
-	return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(specifier);
+/**
+ * Rewrite the legacy specifiers a Pi extension may import — `@(scope)/pi-*` and
+ * the bare `@sinclair/typebox` root — to absolute `file://` URLs pointing at the
+ * bundled package or compat shim. Every other specifier (relative siblings, the
+ * extension's own bare dependencies) is left untouched so Bun resolves it
+ * natively from the extension's real on-disk location.
+ */
+function rewriteLegacyExtensionSource(source: string): string {
+	const withPi = rewriteLegacyPiImports(source);
+	return withPi.replace(
+		TYPEBOX_IMPORT_SPECIFIER_REGEX,
+		(_match, prefix: string, _specifier: string, suffix: string) => {
+			return `${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`;
+		},
+	);
 }
 
-function shouldPreserveImportSpecifier(specifier: string): boolean {
-	return specifier.startsWith(".") || path.isAbsolute(specifier) || isUrlLikeSpecifier(specifier);
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function toRewrittenImportSpecifier(resolvedPath: string): string {
-	return isUrlLikeSpecifier(resolvedPath) ? resolvedPath : toImportSpecifier(resolvedPath);
+// Match relative import specifiers (static `from "./…"` and dynamic
+// `import("./…")`). Used to walk an extension's own module graph; bare and
+// absolute specifiers are deliberately excluded.
+const RELATIVE_IMPORT_SPECIFIER_REGEX = /(?:from\s+|import\s*\(\s*)["'](\.\.?\/[^"']+)["']/g;
+
+// Extension entry realpaths that already have a load-time rewrite hook
+// installed. Each `Bun.plugin()` registration is process-global and permanent,
+// so we register at most one hook per entry.
+const hookedExtensionEntries = new Set<string>();
+
+/** Resolve symlinks in a path, falling back to the input if realpath fails. */
+async function realpathOrSelf(p: string): Promise<string> {
+	try {
+		return await fs.realpath(p);
+	} catch {
+		return p;
+	}
 }
 
-function rewriteBareImportsForLegacyExtension(source: string, importerPath: string): string {
-	const importerDir = path.dirname(importerPath);
-	return source.replace(ANY_IMPORT_SPECIFIER_REGEX, (match, prefix: string, specifier: string, suffix: string) => {
-		// Skip relative, absolute, URL-style, and already-resolved Node specifiers.
-		if (shouldPreserveImportSpecifier(specifier)) {
-			return match;
-		}
-		if (specifier === TYPEBOX_SPECIFIER) {
-			return `${prefix}${toRewrittenImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`;
-		}
-		try {
-			const resolved = Bun.resolveSync(specifier, importerDir);
-			return `${prefix}${toRewrittenImportSpecifier(resolved)}${suffix}`;
-		} catch {
-			return match;
-		}
-	});
-}
-
-interface LegacyPiMirrorState {
-	root: string;
-	seen: Map<string, string>;
-}
-
-function getMirrorPath(sourcePath: string, state: LegacyPiMirrorState): string {
-	const extension = path.extname(sourcePath) || ".js";
-	const digest = Bun.hash(sourcePath).toString(36);
-	return path.join(state.root, `module-${digest}${extension}`);
-}
-
-async function rewriteRelativeImportsForLegacyExtension(
-	source: string,
-	importerPath: string,
-	state: LegacyPiMirrorState,
-): Promise<string> {
-	const replacements = new Map<string, string>();
-
-	for (const match of source.matchAll(STATIC_IMPORT_SPECIFIER_REGEX)) {
-		const specifier = match[2];
-		if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+/**
+ * Walk the extension's relative-import graph starting at `entryRealPath`,
+ * returning the realpath of every reachable source module. Only relative
+ * specifiers (`./`, `../`) are followed — bare and absolute imports are left to
+ * Bun's native resolver — so the set is exactly the extension's own source,
+ * wherever it physically lives (a `../src` sibling, a symlinked sub-tree, …).
+ * This mirrors the module set the old temp-dir mirror tracked, minus the copy.
+ */
+async function collectExtensionModules(entryRealPath: string): Promise<Set<string>> {
+	const modules = new Set<string>();
+	const queue = [entryRealPath];
+	while (queue.length > 0) {
+		const file = queue.pop();
+		if (!file || modules.has(file)) {
 			continue;
 		}
-
-		const resolved = Bun.resolveSync(specifier, path.dirname(importerPath));
-		const mirrored = await mirrorLegacyPiFile(resolved, state);
-		replacements.set(specifier, toImportSpecifier(mirrored));
+		let source: string;
+		try {
+			source = await Bun.file(file).text();
+		} catch {
+			continue;
+		}
+		modules.add(file);
+		const dir = path.dirname(file);
+		for (const match of source.matchAll(RELATIVE_IMPORT_SPECIFIER_REGEX)) {
+			try {
+				const resolved = await realpathOrSelf(Bun.resolveSync(match[1], dir));
+				if (!modules.has(resolved)) {
+					queue.push(resolved);
+				}
+			} catch {
+				// Unresolvable relative import (e.g. a type-only path); skip it.
+			}
+		}
 	}
+	return modules;
+}
 
-	if (replacements.size === 0) {
-		return source;
+/**
+ * Install a `Bun.plugin()` `onLoad` hook scoped to exactly the modules in an
+ * extension's relative-import graph, so their legacy `@(scope)/pi-*` and bare
+ * `@sinclair/typebox` imports are rewritten at load time. A runtime `onLoad`
+ * cannot fall through (Bun requires a result object), so the filter is an
+ * exact-path alternation of the graph's realpaths — it never matches the host,
+ * other extensions, `node_modules` deps, or unrelated project source.
+ */
+async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
+	if (hookedExtensionEntries.has(entryRealPath)) {
+		return;
 	}
+	hookedExtensionEntries.add(entryRealPath);
 
-	return source.replace(STATIC_IMPORT_SPECIFIER_REGEX, (match, prefix: string, specifier: string, suffix: string) => {
-		const replacement = replacements.get(specifier);
-		return replacement ? `${prefix}${replacement}${suffix}` : match;
+	const modules = await collectExtensionModules(entryRealPath);
+	const alternation = [...modules].map(escapeRegExp).join("|");
+	const filter = new RegExp(`^(?:${alternation})$`);
+	Bun.plugin({
+		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
+		setup(build) {
+			build.onLoad({ filter, namespace: "file" }, async args => {
+				// Re-read on every load so a `?mtime` reload picks up edited source.
+				const raw = await Bun.file(args.path).text();
+				return { contents: rewriteLegacyExtensionSource(raw), loader: getLoader(args.path) };
+			});
+		},
 	});
 }
 
-async function rewriteLegacyPiImportsForRuntime(
-	source: string,
-	importerPath: string,
-	state: LegacyPiMirrorState,
-): Promise<string> {
-	const withRelativeResolved = await rewriteRelativeImportsForLegacyExtension(source, importerPath, state);
-	const withLegacyRemap = rewriteLegacyPiImports(withRelativeResolved);
-	return rewriteBareImportsForLegacyExtension(withLegacyRemap, importerPath);
-}
-
-async function mirrorLegacyPiFile(sourcePath: string, state: LegacyPiMirrorState): Promise<string> {
-	const resolvedPath = path.resolve(sourcePath);
-	const cached = state.seen.get(resolvedPath);
-	if (cached) {
-		return cached;
-	}
-
-	const mirrorPath = getMirrorPath(resolvedPath, state);
-	state.seen.set(resolvedPath, mirrorPath);
-
-	const raw = await Bun.file(resolvedPath).text();
-	const rewritten = await rewriteLegacyPiImportsForRuntime(raw, resolvedPath, state);
-	await Bun.write(mirrorPath, rewritten);
-	return mirrorPath;
-}
-
+/**
+ * Load a legacy Pi extension module from its real on-disk location.
+ *
+ * The extension runs in place, so its `import.meta.url` is the real source file
+ * and `__dirname`-relative `readFileSync` asset loads (HTML/CSS bundled next to
+ * the entry) resolve exactly as they do under the original Pi runtime — no
+ * temp-directory mirroring and no asset copying. An `onLoad` hook scoped to the
+ * entry's relative-import graph rewrites only the legacy `@(scope)/pi-*` and
+ * `@sinclair/typebox` imports in the extension's own source; everything else
+ * resolves natively.
+ */
 export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown> {
-	const root = path.join(os.tmpdir(), "omp-legacy-pi-file", `entry-${Bun.hash(resolvedPath).toString(36)}`);
-	await fs.rm(root, { recursive: true, force: true });
-	const state: LegacyPiMirrorState = { root, seen: new Map() };
-	const mirroredEntry = await mirrorLegacyPiFile(resolvedPath, state);
-	return import(`${toImportSpecifier(mirroredEntry)}?mtime=${Date.now()}`);
+	// Bun reports the realpath of a loaded module to `onLoad` and exposes it as
+	// `import.meta.url`. Resolve symlinks here too (macOS `/var`→`/private/var`,
+	// `bun link`/pnpm installs) so the rewrite filter matches the path Bun
+	// actually hands the hook.
+	const entryRealPath = await realpathOrSelf(path.resolve(resolvedPath));
+	await ensureExtensionGraphHook(entryRealPath);
+	// `?mtime` busts Bun's module cache so repeat loads pick up edited source.
+	return import(`${toImportSpecifier(entryRealPath)}?mtime=${Date.now()}`);
 }
 
 function getLoader(path: string): "js" | "jsx" | "ts" | "tsx" {
@@ -297,14 +377,20 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { p
 		return { path: resolveCanonicalPiSpecifier(remappedSpecifier) };
 	} catch {
 		// Fallback for compiled binary mode: the bundled packages live inside
-		// /$bunfs/root and aren't reachable by filesystem resolution. Try the
-		// original (pre-remap) specifier against the importing file's directory,
-		// which resolves to the plugin's installed peer dep.
+		// /$bunfs/root and aren't reachable by filesystem resolution. Prefer the
+		// canonical specifier against the importing file's directory when the
+		// plugin installed @oh-my-pi peer deps, then try the original legacy
+		// specifier for plugins that still vendor only @mariozechner or
+		// @earendil-works peer deps.
 		const importerDir = path.dirname(args.importer);
 		try {
-			return { path: Bun.resolveSync(args.path, importerDir) };
+			return { path: Bun.resolveSync(remappedSpecifier, importerDir) };
 		} catch {
-			return undefined;
+			try {
+				return { path: Bun.resolveSync(args.path, importerDir) };
+			} catch {
+				return undefined;
+			}
 		}
 	}
 }
@@ -323,36 +409,12 @@ export function installLegacyPiSpecifierShim(): void {
 		name: "omp:legacy-pi-shim",
 		setup(build) {
 			build.onResolve({ filter: LEGACY_PI_SPECIFIER_FILTER, namespace: "file" }, resolveLegacyPiSpecifier);
-			build.onResolve(
-				{ filter: LEGACY_PI_SPECIFIER_FILTER, namespace: LEGACY_PI_FILE_NAMESPACE },
-				resolveLegacyPiSpecifier,
-			);
-
 			build.onResolve({ filter: TYPEBOX_SPECIFIER_FILTER, namespace: "file" }, resolveTypeBoxSpecifier);
-			build.onResolve(
-				{ filter: TYPEBOX_SPECIFIER_FILTER, namespace: LEGACY_PI_FILE_NAMESPACE },
-				resolveTypeBoxSpecifier,
-			);
-
-			build.onResolve({ filter: /^omp-legacy-pi-file:/, namespace: "file" }, args => ({
-				path: args.path.slice(LEGACY_PI_FILE_PREFIX.length),
-				namespace: LEGACY_PI_FILE_NAMESPACE,
-			}));
-
-			build.onResolve({ filter: /^(?:\.{1,2}\/|\/)/, namespace: LEGACY_PI_FILE_NAMESPACE }, args => ({
-				path: args.path.startsWith("/") ? args.path : Bun.resolveSync(args.path, path.dirname(args.importer)),
-				namespace: LEGACY_PI_FILE_NAMESPACE,
-			}));
-
-			build.onLoad({ filter: /\.[cm]?[jt]sx?$/, namespace: LEGACY_PI_FILE_NAMESPACE }, async args => {
-				const raw = await Bun.file(args.path).text();
-				const withLegacyRemap = rewriteLegacyPiImports(raw);
-				const withBareResolved = rewriteBareImportsForLegacyExtension(withLegacyRemap, args.path);
-				return {
-					contents: withBareResolved,
-					loader: getLoader(args.path),
-				};
-			});
 		},
 	});
+}
+
+/** Test seam: clears the memoized canonical specifier resolutions. */
+export function __resetLegacyPiResolutionCache(): void {
+	resolvedSpecifierFallbacks.clear();
 }

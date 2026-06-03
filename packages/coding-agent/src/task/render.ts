@@ -10,6 +10,7 @@ import { Container, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import type { Theme } from "../modes/theme/theme";
 import {
 	formatBadge,
@@ -29,7 +30,7 @@ import {
 } from "../tools/review";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine } from "../tui";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "./types";
+import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
 /**
  * Get status icon for agent state.
@@ -51,7 +52,9 @@ function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFra
 	}
 }
 
-/** Append tool-count, context, cumulative-tokens, and cost stats to a status line string. */
+/**
+ * Append tool-count, context, and cost stats to a status line string.
+ */
 function appendAgentStats(
 	line: string,
 	opts: {
@@ -66,22 +69,15 @@ function appendAgentStats(
 	theme: Theme,
 ): string {
 	if (opts.toolCount) {
-		line += `${theme.sep.dot}${theme.fg("dim", `${opts.toolCount} tools`)}`;
+		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(opts.toolCount)} ${theme.icon.extensionTool}`)}`;
 	}
-	// Current per-turn context — what the user reads as "how full is the context".
-	// Cumulative tokens (billing volume) renders separately with a Σ sigil to avoid
-	// being mistaken for current window pressure.
+	// Current per-turn context — match the status line's `<pct>%/<window>` gauge (e.g. `5.1%/1M`).
 	if (opts.contextTokens && opts.contextTokens > 0) {
 		const ctx =
 			opts.contextWindow && opts.contextWindow > 0
-				? `${formatNumber(opts.contextTokens)}/${formatNumber(opts.contextWindow)} ctx`
-				: `${formatNumber(opts.contextTokens)} ctx`;
+				? formatContextUsage((opts.contextTokens / opts.contextWindow) * 100, opts.contextWindow)
+				: `${formatNumber(opts.contextTokens)}`;
 		line += `${theme.sep.dot}${theme.fg("dim", ctx)}`;
-		if (opts.tokens > 0) {
-			line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
-		}
-	} else if (opts.tokens > 0) {
-		line += `${theme.sep.dot}${theme.fg("dim", `Σ${formatNumber(opts.tokens)}`)}`;
 	}
 	if (opts.cost > 0) {
 		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${opts.cost.toFixed(2)}`)}`;
@@ -132,15 +128,10 @@ function formatJsonScalar(value: unknown, _theme: Theme): string {
 }
 
 function formatTaskId(id: string): string {
+	// Ids are name-based (e.g. "Anna", "Anna-2"); a "." separates nesting levels
+	// (e.g. "Anna.Bob"). Render the hierarchy with a ">" breadcrumb.
 	const segments = id.split(".");
-	if (segments.length < 2) return id;
-
-	const parsed = segments.map(segment => segment.match(/^(\d+)-(.+)$/));
-	if (parsed.some(match => !match)) return id;
-
-	const indices = parsed.map(match => match![1]).join(".");
-	const labels = parsed.map(match => match![2]).join(">");
-	return `${indices} ${labels}`;
+	return segments.length < 2 ? id : segments.join(">");
 }
 
 const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
@@ -491,19 +482,62 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 }
 
 /**
+ * Render the per-task list (`id` + ui `description`) for the streaming call
+ * preview. The args stream in token by token, so the array grows over time and
+ * trailing entries may be partially parsed — every field access is defensive.
+ */
+function renderTaskItemLines(
+	tasks: TaskItem[] | undefined,
+	contPrefix: string,
+	expanded: boolean,
+	theme: Theme,
+): string[] {
+	const items = tasks ?? [];
+	if (items.length === 0) return [];
+
+	const branch = theme.fg("dim", theme.tree.branch);
+	const last = theme.fg("dim", theme.tree.last);
+	const cap = expanded ? items.length : Math.min(items.length, 12);
+	const truncated = cap < items.length;
+
+	const lines: string[] = [];
+	for (let i = 0; i < cap; i++) {
+		const task = items[i] as Partial<TaskItem> | undefined;
+		const isLastLine = !truncated && i === items.length - 1;
+		const connector = isLastLine ? last : branch;
+		const rawId = task?.id?.trim();
+		const idLabel = rawId ? formatTaskId(rawId) : `#${i + 1}`;
+		let line = `${contPrefix}${connector} ${theme.fg("accent", theme.bold(idLabel))}`;
+		const desc = task?.description?.trim();
+		if (desc) {
+			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
+		}
+		lines.push(line);
+	}
+	if (truncated) {
+		lines.push(`${contPrefix}${last} ${theme.fg("dim", formatMoreItems(items.length - cap, "agent"))}`);
+	}
+	return lines;
+}
+
+/**
  * Render the tool call arguments.
  */
-export function renderCall(args: TaskParams, _options: RenderResultOptions, theme: Theme): Component {
+export function renderCall(
+	args: TaskParams,
+	options: RenderResultOptions & { renderContext?: { hasResult?: boolean } },
+	theme: Theme,
+): Component {
 	const lines: string[] = [];
 	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme));
 
-	const contextTemplate = args.context ?? "";
-	const context = contextTemplate.trim();
+	const context = (args.context ?? "").trim();
 	const hasContext = context.length > 0;
 	const branch = theme.fg("dim", theme.tree.branch);
 	const last = theme.fg("dim", theme.tree.last);
 	const vertical = theme.fg("dim", theme.tree.vertical);
 	const showIsolated = "isolated" in args && args.isolated === true;
+	const taskCount = args.tasks?.length ?? 0;
 
 	if (hasContext) {
 		lines.push(` ${branch} ${theme.fg("dim", "Context")}`);
@@ -511,19 +545,23 @@ export function renderCall(args: TaskParams, _options: RenderResultOptions, them
 			const content = line ? theme.fg("muted", replaceTabs(line)) : "";
 			lines.push(` ${vertical}  ${content}`);
 		}
-		const taskPrefix = showIsolated ? branch : last;
-		lines.push(
-			` ${taskPrefix} ${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks?.length ?? 0} agents`)}`,
-		);
-		if (showIsolated) {
-			lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
-		}
-		return new Text(lines.join("\n"), 0, 0);
 	}
 
-	lines.push(`${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks?.length ?? 0} agents`)}`);
+	// `Tasks` is the last child unless the isolation flag follows it.
+	const tasksIsLast = !showIsolated;
+	const tasksPrefix = tasksIsLast ? last : branch;
+	lines.push(` ${tasksPrefix} ${theme.fg("dim", "Tasks")} ${theme.fg("muted", `(${taskCount})`)}`);
+	const tasksContPrefix = tasksIsLast ? "    " : ` ${vertical}  `;
+	// The per-task preview list only exists to surface dispatched agents while
+	// the call args stream in. Once a result snapshot exists, `renderResult`
+	// draws the same agents as progress/result lines (id + description), so
+	// emitting the preview here would render every task twice.
+	if (!options.renderContext?.hasResult) {
+		lines.push(...renderTaskItemLines(args.tasks, tasksContPrefix, options.expanded, theme));
+	}
+
 	if (showIsolated) {
-		lines.push(`${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
+		lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
 	}
 
 	return new Text(lines.join("\n"), 0, 0);

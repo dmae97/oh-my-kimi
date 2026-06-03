@@ -24,6 +24,7 @@ export class TerminalInfo {
 		public readonly trueColor: boolean,
 		public readonly hyperlinks: boolean,
 		public readonly notifyProtocol: NotifyProtocol = NotifyProtocol.Bell,
+		public readonly eagerEraseScrollbackRisk: boolean = false,
 	) {}
 
 	isImageLine(line: string): boolean {
@@ -91,6 +92,57 @@ export function isWindowsTerminalPreviewSixelSupported(
 	if (!version) return false;
 	return version.major > 1 || (version.major === 1 && version.minor >= 22);
 }
+
+/**
+ * Whether eager live-frame native scrollback rebuilds are unsafe when the
+ * terminal viewport position is unobservable.
+ *
+ * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). On the
+ * terminals below, ED3 can disturb a reader parked in native scrollback during
+ * streaming: kitty/ghostty/alacritty/VTE clamp the scroll offset back to the
+ * active tail when saved lines are erased. WezTerm, macOS Terminal.app, and
+ * iTerm2 expose scrollback-only clears via ED3/terminfo E3; that still
+ * invalidates a reader's scrollback position during live streaming.
+ *
+ * Windows Terminal erases its host scrollback on ED3 and repositions the
+ * viewport against the shortened buffer, so a scrolled-up reader is yanked.
+ * Native win32 is excluded here because the renderer guards it with dedicated
+ * platform checks (the viewport position is never observable on Windows — see
+ * `Terminal.isNativeViewportAtBottom`); a `WT_SESSION` sighting on any other
+ * platform means the outer host is Windows Terminal fronting a WSL distro (WT
+ * propagates the variable into the Linux environment), where the same ED3
+ * yank applies. See #1610.
+ *
+ * Pure helper for tests and `TERMINAL` trait construction. See #1682 and #1719.
+ */
+export function detectTerminalEagerEraseScrollbackRisk(
+	env: NodeJS.ProcessEnv = Bun.env,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (platform === "win32") return false;
+	if (env.WT_SESSION) return true;
+	if (
+		env.WEZTERM_PANE ||
+		env.KITTY_WINDOW_ID ||
+		env.GHOSTTY_RESOURCES_DIR ||
+		env.ALACRITTY_WINDOW_ID ||
+		env.VTE_VERSION ||
+		env.ITERM_SESSION_ID
+	) {
+		return true;
+	}
+	switch (env.TERM_PROGRAM?.toLowerCase()) {
+		case "alacritty":
+		case "apple_terminal":
+		case "ghostty":
+		case "iterm.app":
+		case "kitty":
+		case "wezterm":
+			return true;
+		default:
+			return false;
+	}
+}
 function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null {
 	if (!process.stdout.isTTY) return null;
 	if (terminalId === "vscode" || terminalId === "alacritty") return null;
@@ -105,12 +157,12 @@ const KNOWN_TERMINALS = Object.freeze({
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
-	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99),
-	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9),
-	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9),
-	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9),
+	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true),
+	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
+	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
+	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9, true),
 	vscode: new TerminalInfo("vscode", null, true, true, NotifyProtocol.Bell),
-	alacritty: new TerminalInfo("alacritty", null, true, true, NotifyProtocol.Bell),
+	alacritty: new TerminalInfo("alacritty", null, true, true, NotifyProtocol.Bell, true),
 });
 
 export const TERMINAL_ID: TerminalId = (() => {
@@ -155,26 +207,39 @@ export const TERMINAL_ID: TerminalId = (() => {
 })();
 
 export const TERMINAL = (() => {
-	const terminal = getTerminalInfo(TERMINAL_ID);
+	let resolved = getTerminalInfo(TERMINAL_ID);
+	const eagerEraseScrollbackRisk = detectTerminalEagerEraseScrollbackRisk(Bun.env, process.platform);
+	if (resolved.eagerEraseScrollbackRisk !== eagerEraseScrollbackRisk) {
+		resolved = new TerminalInfo(
+			resolved.id,
+			resolved.imageProtocol,
+			resolved.trueColor,
+			resolved.hyperlinks,
+			resolved.notifyProtocol,
+			eagerEraseScrollbackRisk,
+		);
+	}
+
 	const forcedImageProtocol = getForcedImageProtocol();
-	let resolved = terminal;
 	if (forcedImageProtocol !== undefined) {
 		resolved = new TerminalInfo(
-			terminal.id,
+			resolved.id,
 			forcedImageProtocol,
-			terminal.trueColor,
-			terminal.hyperlinks,
-			terminal.notifyProtocol,
+			resolved.trueColor,
+			resolved.hyperlinks,
+			resolved.notifyProtocol,
+			resolved.eagerEraseScrollbackRisk,
 		);
-	} else if (!terminal.imageProtocol) {
-		const fallbackImageProtocol = getFallbackImageProtocol(terminal.id);
+	} else if (!resolved.imageProtocol) {
+		const fallbackImageProtocol = getFallbackImageProtocol(resolved.id);
 		if (fallbackImageProtocol) {
 			resolved = new TerminalInfo(
-				terminal.id,
+				resolved.id,
 				fallbackImageProtocol,
-				terminal.trueColor,
-				terminal.hyperlinks,
-				terminal.notifyProtocol,
+				resolved.trueColor,
+				resolved.hyperlinks,
+				resolved.notifyProtocol,
+				resolved.eagerEraseScrollbackRisk,
 			);
 		}
 	}
@@ -188,6 +253,7 @@ export const TERMINAL = (() => {
 			resolved.trueColor,
 			false,
 			resolved.notifyProtocol,
+			resolved.eagerEraseScrollbackRisk,
 		);
 	}
 	return resolved;

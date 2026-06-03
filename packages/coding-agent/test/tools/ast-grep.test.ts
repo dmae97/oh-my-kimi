@@ -101,8 +101,8 @@ describe("ast_grep parse errors", () => {
 			const details = result.details as { matchCount?: number; fileCount?: number } | undefined;
 
 			// Directory mode uses tree-grouped `# dir/` + `## name#hash` headers.
-			expect(text).toMatch(/## root\.ts#[0-9A-F]{3}/);
-			expect(text).toMatch(/## child\.ts#[0-9A-F]{3}/);
+			expect(text).toMatch(/## root\.ts#[0-9A-F]{4}/);
+			expect(text).toMatch(/## child\.ts#[0-9A-F]{4}/);
 			expect(text).not.toContain("ignore.js");
 			expect(text).not.toContain("outside.ts");
 			expect(details?.matchCount).toBe(2);

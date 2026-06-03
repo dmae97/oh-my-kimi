@@ -204,6 +204,36 @@ def test_log_tool_call(db: Database) -> None:
     assert row_id > 0
 
 
+def test_pr_review_comment_staging_round_trip(db: Database) -> None:
+    first = db.stage_review_comment(
+        issue_key="octo/widget#9",
+        path="src/app.py",
+        line=12,
+        side="RIGHT",
+        start_line=10,
+        start_side="RIGHT",
+        body="blocking finding",
+    )
+    db.stage_review_comment(
+        issue_key="octo/widget#9",
+        path="src/other.py",
+        line=3,
+        body="nit",
+    )
+    db.stage_review_comment(issue_key="octo/widget#10", path="x.py", line=1, body="other")
+
+    rows = db.list_staged_review_comments("octo/widget#9")
+    assert [row.id for row in rows] == [first.id, first.id + 1]
+    assert rows[0].path == "src/app.py"
+    assert rows[0].start_line == 10
+    assert rows[0].start_side == "RIGHT"
+    assert rows[1].side == "RIGHT"
+
+    assert db.clear_staged_review_comments("octo/widget#9") == 2
+    assert db.list_staged_review_comments("octo/widget#9") == []
+    assert len(db.list_staged_review_comments("octo/widget#10")) == 1
+
+
 def test_processed_issue_keys_returns_only_known(db: Database) -> None:
     db.upsert_issue(key=issue_key("octo/widget", 1), repo="octo/widget", number=1, state="new")
     db.upsert_issue(key=issue_key("octo/widget", 2), repo="octo/widget", number=2, state="reproducing")

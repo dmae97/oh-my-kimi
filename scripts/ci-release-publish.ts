@@ -2,6 +2,11 @@
 /**
  * Publish workspace packages.
  *
+ * The default mode publishes public JS packages and the `@oh-my-pi/pi-natives`
+ * core package. Generated native leaf packages are published separately with
+ * `--native-leaf <tag>` from the release_binary matrix after that matrix entry
+ * downloads the matching `.node` artifacts.
+ *
  * For each public TypeScript package we:
  *   1. Emit `.d.ts` declarations into `dist/types/` so consumers get
  *      stable types regardless of their tsconfig `lib`.
@@ -10,16 +15,26 @@
  *      and `dist/types` (plus `dist/client` for `stats`) is added to
  *      `files`. The on-repo manifest keeps pointing at source so local
  *      dev resolves types without any build.
- *   3. Invoke `bun publish` on the (now publish-shaped) manifest.
+ *   3. Pack with `bun pm pack` (resolves the `catalog:`/`workspace:`
+ *      protocols npm cannot, and runs each package's `prepack` lifecycle),
+ *      then publish the resolved tarball with `npm publish` — see
+ *      `packAndPublish` for why npm and not `bun publish`.
  *
  * Intended for CI. Mutates `package.json` in place — if you run this
  * locally, expect a dirty working tree and `git restore` after.
  */
 
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
+import {
+	generateNpmPackages,
+	LEAF_TARGETS,
+	type GeneratedLeafPackage,
+} from "../packages/natives/scripts/gen-npm-packages.ts";
 
-interface PublishPackage {
+export interface PublishPackage {
 	dir: string;
 	kind: "typescript" | "native";
 	/** Extra build steps before manifest rewrite (e.g. esbuild bundles). */
@@ -34,19 +49,39 @@ type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
 interface JsonObject {
 	[key: string]: JsonValue;
 }
-interface PackageManifest extends JsonObject {
+interface PackageManifest {
+	[key: string]: JsonValue | undefined;
 	name?: string;
+	version?: string;
 	private?: boolean;
+	files?: JsonValue[];
+	optionalDependencies?: JsonObject;
 }
 
 const repoRoot = path.join(import.meta.dir, "..");
 const isDryRun = process.argv.includes("--dry-run");
-const packages: PublishPackage[] = [
+
+function nativeLeafTagFromArgs(argv: readonly string[]): string | null {
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "--native-leaf") {
+			const tag = argv[i + 1];
+			if (!tag) throw new Error("--native-leaf requires a native target tag");
+			return tag;
+		}
+		if (arg.startsWith("--native-leaf=")) return arg.slice("--native-leaf=".length);
+	}
+	return null;
+}
+
+const nativeLeafTag = nativeLeafTagFromArgs(process.argv.slice(2));
+export const packages: PublishPackage[] = [
 	{ dir: "packages/utils", kind: "typescript" },
 	{ dir: "packages/ai", kind: "typescript" },
 	{ dir: "packages/natives", kind: "native" },
 	{ dir: "packages/tui", kind: "typescript" },
 	{ dir: "packages/hashline", kind: "typescript" },
+	{ dir: "packages/mnemopi", kind: "typescript" },
 	{
 		dir: "packages/stats",
 		kind: "typescript",
@@ -87,7 +122,7 @@ function rewriteExports(exports: JsonValue): JsonValue {
 	return out;
 }
 
-async function rewriteManifest(pkgDir: string, extraFiles: readonly string[]): Promise<PackageManifest> {
+async function rewriteManifest(pkgDir: string, extraFiles: readonly string[], write: boolean): Promise<PackageManifest> {
 	const manifestPath = path.join(pkgDir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
 	if (typeof manifest.types === "string" && manifest.types.startsWith("./src/")) {
@@ -101,15 +136,12 @@ async function rewriteManifest(pkgDir: string, extraFiles: readonly string[]): P
 		if (!hasDist && !files.includes(extra)) files.push(extra);
 	}
 	manifest.files = files;
-	await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
+	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
 	return manifest;
 }
 
 async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	const pkgDir = path.join(repoRoot, pkg.dir);
-	if (pkg.kind === "native") {
-		return (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
-	}
 	for (const argv of pkg.preBuild ?? []) {
 		await $`${argv}`.cwd(pkgDir);
 	}
@@ -117,10 +149,122 @@ async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	for (const cfg of pkg.extraTypeConfigs ?? []) {
 		await $`bun x tsgo -p ${cfg}`.cwd(pkgDir);
 	}
-	return rewriteManifest(pkgDir, pkg.extraFiles ?? []);
+	return rewriteManifest(pkgDir, pkg.extraFiles ?? [], !isDryRun);
+}
+
+function buildNativeOptionalDependencies(version: string): JsonObject {
+	const optionalDependencies: JsonObject = {};
+	for (const target of LEAF_TARGETS) {
+		optionalDependencies[`@oh-my-pi/pi-natives-${target.tag}`] = version;
+	}
+	return optionalDependencies;
+}
+
+export async function prepareNativeCorePackage(pkgDir: string, write: boolean): Promise<PackageManifest> {
+	const manifestPath = path.join(pkgDir, "package.json");
+	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
+	if (typeof manifest.version !== "string") throw new Error(`Missing version in ${manifestPath}`);
+	manifest.optionalDependencies = buildNativeOptionalDependencies(manifest.version);
+	manifest.files = [
+		"native/index.js",
+		"native/index.d.ts",
+		"native/loader-state.js",
+		"native/loader-state.d.ts",
+		"native/embedded-addon.js",
+		"README.md",
+	];
+	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
+	return manifest;
+}
+
+/**
+ * Pack with `bun pm pack`, then publish the resolved tarball with `npm publish`.
+ *
+ * `bun pm pack` builds the tarball because it resolves the `catalog:` and
+ * `workspace:` protocols (npm would ship them verbatim, producing
+ * uninstallable manifests) and runs the `prepack` lifecycle, baking generated
+ * sources (e.g. coding-agent's docs index) into the tarball.
+ *
+ * The tarball is handed to `npm publish` — not `bun publish` — because only the
+ * npm CLI performs the OIDC trusted-publishing token exchange; `bun publish`
+ * has no OIDC support (oven-sh/bun#22423). In CI with `id-token: write` granted
+ * and `NODE_AUTH_TOKEN` set, npm tries OIDC per package and silently falls back
+ * to the configured token when the package has no matching trusted publisher —
+ * which also covers a package's first-ever publish. npm auto-enables provenance
+ * only on the OIDC path, so we never pass `--provenance` (it would hard-fail the
+ * token fallback).
+ */
+async function packAndPublish(dir: string, name: string): Promise<void> {
+	if (isDryRun) {
+		console.log(`DRY RUN bun pm pack && npm publish --access public (${path.relative(repoRoot, dir)})`);
+		return;
+	}
+	console.log(`Publishing ${name}…`);
+	const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-pack-"));
+	try {
+		const packed = await $`bun pm pack --quiet --destination ${packDir}`.cwd(dir).quiet().nothrow();
+		const packOutput = `${packed.stdout.toString()}${packed.stderr.toString()}`.trim();
+		if (packed.exitCode !== 0) {
+			if (packOutput) console.log(packOutput);
+			process.exit(packed.exitCode ?? 1);
+		}
+		const tarball = (await fs.readdir(packDir)).find(entry => entry.endsWith(".tgz"));
+		if (!tarball) throw new Error(`bun pm pack produced no tarball for ${name} (${path.relative(repoRoot, dir)})`);
+		const result = await $`npm publish ${path.join(packDir, tarball)} --access public`.quiet().nothrow();
+		const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
+		if (output) console.log(output);
+		if (result.exitCode !== 0) {
+			// Idempotent re-runs: tolerate this exact version already being on the
+			// registry (the `bun publish --tolerate-republish` equivalent), but
+			// surface every other failure.
+			if (isVersionAlreadyPublished(output)) {
+				console.log(`Skipping ${name} (version already published)`);
+				return;
+			}
+			process.exit(result.exitCode ?? 1);
+		}
+	} finally {
+		await fs.rm(packDir, { recursive: true, force: true });
+	}
+}
+
+/** Match npm's rejection when this exact version already exists on the registry. */
+function isVersionAlreadyPublished(output: string): boolean {
+	return /cannot publish over the previously published version|EPUBLISHCONFLICT/i.test(output);
+}
+
+async function publishGeneratedLeafPackage(leaf: GeneratedLeafPackage): Promise<void> {
+	await packAndPublish(leaf.dir, leaf.manifest.name);
+}
+
+async function publishNativeLeafPackage(tag: string): Promise<void> {
+	const pkg = packages.find(candidate => candidate.kind === "native");
+	if (!pkg) throw new Error("No native package configured");
+	const pkgDir = path.join(repoRoot, pkg.dir);
+	const coreManifest = (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
+	if (typeof coreManifest.version !== "string") throw new Error(`Missing version in ${pkg.dir}/package.json`);
+	const leaves = await generateNpmPackages({ packageDir: pkgDir, dryRun: isDryRun, version: coreManifest.version, tags: [tag] });
+	const leaf = leaves[0];
+	if (!leaf) throw new Error(`No native leaf generated for ${tag}`);
+	await publishGeneratedLeafPackage(leaf);
+}
+
+async function publishNativePackage(pkg: PublishPackage): Promise<void> {
+	const pkgDir = path.join(repoRoot, pkg.dir);
+	const manifest = await prepareNativeCorePackage(pkgDir, !isDryRun);
+	const name = manifest.name ?? path.basename(pkg.dir);
+	if (isDryRun) {
+		console.log(`DRY RUN native core manifest rewrite (${pkg.dir})`);
+		console.log(JSON.stringify({ optionalDependencies: manifest.optionalDependencies, files: manifest.files }, null, "\t"));
+	}
+	await packAndPublish(pkgDir, name);
 }
 
 async function publishPackage(pkg: PublishPackage): Promise<void> {
+	if (pkg.kind === "native") {
+		await publishNativePackage(pkg);
+		return;
+	}
 	const pkgDir = path.join(repoRoot, pkg.dir);
 	const manifest = await preparePackage(pkg);
 	const name = manifest.name ?? path.basename(pkg.dir);
@@ -128,17 +272,15 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 		console.log(`Skipping ${name} (private)`);
 		return;
 	}
-	if (isDryRun) {
-		console.log(`DRY RUN bun publish --access public --tolerate-republish (${pkg.dir})`);
-		return;
-	}
-	console.log(`Publishing ${name}…`);
-	const result = await $`bun publish --access public --tolerate-republish`.cwd(pkgDir).quiet().nothrow();
-	const output = `${result.stdout.toString()}${result.stderr.toString()}`.trim();
-	if (output) console.log(output);
-	if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
+	await packAndPublish(pkgDir, name);
 }
 
-for (const pkg of packages) {
-	await publishPackage(pkg);
+if (import.meta.main) {
+	if (nativeLeafTag) {
+		await publishNativeLeafPackage(nativeLeafTag);
+	} else {
+		for (const pkg of packages) {
+			await publishPackage(pkg);
+		}
+	}
 }

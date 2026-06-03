@@ -39,6 +39,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	interruptMode?: "immediate" | "wait";
 
 	/**
+	 * Maximum completed tool calls to accept from one streamed assistant turn before
+	 * cutting the provider stream and executing that batch. The cap is enforced on
+	 * `toolcall_end` so every executed call has complete arguments. Undefined disables
+	 * batching.
+	 */
+	maxToolCallsPerTurn?: number;
+
+	/**
 	 * Optional session identifier forwarded to LLM providers.
 	 * Used by providers that support session-based caching (e.g., OpenAI Codex).
 	 */
@@ -432,6 +440,15 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
 	 */
 	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
+
+	/**
+	 * Normalize (potentially partial) streamed arguments into the plain text that
+	 * stream-content matchers (e.g. TTSR rules) should inspect — the real content
+	 * the call introduces, without wire grammar such as patch prefixes or JSON
+	 * string escaping. Return `undefined` to fall back to raw argument-delta
+	 * matching.
+	 */
+	matcherDigest?: (args: unknown) => string | undefined;
 
 	/** Capability tier declaration used by approval gates. Omitted means "exec". */
 	approval?: ToolApproval;

@@ -7,7 +7,7 @@ import { type ThemeColor, theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
-import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
+import { formatContextUsage, getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
 
 export type { SegmentContext } from "./types";
@@ -90,11 +90,19 @@ const modelSegment: StatusLineSegment = {
 
 		// Add thinking level with dot separator
 		if (opts.showThinkingLevel !== false && state.model?.thinking) {
-			const level = state.thinkingLevel ?? ThinkingLevel.Off;
-			if (level !== ThinkingLevel.Off) {
-				const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
-				if (thinkingText) {
-					content += `${theme.sep.dot}${thinkingText}`;
+			if (ctx.session.isAutoThinking) {
+				// Pending (no turn classified yet / classifying) shows a symbol-theme
+				// question-box marker; once resolved it shows `<level>`.
+				const resolved = ctx.session.autoResolvedThinkingLevel();
+				const resolvedText = resolved ? (theme.thinking[resolved as keyof typeof theme.thinking] ?? resolved) : "";
+				content += `${theme.sep.dot}${resolved ? resolvedText : `${theme.thinking.autoPending} auto`}`;
+			} else {
+				const level = state.thinkingLevel ?? ThinkingLevel.Off;
+				if (level !== ThinkingLevel.Off) {
+					const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
+					if (thinkingText) {
+						content += `${theme.sep.dot}${thinkingText}`;
+					}
 				}
 			}
 		}
@@ -350,7 +358,7 @@ const contextPctSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 
 		const autoIcon = ctx.autoCompactEnabled && theme.icon.auto ? ` ${theme.icon.auto}` : "";
-		const text = `${pct.toFixed(1)}%/${formatNumber(window)}${autoIcon}`;
+		const text = `${formatContextUsage(pct, window)}${autoIcon}`;
 
 		const color = getContextUsageThemeColor(getContextUsageLevel(pct, window));
 		const content = withIcon(theme.icon.context, theme.fg(color, text));
@@ -448,6 +456,28 @@ const cacheWriteSegment: StatusLineSegment = {
 	},
 };
 
+const cacheHitSegment: StatusLineSegment = {
+	id: "cache_hit",
+	render(ctx) {
+		const { cacheRead, cacheWrite, input } = ctx.usageStats;
+		if (!cacheRead) return { content: "", visible: false };
+
+		// Hit rate = cacheRead / total prompt tokens. The prompt is the sum of
+		// cacheRead (served from cache), cacheWrite (newly cached this turn) and
+		// input (uncached). Including uncached input keeps the denominator honest
+		// for Anthropic/OpenRouter; DeepSeek reports its miss as input with
+		// cacheWrite 0, so this still yields hit/(hit+miss).
+		const total = cacheRead + cacheWrite + input;
+
+		const rate = (cacheRead / total) * 100;
+		const rateStr = rate.toFixed(2);
+
+		const parts: string[] = [theme.icon.cache];
+		parts.push(theme.fg("statusLineSpend", `${rateStr}%`));
+		return { content: parts.join(" "), visible: true };
+	},
+};
+
 const sessionNameSegment: StatusLineSegment = {
 	id: "session_name",
 	render(ctx) {
@@ -537,6 +567,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	hostname: hostnameSegment,
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,
+	cache_hit: cacheHitSegment,
 	session_name: sessionNameSegment,
 	usage: usageSegment,
 };

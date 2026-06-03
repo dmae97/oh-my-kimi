@@ -17,6 +17,21 @@ const enum ToolCallStatus {
 	Aborted = 2,
 }
 
+function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage): boolean {
+	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
+	return isTruncatedStop && !msg.content.some(block => block.type === "toolCall" || block.type === "text");
+}
+
+function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const msg = messages[index]!;
+		if (msg.role === "assistant" && !shouldDropTruncatedThinkingOnlyAssistant(msg)) {
+			return index;
+		}
+	}
+	return -1;
+}
+
 /**
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
@@ -35,7 +50,7 @@ export function transformMessages<TApi extends Api>(
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
 
-	const latestAssistantIndex = messages.findLastIndex(msg => msg.role === "assistant");
+	const latestSurvivingAssistantIndex = getLatestSurvivingAssistantIndex(messages);
 	// First pass: transform messages (thinking blocks, tool call ID normalization)
 	const transformed = messages.map((msg, index) => {
 		// User and developer messages pass through unchanged
@@ -61,20 +76,36 @@ export function transformMessages<TApi extends Api>(
 				assistantMsg.model === model.id;
 
 			const mustPreserveLatestAnthropicThinking =
-				index === latestAssistantIndex &&
+				index === latestSurvivingAssistantIndex &&
 				model.api === "anthropic-messages" &&
 				assistantMsg.api === "anthropic-messages";
 			// Aborted/errored messages may have partially-streamed thinking signatures.
 			// A partial signature is invalid and will be rejected by the API, so we must
 			// strip signatures from thinking blocks in these messages.
-			const hasInvalidSignatures = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
+			//
+			// Abandoned tool-use turns get the same treatment once they are no longer
+			// the latest assistant message. When a turn carries toolCall blocks but did
+			// NOT request tool execution (stopReason !== "toolUse" — e.g.
+			// adaptive-thinking Opus emitting tool calls and then ending the turn on
+			// `end_turn`/`stop`), the agent loop pairs those calls with placeholder
+			// tool_results to keep the tool_use/tool_result contract valid. Historical
+			// abandoned turns cannot safely replay their end_turn-bound signatures in
+			// that continuation, so stripping downgrades them to plain text downstream.
+			// Latest abandoned turns are exempt because Anthropic requires thinking
+			// blocks from its most recent response to remain byte-for-byte unmodified.
+			const invalidStopReason = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
+			const abandonedToolUse =
+				!invalidStopReason &&
+				assistantMsg.stopReason !== "toolUse" &&
+				assistantMsg.content.some(b => b.type === "toolCall");
+			const hasInvalidSignatures = invalidStopReason || abandonedToolUse;
 
 			const transformedContent = assistantMsg.content.flatMap(block => {
 				if (block.type === "thinking") {
-					// Strip signature from aborted/errored messages — it's likely incomplete
+					// Strip untrustworthy signatures so the encoder can downgrade to text.
 					const sanitized =
 						hasInvalidSignatures && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block;
-					if (mustPreserveLatestAnthropicThinking) return sanitized;
+					if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;
 					// For same model: keep thinking blocks with signatures (needed for replay)
 					// even if the thinking text is empty (OpenAI encrypted reasoning)
 					if (isSameModel && sanitized.thinkingSignature) return sanitized;
@@ -222,7 +253,6 @@ export function transformMessages<TApi extends Api>(
 			flushPendingAbortedToolCalls();
 
 			const assistantMsg = msg as AssistantMessage;
-			const toolCalls = assistantMsg.content.filter(b => b.type === "toolCall") as ToolCall[];
 
 			// Drop assistant turns that carry no actionable content (no `text`, no `toolCall`)
 			// AND were terminated by a truncating stop reason (`length` / `error` / `aborted`).
@@ -236,11 +266,8 @@ export function transformMessages<TApi extends Api>(
 			// `stopReason: "stop"` thinking-only messages are intentionally preserved: they
 			// represent reasoning-only assistant turns used for replay round-trips
 			// (OpenAI completions `reasoning_text`, Google signed thought parts).
-			const isTruncatedStop =
-				assistantMsg.stopReason === "length" ||
-				assistantMsg.stopReason === "error" ||
-				assistantMsg.stopReason === "aborted";
-			if (isTruncatedStop && toolCalls.length === 0 && !assistantMsg.content.some(b => b.type === "text")) {
+			const originalMsg = messages[i]!;
+			if (originalMsg.role === "assistant" && shouldDropTruncatedThinkingOnlyAssistant(originalMsg)) {
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
 					// Still arm the aborted-turn note so downstream guidance fires.
 					pendingAbortedToolCalls = new Map();
@@ -248,6 +275,8 @@ export function transformMessages<TApi extends Api>(
 				}
 				continue;
 			}
+
+			const toolCalls = assistantMsg.content.filter(b => b.type === "toolCall") as ToolCall[];
 
 			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
 				// Keep the assistant message with tool calls intact. Real tool results are

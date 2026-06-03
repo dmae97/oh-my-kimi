@@ -146,3 +146,37 @@ export function parseStreamingJson<T = Record<string, unknown>>(partialJson: str
 		}
 	}
 }
+
+/**
+ * Default minimum byte growth before `parseStreamingJsonThrottled` will
+ * re-parse a streaming tool-call argument buffer. Bounds the mid-stream
+ * partial-parse cost from quadratic to linear in N.
+ */
+export const STREAMING_JSON_PARSE_MIN_GROWTH = 256;
+
+/**
+ * Throttled variant of {@link parseStreamingJson} for the per-delta hot path.
+ *
+ * Tool calls arrive as a long sequence of small deltas — calling
+ * `parseStreamingJson(buffer)` on every delta re-parses the entire buffer
+ * each time, giving O(N²) work in the total buffer length. Throttling skips
+ * the re-parse until at least `minGrowthBytes` of new content has arrived
+ * since the last successful parse, bounding mid-stream cost to O(N).
+ *
+ * Each provider tracks the last parsed length on its tool-call block, so the
+ * final `toolcall_end` parse (which providers already perform unconditionally)
+ * is the authoritative full parse — the throttle only delays mid-stream UI
+ * updates by at most `minGrowthBytes` of accumulated partial content.
+ *
+ * @returns the parsed object plus the new `parsedLen` to persist; or `null`
+ *          when the buffer has not grown enough to warrant a re-parse.
+ */
+export function parseStreamingJsonThrottled<T = Record<string, unknown>>(
+	partialJson: string | undefined,
+	lastParsedLen: number,
+	minGrowthBytes: number = STREAMING_JSON_PARSE_MIN_GROWTH,
+): { value: T; parsedLen: number } | null {
+	const len = partialJson?.length ?? 0;
+	if (len === 0 || (lastParsedLen > 0 && len - lastParsedLen < minGrowthBytes)) return null;
+	return { value: parseStreamingJson<T>(partialJson), parsedLen: len };
+}

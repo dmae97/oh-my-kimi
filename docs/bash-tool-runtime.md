@@ -10,7 +10,7 @@ There are two different bash execution surfaces in coding-agent:
 
 1. **Tool-call surface** (`toolName: "bash"`): used when the model calls the bash tool.
    - Entry point: `BashTool.execute()`.
-   - Parameters include `command`, optional `env`, `timeout`, `cwd`, `head`, `tail`, `pty`, and, when `async.enabled` is true, `async`.
+   - Parameters include `command`, optional `env`, `timeout`, `cwd`, `pty`, and, when `async.enabled` is true, `async`.
 2. **User bang-command surface** (`!cmd` from interactive input or RPC `bash` command): session-level helper path.
    - Entry point: `AgentSession.executeBash()`.
 
@@ -23,11 +23,11 @@ Both eventually use `executeBash()` in `src/exec/bash-executor.ts` for non-PTY e
 `BashTool.execute()` currently handles input before execution as follows:
 
 - validates optional `env` names against shell-variable syntax,
-- extracts a leading `cd <path> && ...` into `cwd` when `cwd` was not supplied,
-- rejects `async: true` when `async.enabled` is false,
-- uses only explicit `head`/`tail` tool args for post-run filtering.
+- when `bash.stripTrailingHeadTail` is enabled (default), applies conservative native fixups that remove safe trailing `| head` / `| tail` pipes and redundant trailing `2>&1`,
+- extracts a leading single-line `cd <path> && ...` into `cwd` when `cwd` was not supplied,
+- rejects `async: true` when `async.enabled` is false.
 
-`normalizeBashCommand()` was previously in `src/tools/bash-normalize.ts` but has been removed. Trailing shell pipes such as `| head -n 50` remain part of the shell command unless the caller uses the structured `head`/`tail` args.
+There are no structured `head` or `tail` tool parameters in the current schema. Output limiting is handled by `OutputSink` truncation/artifacts, and the optional trailing-pipe fixup exists to avoid hiding output before the harness can capture it.
 
 ## 2) Optional interception (blocked-command path)
 
@@ -173,6 +173,10 @@ Both PTY and non-PTY paths use `OutputSink`.
 
 Runtime truncation is byte-threshold based in `OutputSink` (50KB default). It does not enforce a hard 2000-line cap in this code path.
 
+### Shell output minimizer
+
+Non-PTY execution also passes shell-minimizer settings into the native `Shell` session. When the minimizer rewrites verbose output, the executor replaces the sink's visible text with the minimized text and, when possible, saves the raw original capture as a separate `bash-original` artifact referenced by a `[raw output: artifact://<id>]` footer.
+
 ## Live tool updates and async jobs
 
 For non-PTY foreground execution, `BashTool` uses a separate `TailBuffer` for partial updates and emits `onUpdate` snapshots while command is running.
@@ -189,12 +193,11 @@ After execution:
    - if abort signal is aborted -> throw `ToolAbortError` (abort semantics),
    - else -> throw `ToolError` (treated as tool failure).
 2. PTY `timedOut` -> throw `ToolError`.
-3. apply head/tail filters to final output text (`applyHeadTail`, head then tail).
-4. empty output becomes `(no output)`.
-5. attach truncation metadata via `toolResult(...).truncationFromSummary(result, { direction: "tail" })`.
-6. exit-code mapping:
-   - missing exit code -> `ToolError("... missing exit status")`
-   - non-zero exit -> `ToolError("... Command exited with code N")`
+3. empty output becomes `(no output)`.
+4. attach truncation metadata via `toolResult(...).truncationFromSummary(result, { direction: "tail" })`.
+5. exit-code mapping:
+   - missing exit code -> throw `ToolError("... missing exit status")`
+   - non-zero exit -> error result with `"Command exited with code N"` and `details.exitCode`
    - zero exit -> success result.
 
 Success payload structure:
@@ -236,13 +239,13 @@ This component is wired by `CommandController.handleBashCommand()` and fed from 
 
 ## Mode-specific behavior differences
 
-| Surface                        | Entry path                                            | PTY eligible                                                         | Live output UX                                                           | Error surfacing                                  |
-| ------------------------------ | ----------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ |
-| Interactive tool call          | `BashTool.execute`                                    | Yes, when `pty=true` and UI exists and `PI_NO_PTY!=1`                | PTY overlay (interactive) or streamed tail updates                       | Tool errors become `toolResult.isError`          |
-| Print mode tool call           | `BashTool.execute`                                    | No (no UI context)                                                   | No TUI overlay; output appears in event stream/final assistant text flow | Same tool error mapping                          |
-| RPC tool call (agent tooling)  | `BashTool.execute`                                    | Usually no UI -> non-PTY                                             | Structured tool events/results                                           | Same tool error mapping                          |
-| Interactive bang command (`!`) | `AgentSession.executeBash` + `BashExecutionComponent` | No (uses executor directly)                                          | Dedicated bash execution component                                       | Controller catches exceptions and shows UI error |
-| RPC `bash` command             | `rpc-mode` -> `session.executeBash`                   | No                                                                   | Returns `BashResult` directly                                            | Consumer handles returned fields                 |
+| Surface                        | Entry path                                            | PTY eligible                                          | Live output UX                                                           | Error surfacing                                  |
+| ------------------------------ | ----------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ |
+| Interactive tool call          | `BashTool.execute`                                    | Yes, when `pty=true` and UI exists and `PI_NO_PTY!=1` | PTY overlay (interactive) or streamed tail updates                       | Tool errors become `toolResult.isError`          |
+| Print mode tool call           | `BashTool.execute`                                    | No (no UI context)                                    | No TUI overlay; output appears in event stream/final assistant text flow | Same tool error mapping                          |
+| RPC tool call (agent tooling)  | `BashTool.execute`                                    | Usually no UI -> non-PTY                              | Structured tool events/results                                           | Same tool error mapping                          |
+| Interactive bang command (`!`) | `AgentSession.executeBash` + `BashExecutionComponent` | No (uses executor directly)                           | Dedicated bash execution component                                       | Controller catches exceptions and shows UI error |
+| RPC `bash` command             | `rpc-mode` -> `session.executeBash`                   | No                                                    | Returns `BashResult` directly                                            | Consumer handles returned fields                 |
 
 ## Operational caveats
 
@@ -256,7 +259,7 @@ This component is wired by `CommandController.handleBashCommand()` and fed from 
 ## Implementation files
 
 - [`src/tools/bash.ts`](../packages/coding-agent/src/tools/bash.ts) — tool entrypoint, input handling/interception, async and PTY/non-PTY selection, result/error mapping, bash tool renderer.
-- ~~`src/tools/bash-normalize.ts`~~ — removed (post-run head/tail filtering is now handled inline).
+- [`src/tools/bash-command-fixup.ts`](../packages/coding-agent/src/tools/bash-command-fixup.ts) — native-backed conservative cleanup for trailing `head`/`tail` pipes and redundant `2>&1`.
 - [`src/tools/bash-interceptor.ts`](../packages/coding-agent/src/tools/bash-interceptor.ts) — interceptor rule matching and blocked-command messages.
 - [`src/exec/bash-executor.ts`](../packages/coding-agent/src/exec/bash-executor.ts) — non-PTY executor, shell session reuse, cancellation wiring, output sink integration.
 - [`src/tools/bash-interactive.ts`](../packages/coding-agent/src/tools/bash-interactive.ts) — PTY runtime, overlay UI, input normalization, non-interactive env defaults.

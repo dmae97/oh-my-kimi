@@ -97,6 +97,48 @@ describe("openai-completions convertMessages", () => {
 		const imageParts = (imageMessage.content as Array<{ type?: string }>).filter(part => part?.type === "image_url");
 		expect(imageParts.length).toBe(2);
 	});
+	it("serializes assistant tool-call turns with string content for strict OpenAI-compatible backends", () => {
+		const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
+		const model: Model<"openai-completions"> = {
+			...baseModel,
+			api: "openai-completions",
+			input: ["text"],
+		};
+
+		const now = Date.now();
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Read missing file", timestamp: now - 1 },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "missing.txt" } }],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: emptyUsage,
+					stopReason: "toolUse",
+					timestamp: now,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tool-1",
+					toolName: "read",
+					content: [{ type: "text", text: "" }],
+					isError: false,
+					timestamp: now + 1,
+				},
+			],
+		};
+
+		const messages = convertMessages(model, context, compat);
+		const assistantParam = messages.find(message => message.role === "assistant") as
+			| { role: "assistant"; content: unknown; tool_calls?: Array<{ id: string }> }
+			| undefined;
+
+		expect(assistantParam?.tool_calls).toHaveLength(1);
+		expect(assistantParam?.content).toBe("");
+	});
+
 	it("uses generated tool_call_id values when assistant/tool IDs are empty", () => {
 		const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
 		const model: Model<"openai-completions"> = {

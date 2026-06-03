@@ -7,6 +7,7 @@ import type {
 	AgentMessage,
 	AgentTool,
 	AgentToolContext,
+	StreamFn,
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
@@ -55,6 +56,76 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("retries when harmony leakage reaches the committed assistant message (openai-codex)", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		// First response leaks a harmony payload as visible assistant text; the
+		// retry is clean. Mitigation only engages for openai-codex.
+		const leak = "Some prose. analysis to=functions.edit code 大发官网";
+		const mock = createMockModel({
+			provider: "openai-codex",
+			responses: [{ content: [leak] }, { content: ["clean retry response"] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// The leaked attempt was retried, not committed.
+		expect(mock.calls).toHaveLength(2);
+		expect(messages).toHaveLength(2);
+		const final = messages[1];
+		if (final.role !== "assistant") throw new Error("expected assistant message");
+		expect(final.content).toEqual([{ type: "text", text: "clean retry response" }]);
+		expect(JSON.stringify(messages)).not.toContain("to=functions.");
+	});
+
+	it("does not hard-abort a codex tool call whose argument legitimately carries the marker", async () => {
+		// A legit edit of a file (e.g. these harmony fixtures) whose content carries
+		// `to=functions.*` next to a channel word + non-Latin script. tool_arg is
+		// gated on the trailing-garbage `T` co-signal, and the loop supplies no parse
+		// boundary, so the call commits + executes once instead of being detected as
+		// a leak and retried/escalated.
+		const toolSchema = z.object({ input: z.string() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { input: string }> = {
+			name: "edit",
+			label: "Edit",
+			description: "Edit tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.input);
+				return { content: [{ type: "text", text: "ok" }], details: { input: params.input } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const leakyArg = "@fixtures/corpus.json\n+\tanalysis to=functions.edit code 大发官网\n";
+		const mock = createMockModel({
+			provider: "openai-codex",
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "edit", arguments: { input: leakyArg } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const stream = agentLoop([createUserMessage("edit a fixture")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain
+		}
+		// The tool ran on the original (unmodified) argument and the turn was not
+		// retried — a hard-abort would have left `executed` empty and consumed the
+		// "done" response as a clean retry instead.
+		expect(executed).toEqual([leakyArg]);
+		expect(mock.calls).toHaveLength(2);
+	});
+
 	it("emits an aborted assistant message when cancellation happens before provider events", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],
@@ -62,7 +133,7 @@ describe("agentLoop with AgentMessage", () => {
 			tools: [],
 		};
 		const mock = createMockModel();
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, maxToolCallsPerTurn: 8 };
 		const controller = new AbortController();
 		// The mock provider would reject without a configured response; we want the
 		// agent's abort path to kick in before any event is emitted. Use a raw stream
@@ -273,6 +344,118 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("cuts a streamed assistant turn after the configured completed tool-call batch", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel();
+		let modelCalls = 0;
+		let firstRequestSignal: AbortSignal | undefined;
+
+		const makeToolCall = (index: number): AssistantMessage["content"][number] => ({
+			type: "toolCall",
+			id: `tool-${index}`,
+			name: "echo",
+			arguments: { value: String(index) },
+		});
+		const makeMessage = (count: number, stopReason: AssistantMessage["stopReason"] = "stop") =>
+			createAssistantMessage(
+				Array.from({ length: count }, (_, index) => makeToolCall(index + 1)),
+				stopReason,
+			);
+
+		const streamFn: StreamFn = (_model, _llmContext, options) => {
+			modelCalls++;
+			const stream = new AssistantMessageEventStream();
+			if (modelCalls > 1) {
+				queueMicrotask(() => {
+					const done = createAssistantMessage([{ type: "text", text: "done" }], "stop");
+					stream.push({ type: "start", partial: done });
+					stream.push({ type: "text_start", contentIndex: 0, partial: done });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial: done });
+					stream.push({ type: "text_end", contentIndex: 0, content: "done", partial: done });
+					stream.push({ type: "done", reason: "stop", message: done });
+				});
+				return stream;
+			}
+
+			queueMicrotask(async () => {
+				firstRequestSignal = options?.signal;
+				stream.push({ type: "start", partial: makeMessage(0) });
+				for (let index = 1; index <= 10; index++) {
+					if (options?.signal?.aborted) {
+						const aborted = createAssistantMessage([], "aborted");
+						stream.push({ type: "error", reason: "aborted", error: aborted });
+						return;
+					}
+					const partial = makeMessage(index);
+					const toolCall = partial.content[index - 1];
+					if (toolCall?.type !== "toolCall") throw new Error("Expected tool call");
+					stream.push({ type: "toolcall_start", contentIndex: index - 1, partial });
+					stream.push({
+						type: "toolcall_delta",
+						contentIndex: index - 1,
+						delta: JSON.stringify(toolCall.arguments),
+						partial,
+					});
+					stream.push({ type: "toolcall_end", contentIndex: index - 1, toolCall, partial });
+					await Bun.sleep(0);
+				}
+				stream.push({ type: "done", reason: "toolUse", message: makeMessage(10, "toolUse") });
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			maxToolCallsPerTurn: 8,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo many")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(executed).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+		expect(firstRequestSignal?.aborted).toBe(true);
+		expect(modelCalls).toBe(2);
+
+		const batchedTurn = events.find(
+			(event): event is Extract<AgentEvent, { type: "turn_end" }> =>
+				event.type === "turn_end" && event.toolResults.length === 8,
+		);
+		expect(batchedTurn).toBeDefined();
+		if (batchedTurn?.message.role !== "assistant") return;
+		expect(batchedTurn.message.stopReason).toBe("toolUse");
+		expect(batchedTurn.message.content.filter(block => block.type === "toolCall")).toHaveLength(8);
+		expect(batchedTurn.toolResults.map(result => result.toolCallId).sort()).toEqual([
+			"tool-1",
+			"tool-2",
+			"tool-3",
+			"tool-4",
+			"tool-5",
+			"tool-6",
+			"tool-7",
+			"tool-8",
+		]);
+	});
+
 	it("injects and strips intent when intent tracing is enabled", async () => {
 		const toolSchema = z.object({ value: z.string() });
 		const executedParams: Record<string, unknown>[] = [];
@@ -458,7 +641,7 @@ describe("agentLoop with AgentMessage", () => {
 				e.type === "message_end" && e.message.role === "toolResult",
 		);
 		expect(toolResultEvent).toBeDefined();
-		if (!toolResultEvent || toolResultEvent.message.role !== "toolResult") return;
+		if (toolResultEvent?.message.role !== "toolResult") return;
 		expect(toolResultEvent.message.isError).toBe(true);
 		expect(toolResultEvent.message.toolCallId).toBe("tool-1");
 		expect(toolResultEvent.message.content[0]?.type).toBe("text");
@@ -951,5 +1134,74 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(hookCalls).toBe(2);
 		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
 		expect(messages[2]).toMatchObject({ role: "user", content: "follow-up" });
+	});
+
+	it("skips tool calls when the assistant turn was truncated by max_tokens (stop_reason: length) and tells the model to chunk", async () => {
+		// Regression for issue #1785 (`write` tool crash on >1020-line content).
+		// When a model emits a `write` call whose `content` argument exceeds the
+		// model's `max_tokens` output cap, the provider cuts the stream off mid-
+		// arguments and reports `stop_reason: length`. The agent must NOT execute
+		// the truncated call (its `content` is a partial string), AND the synthetic
+		// tool result must guide the model towards a chunked retry — otherwise the
+		// auto-continue loop re-emits the same oversized payload and the file never
+		// gets written ("write tool crash" from the reporter's POV).
+		const writeSchema = z.object({ path: z.string(), content: z.string() });
+		const executed: { path: string; content: string }[] = [];
+		const writeTool: AgentTool<typeof writeSchema, { path: string }> = {
+			name: "write",
+			label: "Write",
+			description: "Write tool",
+			parameters: writeSchema,
+			async execute(_id, params) {
+				executed.push({ path: params.path, content: params.content });
+				return { content: [{ type: "text", text: "ok" }], details: { path: params.path } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [writeTool] };
+
+		// The model emits one write tool call, then the stream ends with
+		// stop_reason: "length". The arguments field carries a truncated content
+		// payload — exactly what the streaming JSON parser produces when the
+		// closing quote/brace never arrive.
+		const truncatedContent = "line 1\nline 2\n... (cut off mid-string"; // no closing quote
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "tc-write-1",
+							name: "write",
+							arguments: { path: "/tmp/huge.ts", content: truncatedContent },
+						},
+					],
+					stopReason: "length",
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const stream = agentLoop([createUserMessage("write huge file")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+
+		// The tool MUST NOT have been executed — the arguments are mid-string and
+		// running them would persist a half-written file.
+		expect(executed).toEqual([]);
+
+		// The synthetic tool result must surface the truncation cause so the model
+		// can recover by chunking instead of re-emitting the same payload.
+		const toolResult = messages.find(m => m.role === "toolResult");
+		expect(toolResult).toBeDefined();
+		if (toolResult?.role !== "toolResult") throw new Error("expected tool result");
+		expect(toolResult.toolCallId).toBe("tc-write-1");
+		expect(toolResult.isError).toBe(true);
+		const text = toolResult.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map(c => c.text)
+			.join("\n");
+		expect(text).toContain("stop_reason: length");
+		expect(text).toMatch(/split|chunk/i);
 	});
 });

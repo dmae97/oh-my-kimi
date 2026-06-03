@@ -38,6 +38,7 @@ import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from ".
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
+import { bucketRules } from "./capability/rule-buckets";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	formatModelString,
@@ -86,8 +87,8 @@ import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
-
 import { resolveMemoryBackend } from "./memory-backend";
+import { getMnemopiSessionState, type MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -101,7 +102,7 @@ import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
 import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
 import { type CustomMessage, convertToLlm } from "./session/messages";
-import { SessionManager } from "./session/session-manager";
+import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -111,7 +112,14 @@ import {
 	loadProjectContextFiles as loadContextFilesInternal,
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
-import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	parseThinkingLevel,
+	resolveProvisionalAutoLevel,
+	resolveThinkingLevelForModel,
+	toReasoningEffort,
+} from "./thinking";
 import {
 	collectDiscoverableTools,
 	type DiscoverableTool,
@@ -253,7 +261,7 @@ export interface CreateAgentSessionOptions {
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string;
 	/** Thinking selector. Default: from settings, else unset */
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
@@ -313,13 +321,15 @@ export interface CreateAgentSessionOptions {
 	taskDepth?: number;
 	/** Parent Hindsight state to alias for subagent memory tools. */
 	parentHindsightSessionState?: HindsightSessionState;
-	/** Pre-allocated agent identity for IRC routing. Default: "0-Main" for top-level, parentTaskPrefix-derived for sub. */
+	/** Parent Mnemopi state to alias for subagent memory tools. */
+	parentMnemopiSessionState?: MnemopiSessionState;
+	/** Pre-allocated agent identity for IRC routing. Default: "Main" for top-level, parentTaskPrefix-derived for sub. */
 	agentId?: string;
 	/** Display name for the agent in IRC. Default: "main" or "sub". */
 	agentDisplayName?: string;
 	/** Optional shared agent registry for IRC routing. Default: AgentRegistry.global(). */
 	agentRegistry?: AgentRegistry;
-	/** Parent task ID prefix for nested artifact naming (e.g., "6-Extensions") */
+	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
 	/** Inherited eval executor session id for subagents sharing parent eval state. */
 	parentEvalSessionId?: string;
@@ -452,6 +462,44 @@ export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsRe
 	const resolvedCwd = cwd ?? getProjectDir();
 
 	return discoverAndLoadExtensions([], resolvedCwd);
+}
+
+/**
+ * Load the discovered/configured extensions for a session — everything {@link
+ * createAgentSession} would load except the inline factory extensions it appends
+ * itself. Extracted so the CLI can resolve extension-registered flags (and thus
+ * classify `@file` arguments extension-aware) *before* a session — and its
+ * terminal breadcrumb — is created, then hand the result back through
+ * {@link CreateAgentSessionOptions.preloadedExtensions} so the work is not
+ * repeated. Keep this the single source of the discovery branch logic.
+ */
+export async function loadSessionExtensions(
+	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths">,
+	cwd: string,
+	settings: Settings,
+	eventBus: EventBus,
+): Promise<LoadExtensionsResult> {
+	let result: LoadExtensionsResult;
+	if (options.disableExtensionDiscovery) {
+		const configuredPaths = options.additionalExtensionPaths ?? [];
+		result = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
+	} else {
+		// Merge CLI extension paths with settings extension paths.
+		const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
+		const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+		result = await logger.time(
+			"discoverAndLoadExtensions",
+			discoverAndLoadExtensions,
+			configuredPaths,
+			cwd,
+			eventBus,
+			disabledExtensionIds,
+		);
+	}
+	for (const { path, error } of result.errors) {
+		logger.error("Failed to load extension", { path, error });
+	}
+	return result;
 }
 
 /**
@@ -960,20 +1008,37 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
-	// If session has data, try to restore model from it.
-	// Skip restore when an explicit model was requested.
-	const defaultModelStr = existingSession.models.default;
-	if (!hasExplicitModel && !model && hasExistingSession && defaultModelStr) {
+	// Identify session model strings to restore in fallback order. We do an
+	// initial pass here so model-dependent setup (thinking-level resolution,
+	// host preconnect) can use the restored model; extension-registered
+	// providers aren't visible yet, so we retry the preferred candidates once
+	// extensions register below.
+	const sessionModelStrings =
+		!hasExplicitModel && hasExistingSession
+			? getRestorableSessionModels(existingSession.models, sessionManager.getLastModelChangeRole())
+			: [];
+	let restoredSessionModelIndex = -1;
+	if (!hasExplicitModel && !model && sessionModelStrings.length > 0) {
 		await logger.time("restoreSessionModel", async () => {
-			const parsedModel = parseModelString(defaultModelStr);
-			if (parsedModel) {
+			let failedSessionModel: string | undefined;
+			for (let i = 0; i < sessionModelStrings.length; i++) {
+				const sessionModelStr = sessionModelStrings[i];
+				const parsedModel = parseModelString(sessionModelStr);
+				if (!parsedModel) {
+					failedSessionModel ??= sessionModelStr;
+					continue;
+				}
+
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
 				if (restoredModel && (await hasModelApiKey(restoredModel))) {
 					model = restoredModel;
+					restoredSessionModelIndex = i;
+					break;
 				}
+				failedSessionModel ??= sessionModelStr;
 			}
-			if (!model) {
-				modelFallbackMessage = `Could not restore model ${defaultModelStr}`;
+			if (failedSessionModel) {
+				modelFallbackMessage = `Could not restore model ${failedSessionModel}`;
 			}
 		});
 	}
@@ -991,29 +1056,39 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const taskDepth = options.taskDepth ?? 0;
 
-	let thinkingLevel = options.thinkingLevel;
-
-	// If session has data and includes a thinking entry, restore it
-	if (thinkingLevel === undefined && hasExistingSession && hasThinkingEntry) {
-		thinkingLevel = parseThinkingLevel(existingSession.thinkingLevel);
-	}
-
-	if (thinkingLevel === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
-		thinkingLevel = defaultRoleSpec.thinkingLevel;
-	}
-
-	// Prefer the selected model's configured defaultLevel, otherwise fall back
-	// to the global settings default.
-	if (thinkingLevel === undefined && model?.thinking?.defaultLevel !== undefined) {
-		thinkingLevel = model.thinking.defaultLevel;
-	}
-	if (thinkingLevel === undefined) {
-		thinkingLevel = settings.get("defaultThinkingLevel");
-	}
+	// Resolves the session/agent thinking level using the same precedence we
+	// apply at startup: explicit option → persisted session entry → default
+	// role's explicit selector → selected model's defaultLevel → global
+	// settings default. Run again after extension role reclaim so the final
+	// model's own defaults aren't masked by an earlier fallback model's.
+	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
+		let level = options.thinkingLevel;
+		if (level === undefined && hasExistingSession && hasThinkingEntry) {
+			level = parseThinkingLevel(existingSession.thinkingLevel);
+		}
+		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
+			level = defaultRoleSpec.thinkingLevel;
+		}
+		if (level === undefined && selectedModel?.thinking?.defaultLevel !== undefined) {
+			level = selectedModel.thinking.defaultLevel;
+		}
+		if (level === undefined) {
+			level = settings.get("defaultThinkingLevel");
+		}
+		return level;
+	};
+	let thinkingLevel = pickInitialThinkingLevel(model);
+	let autoThinking = thinkingLevel === AUTO_THINKING;
+	// Concrete level the agent/session start with. With `auto` this is the
+	// provisional level shown until the first per-turn classification resolves;
+	// `auto` itself stays a session-only concept handled by AgentSession.
+	let effectiveThinkingLevel: ThinkingLevel | undefined = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
 	if (model) {
 		const resolvedModel = model;
-		thinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			resolveThinkingLevelForModel(resolvedModel, thinkingLevel),
+		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+			autoThinking
+				? resolveProvisionalAutoLevel(resolvedModel)
+				: resolveThinkingLevelForModel(resolvedModel, effectiveThinkingLevel),
 		);
 		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
 		// with the rest of session setup (extension/skill load, tool registry,
@@ -1043,21 +1118,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			options.rules !== undefined
 				? { items: options.rules, warnings: undefined }
 				: await loadCapability<Rule>(ruleCapability.id, { cwd });
-		const rulebookRules: Rule[] = [];
-		const alwaysApplyRules: Rule[] = [];
-		for (const rule of rulesResult.items) {
-			const isTtsrRule = rule.condition && rule.condition.length > 0 ? ttsrManager.addRule(rule) : false;
-			if (isTtsrRule) {
-				continue;
-			}
-			if (rule.alwaysApply === true) {
-				alwaysApplyRules.push(rule);
-				continue;
-			}
-			if (rule.description) {
-				rulebookRules.push(rule);
-			}
-		}
+		const { rulebookRules, alwaysApplyRules } = bucketRules(rulesResult.items, ttsrManager, {
+			builtinRules: ttsrSettings.builtinRules,
+			disabledRules: ttsrSettings.disabledRules,
+		});
 		if (existingSession.injectedTtsrRules.length > 0) {
 			ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
 		}
@@ -1187,6 +1251,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
+			getMnemopiSessionState: () => getMnemopiSessionState(session),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -1196,6 +1261,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getPlanModeState: () => session?.getPlanModeState(),
 			getGoalModeState: () => session?.getGoalModeState(),
 			getGoalRuntime: () => session?.goalRuntime,
+			getUsageStatistics: () => sessionManager.getUsageStatistics(),
+			getTurnBudget: () => sessionManager.getTurnBudget(),
+			recordEvalSubagentUsage: output => sessionManager.recordEvalSubagentOutput(output),
 			getClientBridge: () => session?.clientBridge,
 			getCompactContext: () => session.formatCompactContext(),
 			getTodoPhases: () => session.getTodoPhases(),
@@ -1255,10 +1323,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
 			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
+		const localProtocolOptions = options.localProtocolOptions ?? {
+			getArtifactsDir,
+			getSessionId: () => sessionManager.getSessionId?.() ?? null,
+		};
 		if (options.localProtocolOptions) {
 			LocalProtocolHandler.setOverride(options.localProtocolOptions);
 		}
 		toolSession.getArtifactsDir = getArtifactsDir;
+		toolSession.localProtocolOptions = localProtocolOptions;
 		toolSession.agentOutputManager = new AgentOutputManager(
 			getArtifactsDir,
 			options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
@@ -1269,6 +1342,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Discover MCP tools from .mcp.json files
 		let mcpManager: MCPManager | undefined = options.mcpManager;
+		toolSession.mcpManager = mcpManager;
 		const enableMCP = options.enableMCP ?? true;
 		const customTools: CustomTool[] = [];
 		if (enableMCP && !mcpManager) {
@@ -1287,6 +1361,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				authStorage,
 			});
 			mcpManager = mcpResult.manager;
+			toolSession.mcpManager = mcpManager;
 
 			if (settings.get("mcp.notifications")) {
 				mcpManager.setNotificationsEnabled(true);
@@ -1350,32 +1425,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
 
-		// Load extensions (discovers from standard locations + configured paths)
-		let extensionsResult: LoadExtensionsResult;
-		if (options.disableExtensionDiscovery) {
-			const configuredPaths = options.additionalExtensionPaths ?? [];
-			extensionsResult = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		} else if (options.preloadedExtensions) {
-			extensionsResult = options.preloadedExtensions;
-		} else {
-			// Merge CLI extension paths with settings extension paths
-			const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-			const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
-			extensionsResult = await logger.time(
-				"discoverAndLoadExtensions",
-				discoverAndLoadExtensions,
-				configuredPaths,
-				cwd,
-				eventBus,
-				disabledExtensionIds,
-			);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		}
+		// Load extensions. A preloaded result (e.g. resolved by the CLI before
+		// session creation so it can classify `@file` args extension-aware without
+		// a session/breadcrumb existing yet) is reused as-is; otherwise discover now
+		// through the shared helper. Preloaded wins over `disableExtensionDiscovery`
+		// because the preloaded result already reflects that choice — re-running the
+		// loader here would double-load.
+		const extensionsResult: LoadExtensionsResult =
+			options.preloadedExtensions ?? (await loadSessionExtensions(options, cwd, settings, eventBus));
 
 		// Load inline extensions from factories
 		if (inlineExtensions.length > 0) {
@@ -1407,6 +1464,40 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
 
+		// Retry session-model candidates now that extension providers are
+		// registered. The initial restore runs before extensions load, so a role
+		// model supplied by an extension would have either fallen back to the
+		// saved default (`restoredSessionModelIndex > 0`) or failed entirely
+		// (`restoredSessionModelIndex === -1`, with the settings default or
+		// downstream fallback filling `model`). Reclaim it here so resume
+		// honors the last active role in either case.
+		const sessionRetryLimit = restoredSessionModelIndex >= 0 ? restoredSessionModelIndex : sessionModelStrings.length;
+		if (!hasExplicitModel && sessionRetryLimit > 0) {
+			for (let i = 0; i < sessionRetryLimit; i++) {
+				const sessionModelStr = sessionModelStrings[i];
+				const parsedModel = parseModelString(sessionModelStr);
+				if (!parsedModel) continue;
+				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
+				if (restoredModel && (await hasModelApiKey(restoredModel))) {
+					model = restoredModel;
+					modelFallbackMessage = undefined;
+					restoredSessionModelIndex = i;
+					// Recompute thinking-level from scratch against the reclaimed
+					// model: any value derived from the earlier fallback model's
+					// `thinking.defaultLevel` must not become sticky.
+					thinkingLevel = pickInitialThinkingLevel(restoredModel);
+					autoThinking = thinkingLevel === AUTO_THINKING;
+					effectiveThinkingLevel = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
+					effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+						autoThinking
+							? resolveProvisionalAutoLevel(restoredModel)
+							: resolveThinkingLevelForModel(restoredModel, effectiveThinkingLevel),
+					);
+					preconnectModelHost(restoredModel.baseUrl);
+					break;
+				}
+			}
+		}
 		// Resolve deferred --model pattern now that extension models are registered.
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();
@@ -1593,11 +1684,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
-			const memoryInstructions = await resolveMemoryBackend(settings).buildDeveloperInstructions(
-				agentDir,
-				settings,
-				session,
-			);
+			const memoryBackend = resolveMemoryBackend(settings);
+			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
 			const serverInstructions = mcpManager?.getServerInstructions();
@@ -1634,6 +1722,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				eagerTasks,
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
+				memoryRootEnabled: memoryBackend.id === "local",
 			});
 
 			if (options.systemPrompt === undefined) {
@@ -1847,7 +1936,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialState: {
 				systemPrompt,
 				model,
-				thinkingLevel: toReasoningEffort(thinkingLevel),
+				thinkingLevel: toReasoningEffort(effectiveThinkingLevel),
 				tools: initialTools,
 			},
 			convertToLlm: convertToLlmFinal,
@@ -1954,7 +2043,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) {
 				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
 			}
-			sessionManager.appendThinkingLevelChange(thinkingLevel);
+			if (!autoThinking) {
+				// Do not write the `auto` selector before the first turn resolves; auto
+				// classification persists its concrete effort once a real user turn runs.
+				sessionManager.appendThinkingLevelChange(effectiveThinkingLevel);
+			}
 			if (initialServiceTier) {
 				sessionManager.appendServiceTierChange(initialServiceTier);
 			}
@@ -1962,7 +2055,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		session = new AgentSession({
 			agent,
-			thinkingLevel,
+			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			sessionManager,
 			settings,
 			evalKernelOwnerId,
@@ -2123,6 +2216,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					agentDir,
 					taskDepth,
 					parentHindsightSessionState: options.parentHindsightSessionState,
+					parentMnemopiSessionState: options.parentMnemopiSessionState,
 				}),
 			),
 		);

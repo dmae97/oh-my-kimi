@@ -4,6 +4,7 @@ import {
 	extractSegments as nativeExtractSegments,
 	sliceWithWidth as nativeSliceWithWidth,
 	truncateToWidth as nativeTruncateToWidth,
+	visibleWidth as nativeVisibleWidth,
 	wrapTextWithAnsi as nativeWrapTextWithAnsi,
 	type SliceResult,
 } from "@oh-my-pi/pi-natives";
@@ -84,6 +85,44 @@ export function padding(n: number): string {
 // Grapheme segmenter (shared instance)
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+const EXTENDED_PICTOGRAPHIC_REGEX = /\p{Extended_Pictographic}/u;
+
+// Matches CSI (`\x1b[…`) and OSC (`\x1b]…` terminated by BEL/ST) escape
+// sequences. Mirrors the standard ansi-regex coverage so visible-span
+// segmentation lines up with the native ANSI scanner.
+const ANSI_ESCAPE_REGEX =
+	/[\u001b\u009b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+
+function pictographicSpanWidth(span: string): number {
+	let width = 0;
+	for (const { segment } of segmenter.segment(span)) {
+		width += EXTENDED_PICTOGRAPHIC_REGEX.test(segment) ? 2 : nativeVisibleWidth(segment, getDefaultTabWidth());
+	}
+	return width;
+}
+
+// Width fallback for strings that mix ANSI styling with ZWJ pictographic
+// emoji. `Intl.Segmenter` would split an escape sequence into individual
+// graphemes, so the native scanner (which only skips ANSI when handed the
+// complete sequence) double-counts the printable SGR bytes. Excise the ANSI
+// spans first — they contribute zero cells — and apply the pictographic
+// grapheme override only to the visible spans, then sum.
+function visibleWidthByGrapheme(str: string): number {
+	let width = 0;
+	let lastIndex = 0;
+	ANSI_ESCAPE_REGEX.lastIndex = 0;
+	for (let match = ANSI_ESCAPE_REGEX.exec(str); match !== null; match = ANSI_ESCAPE_REGEX.exec(str)) {
+		if (match.index > lastIndex) {
+			width += pictographicSpanWidth(str.slice(lastIndex, match.index));
+		}
+		lastIndex = ANSI_ESCAPE_REGEX.lastIndex;
+	}
+	if (lastIndex < str.length) {
+		width += lastIndex === 0 ? pictographicSpanWidth(str) : pictographicSpanWidth(str.slice(lastIndex));
+	}
+	return width;
+}
+
 /**
  * Get the shared grapheme segmenter instance.
  */
@@ -96,30 +135,17 @@ export function visibleWidthRaw(str: string): number {
 		return 0;
 	}
 
-	// Fast path: pure ASCII printable
-	let tabLength = 0;
-	const tabWidth = getDefaultTabWidth();
-	let isPureAscii = true;
-	let jamoOvercount = 0;
-	const isMacOS = process.platform === "darwin";
+	// Fast path: printable ASCII has one cell per code unit. Defer every
+	// control/non-ASCII case (tabs, ANSI/OSC, combining marks, CJK) to the
+	// native text engine so all width/slice/wrap helpers share one Unicode
+	// model instead of mixing Bun.stringWidth quirks with Rust truncation.
 	for (let i = 0; i < str.length; i++) {
 		const code = str.charCodeAt(i);
-		if (code === 9) {
-			tabLength += tabWidth;
-		} else if (code < 0x20 || code > 0x7e) {
-			isPureAscii = false;
-			// Hangul Compatibility Jamo (U+3131..U+318E) is EAW=W per UAX#11,
-			// but macOS terminals render them as 1 cell. WezTerm and others
-			// follow UAX#11 at 2 cells. Only correct on macOS.
-			if (isMacOS && code >= 0x3131 && code <= 0x318e) {
-				jamoOvercount++;
-			}
+		if (code < 0x20 || code > 0x7e) {
+			return str.includes("\u200d") ? visibleWidthByGrapheme(str) : nativeVisibleWidth(str, getDefaultTabWidth());
 		}
 	}
-	if (isPureAscii) {
-		return str.length + tabLength;
-	}
-	return Bun.stringWidth(str) - jamoOvercount + tabLength;
+	return str.length;
 }
 
 /**

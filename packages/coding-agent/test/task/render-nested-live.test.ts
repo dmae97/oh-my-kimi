@@ -3,12 +3,8 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
+import { formatNumber } from "@oh-my-pi/pi-utils";
 
-// Defends the live-rendering contract for the `task` tool: while a Level-1
-// subagent is still mid-flight, any nested `task` activity it has produced
-// (already-completed sub-calls in `extractedToolData.task`, plus the in-flight
-// snapshot in `inflightTaskDetails`) MUST surface in the parent's streaming
-// output — same way it surfaces in the finished result.
 describe("task renderer: nested live rendering", () => {
 	beforeAll(async () => {
 		resetSettingsForTest();
@@ -21,6 +17,12 @@ describe("task renderer: nested live rendering", () => {
 	afterAll(() => {
 		resetSettingsForTest();
 	});
+
+	// Defends the live-rendering contract for the `task` tool: while a Level-1
+	// subagent is still mid-flight, any nested `task` activity it has produced
+	// (already-completed sub-calls in `extractedToolData.task`, plus the in-flight
+	// snapshot in `inflightTaskDetails`) MUST surface in the parent's streaming
+	// output — same way it surfaces in the finished result.
 
 	function makeRunningProgress(overrides: Partial<AgentProgress>): AgentProgress {
 		return {
@@ -97,15 +99,15 @@ describe("task renderer: nested live rendering", () => {
 
 	it("renders completed nested task results stored in extractedToolData.task while parent is in-progress", async () => {
 		const parent = makeRunningProgress({
-			id: "1-Parent",
+			id: "Parent",
 			recentTools: [{ tool: "task", args: "", endMs: Date.now() }],
 			extractedToolData: {
 				task: [
 					{
 						projectAgentsDir: null,
 						results: [
-							makeCompletedSubResult("1-Parent.0-AlphaSub", "Alpha child"),
-							makeCompletedSubResult("1-Parent.1-BetaSub", "Beta child"),
+							makeCompletedSubResult("Parent.AlphaSub", "Alpha child"),
+							makeCompletedSubResult("Parent.BetaSub", "Beta child"),
 						],
 						totalDurationMs: 1000,
 					} satisfies TaskToolDetails,
@@ -117,12 +119,12 @@ describe("task renderer: nested live rendering", () => {
 
 		// Parent label is intact.
 		expect(text).toContain("Parent Level 1 work");
-		// Both nested completed children labels surface (formatTaskId collapses
-		// dotted ids → "1.0 Parent>AlphaSub").
+		// Both nested completed children labels surface (formatTaskId renders the
+		// dotted hierarchy as a "Parent>AlphaSub" breadcrumb).
 		expect(text).toContain("Alpha child");
 		expect(text).toContain("Beta child");
-		expect(text).toContain("1.0 Parent>AlphaSub");
-		expect(text).toContain("1.1 Parent>BetaSub");
+		expect(text).toContain("Parent>AlphaSub");
+		expect(text).toContain("Parent>BetaSub");
 	});
 
 	it("renders the in-flight nested task snapshot (progress[]) before the call ends", async () => {
@@ -131,12 +133,12 @@ describe("task renderer: nested live rendering", () => {
 			results: [],
 			totalDurationMs: 0,
 			progress: [
-				makeRunningSubProgress("2-Parent.0-GammaSub", "Gamma child running"),
-				makeRunningSubProgress("2-Parent.1-DeltaSub", "Delta child running"),
+				makeRunningSubProgress("Parent.GammaSub", "Gamma child running"),
+				makeRunningSubProgress("Parent.DeltaSub", "Delta child running"),
 			],
 		};
 		const parent = makeRunningProgress({
-			id: "2-Parent",
+			id: "Parent",
 			currentTool: "task",
 			currentToolStartMs: Date.now(),
 			inflightTaskDetails: inflight,
@@ -147,8 +149,8 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).toContain("Parent Level 1 work");
 		expect(text).toContain("Gamma child running");
 		expect(text).toContain("Delta child running");
-		expect(text).toContain("2.0 Parent>GammaSub");
-		expect(text).toContain("2.1 Parent>DeltaSub");
+		expect(text).toContain("Parent>GammaSub");
+		expect(text).toContain("Parent>DeltaSub");
 	});
 
 	it("combines completed and in-flight nested snapshots in one tree", async () => {
@@ -158,7 +160,7 @@ describe("task renderer: nested live rendering", () => {
 				task: [
 					{
 						projectAgentsDir: null,
-						results: [makeCompletedSubResult("3.0-EpsilonSub", "Epsilon done")],
+						results: [makeCompletedSubResult("Parent.EpsilonSub", "Epsilon done")],
 						totalDurationMs: 1000,
 					} satisfies TaskToolDetails,
 				],
@@ -167,7 +169,7 @@ describe("task renderer: nested live rendering", () => {
 				projectAgentsDir: null,
 				results: [],
 				totalDurationMs: 0,
-				progress: [makeRunningSubProgress("3.1-ZetaSub", "Zeta running")],
+				progress: [makeRunningSubProgress("Parent.ZetaSub", "Zeta running")],
 			},
 		});
 
@@ -180,5 +182,26 @@ describe("task renderer: nested live rendering", () => {
 		const zetaIdx = text.indexOf("Zeta running");
 		// Completed entries are emitted before the in-flight snapshot.
 		expect(epsilonIdx).toBeLessThan(zetaIdx);
+	});
+
+	it("formats running progress stats with tool icon, context window, and cost", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const text = await render(
+			makeRunningProgress({
+				toolCount: 19,
+				contextTokens: 58_000,
+				contextWindow: 272_000,
+				cost: 2.1,
+				durationMs: 0,
+			}),
+		);
+
+		// Context now matches the status line gauge: 58000/272000 → 21.3%/272K.
+		// Cost is separated by the theme dot separator, not a literal ".".
+		const expectedStats = `${formatNumber(19)} ${theme.icon.extensionTool}${theme.sep.dot}21.3%/272K${theme.sep.dot}$2.10`;
+		expect(text).toContain(expectedStats);
+		expect(text).not.toContain("tools");
+		expect(text).not.toContain("ctx");
+		expect(text).not.toContain("Σ");
 	});
 });

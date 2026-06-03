@@ -205,7 +205,6 @@ describe("createTools", () => {
 				"web_search.enabled": false,
 				"browser.enabled": false,
 				"inspect_image.enabled": false,
-				"calc.enabled": false,
 			}),
 		});
 		const tools = await createTools(session);
@@ -219,7 +218,6 @@ describe("createTools", () => {
 		expect(names).not.toContain("web_search");
 		expect(names).not.toContain("browser");
 		expect(names).not.toContain("inspect_image");
-		expect(names).not.toContain("calc");
 	});
 
 	it("always includes resolve regardless of plan-mode setting", async () => {

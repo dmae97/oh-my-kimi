@@ -55,6 +55,96 @@ describe("lsp regressions", () => {
 		expect(clampTimeout("lsp", 1000)).toBe(60);
 	});
 
+	async function markerExists(filePath: string): Promise<boolean> {
+		try {
+			await Bun.file(filePath).bytes();
+			return true;
+		} catch (error) {
+			if (piUtils.isEnoent(error)) return false;
+			throw error;
+		}
+	}
+
+	it("sends the LSP exit notification after shutdown completes", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-shutdown-");
+		try {
+			const markerDir = tempDir.path();
+			const serverPath = path.join(markerDir, "server.ts");
+			await Bun.write(
+				serverPath,
+				`
+const markerDir = process.argv[2];
+const decoder = new TextDecoder();
+let buffer = "";
+
+async function mark(name) {
+	await Bun.write(\`\${markerDir}/\${name}\`, "1\\n");
+}
+
+function send(message) {
+	const content = JSON.stringify(message);
+	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
+}
+
+process.on("SIGTERM", () => {
+	void mark("sigterm").finally(() => process.abort());
+});
+
+for await (const chunk of Bun.stdin.stream()) {
+	buffer += decoder.decode(chunk, { stream: true });
+	while (true) {
+		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+		if (headerEnd === -1) break;
+
+		const header = buffer.slice(0, headerEnd);
+		const match = /Content-Length: (\\d+)/i.exec(header);
+		if (!match) process.exit(2);
+
+		const contentLength = Number(match[1]);
+		const contentStart = headerEnd + 4;
+		const contentEnd = contentStart + contentLength;
+		if (buffer.length < contentEnd) break;
+
+		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
+		buffer = buffer.slice(contentEnd);
+
+		if (message.method === "initialize") {
+			await mark("initialize");
+			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+		} else if (message.method === "shutdown") {
+			await mark("shutdown");
+			send({ jsonrpc: "2.0", id: message.id, result: null });
+		} else if (message.method === "exit") {
+			await mark("exit");
+			process.exit(0);
+		}
+	}
+}
+
+await mark("stdin-closed");
+process.abort();
+`,
+			);
+
+			const server: ServerConfig = {
+				command: process.execPath,
+				args: [serverPath, markerDir],
+				fileTypes: ["ts"],
+				rootMarkers: [],
+			};
+
+			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
+			await lspClient.shutdownAll();
+
+			expect(await markerExists(path.join(markerDir, "shutdown"))).toBe(true);
+			expect(await markerExists(path.join(markerDir, "exit"))).toBe(true);
+			expect(await markerExists(path.join(markerDir, "sigterm"))).toBe(false);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("limits glob collection to avoid large diagnostic stalls", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-glob-");
 		try {
