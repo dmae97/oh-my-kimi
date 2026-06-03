@@ -29,7 +29,7 @@ const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
 
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
-export const DEFAULT_MAX_INLINE_IMAGES = 3;
+export const DEFAULT_MAX_INLINE_IMAGES = 8;
 
 /**
  * Bounds how many inline images render as live terminal graphics at once.
@@ -276,17 +276,20 @@ export class Image implements Component {
 				this.#budget.enqueueTransmit(this.#imageId, result.transmit);
 			}
 
-			if (result) {
-				// Return `rows` lines so TUI accounts for image height
-				// First (rows-1) lines are empty (TUI clears them)
-				// Last line: move cursor back up, then output image sequence
+			if (result?.lines) {
+				// Unicode placeholders: the image is already a block of real text-cell
+				// lines (line 0 carries the virtual-placement APC). No cursor moves.
+				lines = result.lines;
+			} else if (result) {
+				// Direct placement: return `rows` lines so TUI accounts for image
+				// height. First (rows-1) lines are empty (TUI clears them); the last
+				// moves the cursor back up, then emits the image sequence.
 				lines = [];
 				for (let i = 0; i < result.rows - 1; i++) {
 					lines.push("");
 				}
-				// Move cursor up to first row, then output image
 				const moveUp = result.rows > 1 ? `\x1b[${result.rows - 1}A` : "";
-				lines.push(moveUp + result.sequence);
+				lines.push(moveUp + (result.sequence ?? ""));
 			} else {
 				lines = [
 					this.#theme.fallbackColor(imageFallback(this.#mimeType, this.#dimensions, this.#options.filename)),

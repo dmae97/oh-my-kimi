@@ -1,5 +1,13 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import {
+	encodeKittyTempFileTransmit,
+	getKittyGraphics,
+	isPngBase64,
+	KITTY_PLACEHOLDER,
+	kittyPlaceholdersFit,
+	renderKittyPlaceholderLines,
+} from "./kitty-graphics";
 
 export enum ImageProtocol {
 	Kitty = "\x1b_G",
@@ -26,6 +34,7 @@ export class TerminalInfo {
 		public readonly notifyProtocol: NotifyProtocol = NotifyProtocol.Bell,
 		public readonly eagerEraseScrollbackRisk: boolean = false,
 		public readonly deccara: boolean = false,
+		readonly supportsScreenToScrollback: boolean = false,
 	) {}
 
 	isImageLine(line: string): boolean {
@@ -33,7 +42,8 @@ export class TerminalInfo {
 		if (this.imageProtocol === ImageProtocol.Sixel) {
 			return SIXEL_DCS_START_REGEX.test(line.slice(0, 128));
 		}
-		return line.slice(0, 64).includes(this.imageProtocol);
+		const head = line.slice(0, 64);
+		return head.includes(this.imageProtocol) || head.includes(KITTY_PLACEHOLDER);
 	}
 
 	formatNotification(message: string | TerminalNotification): string {
@@ -198,7 +208,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
-	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true),
+	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true),
 	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9, true),
@@ -255,6 +265,7 @@ function withTerminalOverrides(
 		hyperlinks?: boolean;
 		eagerEraseScrollbackRisk?: boolean;
 		deccara?: boolean;
+		supportsScreenToScrollback?: boolean;
 	},
 ): TerminalInfo {
 	return new TerminalInfo(
@@ -267,6 +278,9 @@ function withTerminalOverrides(
 			? overrides.eagerEraseScrollbackRisk
 			: base.eagerEraseScrollbackRisk,
 		overrides.deccara !== undefined ? overrides.deccara : base.deccara,
+		overrides.supportsScreenToScrollback !== undefined
+			? overrides.supportsScreenToScrollback
+			: base.supportsScreenToScrollback,
 	);
 }
 
@@ -308,6 +322,7 @@ export const TERMINAL = (() => {
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
 	deccara: boolean;
+	supportsScreenToScrollback: boolean;
 };
 
 /**
@@ -324,6 +339,11 @@ export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): v
  */
 export function setTerminalDeccara(enabled: boolean): void {
 	(TERMINAL as unknown as MutableTerminalInfo).deccara = enabled;
+}
+
+/** Override screen-to-scrollback clear support for targeted renderer tests. */
+export function setTerminalScreenToScrollback(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).supportsScreenToScrollback = enabled;
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {
@@ -664,7 +684,7 @@ export function renderImage(
 	base64Data: string,
 	imageDimensions: ImageDimensions,
 	options: ImageRenderOptions = {},
-): { sequence: string; rows: number; transmit?: string } | null {
+): { sequence?: string; lines?: string[]; rows: number; transmit?: string } | null {
 	if (!TERMINAL.imageProtocol) {
 		return null;
 	}
@@ -674,14 +694,39 @@ export function renderImage(
 
 	if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 		if (options.imageId != null) {
-			// Transmit-once + placement: re-emit only the tiny `a=p` on repaints.
+			const placementId = options.placementId ?? options.imageId;
+			const graphics = getKittyGraphics();
+			// Transmit-once (keyed by id). Prefer a local temp file for PNGs when the
+			// medium has been promoted; otherwise send in-band base64. Repaints reuse
+			// the stored image, so the transmit is only emitted when requested.
+			let transmit: string | undefined;
+			if (options.includeTransmit) {
+				const tempFile =
+					graphics.transmissionMedium === "temp-file" && isPngBase64(base64Data)
+						? encodeKittyTempFileTransmit(base64Data, options.imageId)
+						: null;
+				transmit = tempFile ?? encodeKittyTransmit(base64Data, options.imageId);
+			}
+			// Unicode placeholders render the image as real text cells (which survive
+			// horizontal slicing, reflow and overlaps) instead of a cursor-positioned
+			// `a=p` placement. Falls back to direct placement when disabled or when the
+			// grid exceeds the diacritic table's addressable cell range.
+			if (graphics.unicodePlaceholders && kittyPlaceholdersFit(fit.columns, fit.rows)) {
+				const lines = renderKittyPlaceholderLines({
+					imageId: options.imageId,
+					placementId,
+					columns: fit.columns,
+					rows: fit.rows,
+				});
+				return { lines, rows: fit.rows, transmit };
+			}
+			// Direct placement: re-emit only the tiny `a=p` on repaints.
 			const sequence = encodeKittyPlacement({
 				imageId: options.imageId,
-				placementId: options.placementId ?? options.imageId,
+				placementId,
 				columns: fit.columns,
 				rows: fit.rows,
 			});
-			const transmit = options.includeTransmit ? encodeKittyTransmit(base64Data, options.imageId) : undefined;
 			return { sequence, rows: fit.rows, transmit };
 		}
 		// No stable id (e.g. no budget): self-contained transmit-and-display.
@@ -765,12 +810,68 @@ function notificationToLine(n: TerminalNotification): string {
 
 // C0/C1 control characters that are unsafe inside an OSC payload (must base64).
 const OSC99_UNSAFE = /[\x00-\x1f\x7f\x80-\x9f]/u;
+const OSC99_MAX_PAYLOAD_BYTES = 2048;
+const OSC99_APP_NAME = "Oh My Pi";
+let nextOsc99NotificationId = 1;
+
+function base64Utf8(value: string): string {
+	return Buffer.from(value, "utf8").toString("base64");
+}
+
+function sanitizeOsc99Id(id: string | undefined): string {
+	if (!id) return "";
+	const safe = id.replace(/[^a-zA-Z0-9_+\-.]/gu, "");
+	return safe === "0" ? "" : safe;
+}
+
+function osc99Id(id: string | undefined): string {
+	return sanitizeOsc99Id(id) || `omp-${nextOsc99NotificationId++}`;
+}
+
+function utf8CodePointBytes(char: string): number {
+	const codePoint = char.codePointAt(0) ?? 0;
+	if (codePoint <= 0x7f) return 1;
+	if (codePoint <= 0x7ff) return 2;
+	if (codePoint <= 0xffff) return 3;
+	return 4;
+}
+
+function chunkUtf8(payload: string): string[] {
+	if (payload === "") return [""];
+	const chunks: string[] = [];
+	let start = 0;
+	let index = 0;
+	let bytes = 0;
+	for (const char of payload) {
+		const charBytes = utf8CodePointBytes(char);
+		if (bytes > 0 && bytes + charBytes > OSC99_MAX_PAYLOAD_BYTES) {
+			chunks.push(payload.slice(start, index));
+			start = index;
+			bytes = 0;
+		}
+		bytes += charBytes;
+		index += char.length;
+	}
+	chunks.push(payload.slice(start));
+	return chunks;
+}
 
 function osc99Chunk(meta: string[], payload: string): string {
 	if (OSC99_UNSAFE.test(payload)) {
-		return `\x1b]99;${[...meta, "e=1"].join(":")};${Buffer.from(payload, "utf8").toString("base64")}\x1b\\`;
+		return `\x1b]99;${[...meta, "e=1"].join(":")};${base64Utf8(payload)}\x1b\\`;
 	}
 	return `\x1b]99;${meta.join(":")};${payload}\x1b\\`;
+}
+
+function osc99Payload(meta: string[], payload: string, holdUntilLaterPayload: boolean): string {
+	const chunks = chunkUtf8(payload);
+	let out = "";
+	for (let i = 0; i < chunks.length; i++) {
+		const chunkMeta = [...meta];
+		if (holdUntilLaterPayload || i < chunks.length - 1) chunkMeta.push("d=0");
+		out += osc99Chunk(chunkMeta, chunks[i]!);
+	}
+	return out;
 }
 
 function osc99Urgency(urgency: TerminalNotification["urgency"]): string | undefined {
@@ -802,41 +903,46 @@ function osc99Actions(actions: TerminalNotification["actions"]): string | undefi
 }
 
 /**
- * Format a structured notification as one or two OSC 99 escape codes. Title and
- * body are separate chunks sharing an id: the title chunk carries all metadata
- * with `d=0` (hold), the body chunk closes with the default `d=1`. Values that
- * need it (type/icon/sound, unsafe payloads) are base64-encoded.
+ * Format a structured notification as OSC 99 title/body payloads. Title and
+ * body chunks share one id. Every non-final chunk carries `d=0`; the final
+ * title or body chunk displays the notification. Metadata values that require
+ * it (application name, type, icon name, sound) are base64-encoded.
  */
 function formatOsc99Notification(n: TerminalNotification): string {
-	const id = (n.id ?? "").replace(/[^a-zA-Z0-9_\-+.]/gu, "") || "1";
-	const meta: string[] = [`i=${id}`];
+	const id = osc99Id(n.id);
+	const meta: string[] = [`i=${id}`, `f=${base64Utf8(OSC99_APP_NAME)}`];
 	const actions = osc99Actions(n.actions);
 	if (actions) meta.push(`a=${actions}`);
 	const urgency = osc99Urgency(n.urgency);
 	if (urgency) meta.push(`u=${urgency}`);
 	const types = n.type === undefined ? [] : Array.isArray(n.type) ? n.type : [n.type];
-	for (const t of types) meta.push(`t=${Buffer.from(t, "utf8").toString("base64")}`);
-	if (n.iconName) meta.push(`n=${Buffer.from(n.iconName, "utf8").toString("base64")}`);
-	if (n.sound) meta.push(`s=${Buffer.from(n.sound, "utf8").toString("base64")}`);
-	if (n.expiresMs !== undefined) meta.push(`w=${Math.trunc(n.expiresMs)}`);
+	for (const t of types) meta.push(`t=${base64Utf8(t)}`);
+	if (n.iconName) meta.push(`n=${base64Utf8(n.iconName)}`);
+	if (n.sound) meta.push(`s=${base64Utf8(n.sound)}`);
+	if (n.expiresMs !== undefined && Number.isFinite(n.expiresMs)) {
+		meta.push(`w=${Math.max(-1, Math.trunc(n.expiresMs))}`);
+	}
 
-	// A notification with no title uses the body as title (per spec).
 	const title = n.title ?? n.body ?? "";
 	const body = n.title ? n.body : undefined;
 
 	if (body !== undefined && body !== "") {
-		meta.push("d=0");
-		return osc99Chunk(meta, title) + osc99Chunk([`i=${id}`, "p=body"], body);
+		return osc99Payload(meta, title, true) + osc99Payload([`i=${id}`, "p=body"], body, false);
 	}
-	return osc99Chunk(meta, title);
+	return osc99Payload(meta, title, false);
 }
 
 /**
- * Whether the terminal supports the OSC 66 text-sizing protocol. Defaults false
- * (opted in at runtime by a known Kitty-family terminal + probe) so
- * non-supporting terminals keep their existing ANSI output.
+ * Whether the terminal supports the OSC 66 text-sizing protocol. The CPR probe
+ * is deliberately not run in normal startup because it moves the cursor; the
+ * initial value is an explicit opt-in for Kitty only, and tests can override it.
  */
-let textSizing = false;
+export function detectTextSizingSupport(terminalId: TerminalId, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	const optIn = env.PI_TUI_TEXT_SIZING?.toLowerCase();
+	return terminalId === "kitty" && (optIn === "1" || optIn === "true" || optIn === "on");
+}
+
+let textSizing = detectTextSizingSupport(TERMINAL_ID, Bun.env);
 
 export function getTextSizing(): boolean {
 	return textSizing;

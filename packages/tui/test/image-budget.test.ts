@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
 import {
+	encodeKittyVirtualPlacement,
+	getKittyGraphics,
+	KITTY_PLACEHOLDER,
+	setKittyGraphics,
+} from "@oh-my-pi/pi-tui/kitty-graphics";
+import {
 	type CellDimensions,
 	encodeKittyDeleteImage,
 	encodeKittyPlacement,
@@ -30,6 +36,10 @@ function pass(budget: ImageBudget, count: number): { suppressed: boolean[]; rese
 }
 
 describe("ImageBudget", () => {
+	it("defaults to eight live images", () => {
+		expect(new ImageBudget().cap).toBe(8);
+	});
+
 	it("keeps every image live while at or under the cap", () => {
 		const budget = new ImageBudget(3, () => {});
 		const first = pass(budget, 2);
@@ -139,17 +149,21 @@ describe("encodeKittyDeleteImage", () => {
 
 describe("Image budget integration", () => {
 	const originalProtocol = TERMINAL.imageProtocol;
+	const originalGraphics = { ...getKittyGraphics() };
 	let originalCellDims: CellDimensions;
 
 	beforeEach(() => {
 		originalCellDims = { ...getCellDimensions() };
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
+		// These tests pin the direct `a=p` placement contract.
+		setKittyGraphics({ unicodePlaceholders: false });
 	});
 
 	afterEach(() => {
 		setCellDimensions(originalCellDims);
 		terminal.imageProtocol = originalProtocol;
+		setKittyGraphics(originalGraphics);
 	});
 
 	it("renders within-budget images as graphics carrying their stable id", () => {
@@ -233,6 +247,77 @@ describe("Image budget integration", () => {
 		expect(olderLines.join("")).toContain("[Image:");
 		expect(olderLines.join("")).not.toContain("\x1b_G");
 		expect(newerLines.at(-1) ?? "").toContain("\x1b_G");
+	});
+});
+
+describe("Image budget + Unicode placeholders", () => {
+	const originalProtocol = TERMINAL.imageProtocol;
+	const originalGraphics = { ...getKittyGraphics() };
+	let originalCellDims: CellDimensions;
+
+	beforeEach(() => {
+		originalCellDims = { ...getCellDimensions() };
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		setKittyGraphics({ unicodePlaceholders: true, transmissionMedium: "direct" });
+	});
+
+	afterEach(() => {
+		setCellDimensions(originalCellDims);
+		terminal.imageProtocol = originalProtocol;
+		setKittyGraphics(originalGraphics);
+	});
+
+	it("renders a transmitted image as a virtual-placement placeholder grid", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id = budget.acquireId("k");
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: "k" },
+		);
+
+		budget.beginPass();
+		const lines = image.render(20);
+		budget.endPass();
+
+		// Line 0 carries the U=1 virtual placement keyed by the image id.
+		expect(lines[0]).toContain(`\x1b_Ga=p,U=1,q=2,i=${id}`);
+		// Every rendered line is a real placeholder-cell row (no empty/cursor-up trick).
+		expect(lines.every(l => l.includes(KITTY_PLACEHOLDER))).toBe(true);
+		expect(lines.join("")).not.toContain("\x1b[1A");
+		// The image id is encoded in the cell foreground color (low 24 bits).
+		expect(lines[0]).toContain(`38;2;0;0;${id}`);
+		// Render lines never carry the base64 — data goes via the one-time transmit.
+		expect(lines.join("")).not.toContain(BASE64_ONE_PIXEL_PNG);
+		const transmits = [...budget.takeTransmits()];
+		expect(transmits).toHaveLength(1);
+		expect(transmits[0]).toContain("\x1b_Ga=t");
+		expect(transmits[0]).toContain(`i=${id}`);
+	});
+
+	it("re-emits the virtual placement (not base64) on a fresh render after cache invalidation", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id = budget.acquireId("k");
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: "k" },
+		);
+		budget.beginPass();
+		image.render(20);
+		budget.endPass();
+		expect([...budget.takeTransmits()]).toHaveLength(1);
+
+		// A repaint after invalidation re-emits the placement but never the data.
+		image.invalidate();
+		budget.beginPass();
+		const lines = image.render(20);
+		budget.endPass();
+		expect(lines[0]).toContain(encodeKittyVirtualPlacement({ imageId: id, placementId: id, columns: 4, rows: 4 }));
+		expect([...budget.takeTransmits()]).toEqual([]);
 	});
 });
 

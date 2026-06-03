@@ -610,9 +610,9 @@ export const SETTINGS_SCHEMA = {
 
 	"tui.maxInlineImages": {
 		type: "number",
-		default: 3,
+		default: 8,
 		description:
-			"Maximum number of inline images kept as live terminal graphics (default 3). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit).",
+			"Maximum number of inline images kept as live terminal graphics (default 8). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit).",
 	},
 
 	"tui.hyperlinks": {

@@ -91,7 +91,7 @@ describe("terminal image rendering", () => {
 
 		expect(result).not.toBeNull();
 		expect(result?.rows).toBe(2);
-		expect(result?.sequence.startsWith("\x1bP")).toBe(true);
+		expect((result?.sequence ?? "").startsWith("\x1bP")).toBe(true);
 	});
 
 	it("Image component forwards maxHeightCells to terminal rendering", () => {

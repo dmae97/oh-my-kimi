@@ -26,6 +26,8 @@ export * from "./fuzzy";
 export * from "./keybindings";
 // Kitty keyboard protocol helpers
 export * from "./keys";
+// Kitty graphics: Unicode placeholders + temp-file transmission
+export * from "./kitty-graphics";
 // Mermaid diagram support
 // Input buffering for batch splitting
 export * from "./stdin-buffer";
