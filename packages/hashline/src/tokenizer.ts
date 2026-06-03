@@ -314,16 +314,42 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 	const end = trimEndIndex(line);
 	if (FILE_PREFIX_LENGTH >= end) return null;
 
+	// The snapshot tag, when present, is the trailing `#XXXX` block. We
+	// detect it from the suffix so the path may legitimately contain
+	// whitespace (e.g. `OneDrive - Company/file.ts`).
 	let pathEnd = end;
 	let fileHash: string | undefined;
-	const hashStart = end - HL_FILE_HASH_LENGTH - 1;
-	if (hashStart >= FILE_PREFIX_LENGTH && line.charCodeAt(hashStart) === CHAR_HASH) {
-		const tagStart = hashStart + 1;
-		for (let probe = tagStart; probe < end; probe++) {
-			if (!isHexDigitCode(line.charCodeAt(probe))) return null;
+	const trailingHashStart = end - HL_FILE_HASH_LENGTH - 1;
+	if (trailingHashStart >= FILE_PREFIX_LENGTH && line.charCodeAt(trailingHashStart) === CHAR_HASH) {
+		let allHex = true;
+		for (let probe = trailingHashStart + 1; probe < end; probe++) {
+			if (!isHexDigitCode(line.charCodeAt(probe))) {
+				allHex = false;
+				break;
+			}
 		}
-		pathEnd = hashStart;
-		fileHash = line.slice(tagStart, end).toUpperCase();
+		if (allHex) {
+			pathEnd = trailingHashStart;
+			fileHash = line.slice(trailingHashStart + 1, end).toUpperCase();
+		}
+	}
+
+	// Reject stale-tag copy-paste such as `¶src/a.ts#1A2B copied from read`:
+	// a `#XXXX` token followed by whitespace+more content in the path body
+	// is a malformed header, not a path-with-embedded-hash. Surface the
+	// focused diagnostic instead of silently mis-routing the edit.
+	for (let i = FILE_PREFIX_LENGTH; i + HL_FILE_HASH_LENGTH < pathEnd; i++) {
+		if (line.charCodeAt(i) !== CHAR_HASH) continue;
+		let allHex = true;
+		for (let k = 1; k <= HL_FILE_HASH_LENGTH; k++) {
+			if (!isHexDigitCode(line.charCodeAt(i + k))) {
+				allHex = false;
+				break;
+			}
+		}
+		if (!allHex) continue;
+		const after = i + HL_FILE_HASH_LENGTH + 1;
+		if (after < pathEnd && isWhitespaceCode(line.charCodeAt(after))) return null;
 	}
 
 	if (pathEnd === FILE_PREFIX_LENGTH) return null;

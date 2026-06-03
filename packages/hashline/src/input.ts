@@ -57,11 +57,30 @@ function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const body = stripApplyPatchPathNoise(line.slice(HL_FILE_PREFIX.length).trim());
 	if (body.length === 0) return null;
-	const match = new RegExp(`^(.+?)(?:#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}))?\\s*$`).exec(body);
-	if (match === null) return null;
-	const path = normalizeHashlinePath(match[1], cwd);
+
+	// Trailing `#XXXX` is the tag; everything before it is the path. The
+	// path may contain whitespace (Windows OneDrive folders, Program Files,
+	// etc.), so we anchor the tag at end-of-body rather than scanning
+	// forward and stopping at the first space.
+	const trailing = new RegExp(`#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}})\\s*$`).exec(body);
+	let pathText: string;
+	let fileHash: string | undefined;
+	if (trailing !== null) {
+		pathText = body.slice(0, trailing.index);
+		fileHash = trailing[1].toUpperCase();
+	} else {
+		pathText = body.replace(/\s+$/, "");
+	}
+
+	// Same anti-junk rule as the strict tokenizer: a `#XXXX` token followed
+	// by whitespace+content inside the path body is a malformed header (e.g.
+	// stale-tag copy-paste like `src/a.ts#1A2B copied from read`), not a
+	// path with an embedded hex fragment.
+	if (new RegExp(`#[0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}\\s`).test(pathText)) return null;
+
+	const path = normalizeHashlinePath(pathText, cwd);
 	if (path.length === 0) return null;
-	return match[2] !== undefined ? { path, fileHash: match[2].toUpperCase(), diff: "" } : { path, diff: "" };
+	return fileHash !== undefined ? { path, fileHash, diff: "" } : { path, diff: "" };
 }
 
 function normalizeHashlinePath(rawPath: string, cwd?: string): string {

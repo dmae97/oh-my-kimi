@@ -23,6 +23,18 @@ describe("hashline section headers", () => {
 		expect(section.fileHash).toBe("1A2B");
 		expect(section.applyTo("before").text).toBe("after");
 	});
+
+	it("rejects trailing junk after a snapshot tag", () => {
+		expect(() => Patch.parse("¶src/a.ts#1A2B copied from read\nreplace 1..1:\n+after")).toThrow(
+			/Input header must be/,
+		);
+	});
+
+	it("rejects trailing junk after a snapshot tag even with apply_patch noise", () => {
+		expect(() => Patch.parse("¶Update File: src/a.ts#1A2B copied from read\nreplace 1..1:\n+after")).toThrow(
+			/Input header must be/,
+		);
+	});
 });
 
 describe("hashline core — verb header forms", () => {
