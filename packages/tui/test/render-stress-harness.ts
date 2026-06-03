@@ -968,8 +968,22 @@ class StressDriver {
 		);
 	}
 
+	/**
+	 * Native-Windows ConPTY host (Windows Terminal, Tabby, VS Code, Hyper —
+	 * every modern Windows terminal). kernel32 cannot see host-UI scrollback
+	 * (the pseudo-console buffer is pinned to the visible grid,
+	 * microsoft/terminal#10191), so `ProcessTerminal` reports `undefined` and
+	 * the renderer's win32 platform guards own the anti-yank contract (#1635,
+	 * #1651, #1746). The yank class only reproduces while the reader is parked
+	 * in scrollback, so the op schedule forces the scroll-up -> streaming-
+	 * mutation pattern early and often, mirroring the ED3-risk schedule above.
+	 */
+	#isWin32ConptyScenario(): boolean {
+		return this.#scenario.platform === "win32" && this.#scenario.terminalMode === "unknown";
+	}
+
 	#chooseOperation(index: number, before: Snapshot): OperationKind {
-		if (this.#isUnknownEd3RiskScenario() && before.position.baseY > 0) {
+		if ((this.#isUnknownEd3RiskScenario() || this.#isWin32ConptyScenario()) && before.position.baseY > 0) {
 			if (before.atBottom && index % 47 === 0) return "scrollUp";
 			if (!before.atBottom && index % 47 === 1) return "eagerStreamingMutation";
 		}
@@ -3086,6 +3100,25 @@ function coreTemplates(): ScenarioTemplate[] {
 			columns: 32,
 			rows: 4,
 			widthChoices: [10, 16, 24, 32, 40],
+			heightChoices: [3, 4, 6],
+			scrollbackRows: 10_000,
+		},
+		{
+			// Native-Windows ConPTY host (Windows Terminal, Tabby, Hyper, VS Code,
+			// conhost behind ConPTY — #1635/#1746). kernel32 cannot see the host
+			// UI's scrollback (the pseudo-console buffer is pinned to the visible
+			// grid), and no env var distinguishes the hosts (Tabby sets none), so
+			// the probe is permanently `undefined`. A reader scrolled in the host
+			// UI must not be yanked by streaming-time rebuilds; reconciliation
+			// waits for explicit checkpoints.
+			name: "win32-unknown-small",
+			platform: "win32",
+			terminalMode: "unknown",
+			envMode: "plain",
+			geometryMode: "small",
+			columns: 32,
+			rows: 4,
+			widthChoices: [10, 16, 32],
 			heightChoices: [3, 4, 6],
 			scrollbackRows: 10_000,
 		},

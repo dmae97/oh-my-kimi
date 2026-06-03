@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, TUI } from "@oh-my-pi/pi-tui";
-import { shouldTrustNativeViewportProbe } from "@oh-my-pi/pi-tui/terminal";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1635
@@ -12,9 +11,14 @@ import { VirtualTerminal } from "./virtual-terminal";
 // shrink-across-viewport branch), the destructive `\x1b[2J\x1b[H\x1b[3J`
 // sequence reset the WT viewport to the top of scrollback.
 //
-// Fix: `shouldTrustNativeViewportProbe` returns false under WT_SESSION so the
-// probe falls back to `undefined`, and the renderer's existing
-// deferred-rebuild path keeps streaming-time mutations non-destructive.
+// Fix: `ProcessTerminal` no longer implements the optional
+// `isNativeViewportAtBottom` probe — no Windows host can answer it truthfully
+// (ConPTY pins the pseudo-console buffer to the visible grid; legacy conhost's
+// window tracks the output cursor, not the buffer tail) — so the renderer's
+// deferred-rebuild path keeps streaming-time mutations non-destructive. The
+// same contract for non-WT ConPTY hosts (Tabby, Hyper, VS Code) is locked
+// end-to-end by issue-1746-repro.test.ts and the win32-unknown render stress
+// scenarios.
 //
 // The renderer assertions below override the VirtualTerminal probe to simulate
 // the two relevant post-fix outcomes:
@@ -70,25 +74,6 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => T | Promise
 }
 
 const ERASE_SCROLLBACK = /\x1b\[3J/g;
-
-describe("issue #1635: shouldTrustNativeViewportProbe", () => {
-	it("returns true on bare native Windows (legacy console)", () => {
-		expect(shouldTrustNativeViewportProbe({}, "win32")).toBe(true);
-	});
-
-	it("returns false when running under Windows Terminal", () => {
-		expect(shouldTrustNativeViewportProbe({ WT_SESSION: "abcd-efgh" }, "win32")).toBe(false);
-	});
-
-	it("returns false on POSIX where the probe has no answer", () => {
-		expect(shouldTrustNativeViewportProbe({}, "linux")).toBe(false);
-		expect(shouldTrustNativeViewportProbe({}, "darwin")).toBe(false);
-	});
-
-	it("returns false on POSIX even if WT_SESSION leaked through (defense in depth)", () => {
-		expect(shouldTrustNativeViewportProbe({ WT_SESSION: "x" }, "linux")).toBe(false);
-	});
-});
 
 describe("issue #1635: TUI must not emit \\x1b[3J when probe is unreliable", () => {
 	it("content shrink with unreportable viewport must not emit \\x1b[3J", async () => {

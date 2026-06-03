@@ -2337,8 +2337,8 @@ describe("TUI terminal-state regressions", () => {
 		});
 
 		it("paints a viewport-saturating pure-append on native Windows Terminal (no \\x1b[3J)", async () => {
-			// Regression: under `WT_SESSION` on native Windows the kernel32 probe is
-			// suppressed and `isNativeViewportAtBottom()` returns `undefined`. The
+			// Regression: on native Windows the viewport probe is permanently
+			// `undefined` (ProcessTerminal does not implement it — see #1635/#1746). The
 			// `15.7.5` #1635 fix routed pure-append-over-saturated-viewport frames to
 			// `deferredMutation` here, which is a literal no-op. That froze the editor
 			// on the very keystroke that grows `lines.length` past the viewport (the

@@ -400,10 +400,12 @@ export class TUI extends Container {
 	 * duplicate-free history and is meant for windows where output above the fold
 	 * is actively re-rendering — e.g. a tool whose result is still streaming and
 	 * re-laying-out rows that have already scrolled into history. A terminal that
-	 * can report a *known*-scrolled viewport (Windows) still defers; only the
-	 * unknown case is forced to rebuild. POSIX hosts known to disturb scrolled
-	 * readers on xterm ED3 (`CSI 3 J`, erase saved lines) also defer the eager
-	 * opt-in; checkpoint and direct user-input rebuilds are unaffected.
+	 * reports a *known*-scrolled viewport still defers, as does native Windows
+	 * (the viewport is never observable there and ConPTY hosts erase host
+	 * scrollback on ED3 — #1635/#1746); only the unknown POSIX case is forced to
+	 * rebuild. POSIX hosts known to disturb scrolled readers on xterm ED3
+	 * (`CSI 3 J`, erase saved lines) also defer the eager opt-in; checkpoint and
+	 * direct user-input rebuilds are unaffected.
 	 *
 	 * Disabling does not take effect until the next frame has been classified:
 	 * the event batch that ends a foreground stream both removes its UI rows

@@ -107,10 +107,11 @@ export function isWindowsTerminalPreviewSixelSupported(
  * Windows Terminal erases its host scrollback on ED3 and repositions the
  * viewport against the shortened buffer, so a scrolled-up reader is yanked.
  * Native win32 is excluded here because the renderer guards it with dedicated
- * platform checks; a `WT_SESSION` sighting on any other platform means the
- * outer host is Windows Terminal fronting a WSL distro (WT propagates the
- * variable into the Linux environment), where the kernel32 viewport probe is
- * unreachable and the same ED3 yank applies. See #1610.
+ * platform checks (the viewport position is never observable on Windows — see
+ * `Terminal.isNativeViewportAtBottom`); a `WT_SESSION` sighting on any other
+ * platform means the outer host is Windows Terminal fronting a WSL distro (WT
+ * propagates the variable into the Linux environment), where the same ED3
+ * yank applies. See #1610.
  *
  * Pure helper for tests and `TERMINAL` trait construction. See #1682 and #1719.
  */
