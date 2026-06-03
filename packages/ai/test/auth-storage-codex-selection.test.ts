@@ -372,7 +372,11 @@ describe("AuthStorage codex oauth ranking", () => {
 							async fetchUsage(params) {
 								const { promise, resolve } = Promise.withResolvers<UsageReport | null>();
 								params.signal?.addEventListener("abort", () => resolve(null), { once: true });
-								return Promise.race([promise, Bun.sleep(200).then(() => null)]);
+								// 2s "would-block" fallback: if the per-request timeout below fails
+								// to abort the fetch, ranking blocks for this long instead of the
+								// ~10ms timeout path. Kept well above the assertion bound so a broken
+								// timeout is still caught, while leaving generous slack for CI jitter.
+								return Promise.race([promise, Bun.sleep(2_000).then(() => null)]);
 							},
 						} satisfies UsageProvider)
 					: undefined,
@@ -389,7 +393,10 @@ describe("AuthStorage codex oauth ranking", () => {
 		const elapsedMs = Date.now() - startedAt;
 
 		expect(apiKey).toBe("api-acct-first");
-		expect(elapsedMs).toBeLessThan(100);
+		// Timeout path resolves in ~10ms; the would-block fallback is 2s. A bound
+		// of 1s proves the 10ms per-request timeout fired without being fooled by
+		// the block path, and absorbs scheduling jitter under parallel CI load.
+		expect(elapsedMs).toBeLessThan(1_000);
 	});
 
 	test("sorts 3 accounts by weekly drain rate", async () => {

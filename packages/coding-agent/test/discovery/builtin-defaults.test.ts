@@ -21,6 +21,7 @@ const EXPECTED_RULE_NAMES = [
 	"ts-bare-catch",
 	"ts-import-type",
 	"ts-no-any",
+	"ts-no-deprecated-leftovers",
 	"ts-no-dynamic-import",
 	"ts-no-return-type",
 	"ts-no-tiny-functions",

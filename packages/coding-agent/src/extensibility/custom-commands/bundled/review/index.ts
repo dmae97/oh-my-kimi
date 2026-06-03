@@ -7,7 +7,7 @@
  * 3. Review a specific commit
  * 4. Custom review instructions
  *
- * Runs git diff upfront, parses results, filters noise, and provides
+ * Runs VCS diffs upfront, parses results, filters noise, and provides
  * rich context for the orchestrating agent to distribute work across
  * multiple reviewer agents based on diff weight and locality.
  */
@@ -18,6 +18,7 @@ import reviewCustomRequestTemplate from "../../../../prompts/review-custom-reque
 import reviewHeadlessRequestTemplate from "../../../../prompts/review-headless-request.md" with { type: "text" };
 import reviewRequestTemplate from "../../../../prompts/review-request.md" with { type: "text" };
 import * as git from "../../../../utils/git";
+import * as jj from "../../../../utils/jj";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -35,6 +36,13 @@ interface DiffStats {
 	totalAdded: number;
 	totalRemoved: number;
 	excluded: { path: string; reason: string; linesAdded: number; linesRemoved: number }[];
+}
+
+interface CurrentReviewDiff {
+	diffInstruction: string;
+	diffText: string;
+	emptyMessage?: string;
+	mode: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -195,11 +203,20 @@ function getDiffPreview(hunks: string, maxLines: number): string {
 // Thresholds for diff inclusion
 const MAX_DIFF_CHARS = 50_000; // Don't include diff above this
 const MAX_FILES_FOR_INLINE_DIFF = 20; // Don't include diff if more files than this
+const DEFAULT_LARGE_DIFF_INSTRUCTION = "MUST run `git diff`/`git show` for assigned files";
+const GIT_UNCOMMITTED_DIFF_INSTRUCTION =
+	"MUST run both `git diff -- <path>` and `git diff --cached -- <path>` for assigned files";
+const JJ_UNCOMMITTED_DIFF_INSTRUCTION = "MUST run `jj --ignore-working-copy diff --git -- <path>` for assigned files";
 
 /**
  * Build the full review prompt with diff stats and distribution guidance.
  */
-function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string, additionalInstructions?: string): string {
+function buildReviewPrompt(
+	mode: string,
+	stats: DiffStats,
+	rawDiff: string,
+	options: { additionalInstructions?: string; diffInstruction?: string } = {},
+): string {
 	const agentCount = getRecommendedAgentCount(stats);
 	const skipDiff = rawDiff.length > MAX_DIFF_CHARS || stats.files.length > MAX_FILES_FOR_INLINE_DIFF;
 	const totalLines = stats.totalAdded + stats.totalRemoved;
@@ -223,7 +240,8 @@ function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string, addi
 		skipDiff,
 		rawDiff: rawDiff.trim(),
 		linesPerFile,
-		additionalInstructions,
+		additionalInstructions: options.additionalInstructions,
+		diffInstruction: options.diffInstruction ?? DEFAULT_LARGE_DIFF_INSTRUCTION,
 	});
 }
 
@@ -305,49 +323,32 @@ export class ReviewCommand implements CustomCommand {
 					`Reviewing changes between \`${baseBranch}\` and \`${currentBranch}\` (PR-style)`,
 					stats,
 					diffText,
-					extraInstructions,
+					{ additionalInstructions: extraInstructions },
 				);
 			}
 
 			case 2: {
-				// Uncommitted changes - combine staged and unstaged
-				const status = await getGitStatus(this.api);
-				if (!status.trim()) {
-					ctx.ui.notify("No uncommitted changes found", "warning");
-					return undefined;
-				}
-
-				let unstagedDiff: string;
-				let stagedDiff: string;
-				try {
-					[unstagedDiff, stagedDiff] = await Promise.all([
-						git.diff(this.api.cwd),
-						git.diff(this.api.cwd, { cached: true }),
-					]);
-				} catch (err) {
+				const reviewDiff = await getUncommittedReviewDiff(this.api).catch(err => {
 					ctx.ui.notify(`Failed to get diff: ${err instanceof Error ? err.message : String(err)}`, "error");
 					return undefined;
-				}
+				});
+				if (!reviewDiff) return undefined;
 
-				const combinedDiff = [unstagedDiff, stagedDiff].filter(Boolean).join("\n");
-
-				if (!combinedDiff.trim()) {
-					ctx.ui.notify("No diff content found", "warning");
+				if (!reviewDiff.diffText.trim()) {
+					ctx.ui.notify(reviewDiff.emptyMessage ?? "No diff content found", "warning");
 					return undefined;
 				}
 
-				const stats = parseDiff(combinedDiff);
+				const stats = parseDiff(reviewDiff.diffText);
 				if (stats.files.length === 0) {
 					ctx.ui.notify("No reviewable files (all changes filtered out)", "warning");
 					return undefined;
 				}
 
-				return buildReviewPrompt(
-					"Reviewing uncommitted changes (staged + unstaged)",
-					stats,
-					combinedDiff,
-					extraInstructions,
-				);
+				return buildReviewPrompt(reviewDiff.mode, stats, reviewDiff.diffText, {
+					additionalInstructions: extraInstructions,
+					diffInstruction: reviewDiff.diffInstruction,
+				});
 			}
 
 			case 3: {
@@ -383,11 +384,13 @@ export class ReviewCommand implements CustomCommand {
 					return undefined;
 				}
 
-				return buildReviewPrompt(`Reviewing commit \`${hash}\``, stats, diffText, extraInstructions);
+				return buildReviewPrompt(`Reviewing commit \`${hash}\``, stats, diffText, {
+					additionalInstructions: extraInstructions,
+				});
 			}
 
 			case 4: {
-				// Custom instructions - still uses the old approach since user provides context
+				// Custom instructions with opportunistic current-diff context.
 				const instructions = await ctx.ui.editor(
 					"Enter custom review instructions",
 					"Review the following:\n\n",
@@ -396,23 +399,19 @@ export class ReviewCommand implements CustomCommand {
 				);
 				if (!instructions?.trim()) return undefined;
 
-				// For custom, we still try to get current diff for context
-				let diffText: string | undefined;
-				try {
-					diffText = await git.diff(this.api.cwd, { base: "HEAD" });
-				} catch {
-					diffText = undefined;
-				}
-				const reviewDiff = diffText?.trim();
+				const reviewDiff = await getUncommittedReviewDiff(this.api).catch(() => undefined);
 
-				if (reviewDiff) {
-					const stats = parseDiff(reviewDiff);
+				if (reviewDiff?.diffText.trim()) {
+					const stats = parseDiff(reviewDiff.diffText);
 					// Even if all files filtered, include the custom instructions
 					return buildReviewPrompt(
 						`Custom review: ${instructions.split("\n")[0].slice(0, 60)}…`,
 						stats,
-						reviewDiff,
-						instructions,
+						reviewDiff.diffText,
+						{
+							additionalInstructions: instructions,
+							diffInstruction: reviewDiff.diffInstruction,
+						},
 					);
 				}
 
@@ -447,6 +446,36 @@ async function getGitStatus(api: CustomCommandAPI): Promise<string> {
 	} catch {
 		return "";
 	}
+}
+
+async function getUncommittedReviewDiff(api: CustomCommandAPI): Promise<CurrentReviewDiff> {
+	if (await jj.repo.is(api.cwd)) {
+		return {
+			diffText: await jj.diff(api.cwd),
+			diffInstruction: JJ_UNCOMMITTED_DIFF_INSTRUCTION,
+			emptyMessage: "No uncommitted changes found",
+			mode: "Reviewing JJ working-copy changes",
+		};
+	}
+
+	const status = await getGitStatus(api);
+	if (!status.trim()) {
+		return {
+			diffText: "",
+			diffInstruction: GIT_UNCOMMITTED_DIFF_INSTRUCTION,
+			emptyMessage: "No uncommitted changes found",
+			mode: "Reviewing uncommitted changes (staged + unstaged)",
+		};
+	}
+
+	const [unstagedDiff, stagedDiff] = await Promise.all([git.diff(api.cwd), git.diff(api.cwd, { cached: true })]);
+	const combinedDiff = [unstagedDiff, stagedDiff].filter(Boolean).join("\n");
+	return {
+		diffText: combinedDiff,
+		diffInstruction: GIT_UNCOMMITTED_DIFF_INSTRUCTION,
+		emptyMessage: "No diff content found",
+		mode: "Reviewing uncommitted changes (staged + unstaged)",
+	};
 }
 
 async function getRecentCommits(api: CustomCommandAPI, count: number): Promise<string[]> {

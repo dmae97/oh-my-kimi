@@ -437,6 +437,26 @@ impl Job {
 		}
 	}
 
+	/// Aborts shell-internal background tasks and drops their join handles.
+	///
+	/// External process jobs are intentionally left alone; callers that abort
+	/// internal tasks are still responsible for signalling any process trees
+	/// those tasks may have spawned.
+	pub fn abort_internal_tasks(&mut self) {
+		let mut aborted = false;
+		self.tasks.retain_mut(|task| {
+			if let JobTask::Internal(handle) = task {
+				handle.abort();
+				aborted = true;
+				return false;
+			}
+			true
+		});
+		if aborted && self.tasks.is_empty() {
+			self.state = JobState::Done;
+		}
+	}
+
 	/// Tries to retrieve a "representative" pid for the job.
 	pub fn representative_pid(&self) -> Option<sys::process::ProcessId> {
 		for task in &self.tasks {

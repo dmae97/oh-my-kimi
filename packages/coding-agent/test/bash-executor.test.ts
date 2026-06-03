@@ -570,11 +570,15 @@ describe("executeBash", () => {
 		if (process.platform === "win32") return;
 
 		const marker = path.join(tempDir, "marker-bg-abort.txt");
+		const release = path.join(tempDir, "marker-bg-abort.release");
+		const started = path.join(tempDir, "marker-bg-abort.started");
 		const markerEscaped = marker.replace(/'/g, "'\\''");
+		const releaseEscaped = release.replace(/'/g, "'\\''");
+		const startedEscaped = started.replace(/'/g, "'\\''");
 		const controller = new AbortController();
 
 		const promise = executeBash(
-			`{ sleep ${KILL_MARKER_DELAY_SECONDS}; echo done > '${markerEscaped}'; } & sleep 10`,
+			`{ touch '${startedEscaped}'; while [ ! -f '${releaseEscaped}' ]; do sleep 0.05; done; echo done > '${markerEscaped}'; } & sleep 10`,
 			{
 				cwd: tempDir,
 				timeout: 10000,
@@ -582,7 +586,11 @@ describe("executeBash", () => {
 			},
 		);
 
-		await Bun.sleep(100);
+		const startDeadline = Date.now() + 4000;
+		while (!fs.existsSync(started) && Date.now() < startDeadline) {
+			await Bun.sleep(2);
+		}
+		expect(fs.existsSync(started)).toBe(true);
 		controller.abort();
 		const result = await promise;
 
@@ -590,6 +598,8 @@ describe("executeBash", () => {
 		expect(result.output).toContain("Command cancelled");
 
 		await Bun.sleep(KILL_MARKER_ASSERTION_WAIT_MS);
+		fs.writeFileSync(release, "");
+		await Bun.sleep(150);
 		expect(fs.existsSync(marker)).toBe(false);
 	});
 

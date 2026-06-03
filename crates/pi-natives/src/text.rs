@@ -378,14 +378,34 @@ const fn ascii_cell_width_u16(u: u16, tab_width: usize) -> usize {
 	}
 }
 
+const MACOS_HANGUL_COMPAT_JAMO_WIDTH: usize = 1;
+
+#[inline]
+const fn is_macos_hangul_compat_jamo(c: char) -> bool {
+	let cp = c as u32;
+	cfg!(target_os = "macos") && cp >= 0x3131 && cp <= 0x318e
+}
+
+#[inline]
+fn apply_macos_hangul_compat_jamo_delta(width: usize, c: char) -> usize {
+	if !is_macos_hangul_compat_jamo(c) {
+		return width;
+	}
+	let unicode_width = UnicodeWidthChar::width(c).unwrap_or(0);
+	if unicode_width > MACOS_HANGUL_COMPAT_JAMO_WIDTH {
+		width.saturating_sub(unicode_width - MACOS_HANGUL_COMPAT_JAMO_WIDTH)
+	} else {
+		width.saturating_add(MACOS_HANGUL_COMPAT_JAMO_WIDTH - unicode_width)
+	}
+}
+
 #[inline]
 fn char_width_corrected(c: char) -> Option<usize> {
 	// Hangul Compatibility Jamo U+3131..=U+318E render as 1 cell on macOS
 	// terminals (Ghostty, Terminal.app, iTerm2), but follow UAX#11 at 2
 	// cells on WezTerm and most Linux terminals. Only force 1 on macOS.
-	let cp = c as u32;
-	if cfg!(target_os = "macos") && (0x3131..=0x318e).contains(&cp) {
-		return Some(1);
+	if is_macos_hangul_compat_jamo(c) {
+		return Some(MACOS_HANGUL_COMPAT_JAMO_WIDTH);
 	}
 	UnicodeWidthChar::width(c)
 }
@@ -402,13 +422,18 @@ fn grapheme_width_str(g: &str, tab_width: usize) -> usize {
 	if it.next().is_none() {
 		return char_width_corrected(c0).unwrap_or(0);
 	}
+	// Multi-char grapheme: keep UnicodeWidthStr as the source of truth for
+	// sequence-level width rules (VS16 emoji presentation, keycaps, ZWJ emoji,
+	// CRLF, script ligatures). A per-char sum is not equivalent. On macOS,
+	// apply only the same local Compatibility Jamo delta that
+	// char_width_corrected applies to standalone code points.
+	let mut width = UnicodeWidthStr::width(g);
 	if cfg!(target_os = "macos") {
-		g.chars()
-			.map(|c| char_width_corrected(c).unwrap_or(0))
-			.sum()
-	} else {
-		UnicodeWidthStr::width(g)
+		for c in g.chars() {
+			width = apply_macos_hangul_compat_jamo_delta(width, c);
+		}
 	}
+	width
 }
 
 thread_local! {
@@ -1309,6 +1334,31 @@ mod tests {
 		assert_eq!(visible_width_u16(&to_u16("\x1b[31mhello\x1b[0m"), DEFAULT_TAB_WIDTH), 5);
 		assert_eq!(visible_width_u16(&to_u16("\x1b[38;5;196mred\x1b[0m"), DEFAULT_TAB_WIDTH), 3);
 		assert_eq!(visible_width_u16(&to_u16("a\tb"), DEFAULT_TAB_WIDTH), 1 + DEFAULT_TAB_WIDTH + 1);
+	}
+
+	#[test]
+	fn test_visible_width_vs16_emoji_presentation() {
+		// Variation-selector-16 (U+FE0F) promotes a default-text-presentation
+		// symbol to emoji presentation, which renders as 2 cells. A naive
+		// per-char sum would count U+26A0 (1) + U+FE0F (0) = 1 and shift table
+		// borders one column. Guards the regression where ⚠️ measured as 1.
+		assert_eq!(visible_width_u16(&to_u16("\u{26A0}\u{FE0F}"), DEFAULT_TAB_WIDTH), 2); // ⚠️
+		assert_eq!(visible_width_u16(&to_u16("\u{2139}\u{FE0F}"), DEFAULT_TAB_WIDTH), 2); // ℹ️
+		assert_eq!(visible_width_u16(&to_u16("\u{2764}\u{FE0F}"), DEFAULT_TAB_WIDTH), 2); // ❤️
+		assert_eq!(visible_width_u16(&to_u16("0\u{FE0F}\u{20E3}"), DEFAULT_TAB_WIDTH), 2); // 0️⃣ keycap
+		// Bare symbol without VS16 keeps text-presentation width (1 cell).
+		assert_eq!(visible_width_u16(&to_u16("\u{26A0}"), DEFAULT_TAB_WIDTH), 1);
+		// Intrinsically wide emoji are unaffected.
+		assert_eq!(visible_width_u16(&to_u16("\u{2705}"), DEFAULT_TAB_WIDTH), 2); // ✅
+		assert_eq!(visible_width_u16(&to_u16("\u{274C}"), DEFAULT_TAB_WIDTH), 2); // ❌
+	}
+
+	#[test]
+	fn test_visible_width_jamo_correction_inside_combining_cluster() {
+		let jamo_cells = if cfg!(target_os = "macos") { 1 } else { 2 };
+		let filler_cells = if cfg!(target_os = "macos") { 1 } else { 0 };
+		assert_eq!(visible_width_u16(&to_u16("\u{3141}\u{0301}"), DEFAULT_TAB_WIDTH), jamo_cells);
+		assert_eq!(visible_width_u16(&to_u16("\u{3164}\u{0301}"), DEFAULT_TAB_WIDTH), filler_cells);
 	}
 
 	#[test]

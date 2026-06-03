@@ -59,6 +59,16 @@ function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void
 	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
 }
 
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => T | Promise<T>): Promise<T> {
+	const originalPlatform = process.platform;
+	Object.defineProperty(process, "platform", { configurable: true, value: platform });
+	try {
+		return await run();
+	} finally {
+		Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+	}
+}
+
 const ERASE_SCROLLBACK = /\x1b\[3J/g;
 
 describe("issue #1635: shouldTrustNativeViewportProbe", () => {
@@ -153,5 +163,31 @@ describe("issue #1635: TUI must not emit \\x1b[3J when probe is unreliable", () 
 		} finally {
 			tui.stop();
 		}
+	});
+
+	it("eager overlay rebuild with unreportable Windows viewport must not emit \\x1b[3J", async () => {
+		await withPlatform("win32", async () => {
+			const term = new VirtualTerminal(40, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const component = new LineList(["base-0", "base-1", "base-2", "base-3"]);
+			tui.addChild(component);
+			try {
+				tui.start();
+				await settle(term);
+				const writes = capture(term);
+				tui.showOverlay(new LineList(["overlay-0"]), { row: 0, col: 0 });
+				await settle(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				component.setLines(["base-0", "base-1", "base-2", "base-3", "streamed"]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(writes.join("").match(ERASE_SCROLLBACK)).toBeNull();
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 });
