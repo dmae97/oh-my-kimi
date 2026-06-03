@@ -1,11 +1,24 @@
-import { beforeAll, describe, expect, it } from "bun:test";
-import { getImageDimensions } from "@oh-my-pi/pi-tui";
-import { buildLargeTextLines, buildSampleImage, encodeRgbPng } from "../../src/debug/protocol-probe";
+import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { getImageDimensions, ImageBudget, ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import {
+	buildLargeTextLines,
+	buildSampleImage,
+	encodeRgbPng,
+	ProtocolProbeComponent,
+} from "../../src/debug/protocol-probe";
 import { initTheme } from "../../src/modes/theme/theme";
 
 beforeAll(async () => {
 	// buildLargeTextLines styles the OSC 66 span through the global theme singleton.
 	await initTheme();
+});
+
+type MutableTerminalInfo = { imageProtocol: ImageProtocol | null };
+const terminal = TERMINAL as unknown as MutableTerminalInfo;
+const originalImageProtocol = TERMINAL.imageProtocol;
+
+afterEach(() => {
+	terminal.imageProtocol = originalImageProtocol;
 });
 
 describe("encodeRgbPng / buildSampleImage", () => {
@@ -28,6 +41,22 @@ describe("encodeRgbPng / buildSampleImage", () => {
 		const decoded = getImageDimensions(Buffer.from(png).toString("base64"), "image/png");
 		expect(decoded).toEqual({ widthPx: 3, heightPx: 2 });
 	});
+});
+
+it("uses independent graphics ids for repeated probe panels", () => {
+	terminal.imageProtocol = ImageProtocol.Kitty;
+	const budget = new ImageBudget(8, () => {});
+	const image = buildSampleImage(8, 8);
+	const first = new ProtocolProbeComponent({ image, imageBudget: budget, notificationSuppressed: true });
+	const second = new ProtocolProbeComponent({ image, imageBudget: budget, notificationSuppressed: true });
+
+	budget.beginPass();
+	const firstBytes = first.render(80).join("\n");
+	const secondBytes = second.render(80).join("\n");
+	budget.endPass();
+
+	expect(firstBytes).toContain("i=1");
+	expect(secondBytes).toContain("i=2");
 });
 
 describe("buildLargeTextLines", () => {

@@ -147,6 +147,19 @@ describe("analyzeBgFillLine", () => {
 		expect(analyzeBgFillLine(`hello${" ".repeat(5)}`, 10)).toBeNull();
 	});
 
+	it("rejects colored trailing fills after default-background gap cells", () => {
+		expect(analyzeBgFillLine(`${" ".repeat(2)}${BG_OPEN}${" ".repeat(8)}${close}`, 10)).toBeNull();
+		expect(analyzeBgFillLine(`X ${BG_OPEN}${" ".repeat(8)}${close}`, 10)).toBeNull();
+	});
+
+	it("allows a colored trailing fill that starts immediately after default content", () => {
+		expect(analyzeBgFillLine(`X${BG_OPEN}${" ".repeat(9)}${close}`, 10)).toEqual({
+			cut: 1,
+			leftCol: 1,
+			bg: BG_SGR,
+		});
+	});
+
 	it("rejects rows narrower than the full width", () => {
 		const line = `\x1b[41mab${" ".repeat(3)}${close}`;
 		expect(analyzeBgFillLine(line, 10)).toBeNull();

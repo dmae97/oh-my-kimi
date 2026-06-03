@@ -366,6 +366,7 @@ fn is_sgr_u16(seq: &[u16]) -> bool {
 
 struct Osc66Info<'a> {
 	payload: &'a [u16],
+	scale:   usize,
 	width:   usize,
 }
 
@@ -380,7 +381,9 @@ fn parse_ascii_usize_u16(data: &[u16]) -> Option<usize> {
 		if !(b'0' as u16..=b'9' as u16).contains(&u) {
 			return None;
 		}
-		value = value.saturating_mul(10).saturating_add((u - b'0' as u16) as usize);
+		value = value
+			.saturating_mul(10)
+			.saturating_add((u - b'0' as u16) as usize);
 	}
 	Some(value)
 }
@@ -399,10 +402,7 @@ fn osc66_meta_payload_u16(seq: &[u16]) -> Option<(&[u16], &[u16])> {
 
 	let payload_end = if *seq.last()? == 0x07 {
 		seq.len() - 1
-	} else if seq.len() >= 8
-		&& seq[seq.len() - 2] == ESC
-		&& seq[seq.len() - 1] == b'\\' as u16
-	{
+	} else if seq.len() >= 8 && seq[seq.len() - 2] == ESC && seq[seq.len() - 1] == b'\\' as u16 {
 		seq.len() - 2
 	} else {
 		return None;
@@ -463,12 +463,51 @@ fn osc66_info_u16(seq: &[u16], tab_width: usize) -> Option<Osc66Info<'_>> {
 	let (meta, payload) = osc66_meta_payload_u16(seq)?;
 	let (scale, explicit_width) = parse_osc66_meta_u16(meta);
 	let base_width = explicit_width.unwrap_or_else(|| visible_width_u16(payload, tab_width));
-	Some(Osc66Info { payload, width: scale.saturating_mul(base_width) })
+	Some(Osc66Info { payload, scale, width: scale.saturating_mul(base_width) })
 }
 
 #[inline]
 fn osc66_visible_width_u16(seq: &[u16], tab_width: usize) -> Option<usize> {
 	Some(osc66_info_u16(seq, tab_width)?.width)
+}
+
+#[inline]
+const fn div_ceil_usize(n: usize, d: usize) -> usize {
+	if n == 0 { 0 } else { 1 + (n - 1) / d }
+}
+
+#[inline]
+const fn osc66_payload_range(
+	visual_start: usize,
+	visual_len: usize,
+	scale: usize,
+	strict: bool,
+) -> (usize, usize) {
+	let visual_end = visual_start.saturating_add(visual_len);
+	let payload_start = if strict {
+		div_ceil_usize(visual_start, scale)
+	} else {
+		visual_start / scale
+	};
+	let payload_end = if strict {
+		visual_end / scale
+	} else {
+		div_ceil_usize(visual_end, scale)
+	};
+	(payload_start, payload_end.saturating_sub(payload_start))
+}
+
+#[inline]
+const fn is_ascii_grapheme_extender_u16(u: u16) -> bool {
+	matches!(
+		u,
+		0x0300..=0x036f
+			| 0x1ab0..=0x1aff
+			| 0x1dc0..=0x1dff
+			| 0x200d
+			| 0x20d0..=0x20ff
+			| 0xfe00..=0xfe0f
+	)
 }
 
 // ============================================================================
@@ -666,12 +705,26 @@ where
 
 	while i < data.len() && current_col < end_col {
 		let start = i;
-		let mut is_ascii = true;
-		while i < data.len() {
-			if data[i] > 0x7f {
-				is_ascii = false;
+		let mut is_ascii = data[i] <= 0x7f;
+		i += 1;
+		if is_ascii {
+			while i < data.len() && data[i] <= 0x7f {
+				i += 1;
 			}
-			i += 1;
+			if i < data.len() && is_ascii_grapheme_extender_u16(data[i]) {
+				let safe_end = i.saturating_sub(1);
+				if safe_end > start {
+					i = safe_end;
+				} else {
+					is_ascii = false;
+					i += 1;
+				}
+			}
+		}
+		if !is_ascii {
+			while i < data.len() && data[i] > 0x7f {
+				i += 1;
+			}
 		}
 		let seg = &data[start..i];
 
@@ -1281,11 +1334,13 @@ fn slice_with_width_impl(
 						let overlap_start = start_col.saturating_sub(span_start);
 						let overlap_end = span_end.min(end_col) - span_start;
 						let overlap_len = overlap_end.saturating_sub(overlap_start);
+						let (payload_start, payload_len) =
+							osc66_payload_range(overlap_start, overlap_len, osc66.scale, strict);
 						let (payload_w, _) = append_visible_range_plain_u16(
 							&mut out,
 							osc66.payload,
-							overlap_start,
-							overlap_len,
+							payload_start,
+							payload_len,
 							strict,
 							tab_width,
 							|out| flush_pending_ansi(out, line, &mut pending_ansi),
@@ -1455,11 +1510,13 @@ fn extract_segments_impl(
 							before_w = before_w.saturating_add(osc66.width);
 						} else {
 							let overlap_len = before_end - span_start;
+							let (payload_start, payload_len) =
+								osc66_payload_range(0, overlap_len, osc66.scale, true);
 							let (payload_w, _) = append_visible_range_plain_u16(
 								&mut before,
 								osc66.payload,
-								0,
-								overlap_len,
+								payload_start,
+								payload_len,
 								true,
 								tab_width,
 								|out| flush_pending_ansi(out, line, &mut pending_before_ansi),
@@ -1481,11 +1538,13 @@ fn extract_segments_impl(
 							after.extend_from_slice(seq);
 							after_w = after_w.saturating_add(osc66.width);
 						} else {
+							let (payload_start, payload_len) =
+								osc66_payload_range(overlap_start, overlap_len, osc66.scale, strict_after);
 							let (payload_w, wrote_payload) = append_visible_range_plain_u16(
 								&mut after,
 								osc66.payload,
-								overlap_start,
-								overlap_len,
+								payload_start,
+								payload_len,
 								strict_after,
 								tab_width,
 								|out| {
@@ -1678,7 +1737,7 @@ mod tests {
 	#[test]
 	fn test_visible_width_jamo_correction_inside_combining_cluster() {
 		let jamo_cells = if cfg!(target_os = "macos") { 1 } else { 2 };
-		let filler_cells = if cfg!(target_os = "macos") { 1 } else { 0 };
+		let filler_cells = usize::from(cfg!(target_os = "macos"));
 		assert_eq!(visible_width_u16(&to_u16("\u{3141}\u{0301}"), DEFAULT_TAB_WIDTH), jamo_cells);
 		assert_eq!(visible_width_u16(&to_u16("\u{3164}\u{0301}"), DEFAULT_TAB_WIDTH), filler_cells);
 	}
@@ -1711,10 +1770,7 @@ mod tests {
 	fn test_visible_width_counts_osc66_lines() {
 		assert_eq!(visible_width_u16(&to_u16("\x1b]66;s=2;Hi\x1b\\"), DEFAULT_TAB_WIDTH), 4);
 		assert_eq!(visible_width_u16(&to_u16("\x1b]66;w=5;Hi\x1b\\"), DEFAULT_TAB_WIDTH), 5);
-		assert_eq!(
-			visible_width_u16(&to_u16("\x1b]66;s=3:w=4;X\x1b\\"), DEFAULT_TAB_WIDTH),
-			12
-		);
+		assert_eq!(visible_width_u16(&to_u16("\x1b]66;s=3:w=4;X\x1b\\"), DEFAULT_TAB_WIDTH), 12);
 		assert_eq!(visible_width_u16(&to_u16("\x1b]66;;abc\x1b\\"), DEFAULT_TAB_WIDTH), 3);
 		assert_eq!(
 			visible_width_u16(&to_u16("A\x1b]66;s=2;Hi\x1b\\Z"), DEFAULT_TAB_WIDTH),
@@ -1724,6 +1780,37 @@ mod tests {
 			visible_width_u16(&to_u16("\x1b[31m\x1b]66;s=2;Hi\x1b\\\x1b[0m"), DEFAULT_TAB_WIDTH),
 			4
 		);
+	}
+
+	#[test]
+	fn test_osc66_scaled_partial_slices_map_to_payload_cells() {
+		let data = to_u16("\x1b]66;s=2;Hi\x1b\\");
+
+		let (head, head_w) = slice_with_width_impl(&data, 0, 2, true, DEFAULT_TAB_WIDTH);
+		assert_eq!(String::from_utf16_lossy(&head), "H");
+		assert_eq!(head_w, 1);
+
+		let (tail, tail_w) = slice_with_width_impl(&data, 2, 2, true, DEFAULT_TAB_WIDTH);
+		assert_eq!(String::from_utf16_lossy(&tail), "i");
+		assert_eq!(tail_w, 1);
+
+		let (before, before_w, after, after_w) =
+			extract_segments_impl(&to_u16("A\x1b]66;s=2;Hi\x1b\\Z"), 1, 3, 2, true, DEFAULT_TAB_WIDTH);
+		assert_eq!(String::from_utf16_lossy(&before), "A");
+		assert_eq!(before_w, 1);
+		assert_eq!(String::from_utf16_lossy(&after), "i");
+		assert_eq!(after_w, 1);
+	}
+
+	#[test]
+	fn test_plain_range_keeps_ascii_base_with_combining_mark() {
+		let mut out = Vec::new();
+		let data = to_u16("ab\u{0301}c界");
+		let (width, wrote) =
+			append_visible_range_plain_u16(&mut out, &data, 1, 1, true, DEFAULT_TAB_WIDTH, |_| {});
+		assert!(wrote);
+		assert_eq!(width, 1);
+		assert_eq!(String::from_utf16_lossy(&out), "b\u{0301}");
 	}
 
 	#[test]

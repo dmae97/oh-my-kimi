@@ -18,7 +18,6 @@ import {
 	type Component,
 	Container,
 	encodeTextSized,
-	getTextSizing,
 	Image,
 	type ImageBudget,
 	ImageProtocol,
@@ -197,7 +196,7 @@ export class ProtocolProbeComponent extends Container {
 	constructor(options: ProtocolProbeOptions) {
 		super();
 		const hyperlinksOn = TERMINAL.hyperlinks;
-		const sizingOn = getTextSizing();
+		const sizingOn = TERMINAL.textSizing;
 		const yesNo = (on: boolean) => (on ? theme.fg("success", "supported") : theme.fg("muted", "unsupported"));
 
 		this.addChild(new DynamicBorder());
@@ -232,7 +231,7 @@ export class ProtocolProbeComponent extends Container {
 			this.addChild(new RawLines(buildLargeTextLines()));
 		} else {
 			this.addChild(
-				new Text(theme.fg("dim", "  (enable with PI_TUI_TEXT_SIZING=1 on a supporting terminal)"), 1, 0),
+				new Text(theme.fg("dim", "  (enable via the tui.textSizing setting on a Kitty terminal)"), 1, 0),
 			);
 		}
 		this.addChild(new Spacer(1));
@@ -246,7 +245,7 @@ export class ProtocolProbeComponent extends Container {
 				{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
 				// Fixed modest caps (not the user's inline-image setting) keep the
 				// swatch a crisp, bounded preview rather than an upscaled wall.
-				{ maxWidthCells: 20, maxHeightCells: 16, budget: options.imageBudget, imageKey: "debug:protocol-probe" },
+				{ maxWidthCells: 20, maxHeightCells: 16, budget: options.imageBudget },
 				options.image.dimensions,
 			),
 		);

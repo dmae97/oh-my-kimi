@@ -202,7 +202,9 @@ export function visibleWidthRaw(str: string): number {
 	for (let i = 0; i < str.length; i++) {
 		const code = str.charCodeAt(i);
 		if (code < 0x20 || code > 0x7e) {
-			return str.includes("\u200d") ? visibleWidthByGrapheme(str) : nativeVisibleWidth(str, getDefaultTabWidth());
+			const tabWidth = getDefaultTabWidth();
+			if (str.includes("\x1b]66;")) return nativeVisibleWidth(str, tabWidth);
+			return str.includes("\u200d") ? visibleWidthByGrapheme(str) : nativeVisibleWidth(str, tabWidth);
 		}
 	}
 	return str.length;

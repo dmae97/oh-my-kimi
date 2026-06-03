@@ -102,6 +102,8 @@ describe("text utils", () => {
 		expect(visibleWidth("\x1b]66;s=3:w=4;X\x1b\\")).toBe(12);
 		expect(visibleWidth("\x1b]66;;abc\x1b\\")).toBe(3);
 		expect(visibleWidth(`A${"\x1b]66;s=2;Hi\x1b\\"}Z`)).toBe(1 + 4 + 1);
+		const family = "👨‍👩‍👧‍👦";
+		expect(visibleWidth(encodeTextSized(family, { scale: 2, widthCells: 2 }))).toBe(4);
 	});
 
 	it("slices and truncates OSC 66 spans atomically", () => {
@@ -117,9 +119,14 @@ describe("text utils", () => {
 		expect(visibleWidth(fullTruncate)).toBe(4);
 
 		const partialSlice = sliceWithWidth(osc66, 0, 2, true);
-		expect(partialSlice.text).toBe("Hi");
-		expect(partialSlice.width).toBe(2);
+		expect(partialSlice.text).toBe("H");
+		expect(partialSlice.width).toBe(1);
 		expect(partialSlice.text.includes("\x1b]66")).toBe(false);
+
+		const trailingSlice = sliceWithWidth(osc66, 2, 2, true);
+		expect(trailingSlice.text).toBe("i");
+		expect(trailingSlice.width).toBe(1);
+		expect(trailingSlice.text.includes("\x1b]66")).toBe(false);
 
 		const partialTruncate = truncateToWidth(osc66, 3);
 		expect(partialTruncate.includes("\x1b]66")).toBe(false);
@@ -133,8 +140,8 @@ describe("text utils", () => {
 
 		expect(result.before).toBe("A");
 		expect(result.beforeWidth).toBe(1);
-		expect(result.after).toBe("Hi");
-		expect(result.afterWidth).toBe(2);
+		expect(result.after).toBe("H");
+		expect(result.afterWidth).toBe(1);
 		expect(result.after.includes("\x1b]66")).toBe(false);
 	});
 });

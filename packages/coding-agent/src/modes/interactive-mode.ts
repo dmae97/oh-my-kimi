@@ -28,6 +28,8 @@ import {
 	Markdown,
 	ProcessTerminal,
 	Spacer,
+	setTerminalTextSizing,
+	TERMINAL,
 	Text,
 	TUI,
 	visibleWidth,
@@ -391,6 +393,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
 		this.ui.setMaxInlineImages(settings.get("tui.maxInlineImages"));
+		// OSC 66 text-sizing is Kitty-only; resolve the setting against the terminal's
+		// capability (`TERMINAL.textSizing` defaults on for Kitty) so it stays off
+		// unless the user opts in, and never emits raw escapes on other terminals.
+		setTerminalTextSizing(settings.get("tui.textSizing") && TERMINAL.textSizing);
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();

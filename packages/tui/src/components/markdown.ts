@@ -1,7 +1,7 @@
 import { LRUCache } from "lru-cache/raw";
 import { Marked, marked, type Token, Tokenizer, type Tokens } from "marked";
 import type { SymbolTheme } from "../symbols";
-import { getTextSizing, TERMINAL } from "../terminal-capabilities";
+import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import {
 	applyBackgroundToLine,
@@ -357,7 +357,7 @@ export class Markdown implements Component {
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
 		const headingProbe = this.#theme.heading("");
-		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${getTextSizing() ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
 		const cached = renderCache.get(cacheKey);
 		if (cached !== undefined) {
 			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -550,16 +550,14 @@ export class Markdown implements Component {
 				const headingText = this.#renderInlineTokens(token.tokens || [], styleContext);
 				const headingPlainText = plainInlineTokens(token.tokens || []);
 				let styledHeading: string;
-				if (headingLevel === 1 && getTextSizing()) {
+				if (headingLevel === 1 && TERMINAL.textSizing) {
 					const plainWidth = visibleWidth(headingPlainText);
 					if (plainWidth > 0 && 2 * plainWidth <= width) {
 						const sizedHeading = encodeTextSizedHeading(headingPlainText, 2);
 						lines.push(this.#theme.heading(this.#theme.bold(this.#theme.underline(sizedHeading))));
-						if (nextTokenType) {
-							lines.push(""); // reserve the heading's second visual row
-							if (nextTokenType !== "space") {
-								lines.push(""); // Add spacing after headings (unless space token follows)
-							}
+						lines.push(""); // reserve the heading's second visual row
+						if (nextTokenType && nextTokenType !== "space") {
+							lines.push(""); // Add spacing after headings (unless space token follows)
 						}
 						break;
 					}

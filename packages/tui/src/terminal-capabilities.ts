@@ -35,6 +35,8 @@ export class TerminalInfo {
 		public readonly eagerEraseScrollbackRisk: boolean = false,
 		public readonly deccara: boolean = false,
 		readonly supportsScreenToScrollback: boolean = false,
+		/** Renders the Kitty OSC 66 text-sizing protocol (scaled spans). Kitty only. */
+		public readonly textSizing: boolean = false,
 	) {}
 
 	isImageLine(line: string): boolean {
@@ -208,7 +210,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
-	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true),
+	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true, true),
 	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9, true),
@@ -323,6 +325,7 @@ type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
 	deccara: boolean;
 	supportsScreenToScrollback: boolean;
+	textSizing: boolean;
 };
 
 /**
@@ -344,6 +347,15 @@ export function setTerminalDeccara(enabled: boolean): void {
 /** Override screen-to-scrollback clear support for targeted renderer tests. */
 export function setTerminalScreenToScrollback(enabled: boolean): void {
 	(TERMINAL as unknown as MutableTerminalInfo).supportsScreenToScrollback = enabled;
+}
+
+/**
+ * Enable/disable OSC 66 text-sizing at runtime. The coding-agent calls this from
+ * the `tui.textSizing` setting (gated on the terminal's static `textSizing`
+ * capability); tests flip it directly to exercise the scaled-heading path.
+ */
+export function setTerminalTextSizing(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).textSizing = enabled;
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {
@@ -930,24 +942,4 @@ function formatOsc99Notification(n: TerminalNotification): string {
 		return osc99Payload(meta, title, true) + osc99Payload([`i=${id}`, "p=body"], body, false);
 	}
 	return osc99Payload(meta, title, false);
-}
-
-/**
- * Whether the terminal supports the OSC 66 text-sizing protocol. The CPR probe
- * is deliberately not run in normal startup because it moves the cursor; the
- * initial value is an explicit opt-in for Kitty only, and tests can override it.
- */
-export function detectTextSizingSupport(terminalId: TerminalId, env: NodeJS.ProcessEnv = Bun.env): boolean {
-	const optIn = env.PI_TUI_TEXT_SIZING?.toLowerCase();
-	return terminalId === "kitty" && (optIn === "1" || optIn === "true" || optIn === "on");
-}
-
-let textSizing = detectTextSizingSupport(TERMINAL_ID, Bun.env);
-
-export function getTextSizing(): boolean {
-	return textSizing;
-}
-
-export function setTextSizing(enabled: boolean): void {
-	textSizing = enabled;
 }

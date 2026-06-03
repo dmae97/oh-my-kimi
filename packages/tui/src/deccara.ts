@@ -142,10 +142,11 @@ export function analyzeBgFillLine(line: string, width: number): BgFillAnalysis |
 	// Byte index / column immediately after the last non-space printable glyph.
 	let nonSpaceEndByte = 0;
 	let nonSpaceEndCol = 0;
-	// Background covering the current trailing run of spaces, and whether it has
-	// stayed constant across that run. `trailBg` is captured the moment a space
-	// run is seen and reset whenever a non-space glyph restarts the trailing run.
+	// Background covering the current trailing run of spaces, and whether that
+	// trailing run has started. `null` is a real "default background" value, so
+	// it cannot double as the uninitialized sentinel.
 	let trailBg: BgState = null;
+	let trailStarted = false;
 	let trailConsistent = true;
 
 	while (i < line.length) {
@@ -180,13 +181,22 @@ export function analyzeBgFillLine(line: string, width: number): BgFillAnalysis |
 			const nonSpaceWidth = visibleWidth(text.slice(0, nonSpaceLen));
 			nonSpaceEndByte = i + nonSpaceLen;
 			nonSpaceEndCol = col + nonSpaceWidth;
-			// Any trailing spaces in this same run sit under the current bg.
-			trailBg = bg;
+			// Spaces after the last non-space glyph in this same printable run sit
+			// under the current bg. If there are none, the trailing region has not
+			// started yet; a later SGR can still begin a uniform fill safely.
+			if (nonSpaceLen < text.length) {
+				trailBg = bg;
+				trailStarted = true;
+			} else {
+				trailBg = null;
+				trailStarted = false;
+			}
 			trailConsistent = true;
 		} else if (text.length > 0) {
 			// Whole run is spaces: it extends the trailing region. Track bg drift.
-			if (trailBg === null) {
+			if (!trailStarted) {
 				trailBg = bg;
+				trailStarted = true;
 			} else if (bg !== trailBg) {
 				trailConsistent = false;
 			}
@@ -197,7 +207,7 @@ export function analyzeBgFillLine(line: string, width: number): BgFillAnalysis |
 
 	if (col !== width) return null; // not a full-width fill
 	if (nonSpaceEndCol >= width) return null; // no trailing padding to drop
-	if (trailBg === null || !trailConsistent) return null; // default/mixed bg — nothing safe to paint
+	if (!trailStarted || trailBg === null || !trailConsistent) return null; // default/mixed bg — nothing safe to paint
 	return { cut: nonSpaceEndByte, leftCol: nonSpaceEndCol, bg: trailBg };
 }
 

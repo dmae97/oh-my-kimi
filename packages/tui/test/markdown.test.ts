@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
 import { Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
-import { getTextSizing, setTextSizing, TERMINAL } from "../src/terminal-capabilities.js";
+import { setTerminalTextSizing, TERMINAL } from "../src/terminal-capabilities.js";
 import { type Component, TUI } from "../src/tui.js";
 import { visibleWidth } from "../src/utils.js";
 import { defaultMarkdownTheme } from "./test-themes.js";
@@ -1254,34 +1254,36 @@ describe("OSC 66 text-sizing headings", () => {
 
 	afterEach(() => {
 		// The capability gate is process-global; never let it leak into other suites.
-		setTextSizing(false);
+		setTerminalTextSizing(false);
 	});
 
 	it("keeps H1 as plain ANSI when text-sizing is disabled (default)", () => {
-		expect(getTextSizing()).toBe(false);
+		expect(TERMINAL.textSizing).toBe(false);
 		const lines = new Markdown("# Hello", 0, 0, defaultMarkdownTheme).render(80);
 		expect(lines.some(line => line.includes(OSC66_INTRO))).toBe(false);
 		expect(lines.some(line => stripVTControlCharacters(line).includes("Hello"))).toBe(true);
 	});
 
-	it("emits a scale-2 OSC 66 span for H1 when text-sizing is enabled and width allows", () => {
-		setTextSizing(true);
+	it("emits a scale-2 OSC 66 span for H1 and reserves its second visual row", () => {
+		setTerminalTextSizing(true);
 		const lines = new Markdown("# Hello", 0, 0, defaultMarkdownTheme).render(80);
 
-		const oscLine = lines.find(line => line.includes(OSC66_INTRO));
-		expect(oscLine).toBeTruthy();
-		expect(oscLine!).toContain("s=2");
+		const oscIndex = lines.findIndex(line => line.includes(OSC66_INTRO));
+		expect(oscIndex).toBeGreaterThanOrEqual(0);
+		const oscLine = lines[oscIndex]!;
+		expect(oscLine).toContain("s=2");
 		// The heading text rides inside the OSC 66 payload, so it survives in the
 		// raw bytes (stripVTControlCharacters would drop the whole OSC span).
-		expect(oscLine!.includes("Hello")).toBe(true);
+		expect(oscLine.includes("Hello")).toBe(true);
+		expect(lines[oscIndex + 1]).toBe("");
 
 		// Native + emit agree: a scale-2 span measures exactly twice the plain
 		// heading width regardless of how the span is internally encoded.
-		expect(visibleWidth(oscLine!)).toBe(2 * visibleWidth("Hello"));
+		expect(visibleWidth(oscLine)).toBe(2 * visibleWidth("Hello"));
 	});
 
 	it("leaves the reserved row after a scale-2 H1 as a cursor-only blank", () => {
-		setTextSizing(true);
+		setTerminalTextSizing(true);
 		const lines = new Markdown("# Hello\n\nBody", 0, 0, defaultMarkdownTheme).render(80);
 		const oscIndex = lines.findIndex(line => line.includes(OSC66_INTRO));
 		expect(oscIndex).toBeGreaterThanOrEqual(0);
@@ -1290,7 +1292,7 @@ describe("OSC 66 text-sizing headings", () => {
 	});
 
 	it("doubles the measured width for wide/emoji H1 glyphs", () => {
-		setTextSizing(true);
+		setTerminalTextSizing(true);
 		const lines = new Markdown("# 🚀 Hi", 0, 0, defaultMarkdownTheme).render(80);
 
 		const oscLine = lines.find(line => line.includes(OSC66_INTRO));
@@ -1299,7 +1301,7 @@ describe("OSC 66 text-sizing headings", () => {
 	});
 
 	it("falls back to ANSI when the doubled H1 width would overflow the render width", () => {
-		setTextSizing(true);
+		setTerminalTextSizing(true);
 		// "Hello" is 5 cells; 2*5 = 10 > 8 render columns, so the OSC path is skipped.
 		const lines = new Markdown("# Hello", 0, 0, defaultMarkdownTheme).render(8);
 		expect(lines.some(line => line.includes(OSC66_INTRO))).toBe(false);
@@ -1307,7 +1309,7 @@ describe("OSC 66 text-sizing headings", () => {
 	});
 
 	it("keeps H2 as plain ANSI even when text-sizing is enabled", () => {
-		setTextSizing(true);
+		setTerminalTextSizing(true);
 		const lines = new Markdown("## Sub", 0, 0, defaultMarkdownTheme).render(80);
 		expect(lines.some(line => line.includes(OSC66_INTRO))).toBe(false);
 		expect(lines.some(line => stripVTControlCharacters(line).includes("Sub"))).toBe(true);

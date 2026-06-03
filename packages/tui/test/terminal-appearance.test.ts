@@ -4,6 +4,7 @@ import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	type CellDimensions,
 	getCellDimensions,
+	getTerminalInfo,
 	ImageProtocol,
 	setCellDimensions,
 	setTerminalImageProtocol,
@@ -468,6 +469,15 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
+	it("reports permanent DECRPM statuses 3 and 4 as recognized private modes", () => {
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;3$y");
+		process.stdin.emit("data", "\x1b[?2048;4$y");
+		expect(reports).toContainEqual({ mode: 2026, supported: true });
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		terminal.stop();
+	});
+
 	it("reports a private mode unsupported when DECRPM status is 0", () => {
 		const { terminal, reports } = setup();
 		process.stdin.emit("data", "\x1b[?2026;0$y");
@@ -590,5 +600,16 @@ describe("ProcessTerminal Kitty graphics temp-file probe", () => {
 		process.stdin.emit("data", `\x1b_Gi=${id};ENOTSUP:bad\x1b\\`);
 		expect(getKittyGraphics().transmissionMedium).toBe("direct");
 		terminal.stop();
+	});
+});
+
+describe("OSC 66 text-sizing capability", () => {
+	it("advertises text sizing only for Kitty", () => {
+		// OSC 66 is a Kitty-only protocol; any other terminal must report the
+		// capability as false so the renderer never emits raw escape bytes there.
+		expect(getTerminalInfo("kitty").textSizing).toBe(true);
+		for (const id of ["ghostty", "wezterm", "iterm2", "vscode", "alacritty", "base", "trueColor"] as const) {
+			expect(getTerminalInfo(id).textSizing).toBe(false);
+		}
 	});
 });

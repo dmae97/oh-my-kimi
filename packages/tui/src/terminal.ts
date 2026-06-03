@@ -434,10 +434,11 @@ export class ProcessTerminal implements Terminal {
 
 			// DECRPM private-mode report. Resolves the matching probe by mode; the
 			// owner stays in the FIFO and is drained by its DA1 sentinel (a no-op
-			// once resolved). Per spec status 1 (set) / 2 (reset) = recognized.
+			// once resolved). Per DECRPM, status 0 = unrecognized; 1/2 = set/reset,
+			// and 3/4 = permanently set/reset, still recognized.
 			const decrpmMatch = sequence.match(decrpmResponsePattern);
 			if (decrpmMatch) {
-				this.#resolvePrivateMode(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2] === "1" || decrpmMatch[2] === "2");
+				this.#resolvePrivateMode(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2] !== "0");
 				return;
 			}
 
