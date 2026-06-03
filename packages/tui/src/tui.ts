@@ -1457,30 +1457,31 @@ export class TUI extends Container {
 				return { kind: "viewportRepaint" };
 			}
 			// The shrunk transcript still overflows the viewport. A plain viewport
-			// repaint can duplicate stale rows in native scrollback, while a destructive
-			// history rebuild (`CSI 3 J`) can yank readers in ED3-risk terminals whose
-			// viewport position is unobservable. Outside foreground-tool streaming,
-			// keep the old visible history frozen and reconcile at the next explicit
-			// checkpoint. During a foreground tool, a literal no-op freezes the live
-			// command/status view; continue with a non-destructive repaint path instead.
-			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk && !this.#eagerNativeScrollbackRebuild) {
+			// repaint can leave stale high-water rows in native scrollback, while a
+			// destructive history rebuild (`CSI 3 J`) can yank readers in ED3-risk
+			// terminals whose viewport position is unobservable.
+			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				return { kind: "deferredMutation" };
+				// During a foreground tool the user follows the live tail and we were
+				// asked to keep it fresh (eager rebuild): repaint the true
+				// bottom-anchored tail in place and reconcile stale scrollback at the
+				// next checkpoint. `deferredShrink` would pin the viewport to the
+				// pre-shrink top and pad blank rows, drifting the live tail up by the
+				// shrink delta so later rows render over the ones above (e.g. an
+				// injected notification chip painting over the active tool render).
+				// Outside foreground streaming a literal no-op keeps the old visible
+				// history frozen so a scrolled reader is not yanked.
+				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
 			}
 
-			// If the shrink still leaves enough rows to cover the previous viewport
-			// top, `deferredShrink` can repaint that stable slice without committing
-			// duplicate rows to native scrollback. When the shrink jumps above that
-			// padded viewport top, `deferredShrink` would draw only blank padding and
-			// hide the live prompt. Ordinary POSIX terminals rebuild history in that
-			// case; ED3-risk foreground-tool frames use a non-destructive viewport
-			// repaint and leave stale scrollback queued for the next checkpoint.
+			// Non-ED3-risk POSIX with an unobservable viewport. If the shrink still
+			// leaves enough rows to cover the previous viewport top, `deferredShrink`
+			// can repaint that stable slice without committing duplicate rows to
+			// native scrollback. When the shrink jumps above that padded viewport
+			// top, `deferredShrink` would draw only blank padding and hide the live
+			// prompt, so rebuild history instead (ED3 is safe on these terminals).
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			if (newLines.length <= paddedViewportTop) {
-				if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
-					this.#markNativeScrollbackDirty();
-					return { kind: "viewportRepaint" };
-				}
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
@@ -1512,6 +1513,30 @@ export class TUI extends Container {
 			newLines.length < this.#previousLines.length &&
 			naturalViewportTop !== prevViewportTop
 		) {
+			return { kind: "viewportRepaint" };
+		}
+
+		// A shrink that moves the bottom-anchored viewport upward must re-anchor the
+		// visible window. The shrink-across-high-water block above already
+		// rebuilt/deferred when the shrink re-exposes rows committed to native
+		// scrollback (`naturalViewportTop < #scrollbackHighWater`). The remaining
+		// case slips through when the high-water mark lags the logical viewport top:
+		// non-destructive viewport repaints during foreground-tool streaming on
+		// ED3-risk terminals (ghostty/kitty/…) advance `#maxLinesRendered` without
+		// committing the overflow to native history, so a later shrink finds
+		// `naturalViewportTop >= #scrollbackHighWater` yet still needs to move the
+		// window up. The diff emitter below anchors to `#maxLinesRendered - height`
+		// and would only rewrite the suffix — dropping the newly exposed top row and
+		// leaving a blank at the bottom, so the rows below appear to render over the
+		// ones above. Repaint the true bottom-anchored tail and leave stale
+		// scrollback for the next checkpoint.
+		if (
+			!isMultiplexerSession() &&
+			diff.firstChanged !== -1 &&
+			newLines.length < this.#previousLines.length &&
+			naturalViewportTop < prevViewportTop
+		) {
+			this.#markNativeScrollbackDirty();
 			return { kind: "viewportRepaint" };
 		}
 
