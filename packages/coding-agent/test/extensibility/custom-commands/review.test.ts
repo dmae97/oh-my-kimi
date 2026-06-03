@@ -1,14 +1,23 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $ } from "bun";
 import { ReviewCommand } from "../../../src/extensibility/custom-commands/bundled/review";
 import type { CustomCommandAPI } from "../../../src/extensibility/custom-commands/types";
 import type { HookCommandContext } from "../../../src/extensibility/hooks/types";
+import * as git from "../../../src/utils/git";
+import * as jj from "../../../src/utils/jj";
 
 const LEGACY_TASK_INSTRUCTION = 'Use the Task tool with `agent: "reviewer"` to execute this review.';
 const REVIEWER_TASK_INSTRUCTION = 'Use the `task` tool with `agent: "reviewer"` and a `tasks` array.';
+
+const SAMPLE_JJ_DIFF = `diff --git a/src/workspace.ts b/src/workspace.ts
+--- a/src/workspace.ts
++++ b/src/workspace.ts
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`;
 
 interface EditorCall {
 	title: string;
@@ -29,18 +38,6 @@ describe("ReviewCommand", () => {
 	async function createTempDir(): Promise<string> {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-command-"));
 		return tmpDir;
-	}
-
-	async function createGitRepoWithUncommittedChange(): Promise<string> {
-		const dir = await createTempDir();
-		await $`git init`.cwd(dir).quiet();
-		await $`git config user.name Omp Test`.cwd(dir).quiet();
-		await $`git config user.email omp-test@example.com`.cwd(dir).quiet();
-		await Bun.write(path.join(dir, "review-target.ts"), "export const value = 1;\n");
-		await $`git add review-target.ts`.cwd(dir).quiet();
-		await $`git commit -m initial`.cwd(dir).quiet();
-		await Bun.write(path.join(dir, "review-target.ts"), "export const value = 2;\n");
-		return dir;
 	}
 
 	function createContext(options?: {
@@ -121,20 +118,94 @@ describe("ReviewCommand", () => {
 		}
 	});
 
+	it("uses JJ diff for uncommitted review prompts", async () => {
+		const dir = await createTempDir();
+		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(true);
+		const jjDiffSpy = spyOn(jj, "diff").mockResolvedValue(SAMPLE_JJ_DIFF);
+		const gitStatusSpy = spyOn(git, "status").mockResolvedValue(" M src/workspace.ts\n");
+		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue("");
+		try {
+			const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+			const ctx = createContext({
+				selectedMode: "2. Review uncommitted changes",
+			});
+
+			const result = await command.execute([], ctx);
+
+			expect(result).toBeDefined();
+			const promptText = result!;
+			expect(promptText).toContain("Reviewing JJ working-copy changes");
+			expect(promptText).toContain("src/workspace.ts");
+			expect(promptText).toContain("+1/-1");
+			expect(jjDiffSpy).toHaveBeenCalledWith(dir);
+			expect(gitStatusSpy).not.toHaveBeenCalled();
+			expect(gitDiffSpy).not.toHaveBeenCalled();
+		} finally {
+			jjRepoSpy.mockRestore();
+			jjDiffSpy.mockRestore();
+			gitStatusSpy.mockRestore();
+			gitDiffSpy.mockRestore();
+		}
+	});
+
 	it("includes reviewer task orchestration for single-agent diff reviews", async () => {
-		const dir = await createGitRepoWithUncommittedChange();
-		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
-		const ctx = createContext({
-			selectedMode: "2. Review uncommitted changes",
-		});
+		const dir = await createTempDir();
+		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(false);
+		const gitStatusSpy = spyOn(git, "status").mockResolvedValue(" M review-target.ts\n");
+		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue(`diff --git a/review-target.ts b/review-target.ts
+--- a/review-target.ts
++++ b/review-target.ts
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`);
+		try {
+			const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+			const ctx = createContext({
+				selectedMode: "2. Review uncommitted changes",
+			});
 
-		const result = await command.execute([], ctx);
+			const result = await command.execute([], ctx);
 
-		expect(result).toBeDefined();
-		const promptText = result!;
-		expect(promptText).toContain(REVIEWER_TASK_INSTRUCTION);
-		expect(promptText).toContain("Create exactly **1 reviewer task**");
-		expect(promptText).not.toContain(LEGACY_TASK_INSTRUCTION);
+			expect(result).toBeDefined();
+			const promptText = result!;
+			expect(promptText).toContain(REVIEWER_TASK_INSTRUCTION);
+			expect(promptText).toContain("Create exactly **1 reviewer task**");
+			expect(promptText).not.toContain(LEGACY_TASK_INSTRUCTION);
+		} finally {
+			jjRepoSpy.mockRestore();
+			gitStatusSpy.mockRestore();
+			gitDiffSpy.mockRestore();
+		}
+	});
+
+	it("includes JJ diff context for custom review prompts", async () => {
+		const dir = await createTempDir();
+		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(true);
+		const jjDiffSpy = spyOn(jj, "diff").mockResolvedValue(SAMPLE_JJ_DIFF);
+		const gitStatusSpy = spyOn(git, "status").mockResolvedValue("");
+		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue("");
+		try {
+			const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+			const ctx = createContext({
+				editorValue: "Check workspace state transitions",
+			});
+
+			const result = await command.execute([], ctx);
+
+			expect(result).toBeDefined();
+			const promptText = result!;
+			expect(promptText).toContain("Custom review: Check workspace state transitions…");
+			expect(promptText).toContain("Check workspace state transitions");
+			expect(promptText).toContain("src/workspace.ts");
+			expect(gitStatusSpy).not.toHaveBeenCalled();
+			expect(gitDiffSpy).not.toHaveBeenCalled();
+		} finally {
+			jjRepoSpy.mockRestore();
+			jjDiffSpy.mockRestore();
+			gitStatusSpy.mockRestore();
+			gitDiffSpy.mockRestore();
+		}
 	});
 
 	it("renders headless review requests through the reviewer task prompt", async () => {

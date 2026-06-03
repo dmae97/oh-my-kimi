@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed delimiter-balance boundary repair to also drop a single duplicated structural opener (e.g. a restated `foo(` / `if (x) {` signature line surviving just above the range), not only duplicated closers. Zero-balance duplicates remain untouched.
+
 ## [15.8.0] - 2026-06-02
 
 ### Fixed

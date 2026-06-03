@@ -53,6 +53,17 @@ function discoveryDefaultMaxTokens(api: Api | undefined): number {
 	return api === "anthropic-messages" ? DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC : DISCOVERY_DEFAULT_MAX_TOKENS;
 }
 
+const SPECIAL_MODEL_MANAGER_PROVIDER_IDS: readonly string[] = [
+	"google-antigravity",
+	"google-gemini-cli",
+	"openai-codex",
+];
+
+const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
+	...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+	...SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
+];
+
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
@@ -1133,28 +1144,28 @@ export class ModelRegistry {
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		const cachedModels: Model<Api>[] = [];
 		const authoritativeFreshProviders = new Set<string>();
-		for (const descriptor of PROVIDER_DESCRIPTORS) {
-			if (configuredDiscoveryProviders.has(descriptor.providerId)) {
+		for (const providerId of STARTUP_MODEL_CACHE_PROVIDER_IDS) {
+			if (configuredDiscoveryProviders.has(providerId)) {
 				continue;
 			}
-			const cache = readModelCache<Api>(descriptor.providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
+			const cache = readModelCache<Api>(providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
 			if (!cache) {
 				continue;
 			}
 			if (cache.fresh && cache.authoritative) {
-				authoritativeFreshProviders.add(descriptor.providerId);
+				authoritativeFreshProviders.add(providerId);
 			}
 			const models = cache.models.map(model =>
-				model.provider === descriptor.providerId ? model : { ...model, provider: descriptor.providerId },
+				model.provider === providerId ? model : { ...model, provider: providerId },
 			);
-			const providerOverride = this.#providerOverrides.get(descriptor.providerId);
+			const providerOverride = this.#providerOverrides.get(providerId);
 			const withTransport = providerOverride
 				? models.map(model => this.#applyProviderTransportOverride(model, providerOverride))
 				: models;
 			const withCompat = providerOverride?.compat
 				? withTransport.map(model => ({ ...model, compat: mergeCompat(model.compat, providerOverride.compat) }))
 				: withTransport;
-			cachedModels.push(...this.#applyProviderModelOverrides(descriptor.providerId, withCompat));
+			cachedModels.push(...this.#applyProviderModelOverrides(providerId, withCompat));
 		}
 		return { models: cachedModels, authoritativeFreshProviders };
 	}

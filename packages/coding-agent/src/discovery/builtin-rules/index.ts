@@ -17,6 +17,7 @@ import rsResultType from "./rs-result-type.md" with { type: "text" };
 import tsBareCatch from "./ts-bare-catch.md" with { type: "text" };
 import tsImportType from "./ts-import-type.md" with { type: "text" };
 import tsNoAny from "./ts-no-any.md" with { type: "text" };
+import tsNoDeprecatedLeftovers from "./ts-no-deprecated-leftovers.md" with { type: "text" };
 import tsNoDynamicImport from "./ts-no-dynamic-import.md" with { type: "text" };
 import tsNoReturnType from "./ts-no-return-type.md" with { type: "text" };
 import tsNoTinyFunctions from "./ts-no-tiny-functions.md" with { type: "text" };
@@ -40,6 +41,7 @@ export const BUILTIN_RULE_SOURCES: readonly BuiltinRuleSource[] = [
 	{ name: "ts-bare-catch", content: tsBareCatch },
 	{ name: "ts-import-type", content: tsImportType },
 	{ name: "ts-no-any", content: tsNoAny },
+	{ name: "ts-no-deprecated-leftovers", content: tsNoDeprecatedLeftovers },
 	{ name: "ts-no-dynamic-import", content: tsNoDynamicImport },
 	{ name: "ts-no-return-type", content: tsNoReturnType },
 	{ name: "ts-no-tiny-functions", content: tsNoTinyFunctions },

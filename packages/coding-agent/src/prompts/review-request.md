@@ -36,7 +36,7 @@ Group files by locality, e.g.:
 
 Reviewer MUST:
 1. Focus ONLY on assigned files
-2. {{#if skipDiff}}MUST run `git diff`/`git show` for assigned files{{else}}MUST use diff hunks below (NEVER re-run git diff){{/if}}
+2. {{#if skipDiff}}{{diffInstruction}}{{else}}MUST use diff hunks below (NEVER re-run git diff){{/if}}
 3. MAY read full file context as needed via `read`
 4. Call `report_finding` per issue
 5. Call `yield` with verdict when done

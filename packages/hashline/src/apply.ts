@@ -257,9 +257,13 @@ function findReplacementGroup(edits: readonly AppliedEdit[], start: number): Rep
 /**
  * Largest `k` such that the payload's last `k` lines exactly equal the `k`
  * surviving file lines just below the range AND dropping them zeroes `delta`.
- * Single-line drops are limited to pure structural closers.
+ * Requires a non-zero `delta`: a zero-balance candidate can never account for
+ * the imbalance, so intentional duplicates of ordinary statements stay intact,
+ * while duplicated structural lines (closers like `});`, openers like `foo(`)
+ * are dropped when they exactly explain the imbalance.
  */
 function findDuplicateSuffix(group: ReplacementGroup, fileLines: readonly string[], delta: DelimiterBalance): number {
+	if (balanceIsZero(delta)) return 0;
 	const { payload, endLine } = group;
 	const maxK = Math.min(payload.length, fileLines.length - endLine);
 	for (let k = maxK; k >= 1; k--) {
@@ -271,7 +275,6 @@ function findDuplicateSuffix(group: ReplacementGroup, fileLines: readonly string
 			}
 		}
 		if (!matches) continue;
-		if (k === 1 && !STRUCTURAL_CLOSER_RE.test(payload[payload.length - 1])) continue;
 		if (balanceEqual(computeDelimiterBalance(payload.slice(payload.length - k)), delta)) return k;
 	}
 	return 0;
@@ -280,8 +283,10 @@ function findDuplicateSuffix(group: ReplacementGroup, fileLines: readonly string
 /**
  * Largest `j` such that the payload's first `j` lines exactly equal the `j`
  * surviving file lines just above the range AND dropping them zeroes `delta`.
+ * Requires a non-zero `delta`; see {@link findDuplicateSuffix}.
  */
 function findDuplicatePrefix(group: ReplacementGroup, fileLines: readonly string[], delta: DelimiterBalance): number {
+	if (balanceIsZero(delta)) return 0;
 	const { payload, startLine } = group;
 	const maxJ = Math.min(payload.length, startLine - 1);
 	for (let j = maxJ; j >= 1; j--) {
@@ -293,7 +298,6 @@ function findDuplicatePrefix(group: ReplacementGroup, fileLines: readonly string
 			}
 		}
 		if (!matches) continue;
-		if (j === 1 && !STRUCTURAL_CLOSER_RE.test(payload[0])) continue;
 		if (balanceEqual(computeDelimiterBalance(payload.slice(0, j)), delta)) return j;
 	}
 	return 0;

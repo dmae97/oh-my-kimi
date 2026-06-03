@@ -53,6 +53,15 @@ describe("visibleWidth — Hangul Compatibility Jamo correction", () => {
 		expect(visibleWidth("\u3164")).toBe(fillerCells);
 	});
 
+	it("combining marks on compatibility jamo keep the platform base width", () => {
+		// Combining marks add no cells. The native scanner must keep
+		// UnicodeWidthStr's sequence rules, then apply the same local jamo
+		// correction used for standalone code points.
+		expect(visibleWidth("\u3141\u0301")).toBe(JAMO_CELLS);
+		const fillerCells = process.platform === "darwin" ? 1 : 0;
+		expect(visibleWidth("\u3164\u0301")).toBe(fillerCells);
+	});
+
 	it("string of 8 consecutive jamo is 8 cells on darwin, 16 elsewhere", () => {
 		// Matches the user-typed sequence in the v2 screen recording —
 		// before the macOS fix this returned 16 and produced an 8-cell gap.
