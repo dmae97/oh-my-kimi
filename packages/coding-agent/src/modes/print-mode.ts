@@ -9,6 +9,7 @@ import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
+import { flushTelemetryExport } from "../telemetry-export";
 import { initializeExtensions } from "./runtime-init";
 
 /**
@@ -83,6 +84,10 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				!isSilentAbort(assistantMsg.errorMessage)
 			) {
 				const errorLine = sanitizeText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+				// Flush before this hard exit — it bypasses the awaited postmortem.quit()
+				// in main(), and the postmortem `exit` handler can't await, so the error
+				// spans would otherwise stay buffered in the batch processor and drop.
+				await flushTelemetryExport();
 				const flushed = process.stderr.write(`${errorLine}\n`);
 				if (flushed) {
 					process.exit(1);

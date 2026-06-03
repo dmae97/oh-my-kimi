@@ -66,6 +66,7 @@ import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
+import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
@@ -972,6 +973,17 @@ export async function runRootCommand(
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.hasUI = isInteractive || mode === "rpc-ui";
 	sessionOptions.settings = settingsInstance;
+
+	// OTEL: register the global OTLP trace exporter when an OTLP endpoint is
+	// configured via env, then switch on the agent loop's telemetry so its
+	// GenAI spans (invoke_agent / chat / execute_tool) are actually emitted.
+	// Both are no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset. An empty config
+	// is enough to enable telemetry — content capture is governed by the
+	// standard OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT env var.
+	initTelemetryExport();
+	if (isTelemetryExportEnabled()) {
+		sessionOptions.telemetry = {};
+	}
 
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsedArgs.apiKey) {
