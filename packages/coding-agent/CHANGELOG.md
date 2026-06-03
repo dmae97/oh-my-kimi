@@ -4,15 +4,7 @@
 
 ### Added
 
-- Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
-- Added `--alias <command>` support for generating shell shortcuts like `omp-work` that activate `--profile=<name>` while preserving subcommands such as `update` and `--version`.
-
-### Fixed
-
-- Fixed generated profile aliases to pass the profile as `--profile=<name>`, avoiding the separate argv value that could be misread as an initial prompt while still forcing the CLI's explicit profile bootstrap path.
-- Fixed `--alias` when run from a source checkout (`bun src/cli.ts` / `omp-test`) so the generated profile command targets that same checkout instead of a stale installed `omp` binary, while preserving the directory where the alias is invoked.
-- Fixed explicit `omp launch --profile <name>` / `omp launch --alias <name>` and `omp acp --profile <name>` / `omp acp --alias <name>` so launch-shaped subcommands behave like the default command during profile bootstrap instead of blocking global profile extraction.
-- Fixed profile bootstrap and alias installation edge cases: `--profile` is now still honored for `launch` argv that merely contain subcommand-shaped words; a trailing global `--profile`/`--alias` after an unknown (extension) flag is still extracted unless that flag would consume it as a value-like successor (mirroring `parseArgs`); extension flags no longer parse literal text after `--`; alias installation preserves non-ENOENT shell config read failures; `/bin/sh` is rejected instead of being treated as bash; aliases cannot shadow `omp` case-insensitively; on Windows the PowerShell edition is inferred from `PSModulePath` (then `POWERSHELL_DISTRIBUTION_CHANNEL`) when `$SHELL` is unset; and the fish alias honors `$XDG_CONFIG_HOME`.
+- Added isolated profile support via `--profile <name>` / `OMP_PROFILE` and shell alias bootstrap via `--alias <command>`, including launch/ACP bootstrap handling and extension-flag-safe parsing.
 
 ## [15.8.2] - 2026-06-03
 
