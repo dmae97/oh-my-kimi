@@ -769,10 +769,7 @@ function schemaAcceptsStringAndArray(schema: Record<string, unknown>): boolean {
  *
  * See https://github.com/can1357/oh-my-pi/issues/1788.
  */
-function normalizeStringEncodedArrayUnions(
-	schema: unknown,
-	value: unknown,
-): { value: unknown; changed: boolean } {
+function normalizeStringEncodedArrayUnions(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
 	if (value === null || value === undefined) return { value, changed: false };
 	if (schema === null || typeof schema !== "object") return { value, changed: false };
 
