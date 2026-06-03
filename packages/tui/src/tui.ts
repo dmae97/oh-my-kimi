@@ -1572,6 +1572,22 @@ export class TUI extends Container {
 		}
 
 		if (diff.firstChanged === -1) {
+			// A geometry change reflows the terminal's own buffer, moving rows between
+			// the viewport and native scrollback. When content overflows and the
+			// viewport position is unobservable (POSIX/ED3-risk/Windows), an in-place
+			// repaint can leave native history out of sync with the transcript, and —
+			// unlike a content-bearing resize, which rebuilds via the geometry branch
+			// below — nothing flags it. Mark scrollback dirty so the next checkpoint
+			// (refreshNativeScrollbackIfDirty) reconciles it; a known-at-bottom reader
+			// rebuilds unconditionally at its checkpoint and needs no flag.
+			if (
+				(widthChanged || heightChanged) &&
+				!isMultiplexerSession() &&
+				newLines.length > height &&
+				this.#readNativeViewportAtBottom() !== true
+			) {
+				this.#markNativeScrollbackDirty();
+			}
 			// Content unchanged. A forced render still needs to refresh the visible
 			// viewport, but it must keep the existing diff basis so later coalesced
 			// content mutations can still update native scrollback correctly.

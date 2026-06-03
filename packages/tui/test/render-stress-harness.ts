@@ -206,6 +206,12 @@ export interface Scenario {
 	// The default content-frame path instead forces `allowUnknownViewportMutation`
 	// and never exercises that lagging-high-water state.
 	foregroundStream: boolean;
+	// Renders each logical line wrapped to the viewport width, so a width resize
+	// changes the physical line COUNT (reflow), not just per-row truncation —
+	// exercising the geometry-change + line-count-change interaction the
+	// fixed-line components never produced. Paired with the modern width model so
+	// the wrap agrees with the terminal's cell widths.
+	reflow: boolean;
 }
 
 interface Snapshot {
@@ -240,6 +246,14 @@ interface AppliedOperation {
 	// retracted from multiplexer pane history, so growth oracles must allow
 	// them. Defaults to the net frame growth when absent.
 	transientFrameGrowth?: number;
+	// The periodic prompt-submit checkpoint pins the viewport to the bottom and
+	// runs the real reconciliation (`refreshNativeScrollbackIfDirty` outside
+	// `normal`, a `/clear`-style forced rebuild for `normal`), so native
+	// scrollback must equal the transcript afterward. Plain `scrollToBottom` /
+	// forced-render ops also set `checkpoint`, but on Windows hosts a forced
+	// render cannot rebuild ConPTY-hidden history (it defers to the next submit),
+	// so the clean-buffer oracle keys on this flag for non-`normal` scenarios.
+	reconcilesNativeScrollback?: boolean;
 }
 
 interface OperationLogEntry {
@@ -713,18 +727,42 @@ class StressModel {
 	}
 }
 
+// Wrap a rendered line set to the viewport width, ANSI- and grapheme-aware, so
+// a logical line can occupy a width-dependent NUMBER of physical rows — the
+// reflow that real wrapped/markdown content performs and that fixed-line
+// components never exercised. Because BOTH the live render and the expected
+// frame run through this same deterministic transform (StressComponent.render),
+// the geometric oracles stay consistent; the renderer's own truncation
+// normalizes any residual width-model disagreement on each physical row.
+function reflowToWidth(lines: readonly string[], width: number): string[] {
+	const target = Math.max(1, width);
+	const out: string[] = [];
+	for (const line of lines) {
+		if (line.length === 0) {
+			out.push("");
+			continue;
+		}
+		const wrapped = Bun.wrapAnsi(line, target, { hard: true, wordWrap: false, trim: false });
+		for (const physical of wrapped.split("\n")) out.push(physical);
+	}
+	return out;
+}
+
 class StressComponent implements Component, Focusable {
 	focused = false;
 	#model: StressModel;
+	#reflow: boolean;
 
-	constructor(model: StressModel) {
+	constructor(model: StressModel, reflow = false) {
 		this.#model = model;
+		this.#reflow = reflow;
 	}
 
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		return this.#model.renderedLines(width, this.focused);
+		const lines = this.#model.renderedLines(width, this.focused);
+		return this.#reflow ? reflowToWidth(lines, width) : lines;
 	}
 }
 
@@ -864,7 +902,7 @@ class StressDriver {
 		this.#rng = new Rng(scenario.seed);
 		const maxHeight = maxOf(scenario.heightChoices);
 		this.#model = new StressModel(this.#rng, maxHeight + 12, scenario.uniqueContent, "root-");
-		this.#component = new StressComponent(this.#model);
+		this.#component = new StressComponent(this.#model, scenario.reflow);
 		this.#children = [0, 1].map(id => {
 			const model = new StressModel(
 				this.#rng,
@@ -872,7 +910,7 @@ class StressDriver {
 				scenario.uniqueContent,
 				`child${id}-`,
 			);
-			return { id, model, component: new StressComponent(model), active: false };
+			return { id, model, component: new StressComponent(model, scenario.reflow), active: false };
 		});
 		this.#term = createTerminal(scenario);
 		// Capture every byte written to the terminal so per-op oracles can audit
@@ -1080,7 +1118,14 @@ class StressDriver {
 		this.#pushWeighted(weighted, "swapOffscreenRows", 3);
 		this.#pushWeighted(weighted, "collapseToFew", 1);
 		this.#pushWeighted(weighted, "highWaterPreviewCollapse", 2);
-		this.#pushWeighted(weighted, "eagerStreamingMutation", this.#scenario.envMode === "tmux" ? 0 : 3);
+		// `eagerStreamingMutation` toggles the eager opt-in off in its `finally`,
+		// which would end the modeled foreground-tool turn early; a foregroundStream
+		// scenario keeps the opt-in on for its whole run, so skip it there.
+		this.#pushWeighted(
+			weighted,
+			"eagerStreamingMutation",
+			this.#scenario.envMode === "tmux" || this.#scenario.foregroundStream ? 0 : 3,
+		);
 		this.#pushWeighted(weighted, "resizeBoth", 2);
 		this.#pushWeighted(weighted, "resizeNoop", 1);
 		this.#pushWeighted(weighted, "resizeWithAppend", 2);
@@ -1532,7 +1577,10 @@ class StressDriver {
 		const columns = this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns);
 		const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
 		this.#term.resize(columns, rows);
-		if (!this.#scenario.strictScrollback) {
+		// foregroundStream models a live tool turn: let the terminal's own resize
+		// callback drive the (non-forced, gated) repaint the real app relies on,
+		// rather than forcing an allowUnknown rebuild the streaming path never uses.
+		if (!this.#scenario.strictScrollback && !this.#scenario.foregroundStream) {
 			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		}
 		await settle(this.#term);
@@ -1599,7 +1647,7 @@ class StressDriver {
 	async #resizeWidth(): Promise<AppliedOperation> {
 		const columns = this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns);
 		this.#term.resize(columns, this.#term.rows);
-		if (!this.#scenario.strictScrollback) {
+		if (!this.#scenario.strictScrollback && !this.#scenario.foregroundStream) {
 			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		}
 		await settle(this.#term);
@@ -1618,7 +1666,7 @@ class StressDriver {
 	async #resizeHeight(): Promise<AppliedOperation> {
 		const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
 		this.#term.resize(this.#term.columns, rows);
-		if (!this.#scenario.strictScrollback) {
+		if (!this.#scenario.strictScrollback && !this.#scenario.foregroundStream) {
 			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		}
 		await settle(this.#term);
@@ -1856,11 +1904,24 @@ class StressDriver {
 
 	async #checkpoint(index: number, kind: "periodicCheckpoint"): Promise<void> {
 		const before = this.#snapshot();
+		// Model a prompt submit: the editor keystroke pins the terminal to the
+		// bottom, then the app reconciles any deferred native-scrollback rewrite.
 		this.#term.scrollLines(LARGE_SCROLL);
-		this.#tui.requestRender(true, {
-			allowUnknownViewportMutation: true,
-			clearScrollback: this.#scenario.strictScrollback,
-		});
+		if (this.#scenario.strictScrollback || this.#scenario.envMode === "tmux") {
+			// Normal POSIX uses a /clear-style forced rebuild; tmux keeps its forced
+			// repaint (its pane history cannot be destructively reconciled).
+			this.#tui.requestRender(true, {
+				allowUnknownViewportMutation: true,
+				clearScrollback: this.#scenario.strictScrollback,
+			});
+		} else {
+			// Unknown-viewport / ED3-risk / Windows hosts take the real prompt-submit
+			// path: refreshNativeScrollbackIfDirty rebuilds the deferred history now
+			// that the keystroke has pinned the viewport to the bottom. This is where
+			// the streaming turn's dirty/lagged scrollback must reconcile to an exact
+			// copy of the transcript.
+			this.#tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+		}
 		await settle(this.#term);
 		const after = this.#snapshot();
 		this.#recordOperation(index, kind, { forcedCheckpoint: this.#scenario.strictScrollback }, before, after);
@@ -1874,6 +1935,7 @@ class StressDriver {
 				forcedRender: true,
 				mutatesViewport: true,
 				checkpoint: true,
+				reconcilesNativeScrollback: true,
 			},
 			before,
 			after,
@@ -1919,7 +1981,16 @@ class StressDriver {
 		this.#assertNoStaleOverlaySentinels(op, before, after, index);
 		this.#assertUniqueContentNoUnexpectedDuplicates(op, before, after, index);
 		this.#assertNoBackgroundBleed(op, before, after, index);
-		if (op.checkpoint && this.#scenario.strictScrollback) {
+		// Native scrollback must reconcile to an exact bottom-anchored copy of the
+		// transcript at every checkpoint — including the unknown-viewport / ED3-risk
+		// / Windows hosts whose live oracles are relaxed (they defer history rewrites
+		// mid-stream and only reconcile here). tmux is excluded: its pane history is
+		// preserved, not rebuilt, so the buffer snapshot is the view, not history.
+		if (
+			op.checkpoint &&
+			this.#scenario.envMode !== "tmux" &&
+			(this.#scenario.strictScrollback || op.reconcilesNativeScrollback === true)
+		) {
 			this.#assertCleanBuffer(op, before, after, index);
 		}
 	}
@@ -2061,6 +2132,21 @@ class StressDriver {
 			const expectedAfterResize = expectedViewport(after.frame, after.height);
 			if (!sameLines(after.view, expectedAfterResize)) {
 				this.#fail("viewport fidelity", op, before, after, index, { expected: expectedAfterResize });
+			}
+			return;
+		}
+		// Foreground-tool streaming never legitimately defers: the eager opt-in keeps
+		// the live tail current every frame (a shrink repaints in place rather than
+		// padding and pinning the pre-shrink viewport), so the visible window must be
+		// exactly bottom-anchored even when stale rows still sit in native scrollback
+		// (those reconcile at the next checkpoint). Asserting the visible rows
+		// directly — without the ghost-row buffer-length bail below — is what catches
+		// the "injected chip rendered over the tool render" drift head-on instead of
+		// skipping the frame because the drift left a length mismatch.
+		if (this.#scenario.foregroundStream) {
+			const expected = expectedViewport(after.frame, after.height);
+			if (!sameLines(after.view, expected)) {
+				this.#fail("foreground-stream viewport fidelity", op, before, after, index, { expected });
 			}
 			return;
 		}
@@ -2980,6 +3066,7 @@ function materializeScenario(
 		timeoutMs,
 		uniqueContent: template.uniqueContent ?? false,
 		foregroundStream: template.foregroundStream ?? false,
+		reflow: template.reflow ?? false,
 	};
 }
 
@@ -3028,10 +3115,12 @@ type ScenarioTemplate = Omit<
 	| "timeoutMs"
 	| "uniqueContent"
 	| "foregroundStream"
+	| "reflow"
 > & {
 	scrollbackRows?: number;
 	uniqueContent?: boolean;
 	foregroundStream?: boolean;
+	reflow?: boolean;
 };
 
 function coreTemplates(): ScenarioTemplate[] {
@@ -3244,6 +3333,41 @@ function coreTemplates(): ScenarioTemplate[] {
 			widthChoices: [40, 80, 120],
 			heightChoices: [8, 12, 24],
 			scrollbackRows: 10_000,
+			foregroundStream: true,
+		},
+		{
+			// Width-reflowing content (wrapped/markdown-style) on the modern grapheme
+			// width model, where the wrap agrees with the terminal's cell widths. A
+			// width resize changes the physical line count, so the renderer must
+			// re-anchor the viewport and rebuild native history across a line-count
+			// change — not just retruncate rows. Combined with the full random op
+			// space (scroll, overlay, append, shrink) it covers reflow interactions
+			// the deterministic width tests exercise only in isolation.
+			name: "darwin-normal-reflow-small",
+			platform: "darwin",
+			terminalMode: "normal",
+			envMode: "plain",
+			geometryMode: "small",
+			widthModel: "modern",
+			columns: 32,
+			rows: 4,
+			widthChoices: [8, 12, 16, 24, 32, 40],
+			heightChoices: [3, 4, 6],
+			reflow: true,
+		},
+		{
+			name: "darwin-unknown-reflow-stream-large",
+			platform: "darwin",
+			terminalMode: "unknown",
+			envMode: "ghostty",
+			geometryMode: "large",
+			widthModel: "modern",
+			columns: 80,
+			rows: 12,
+			widthChoices: [24, 40, 80, 120],
+			heightChoices: [8, 12, 24],
+			scrollbackRows: 10_000,
+			reflow: true,
 			foregroundStream: true,
 		},
 	];
