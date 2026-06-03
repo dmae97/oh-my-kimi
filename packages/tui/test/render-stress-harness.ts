@@ -14,7 +14,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { VirtualTerminal } from "./virtual-terminal";
+import { VirtualTerminal, type VirtualTerminalWidthModel } from "./virtual-terminal";
 
 const BASE_SEEDS = [
 	0x00c0ffee, 0x1badb002, 0x5eed1234, 0xdecafbad, 0x8badf00d, 0x0ddc0ffe, 0xcafed00d, 0xb16b00b5,
@@ -35,7 +35,7 @@ const SMILE = String.fromCodePoint(0x1f642);
 type TestPlatform = "darwin" | "linux" | "win32";
 type TerminalMode = "normal" | "unknown" | "intermittentUnknown" | "staleBottom";
 type GeometryMode = "small" | "large";
-type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2";
+type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2" | "wsl";
 const ENV_KEYS = [
 	"TMUX",
 	"STY",
@@ -48,6 +48,9 @@ const ENV_KEYS = [
 	"VTE_VERSION",
 	"TERM_PROGRAM",
 	"ITERM_SESSION_ID",
+	"WT_SESSION",
+	"WSL_DISTRO_NAME",
+	"WSL_INTEROP",
 ] as const;
 type EnvKey = (typeof ENV_KEYS)[number];
 type JsonPrimitive = string | number | boolean | null;
@@ -56,6 +59,7 @@ type JsonObject = { [key: string]: JsonValue };
 
 type OperationKind =
 	| "appendSmall"
+	| "appendExactWidth"
 	| "appendBulk"
 	| "streamOne"
 	| "editVisibleLine"
@@ -78,6 +82,7 @@ type OperationKind =
 	| "scrollPartial"
 	| "resizeWidth"
 	| "resizeHeight"
+	| "resizeWithAppend"
 	| "forceRender"
 	| "toggleFocusInput"
 	| "moveCursorVisible"
@@ -138,6 +143,10 @@ interface ExpectedCursor {
 interface ExpectedFrame {
 	frame: string[];
 	cursor: ExpectedCursor | null;
+	// Frame rows whose logical content carries background SGR. Only these rows
+	// may have background-colored cells in the terminal; anywhere else is BCE
+	// bleed (leaked SGR state painting erased cells).
+	backgroundRows: boolean[];
 }
 
 interface StressOverlayEntry {
@@ -170,6 +179,11 @@ export interface Scenario {
 	terminalMode: TerminalMode;
 	envMode: EnvMode;
 	geometryMode: GeometryMode;
+	// Terminal cell-width semantics. "legacy" (default) = xterm.js Unicode 6
+	// tables (emoji/VS16 narrow); "modern" = grapheme-aware widths matching the
+	// renderer's native engine (ghostty/WezTerm/kitty/iTerm2/WT 1.22+). Modern
+	// scenarios make geometric oracles cell-exact for emoji content.
+	widthModel?: VirtualTerminalWidthModel;
 	columns: number;
 	rows: number;
 	widthChoices: readonly number[];
@@ -185,6 +199,8 @@ export interface Scenario {
 interface Snapshot {
 	buffer: string[];
 	view: string[];
+	viewBackgroundColumns: number[][];
+	frameBackgroundRows: boolean[];
 	position: { baseY: number; viewportY: number };
 	cursor: { row: number; col: number };
 	expectedCursor: ExpectedCursor | null;
@@ -205,6 +221,13 @@ interface AppliedOperation {
 	checkpoint: boolean;
 	mutatesViewport: boolean;
 	coalesced?: boolean;
+	// Maximum number of rows the op appended to the frame at any point while it
+	// ran, even if a later step inside the same op removed them again (e.g. a
+	// preview expanding and collapsing). Appended rows that overflow the
+	// viewport legitimately scroll into terminal history and can never be
+	// retracted from multiplexer pane history, so growth oracles must allow
+	// them. Defaults to the net frame growth when absent.
+	transientFrameGrowth?: number;
 }
 
 interface OperationLogEntry {
@@ -365,6 +388,31 @@ class StressModel {
 			this.lines.push(this.#randomLine("a"));
 		}
 		return { count };
+	}
+
+	// Append a row whose visible width EXACTLY equals the terminal width. Half
+	// the time the final cell is a wide (2-cell) glyph so the exact-fit boundary
+	// lands a double-width char on the last column — the pending-wrap trigger the
+	// renderer's autowrap-off discipline must neutralize.
+	appendExactWidth(width: number): JsonObject {
+		const text = this.#exactWidthLine(width);
+		this.lines.push(this.#line(text));
+		return { width, text, visibleWidth: visibleWidth(text) };
+	}
+
+	#exactWidthLine(width: number): string {
+		if (width <= 0) return "";
+		const label = `${this.#labelPrefix}ew${this.#nextId.toString(36)}`;
+		// Pad with enough ASCII fill to cover any terminal width (the widest stress
+		// geometry is 120 cols). ASCII is one cell per code unit, so a code-unit
+		// slice is a cell-exact slice.
+		const fill = label.length >= width ? label : `${label}${".".repeat(width)}`;
+		// End on a wide CJK char (2 cells) on the wider rows so the exact-fit
+		// boundary lands a double-width glyph on the last column.
+		if (width >= 3 && this.#rng.chance(0.5)) {
+			return `${fill.slice(0, width - 2)}界`;
+		}
+		return fill.slice(0, width);
 	}
 
 	appendBulk(maxBulk: number): JsonObject {
@@ -584,6 +632,7 @@ class StressModel {
 	#initialText(index: number): string {
 		if (this.#uniqueContent) return index % 13 === 0 ? "" : `${this.#labelPrefix}init${index.toString(36)}`;
 		if (index % 13 === 0) return "";
+		if (index % 37 === 0) return backgroundStyledText(`bg${index.toString(36)}`, 41 + (index % 6));
 		if (index % 31 === 0) return emojiPresentationText(`ep${index.toString(36)}`);
 		if (index % 29 === 0) return arabicCombiningText(`ar${index.toString(36)}`);
 		if (index % 23 === 0) return longText(`L${index.toString(36)}`, 4);
@@ -780,7 +829,23 @@ class StressDriver {
 	#hiddenOverlaySentinels = new Set<string>();
 	#nextOverlayId = 0;
 	#opLog: OperationLogEntry[] = [];
+	// Lines that legitimately appeared 2+ times in any committed frame. Native
+	// scrollback retains rows from every past frame — content that leaves the
+	// frame (a detached child, collapsed preview, truncation-colliding rows
+	// after a width shrink) keeps its committed copies in history forever, so
+	// the duplicate oracle must allow them cumulatively, not just against the
+	// current frame.
+	#everDuplicatedFrameLines = new Set<string>();
 	#nativeScrollbackAuditBlocked = false;
+	// Every byte the renderer wrote to the terminal, in order. The sync-output
+	// discipline oracle audits bracket balance incrementally from #writeLogScanned.
+	#writeLog: string[] = [];
+	#writeLogScanned = 0;
+	// Running depth of synchronized-output (DEC 2026) and autowrap-disable (DECAWM)
+	// brackets across the whole session; both must return to 0 at every op
+	// boundary and never go out of {0,1}.
+	#syncDepth = 0;
+	#autowrapOffDepth = 0;
 
 	constructor(scenario: Scenario) {
 		this.#scenario = scenario;
@@ -798,6 +863,13 @@ class StressDriver {
 			return { id, model, component: new StressComponent(model), active: false };
 		});
 		this.#term = createTerminal(scenario);
+		// Capture every byte written to the terminal so per-op oracles can audit
+		// emission discipline (synchronized-output bracketing, autowrap restore).
+		const realWrite = this.#term.write.bind(this.#term);
+		(this.#term as { write: (data: string) => void }).write = (data: string) => {
+			this.#writeLog.push(data);
+			realWrite(data);
+		};
 		this.#tui = new TUI(this.#term, true);
 		this.#tui.addChild(this.#component);
 	}
@@ -844,6 +916,10 @@ class StressDriver {
 		const position = this.#term.getBufferPosition();
 		const expected = this.#expectedFrame();
 		const view = normalizeLines(this.#term.getViewport());
+		const viewBackgroundColumns: number[][] = [];
+		for (let row = 0; row < this.#term.rows; row++) {
+			viewBackgroundColumns.push(this.#term.getViewportRowBackgroundColumns(row));
+		}
 		// Tmux pane history is intentionally preserved, so overlay bytes can remain
 		// in historical scrollback after resize/reflow. The non-strict tmux stress
 		// oracle only checks live viewport behavior; avoid repeatedly materializing
@@ -851,6 +927,8 @@ class StressDriver {
 		return {
 			buffer: this.#scenario.envMode === "tmux" ? view : normalizeLines(this.#term.getScrollBuffer()),
 			view,
+			viewBackgroundColumns,
+			frameBackgroundRows: expected.backgroundRows,
 			position,
 			cursor: this.#term.getCursor(),
 			expectedCursor: expected.cursor,
@@ -884,7 +962,9 @@ class StressDriver {
 	#isUnknownEd3RiskScenario(): boolean {
 		return (
 			this.#scenario.terminalMode === "unknown" &&
-			(this.#scenario.envMode === "appleTerminal" || this.#scenario.envMode === "iterm2")
+			(this.#scenario.envMode === "appleTerminal" ||
+				this.#scenario.envMode === "iterm2" ||
+				this.#scenario.envMode === "wsl")
 		);
 	}
 
@@ -921,6 +1001,13 @@ class StressDriver {
 		const weighted: OperationKind[] = [];
 		this.#pushWeighted(weighted, "appendSmall", 14);
 		this.#pushWeighted(weighted, "streamOne", 12);
+		// Exact-width rows are the pending-wrap / DECAWM boundary case: a row whose
+		// visible width equals the terminal width writes its last cell, latching
+		// pending-wrap on autowrap terminals so a following cursor move can wrap and
+		// staircase. The renderer disables autowrap around paints (\x1b[?7l). Skipped
+		// for uniqueContent scenarios — at width 1-2 the finite cell alphabet cannot
+		// stay unique across hundreds of ops.
+		this.#pushWeighted(weighted, "appendExactWidth", this.#scenario.uniqueContent ? 0 : 5);
 		this.#pushWeighted(weighted, "appendRepeatedTail", this.#scenario.uniqueContent ? 2 : 8);
 		this.#pushWeighted(weighted, "appendDuplicateOfExisting", this.#scenario.uniqueContent ? 2 : 8);
 		this.#pushWeighted(weighted, "injectBlankCluster", 5);
@@ -960,6 +1047,7 @@ class StressDriver {
 		this.#pushWeighted(weighted, "eagerStreamingMutation", this.#scenario.envMode === "tmux" ? 0 : 3);
 		this.#pushWeighted(weighted, "resizeBoth", 2);
 		this.#pushWeighted(weighted, "resizeNoop", 1);
+		this.#pushWeighted(weighted, "resizeWithAppend", 2);
 		this.#pushWeighted(weighted, "attachChild", this.#children.some(child => !child.active) ? 2 : 0);
 		this.#pushWeighted(weighted, "detachChild", this.#children.some(child => child.active) ? 2 : 0);
 		this.#pushWeighted(weighted, "reorderChildren", this.#children.filter(child => child.active).length > 1 ? 1 : 0);
@@ -977,6 +1065,8 @@ class StressDriver {
 		switch (kind) {
 			case "appendSmall":
 				return await this.#applyContent(kind, this.#model.appendSmall(), true);
+			case "appendExactWidth":
+				return await this.#applyContent(kind, this.#model.appendExactWidth(this.#term.columns), true);
 			case "appendBulk":
 				return await this.#applyContent(kind, this.#model.appendBulk(this.#scenario.bulkMax), true);
 			case "streamOne":
@@ -1021,6 +1111,8 @@ class StressDriver {
 				return await this.#resizeWidth();
 			case "resizeHeight":
 				return await this.#resizeHeight();
+			case "resizeWithAppend":
+				return await this.#resizeWithAppend();
 			case "forceRender":
 				return await this.#forceRender();
 			case "forceRenderAllowUnknown":
@@ -1124,7 +1216,14 @@ class StressDriver {
 	}
 
 	async #highWaterPreviewCollapse(): Promise<AppliedOperation> {
+		// `beginHighWaterPreview` first pads seed rows up to `height + 8`, THEN
+		// pushes the preview rows — so the op's true peak frame growth is the
+		// padding plus the preview count, not the preview count alone. In a
+		// multiplexer every one of those overflowing rows enters irretractable pane
+		// history, so the transient bound must measure the actual expansion.
+		const lengthBeforeBegin = this.#model.lines.length;
 		const begin = this.#model.beginHighWaterPreview(this.#term.rows);
+		const expandedFrameGrowth = this.#model.lines.length - lengthBeforeBegin;
 		this.#renderContentFrame();
 		await settle(this.#term);
 		const start = typeof begin.start === "number" ? begin.start : 0;
@@ -1141,6 +1240,10 @@ class StressDriver {
 			forcedRender: false,
 			mutatesViewport: false,
 			checkpoint: false,
+			// The preview rows AND the seed-padding rows that begin appended scroll
+			// into history while expanded; the collapse cannot retract them, and a
+			// multiplexer pane keeps every one. Bound by the measured expansion.
+			transientFrameGrowth: Math.max(count, expandedFrameGrowth),
 		};
 	}
 
@@ -1483,6 +1586,31 @@ class StressDriver {
 		};
 	}
 
+	// SIGWINCH racing a streamed token: the model grows and the terminal
+	// resizes inside the same frame budget. The TUI's own resize handler
+	// schedules the (non-forced) render; the embedder does not force — this is
+	// the default production path for "user resizes the window while the
+	// assistant is streaming".
+	async #resizeWithAppend(): Promise<AppliedOperation> {
+		const appended = this.#model.appendSmall();
+		const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
+		const columns = this.#rng.chance(0.5)
+			? this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns)
+			: this.#term.columns;
+		this.#term.resize(columns, rows);
+		await settle(this.#term);
+		return {
+			kind: "resizeWithAppend",
+			detail: { appended, columns, rows },
+			mutatesContent: true,
+			checksRowAccounting: false,
+			geometryChanged: true,
+			forcedRender: false,
+			mutatesViewport: true,
+			checkpoint: false,
+		};
+	}
+
 	async #forceRender(): Promise<AppliedOperation> {
 		this.#tui.requestRender(true);
 		await settle(this.#term);
@@ -1513,12 +1641,20 @@ class StressDriver {
 		const empty = this.#model.clear();
 		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
 		await settle(this.#term);
-		const overflow = this.#model.appendCount(this.#term.rows + this.#rng.int(1, 4), "overflow");
+		// The clear's own replay frame can itself overflow the viewport (status
+		// header + residual rows), so the transient bound must cover everything
+		// this op writes: the cleared frame plus the fresh overflow appends.
+		const clearedFrameLength = this.#expectedFrame().frame.length;
+		const overflowCount = this.#term.rows + this.#rng.int(1, 4);
+		const overflow = this.#model.appendCount(overflowCount, "overflow");
 		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
 		await settle(this.#term);
 		return {
 			...this.#forceOperation("forceRenderAfterEmptyOverflow", { detachedChildren, empty, overflow }),
 			mutatesContent: true,
+			// In multiplexers everything written during this op scrolls into pane
+			// history on top of whatever was already there.
+			transientFrameGrowth: clearedFrameLength + overflowCount,
 		};
 	}
 
@@ -1721,6 +1857,7 @@ class StressDriver {
 		});
 	}
 	#assertOracles(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		this.#assertSyncOutputDiscipline(op, before, after, index);
 		this.#assertViewportFidelity(op, before, after, index);
 		this.#assertCleanBufferWhenAligned(op, before, after, index);
 		this.#assertNoFrameNeutralScrollbackGrowth(op, before, after, index);
@@ -1728,18 +1865,132 @@ class StressDriver {
 		this.#assertScrolledDeferral(op, before, after, index);
 		this.#assertRowAccounting(op, before, after, index);
 		this.#assertScrollbackGrowthMatchesFrameGrowth(op, before, after, index);
+		this.#assertMultiplexerPaneHistoryGrowth(op, before, after, index);
 		this.#assertHistoryPrefixStability(op, before, after, index);
 		this.#assertNativeScrollbackReplay(op, before, after, index);
 		this.#assertNoStaleOverlaySentinels(op, before, after, index);
 		this.#assertUniqueContentNoUnexpectedDuplicates(op, before, after, index);
+		this.#assertNoBackgroundBleed(op, before, after, index);
 		if (op.checkpoint && this.#scenario.strictScrollback) {
 			this.#assertCleanBuffer(op, before, after, index);
+		}
+	}
+
+	// Synchronized-output (DEC 2026) + autowrap (DECAWM) bracket discipline.
+	// Every paint write opens with PAINT_BEGIN (`\x1b[?2026h\x1b[?7l`) and closes
+	// with PAINT_END (`\x1b[?7h\x1b[?2026l`); the standalone cursor write brackets
+	// its move in `\x1b[?2026h…\x1b[?2026l`. The contract: across the entire byte
+	// stream the brackets must strictly alternate open/close (depth stays in
+	// {0,1}) and return to 0 at every op boundary. A renderer path that opens a
+	// sync block and returns before closing it freezes the terminal until the
+	// next keystroke — the "output froze until I pressed a key" bug class — and
+	// an unbalanced `\x1b[?7l` leaves autowrap off, producing staircase trails on
+	// the next non-TUI write. There is no terminal-side timeout for an unclosed
+	// 2026 block (Contour synchronized-output spec), so the renderer alone owns
+	// the invariant. Audits incrementally from #writeLogScanned to stay O(bytes).
+	#assertSyncOutputDiscipline(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		for (; this.#writeLogScanned < this.#writeLog.length; this.#writeLogScanned++) {
+			const chunk = this.#writeLog[this.#writeLogScanned]!;
+			let cursor = 0;
+			while (cursor < chunk.length) {
+				const esc = chunk.indexOf("\x1b[?", cursor);
+				if (esc === -1) break;
+				if (chunk.startsWith("\x1b[?2026h", esc)) {
+					this.#syncDepth++;
+					if (this.#syncDepth > 1) {
+						this.#fail("nested synchronized-output begin (BSU within BSU)", op, before, after, index, {
+							syncDepth: this.#syncDepth,
+						});
+					}
+					cursor = esc + 8;
+				} else if (chunk.startsWith("\x1b[?2026l", esc)) {
+					this.#syncDepth--;
+					if (this.#syncDepth < 0) {
+						this.#fail("synchronized-output end (ESU) without matching begin", op, before, after, index, {
+							syncDepth: this.#syncDepth,
+						});
+					}
+					cursor = esc + 8;
+				} else if (chunk.startsWith("\x1b[?7l", esc)) {
+					this.#autowrapOffDepth++;
+					cursor = esc + 5;
+				} else if (chunk.startsWith("\x1b[?7h", esc)) {
+					this.#autowrapOffDepth--;
+					cursor = esc + 5;
+				} else {
+					cursor = esc + 3;
+				}
+			}
+		}
+		// At an op boundary every paint/cursor write the op emitted has completed,
+		// so both brackets must be balanced. A nonzero depth means a paint path
+		// left the terminal inside a sync block or with autowrap disabled.
+		if (this.#syncDepth !== 0) {
+			this.#fail("synchronized-output left open at op boundary", op, before, after, index, {
+				syncDepth: this.#syncDepth,
+			});
+		}
+		if (this.#autowrapOffDepth !== 0) {
+			this.#fail("autowrap left disabled at op boundary", op, before, after, index, {
+				autowrapOffDepth: this.#autowrapOffDepth,
+			});
+		}
+	}
+
+	// SGR/BCE bleed: background attributes must appear only on viewport rows
+	// whose logical content carries background SGR. Stress content includes
+	// deliberately unreset background sequences (backgroundStyledText); the
+	// renderer's per-line terminators (#applyLineResets / LINE_TERMINATOR) must
+	// confine the color to its own row. A leak means BCE (back-color-erase, which
+	// xterm.js and most real terminals implement) paints \x1b[K / \x1b[2K erased
+	// cells with the stale background — the user-visible "random colored blank
+	// rows" bug class. Text-only oracles cannot see this; this oracle reads cell
+	// attributes.
+	#assertNoBackgroundBleed(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#hasVisibleOverlay()) return;
+		if (!after.atBottom) return;
+		const expectedView = expectedViewport(after.frame, after.height);
+		const viewportTop = Math.max(0, after.frame.length - after.height);
+		for (let row = 0; row < after.height; row++) {
+			const backgroundColumns = after.viewBackgroundColumns[row] ?? [];
+			if (backgroundColumns.length === 0) continue;
+			// Judge only rows whose text matches the frame row they map to: a
+			// deferred/stale row (text mismatch) has ambiguous provenance and is
+			// re-checked once a repaint re-aligns it. backgroundStyledText labels are
+			// never whitespace-only, so a stale background row cannot masquerade as a
+			// legitimately blank row.
+			if ((after.view[row] ?? "") !== (expectedView[row] ?? "")) continue;
+			const frameRow = viewportTop + row;
+			if (after.frameBackgroundRows[frameRow] !== true) {
+				this.#fail("background SGR bleed", op, before, after, index, {
+					row,
+					frameRow,
+					backgroundColumns,
+					rowText: after.view[row] ?? null,
+					expected: "background-colored cells only on rows whose content carries background SGR",
+				});
+			}
 		}
 	}
 
 	#assertViewportFidelity(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (this.#hasVisibleOverlay()) return;
 		if (!after.atBottom) return;
+		// Multiplexer mode: the buffer snapshot is just the view, so the
+		// buffer-length alignment precondition below can never hold once the frame
+		// overflows. Check fidelity on geometry-changed frames instead — tmux
+		// reflows the pane grid on resize, and the renderer must repaint the whole
+		// visible window at the new geometry (any output anchored to pre-reflow
+		// rows splices phantom rows into the pane). Geometry repaints write every
+		// row, so ghost trailing blanks cannot occur and the comparison is exact.
+		if (this.#scenario.envMode === "tmux") {
+			if (!op.geometryChanged) return;
+			const expectedAfterResize = expectedViewport(after.frame, after.height);
+			if (!sameLines(after.view, expectedAfterResize)) {
+				this.#fail("viewport fidelity", op, before, after, index, { expected: expectedAfterResize });
+			}
+			return;
+		}
 		// Strict bottom-anchoring only holds when the buffer carries no ghost/stale
 		// extra rows. A trailing shrink clears the bottom row in place (it cannot pull
 		// a scrollback line down without a disruptive full repaint), leaving the
@@ -1904,6 +2155,44 @@ class StressDriver {
 		}
 	}
 
+	// Multiplexer panes never receive a destructive scrollback clear (the
+	// renderer forces clearScrollback off inside tmux/screen/zellij because pane
+	// history is intentionally preserved), so any full-frame replay during live
+	// rendering appends a complete duplicate copy of the transcript to pane
+	// history. Users see every transcript row twice (or more) when scrolling
+	// back, and the per-frame write cost becomes O(frame). Bound live-frame pane
+	// history growth by the rows the frame actually appended; only explicit
+	// checkpoints may replay the transcript wholesale. Geometry-changed frames
+	// are exempt except for pure height resizes, where xterm/tmux reflow is
+	// bounded: a height shrink moves at most (oldHeight - newHeight) rows into
+	// pane history and a height grow moves rows back out — width changes rewrap
+	// pane history with unbounded row deltas and cannot be bounded from here.
+	#assertMultiplexerPaneHistoryGrowth(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (this.#scenario.envMode !== "tmux") return;
+		if (op.checkpoint) return;
+		const heightOnlyResize = op.kind === "resizeHeight";
+		if (op.geometryChanged && !heightOnlyResize) return;
+		const reflowAllowance = heightOnlyResize ? Math.max(0, before.height - after.height) : 0;
+		const deltaBaseY = after.position.baseY - before.position.baseY;
+		if (deltaBaseY <= 0) return;
+		// Rows appended at any point during the op (including transient preview
+		// expansions that later collapsed) legitimately scroll into pane history
+		// — terminal scrolling is how appends work, and pane history can never be
+		// retracted. The invariant targets full-frame replays, which grow history
+		// by ~frame.length instead of by the number of appended rows.
+		const allowedGrowth =
+			Math.max(Math.max(0, after.frame.length - before.frame.length), op.transientFrameGrowth ?? 0) +
+			reflowAllowance;
+		if (deltaBaseY > allowedGrowth) {
+			this.#fail("multiplexer pane history grew faster than frame", op, before, after, index, {
+				deltaBaseY,
+				allowedGrowth,
+				transientFrameGrowth: op.transientFrameGrowth ?? null,
+				expected: "live frames must not replay the transcript into preserved pane history",
+			});
+		}
+	}
+
 	#assertHistoryPrefixStability(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (!this.#scenario.strictScrollback) return;
 		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
@@ -2018,8 +2307,15 @@ class StressDriver {
 		after: Snapshot,
 		index: number,
 	): void {
-		if (!this.#scenario.uniqueContent || this.#hasVisibleOverlay() || !after.atBottom) return;
-		const allowed = duplicateNonblankLines(after.frame);
+		if (!this.#scenario.uniqueContent) return;
+		// Accumulate even when the check below is skipped (scrolled/overlay): the
+		// frame's legitimate duplicates commit to scrollback regardless of where
+		// the viewport is parked.
+		for (const line of duplicateNonblankLines(after.frame)) {
+			this.#everDuplicatedFrameLines.add(line);
+		}
+		if (this.#hasVisibleOverlay() || !after.atBottom) return;
+		const allowed = this.#everDuplicatedFrameLines;
 		const seen = new Set<string>();
 		for (const line of after.buffer) {
 			if (line.length === 0) continue;
@@ -2055,15 +2351,21 @@ class StressDriver {
 }
 
 function createTerminal(scenario: Scenario): VirtualTerminal {
+	const widthModel = scenario.widthModel ?? "legacy";
 	switch (scenario.terminalMode) {
 		case "unknown":
-			return new UnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+			return new UnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback, widthModel);
 		case "intermittentUnknown":
-			return new IntermittentUnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+			return new IntermittentUnknownViewportTerminal(
+				scenario.columns,
+				scenario.rows,
+				scenario.scrollback,
+				widthModel,
+			);
 		case "staleBottom":
-			return new StaleBottomTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+			return new StaleBottomTerminal(scenario.columns, scenario.rows, scenario.scrollback, widthModel);
 		case "normal":
-			return new VirtualTerminal(scenario.columns, scenario.rows, scenario.scrollback);
+			return new VirtualTerminal(scenario.columns, scenario.rows, scenario.scrollback, widthModel);
 	}
 }
 
@@ -2156,12 +2458,19 @@ function stripPlainTerminalText(text: string): string {
 		.replaceAll(BEL, "");
 }
 
+// SGR sequence carrying a background color parameter (40-47 basic, 48 extended,
+// 100-107 bright). Used to mark which logical rows may legitimately produce
+// background-colored terminal cells.
+const BACKGROUND_SGR_REGEX = /\x1b\[(?:\d+;)*(?:4[0-8]|10[0-7])(?:;\d+)*m/;
+
 function expectedFrameFromLines(lines: readonly string[], width: number, height: number): ExpectedFrame {
 	const stripped = [...lines];
 	const viewportTop = Math.max(0, stripped.length - height);
 	let cursor: ExpectedCursor | null = null;
+	const backgroundRows: boolean[] = new Array(stripped.length).fill(false);
 	for (let row = stripped.length - 1; row >= 0; row--) {
 		const line = stripped[row] ?? "";
+		backgroundRows[row] = BACKGROUND_SGR_REGEX.test(line);
 		const markerIndex = line.indexOf(CURSOR_MARKER);
 		if (markerIndex === -1) continue;
 		if (cursor === null && row >= viewportTop) {
@@ -2169,7 +2478,7 @@ function expectedFrameFromLines(lines: readonly string[], width: number, height:
 		}
 		stripped[row] = removeCursorMarkers(line);
 	}
-	return { frame: stripped.map(line => expectedTerminalLine(line, width)), cursor };
+	return { frame: stripped.map(line => expectedTerminalLine(line, width)), cursor, backgroundRows };
 }
 
 function removeCursorMarkers(line: string): string {
@@ -2389,6 +2698,17 @@ function styledText(label: string, color: number): string {
 	return `${ESC}[${color}m${label}${ESC}[0m`;
 }
 
+function backgroundStyledText(label: string, color: number): string {
+	// Background SGR with NO trailing reset. Real components do leak unreset SGR
+	// (markdown renderers, raw tool output), and BCE terminals (xterm.js included)
+	// fill cells erased by \x1b[K / \x1b[2K with the *current* background — so a
+	// leaked background paints whole phantom-colored rows. The renderer must
+	// contain the leak to this row via its per-line terminators; the
+	// no-background-bleed oracle asserts neighboring and blank rows never
+	// inherit the color.
+	return `${ESC}[${color}m${label}`;
+}
+
 function linkedText(label: string): string {
 	return `${ESC}]8;;https://example.test/${label}${BEL}${label}-link${ESC}]8;;${BEL}`;
 }
@@ -2404,11 +2724,12 @@ function longText(label: string, repeats: number): string {
 function randomDecoratedText(rng: Rng, label: string): string {
 	const roll = rng.next();
 	if (roll < 0.18) return wideText(label);
-	if (roll < 0.36) return styledText(`${label}界`, 31 + rng.int(0, 6));
-	if (roll < 0.54) return linkedText(label);
-	if (roll < 0.72) return longText(label, rng.int(2, 6));
-	if (roll < 0.81) return arabicCombiningText(label);
-	if (roll < 0.9) return emojiPresentationText(label);
+	if (roll < 0.34) return styledText(`${label}界`, 31 + rng.int(0, 6));
+	if (roll < 0.5) return linkedText(label);
+	if (roll < 0.66) return longText(label, rng.int(2, 6));
+	if (roll < 0.76) return arabicCombiningText(label);
+	if (roll < 0.85) return emojiPresentationText(label);
+	if (roll < 0.93) return backgroundStyledText(label, 41 + rng.int(0, 6));
 	return label;
 }
 
@@ -2447,6 +2768,7 @@ function snapshotDump(snapshot: Snapshot): JsonObject {
 	return {
 		buffer: snapshot.buffer,
 		view: snapshot.view,
+		viewBackgroundColumns: snapshot.viewBackgroundColumns,
 		position: { baseY: snapshot.position.baseY, viewportY: snapshot.position.viewportY },
 		cursor: cursorObject(snapshot),
 		expectedCursor:
@@ -2474,10 +2796,26 @@ function maxOf(values: readonly number[]): number {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	process.nextTick(resolve);
-	await promise;
-	await Bun.sleep(1);
+	// Wait for the TUI's scheduled render to land using EVENT-LOOP ORDER, not
+	// wall-clock sleeps. The renderer schedules non-forced renders as
+	// process.nextTick(...) → setTimeout(..., 0) (the 16ms throttle always
+	// computes delay 0 under the mocked performance.now). Same-delay timers fire
+	// in creation order, so a nextTick + setTimeout(0) round issued here — after
+	// the op's requestRender() — runs strictly after the renderer's own chain,
+	// no matter how starved the worker thread is. A fixed Bun.sleep(1) raced that
+	// chain and lost under parallel-worker CPU contention, snapshotting torn
+	// mid-frame states that produced unreplayable "failures" (fails in a full
+	// cranked run, passes in isolation — see render-stress-journal.md iteration 5).
+	// Two rounds cover a render that re-requests itself; the trailing flush waits
+	// out xterm.js's own async write parsing.
+	for (let round = 0; round < 2; round++) {
+		const tick = Promise.withResolvers<void>();
+		process.nextTick(tick.resolve);
+		await tick.promise;
+		const timer = Promise.withResolvers<void>();
+		setTimeout(timer.resolve, 0);
+		await timer.promise;
+	}
 	await term.flush();
 }
 
@@ -2505,6 +2843,11 @@ function scenarioEnv(envMode: EnvMode): Record<EnvKey, string | undefined> {
 		VTE_VERSION: undefined,
 		TERM_PROGRAM: envMode === "appleTerminal" ? "Apple_Terminal" : envMode === "iterm2" ? "iTerm.app" : undefined,
 		ITERM_SESSION_ID: envMode === "iterm2" ? "w0t0p0" : undefined,
+		// WSL fronted by Windows Terminal: WT propagates WT_SESSION into the
+		// Linux environment, and WSL sets its own distro markers. See #1610.
+		WT_SESSION: envMode === "wsl" ? "5ca7376f-cd1b-4524-a45a-7e87b06b8f9e" : undefined,
+		WSL_DISTRO_NAME: envMode === "wsl" ? "Ubuntu" : undefined,
+		WSL_INTEROP: envMode === "wsl" ? "/run/WSL/8_interop" : undefined,
 	};
 }
 
@@ -2712,6 +3055,40 @@ function coreTemplates(): ScenarioTemplate[] {
 			heightChoices: [3, 4, 6],
 			scrollbackRows: 10_000,
 		},
+		{
+			// WSL fronted by Windows Terminal (#1610): the viewport probe is
+			// permanently unobservable (kernel32 is unreachable from a Linux
+			// process) and the outer WT host erases scrollback on ED3, snapping a
+			// scrolled-up reader to the remaining buffer. The renderer must treat
+			// this environment as ED3-risk and defer eager live rebuilds.
+			name: "linux-unknown-wsl-small",
+			platform: "linux",
+			terminalMode: "unknown",
+			envMode: "wsl",
+			geometryMode: "small",
+			columns: 32,
+			rows: 4,
+			widthChoices: [10, 16, 32],
+			heightChoices: [3, 4, 6],
+			scrollbackRows: 10_000,
+		},
+		{
+			// Modern grapheme-aware terminal (ghostty/WezTerm/kitty/iTerm2/WT 1.22+):
+			// the terminal's width model agrees with the renderer's native engine for
+			// all stress content (emoji presentation = 2 cells, VS16 promotion), so
+			// text-fidelity oracles double as cell-exact geometric oracles here.
+			name: "darwin-normal-modern-small",
+			platform: "darwin",
+			terminalMode: "normal",
+			envMode: "plain",
+			geometryMode: "small",
+			widthModel: "modern",
+			columns: 32,
+			rows: 4,
+			widthChoices: [10, 16, 24, 32, 40],
+			heightChoices: [3, 4, 6],
+			scrollbackRows: 10_000,
+		},
 	];
 }
 
@@ -2747,6 +3124,43 @@ function soakTemplates(): ScenarioTemplate[] {
 			}
 		}
 	}
+	// WSL fronted by Windows Terminal (#1610): only the unknown terminal mode is
+	// realistic — the kernel32 viewport probe never answers from a Linux process.
+	for (const geometryMode of geometries) {
+		const large = geometryMode === "large";
+		templates.push({
+			name: `linux-unknown-wsl-${geometryMode}`,
+			platform: "linux",
+			terminalMode: "unknown",
+			envMode: "wsl",
+			geometryMode,
+			columns: large ? 80 : 32,
+			rows: large ? 12 : 4,
+			widthChoices: large ? [80, 120] : [2, 10, 16, 24, 32, 40],
+			heightChoices: large ? [12, 24] : [3, 4, 6],
+		});
+	}
+	// Modern grapheme-aware width model (ghostty/WezTerm/kitty/iTerm2/WT 1.22+):
+	// terminal cell widths agree with the renderer's native engine, so the
+	// text-fidelity oracles double as cell-exact geometric oracles. Cover the
+	// observable probe modes on both geometries.
+	for (const terminalMode of ["normal", "unknown"] as const) {
+		for (const geometryMode of geometries) {
+			const large = geometryMode === "large";
+			templates.push({
+				name: `darwin-${terminalMode}-modern-${geometryMode}`,
+				platform: "darwin",
+				terminalMode,
+				envMode: "plain",
+				geometryMode,
+				widthModel: "modern",
+				columns: large ? 80 : 32,
+				rows: large ? 12 : 4,
+				widthChoices: large ? [80, 120] : [2, 10, 16, 24, 32, 40],
+				heightChoices: large ? [12, 24] : [3, 4, 6],
+			});
+		}
+	}
 	return templates;
 }
 
@@ -2770,6 +3184,9 @@ export function applyStressEnv(envMode: Scenario["envMode"]): StressEnvSnapshot 
 			VTE_VERSION: undefined,
 			TERM_PROGRAM: undefined,
 			ITERM_SESSION_ID: undefined,
+			WT_SESSION: undefined,
+			WSL_DISTRO_NAME: undefined,
+			WSL_INTEROP: undefined,
 		},
 		process: {
 			TMUX: undefined,
@@ -2783,6 +3200,9 @@ export function applyStressEnv(envMode: Scenario["envMode"]): StressEnvSnapshot 
 			VTE_VERSION: undefined,
 			TERM_PROGRAM: undefined,
 			ITERM_SESSION_ID: undefined,
+			WT_SESSION: undefined,
+			WSL_DISTRO_NAME: undefined,
+			WSL_INTEROP: undefined,
 		},
 	};
 	for (const key of ENV_KEYS) {

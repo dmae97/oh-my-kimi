@@ -104,6 +104,14 @@ export function isWindowsTerminalPreviewSixelSupported(
  * iTerm2 expose scrollback-only clears via ED3/terminfo E3; that still
  * invalidates a reader's scrollback position during live streaming.
  *
+ * Windows Terminal erases its host scrollback on ED3 and repositions the
+ * viewport against the shortened buffer, so a scrolled-up reader is yanked.
+ * Native win32 is excluded here because the renderer guards it with dedicated
+ * platform checks; a `WT_SESSION` sighting on any other platform means the
+ * outer host is Windows Terminal fronting a WSL distro (WT propagates the
+ * variable into the Linux environment), where the kernel32 viewport probe is
+ * unreachable and the same ED3 yank applies. See #1610.
+ *
  * Pure helper for tests and `TERMINAL` trait construction. See #1682 and #1719.
  */
 export function detectTerminalEagerEraseScrollbackRisk(
@@ -111,6 +119,7 @@ export function detectTerminalEagerEraseScrollbackRisk(
 	platform: NodeJS.Platform = process.platform,
 ): boolean {
 	if (platform === "win32") return false;
+	if (env.WT_SESSION) return true;
 	if (
 		env.WEZTERM_PANE ||
 		env.KITTY_WINDOW_ID ||
