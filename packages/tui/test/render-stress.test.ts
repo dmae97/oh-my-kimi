@@ -18,8 +18,10 @@ const SOAK_BATCH_TIMEOUT_MS = 150_000;
 function parsePositiveInt(name: string, fallback: number): number {
 	const raw = Bun.env[name];
 	if (raw === undefined || raw.length === 0) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+	if (!/^[1-9]\d*$/.test(raw)) {
+		throw new Error(`${name} must be a positive integer; received ${JSON.stringify(raw)}`);
+	}
+	return Number.parseInt(raw, 10);
 }
 
 function stressWorkerCount(scenarios: readonly Scenario[]): number {

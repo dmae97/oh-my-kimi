@@ -51,6 +51,35 @@ const CURSOR_END_NO_SYNC = "";
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 
+export interface RenderTimer {
+	cancel(): void;
+}
+
+export interface RenderScheduler {
+	now(): number;
+	scheduleImmediate(callback: () => void): void;
+	scheduleRender(callback: () => void, delayMs: number): RenderTimer;
+}
+
+export interface TUIOptions {
+	renderScheduler?: RenderScheduler;
+}
+
+const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
+	now: () => performance.now(),
+	scheduleImmediate: callback => {
+		process.nextTick(callback);
+	},
+	scheduleRender: (callback, delayMs) => {
+		const timer = setTimeout(callback, delayMs);
+		return {
+			cancel: () => {
+				clearTimeout(timer);
+			},
+		};
+	},
+};
+
 /**
  * Component interface - all components must implement this
  */
@@ -310,7 +339,8 @@ export class TUI extends Container {
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
 	#renderRequested = false;
-	#renderTimer: NodeJS.Timeout | undefined;
+	#renderTimer: RenderTimer | undefined;
+	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 16;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
@@ -368,9 +398,10 @@ export class TUI extends Container {
 		hidden: boolean;
 	}[] = [];
 
-	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
+	constructor(terminal: Terminal, showHardwareCursor?: boolean, options?: TUIOptions) {
 		super();
 		this.terminal = terminal;
+		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
 		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
 	}
 
@@ -714,7 +745,7 @@ export class TUI extends Container {
 		this.#clearSixelProbeState();
 		this.#stopped = true;
 		if (this.#renderTimer) {
-			clearTimeout(this.#renderTimer);
+			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
 		// Place the parent shell on the first line after the rendered content. When
@@ -763,7 +794,7 @@ export class TUI extends Container {
 		}
 		this.#prepareForcedRender(true, options?.allowUnknownViewport === true);
 		this.#renderRequested = false;
-		this.#lastRenderAt = performance.now();
+		this.#lastRenderAt = this.#renderScheduler.now();
 		this.#doRender();
 		return true;
 	}
@@ -774,19 +805,19 @@ export class TUI extends Container {
 		if (force) {
 			this.#prepareForcedRender(options?.clearScrollback === true, allowUnknownViewportMutation);
 			this.#renderRequested = true;
-			process.nextTick(() => {
+			this.#renderScheduler.scheduleImmediate(() => {
 				if (this.#stopped || !this.#renderRequested) {
 					return;
 				}
 				this.#renderRequested = false;
-				this.#lastRenderAt = performance.now();
+				this.#lastRenderAt = this.#renderScheduler.now();
 				this.#doRender();
 			});
 			return;
 		}
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
-		process.nextTick(() => this.#scheduleRender());
+		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 	}
 
 	#prepareForcedRender(clearScrollback: boolean, allowUnknownViewportMutation: boolean): void {
@@ -803,7 +834,7 @@ export class TUI extends Container {
 		this.#clearScrollbackOnNextRender ||= clearScrollback || replayGeometry;
 		this.#forceViewportRepaintOnNextRender = true;
 		if (this.#renderTimer) {
-			clearTimeout(this.#renderTimer);
+			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
 	}
@@ -812,15 +843,15 @@ export class TUI extends Container {
 		if (this.#stopped || this.#renderTimer || !this.#renderRequested) {
 			return;
 		}
-		const elapsed = performance.now() - this.#lastRenderAt;
+		const elapsed = this.#renderScheduler.now() - this.#lastRenderAt;
 		const delay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
-		this.#renderTimer = setTimeout(() => {
+		this.#renderTimer = this.#renderScheduler.scheduleRender(() => {
 			this.#renderTimer = undefined;
 			if (this.#stopped || !this.#renderRequested) {
 				return;
 			}
 			this.#renderRequested = false;
-			this.#lastRenderAt = performance.now();
+			this.#lastRenderAt = this.#renderScheduler.now();
 			this.#doRender();
 			if (this.#renderRequested) {
 				this.#scheduleRender();
