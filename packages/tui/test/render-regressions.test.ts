@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { type Component, CURSOR_MARKER, type Focusable, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	CURSOR_MARKER,
+	type Focusable,
+	setTerminalScreenToScrollback,
+	TERMINAL,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -111,6 +118,16 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await nextTick.promise;
 	await Bun.sleep(1);
 	await term.flush();
+}
+
+function captureWrites(term: VirtualTerminal): string[] {
+	const writes: string[] = [];
+	const realWrite = term.write.bind(term);
+	vi.spyOn(term, "write").mockImplementation((data: string) => {
+		writes.push(data);
+		realWrite(data);
+	});
+	return writes;
 }
 
 function visible(term: VirtualTerminal): string[] {
@@ -1137,6 +1154,100 @@ describe("TUI terminal-state regressions", () => {
 					tui.stop();
 				}
 			});
+		});
+	});
+
+	describe("screen clearing", () => {
+		it("saves to scrollback and clears the viewport for supported non-destructive full paints", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(true);
+			const term = new VirtualTerminal(20, 5);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["hello"]));
+			const writes = captureWrites(term);
+
+			try {
+				tui.start();
+				await settle(term);
+				const out = writes.join("");
+				const screenToScrollback = out.indexOf("\x1b[22J");
+				const viewportClear = out.indexOf("\x1b[2J\x1b[H");
+				expect(screenToScrollback).toBeGreaterThanOrEqual(0);
+				expect(viewportClear).toBeGreaterThanOrEqual(0);
+				expect(screenToScrollback).toBeLessThan(viewportClear);
+				expect(out).not.toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("clears stale screen content on a supported non-destructive paint when the terminal ignores CSI 22 J", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(true);
+			const term = new VirtualTerminal(40, 8);
+			// A previous program's screen the TUI must not leave behind.
+			term.write("\x1b[H");
+			for (let r = 0; r < 6; r++) term.write(`STALE-ROW-${r} leftover content\r\n`);
+			await term.flush();
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["omp line 1", "omp line 2"]));
+
+			try {
+				tui.start();
+				await settle(term);
+				const viewport = term.getViewport().join("\n");
+				expect(viewport).not.toContain("STALE-ROW");
+				expect(viewport).toContain("omp line 1");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("keeps CSI 2 J as the non-destructive fallback", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(false);
+			const term = new VirtualTerminal(20, 5);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["hello"]));
+			const writes = captureWrites(term);
+
+			try {
+				tui.start();
+				await settle(term);
+				const out = writes.join("");
+				expect(out).toContain("\x1b[2J\x1b[H");
+				expect(out).not.toContain("\x1b[22J");
+				expect(out).not.toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("uses ED3 for destructive rebuilds even when CSI 22 J is supported", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(true);
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("line-", 6)));
+			const writes = captureWrites(term);
+
+			try {
+				tui.start();
+				await settle(term);
+				writes.length = 0;
+
+				tui.requestRender(true, { clearScrollback: true });
+				await settle(term);
+				const out = writes.join("");
+				expect(out).toContain("\x1b[2J\x1b[H\x1b[3J");
+				expect(out).not.toContain("\x1b[22J");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
 		});
 	});
 

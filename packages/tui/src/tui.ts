@@ -461,6 +461,15 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Whether DEC 2026 synchronized-output wrappers are currently emitted around
+	 * paints. Starts from `PI_NO_SYNC_OUTPUT` and is force-disabled at runtime if
+	 * the terminal reports mode 2026 unsupported via DECRQM.
+	 */
+	get synchronizedOutput(): boolean {
+		return this.#synchronizedOutputEnabled;
+	}
+
+	/**
 	 * When enabled, live render frames rebuild native scrollback on offscreen and
 	 * structural changes even when the viewport position is unobservable (POSIX,
 	 * where `isNativeViewportAtBottom()` is `undefined`), instead of deferring to a
@@ -2074,7 +2083,20 @@ export class TUI extends Container {
 			for (const id of purgeIds) buffer += encodeKittyDeleteImage(id);
 		}
 		if (options.clearViewport) {
-			buffer += options.clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
+			if (options.clearScrollback) {
+				buffer += "\x1b[2J\x1b[H\x1b[3J";
+			} else {
+				// Best-effort: push the pre-paint screen into scrollback on terminals
+				// that implement kitty's ED 22 (copy-screen-to-scrollback-then-erase).
+				// ED 22 is not universal: multiplexers (tmux/screen/zellij), non-kitty
+				// terminals, and old kitty ignore the unknown ED parameter, which left
+				// the initial paint with no viewport clear (stale prior-program content
+				// bled through until a resize). Always follow with ED 2 so the viewport
+				// is cleared regardless; on real kitty, ED 2 over the now-blank screen
+				// is a no-op and does not push a second (blank) copy to scrollback.
+				if (TERMINAL.supportsScreenToScrollback) buffer += "\x1b[22J";
+				buffer += "\x1b[2J\x1b[H";
+			}
 		}
 		// Only the final viewport rows stay on screen; everything above scrolls
 		// into native scrollback, so optimize the visible tail with DECCARA
@@ -2313,30 +2335,35 @@ export class TUI extends Container {
 		// This bounds flicker for single-row updates (e.g. spinner ticks).
 		const renderEnd = Math.min(lastChanged, lines.length - 1);
 		// Optimize the in-place rewrite of a contiguous visible row range with
-		// DECCARA. Skip the append/scroll branch (`moveTargetRow > prevViewportBottom`
-		// pushed rows into history) and any range starting above the viewport —
-		// those rows live in scrollback, which DECCARA cannot reach.
+		// DECCARA. The rectangle coordinates are absolute screen rows, so two
+		// effects that the relatively-positioned text absorbs transparently must
+		// be folded into the coordinates explicitly:
+		//   1. Writing rows past the viewport bottom scrolls the terminal, so the
+		//      rewritten rows settle `scrollAmount` rows higher than where they
+		//      were first painted. The rectangles must target the post-scroll rows.
+		//   2. Rows pushed into history keep their full background padding (DECCARA
+		//      cannot reach scrollback), so only rows that remain in the final
+		//      viewport are shortened and repainted.
+		// The append/scroll branch (`moveTargetRow > prevViewportBottom`) already
+		// pushed rows into history and is excluded.
+		const scrollAmount = Math.max(0, renderEnd - viewportTop - (height - 1));
+		const fillViewportTop = viewportTop + scrollAmount;
+		const fillStart = Math.max(firstChanged, fillViewportTop);
 		let fillSequence = "";
 		let fillTexts: string[] | null = null;
-		if (
-			TERMINAL.deccara &&
-			!appendStart &&
-			moveTargetRow <= prevViewportBottom &&
-			firstChanged >= viewportTop &&
-			renderEnd >= firstChanged
-		) {
-			const slice: string[] = new Array(renderEnd - firstChanged + 1);
-			for (let i = firstChanged; i <= renderEnd; i++) {
-				slice[i - firstChanged] = this.#fitLineToWidth(lines[i], width);
+		if (TERMINAL.deccara && !appendStart && moveTargetRow <= prevViewportBottom && renderEnd >= fillStart) {
+			const slice: string[] = new Array(renderEnd - fillStart + 1);
+			for (let i = fillStart; i <= renderEnd; i++) {
+				slice[i - fillStart] = this.#fitLineToWidth(lines[i], width);
 			}
-			const plan = planDeccaraFills(slice, width, firstChanged - viewportTop);
+			const plan = planDeccaraFills(slice, width, fillStart - fillViewportTop);
 			fillTexts = plan.texts;
 			fillSequence = plan.sequence;
 		}
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
 			buffer += "\x1b[2K";
-			buffer += fillTexts ? fillTexts[i - firstChanged] : this.#fitLineToWidth(lines[i], width);
+			buffer += fillTexts && i >= fillStart ? fillTexts[i - fillStart] : this.#fitLineToWidth(lines[i], width);
 		}
 
 		// If the prior frame was taller, clear the trailing rows.
