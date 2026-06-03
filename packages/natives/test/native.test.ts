@@ -407,6 +407,38 @@ describe("pi-natives", () => {
 			expect(result.matches).toHaveLength(0);
 		});
 
+		it("should bound sorted callbacks to maxResults", async () => {
+			const scopedDir = await fs.mkdtemp(path.join(os.tmpdir(), "natives-glob-limit-"));
+			try {
+				for (let i = 0; i < 40; i++) {
+					await fs.writeFile(path.join(scopedDir, `file-${String(i).padStart(2, "0")}.txt`), `${i}\n`);
+				}
+
+				const streamedPaths: string[] = [];
+				const result = await glob(
+					{
+						pattern: "**/*",
+						path: scopedDir,
+						hidden: true,
+						gitignore: false,
+						sortByMtime: true,
+						maxResults: 5,
+					},
+					(error, match) => {
+						if (error) throw error;
+						if (match?.path) streamedPaths.push(match.path);
+					},
+				);
+
+				await Bun.sleep(10);
+				expect(result.matches).toHaveLength(5);
+				expect(streamedPaths).toHaveLength(5);
+				expect(new Set(streamedPaths)).toEqual(new Set(result.matches.map(match => match.path)));
+			} finally {
+				await fs.rm(scopedDir, { recursive: true, force: true });
+			}
+		});
+
 		it("should fast-recheck empty cached results when threshold is reached", async () => {
 			const fileName = "cache-empty-recheck-target.txt";
 			const filePath = path.join(testDir, fileName);
