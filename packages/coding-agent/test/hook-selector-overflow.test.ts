@@ -95,30 +95,48 @@ describe("HookSelectorComponent", () => {
 		}
 	});
 
-	it("counts description rows toward the visible row cap", () => {
+	it("collapses to labels with only the highlighted description when descriptions overflow", () => {
+		const options = [
+			{ label: "Path A", description: "Reuse existing credentials." },
+			{ label: "Path B", description: "Authorize a provider in the browser." },
+			{ label: "Path C", description: "Edit provider keys manually." },
+			{ label: "Path D", description: "Continue with offline-only tools." },
+		];
 		const component = new HookSelectorComponent(
 			"Which setup path should be used?",
-			[
-				{ label: "Path A", description: "Reuse existing credentials." },
-				{ label: "Path B", description: "Authorize a provider in the browser." },
-				{ label: "Path C", description: "Edit provider keys manually." },
-				{ label: "Path D", description: "Continue with offline-only tools." },
-			],
+			options,
 			() => {},
 			() => {},
-			{ outline: true, initialIndex: 0, maxVisible: 4 },
+			{ outline: true, initialIndex: 0, maxVisible: 6 },
 		);
 
 		const plain = component
 			.render(76)
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
+		// Every option label stays on screen so the user can see the whole menu...
 		expect(plain).toContain("Path A");
-		expect(plain).toContain("Reuse existing credentials.");
 		expect(plain).toContain("Path B");
-		expect(plain).toContain("Authorize a provider in the browser.");
-		expect(plain).not.toContain("Path C");
+		expect(plain).toContain("Path C");
+		expect(plain).toContain("Path D");
+		// ...but only the highlighted option expands its description.
+		expect(plain).toContain("Reuse existing credentials.");
+		expect(plain).not.toContain("Authorize a provider in the browser.");
+		expect(plain).not.toContain("Edit provider keys manually.");
 		expect(plain).toContain("(1/4)");
+
+		// The detail pane follows the cursor: moving down expands Path B and
+		// collapses Path A's description.
+		component.handleInput("\x1b[B");
+		const afterDown = component
+			.render(76)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(afterDown).toContain("Path A");
+		expect(afterDown).toContain("Path D");
+		expect(afterDown).toContain("Authorize a provider in the browser.");
+		expect(afterDown).not.toContain("Reuse existing credentials.");
+		expect(afterDown).toContain("(2/4)");
 	});
 
 	it("counts wrapped outlined rows toward the visible row cap", () => {
