@@ -387,6 +387,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 | `PI_TUI_WRITE_LOG`        | If set, logs TUI writes to file                                                       |
 | `PI_HARDWARE_CURSOR`      | If `1`, enables hardware cursor mode                                                  |
 | `PI_CLEAR_ON_SHRINK`      | If `1`, clears empty rows when content shrinks                                        |
+| `PI_NO_SYNC_OUTPUT`       | If `1`, disables DEC 2026 synchronized-output wrappers while keeping TUI autowrap guards |
 | `PI_DEBUG_REDRAW`         | If `1`, enables redraw debug logging                                                  |
 | `PI_TUI_DEBUG`            | If `1`, enables deep TUI debug dump path                                              |
 | `PI_FORCE_IMAGE_PROTOCOL` | Forces terminal image protocol detection (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) |

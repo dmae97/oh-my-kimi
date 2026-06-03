@@ -24,6 +24,7 @@ import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
 import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
+import { EDIT_MODE_STRATEGIES } from "./streaming";
 
 export * from "@oh-my-pi/hashline";
 export { DEFAULT_EDIT_MODE, type EditMode, normalizeEditMode } from "../utils/edit-mode";
@@ -358,6 +359,15 @@ export class EditTool implements AgentTool<TInput> {
 	get customWireName(): string | undefined {
 		if (this.mode !== "apply_patch") return undefined;
 		return "apply_patch";
+	}
+
+	/**
+	 * Normalize streamed args into the source text this edit introduces, so
+	 * stream matchers (TTSR rules) run against real file content instead of the
+	 * mode-specific patch grammar.
+	 */
+	matcherDigest(args: unknown): string | undefined {
+		return EDIT_MODE_STRATEGIES[this.mode].matcherDigest(args);
 	}
 
 	async execute(

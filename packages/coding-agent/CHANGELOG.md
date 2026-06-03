@@ -6,12 +6,6 @@
 
 - Added `--profile <name>` / `OMP_PROFILE` support to isolate agent state (auth credentials, sessions, settings, caches, history, memories, and blobs) under a named profile.
 - Added `--alias <command>` support for generating shell shortcuts like `omp-work` that activate `--profile=<name>` while preserving subcommands such as `update` and `--version`.
-- Added a bundled TypeScript rule that warns against leaving `@deprecated` compatibility shims behind instead of finishing a refactor.
-
-### Changed
-
-- Changed the JJ utility API to mirror Git's scoped helpers: repository operations now live under `jj.repo` (`root`, `resolve`, `is`, `clearRootCache`), and diff file listing is available as `jj.diff.changedFiles`.
-- Changed the `search_tool_bm25` tool description to name the hidden discoverable built-in tools (e.g. `write`, `find`, `search`, `lsp`, `task`) when `tools.discoveryMode: "all"` is active, so a model can form a targeted discovery query by name instead of guessing or falling back to shell. `mcp-only` mode is unchanged (no built-ins are advertised) and the `Total discoverable tools available: N` count still includes them.
 
 ### Fixed
 
@@ -19,8 +13,24 @@
 - Fixed `--alias` when run from a source checkout (`bun src/cli.ts` / `omp-test`) so the generated profile command targets that same checkout instead of a stale installed `omp` binary, while preserving the directory where the alias is invoked.
 - Fixed explicit `omp launch --profile <name>` / `omp launch --alias <name>` and `omp acp --profile <name>` / `omp acp --alias <name>` so launch-shaped subcommands behave like the default command during profile bootstrap instead of blocking global profile extraction.
 - Fixed profile bootstrap and alias installation edge cases: `--profile` is now still honored for `launch` argv that merely contain subcommand-shaped words; a trailing global `--profile`/`--alias` after an unknown (extension) flag is still extracted unless that flag would consume it as a value-like successor (mirroring `parseArgs`); extension flags no longer parse literal text after `--`; alias installation preserves non-ENOENT shell config read failures; `/bin/sh` is rejected instead of being treated as bash; aliases cannot shadow `omp` case-insensitively; on Windows the PowerShell edition is inferred from `PSModulePath` (then `POWERSHELL_DISTRIBUTION_CHANNEL`) when `$SHELL` is unset; and the fish alias honors `$XDG_CONFIG_HOME`.
+
+## [15.8.2] - 2026-06-03
+
+### Added
+
+- Added a bundled TypeScript rule that warns against leaving `@deprecated` compatibility shims behind instead of finishing a refactor.
+
+### Fixed
+
 - Fixed `/review`'s uncommitted-change mode in Jujutsu repositories to read `jj diff --git` from the current workspace, so non-default JJ workspaces include their working-copy changes instead of falling back to the colocated Git checkout.
 - Fixed empty assistant stop retry continuations preserving auto-retry state until a non-empty assistant turn completes or recovery reaches its retry cap.
+- Fixed TTSR rule conditions never matching streamed `edit`/`write` tool calls whose wire format obscures the real content (hashline `+` body rows, apply_patch envelopes, JSON-escaped `write` content). The edit and write tools now expose a `matcherDigest` normalization and TTSR matches against the introduced source text, so rule regexes stay universal regardless of the active edit mode.
+
+### Changed
+
+- Changed the JJ utility API to mirror Git's scoped helpers: repository operations now live under `jj.repo` (`root`, `resolve`, `is`, `clearRootCache`), and diff file listing is available as `jj.diff.changedFiles`.
+
+- Changed the `search_tool_bm25` tool description to name the hidden discoverable built-in tools (e.g. `write`, `find`, `search`, `lsp`, `task`) when `tools.discoveryMode: "all"` is active, so a model can form a targeted discovery query by name instead of guessing or falling back to shell. `mcp-only` mode is unchanged (no built-ins are advertised) and the `Total discoverable tools available: N` count still includes them.
 
 ## [15.8.1] - 2026-06-02
 
