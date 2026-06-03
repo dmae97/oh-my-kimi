@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@oh-my-pi/pi-ai/rate-limit-utils";
+import { calculateRateLimitBackoffMs, isUsageLimitError, parseRateLimitReason } from "@oh-my-pi/pi-ai/rate-limit-utils";
 
 describe("parseRateLimitReason", () => {
 	it("classifies Google Quota exceeded as QUOTA_EXHAUSTED", () => {
@@ -44,6 +44,24 @@ describe("parseRateLimitReason", () => {
 		expect(
 			parseRateLimitReason("Codex error event: The usage limit has been reached (code=usage_limit_reached)"),
 		).toBe("QUOTA_EXHAUSTED");
+	});
+
+	it("classifies account rate limits as QUOTA_EXHAUSTED", () => {
+		expect(
+			parseRateLimitReason(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+			),
+		).toBe("QUOTA_EXHAUSTED");
+	});
+});
+
+describe("isUsageLimitError", () => {
+	it("detects account rate limits as credential-rotatable usage limits", () => {
+		expect(
+			isUsageLimitError(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+			),
+		).toBe(true);
 	});
 });
 
