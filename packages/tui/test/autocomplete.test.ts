@@ -76,14 +76,28 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result.cursorCol).toBe("/skills:fix-bug ".length);
 		});
 
-		it("replaces the live slash command argument when rendered suggestions are stale", () => {
+		it("preserves earlier slash command arguments when completing a path inside the last argument", () => {
 			const provider = new CombinedAutocompleteProvider([], "/tmp");
 			const result = provider.applyCompletion(
-				["/model clau"],
+				["/swarm run pac"],
 				0,
-				11,
+				14,
+				{ value: "package.json", label: "package.json" },
+				"pac",
+			);
+
+			expect(result.lines[0]).toBe("/swarm run package.json");
+			expect(result.cursorCol).toBe("/swarm run package.json".length);
+		});
+
+		it("replaces only the last path token when completing a multi-token slash command argument", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["/model claude"],
+				0,
+				13,
 				{ value: "claude-sonnet", label: "claude-sonnet" },
-				"cl",
+				"claude",
 			);
 
 			expect(result.lines[0]).toBe("/model claude-sonnet");

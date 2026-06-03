@@ -416,25 +416,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
-		// Check if the live cursor is in a slash command argument.
-		if (hasOnlyWhitespaceBeforeSlash) {
-			const slashText = textBeforeCursor.slice(slashStart);
-			const spaceIndex = slashText.indexOf(" ");
-			if (spaceIndex !== -1) {
-				// This is likely a command argument completion
-				const beforeArgument = currentLine.slice(0, slashStart + spaceIndex + 1);
-				const newLine = beforeArgument + item.value + afterCursor;
-				const newLines = [...lines];
-				newLines[cursorLine] = newLine;
-
-				return {
-					lines: newLines,
-					cursorLine,
-					cursorCol: beforeArgument.length + item.value.length,
-				};
-			}
-		}
-
+		// Slash command argument and plain file path completion both fall through
+		// to the path-completion tail below — `beforePrefix` already covers the
+		// rendered prefix, which preserves earlier arguments (e.g. accepting
+		// `package.json` for `/swarm run pac<Tab>` keeps the `run` token intact).
 		// For file paths, complete the path
 		const newLine = beforePrefix + item.value + afterCursor;
 		const newLines = [...lines];
