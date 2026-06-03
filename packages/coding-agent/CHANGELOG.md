@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for `disable-model-invocation: true` frontmatter field from the [Agent Skills standard](https://agentskills.io/specification). Skills using this field are now hidden from the system prompt listing, matching the behavior of `hide: true`.
+
 ## [15.8.3] - 2026-06-03
 ### Fixed
 

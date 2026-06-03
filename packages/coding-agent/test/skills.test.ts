@@ -248,7 +248,32 @@ enabled: false
 			}
 		});
 
-		it("should have ignoredSkills take precedence over includeSkills", async () => {
+		it("should hide skills with disable-model-invocation frontmatter (Agent Skills spec)", async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dmi-skill-"));
+			const skillDir = path.join(tempDir, "hidden-by-spec");
+			await fs.mkdir(skillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(skillDir, "SKILL.md"),
+				`---\nname: hidden-by-spec\ndescription: Should be hidden via Agent Skills standard field.\ndisable-model-invocation: true\n---\n\n# Hidden Skill\n`,
+			);
+
+			try {
+				const { skills } = await loadSkills({
+					enableCodexUser: false,
+					enableClaudeUser: false,
+					enableClaudeProject: false,
+					enablePiUser: false,
+					enablePiProject: false,
+					customDirectories: [tempDir],
+				});
+				const skill = skills.find(s => s.name === "hidden-by-spec");
+				expect(skill).toBeDefined();
+				expect(skill!.hide).toBe(true);
+			} finally {
+				await fs.rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
 			const { skills } = await loadSkills({
 				enableCodexUser: false,
 				enableClaudeUser: false,
