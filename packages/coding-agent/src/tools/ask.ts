@@ -629,6 +629,15 @@ function renderCustomInput(
 	return text;
 }
 
+/**
+ * Marker glyph for a question option. Single-choice questions render circular radio
+ * buttons (pick one); multi-select questions render rectangular checkboxes (pick many).
+ */
+function optionMarker(uiTheme: Theme, multi: boolean | undefined, selected: boolean): string {
+	if (multi) return selected ? uiTheme.checkbox.checked : uiTheme.checkbox.unchecked;
+	return selected ? uiTheme.radio.selected : uiTheme.radio.unselected;
+}
+
 export const askToolRenderer = {
 	renderCall(args: AskRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const label = formatTitle("Ask", uiTheme);
@@ -663,7 +672,7 @@ export const askToolRenderer = {
 						const isLastOpt = j === q.options.length - 1;
 						const optBranch = isLastOpt ? uiTheme.tree.last : uiTheme.tree.branch;
 						const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-						optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("dim", uiTheme.checkbox.unchecked)} ${optLabel}`;
+						optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("dim", optionMarker(uiTheme, q.multi, false))} ${optLabel}`;
 						if (opt.description?.trim()) {
 							const optContinuation = isLastOpt ? " " : uiTheme.tree.vertical;
 							const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t =>
@@ -697,7 +706,7 @@ export const askToolRenderer = {
 				const isLast = i === args.options.length - 1;
 				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
 				const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-				optText += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("dim", uiTheme.checkbox.unchecked)} ${optLabel}`;
+				optText += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("dim", optionMarker(uiTheme, args.multi, false))} ${optLabel}`;
 				if (opt.description?.trim()) {
 					const continuation = isLast ? " " : uiTheme.tree.vertical;
 					const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
@@ -765,7 +774,7 @@ export const askToolRenderer = {
 						uiTheme.fg("toolOutput", t),
 					);
 					answerLines.push(
-						`${continuation}${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("success", uiTheme.checkbox.checked)} ${selectedLabel}`,
+						`${continuation}${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("success", optionMarker(uiTheme, r.multi, true))} ${selectedLabel}`,
 					);
 				}
 				if (answerLines.length > 0) {
@@ -809,7 +818,7 @@ export const askToolRenderer = {
 					uiTheme.fg("toolOutput", t),
 				);
 				answerLines.push(
-					` ${uiTheme.fg("dim", branch)} ${uiTheme.fg("success", uiTheme.checkbox.checked)} ${selectedLabel}`,
+					` ${uiTheme.fg("dim", branch)} ${uiTheme.fg("success", optionMarker(uiTheme, details.multi, true))} ${selectedLabel}`,
 				);
 			}
 		}
