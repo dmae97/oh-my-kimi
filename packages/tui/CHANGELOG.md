@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.8.2] - 2026-06-03
+
 ### Added
 
 - Added `PI_NO_SYNC_OUTPUT=1` to disable DEC 2026 synchronized-output wrappers for terminals whose implementation is buggy or visually worse, while keeping the renderer's autowrap guards active during paints ([#1765](https://github.com/can1357/oh-my-pi/issues/1765)).

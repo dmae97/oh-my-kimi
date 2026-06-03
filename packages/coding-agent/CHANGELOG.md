@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.8.2] - 2026-06-03
+
 ### Added
 
 - Added a bundled TypeScript rule that warns against leaving `@deprecated` compatibility shims behind instead of finishing a refactor.
