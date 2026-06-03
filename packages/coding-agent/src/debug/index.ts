@@ -6,7 +6,17 @@
 import * as fs from "node:fs/promises";
 import * as url from "node:url";
 import { getWorkProfile } from "@oh-my-pi/pi-natives";
-import { Container, Loader, type SelectItem, SelectList, Spacer, Text } from "@oh-my-pi/pi-tui";
+import {
+	Container,
+	isNotificationSuppressed,
+	Loader,
+	type SelectItem,
+	SelectList,
+	Spacer,
+	TERMINAL,
+	type TerminalNotification,
+	Text,
+} from "@oh-my-pi/pi-tui";
 import { getSessionsDir } from "@oh-my-pi/pi-utils";
 import { DynamicBorder } from "../modes/components/dynamic-border";
 import { getSelectListTheme, getSymbolTheme, theme } from "../modes/theme/theme";
@@ -15,10 +25,12 @@ import { formatBytes } from "../tools/render-utils";
 import { openPath } from "../utils/open";
 import { DebugLogViewerComponent } from "./log-viewer";
 import { generateHeapSnapshotData, type ProfilerSession, startCpuProfile } from "./profiler";
+import { buildSampleImage, ProtocolProbeComponent } from "./protocol-probe";
 import { RawSseViewerComponent } from "./raw-sse";
 import { resolveRawSseDebugBuffer } from "./raw-sse-buffer";
 import { clearArtifactCache, createDebugLogSource, createReportBundle, getArtifactCacheStats } from "./report-bundle";
 import { collectSystemInfo, formatSystemInfo } from "./system-info";
+import { collectTerminalState, formatTerminalState } from "./terminal-info";
 
 /** Debug menu options */
 const DEBUG_MENU_ITEMS: SelectItem[] = [
@@ -29,6 +41,12 @@ const DEBUG_MENU_ITEMS: SelectItem[] = [
 	{ value: "memory", label: "Report: memory issue", description: "Heap snapshot + bundle" },
 	{ value: "logs", label: "View: recent logs", description: "Show last 50 log entries" },
 	{ value: "system", label: "View: system info", description: "Show environment details" },
+	{ value: "terminal", label: "View: terminal state", description: "Subprotocols, geometry, scrollback strategy" },
+	{
+		value: "protocols",
+		label: "Test: terminal protocols",
+		description: "Styling, links, text sizing, graphics, notify",
+	},
 	{ value: "raw-sse", label: "View: raw SSE stream", description: "Show live provider SSE frames" },
 	{
 		value: "transcript",
@@ -105,6 +123,12 @@ export class DebugSelectorComponent extends Container {
 				break;
 			case "system":
 				await this.#handleViewSystemInfo();
+				break;
+			case "terminal":
+				await this.#handleViewTerminalState();
+				break;
+			case "protocols":
+				await this.#handleViewProtocols();
 				break;
 			case "transcript":
 				await this.#handleTranscriptExport();
@@ -349,6 +373,48 @@ export class DebugSelectorComponent extends Container {
 			this.ctx.showError(`Failed to collect system info: ${err instanceof Error ? err.message : String(err)}`);
 		}
 
+		this.ctx.ui.requestRender();
+	}
+
+	async #handleViewTerminalState(): Promise<void> {
+		const info = collectTerminalState({
+			columns: this.ctx.ui.terminal.columns,
+			rows: this.ctx.ui.terminal.rows,
+			synchronizedOutput: this.ctx.ui.synchronizedOutput,
+		});
+		const formatted = formatTerminalState(info);
+
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(new Text(formatted, 1, 0));
+		this.ctx.chatContainer.addChild(new DynamicBorder());
+		this.ctx.ui.requestRender();
+	}
+
+	async #handleViewProtocols(): Promise<void> {
+		// Fire the desktop notification as a real side effect, then render a
+		// panel that samples every other special protocol and reports the
+		// notification outcome.
+		const suppressed = isNotificationSuppressed();
+		if (!suppressed) {
+			const sessionName = this.ctx.sessionManager.getSessionName();
+			const notification: TerminalNotification = {
+				title: sessionName || "Oh My Pi",
+				body: "Terminal protocol test",
+				type: "test",
+				actions: "focus",
+			};
+			TERMINAL.sendNotification(notification);
+		}
+
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(
+			new ProtocolProbeComponent({
+				image: buildSampleImage(),
+				imageBudget: this.ctx.ui.imageBudget,
+				notificationSuppressed: suppressed,
+			}),
+		);
 		this.ctx.ui.requestRender();
 	}
 
