@@ -50,4 +50,30 @@ describe("jj workspace detection", () => {
 		expect(await jj.repo.root(dir)).toBeNull();
 		expect(await jj.repo.is(dir)).toBe(false);
 	});
+
+	it("detects a non-default workspace whose .jj/repo is a file", async () => {
+		const dir = await createTempDir();
+		const secondary = path.join(dir, "ws2");
+		// Default workspace: `.jj/repo/` is a directory containing the store.
+		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
+		// `jj workspace add` workspace: `.jj/repo` is a FILE pointing — relative to
+		// `.jj` — at the shared repo dir of the default workspace.
+		await fs.mkdir(path.join(secondary, ".jj", "working_copy"), { recursive: true });
+		await fs.writeFile(path.join(secondary, ".jj", "repo"), path.join("..", "..", ".jj", "repo"));
+
+		expect(await jj.repo.is(secondary)).toBe(true);
+		expect(await jj.repo.root(secondary)).toBe(secondary);
+	});
+
+	it("resolves storeDir to the shared store for a non-default workspace", async () => {
+		const dir = await createTempDir();
+		const secondary = path.join(dir, "ws2");
+		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
+		await fs.mkdir(path.join(secondary, ".jj", "working_copy"), { recursive: true });
+		await fs.writeFile(path.join(secondary, ".jj", "repo"), path.join("..", "..", ".jj", "repo"));
+
+		const resolved = await jj.repo.resolve(secondary);
+		expect(resolved?.repoRoot).toBe(secondary);
+		expect(resolved?.storeDir).toBe(path.join(dir, ".jj", "repo", "store"));
+	});
 });
