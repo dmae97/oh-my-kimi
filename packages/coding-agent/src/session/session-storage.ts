@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, peekFile, toError } from "@oh-my-pi/pi-utils";
+import { isEnoent, peekFile, peekFileTail, toError } from "@oh-my-pi/pi-utils";
 
 const utf8Decoder = new TextDecoder("utf-8");
 
@@ -38,6 +38,8 @@ export interface SessionStorage {
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
 	readTextPrefix(path: string, maxBytes: number): Promise<string>;
+	/** Read up to the last `maxBytes` of the file, decoded as UTF-8. */
+	readTextSuffix(path: string, maxBytes: number): Promise<string>;
 	writeText(path: string, content: string): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
@@ -186,6 +188,10 @@ export class FileSessionStorage implements SessionStorage {
 		return peekFile(path, maxBytes, header => utf8Decoder.decode(header));
 	}
 
+	async readTextSuffix(path: string, maxBytes: number): Promise<string> {
+		return peekFileTail(path, maxBytes, tail => utf8Decoder.decode(tail));
+	}
+
 	async writeText(path: string, content: string): Promise<void> {
 		await Bun.write(path, content, { createPath: true });
 	}
@@ -272,8 +278,8 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
-			// O(1) chunked append — see MemorySessionStorage.appendChunkSync.
-			this.#storage.appendChunkSync(this.#path, line);
+			// O(1) append — push onto the path's string[] mirror.
+			this.#storage.appendSync(this.#path, line);
 		} catch (err) {
 			throw this.#recordError(err);
 		}
@@ -302,26 +308,12 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 	}
 }
 
-/**
- * Mirror entry stored per path. Chunks accumulate via O(1) `push` on
- * `appendChunkSync`; readers materialise into a single string lazily.
- * `byteLen` is kept in sync so `statSync` is O(1) (and returns true UTF-8
- * bytes, not character count).
- */
-interface MirrorEntry {
-	chunks: string[];
-	byteLen: number;
-	mtimeMs: number;
-}
-
-function materialiseMirror(entry: MirrorEntry): string {
-	if (entry.chunks.length === 0) return "";
-	if (entry.chunks.length === 1) return entry.chunks[0];
-	return entry.chunks.join("");
-}
-
 export class MemorySessionStorage implements SessionStorage {
-	#files = new Map<string, MirrorEntry>();
+	// Content mirror: each path maps to the array of appended pieces. Reads join
+	// on demand; appends push in O(1). mtime lives in a sidecar map because
+	// statSync (backup recovery, session listing) depends on it.
+	#files = new Map<string, string[]>();
+	#mtimes = new Map<string, number>();
 
 	ensureDirSync(_dir: string): void {
 		// No-op for in-memory storage.
@@ -332,11 +324,8 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	writeTextSync(path: string, content: string): void {
-		this.#files.set(path, {
-			chunks: content.length === 0 ? [] : [content],
-			byteLen: Buffer.byteLength(content, "utf-8"),
-			mtimeMs: Date.now(),
-		});
+		this.#files.set(path, content.length === 0 ? [] : [content]);
+		this.#mtimes.set(path, Date.now());
 	}
 
 	/**
@@ -344,30 +333,30 @@ export class MemorySessionStorage implements SessionStorage {
 	 * creates the entry. External callers should go through `openWriter()`
 	 * rather than touching the mirror directly.
 	 */
-	appendChunkSync(path: string, chunk: string): void {
-		let entry = this.#files.get(path);
-		if (!entry) {
-			entry = { chunks: [], byteLen: 0, mtimeMs: Date.now() };
-			this.#files.set(path, entry);
+	appendSync(path: string, chunk: string): void {
+		let chunks = this.#files.get(path);
+		if (!chunks) {
+			chunks = [];
+			this.#files.set(path, chunks);
 		}
-		entry.chunks.push(chunk);
-		entry.byteLen += Buffer.byteLength(chunk, "utf-8");
-		entry.mtimeMs = Date.now();
+		chunks.push(chunk);
+		this.#mtimes.set(path, Date.now());
 	}
 
 	readTextSync(path: string): string {
-		const entry = this.#files.get(path);
-		if (!entry) throw new Error(`File not found: ${path}`);
-		return materialiseMirror(entry);
+		const chunks = this.#files.get(path);
+		if (!chunks) throw new Error(`File not found: ${path}`);
+		return chunks.join("");
 	}
 
 	statSync(path: string): SessionStorageStat {
-		const entry = this.#files.get(path);
-		if (!entry) throw new Error(`File not found: ${path}`);
+		const chunks = this.#files.get(path);
+		if (!chunks) throw new Error(`File not found: ${path}`);
+		const mtimeMs = this.#mtimes.get(path) ?? 0;
 		return {
-			size: entry.byteLen,
-			mtimeMs: entry.mtimeMs,
-			mtime: new Date(entry.mtimeMs),
+			size: Buffer.byteLength(chunks.join(""), "utf-8"),
+			mtimeMs,
+			mtime: new Date(mtimeMs),
 		};
 	}
 
@@ -389,37 +378,26 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	readText(path: string): Promise<string> {
-		const entry = this.#files.get(path);
-		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		return Promise.resolve(materialiseMirror(entry));
+		const chunks = this.#files.get(path);
+		if (!chunks) return Promise.reject(new Error(`File not found: ${path}`));
+		return Promise.resolve(chunks.join(""));
 	}
 
 	readTextPrefix(path: string, maxBytes: number): Promise<string> {
-		const entry = this.#files.get(path);
-		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		if (entry.chunks.length === 0 || maxBytes <= 0) return Promise.resolve("");
+		const chunks = this.#files.get(path);
+		if (!chunks) return Promise.reject(new Error(`File not found: ${path}`));
+		if (maxBytes <= 0) return Promise.resolve("");
+		// Char slice (approximate vs FileSessionStorage's byte-exact peekFile).
+		// Good enough for the in-memory double: the only consumer parses the
+		// slice as lenient JSONL and drops partial boundary lines anyway.
+		return Promise.resolve(chunks.join("").slice(0, maxBytes));
+	}
 
-		// Walk chunks until the byte budget is exhausted. Avoids materialising
-		// the full mirror just to slice a prefix — bounded work for big files.
-		let accumulatedBytes = 0;
-		const out: string[] = [];
-		for (const chunk of entry.chunks) {
-			const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-			if (accumulatedBytes + chunkBytes <= maxBytes) {
-				out.push(chunk);
-				accumulatedBytes += chunkBytes;
-				if (accumulatedBytes === maxBytes) break;
-				continue;
-			}
-			// Boundary chunk: slice in byte space and decode. Result MAY be
-			// shorter than the budget if a multi-byte codepoint straddles the
-			// boundary — matches `peekFile` semantics (partial decode at cap).
-			const remainingBytes = maxBytes - accumulatedBytes;
-			const utf8 = Buffer.from(chunk, "utf-8");
-			out.push(utf8Decoder.decode(utf8.subarray(0, remainingBytes)));
-			break;
-		}
-		return Promise.resolve(out.join(""));
+	readTextSuffix(path: string, maxBytes: number): Promise<string> {
+		const chunks = this.#files.get(path);
+		if (!chunks) return Promise.reject(new Error(`File not found: ${path}`));
+		if (maxBytes <= 0) return Promise.resolve("");
+		return Promise.resolve(chunks.join("").slice(-maxBytes));
 	}
 
 	writeText(path: string, content: string): Promise<void> {
@@ -428,15 +406,19 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	rename(path: string, nextPath: string): Promise<void> {
-		const entry = this.#files.get(path);
-		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
-		this.#files.set(nextPath, entry);
+		const chunks = this.#files.get(path);
+		if (!chunks) return Promise.reject(new Error(`File not found: ${path}`));
+		this.#files.set(nextPath, chunks);
 		this.#files.delete(path);
+		const mtimeMs = this.#mtimes.get(path);
+		this.#mtimes.delete(path);
+		this.#mtimes.set(nextPath, mtimeMs ?? Date.now());
 		return Promise.resolve();
 	}
 
 	unlink(path: string): Promise<void> {
 		this.#files.delete(path);
+		this.#mtimes.delete(path);
 		return Promise.resolve();
 	}
 	deleteSessionWithArtifacts(_sessionPath: string): Promise<void> {

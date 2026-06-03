@@ -269,6 +269,17 @@ export class RedisSessionStorage implements SessionStorage {
 		return slice.toString("utf-8");
 	}
 
+	async readTextSuffix(path: string, maxBytes: number): Promise<string> {
+		const entry = this.#mirror.get(path);
+		if (!entry) throw enoent(path);
+		if (maxBytes <= 0) return "";
+		// Byte-oriented tail, mirroring readTextPrefix: encode to UTF-8, slice the
+		// trailing window, then decode.
+		const bytes = Buffer.from(entry.content, "utf-8");
+		const slice = bytes.subarray(Math.max(0, bytes.byteLength - maxBytes));
+		return slice.toString("utf-8");
+	}
+
 	async writeText(path: string, content: string): Promise<void> {
 		const mtimeMs = this.#allocMtimeMs();
 		this.#mirror.set(path, { content, mtimeMs });

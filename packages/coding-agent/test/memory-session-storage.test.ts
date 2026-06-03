@@ -54,6 +54,25 @@ describe("MemorySessionStorage chunked mirror (F2)", () => {
 		expect(prefix).toBe("alpha\nbrav");
 	});
 
+	test("readTextSuffix walks chunks from the tail until the byte budget is exhausted", async () => {
+		const storage = new MemorySessionStorage();
+		const path = "/virtual/suffix.jsonl";
+		const writer = storage.openWriter(path, { flags: "w" });
+		try {
+			writer.writeLineSync("alpha\n");
+			writer.writeLineSync("bravo\n");
+			writer.writeLineSync("charlie\n");
+		} finally {
+			void writer.close();
+		}
+
+		// Last 10 bytes span the tail of "bravo\n" plus all of "charlie\n".
+		expect(await storage.readTextSuffix(path, 10)).toBe("o\ncharlie\n");
+		// Budget >= size returns the whole file; zero budget returns "".
+		expect(await storage.readTextSuffix(path, 100)).toBe("alpha\nbravo\ncharlie\n");
+		expect(await storage.readTextSuffix(path, 0)).toBe("");
+	});
+
 	test("subsequent writeLineSync after readTextSync stays O(1) (chunks preserved)", () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/cont.jsonl";

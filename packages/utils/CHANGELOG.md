@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `peekFileTail`, the tail mirror of `peekFile`: reads up to the last `maxBytes` of a file ending at EOF, reusing the same pooled-buffer strategy (no per-call allocation for small reads).
+
 ## [15.7.3] - 2026-05-31
 ### Added
 
