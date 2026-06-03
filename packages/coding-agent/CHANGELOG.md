@@ -12,6 +12,7 @@
 ### Changed
 
 - Changed the `ask` tool transcript renderer to mark single-choice questions with circular radio glyphs (`○`/`◉`) instead of the rectangular checkbox glyphs (`☐`/`☑`) it shares with multi-select questions, so a "pick one" combo box visually reads as a radio group rather than a checklist. Multi-select questions keep checkboxes. Added a `radio.selected`/`radio.unselected` symbol pair across the unicode, nerd-font, and ASCII presets.
+- Changed the `ask` tool transcript renderer to mark the chosen answer inside the question form rather than re-listing the questions in a detached summary block below it. Once a question is answered, the standalone prompt preview is dropped and the result redraws the same form — every offered option still shown, with the selected one(s) filled in (`◉`/`☑`, highlighted) and the rest dimmed (`○`/`☐`); custom free-text answers and cancellations render in place as the final entry. This removes the duplicate question/option listing that previously appeared once as the call preview and again as the result.
 - Changed task-completion and `ask` desktop notifications to structured terminal notifications (title, body, type, and a focus-on-click action). On Kitty these render through OSC 99 as a proper title/body with click-to-focus; terminals without confirmed OSC 99 support collapse them to the previous single-line message (BEL/OSC 9).
 
 ### Fixed
