@@ -5,9 +5,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
+import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { isKeyRelease, matchesKey } from "./keys";
 import type { Terminal } from "./terminal";
-import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
+import {
+	encodeKittyDeleteImage,
+	ImageProtocol,
+	setCellDimensions,
+	setTerminalImageProtocol,
+	TERMINAL,
+} from "./terminal-capabilities";
 import {
 	Ellipsis,
 	extractSegments,
@@ -370,6 +377,9 @@ export class TUI extends Container {
 	#suppressNextSuffixScroll = false;
 	#nativeScrollbackDirty = false;
 	#fullRedrawCount = 0;
+	// Caps how many inline images render as live graphics; older ones fall back
+	// to text via a purge + full redraw. Cap is configured by the host app.
+	#imageBudget = new ImageBudget(DEFAULT_MAX_INLINE_IMAGES, () => this.requestRender());
 	#clearScrollbackOnNextRender = false;
 	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
@@ -407,6 +417,20 @@ export class TUI extends Container {
 
 	get fullRedraws(): number {
 		return this.#fullRedrawCount;
+	}
+
+	/** Shared budget that caps how many inline images render as live graphics. */
+	get imageBudget(): ImageBudget {
+		return this.#imageBudget;
+	}
+
+	/**
+	 * Set how many inline images stay live graphics before older ones fall back
+	 * to text (`0` disables the cap). Older images are hidden via a graphics purge
+	 * plus a full redraw on the frame after a new image exceeds the cap.
+	 */
+	setMaxInlineImages(cap: number): void {
+		this.#imageBudget.setCap(cap);
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -1265,8 +1289,16 @@ export class TUI extends Container {
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 
-		// 1. Compose the frame.
+		// 1. Compose the frame. Bracket the transcript render so the image budget
+		// observes every inline image in display order (overlays carry none).
+		this.#imageBudget.beginPass();
 		let baseLines = this.render(width);
+		if (this.#imageBudget.endPass()) {
+			// A new image pushed the live-graphics count past the cap: force a full
+			// redraw (so off-screen rows repaint as text) and purge the demoted
+			// images' graphics in #emitFullPaint.
+			this.#clearScrollbackOnNextRender = true;
+		}
 		const visibleOverlayComponents: Component[] = [];
 		if (this.overlayStack.length > 0 || this.#previousVisibleOverlayComponents.length > 0) {
 			for (const entry of this.overlayStack) {
@@ -1316,6 +1348,17 @@ export class TUI extends Container {
 			this.#eagerNativeScrollbackRebuild = false;
 		}
 		this.#logRedraw(intent, lines.length, height);
+		// Load any newly-displayed image data into the terminal once, before this
+		// frame's placements (and any emitter) reference it. Data persists across
+		// paints, so subsequent frames re-emit only the tiny placement sequence.
+		// `a=t` produces no display, so writing it ahead of the synchronized paint
+		// is artifact-free.
+		const imageTransmits = this.#imageBudget.takeTransmits();
+		if (imageTransmits.length > 0) {
+			let transmitBuffer = "";
+			for (const seq of imageTransmits) transmitBuffer += seq;
+			this.terminal.write(transmitBuffer);
+		}
 		// 4. Execute.
 		switch (intent.kind) {
 			case "noop":
@@ -1999,6 +2042,13 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		let buffer = this.#paintBeginSequence;
+		// Purge graphics for images the budget just demoted to text. Kitty keeps
+		// images in a store that text-clear escapes don't touch, so delete them by
+		// id; other protocols bake images into cells the clear-screen below wipes.
+		const purgeIds = this.#imageBudget.takePurgeIds();
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
+			for (const id of purgeIds) buffer += encodeKittyDeleteImage(id);
+		}
 		if (options.clearViewport) {
 			buffer += options.clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
 		}

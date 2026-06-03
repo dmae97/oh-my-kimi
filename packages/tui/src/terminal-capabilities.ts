@@ -288,6 +288,16 @@ export interface ImageRenderOptions {
 	maxWidthCells?: number;
 	maxHeightCells?: number;
 	preserveAspectRatio?: boolean;
+	/**
+	 * Stable Kitty image id (`i=`). When set, the image is displayed via a
+	 * transmit-once + placement scheme keyed off this id instead of re-sending the
+	 * base64 each frame.
+	 */
+	imageId?: number;
+	/** Stable Kitty placement id (`p=`); defaults to {@link imageId}. */
+	placementId?: number;
+	/** When true (Kitty + {@link imageId}), also return the one-time transmit sequence. */
+	includeTransmit?: boolean;
 }
 
 // Default cell dimensions - updated by TUI when terminal responds to query
@@ -301,24 +311,10 @@ export function setCellDimensions(dims: CellDimensions): void {
 	cellDimensions = dims;
 }
 
-export function encodeKitty(
-	base64Data: string,
-	options: {
-		columns?: number;
-		rows?: number;
-		imageId?: number;
-	} = {},
-): string {
+function chunkKittyApc(leadParams: string, base64Data: string): string {
 	const CHUNK_SIZE = 4096;
-
-	const params: string[] = ["a=T", "f=100", "q=2"];
-
-	if (options.columns) params.push(`c=${options.columns}`);
-	if (options.rows) params.push(`r=${options.rows}`);
-	if (options.imageId) params.push(`i=${options.imageId}`);
-
 	if (base64Data.length <= CHUNK_SIZE) {
-		return `\x1b_G${params.join(",")};${base64Data}\x1b\\`;
+		return `\x1b_G${leadParams};${base64Data}\x1b\\`;
 	}
 
 	const chunks: string[] = [];
@@ -330,7 +326,7 @@ export function encodeKitty(
 		const isLast = offset + CHUNK_SIZE >= base64Data.length;
 
 		if (isFirst) {
-			chunks.push(`\x1b_G${params.join(",")},m=1;${chunk}\x1b\\`);
+			chunks.push(`\x1b_G${leadParams},m=1;${chunk}\x1b\\`);
 			isFirst = false;
 		} else if (isLast) {
 			chunks.push(`\x1b_Gm=0;${chunk}\x1b\\`);
@@ -342,6 +338,63 @@ export function encodeKitty(
 	}
 
 	return chunks.join("");
+}
+
+/** Transmit-and-display (`a=T`) — the self-contained form used when no stable id is available. */
+export function encodeKitty(
+	base64Data: string,
+	options: {
+		columns?: number;
+		rows?: number;
+		imageId?: number;
+	} = {},
+): string {
+	const params: string[] = ["a=T", "f=100", "q=2"];
+	if (options.columns) params.push(`c=${options.columns}`);
+	if (options.rows) params.push(`r=${options.rows}`);
+	if (options.imageId) params.push(`i=${options.imageId}`);
+	return chunkKittyApc(params.join(","), base64Data);
+}
+
+/**
+ * Transmit image data only (`a=t`), keyed by `imageId`, without displaying it.
+ * Sent once per image; the data then persists in the terminal's store (it
+ * survives scroll-off and text clears for images with a non-zero id), so
+ * subsequent frames display it with the tiny {@link encodeKittyPlacement}
+ * sequence instead of re-sending the base64.
+ */
+export function encodeKittyTransmit(base64Data: string, imageId: number): string {
+	return chunkKittyApc(`a=t,f=100,q=2,i=${imageId}`, base64Data);
+}
+
+/**
+ * Display a previously transmitted image (`a=p`) at the cursor. Carrying a
+ * stable `placementId` (`p=`) means re-emitting the sequence on a repaint
+ * *replaces* the existing placement (moving/resizing it without flicker) rather
+ * than stacking a duplicate.
+ */
+export function encodeKittyPlacement(options: {
+	imageId: number;
+	placementId?: number;
+	columns?: number;
+	rows?: number;
+}): string {
+	const params: string[] = ["a=p", "q=2", `i=${options.imageId}`];
+	if (options.placementId) params.push(`p=${options.placementId}`);
+	if (options.columns) params.push(`c=${options.columns}`);
+	if (options.rows) params.push(`r=${options.rows}`);
+	return `\x1b_G${params.join(",")}\x1b\\`;
+}
+
+/**
+ * Kitty graphics delete command for a single image id. Uses `d=I` (capital)
+ * which removes the image and every one of its placements — on screen *and* in
+ * scrollback — and frees the backing data. `q=2` suppresses the terminal reply.
+ * Text-clearing escapes (`CSI 2 J` / `CSI 3 J`) do not remove Kitty graphics, so
+ * this is the only way to actually purge a placed image.
+ */
+export function encodeKittyDeleteImage(imageId: number): string {
+	return `\x1b_Ga=d,d=I,i=${imageId},q=2\x1b\\`;
 }
 
 export function encodeITerm2(
@@ -555,7 +608,7 @@ export function renderImage(
 	base64Data: string,
 	imageDimensions: ImageDimensions,
 	options: ImageRenderOptions = {},
-): { sequence: string; rows: number } | null {
+): { sequence: string; rows: number; transmit?: string } | null {
 	if (!TERMINAL.imageProtocol) {
 		return null;
 	}
@@ -564,6 +617,18 @@ export function renderImage(
 	const fit = calculateImageFit(imageDimensions, options, cellDims);
 
 	if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
+		if (options.imageId != null) {
+			// Transmit-once + placement: re-emit only the tiny `a=p` on repaints.
+			const sequence = encodeKittyPlacement({
+				imageId: options.imageId,
+				placementId: options.placementId ?? options.imageId,
+				columns: fit.columns,
+				rows: fit.rows,
+			});
+			const transmit = options.includeTransmit ? encodeKittyTransmit(base64Data, options.imageId) : undefined;
+			return { sequence, rows: fit.rows, transmit };
+		}
+		// No stable id (e.g. no budget): self-contained transmit-and-display.
 		const sequence = encodeKitty(base64Data, {
 			columns: fit.columns,
 			rows: fit.rows,

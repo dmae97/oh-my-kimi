@@ -282,6 +282,7 @@ export class EventController {
 				this.ctx.hideThinkingBlock,
 				() => this.ctx.ui.requestRender(),
 				this.ctx.session.extensionRunner?.getAssistantThinkingRenderers(),
+				this.ctx.ui.imageBudget,
 			);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);

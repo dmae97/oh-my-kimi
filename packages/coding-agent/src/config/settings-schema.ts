@@ -608,6 +608,13 @@ export const SETTINGS_SCHEMA = {
 			"Maximum height in terminal rows for inline images (default 20). Set to 0 to use only the viewport-based limit (60% of terminal height).",
 	},
 
+	"tui.maxInlineImages": {
+		type: "number",
+		default: 3,
+		description:
+			"Maximum number of inline images kept as live terminal graphics (default 3). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit).",
+	},
+
 	"tui.hyperlinks": {
 		type: "enum",
 		values: ["off", "auto", "always"] as const,
