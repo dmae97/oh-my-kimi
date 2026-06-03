@@ -69,6 +69,14 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * compute returned `null` because args are still too partial).
 	 */
 	renderStreamingFallback(args: Args, uiTheme: Theme): string;
+	/**
+	 * Project the (potentially partial) args onto the plain text the edit
+	 * introduces into files — added lines without patch grammar — so stream
+	 * matchers (TTSR rules) can run source-level patterns against real content
+	 * instead of the mode-specific wire format. Returns `undefined` when the
+	 * args don't yet carry any content.
+	 */
+	matcherDigest(args: Args): string | undefined;
 }
 
 // -----------------------------------------------------------------------------
@@ -161,6 +169,28 @@ function groupApplyPatchEntriesByPath(entries: readonly ApplyPatchEntry[]): Map<
 	return groups;
 }
 
+/**
+ * Extract the lines a patch-style payload adds (`+` prefix, excluding `+++ `
+ * file headers), stripped of the prefix. When the text carries no added lines,
+ * returns the whole text if `fallbackToWhole` (full-content payloads such as a
+ * `create` op), otherwise an empty string (grammar-only payloads).
+ */
+function extractAddedLines(text: string, fallbackToWhole: boolean): string {
+	let added: string | undefined;
+	let lineStart = 0;
+	while (lineStart <= text.length) {
+		let lineEnd = text.indexOf("\n", lineStart);
+		if (lineEnd === -1) lineEnd = text.length;
+		if (text.charCodeAt(lineStart) === 43 /* + */ && !text.startsWith("+++ ", lineStart)) {
+			const line = text.slice(lineStart + 1, lineEnd);
+			added = added === undefined ? line : `${added}\n${line}`;
+		}
+		lineStart = lineEnd + 1;
+	}
+	if (added === undefined) return fallbackToWhole ? text : "";
+	return added;
+}
+
 // -----------------------------------------------------------------------------
 // Strategies
 // -----------------------------------------------------------------------------
@@ -196,6 +226,16 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	renderStreamingFallback() {
 		return "";
 	},
+	matcherDigest(args) {
+		const edits = args?.edits;
+		if (!Array.isArray(edits)) return undefined;
+		let digest: string | undefined;
+		for (const edit of edits) {
+			if (typeof edit?.new_text !== "string") continue;
+			digest = digest === undefined ? edit.new_text : `${digest}\n${edit.new_text}`;
+		}
+		return digest;
+	},
 };
 
 interface PatchArgs {
@@ -224,6 +264,19 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 	},
 	renderStreamingFallback() {
 		return "";
+	},
+	matcherDigest(args) {
+		const edits = args?.edits;
+		if (!Array.isArray(edits)) return undefined;
+		let digest: string | undefined;
+		for (const edit of edits) {
+			if (typeof edit?.diff !== "string") continue;
+			// `create` ops carry full file content in `diff` with no +/- markers;
+			// pass that content through whole.
+			const added = extractAddedLines(edit.diff, true);
+			digest = digest === undefined ? added : `${digest}\n${added}`;
+		}
+		return digest;
 	},
 };
 
@@ -378,6 +431,12 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		// than a sigil dump.
 		return "";
 	},
+	matcherDigest(args) {
+		const input = args?.input;
+		if (typeof input !== "string") return undefined;
+		// Body rows are `+TEXT`; headers and op lines are grammar, never content.
+		return extractAddedLines(input, false);
+	},
 };
 
 interface ApplyPatchArgs {
@@ -429,6 +488,12 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 	},
 	renderStreamingFallback() {
 		return "";
+	},
+	matcherDigest(args) {
+		const input = args?.input;
+		if (typeof input !== "string") return undefined;
+		// Envelope markers and `@@` hunk headers are grammar, never content.
+		return extractAddedLines(input, false);
 	},
 };
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {

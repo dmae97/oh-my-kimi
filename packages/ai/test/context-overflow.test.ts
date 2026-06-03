@@ -92,6 +92,110 @@ function logResult(result: OverflowResult) {
 	console.log(`  hasUsageData: ${result.hasUsageData}`);
 }
 
+const LM_STUDIO_DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1";
+const LM_STUDIO_DEFAULT_CONTEXT_WINDOW = 8192;
+const LM_STUDIO_MODEL_DISCOVERY_TIMEOUT_MS = 1000;
+
+interface LmStudioDiscoveredModel {
+	id: string;
+	name: string;
+	contextWindow: number;
+	baseUrl: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeLmStudioBaseUrl(rawBaseUrl: string | undefined): string {
+	const baseUrl = (rawBaseUrl ?? LM_STUDIO_DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+	return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+}
+
+function toLmStudioNativeBaseUrl(openAIBaseUrl: string): string {
+	return openAIBaseUrl.endsWith("/v1") ? openAIBaseUrl.slice(0, -3) : openAIBaseUrl;
+}
+
+async function fetchLmStudioJson(url: string): Promise<unknown | undefined> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), LM_STUDIO_MODEL_DISCOVERY_TIMEOUT_MS);
+	const headers: Record<string, string> = { Accept: "application/json" };
+	if (Bun.env.LM_STUDIO_API_KEY) {
+		headers.Authorization = `Bearer ${Bun.env.LM_STUDIO_API_KEY}`;
+	}
+
+	try {
+		const response = await fetch(url, { headers, signal: controller.signal });
+		if (!response.ok) return undefined;
+		return await response.json();
+	} catch {
+		return undefined;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+function getModelRecords(payload: unknown): Record<string, unknown>[] {
+	if (Array.isArray(payload)) {
+		return payload.filter(isRecord);
+	}
+	if (!isRecord(payload)) {
+		return [];
+	}
+
+	for (const key of ["data", "models", "result", "items"]) {
+		const value = payload[key];
+		if (Array.isArray(value)) {
+			return value.filter(isRecord);
+		}
+	}
+
+	return [];
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+async function discoverLmStudioModel(): Promise<LmStudioDiscoveredModel | undefined> {
+	if (!Bun.env.PI_LOCAL_LLM || Bun.env.PI_NO_LOCAL_LLM) return undefined;
+
+	const baseUrl = normalizeLmStudioBaseUrl(Bun.env.LM_STUDIO_BASE_URL);
+	const openAIModels = getModelRecords(await fetchLmStudioJson(`${baseUrl}/models`))
+		.map(entry => ({
+			id: typeof entry.id === "string" && entry.id.length > 0 ? entry.id : undefined,
+			name: typeof entry.name === "string" && entry.name.length > 0 ? entry.name : undefined,
+		}))
+		.filter((entry): entry is { id: string; name: string | undefined } => entry.id !== undefined);
+	if (openAIModels.length === 0) return undefined;
+	const firstOpenAIModel = openAIModels[0];
+	if (!firstOpenAIModel) return undefined;
+
+	const visibleIds = new Set(openAIModels.map(entry => entry.id));
+	const nativeBaseUrl = toLmStudioNativeBaseUrl(baseUrl);
+	const nativeModels = getModelRecords(await fetchLmStudioJson(`${nativeBaseUrl}/api/v0/models`)).filter(
+		entry => typeof entry.id === "string" && visibleIds.has(entry.id),
+	);
+	const nativeCandidate =
+		nativeModels.find(
+			entry =>
+				entry.state === "loaded" && (entry.type === "llm" || entry.type === "vlm" || entry.type === undefined),
+		) ?? nativeModels.find(entry => entry.type === "llm" || entry.type === "vlm" || entry.type === undefined);
+	const openAICandidate =
+		(nativeCandidate && openAIModels.find(entry => entry.id === nativeCandidate.id)) ?? firstOpenAIModel;
+
+	return {
+		id: openAICandidate.id,
+		name:
+			openAICandidate.name ??
+			(typeof nativeCandidate?.publisher === "string" ? nativeCandidate.publisher : undefined) ??
+			openAICandidate.id,
+		contextWindow: toPositiveInteger(nativeCandidate?.max_context_length) ?? LM_STUDIO_DEFAULT_CONTEXT_WINDOW,
+		baseUrl,
+	};
+}
+
+const lmStudioModel = await discoverLmStudioModel();
 // =============================================================================
 // Anthropic
 // Expected pattern: "prompt is too long: X tokens > Y maximum"
@@ -530,35 +634,26 @@ describe("Context overflow error handling", () => {
 	});
 
 	// =============================================================================
-	// LM Studio (local) - Skip if not running or local LLM tests disabled
+	// LM Studio (local) - requires PI_LOCAL_LLM=1 and a visible local model
 	// =============================================================================
 
-	let lmStudioRunning = false;
-	if (!Bun.env.PI_NO_LOCAL_LLM) {
-		try {
-			execSync("curl -s --max-time 1 http://localhost:1234/v1/models > /dev/null", { stdio: "ignore" });
-			lmStudioRunning = true;
-		} catch {
-			lmStudioRunning = false;
-		}
-	}
-
-	describe.skipIf(!lmStudioRunning)("LM Studio (local)", () => {
+	describe.skipIf(lmStudioModel === undefined)("LM Studio (local)", () => {
 		it("should detect overflow via isContextOverflow", async () => {
+			if (!lmStudioModel) return;
 			const model: Model<"openai-completions"> = {
-				id: "local-model",
+				id: lmStudioModel.id,
 				api: "openai-completions",
 				provider: "lm-studio",
-				baseUrl: "http://localhost:1234/v1",
+				baseUrl: lmStudioModel.baseUrl,
 				reasoning: false,
 				input: ["text"],
-				contextWindow: 8192,
+				contextWindow: lmStudioModel.contextWindow,
 				maxTokens: 2048,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				name: "LM Studio Local Model",
+				name: lmStudioModel.name,
 			};
 
-			const result = await testContextOverflow(model, "lm-studio");
+			const result = await testContextOverflow(model, Bun.env.LM_STUDIO_API_KEY || "lm-studio");
 			logResult(result);
 
 			expect(result.stopReason).toBe("error");

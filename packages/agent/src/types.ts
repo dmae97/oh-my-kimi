@@ -441,6 +441,15 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 */
 	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
 
+	/**
+	 * Normalize (potentially partial) streamed arguments into the plain text that
+	 * stream-content matchers (e.g. TTSR rules) should inspect — the real content
+	 * the call introduces, without wire grammar such as patch prefixes or JSON
+	 * string escaping. Return `undefined` to fall back to raw argument-delta
+	 * matching.
+	 */
+	matcherDigest?: (args: unknown) => string | undefined;
+
 	/** Capability tier declaration used by approval gates. Omitted means "exec". */
 	approval?: ToolApproval;
 

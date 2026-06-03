@@ -322,4 +322,50 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 			});
 		});
 	});
+
+	it("keeps the turn-end teardown frame live when eager mode is disabled in the same batch", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(true, async () => {
+				const term = new VirtualTerminal(40, 10);
+				overrideProbe(term, undefined);
+				const tui = new TUI(term);
+				const transcript = new LineList(Array.from({ length: 80 }, (_value, index) => `init-${index}`));
+				const status = new LineList(["working... (esc to interrupt)"]);
+				tui.addChild(transcript);
+				tui.addChild(status);
+
+				try {
+					tui.start();
+					await settle(term);
+					const writes = capture(term);
+					tui.setEagerNativeScrollbackRebuild(true);
+
+					// Turn end: the same event batch removes the status row (a shrink
+					// across the viewport boundary) and disables eager mode before the
+					// throttled render timer fires.
+					status.setLines([]);
+					tui.requestRender();
+					tui.setEagerNativeScrollbackRebuild(false);
+					await settle(term);
+
+					// The teardown frame must still paint: the stale status row is gone...
+					expect(term.getViewport().join("\n")).not.toContain("working...");
+					// ...without a destructive scrollback erase (anti-yank preserved).
+					expect(eraseScrollbackCount(writes)).toBe(0);
+
+					// The disable lands right after that frame: a later idle shrink
+					// defers instead of running the eager repaint path.
+					transcript.setLines(Array.from({ length: 60 }, (_value, index) => `init-${index}`));
+					tui.requestRender();
+					await settle(term);
+					const idleViewport = term.getViewport().map(line => line.trim());
+					expect(idleViewport).toContain("init-79");
+					expect(idleViewport).not.toContain("init-59");
+					expect(eraseScrollbackCount(writes)).toBe(0);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+	});
 });
