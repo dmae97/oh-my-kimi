@@ -4,11 +4,14 @@
 
 ### Added
 
-- Added the `tui.maxInlineImages` setting (default `3`) capping how many inline images render as live terminal graphics. Once a new image pushes the count past the cap, the oldest images are hidden via a full redraw — replaced by their `[Image: …]` text placeholder and purged from the terminal's graphics store — so long sessions with many screenshots/diagrams stop piling up images (and, on Kitty, stop leaving scrollback ghosts). Set to `0` to keep every image inline.
+- Added the `tui.maxInlineImages` setting (default `8`) capping how many inline images render as live terminal graphics. Once a new image pushes the count past the cap, the oldest images are hidden via a full redraw — replaced by their `[Image: …]` text placeholder and purged from the terminal's graphics store — so long sessions with many screenshots/diagrams stop piling up images (and, on Kitty, stop leaving scrollback ghosts). Set to `0` to keep every image inline.
+- Added a "View: terminal state" item to the `/debug` menu that prints the detected terminal, live geometry and cell size, multiplexer, and the negotiated subprotocols actually in use — graphics (Kitty/iTerm2/Sixel), desktop notifications (BEL/OSC 9/OSC 99, plus whether OSC 99 was confirmed via a device-attributes probe), OSC 8 hyperlinks, 24-bit color, DECCARA rectangular-SGR background fills, and DEC 2026 synchronized output — alongside the scrollback-clear strategy (`CSI 22 J` vs `CSI 2 J` redraw / ED3 eager-erase risk) and the raw `TERM`/`TERM_PROGRAM`/`COLORTERM` detection signals.
+- Added a "Test: terminal protocols" item to the `/debug` menu that renders one live sample of every special escape protocol the renderer can emit — SGR text attributes (bold/italic/underline/strikethrough/inverse/dim), themed and 24-bit truecolor, OSC 8 hyperlinks, OSC 66 text sizing (large text), and an inline graphics swatch via the active image protocol (Kitty/iTerm2/Sixel, with a text fallback) — and fires a desktop notification, so you can eyeball which protocols the current terminal actually honors. The sample image is a gradient PNG generated in-process, so the graphics test needs no asset on disk.
 
 ### Changed
 
 - Changed the `ask` tool transcript renderer to mark single-choice questions with circular radio glyphs (`○`/`◉`) instead of the rectangular checkbox glyphs (`☐`/`☑`) it shares with multi-select questions, so a "pick one" combo box visually reads as a radio group rather than a checklist. Multi-select questions keep checkboxes. Added a `radio.selected`/`radio.unselected` symbol pair across the unicode, nerd-font, and ASCII presets.
+- Changed task-completion and `ask` desktop notifications to structured terminal notifications (title, body, type, and a focus-on-click action). On Kitty these render through OSC 99 as a proper title/body with click-to-focus; terminals without confirmed OSC 99 support collapse them to the previous single-line message (BEL/OSC 9).
 
 ### Fixed
 

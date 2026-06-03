@@ -848,9 +848,13 @@ export class EventController {
 		const last = this.ctx.session.getLastAssistantMessage?.();
 		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
 
-		const title = this.ctx.sessionManager.getSessionName();
-		const message = title ? `${title}: Complete` : "Complete";
-		TERMINAL.sendNotification(message);
+		const sessionName = this.ctx.sessionManager.getSessionName();
+		TERMINAL.sendNotification({
+			title: sessionName || "Oh My Pi",
+			body: "Complete",
+			type: "completion",
+			actions: "focus",
+		});
 	}
 
 	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {

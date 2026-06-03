@@ -419,7 +419,13 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	#sendAskNotification(): void {
 		const method = this.session.settings.get("ask.notify");
 		if (method === "off") return;
-		TERMINAL.sendNotification("Waiting for input");
+		TERMINAL.sendNotification({
+			title: "Oh My Pi",
+			body: "Waiting for input",
+			type: "ask",
+			urgency: "normal",
+			actions: "focus",
+		});
 	}
 
 	async execute(

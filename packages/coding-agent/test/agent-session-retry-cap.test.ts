@@ -155,7 +155,7 @@ describe("AgentSession retry delay cap", () => {
 				messages: [],
 			},
 			streamFn: (requestedModel, context, options) => {
-				const apiKey = options.apiKey;
+				const apiKey = options?.apiKey;
 				if (typeof apiKey !== "string") {
 					throw new Error("Expected API key to be resolved before streaming");
 				}

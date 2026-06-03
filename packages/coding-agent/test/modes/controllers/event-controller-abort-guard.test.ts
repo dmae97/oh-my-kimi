@@ -83,7 +83,8 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 		const controller = new EventController(makeContext(makeAssistantMessage("stop")));
 		controller.sendCompletionNotification();
 		expect(spy).toHaveBeenCalledTimes(1);
-		expect(spy).toHaveBeenCalledWith(expect.stringContaining("Complete"));
+		// Completion now sends a structured notification (title=session, body="Complete").
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ body: "Complete", type: "completion" }));
 	});
 
 	it("fires notification when getLastAssistantMessage is absent (e.g. brand-new session)", () => {

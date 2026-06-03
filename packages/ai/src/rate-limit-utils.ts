@@ -16,7 +16,8 @@ const MODEL_CAPACITY_BASE_MS = 45 * 1000; // 45s base
 const MODEL_CAPACITY_JITTER_MS = 30 * 1000; // ±15s
 const SERVER_ERROR_BACKOFF_MS = 20 * 1000; // 20s
 
-const ACCOUNT_RATE_LIMIT_PATTERN = /\baccount(?:'s)?\b[^\n]{0,80}\brate.?limit\b|\brate.?limit\b[^\n]{0,80}\baccount\b/i;
+const ACCOUNT_RATE_LIMIT_PATTERN =
+	/\baccount(?:'s)?\b[^\n]{0,80}\brate.?limit\b|\brate.?limit\b[^\n]{0,80}\baccount\b/i;
 
 /**
  * Classify a rate-limit error message into a reason category.
@@ -82,7 +83,8 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 }
 
 /** Detect usage/quota limit errors in error messages (persistent, requires credential switch). */
-const USAGE_LIMIT_PATTERN = /usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|resource.?exhausted/i;
+const USAGE_LIMIT_PATTERN =
+	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|resource.?exhausted/i;
 
 export function isUsageLimitError(errorMessage: string): boolean {
 	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
