@@ -3593,3 +3593,125 @@ describe("TUI terminal-state regressions", () => {
 		}
 	});
 });
+
+describe("foreground-tool streaming on ED3-risk terminals", () => {
+	beforeEach(() => {
+		let monotonicNow = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => {
+			monotonicNow += 20;
+			return monotonicNow;
+		});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	// Repro of the "injected notification chip renders over the active tool
+	// render" report. A foreground tool (an active `write`) streams on an
+	// ED3-risk terminal (ghostty/kitty/…) whose viewport position is
+	// unobservable. Its header carries a live elapsed-time counter that ticks
+	// every frame; once output scrolls it above the viewport top, each tick is an
+	// OFFSCREEN edit. The agent requests an eager native-scrollback rebuild for
+	// the streaming turn, but that opt-in is gated off on ED3-risk terminals, so
+	// an offscreen-edit-with-growth frame repaints the viewport in place
+	// (`viewportRepaint`) — advancing the rendered line count WITHOUT committing
+	// the new overflow to native history. `#scrollbackHighWater` then lags the
+	// logical viewport top. A later shrink whose changes land in the visible
+	// region finds `naturalViewportTop >= #scrollbackHighWater`, slips past the
+	// shrink-across-boundary guard, and reaches the diff emitter, which anchors to
+	// `#maxLinesRendered - height`: it rewrites only the suffix, drops the newly
+	// exposed top row, and leaves a blank at the bottom — so every row below the
+	// edit renders one row too high, painting over the rows above. The shrink must
+	// instead re-anchor the bottom-anchored viewport.
+	it("re-anchors a visible-region shrink after an offscreen-edit grow lags native history", async () => {
+		await withTerminalRisk(true, async () => {
+			const term = new UnknownViewportTerminal(40, 6);
+			const tui = new TUI(term);
+			// done-* are completed messages that have scrolled into history; the
+			// "Write …s" header carries the ticking timer; code-* is the streamed
+			// preview; loader/todos/editor is the stable footer below the tool.
+			const frameA = [
+				"done-0",
+				"done-1",
+				"done-2",
+				"done-3",
+				"done-4",
+				"done-5",
+				"Write 0s",
+				"code-148",
+				"code-149",
+				"code-150",
+				"loader",
+				"todos",
+				"editor",
+			];
+			const component = new MutableLinesComponent(frameA);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				// Foreground tool active: the agent enables eager native-scrollback rebuild.
+				tui.setEagerNativeScrollbackRebuild(true);
+				await settle(term);
+				// The header has scrolled above the viewport top (offscreen).
+				expect(visible(term)).toEqual(["code-148", "code-149", "code-150", "loader", "todos", "editor"]);
+
+				// Frame B: the offscreen header ticks (0s -> 1s) AND four notification
+				// chips inject between the tool and the footer — an offscreen-edit grow
+				// that repaints in place and lags native history behind the new overflow.
+				const frameB = [
+					"done-0",
+					"done-1",
+					"done-2",
+					"done-3",
+					"done-4",
+					"done-5",
+					"Write 1s",
+					"code-148",
+					"code-149",
+					"code-150",
+					"chip-0",
+					"chip-1",
+					"chip-2",
+					"chip-3",
+					"loader",
+					"todos",
+					"editor",
+				];
+				component.setLines(frameB);
+				tui.requestRender();
+				await settle(term);
+				expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
+
+				// Frame C: a visible chip collapses (a shrink whose first change lands in
+				// the visible region) while the header does NOT tick this frame. The
+				// viewport must re-anchor one row up, not drift its content upward.
+				const frameC = [
+					"done-0",
+					"done-1",
+					"done-2",
+					"done-3",
+					"done-4",
+					"done-5",
+					"Write 1s",
+					"code-148",
+					"code-149",
+					"code-150",
+					"chip-0",
+					"chip-1",
+					"chip-2",
+					"loader",
+					"todos",
+					"editor",
+				];
+				component.setLines(frameC);
+				tui.requestRender();
+				await settle(term);
+				expect(visible(term)).toEqual(["chip-0", "chip-1", "chip-2", "loader", "todos", "editor"]);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+});

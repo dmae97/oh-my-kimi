@@ -10,6 +10,7 @@ import {
 	type OverlayOptions,
 	sliceByColumn,
 	sliceWithWidth,
+	TERMINAL,
 	TUI,
 	truncateToWidth,
 	visibleWidth,
@@ -35,7 +36,7 @@ const SMILE = String.fromCodePoint(0x1f642);
 type TestPlatform = "darwin" | "linux" | "win32";
 type TerminalMode = "normal" | "unknown" | "intermittentUnknown" | "staleBottom";
 type GeometryMode = "small" | "large";
-type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2" | "wsl" | "vteNoSync";
+type EnvMode = "plain" | "tmux" | "termux" | "appleTerminal" | "iterm2" | "wsl" | "vteNoSync" | "ghostty";
 const ENV_KEYS = [
 	"TMUX",
 	"STY",
@@ -195,6 +196,16 @@ export interface Scenario {
 	strictScrollback: boolean;
 	timeoutMs: number;
 	uniqueContent: boolean;
+	// Models a foreground tool actively streaming output: the agent sets
+	// `setEagerNativeScrollbackRebuild(true)` for the whole turn and re-renders
+	// content frames with a plain (non-forced) `requestRender()`. On an ED3-risk
+	// terminal (ghostty/kitty/…) the eager opt-in is gated off by
+	// `eagerEraseScrollbackRisk`, so `allowUnknownViewportMutation` stays false and
+	// offscreen-edit growth flows through `viewportRepaint` (which advances the
+	// rendered line count without committing the overflow to native history).
+	// The default content-frame path instead forces `allowUnknownViewportMutation`
+	// and never exercises that lagging-high-water state.
+	foregroundStream: boolean;
 }
 
 interface Snapshot {
@@ -876,8 +887,17 @@ class StressDriver {
 	}
 
 	async run(): Promise<void> {
+		// Foreground-tool streaming faithfully: pin the ED3-risk trait (independent
+		// of whatever real terminal hosts the worker) and keep the turn-long eager
+		// rebuild opt-in enabled. On an ED3-risk terminal that opt-in is gated off,
+		// so content frames flow through `viewportRepaint`/`diff` rather than a
+		// forced history rebuild — see `#renderContentFrame`.
+		const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
+		const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
+		if (this.#scenario.foregroundStream) terminalInfo.eagerEraseScrollbackRisk = true;
 		try {
 			this.#tui.start();
+			if (this.#scenario.foregroundStream) this.#tui.setEagerNativeScrollbackRebuild(true);
 			await settle(this.#term);
 			this.#assertOracles(
 				{
@@ -910,6 +930,7 @@ class StressDriver {
 		} finally {
 			this.#tui.stop();
 			await this.#term.flush();
+			terminalInfo.eagerEraseScrollbackRisk = savedRisk;
 		}
 	}
 
@@ -1217,6 +1238,18 @@ class StressDriver {
 	}
 
 	#renderContentFrame(): void {
+		if (this.#scenario.foregroundStream) {
+			// A foreground tool's own re-render: a plain, non-forced request with the
+			// turn-long eager opt-in already enabled. We deliberately do NOT pass
+			// `allowUnknownViewportMutation` — on an ED3-risk terminal the eager
+			// opt-in is gated off, so the renderer keeps the live tail through
+			// `viewportRepaint`/`diff`. Offscreen-edit growth then flows through
+			// `viewportRepaint`, advancing the rendered line count without committing
+			// the overflow to native history, which is the lagging-high-water state a
+			// later shrink must still re-anchor from.
+			this.#tui.requestRender(false);
+			return;
+		}
 		const position = this.#term.getBufferPosition();
 		const atBottom = position.viewportY >= position.baseY;
 		if (!this.#scenario.strictScrollback && atBottom) {
@@ -2878,7 +2911,7 @@ function scenarioEnv(envMode: EnvMode): Record<EnvKey, string | undefined> {
 		TERMUX_VERSION: envMode === "termux" ? "0.118.0" : undefined,
 		WEZTERM_PANE: undefined,
 		KITTY_WINDOW_ID: undefined,
-		GHOSTTY_RESOURCES_DIR: undefined,
+		GHOSTTY_RESOURCES_DIR: envMode === "ghostty" ? "/Applications/Ghostty.app/Contents/Resources" : undefined,
 		ALACRITTY_WINDOW_ID: undefined,
 		VTE_VERSION: envMode === "vteNoSync" ? "6800" : undefined,
 		PI_NO_SYNC_OUTPUT: envMode === "vteNoSync" ? "1" : undefined,
@@ -2946,6 +2979,7 @@ function materializeScenario(
 			template.envMode !== "tmux" && template.terminalMode === "normal" && template.platform !== "win32",
 		timeoutMs,
 		uniqueContent: template.uniqueContent ?? false,
+		foregroundStream: template.foregroundStream ?? false,
 	};
 }
 
@@ -2986,10 +3020,18 @@ function buildSeeds(count: number): number[] {
 
 type ScenarioTemplate = Omit<
 	Scenario,
-	"seed" | "iterations" | "bulkMax" | "scrollback" | "strictScrollback" | "timeoutMs" | "uniqueContent"
+	| "seed"
+	| "iterations"
+	| "bulkMax"
+	| "scrollback"
+	| "strictScrollback"
+	| "timeoutMs"
+	| "uniqueContent"
+	| "foregroundStream"
 > & {
 	scrollbackRows?: number;
 	uniqueContent?: boolean;
+	foregroundStream?: boolean;
 };
 
 function coreTemplates(): ScenarioTemplate[] {
@@ -3165,6 +3207,45 @@ function coreTemplates(): ScenarioTemplate[] {
 			heightChoices: [3, 4, 6],
 			scrollbackRows: 10_000,
 		},
+		{
+			// Foreground tool actively streaming on an ED3-risk terminal whose
+			// viewport position is unobservable (ghostty/kitty/alacritty/VTE/iTerm2;
+			// see `detectTerminalEagerEraseScrollbackRisk`). The agent requests an
+			// eager native-scrollback rebuild for the streaming turn, but that opt-in
+			// is gated off on ED3-risk terminals, so `allowUnknownViewportMutation`
+			// stays false and content frames flow through `viewportRepaint`/`diff`
+			// instead of a forced history rebuild. An offscreen-edit growth then
+			// repaints in place — advancing the rendered line count without committing
+			// the overflow to native history — and the next shrink must still
+			// re-anchor the bottom of the viewport from that lagging high-water mark.
+			// The default content-frame path forces `allowUnknownViewportMutation` and
+			// never reaches this state (a notification chip rendering over the active
+			// tool render: the original report).
+			name: "darwin-unknown-ghostty-stream-small",
+			platform: "darwin",
+			terminalMode: "unknown",
+			envMode: "ghostty",
+			geometryMode: "small",
+			columns: 32,
+			rows: 4,
+			widthChoices: [10, 16, 32],
+			heightChoices: [3, 4, 6],
+			scrollbackRows: 10_000,
+			foregroundStream: true,
+		},
+		{
+			name: "linux-unknown-ghostty-stream-large",
+			platform: "linux",
+			terminalMode: "unknown",
+			envMode: "ghostty",
+			geometryMode: "large",
+			columns: 80,
+			rows: 12,
+			widthChoices: [40, 80, 120],
+			heightChoices: [8, 12, 24],
+			scrollbackRows: 10_000,
+			foregroundStream: true,
+		},
 	];
 }
 
@@ -3236,6 +3317,26 @@ function soakTemplates(): ScenarioTemplate[] {
 				heightChoices: large ? [12, 24] : [3, 4, 6],
 			});
 		}
+	}
+	// Foreground tool streaming on an ED3-risk terminal with an unobservable
+	// viewport (ghostty/kitty/…): the eager native-scrollback rebuild opt-in is
+	// gated off, so content frames repaint in place and offscreen-edit growth
+	// lags the high-water mark — a later shrink must still re-anchor the viewport
+	// bottom rather than drifting rows up over one another.
+	for (const geometryMode of geometries) {
+		const large = geometryMode === "large";
+		templates.push({
+			name: `darwin-unknown-ghostty-stream-${geometryMode}`,
+			platform: "darwin",
+			terminalMode: "unknown",
+			envMode: "ghostty",
+			geometryMode,
+			columns: large ? 80 : 32,
+			rows: large ? 12 : 4,
+			widthChoices: large ? [80, 120] : [2, 10, 16, 24, 32, 40],
+			heightChoices: large ? [8, 12, 24] : [3, 4, 6],
+			foregroundStream: true,
+		});
 	}
 	return templates;
 }
