@@ -230,6 +230,9 @@ class SessionList implements Component {
 			// Metadata line: date + file size (+ project dir in all-projects scope)
 			const modified = formatDate(session.modified);
 			let metadata = `  ${modified} ${theme.sep.dot} ${formatBytes(session.size)}`;
+			if (session.parentSessionPath) {
+				metadata += ` ${theme.sep.dot} ${theme.icon.branch} fork`;
+			}
 			if (this.#showCwd && session.cwd) {
 				metadata += ` ${theme.sep.dot} ${shortenPath(session.cwd)}`;
 			}
