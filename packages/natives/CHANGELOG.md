@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Bounded sorted `glob()` scans to `maxResults` during uncached traversal and capped `onMatch` callbacks to returned matches so broad OMP `find` scans cannot grow parent-process memory independently of the requested limit ([#1761](https://github.com/can1357/oh-my-pi/issues/1761)).
+- Bounded sorted `glob()` scans to `maxResults` during uncached traversal and capped `onMatch` callbacks to bounded traversal progress so broad OMP `find` scans cannot grow parent-process memory independently of the requested limit ([#1761](https://github.com/can1357/oh-my-pi/issues/1761)).
 
 ## [15.7.0] - 2026-05-31
 

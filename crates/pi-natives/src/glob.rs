@@ -221,6 +221,7 @@ fn filter_entries(
 fn collect_sorted_matches_uncached(
 	glob_set: &GlobSet,
 	config: &GlobConfig,
+	on_match: Option<&ThreadsafeFunction<GlobMatch>>,
 	ct: &task::CancelToken,
 ) -> Result<Vec<GlobMatch>> {
 	let builder = fs_cache::build_walker(
@@ -232,6 +233,7 @@ fn collect_sorted_matches_uncached(
 	);
 	let mut top_matches = BinaryHeap::with_capacity(config.max_results.min(1024));
 	let mut visited = 0usize;
+	let mut streamed_matches = 0usize;
 
 	for entry in builder.build() {
 		if visited == 0 || visited >= 128 {
@@ -258,6 +260,12 @@ fn collect_sorted_matches_uncached(
 			continue;
 		};
 		matched_entry.file_type = effective_file_type;
+		if streamed_matches < config.max_results {
+			streamed_matches += 1;
+			if let Some(callback) = on_match {
+				callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
+			}
+		}
 		push_bounded_match(&mut top_matches, matched_entry, config.max_results);
 	}
 
@@ -290,29 +298,30 @@ fn run_glob(
 			fs_cache::ScanDetail::Minimal
 		},
 	};
-	let mut matches =
-		if config.sort_by_mtime && !config.use_cache && config.max_results != usize::MAX {
-			collect_sorted_matches_uncached(&glob_set, &config, &ct)?
-		} else if config.use_cache {
-			let scan = fs_cache::get_or_scan(&config.root, scan_options, &ct)?;
-			let mut matches = filter_entries(&scan.entries, &glob_set, &config, on_match, &ct)?;
-			// Empty-result recheck: if we got zero matches from a cached scan that's old
-			// enough, force a rescan and try once more before returning empty.
-			if matches.is_empty() && scan.cache_age_ms >= fs_cache::empty_recheck_ms() {
-				let fresh = fs_cache::force_rescan(&config.root, scan_options, true, &ct)?;
-				matches = filter_entries(&fresh, &glob_set, &config, on_match, &ct)?;
-			}
-			matches
-		} else {
-			let fresh = fs_cache::force_rescan(&config.root, scan_options, false, &ct)?;
-			filter_entries(&fresh, &glob_set, &config, on_match, &ct)?
-		};
+	let streams_bounded_sorted_partials =
+		config.sort_by_mtime && !config.use_cache && config.max_results != usize::MAX;
+	let mut matches = if streams_bounded_sorted_partials {
+		collect_sorted_matches_uncached(&glob_set, &config, on_match, &ct)?
+	} else if config.use_cache {
+		let scan = fs_cache::get_or_scan(&config.root, scan_options, &ct)?;
+		let mut matches = filter_entries(&scan.entries, &glob_set, &config, on_match, &ct)?;
+		// Empty-result recheck: if we got zero matches from a cached scan that's old
+		// enough, force a rescan and try once more before returning empty.
+		if matches.is_empty() && scan.cache_age_ms >= fs_cache::empty_recheck_ms() {
+			let fresh = fs_cache::force_rescan(&config.root, scan_options, true, &ct)?;
+			matches = filter_entries(&fresh, &glob_set, &config, on_match, &ct)?;
+		}
+		matches
+	} else {
+		let fresh = fs_cache::force_rescan(&config.root, scan_options, false, &ct)?;
+		filter_entries(&fresh, &glob_set, &config, on_match, &ct)?
+	};
 
 	if config.sort_by_mtime {
 		// Sorting mode: rank by mtime descending, then apply max-results truncation.
 		matches.sort_by(compare_matches_by_rank);
 		matches.truncate(config.max_results);
-		if let Some(callback) = on_match {
+		if !streams_bounded_sorted_partials && let Some(callback) = on_match {
 			for matched_entry in &matches {
 				callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
 			}
