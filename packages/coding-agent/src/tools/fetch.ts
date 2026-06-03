@@ -127,9 +127,21 @@ function buildLlmEndpointCandidates(url: string): string[] {
 }
 
 /**
- * Normalize URL (add scheme if missing)
+ * Repair a URL whose scheme `//` collapsed to a single `/`. Node's `path.normalize`/
+ * `path.resolve` collapse `//` → `/`, so any URL routed through path normalization arrives
+ * as `https:/host/x` instead of `https://host/x`. No local filesystem path begins with
+ * `http:/` or `https:/`, so repairing the scheme back to `//` is unambiguous.
+ */
+function repairCollapsedScheme(value: string): string {
+	const m = value.match(/^(https?):\/(?!\/)/i);
+	return m ? `${m[1]}://${value.slice(m[0].length)}` : value;
+}
+
+/**
+ * Normalize URL (repair a collapsed scheme, then add a scheme if one is missing).
  */
 function normalizeUrl(url: string): string {
+	url = repairCollapsedScheme(url);
 	if (!url.match(/^https?:\/\//i)) {
 		return `https://${url}`;
 	}
@@ -137,7 +149,7 @@ function normalizeUrl(url: string): string {
 }
 
 export function isReadableUrlPath(value: string): boolean {
-	return /^https?:\/\//i.test(value) || /^www\./i.test(value);
+	return /^https?:\/\/?/i.test(value) || /^www\./i.test(value);
 }
 
 // URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:5-10,20-30`, `:raw`,
@@ -168,8 +180,9 @@ function isUrlSelectorToken(token: string): boolean {
 }
 
 export function parseReadUrlTarget(readPath: string): ParsedReadUrlTarget | null {
-	const embedded = tryExtractEmbeddedUrlSelector(readPath);
-	const urlPath = embedded?.path ?? readPath;
+	const repaired = repairCollapsedScheme(readPath);
+	const embedded = tryExtractEmbeddedUrlSelector(repaired);
+	const urlPath = embedded?.path ?? repaired;
 	if (!isReadableUrlPath(urlPath)) {
 		return null;
 	}
