@@ -1,9 +1,10 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
+import { encodeKittyTempFileProbe, getKittyGraphics, kittyTempFileAllowed, setKittyGraphics } from "./kitty-graphics";
 import { StdinBuffer } from "./stdin-buffer";
-import { setCellDimensions } from "./terminal-capabilities";
+import { ImageProtocol, NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
@@ -151,8 +152,20 @@ type Da1SentinelOwner =
 	| { kind: "osc11" }
 	| { kind: "privateMode"; mode: number }
 	| { kind: "kittyGraphicsProbe"; id: number }
-	| { kind: "osc99Probe"; id: number };
+	| { kind: "osc99Probe"; id: string };
 
+let nextOsc99ProbeId = 1;
+let nextKittyGraphicsProbeId = 1;
+
+function parseOsc99KeyValues(section: string): Map<string, string> {
+	const values = new Map<string, string>();
+	for (const part of section.split(":")) {
+		const eq = part.indexOf("=");
+		if (eq !== 1) continue;
+		values.set(part.slice(0, eq), part.slice(eq + 1));
+	}
+	return values;
+}
 /**
  * Real terminal using process.stdin/stdout
  */
@@ -173,6 +186,11 @@ export class ProcessTerminal implements Terminal {
 	#osc11Pending = false;
 	#osc11QueryQueued = false;
 	#osc11ResponseBuffer = "";
+	#osc99PendingId: string | undefined;
+	#osc99ResponseBuffer = "";
+	#osc99Capabilities = new Map<string, string>();
+	#kittyGraphicsPendingId: number | undefined;
+	#kittyGraphicsProbeCleanup: (() => void) | undefined;
 	#privateCsiResponseBuffer = "";
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
 	/** Resolved DECRQM support per private mode (mode → supported). */
@@ -246,6 +264,16 @@ export class ProcessTerminal implements Terminal {
 		// the terminal does not support OSC 11. This avoids indefinite hangs.
 		// Technique used by Neovim, bat, fish, and terminal-colorsaurus.
 		this.#queryBackgroundColor();
+
+		// Query OSC 99 notification capabilities for Kitty. The query uses the
+		// same DA1 sentinel FIFO as OSC 11/DECRQM so unsupported terminals resolve
+		// without leaking probe bytes to application input.
+		this.#queryOsc99Support();
+
+		// Probe Kitty temp-file (`t=t`) graphics transmission support. Rides the
+		// same DA1 sentinel FIFO; promotes the transmission medium to temp-file
+		// only on an explicit `OK`, so unsupported terminals stay on direct base64.
+		this.#queryKittyGraphicsTempFile();
 
 		// Subscribe to Mode 2031 appearance change notifications.
 		// When the terminal reports a change, we re-query OSC 11 to get the
@@ -413,8 +441,9 @@ export class ProcessTerminal implements Terminal {
 				return;
 			}
 
-			// DA1 response: swallow our sentinel reply regardless of whether OSC 11
-			// already succeeded. Other terminal probes should never see these replies.
+			// DA1 response: swallow our sentinel reply regardless of whether an
+			// earlier capability-specific response already succeeded. Other terminal
+			// probes should never see these replies.
 			if (da1ResponsePattern.test(sequence) && this.#da1SentinelOwners.length > 0) {
 				const owner = this.#da1SentinelOwners.shift()!;
 				switch (owner.kind) {
@@ -451,6 +480,13 @@ export class ProcessTerminal implements Terminal {
 						}
 						break;
 					}
+					case "osc99Probe": {
+						this.#resolveOsc99Support(owner.id, false);
+						break;
+					}
+					case "kittyGraphicsProbe":
+						this.#resolveKittyGraphicsTempFile(owner.id, false);
+						break;
 				}
 				return;
 			}
@@ -499,6 +535,35 @@ export class ProcessTerminal implements Terminal {
 					this.#osc11ResponseBuffer = "";
 					this.#handleOsc11Response(rHex!, gHex!, bHex!);
 					return;
+				}
+			}
+
+			if (this.#osc99PendingId && (this.#osc99ResponseBuffer || sequence.startsWith("\x1b]99;"))) {
+				if (this.#osc99ResponseBuffer && sequence.startsWith("\x1b") && sequence !== "\x1b\\") {
+					this.#osc99ResponseBuffer = "";
+				} else {
+					this.#osc99ResponseBuffer += sequence;
+					const osc99Match = this.#osc99ResponseBuffer.match(/^\x1b\]99;([^;]*);([\s\S]*?)(?:\x07|\x1b\\)$/u);
+					if (!osc99Match) return;
+					const [, meta, payload] = osc99Match;
+					this.#osc99ResponseBuffer = "";
+					this.#handleOsc99CapabilityResponse(meta!, payload!);
+					return;
+				}
+			}
+
+			// Kitty graphics temp-file probe reply: ESC _ G i=<id>;OK ESC \. The
+			// owner remains in the FIFO and is drained by its DA1 sentinel (no-op
+			// once resolved here).
+			if (this.#kittyGraphicsPendingId !== undefined && sequence.startsWith("\x1b_G")) {
+				const graphicsMatch = sequence.match(/^\x1b_G([^;]*);([\s\S]*?)\x1b\\$/u);
+				if (graphicsMatch) {
+					const idMatch = graphicsMatch[1]!.match(/(?:^|,)i=(\d+)(?:,|$)/);
+					const replyId = idMatch ? parseInt(idMatch[1]!, 10) : undefined;
+					if (replyId === this.#kittyGraphicsPendingId) {
+						this.#resolveKittyGraphicsTempFile(replyId, graphicsMatch[2]!.trim() === "OK");
+						return;
+					}
 				}
 			}
 
@@ -556,6 +621,77 @@ export class ProcessTerminal implements Terminal {
 		this.#da1SentinelOwners.push({ kind: "osc11" });
 		this.#safeWrite("\x1b]11;?\x07"); // OSC 11 query (BEL terminated)
 		this.#safeWrite("\x1b[c"); // DA1 sentinel
+	}
+
+	#shouldQueryOsc99Support(): boolean {
+		if (TERMINAL.notifyProtocol !== NotifyProtocol.Osc99) return false;
+		return !isBunTestRuntime() || $env.PI_TUI_OSC99_PROBE === "1";
+	}
+
+	#queryOsc99Support(): void {
+		setOsc99Supported(false);
+		this.#osc99Capabilities.clear();
+		this.#osc99PendingId = undefined;
+		this.#osc99ResponseBuffer = "";
+		if (this.#dead || !this.#shouldQueryOsc99Support()) return;
+
+		const id = `omp-probe-${nextOsc99ProbeId++}`;
+		this.#osc99PendingId = id;
+		this.#da1SentinelOwners.push({ kind: "osc99Probe", id });
+		this.#safeWrite(`\x1b]99;i=${id}:p=?;\x1b\\\x1b[c`);
+	}
+
+	#handleOsc99CapabilityResponse(metaRaw: string, payload: string): boolean {
+		const pendingId = this.#osc99PendingId;
+		if (!pendingId) return false;
+		const meta = parseOsc99KeyValues(metaRaw);
+		if (meta.get("i") !== pendingId || meta.get("p") !== "?") return false;
+
+		const capabilities = parseOsc99KeyValues(payload);
+		this.#osc99Capabilities = capabilities;
+		const payloadTypes = capabilities.get("p")?.split(",") ?? [];
+		this.#resolveOsc99Support(pendingId, payloadTypes.includes("title"));
+		return true;
+	}
+
+	#resolveOsc99Support(id: string, supported: boolean): void {
+		if (this.#osc99PendingId !== id) return;
+		this.#osc99PendingId = undefined;
+		this.#osc99ResponseBuffer = "";
+		if (!supported) this.#osc99Capabilities.clear();
+		setOsc99Supported(supported);
+	}
+
+	#shouldQueryKittyGraphicsTempFile(): boolean {
+		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return false;
+		// Honor the remote/explicit env gate, and skip when temp-file is already on.
+		if (!kittyTempFileAllowed() || getKittyGraphics().transmissionMedium === "temp-file") return false;
+		return !isBunTestRuntime() || $env.PI_TUI_KITTY_GRAPHICS_PROBE === "1";
+	}
+
+	#queryKittyGraphicsTempFile(): void {
+		this.#clearKittyGraphicsProbe();
+		if (this.#dead || !this.#shouldQueryKittyGraphicsTempFile()) return;
+
+		const id = nextKittyGraphicsProbeId++;
+		const probe = encodeKittyTempFileProbe(id);
+		if (!probe) return;
+		this.#kittyGraphicsPendingId = id;
+		this.#kittyGraphicsProbeCleanup = probe.cleanup;
+		this.#da1SentinelOwners.push({ kind: "kittyGraphicsProbe", id });
+		this.#safeWrite(`${probe.sequence}\x1b[c`);
+	}
+
+	#resolveKittyGraphicsTempFile(id: number, supported: boolean): void {
+		if (this.#kittyGraphicsPendingId !== id) return;
+		if (supported) setKittyGraphics({ transmissionMedium: "temp-file" });
+		this.#clearKittyGraphicsProbe();
+	}
+
+	#clearKittyGraphicsProbe(): void {
+		this.#kittyGraphicsPendingId = undefined;
+		this.#kittyGraphicsProbeCleanup?.();
+		this.#kittyGraphicsProbeCleanup = undefined;
 	}
 	/**
 	 * Parse an OSC 11 background color response and compute BT.601 luminance.
@@ -765,6 +901,11 @@ export class ProcessTerminal implements Terminal {
 		this.#osc11Pending = false;
 		this.#osc11QueryQueued = false;
 		this.#osc11ResponseBuffer = "";
+		this.#osc99PendingId = undefined;
+		this.#osc99ResponseBuffer = "";
+		this.#osc99Capabilities.clear();
+		setOsc99Supported(false);
+		this.#clearKittyGraphicsProbe();
 		this.#privateCsiResponseBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
