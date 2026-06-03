@@ -1152,9 +1152,9 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		}
 
 		// Re-run the union-string coercion because `coerceArgsFromIssues` may
-		// have just unwrapped a root JSON-string into the real arguments
-		// object — exposing inner `string | string[]` fields the initial
-		// pre-validation pass never reached.
+		// have just unwrapped a JSON-stringified object at the root or inside a
+		// nested field — exposing `string | string[]` descendants the initial
+		// pre-validation pass could not reach.
 		const stringEncodedArrayNormPass = normalizeStringEncodedArrayUnions(json, normalizedArgs);
 		if (stringEncodedArrayNormPass.changed) {
 			normalizedArgs = stringEncodedArrayNormPass.value;

@@ -1108,5 +1108,28 @@ describe("Tool argument coercion", () => {
 			expect(result.pattern).toBe("name");
 			expect(result.paths).toEqual(["package.json"]);
 		});
+
+		it("re-runs union coercion after a nested object field is JSON-parsed", () => {
+			const nestedTool: Tool = {
+				name: "nested_search",
+				description: "",
+				parameters: z.object({
+					payload: z.object({
+						paths: z.union([z.string(), z.array(z.string()).min(1)]),
+					}),
+				}),
+			};
+			const result = validateToolArguments(nestedTool, {
+				type: "toolCall",
+				id: "u10",
+				name: "nested_search",
+				arguments: {
+					payload: JSON.stringify({
+						paths: '["package.json"]',
+					}),
+				},
+			}) as { payload: { paths: unknown } };
+			expect(result.payload.paths).toEqual(["package.json"]);
+		});
 	});
 });
