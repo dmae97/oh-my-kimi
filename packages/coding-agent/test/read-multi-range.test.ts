@@ -129,6 +129,36 @@ describe("read tool multi-range selector", () => {
 		expect(text).not.toContain("line 19");
 	});
 
+	it("accepts `..` as a forgiving alias for `-`, producing identical output", async () => {
+		const filePath = path.join(tmpDir, "numbered.txt");
+		await fs.writeFile(filePath, makeNumberedContent(30));
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const dotdot = textOutput(await tool.execute("call-dotdot", { path: `${filePath}:3..5` }));
+		const dash = textOutput(await tool.execute("call-dash", { path: `${filePath}:3-5` }));
+
+		expect(dotdot).toContain("line 3");
+		expect(dotdot).toContain("line 5");
+		// `..` must be a pure alias: byte-for-byte identical to the `-` form.
+		expect(dotdot).toBe(dash);
+	});
+
+	it("accepts `..` in multi-range selectors", async () => {
+		const filePath = path.join(tmpDir, "numbered.txt");
+		await fs.writeFile(filePath, makeNumberedContent(50));
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const result = await tool.execute("call-dotdot-multi", { path: `${filePath}:3..5,20..22` });
+		const text = textOutput(result);
+
+		expect(text).toContain("line 3");
+		expect(text).toContain("line 5");
+		expect(text).toContain("line 20");
+		expect(text).toContain("line 22");
+		expect(text).not.toContain("line 10");
+		expect(text).toContain("…");
+	});
+
 	it("rejects multi-range selectors on directories", async () => {
 		const tool = new ReadTool(createSession(tmpDir));
 		await expect(tool.execute("call-dir", { path: `${tmpDir}:1-2,5-6` })).rejects.toThrow(
