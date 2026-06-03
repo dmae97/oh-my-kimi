@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
+import { setCellDimensions } from "./terminal-capabilities";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
@@ -35,6 +36,7 @@ export function emergencyTerminalRestore(): void {
 			process.stdout.write(
 				"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
+					"\x1b[?2048l" + // Disable in-band resize notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?25h", // Show cursor
@@ -132,11 +134,24 @@ export interface Terminal {
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
+	/**
+	 * Register a callback fired once per DEC private mode when its DECRQM support
+	 * status resolves. Optional: only real terminals implement capability probing.
+	 */
+	onPrivateModeReport?(callback: (mode: number, supported: boolean) => void): void;
 }
 
 function isWindowsSubsystemForLinux(): boolean {
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
 }
+
+/** Discriminated owner of an outstanding DA1 sentinel in the unified probe FIFO. */
+type Da1SentinelOwner =
+	| { kind: "keyboard" }
+	| { kind: "osc11" }
+	| { kind: "privateMode"; mode: number }
+	| { kind: "kittyGraphicsProbe"; id: number }
+	| { kind: "osc99Probe"; id: number };
 
 /**
  * Real terminal using process.stdin/stdout
@@ -159,7 +174,14 @@ export class ProcessTerminal implements Terminal {
 	#osc11QueryQueued = false;
 	#osc11ResponseBuffer = "";
 	#privateCsiResponseBuffer = "";
-	#da1SentinelOwners: ("keyboard" | "osc11")[] = [];
+	#da1SentinelOwners: Da1SentinelOwner[] = [];
+	/** Resolved DECRQM support per private mode (mode → supported). */
+	#privateModeSupport = new Map<number, boolean>();
+	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
+	/** Whether DEC 2048 in-band resize notifications are currently enabled. */
+	#inBandResizeActive = false;
+	#reportedColumns?: number;
+	#reportedRows?: number;
 	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
 	#progressTimer?: ReturnType<typeof setInterval>;
@@ -174,6 +196,10 @@ export class ProcessTerminal implements Terminal {
 
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
 		this.#appearanceCallbacks.push(callback);
+	}
+
+	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
+		this.#privateModeCallbacks.push(callback);
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {
@@ -234,6 +260,14 @@ export class ProcessTerminal implements Terminal {
 		if (!isWindowsSubsystemForLinux()) {
 			this.#startOsc11Poll();
 		}
+
+		// Probe DEC private-mode support via DECRQM. 2026 (synchronized output)
+		// gates the renderer's begin/end markers; 2048 (in-band resize) is enabled
+		// only after the terminal confirms support. Each probe rides the shared DA1
+		// sentinel FIFO, so a terminal that ignores DECRQM still resolves (as
+		// unsupported) when the DA1 reply arrives.
+		this.#queryPrivateMode(2026);
+		this.#queryPrivateMode(2048);
 	}
 
 	/**
@@ -313,7 +347,13 @@ export class ProcessTerminal implements Terminal {
 		// Private CSI partial: \x1b[?<digits/semicolons>... — incomplete probe response
 		// that the StdinBuffer flushed before the terminator arrived (split across
 		// stdin reads). Used to reassemble DA1, kitty, and Mode 2031 replies.
-		const privateCsiPartialPattern = /^\x1b\[\?[\d;]*$/;
+		const privateCsiPartialPattern = /^\x1b\[\?[\d;]*[\x20-\x2f]*$/;
+
+		// DECRPM private-mode report (DECRQM reply): \x1b[?<mode>;<status>$y
+		const decrpmResponsePattern = /^\x1b\[\?(\d+);(\d+)\$y$/;
+
+		// In-band resize report (DEC mode 2048): \x1b[48;rows;cols;yPixels;xPixels t
+		const inBandResizePattern = /^\x1b\[48;(\d+);(\d+);(\d+);(\d+)t$/;
 
 		// Forward individual sequences to the input handler
 		this.#stdinBuffer.on("data", (sequence: string) => {
@@ -355,33 +395,61 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 
+			// In-band resize report (DEC mode 2048). Unsolicited and not tied to a
+			// sentinel: update reported geometry + cell size, then drive the resize
+			// handler so the renderer reflows.
+			const resizeMatch = sequence.match(inBandResizePattern);
+			if (resizeMatch) {
+				this.#handleInBandResizeReport(resizeMatch[1]!, resizeMatch[2]!, resizeMatch[3]!, resizeMatch[4]!);
+				return;
+			}
+
+			// DECRPM private-mode report. Resolves the matching probe by mode; the
+			// owner stays in the FIFO and is drained by its DA1 sentinel (a no-op
+			// once resolved). Per spec status 1 (set) / 2 (reset) = recognized.
+			const decrpmMatch = sequence.match(decrpmResponsePattern);
+			if (decrpmMatch) {
+				this.#resolvePrivateMode(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2] === "1" || decrpmMatch[2] === "2");
+				return;
+			}
+
 			// DA1 response: swallow our sentinel reply regardless of whether OSC 11
 			// already succeeded. Other terminal probes should never see these replies.
 			if (da1ResponsePattern.test(sequence) && this.#da1SentinelOwners.length > 0) {
 				const owner = this.#da1SentinelOwners.shift()!;
-				if (owner === "osc11") {
-					if (this.#osc11Pending) {
-						// DA1 arrived before the OSC 11 reply: terminal does not support OSC 11.
-						this.#osc11Pending = false;
-						this.#osc11ResponseBuffer = "";
+				switch (owner.kind) {
+					case "osc11": {
+						if (this.#osc11Pending) {
+							// DA1 arrived before the OSC 11 reply: terminal does not support OSC 11.
+							this.#osc11Pending = false;
+							this.#osc11ResponseBuffer = "";
+						}
+						// Start a queued OSC 11 query once the prior cycle is fully drained.
+						if (
+							this.#osc11QueryQueued &&
+							!this.#osc11Pending &&
+							!this.#da1SentinelOwners.some(o => o.kind === "osc11") &&
+							!this.#dead
+						) {
+							this.#osc11QueryQueued = false;
+							this.#startOsc11Query();
+						}
+						break;
 					}
-					// Start a queued OSC 11 query once the prior cycle is fully drained.
-					if (
-						this.#osc11QueryQueued &&
-						!this.#osc11Pending &&
-						!this.#da1SentinelOwners.includes("osc11") &&
-						!this.#dead
-					) {
-						this.#osc11QueryQueued = false;
-						this.#startOsc11Query();
+					case "privateMode": {
+						// DA1 beat the DECRPM reply for this mode → treat as unsupported.
+						this.#resolvePrivateMode(owner.mode, false);
+						break;
 					}
-				} else {
-					// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys.
-					if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
-						clearTimeout(this.#modifyOtherKeysTimeout);
-						this.#modifyOtherKeysTimeout = undefined;
-						this.#safeWrite("\x1b[>4;2m");
-						this.#modifyOtherKeysActive = true;
+					case "keyboard": {
+						// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys.
+						if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
+							clearTimeout(this.#modifyOtherKeysTimeout);
+							this.#modifyOtherKeysTimeout = undefined;
+							this.#safeWrite("\x1b[>4;2m");
+							this.#modifyOtherKeysActive = true;
+						}
+						break;
 					}
 				}
 				return;
@@ -475,7 +543,7 @@ export class ProcessTerminal implements Terminal {
 		// consumed yet. Starting a new query while a DA1 is outstanding would
 		// increment the sentinel counter, and the old DA1 arrival would then
 		// prematurely clear the new query's pending state.
-		if (this.#osc11Pending || this.#da1SentinelOwners.includes("osc11")) {
+		if (this.#osc11Pending || this.#da1SentinelOwners.some(o => o.kind === "osc11")) {
 			this.#osc11QueryQueued = true;
 			return;
 		}
@@ -485,7 +553,7 @@ export class ProcessTerminal implements Terminal {
 	#startOsc11Query(): void {
 		this.#osc11Pending = true;
 		this.#osc11ResponseBuffer = "";
-		this.#da1SentinelOwners.push("osc11");
+		this.#da1SentinelOwners.push({ kind: "osc11" });
 		this.#safeWrite("\x1b]11;?\x07"); // OSC 11 query (BEL terminated)
 		this.#safeWrite("\x1b[c"); // DA1 sentinel
 	}
@@ -551,7 +619,7 @@ export class ProcessTerminal implements Terminal {
 		// Progressive enhancement query: CSI ?u asks the terminal for its current
 		// kitty keyboard flags (no side effect on the stack); the DA1 sentinel
 		// guarantees a reply even from terminals that ignore CSI ?u.
-		this.#da1SentinelOwners.push("keyboard");
+		this.#da1SentinelOwners.push({ kind: "keyboard" });
 		this.#safeWrite("\x1b[?u\x1b[c");
 		this.#modifyOtherKeysTimeout = setTimeout(() => {
 			this.#modifyOtherKeysTimeout = undefined;
@@ -561,6 +629,68 @@ export class ProcessTerminal implements Terminal {
 			this.#safeWrite("\x1b[>4;2m");
 			this.#modifyOtherKeysActive = true;
 		}, 150);
+	}
+
+	/**
+	 * Probe a DEC private mode via DECRQM (`CSI ? mode $ p`) plus a DA1 sentinel.
+	 * The sentinel guarantees resolution even from terminals that ignore DECRQM.
+	 * Query and sentinel are fused into one write so the bare-`CSI c` sentinel
+	 * accounting used elsewhere stays accurate.
+	 */
+	#queryPrivateMode(mode: number): void {
+		if (this.#dead) return;
+		if (this.#privateModeSupport.has(mode)) return;
+		this.#da1SentinelOwners.push({ kind: "privateMode", mode });
+		this.#safeWrite(`\x1b[?${mode}$p\x1b[c`);
+	}
+
+	/**
+	 * Record DECRQM support for a private mode (idempotent — first result wins)
+	 * and notify subscribers. Enables DEC 2048 in-band resize when 2048 resolves
+	 * supported.
+	 */
+	#resolvePrivateMode(mode: number, supported: boolean): void {
+		if (this.#privateModeSupport.has(mode)) return;
+		this.#privateModeSupport.set(mode, supported);
+		for (const cb of this.#privateModeCallbacks) {
+			try {
+				cb(mode, supported);
+			} catch {
+				// Ignore subscriber errors — capability reporting must not crash input.
+			}
+		}
+		if (mode === 2048 && supported) this.#enableInBandResize();
+	}
+
+	/**
+	 * Enable DEC 2048 in-band resize notifications. The terminal emits an initial
+	 * report immediately, seeding reported geometry and cell dimensions.
+	 */
+	#enableInBandResize(): void {
+		if (this.#inBandResizeActive || this.#dead) return;
+		this.#inBandResizeActive = true;
+		this.#safeWrite("\x1b[?2048h");
+	}
+
+	/**
+	 * Apply an in-band resize report. Stores reported geometry so `rows`/`columns`
+	 * reflect in-band values, derives cell pixel size, and drives the resize
+	 * handler so the renderer reflows.
+	 */
+	#handleInBandResizeReport(rowsRaw: string, colsRaw: string, yPixelsRaw: string, xPixelsRaw: string): void {
+		const rows = parseInt(rowsRaw, 10);
+		const cols = parseInt(colsRaw, 10);
+		const yPixels = parseInt(yPixelsRaw, 10);
+		const xPixels = parseInt(xPixelsRaw, 10);
+		if (rows > 0) this.#reportedRows = rows;
+		if (cols > 0) this.#reportedColumns = cols;
+		if (cols > 0 && xPixels > 0 && rows > 0 && yPixels > 0) {
+			setCellDimensions({
+				widthPx: Math.max(1, Math.round(xPixels / cols)),
+				heightPx: Math.max(1, Math.round(yPixels / rows)),
+			});
+		}
+		this.#resizeHandler?.();
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
@@ -620,6 +750,12 @@ export class ProcessTerminal implements Terminal {
 
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
+
+		// Disable DEC 2048 in-band resize notifications if we enabled them.
+		if (this.#inBandResizeActive) {
+			this.#safeWrite("\x1b[?2048l");
+			this.#inBandResizeActive = false;
+		}
 		this.#stopOsc11Poll();
 		if (this.#mode2031DebounceTimer) {
 			clearTimeout(this.#mode2031DebounceTimer);
@@ -631,6 +767,10 @@ export class ProcessTerminal implements Terminal {
 		this.#osc11ResponseBuffer = "";
 		this.#privateCsiResponseBuffer = "";
 		this.#da1SentinelOwners.length = 0;
+		this.#privateModeCallbacks = [];
+		this.#privateModeSupport.clear();
+		this.#reportedColumns = undefined;
+		this.#reportedRows = undefined;
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this.#kittyProtocolActive) {
@@ -703,10 +843,12 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	get columns(): number {
+		if (this.#inBandResizeActive && this.#reportedColumns) return this.#reportedColumns;
 		return process.stdout.columns || Number(Bun.env.COLUMNS) || 80;
 	}
 
 	get rows(): number {
+		if (this.#inBandResizeActive && this.#reportedRows) return this.#reportedRows;
 		return process.stdout.rows || Number(Bun.env.LINES) || 24;
 	}
 

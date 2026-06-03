@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
+import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
 import type { Terminal } from "./terminal";
 import {
@@ -606,6 +607,15 @@ export class TUI extends Container {
 
 	start(): void {
 		this.#stopped = false;
+		// Disable synchronized output if the terminal reports DEC 2026 unsupported
+		// via DECRQM. PI_NO_SYNC_OUTPUT already forces it off at construction, so
+		// only react when the user has not already opted out. Future paints drop
+		// the begin/end markers; the autowrap guards stay (see #1765).
+		this.terminal.onPrivateModeReport?.((mode, supported) => {
+			if (mode === 2026 && !supported && !$flag("PI_NO_SYNC_OUTPUT")) {
+				this.#setSynchronizedOutput(false);
+			}
+		});
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
@@ -763,6 +773,20 @@ export class TUI extends Container {
 		// Query terminal for cell size in pixels: CSI 16 t
 		// Response format: CSI 6 ; height ; width t
 		this.terminal.write("\x1b[16t");
+	}
+
+	/**
+	 * Toggle synchronized-output (DEC 2026) wrappers on paint/cursor writes and
+	 * recompute the cached begin/end sequences. Honors a DECRQM report that the
+	 * terminal does not support 2026 (#1765 covers the static env opt-out).
+	 */
+	#setSynchronizedOutput(enabled: boolean): void {
+		if (this.#synchronizedOutputEnabled === enabled) return;
+		this.#synchronizedOutputEnabled = enabled;
+		this.#paintBeginSequence = enabled ? PAINT_BEGIN : PAINT_BEGIN_NO_SYNC;
+		this.#paintEndSequence = enabled ? PAINT_END : PAINT_END_NO_SYNC;
+		this.#cursorBeginSequence = enabled ? CURSOR_BEGIN : CURSOR_BEGIN_NO_SYNC;
+		this.#cursorEndSequence = enabled ? CURSOR_END : CURSOR_END_NO_SYNC;
 	}
 
 	stop(): void {
@@ -2052,10 +2076,28 @@ export class TUI extends Container {
 		if (options.clearViewport) {
 			buffer += options.clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
 		}
+		// Only the final viewport rows stay on screen; everything above scrolls
+		// into native scrollback, so optimize the visible tail with DECCARA
+		// rectangles while writing scrollback-bound rows as full styled strings
+		// (their background must survive in history, which DECCARA cannot reach).
+		const visibleStart = Math.max(0, lines.length - height);
+		let fillSequence = "";
+		let visibleTexts: string[] | null = null;
+		if (TERMINAL.deccara && visibleStart < lines.length) {
+			const visible: string[] = new Array(lines.length - visibleStart);
+			for (let k = 0; k < visible.length; k++) {
+				visible[k] = this.#fitLineToWidth(lines[visibleStart + k], width);
+			}
+			const plan = planDeccaraFills(visible, width);
+			visibleTexts = plan.texts;
+			fillSequence = plan.sequence;
+		}
 		for (let i = 0; i < lines.length; i++) {
 			if (i > 0) buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[i], width);
+			buffer +=
+				visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : this.#fitLineToWidth(lines[i], width);
 		}
+		buffer += fillSequence;
 		const finalRow = Math.max(0, lines.length - 1);
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
 		buffer += seq;
@@ -2086,13 +2128,23 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const viewportTop = Math.max(0, lines.length - height);
+		// Each visible screen row, bottom-anchored, blank past content.
+		const visible: string[] = new Array(height);
+		for (let screenRow = 0; screenRow < height; screenRow++) {
+			visible[screenRow] = this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
+		}
+		const { texts, sequence } = TERMINAL.deccara
+			? planDeccaraFills(visible, width)
+			: { texts: visible, sequence: "" };
 		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (screenRow > 0) buffer += "\r\n";
 			buffer += "\x1b[2K";
-			const line = lines[viewportTop + screenRow] ?? "";
-			buffer += this.#fitLineToWidth(line, width);
+			buffer += texts[screenRow];
 		}
+		// DECCARA rectangles paint the visible fills before cursor positioning;
+		// the cleared cells written above are what the rectangles repaint.
+		buffer += sequence;
 		// The loop unconditionally writes `height` rows from screen row 0, so the
 		// hardware cursor lands at screen row `height - 1` regardless of how many
 		// of those rows held actual content. Tracking it as `lines.length - 1`
@@ -2260,10 +2312,31 @@ export class TUI extends Container {
 		// Repaint only firstChanged..lastChanged, not all rows to the end.
 		// This bounds flicker for single-row updates (e.g. spinner ticks).
 		const renderEnd = Math.min(lastChanged, lines.length - 1);
+		// Optimize the in-place rewrite of a contiguous visible row range with
+		// DECCARA. Skip the append/scroll branch (`moveTargetRow > prevViewportBottom`
+		// pushed rows into history) and any range starting above the viewport —
+		// those rows live in scrollback, which DECCARA cannot reach.
+		let fillSequence = "";
+		let fillTexts: string[] | null = null;
+		if (
+			TERMINAL.deccara &&
+			!appendStart &&
+			moveTargetRow <= prevViewportBottom &&
+			firstChanged >= viewportTop &&
+			renderEnd >= firstChanged
+		) {
+			const slice: string[] = new Array(renderEnd - firstChanged + 1);
+			for (let i = firstChanged; i <= renderEnd; i++) {
+				slice[i - firstChanged] = this.#fitLineToWidth(lines[i], width);
+			}
+			const plan = planDeccaraFills(slice, width, firstChanged - viewportTop);
+			fillTexts = plan.texts;
+			fillSequence = plan.sequence;
+		}
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
 			buffer += "\x1b[2K";
-			buffer += this.#fitLineToWidth(lines[i], width);
+			buffer += fillTexts ? fillTexts[i - firstChanged] : this.#fitLineToWidth(lines[i], width);
 		}
 
 		// If the prior frame was taller, clear the trailing rows.
@@ -2280,6 +2353,9 @@ export class TUI extends Container {
 			}
 			buffer += `\x1b[${extraLines}A`;
 		}
+		// DECCARA rectangles for the rewritten visible fills. Absolute-positioned,
+		// so emitting them after the trailing-shrink cursor moves is safe.
+		buffer += fillSequence;
 
 		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
 		buffer += seq;

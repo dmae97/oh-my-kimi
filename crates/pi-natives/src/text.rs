@@ -364,6 +364,113 @@ fn is_sgr_u16(seq: &[u16]) -> bool {
 	seq.len() >= 3 && seq[1] == b'[' as u16 && *seq.last().unwrap() == b'm' as u16
 }
 
+struct Osc66Info<'a> {
+	payload: &'a [u16],
+	width:   usize,
+}
+
+#[inline]
+fn parse_ascii_usize_u16(data: &[u16]) -> Option<usize> {
+	if data.is_empty() {
+		return None;
+	}
+
+	let mut value = 0usize;
+	for &u in data {
+		if !(b'0' as u16..=b'9' as u16).contains(&u) {
+			return None;
+		}
+		value = value.saturating_mul(10).saturating_add((u - b'0' as u16) as usize);
+	}
+	Some(value)
+}
+
+#[inline]
+fn osc66_meta_payload_u16(seq: &[u16]) -> Option<(&[u16], &[u16])> {
+	if seq.len() < 7
+		|| seq[0] != ESC
+		|| seq[1] != b']' as u16
+		|| seq[2] != b'6' as u16
+		|| seq[3] != b'6' as u16
+		|| seq[4] != b';' as u16
+	{
+		return None;
+	}
+
+	let payload_end = if *seq.last()? == 0x07 {
+		seq.len() - 1
+	} else if seq.len() >= 8
+		&& seq[seq.len() - 2] == ESC
+		&& seq[seq.len() - 1] == b'\\' as u16
+	{
+		seq.len() - 2
+	} else {
+		return None;
+	};
+
+	let mut sep = 5usize;
+	while sep < payload_end {
+		if seq[sep] == b';' as u16 {
+			return Some((&seq[5..sep], &seq[sep + 1..payload_end]));
+		}
+		sep += 1;
+	}
+
+	None
+}
+
+#[inline]
+fn parse_osc66_meta_u16(meta: &[u16]) -> (usize, Option<usize>) {
+	let mut scale = 1usize;
+	let mut explicit_width = None;
+	let mut part_start = 0usize;
+	let mut i = 0usize;
+
+	while i <= meta.len() {
+		if i == meta.len() || meta[i] == b':' as u16 {
+			let part = &meta[part_start..i];
+			if let Some(eq) = part.iter().position(|&u| u == b'=' as u16) {
+				let key = &part[..eq];
+				let value = &part[eq + 1..];
+				if key.len() == 1 {
+					match key[0] {
+						0x73 => {
+							if let Some(parsed) = parse_ascii_usize_u16(value)
+								&& (1..=7).contains(&parsed)
+							{
+								scale = parsed;
+							}
+						},
+						0x77 => {
+							if let Some(parsed) = parse_ascii_usize_u16(value) {
+								explicit_width = Some(parsed);
+							}
+						},
+						_ => {},
+					}
+				}
+			}
+			part_start = i + 1;
+		}
+		i += 1;
+	}
+
+	(scale, explicit_width.filter(|&width| width > 0))
+}
+
+#[inline]
+fn osc66_info_u16(seq: &[u16], tab_width: usize) -> Option<Osc66Info<'_>> {
+	let (meta, payload) = osc66_meta_payload_u16(seq)?;
+	let (scale, explicit_width) = parse_osc66_meta_u16(meta);
+	let base_width = explicit_width.unwrap_or_else(|| visible_width_u16(payload, tab_width));
+	Some(Osc66Info { payload, width: scale.saturating_mul(base_width) })
+}
+
+#[inline]
+fn osc66_visible_width_u16(seq: &[u16], tab_width: usize) -> Option<usize> {
+	Some(osc66_info_u16(seq, tab_width)?.width)
+}
+
 // ============================================================================
 // Grapheme / Width
 // ============================================================================
@@ -486,6 +593,13 @@ fn visible_width_u16_up_to(data: &[u16], limit: usize, tab_width: usize) -> (usi
 	while i < len {
 		if data[i] == ESC {
 			if let Some(seq_len) = ansi_seq_len_u16(data, i) {
+				let seq = &data[i..i + seq_len];
+				if let Some(seq_width) = osc66_visible_width_u16(seq, tab_width) {
+					width = width.saturating_add(seq_width);
+					if width > limit {
+						return (width, true);
+					}
+				}
 				i += seq_len;
 				continue;
 			}
@@ -526,6 +640,95 @@ fn visible_width_u16_up_to(data: &[u16], limit: usize, tab_width: usize) -> (usi
 
 fn visible_width_u16(data: &[u16], tab_width: usize) -> usize {
 	visible_width_u16_up_to(data, usize::MAX, tab_width).0
+}
+
+fn append_visible_range_plain_u16<F>(
+	out: &mut Vec<u16>,
+	data: &[u16],
+	start_col: usize,
+	length: usize,
+	strict: bool,
+	tab_width: usize,
+	mut before_first_write: F,
+) -> (usize, bool)
+where
+	F: FnMut(&mut Vec<u16>),
+{
+	if length == 0 {
+		return (0, false);
+	}
+
+	let end_col = start_col.saturating_add(length);
+	let mut out_w = 0usize;
+	let mut wrote = false;
+	let mut current_col = 0usize;
+	let mut i = 0usize;
+
+	while i < data.len() && current_col < end_col {
+		let start = i;
+		let mut is_ascii = true;
+		while i < data.len() {
+			if data[i] > 0x7f {
+				is_ascii = false;
+			}
+			i += 1;
+		}
+		let seg = &data[start..i];
+
+		if is_ascii {
+			for &u in seg {
+				if current_col >= end_col {
+					break;
+				}
+				let gw = ascii_cell_width_u16(u, tab_width);
+				let in_range = current_col >= start_col;
+				let fits = !strict || current_col + gw <= end_col;
+				if in_range && fits {
+					if !wrote {
+						before_first_write(out);
+						wrote = true;
+					}
+					out.push(u);
+					out_w += gw;
+				}
+				current_col += gw;
+			}
+		} else {
+			let _ = for_each_grapheme_u16_slow(seg, tab_width, |gu16, gw| {
+				if current_col >= end_col {
+					return false;
+				}
+				let in_range = current_col >= start_col;
+				let fits = !strict || current_col + gw <= end_col;
+				if in_range && fits {
+					if !wrote {
+						before_first_write(out);
+						wrote = true;
+					}
+					out.extend_from_slice(gu16);
+					out_w += gw;
+				}
+				current_col += gw;
+				current_col < end_col
+			});
+		}
+	}
+
+	(out_w, wrote)
+}
+
+fn flush_pending_ansi(
+	out: &mut Vec<u16>,
+	source: &[u16],
+	pending: &mut SmallVec<[(usize, usize); 4]>,
+) {
+	if pending.is_empty() {
+		return;
+	}
+	for &(p, l) in pending.iter() {
+		out.extend_from_slice(&source[p..p + l]);
+	}
+	pending.clear();
 }
 
 // ============================================================================
@@ -583,6 +786,12 @@ fn token_is_whitespace(token: &[u16]) -> bool {
 		if token[i] == ESC
 			&& let Some(seq_len) = ansi_seq_len_u16(token, i)
 		{
+			let seq = &token[i..i + seq_len];
+			if let Some((_, payload)) = osc66_meta_payload_u16(seq)
+				&& payload.iter().any(|&u| u != b' ' as u16)
+			{
+				return false;
+			}
 			i += seq_len;
 			continue;
 		}
@@ -665,6 +874,19 @@ fn break_long_word(
 			&& let Some(seq_len) = ansi_seq_len_u16(word, i)
 		{
 			let seq = &word[i..i + seq_len];
+			if let Some(seq_width) = osc66_visible_width_u16(seq, tab_width) {
+				if current_width.saturating_add(seq_width) > width {
+					write_line_end_reset(state, &mut current_line);
+					lines.push(current_line);
+					current_line = Vec::new();
+					write_active_codes(state, &mut current_line);
+					current_width = 0;
+				}
+				current_line.extend_from_slice(seq);
+				current_width = current_width.saturating_add(seq_width);
+				i += seq_len;
+				continue;
+			}
 			current_line.extend_from_slice(seq);
 			if is_sgr_u16(seq) {
 				state.apply_sgr_u16(&seq[2..seq_len - 1]);
@@ -929,6 +1151,33 @@ pub fn truncate_to_width(
 		if text[i] == ESC {
 			if let Some(seq_len) = ansi_seq_len_u16(text, i) {
 				let seq = &text[i..i + seq_len];
+				if let Some(osc66) = osc66_info_u16(seq, tab_width) {
+					let span_end = w.saturating_add(osc66.width);
+					if span_end <= target_w {
+						out.extend_from_slice(seq);
+						w = span_end;
+						i += seq_len;
+						if w >= target_w {
+							break;
+						}
+						continue;
+					}
+
+					if w < target_w {
+						let remaining = target_w - w;
+						let (payload_w, _) = append_visible_range_plain_u16(
+							&mut out,
+							osc66.payload,
+							0,
+							remaining,
+							true,
+							tab_width,
+							|_| {},
+						);
+						w = w.saturating_add(payload_w);
+					}
+					break;
+				}
 				out.extend_from_slice(seq);
 				if is_sgr_u16(seq) {
 					saw_sgr = true;
@@ -1020,6 +1269,34 @@ fn slice_with_width_impl(
 	while i < line_len && current_col < end_col {
 		if line[i] == ESC {
 			if let Some(seq_len) = ansi_seq_len_u16(line, i) {
+				let seq = &line[i..i + seq_len];
+				if let Some(osc66) = osc66_info_u16(seq, tab_width) {
+					let span_start = current_col;
+					let span_end = current_col.saturating_add(osc66.width);
+					if span_start >= start_col && span_end <= end_col {
+						flush_pending_ansi(&mut out, line, &mut pending_ansi);
+						out.extend_from_slice(seq);
+						out_w = out_w.saturating_add(osc66.width);
+					} else if span_start < end_col && span_end > start_col {
+						let overlap_start = start_col.saturating_sub(span_start);
+						let overlap_end = span_end.min(end_col) - span_start;
+						let overlap_len = overlap_end.saturating_sub(overlap_start);
+						let (payload_w, _) = append_visible_range_plain_u16(
+							&mut out,
+							osc66.payload,
+							overlap_start,
+							overlap_len,
+							strict,
+							tab_width,
+							|out| flush_pending_ansi(out, line, &mut pending_ansi),
+						);
+						out_w = out_w.saturating_add(payload_w);
+					}
+					current_col = span_end;
+					i += seq_len;
+					continue;
+				}
+
 				if current_col >= start_col {
 					out.extend_from_slice(&line[i..i + seq_len]);
 				} else {
@@ -1055,12 +1332,7 @@ fn slice_with_width_impl(
 				let fits = !strict || current_col + gw <= end_col;
 
 				if in_range && fits {
-					if !pending_ansi.is_empty() {
-						for &(p, l) in &pending_ansi {
-							out.extend_from_slice(&line[p..p + l]);
-						}
-						pending_ansi.clear();
-					}
+					flush_pending_ansi(&mut out, line, &mut pending_ansi);
 					out.push(u);
 					out_w += gw;
 				}
@@ -1076,12 +1348,7 @@ fn slice_with_width_impl(
 				let fits = !strict || current_col + gw <= end_col;
 
 				if in_range && fits {
-					if !pending_ansi.is_empty() {
-						for &(p, l) in &pending_ansi {
-							out.extend_from_slice(&line[p..p + l]);
-						}
-						pending_ansi.clear();
-					}
+					flush_pending_ansi(&mut out, line, &mut pending_ansi);
 					out.extend_from_slice(gu16);
 					out_w += gw;
 				}
@@ -1097,7 +1364,10 @@ fn slice_with_width_impl(
 		if line[i] == ESC
 			&& let Some(len) = ansi_seq_len_u16(line, i)
 		{
-			out.extend_from_slice(&line[i..i + len]);
+			let seq = &line[i..i + len];
+			if osc66_visible_width_u16(seq, tab_width).is_none() {
+				out.extend_from_slice(seq);
+			}
 			i += len;
 			continue;
 		}
@@ -1174,6 +1444,68 @@ fn extract_segments_impl(
 		if line[i] == ESC {
 			if let Some(seq_len) = ansi_seq_len_u16(line, i) {
 				let seq = &line[i..i + seq_len];
+				if let Some(osc66) = osc66_info_u16(seq, tab_width) {
+					let span_start = current_col;
+					let span_end = current_col.saturating_add(osc66.width);
+
+					if span_start < before_end {
+						if span_end <= before_end {
+							flush_pending_ansi(&mut before, line, &mut pending_before_ansi);
+							before.extend_from_slice(seq);
+							before_w = before_w.saturating_add(osc66.width);
+						} else {
+							let overlap_len = before_end - span_start;
+							let (payload_w, _) = append_visible_range_plain_u16(
+								&mut before,
+								osc66.payload,
+								0,
+								overlap_len,
+								true,
+								tab_width,
+								|out| flush_pending_ansi(out, line, &mut pending_before_ansi),
+							);
+							before_w = before_w.saturating_add(payload_w);
+						}
+					}
+
+					if after_len != 0 && span_start < after_end && span_end > after_start {
+						let overlap_start = after_start.saturating_sub(span_start);
+						let overlap_end = span_end.min(after_end) - span_start;
+						let overlap_len = overlap_end.saturating_sub(overlap_start);
+
+						if span_start >= after_start && span_end <= after_end {
+							if !after_started {
+								state.write_restore_u16(&mut after);
+								after_started = true;
+							}
+							after.extend_from_slice(seq);
+							after_w = after_w.saturating_add(osc66.width);
+						} else {
+							let (payload_w, wrote_payload) = append_visible_range_plain_u16(
+								&mut after,
+								osc66.payload,
+								overlap_start,
+								overlap_len,
+								strict_after,
+								tab_width,
+								|out| {
+									if !after_started {
+										state.write_restore_u16(out);
+										after_started = true;
+									}
+								},
+							);
+							if wrote_payload {
+								after_w = after_w.saturating_add(payload_w);
+							}
+						}
+					}
+
+					current_col = span_end;
+					i += seq_len;
+					continue;
+				}
+
 				if is_sgr_u16(seq) {
 					state.apply_sgr_u16(&seq[2..seq_len - 1]);
 				}
@@ -1215,12 +1547,7 @@ fn extract_segments_impl(
 				let gw = ascii_cell_width_u16(u, tab_width);
 
 				if current_col < before_end {
-					if !pending_before_ansi.is_empty() {
-						for &(p, l) in &pending_before_ansi {
-							before.extend_from_slice(&line[p..p + l]);
-						}
-						pending_before_ansi.clear();
-					}
+					flush_pending_ansi(&mut before, line, &mut pending_before_ansi);
 					before.push(u);
 					before_w += gw;
 				} else if current_col >= after_start && current_col < after_end {
@@ -1243,12 +1570,7 @@ fn extract_segments_impl(
 				}
 
 				if current_col < before_end {
-					if !pending_before_ansi.is_empty() {
-						for &(p, l) in &pending_before_ansi {
-							before.extend_from_slice(&line[p..p + l]);
-						}
-						pending_before_ansi.clear();
-					}
+					flush_pending_ansi(&mut before, line, &mut pending_before_ansi);
 					before.extend_from_slice(gu16);
 					before_w += gw;
 				} else if current_col >= after_start && current_col < after_end {
@@ -1359,6 +1681,49 @@ mod tests {
 		let filler_cells = if cfg!(target_os = "macos") { 1 } else { 0 };
 		assert_eq!(visible_width_u16(&to_u16("\u{3141}\u{0301}"), DEFAULT_TAB_WIDTH), jamo_cells);
 		assert_eq!(visible_width_u16(&to_u16("\u{3164}\u{0301}"), DEFAULT_TAB_WIDTH), filler_cells);
+	}
+
+	#[test]
+	fn test_osc66_visible_width_helper() {
+		assert_eq!(
+			osc66_visible_width_u16(&to_u16("\x1b]66;s=2;Hi\x1b\\"), DEFAULT_TAB_WIDTH),
+			Some(4)
+		);
+		assert_eq!(
+			osc66_visible_width_u16(&to_u16("\x1b]66;w=5;Hi\x07"), DEFAULT_TAB_WIDTH),
+			Some(5)
+		);
+		assert_eq!(
+			osc66_visible_width_u16(&to_u16("\x1b]66;s=3:w=4;X\x1b\\"), DEFAULT_TAB_WIDTH),
+			Some(12)
+		);
+		assert_eq!(
+			osc66_visible_width_u16(&to_u16("\x1b]66;;a\t界\x1b\\"), DEFAULT_TAB_WIDTH),
+			Some(1 + DEFAULT_TAB_WIDTH + 2)
+		);
+		assert_eq!(
+			osc66_visible_width_u16(&to_u16("\x1b]8;;https://example.com\x07"), DEFAULT_TAB_WIDTH),
+			None
+		);
+	}
+
+	#[test]
+	fn test_visible_width_counts_osc66_lines() {
+		assert_eq!(visible_width_u16(&to_u16("\x1b]66;s=2;Hi\x1b\\"), DEFAULT_TAB_WIDTH), 4);
+		assert_eq!(visible_width_u16(&to_u16("\x1b]66;w=5;Hi\x1b\\"), DEFAULT_TAB_WIDTH), 5);
+		assert_eq!(
+			visible_width_u16(&to_u16("\x1b]66;s=3:w=4;X\x1b\\"), DEFAULT_TAB_WIDTH),
+			12
+		);
+		assert_eq!(visible_width_u16(&to_u16("\x1b]66;;abc\x1b\\"), DEFAULT_TAB_WIDTH), 3);
+		assert_eq!(
+			visible_width_u16(&to_u16("A\x1b]66;s=2;Hi\x1b\\Z"), DEFAULT_TAB_WIDTH),
+			1 + 4 + 1
+		);
+		assert_eq!(
+			visible_width_u16(&to_u16("\x1b[31m\x1b]66;s=2;Hi\x1b\\\x1b[0m"), DEFAULT_TAB_WIDTH),
+			4
+		);
 	}
 
 	#[test]

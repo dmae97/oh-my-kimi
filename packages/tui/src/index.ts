@@ -16,6 +16,8 @@ export * from "./components/spacer";
 export * from "./components/tab-bar";
 export * from "./components/text";
 export * from "./components/truncated-text";
+// DECCARA rectangular-SGR background-fill optimizer
+export * from "./deccara";
 // Editor component interface (for custom editors)
 export type * from "./editor-component";
 // Fuzzy matching

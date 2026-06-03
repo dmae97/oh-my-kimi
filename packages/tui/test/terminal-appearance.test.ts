@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import {
+	type CellDimensions,
+	getCellDimensions,
+	setCellDimensions,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -351,13 +356,16 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		expect(writes.some(w => w.includes("\x1b[>31u"))).toBe(false);
 		expect(writes).toContain("\x1b[?u\x1b[c");
 
-		// Two DA1 sentinels are in flight at startup (keyboard probe + OSC 11).
-		// Consume them in send-order and verify neither leaks to the input handler.
+		// Four DA1 sentinels are in flight at startup: keyboard probe, OSC 11, and
+		// the DECRQM probes for DEC 2026 and 2048 (each rides the shared FIFO).
+		// Consume them in send-order and verify none leaks to the input handler.
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual([]);
 
-		// A third stray DA1 has no owner and must reach the input handler — it is
+		// A fifth stray DA1 has no owner and must reach the input handler — it is
 		// no longer ours to swallow.
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual(["\x1b[?1;2c"]);
@@ -394,5 +402,125 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 		const pops = writes.filter(w => w === "\x1b[<u").length;
 		expect(pops).toBe(1);
+	});
+});
+
+describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
+	let originalCellDims: CellDimensions;
+
+	beforeEach(() => {
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
+		originalCellDims = { ...getCellDimensions() };
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
+		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
+		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
+		restoreProperty(process, "platform", processPlatformDescriptor);
+		setCellDimensions(originalCellDims);
+	});
+
+	function setup() {
+		const writes: string[] = [];
+		const received: string[] = [];
+		let resizeCount = 0;
+		const reports: Array<{ mode: number; supported: boolean }> = [];
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdin, "setEncoding").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+
+		const terminal = new ProcessTerminal();
+		terminal.onPrivateModeReport?.((mode, supported) => reports.push({ mode, supported }));
+		terminal.start(
+			data => received.push(data),
+			() => {
+				resizeCount++;
+			},
+		);
+		return { terminal, writes, received, reports, resizeCount: () => resizeCount };
+	}
+
+	it("queries DECRQM for DEC 2026 and 2048 at startup", () => {
+		const { terminal, writes } = setup();
+		expect(writes.some(w => w.includes("\x1b[?2026$p"))).toBe(true);
+		expect(writes.some(w => w.includes("\x1b[?2048$p"))).toBe(true);
+		terminal.stop();
+	});
+
+	it("reports a private mode supported when DECRPM status is 1 or 2", () => {
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;1$y");
+		expect(reports).toContainEqual({ mode: 2026, supported: true });
+		terminal.stop();
+	});
+
+	it("reports a private mode unsupported when DECRPM status is 0", () => {
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;0$y");
+		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		terminal.stop();
+	});
+
+	it("enables DEC 2048 only after DECRPM confirms support, and disables it on stop", () => {
+		const { terminal, writes, reports } = setup();
+		expect(writes).not.toContain("\x1b[?2048h");
+		process.stdin.emit("data", "\x1b[?2048;2$y");
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		expect(writes).toContain("\x1b[?2048h");
+		terminal.stop();
+		expect(writes).toContain("\x1b[?2048l");
+	});
+
+	it("does not enable DEC 2048 when reported unsupported", () => {
+		const { terminal, writes, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2048;0$y");
+		expect(reports).toContainEqual({ mode: 2048, supported: false });
+		expect(writes).not.toContain("\x1b[?2048h");
+		terminal.stop();
+		expect(writes).not.toContain("\x1b[?2048l");
+	});
+
+	it("falls back to unsupported when the DA1 sentinel beats the DECRPM reply", () => {
+		const { terminal, reports } = setup();
+		// Drain keyboard + osc11 sentinels, then 2026's DA1 (no DECRPM arrived).
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		terminal.stop();
+	});
+
+	it("applies an in-band resize report: geometry, cell size, and resize handler", () => {
+		const { terminal, received, resizeCount } = setup();
+		// Enable in-band resize so reported geometry is authoritative.
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+		process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
+		expect(terminal.rows).toBe(30);
+		expect(terminal.columns).toBe(100);
+		expect(getCellDimensions()).toEqual({ widthPx: 10, heightPx: 20 });
+		expect(resizeCount()).toBeGreaterThan(0);
+		// The report must not leak into the input handler.
+		expect(received).toEqual([]);
+		terminal.stop();
+	});
+
+	it("reassembles a DECRPM reply split across stdin reads", () => {
+		vi.useFakeTimers();
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "$y");
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		terminal.stop();
 	});
 });

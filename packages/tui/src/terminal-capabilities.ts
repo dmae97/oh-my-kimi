@@ -1,5 +1,5 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 
 export enum ImageProtocol {
 	Kitty = "\x1b_G",
@@ -25,6 +25,7 @@ export class TerminalInfo {
 		public readonly hyperlinks: boolean,
 		public readonly notifyProtocol: NotifyProtocol = NotifyProtocol.Bell,
 		public readonly eagerEraseScrollbackRisk: boolean = false,
+		public readonly deccara: boolean = false,
 	) {}
 
 	isImageLine(line: string): boolean {
@@ -35,14 +36,23 @@ export class TerminalInfo {
 		return line.slice(0, 64).includes(this.imageProtocol);
 	}
 
-	formatNotification(message: string): string {
+	formatNotification(message: string | TerminalNotification): string {
 		if (this.notifyProtocol === NotifyProtocol.Bell) {
 			return NotifyProtocol.Bell;
+		}
+		// Structured notifications use OSC 99's rich metadata only once the
+		// terminal confirms support; otherwise collapse to a single message line
+		// (basic OSC 99 / OSC 9 still work).
+		if (typeof message !== "string") {
+			if (this.notifyProtocol === NotifyProtocol.Osc99 && osc99CapabilitiesConfirmed) {
+				return formatOsc99Notification(message);
+			}
+			return `${this.notifyProtocol}${notificationToLine(message)}\x1b\\`;
 		}
 		return `${this.notifyProtocol}${message}\x1b\\`;
 	}
 
-	sendNotification(message: string): void {
+	sendNotification(message: string | TerminalNotification): void {
 		if (isNotificationSuppressed()) return;
 		process.stdout.write(this.formatNotification(message));
 	}
@@ -143,6 +153,37 @@ export function detectTerminalEagerEraseScrollbackRisk(
 			return false;
 	}
 }
+
+/**
+ * Whether the terminal applies Kitty-style DECCARA rectangular SGR changes
+ * (`CSI Pt ; Pl ; Pb ; Pr ; <sgr> $ r`) extended to background color, so large
+ * filled regions can be painted as rectangles instead of background-padded
+ * strings on every row.
+ *
+ * Verified against terminal sources rather than terminfo, because a bare
+ * `Cara`/DECCARA terminfo capability does not imply the Kitty SGR-background
+ * extension:
+ * - Kitty implements it for *all* SGR attributes including background (see
+ *   kitty `docs/deccara.rst` and the `test_deccara` parser test).
+ * - Ghostty does NOT: its `CSI $ r` dispatch falls through to an "unknown CSI"
+ *   warning and DECCARA/DECSACE are tracked as unsupported
+ *   (ghostty-org/ghostty#632). Enabling it there would silently drop panel
+ *   backgrounds, so ghostty stays on the padded-string fallback.
+ *
+ * Disabled under tmux/screen/zellij multiplexers — screen-coordinate rectangle
+ * protocols are not safe to assume through a multiplexer — and via the
+ * `PI_NO_DECCARA` kill switch. Pure helper for tests and `TERMINAL` construction.
+ */
+export function detectRectangularSgrSupport(terminalId: TerminalId, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (terminalId !== "kitty") return false;
+	const kill = env.PI_NO_DECCARA;
+	if (kill && kill !== "0" && kill.toLowerCase() !== "false") return false;
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
+		return false;
+	}
+	return true;
+}
 function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null {
 	if (!process.stdout.isTTY) return null;
 	if (terminalId === "vscode" || terminalId === "alacritty") return null;
@@ -157,7 +198,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
-	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true),
+	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true),
 	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9, true),
@@ -206,61 +247,67 @@ export const TERMINAL_ID: TerminalId = (() => {
 	return "base";
 })();
 
+/** Clone a {@link TerminalInfo} with selected fields overridden, preserving the rest. */
+function withTerminalOverrides(
+	base: TerminalInfo,
+	overrides: {
+		imageProtocol?: ImageProtocol | null;
+		hyperlinks?: boolean;
+		eagerEraseScrollbackRisk?: boolean;
+		deccara?: boolean;
+	},
+): TerminalInfo {
+	return new TerminalInfo(
+		base.id,
+		overrides.imageProtocol !== undefined ? overrides.imageProtocol : base.imageProtocol,
+		base.trueColor,
+		overrides.hyperlinks !== undefined ? overrides.hyperlinks : base.hyperlinks,
+		base.notifyProtocol,
+		overrides.eagerEraseScrollbackRisk !== undefined
+			? overrides.eagerEraseScrollbackRisk
+			: base.eagerEraseScrollbackRisk,
+		overrides.deccara !== undefined ? overrides.deccara : base.deccara,
+	);
+}
+
 export const TERMINAL = (() => {
 	let resolved = getTerminalInfo(TERMINAL_ID);
 	const eagerEraseScrollbackRisk = detectTerminalEagerEraseScrollbackRisk(Bun.env, process.platform);
 	if (resolved.eagerEraseScrollbackRisk !== eagerEraseScrollbackRisk) {
-		resolved = new TerminalInfo(
-			resolved.id,
-			resolved.imageProtocol,
-			resolved.trueColor,
-			resolved.hyperlinks,
-			resolved.notifyProtocol,
-			eagerEraseScrollbackRisk,
-		);
+		resolved = withTerminalOverrides(resolved, { eagerEraseScrollbackRisk });
 	}
 
 	const forcedImageProtocol = getForcedImageProtocol();
 	if (forcedImageProtocol !== undefined) {
-		resolved = new TerminalInfo(
-			resolved.id,
-			forcedImageProtocol,
-			resolved.trueColor,
-			resolved.hyperlinks,
-			resolved.notifyProtocol,
-			resolved.eagerEraseScrollbackRisk,
-		);
+		resolved = withTerminalOverrides(resolved, { imageProtocol: forcedImageProtocol });
 	} else if (!resolved.imageProtocol) {
 		const fallbackImageProtocol = getFallbackImageProtocol(resolved.id);
 		if (fallbackImageProtocol) {
-			resolved = new TerminalInfo(
-				resolved.id,
-				fallbackImageProtocol,
-				resolved.trueColor,
-				resolved.hyperlinks,
-				resolved.notifyProtocol,
-				resolved.eagerEraseScrollbackRisk,
-			);
+			resolved = withTerminalOverrides(resolved, { imageProtocol: fallbackImageProtocol });
 		}
 	}
 	// tmux and screen multiplexers do not reliably forward OSC 8 hyperlinks
 	// to the outer terminal, so force them off regardless of detected terminal.
 	const term = Bun.env.TERM?.toLowerCase() ?? "";
 	if (resolved.hyperlinks && (Bun.env.TMUX || term.startsWith("tmux") || term.startsWith("screen"))) {
-		resolved = new TerminalInfo(
-			resolved.id,
-			resolved.imageProtocol,
-			resolved.trueColor,
-			false,
-			resolved.notifyProtocol,
-			resolved.eagerEraseScrollbackRisk,
-		);
+		resolved = withTerminalOverrides(resolved, { hyperlinks: false });
+	}
+	// DECCARA rectangular-SGR background fills. The static per-terminal capability
+	// lives on KNOWN_TERMINALS; here we fold in runtime context — multiplexer and
+	// the PI_NO_DECCARA kill switch via detectRectangularSgrSupport — and force it
+	// off inside the test runtime so the xterm.js-backed virtual terminal (which
+	// ignores DECCARA) exercises the padded-string fallback. Integration tests opt
+	// in explicitly through setTerminalDeccara.
+	const deccara = detectRectangularSgrSupport(resolved.id, Bun.env) && !isBunTestRuntime();
+	if (resolved.deccara !== deccara) {
+		resolved = withTerminalOverrides(resolved, { deccara });
 	}
 	return resolved;
 })();
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
+	deccara: boolean;
 };
 
 /**
@@ -268,6 +315,15 @@ type MutableTerminalInfo = {
  */
 export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): void {
 	(TERMINAL as unknown as MutableTerminalInfo).imageProtocol = imageProtocol;
+}
+
+/**
+ * Override DECCARA rectangular-SGR capability at runtime. Used by tests to
+ * exercise the optimizer and fallback paths deterministically — the default is
+ * resolved once at import and force-disabled under the test runtime.
+ */
+export function setTerminalDeccara(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).deccara = enabled;
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {
@@ -665,4 +721,127 @@ export function imageFallback(mimeType: string, dimensions?: ImageDimensions, fi
 	parts.push(`[${mimeType}]`);
 	if (dimensions) parts.push(`${dimensions.widthPx}x${dimensions.heightPx}`);
 	return `[Image: ${parts.join(" ")}]`;
+}
+
+/**
+ * Structured terminal notification. Rich fields are honored only by OSC 99
+ * (Kitty) once support is confirmed; other protocols and the unconfirmed Kitty
+ * path collapse to a single `title: body` line.
+ */
+export interface TerminalNotification {
+	title?: string;
+	body?: string;
+	id?: string;
+	type?: string | string[];
+	urgency?: "low" | "normal" | "critical";
+	iconName?: string;
+	sound?: "silent" | "system" | "info" | "warning" | "error" | "question";
+	actions?: "focus" | "report" | "focus-report" | "none";
+	expiresMs?: number;
+}
+
+/**
+ * Whether the terminal confirmed OSC 99 desktop-notification support via the
+ * `p=?` query probe. Until confirmed, structured notifications collapse to a
+ * single message line.
+ */
+let osc99CapabilitiesConfirmed = false;
+
+/** Record the OSC 99 capability-probe result (called by ProcessTerminal). */
+export function setOsc99Supported(supported: boolean): void {
+	osc99CapabilitiesConfirmed = supported;
+}
+
+/** True when OSC 99 structured notifications have been confirmed available. */
+export function isOsc99Supported(): boolean {
+	return osc99CapabilitiesConfirmed;
+}
+
+/** Collapse a structured notification to a single line for non-OSC-99 sinks. */
+function notificationToLine(n: TerminalNotification): string {
+	if (n.title && n.body) return `${n.title}: ${n.body}`;
+	return n.title ?? n.body ?? "";
+}
+
+// C0/C1 control characters that are unsafe inside an OSC payload (must base64).
+const OSC99_UNSAFE = /[\x00-\x1f\x7f\x80-\x9f]/u;
+
+function osc99Chunk(meta: string[], payload: string): string {
+	if (OSC99_UNSAFE.test(payload)) {
+		return `\x1b]99;${[...meta, "e=1"].join(":")};${Buffer.from(payload, "utf8").toString("base64")}\x1b\\`;
+	}
+	return `\x1b]99;${meta.join(":")};${payload}\x1b\\`;
+}
+
+function osc99Urgency(urgency: TerminalNotification["urgency"]): string | undefined {
+	switch (urgency) {
+		case "low":
+			return "0";
+		case "normal":
+			return "1";
+		case "critical":
+			return "2";
+		default:
+			return undefined;
+	}
+}
+
+function osc99Actions(actions: TerminalNotification["actions"]): string | undefined {
+	switch (actions) {
+		case "focus":
+			return "focus";
+		case "report":
+			return "report";
+		case "focus-report":
+			return "focus,report";
+		case "none":
+			return "-focus";
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Format a structured notification as one or two OSC 99 escape codes. Title and
+ * body are separate chunks sharing an id: the title chunk carries all metadata
+ * with `d=0` (hold), the body chunk closes with the default `d=1`. Values that
+ * need it (type/icon/sound, unsafe payloads) are base64-encoded.
+ */
+function formatOsc99Notification(n: TerminalNotification): string {
+	const id = (n.id ?? "").replace(/[^a-zA-Z0-9_\-+.]/gu, "") || "1";
+	const meta: string[] = [`i=${id}`];
+	const actions = osc99Actions(n.actions);
+	if (actions) meta.push(`a=${actions}`);
+	const urgency = osc99Urgency(n.urgency);
+	if (urgency) meta.push(`u=${urgency}`);
+	const types = n.type === undefined ? [] : Array.isArray(n.type) ? n.type : [n.type];
+	for (const t of types) meta.push(`t=${Buffer.from(t, "utf8").toString("base64")}`);
+	if (n.iconName) meta.push(`n=${Buffer.from(n.iconName, "utf8").toString("base64")}`);
+	if (n.sound) meta.push(`s=${Buffer.from(n.sound, "utf8").toString("base64")}`);
+	if (n.expiresMs !== undefined) meta.push(`w=${Math.trunc(n.expiresMs)}`);
+
+	// A notification with no title uses the body as title (per spec).
+	const title = n.title ?? n.body ?? "";
+	const body = n.title ? n.body : undefined;
+
+	if (body !== undefined && body !== "") {
+		meta.push("d=0");
+		return osc99Chunk(meta, title) + osc99Chunk([`i=${id}`, "p=body"], body);
+	}
+	return osc99Chunk(meta, title);
+}
+
+/**
+ * Whether the terminal supports the OSC 66 text-sizing protocol. Defaults false
+ * (opted in at runtime by a known Kitty-family terminal + probe) so
+ * non-supporting terminals keep their existing ANSI output.
+ */
+let textSizing = false;
+
+export function getTextSizing(): boolean {
+	return textSizing;
+}
+
+export function setTextSizing(enabled: boolean): void {
+	textSizing = enabled;
 }
