@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai/types";
 
 const emptyUsage: Usage = {
@@ -228,5 +229,131 @@ describe("openai-completions convertMessages", () => {
 		expect(assistantParam?.tool_calls).toBeDefined();
 		const serializedArgs = assistantParam!.tool_calls![0].function.arguments;
 		expect(JSON.parse(serializedArgs)).toEqual({ path: "README.md" });
+	});
+	it("strips image_url content for DashScope compatible-mode text-only Qwen models (issue #1859)", () => {
+		// Reproduces the bailian/qwen3.7-max + dashscope.aliyuncs.com/compatible-mode
+		// 400 from issue #1859: even when a misconfigured `model.input` claims
+		// image support, sending an `image_url` part to a non-VL/Omni Qwen on
+		// the consumer DashScope endpoint server-errors with
+		// "Unexpected item type in content.". Verify both the synthesized user
+		// turn (text-only message) and the tool-result image batching path drop
+		// images for that combination, substituting the standard placeholder.
+		const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
+		const model: Model<"openai-completions"> = {
+			...baseModel,
+			id: "qwen3.7-max",
+			provider: "bailian" as Model<"openai-completions">["provider"],
+			baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			api: "openai-completions",
+			// Wrong-but-realistic user config: claims vision capability even
+			// though qwen3.7-max on this endpoint is text-only upstream.
+			input: ["text", "image"],
+		};
+
+		const now = Date.now();
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tool-1", name: "browser", arguments: { action: "screenshot" } }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: emptyUsage,
+			stopReason: "toolUse",
+			timestamp: now,
+		};
+
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Take a screenshot" },
+						{ type: "image", data: "ZmFrZQ==", mimeType: "image/webp" },
+					],
+					timestamp: now - 2,
+				},
+				assistantMessage,
+				buildToolResult("tool-1", now + 1),
+			],
+		};
+
+		const messages = convertMessages(model, context, compat);
+
+		// No converted turn carries an image_url part — the dashscope guard
+		// must veto both the user-content and tool-result-batching emit paths.
+		for (const m of messages) {
+			if (Array.isArray(m.content)) {
+				for (const part of m.content as Array<{ type?: string }>) {
+					expect(part?.type).not.toBe("image_url");
+				}
+			}
+		}
+
+		// User content with the dropped image keeps the text and appends the
+		// standard "image omitted" placeholder so the model still sees that an
+		// attachment existed.
+		const userMessage = messages.find(m => m.role === "user");
+		expect(userMessage).toBeDefined();
+		const userContent = userMessage?.content;
+		const userText =
+			typeof userContent === "string"
+				? userContent
+				: (userContent as Array<{ type?: string; text?: string }>)
+						.filter(p => p?.type === "text")
+						.map(p => p?.text ?? "")
+						.join("\n");
+		expect(userText).toContain("Take a screenshot");
+		expect(userText).toContain(NON_VISION_IMAGE_PLACEHOLDER);
+
+		// Tool-result image is folded into the tool text content with the same
+		// placeholder rather than emitted as a follow-up multimodal user turn.
+		const toolMessage = messages.find(m => m.role === "tool");
+		expect(toolMessage).toBeDefined();
+		expect(typeof toolMessage?.content).toBe("string");
+		expect(toolMessage?.content as string).toContain(NON_VISION_IMAGE_PLACEHOLDER);
+	});
+
+	it("preserves image_url for DashScope compatible-mode multimodal Qwen models", () => {
+		// Counter-cases for the issue #1859 guard: DashScope also exposes
+		// genuinely multimodal Qwen ids without `vl` in the name (`qwen3.7-plus`),
+		// so the text-only override must be limited to known text-only families.
+		for (const id of ["qwen3.7-plus", "qwen-vl-max"]) {
+			const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
+			const model: Model<"openai-completions"> = {
+				...baseModel,
+				id,
+				provider: "bailian" as Model<"openai-completions">["provider"],
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				api: "openai-completions",
+				input: ["text", "image"],
+			};
+
+			const now = Date.now();
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "img.png" } }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: emptyUsage,
+				stopReason: "toolUse",
+				timestamp: now,
+			};
+
+			const context: Context = {
+				messages: [
+					{ role: "user", content: "Read the image", timestamp: now - 2 },
+					assistantMessage,
+					buildToolResult("tool-1", now + 1),
+				],
+			};
+
+			const messages = convertMessages(model, context, compat);
+			const trailingUser = messages[messages.length - 1];
+			expect(trailingUser.role).toBe("user");
+			expect(Array.isArray(trailingUser.content)).toBe(true);
+			const imageParts = (trailingUser.content as Array<{ type?: string }>).filter(p => p?.type === "image_url");
+			expect(imageParts.length).toBe(1);
+		}
 	});
 });
