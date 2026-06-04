@@ -4646,6 +4646,7 @@ export class AgentSession {
 		this.agent.steer({
 			role: "user",
 			content,
+			steering: true,
 			attribution: "user",
 			timestamp: Date.now(),
 		});
