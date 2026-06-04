@@ -44,6 +44,48 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths cross-tree degeneracy", (
 	});
 });
 
+describe.skipIf(isWindows)("search with omitted paths", () => {
+	let cwd: string;
+
+	beforeEach(async () => {
+		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-search-default-cwd-"));
+		await Bun.write(path.join(cwd, "rooted.txt"), "default-needle here\n");
+	});
+
+	afterEach(async () => {
+		await fs.rm(cwd, { recursive: true, force: true });
+	});
+
+	it("defaults to the workspace root when paths is omitted", async () => {
+		const tools = await createTools(createTestSession(cwd));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		// Callers that omit `paths` would otherwise be rejected at schema
+		// validation with `paths: Invalid input` and never run. Omission must
+		// degrade to a workspace-root scan rather than fail the tool call.
+		const result = await tool.execute("search-default-paths", { pattern: "default-needle" });
+
+		const text = getText(result);
+		const details = result.details as { fileCount?: number } | undefined;
+		expect(text).toContain("default-needle here");
+		expect(details?.fileCount).toBe(1);
+	});
+
+	it("defaults to the workspace root when paths is an empty array", async () => {
+		const tools = await createTools(createTestSession(cwd));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-empty-paths", {
+			pattern: "default-needle",
+			paths: [],
+		});
+
+		expect(getText(result)).toContain("default-needle here");
+	});
+});
+
 describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 	let dirA: string;
 	let dirB: string;

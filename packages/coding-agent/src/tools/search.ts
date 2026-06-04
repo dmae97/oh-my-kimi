@@ -61,9 +61,10 @@ const searchSchema = z
 	.object({
 		pattern: z.string().describe("regex pattern"),
 		paths: z
-			.union([searchPathEntrySchema, z.array(searchPathEntrySchema).min(1)])
+			.union([searchPathEntrySchema, z.array(searchPathEntrySchema)])
+			.optional()
 			.describe(
-				"file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges",
+				'file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges. Omitted or empty -> searches the workspace root (".")',
 			),
 		i: z.boolean().optional().describe("case-insensitive search"),
 		gitignore: z.boolean().optional().describe("respect gitignore"),
@@ -638,7 +639,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
-			const rawEntries = await expandDelimitedPathEntries(toPathList(rawPaths), this.session.cwd);
+			const scopedPaths = toPathList(rawPaths);
+			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
+			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
 			const pathSpecs = parsePathSpecs(rawEntries);
 			const paths = pathSpecs.map(spec => spec.clean);
 			const {
