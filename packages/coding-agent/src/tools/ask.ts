@@ -16,7 +16,15 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type Component, Container, Markdown, type MarkdownTheme, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	Markdown,
+	type MarkdownTheme,
+	renderInlineMarkdown,
+	TERMINAL,
+	Text,
+} from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -813,13 +821,19 @@ export const askToolRenderer = {
 				const continuation = isLastQuestion ? " " : uiTheme.tree.vertical;
 				const linePrefix = ` ${uiTheme.fg("dim", continuation)}   `;
 
-				container.addChild(
-					new Text(` ${uiTheme.fg("dim", qBranch)} ${uiTheme.fg("dim", `[${r.id}]`)}`, 0, 0),
-				);
+				container.addChild(new Text(` ${uiTheme.fg("dim", qBranch)} ${uiTheme.fg("dim", `[${r.id}]`)}`, 0, 0));
 				container.addChild(new Markdown(r.question, 3, 0, mdTheme, accentStyle));
 				container.addChild(
 					new Text(
-						renderAnswerOptions(uiTheme, mdTheme, linePrefix, r.options, r.selectedOptions, r.multi, r.customInput),
+						renderAnswerOptions(
+							uiTheme,
+							mdTheme,
+							linePrefix,
+							r.options,
+							r.selectedOptions,
+							r.multi,
+							r.customInput,
+						),
 						0,
 						0,
 					),

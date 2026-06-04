@@ -100,11 +100,8 @@ class CloseHoldingStorage implements SessionStorage {
 	readText(p: string): Promise<string> {
 		return this.#inner.readText(p);
 	}
-	readTextPrefix(p: string, maxBytes: number): Promise<string> {
-		return this.#inner.readTextPrefix(p, maxBytes);
-	}
-	readTextSuffix(p: string, maxBytes: number): Promise<string> {
-		return this.#inner.readTextSuffix(p, maxBytes);
+	readTextSlices(p: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
+		return this.#inner.readTextSlices(p, prefixBytes, suffixBytes);
 	}
 	writeText(p: string, content: string): Promise<void> {
 		return this.#inner.writeText(p, content);

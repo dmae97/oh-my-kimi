@@ -143,3 +143,46 @@ export async function peekFileTail<T>(filePath: string, maxBytes: number, op: (t
 		await fileHandle.close();
 	}
 }
+
+/**
+ * Read up to the first `prefixBytes` and last `suffixBytes` of `filePath`, then
+ * pass both slices to `op`.
+ *
+ * Uses a single open/stat sequence. When the whole file fits in the head window,
+ * the tail is sliced from the already-read head bytes instead of issuing a
+ * second read.
+ */
+export async function peekFileEnds<T>(
+	filePath: string,
+	prefixBytes: number,
+	suffixBytes: number,
+	op: (head: Uint8Array, tail: Uint8Array) => T,
+): Promise<T> {
+	if (prefixBytes <= 0 && suffixBytes <= 0) {
+		return op(EMPTY_BUFFER, EMPTY_BUFFER);
+	}
+
+	const fileHandle = await fs.promises.open(filePath, "r");
+	try {
+		const { size } = await fileHandle.stat();
+		const headLen = prefixBytes > 0 ? Math.min(prefixBytes, size) : 0;
+		const tailLen = suffixBytes > 0 ? Math.min(suffixBytes, size) : 0;
+
+		const head = headLen > 0 ? Buffer.allocUnsafe(headLen) : EMPTY_BUFFER;
+		const headBytesRead = headLen > 0 ? (await fileHandle.read(head, 0, head.byteLength, 0)).bytesRead : 0;
+		const headSlice = head.subarray(0, headBytesRead);
+
+		if (tailLen <= 0) {
+			return op(headSlice, EMPTY_BUFFER);
+		}
+		if (size <= headLen) {
+			return op(headSlice, headSlice.subarray(Math.max(0, headBytesRead - tailLen)));
+		}
+
+		const tail = Buffer.allocUnsafe(tailLen);
+		const { bytesRead: tailBytesRead } = await fileHandle.read(tail, 0, tail.byteLength, size - tailLen);
+		return op(headSlice, tail.subarray(0, tailBytesRead));
+	} finally {
+		await fileHandle.close();
+	}
+}

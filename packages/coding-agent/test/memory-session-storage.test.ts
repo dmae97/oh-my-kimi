@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { MemorySessionStorage } from "../src/session/session-storage";
 
-describe("MemorySessionStorage chunked mirror (F2)", () => {
+describe("MemorySessionStorage indexed mirror", () => {
 	test("writeLineSync builds the same content as a single writeTextSync of the join", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/session.jsonl";
@@ -37,7 +37,7 @@ describe("MemorySessionStorage chunked mirror (F2)", () => {
 		expect(storage.statSync(path).size).toBe(expectedBytes);
 	});
 
-	test("readTextPrefix walks chunks until the byte budget is exhausted", async () => {
+	test("readTextSlices slices the head by UTF-8 byte budget across chunks", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/prefix.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
@@ -50,11 +50,11 @@ describe("MemorySessionStorage chunked mirror (F2)", () => {
 		}
 
 		// Cap mid-second-chunk; first chunk = 6B, take 4 of the second.
-		const prefix = await storage.readTextPrefix(path, 10);
+		const [prefix] = await storage.readTextSlices(path, 10, 0);
 		expect(prefix).toBe("alpha\nbrav");
 	});
 
-	test("readTextSuffix walks chunks from the tail until the byte budget is exhausted", async () => {
+	test("readTextSlices slices the tail by UTF-8 byte budget across chunks", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/suffix.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
@@ -67,21 +67,52 @@ describe("MemorySessionStorage chunked mirror (F2)", () => {
 		}
 
 		// Last 10 bytes span the tail of "bravo\n" plus all of "charlie\n".
-		expect(await storage.readTextSuffix(path, 10)).toBe("o\ncharlie\n");
+		expect(await storage.readTextSlices(path, 0, 10)).toEqual(["", "o\ncharlie\n"]);
 		// Budget >= size returns the whole file; zero budget returns "".
-		expect(await storage.readTextSuffix(path, 100)).toBe("alpha\nbravo\ncharlie\n");
-		expect(await storage.readTextSuffix(path, 0)).toBe("");
+		expect(await storage.readTextSlices(path, 0, 100)).toEqual(["", "alpha\nbravo\ncharlie\n"]);
+		expect(await storage.readTextSlices(path, 0, 0)).toEqual(["", ""]);
 	});
 
-	test("subsequent writeLineSync after readTextSync stays O(1) (chunks preserved)", () => {
+	test("readTextSlices returns both requested ends in one call", async () => {
+		const storage = new MemorySessionStorage();
+		const path = "/virtual/both.jsonl";
+		const writer = storage.openWriter(path, { flags: "w" });
+		try {
+			writer.writeLineSync("alpha\n");
+			writer.writeLineSync("bravo\n");
+			writer.writeLineSync("charlie\n");
+		} finally {
+			void writer.close();
+		}
+
+		expect(await storage.readTextSlices(path, 10, 10)).toEqual(["alpha\nbrav", "o\ncharlie\n"]);
+	});
+
+	test("prefix and suffix preserve byte-oriented UTF-8 slicing semantics", async () => {
+		const storage = new MemorySessionStorage();
+		const path = "/virtual/unicode-slices.jsonl";
+		const writer = storage.openWriter(path, { flags: "w" });
+		try {
+			writer.writeLineSync("é\n");
+			writer.writeLineSync("日本\n");
+		} finally {
+			void writer.close();
+		}
+
+		expect(storage.statSync(path).size).toBe(Buffer.byteLength("é\n日本\n", "utf-8"));
+		expect(await storage.readTextSlices(path, 4, 5)).toEqual(["é\n�", "�本\n"]);
+		expect(await storage.readTextSlices(path, 0, 4)).toEqual(["", "本\n"]);
+	});
+
+	test("subsequent writeLineSync after readTextSync appends after materialized content", () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/cont.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
 			writer.writeLineSync("first\n");
 			writer.writeLineSync("second\n");
-			// Materialise once — implementation must NOT cache the joined string
-			// back into the entry, or subsequent appends collapse back to O(N).
+			// Materialise once — implementation may collapse previous chunks into one
+			// string, but future appends must still retain content and byte accounting.
 			expect(storage.readTextSync(path)).toBe("first\nsecond\n");
 			writer.writeLineSync("third\n");
 			expect(storage.readTextSync(path)).toBe("first\nsecond\nthird\n");

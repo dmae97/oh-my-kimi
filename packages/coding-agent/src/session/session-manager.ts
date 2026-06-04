@@ -1097,7 +1097,7 @@ async function getSortedSessions(sessionDir: string, storage: SessionStorage): P
 		await Promise.all(
 			files.map(async (path: string) => {
 				try {
-					const content = await storage.readTextPrefix(path, 4096);
+					const [content] = await storage.readTextSlices(path, 4096, 0);
 					const entries = parseJsonlLenient<Record<string, unknown>>(content);
 					if (entries.length === 0) return;
 					const header = entries[0] as Record<string, unknown>;
@@ -1557,57 +1557,6 @@ const SESSION_LIST_PREFIX_BYTES = 4096;
 const SESSION_LIST_SUFFIX_BYTES = 32_768;
 const SESSION_LIST_PARALLEL_THRESHOLD = 64;
 const SESSION_LIST_MAX_WORKERS = 16;
-const sessionListDecoder = new TextDecoder("utf-8", { fatal: false });
-
-/** Head + tail byte windows of a session file, plus its size/mtime, read in one pass. */
-interface SessionListSlices {
-	/** First {@link SESSION_LIST_PREFIX_BYTES} bytes — header + first user message. */
-	prefix: string;
-	/** Last {@link SESSION_LIST_SUFFIX_BYTES} bytes — used to derive {@link SessionStatus}. */
-	suffix: string;
-	size: number;
-	mtime: Date;
-}
-
-/**
- * Read the header window and the status tail of a session file. For on-disk
- * sessions both windows come from a single open file handle into the caller's
- * reused buffers (no per-file allocation on the picker hot path); when the file
- * fits inside the prefix window the tail reuses the already-decoded prefix.
- */
-async function readSessionListSlices(
-	file: string,
-	storage: SessionStorage,
-	prefixBuffer: Buffer,
-	suffixBuffer: Buffer,
-): Promise<SessionListSlices> {
-	if (!(storage instanceof FileSessionStorage)) {
-		const stat = storage.statSync(file);
-		const [prefix, suffix] = await Promise.all([
-			storage.readTextPrefix(file, prefixBuffer.byteLength),
-			storage.readTextSuffix(file, suffixBuffer.byteLength),
-		]);
-		return { prefix, suffix, size: stat.size, mtime: stat.mtime };
-	}
-
-	const handle = await fs.promises.open(file, "r");
-	try {
-		const stat = await handle.stat();
-		const size = stat.size;
-		const prefixLen = Math.min(prefixBuffer.byteLength, size);
-		const prefixRead = await handle.read(prefixBuffer, 0, prefixLen, 0);
-		const prefix = sessionListDecoder.decode(prefixBuffer.subarray(0, prefixRead.bytesRead));
-		let suffix = prefix;
-		if (size > prefixBuffer.byteLength) {
-			const suffixLen = Math.min(suffixBuffer.byteLength, size);
-			const suffixRead = await handle.read(suffixBuffer, 0, suffixLen, size - suffixLen);
-			suffix = sessionListDecoder.decode(suffixBuffer.subarray(0, suffixRead.bytesRead));
-		}
-		return { prefix, suffix, size, mtime: stat.mtime };
-	} finally {
-		await handle.close();
-	}
-}
 
 /**
  * Derive a {@link SessionStatus} from a tail window of a session file. Entries are
@@ -1807,19 +1756,15 @@ function getSessionListWorkerCount(fileCount: number): number {
 	);
 }
 
-async function collectSessionFromFile(
-	file: string,
-	storage: SessionStorage,
-	prefixBuffer: Buffer,
-	suffixBuffer: Buffer,
-): Promise<SessionInfo | undefined> {
+async function collectSessionFromFile(file: string, storage: SessionStorage): Promise<SessionInfo | undefined> {
 	try {
-		const {
-			prefix: content,
-			suffix,
-			size,
-			mtime,
-		} = await readSessionListSlices(file, storage, prefixBuffer, suffixBuffer);
+		const stat = storage.statSync(file);
+		const [content, suffix] = await storage.readTextSlices(
+			file,
+			SESSION_LIST_PREFIX_BYTES,
+			SESSION_LIST_SUFFIX_BYTES,
+		);
+		const { size, mtime } = stat;
 		const entries = parseJsonlLenient<Record<string, unknown>>(content);
 		const header = parseSessionListHeader(content, entries);
 		if (!header) return undefined;
@@ -1881,11 +1826,9 @@ async function collectSessionsFromFileStride(
 	stride: number,
 ): Promise<SessionInfo[]> {
 	const sessions: SessionInfo[] = [];
-	const prefixBuffer = Buffer.allocUnsafe(SESSION_LIST_PREFIX_BYTES);
-	const suffixBuffer = Buffer.allocUnsafe(SESSION_LIST_SUFFIX_BYTES);
 
 	for (let i = startIndex; i < files.length; i += stride) {
-		const session = await collectSessionFromFile(files[i], storage, prefixBuffer, suffixBuffer);
+		const session = await collectSessionFromFile(files[i], storage);
 		if (session) sessions.push(session);
 	}
 

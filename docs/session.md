@@ -448,7 +448,7 @@ On load, blob refs are resolved back to base64 for message/custom_message image 
 `SessionStorage` interface provides all filesystem operations used by `SessionManager`:
 
 - sync: `ensureDirSync`, `existsSync`, `writeTextSync`, `statSync`, `listFilesSync`
-- async: `exists`, `readText`, `readTextPrefix`, `writeText`, `rename`, `unlink`, `openWriter`
+- async: `exists`, `readText`, `readTextSlices`, `writeText`, `rename`, `unlink`, `openWriter`
 
 Implementations:
 
@@ -467,7 +467,7 @@ Defined in `session-manager.ts`:
 - `listAll()` -> sessions across all project scopes under `~/.omp/agent/sessions`
 - `resolveResumableSession(sessionArg, cwd, sessionDir?)` -> local then global resume/fork target lookup
 
-Metadata extraction for `list`/`listAll` and `getRecentSessions` reads only a prefix (`readTextPrefix(..., 4096)` or an equivalent direct 4KB read for file storage). Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
+Metadata extraction for `getRecentSessions` reads a prefix via `readTextSlices(..., 4096, 0)`. `list`/`listAll` read a 4KB prefix plus a bounded 32 KiB tail through one `readTextSlices(...)` call per file, using the prefix for metadata and the tail for lifecycle status. Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
 
 ## Related but Distinct: Prompt History Storage
 

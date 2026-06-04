@@ -344,27 +344,17 @@ export class SqlSessionStorage implements SessionStorage {
 		return entry.content;
 	}
 
-	async readTextPrefix(path: string, maxBytes: number): Promise<string> {
+	async readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		const entry = this.#mirror.get(path);
 		if (!entry) throw enoent(path);
-		if (maxBytes <= 0) return "";
-		// `entry.content` is a JS string (UTF-16 code units); the prefix
-		// contract is byte-oriented. Encode to UTF-8, slice, then decode —
-		// matching `peekFile`'s behaviour for the file-backed storage.
+		if (prefixBytes <= 0 && suffixBytes <= 0) return ["", ""];
+		// `entry.content` is a JS string (UTF-16 code units), but slices are
+		// byte-oriented. Encode to UTF-8 once, slice each requested window, then
+		// decode — matching the file-backed storage.
 		const bytes = Buffer.from(entry.content, "utf-8");
-		const slice = bytes.subarray(0, Math.min(maxBytes, bytes.byteLength));
-		return slice.toString("utf-8");
-	}
-
-	async readTextSuffix(path: string, maxBytes: number): Promise<string> {
-		const entry = this.#mirror.get(path);
-		if (!entry) throw enoent(path);
-		if (maxBytes <= 0) return "";
-		// Byte-oriented tail, mirroring readTextPrefix: encode to UTF-8, slice the
-		// trailing window, then decode.
-		const bytes = Buffer.from(entry.content, "utf-8");
-		const slice = bytes.subarray(Math.max(0, bytes.byteLength - maxBytes));
-		return slice.toString("utf-8");
+		const head = prefixBytes > 0 ? bytes.subarray(0, Math.min(prefixBytes, bytes.byteLength)).toString("utf-8") : "";
+		const tail = suffixBytes > 0 ? bytes.subarray(Math.max(0, bytes.byteLength - suffixBytes)).toString("utf-8") : "";
+		return [head, tail];
 	}
 
 	async writeText(path: string, content: string): Promise<void> {

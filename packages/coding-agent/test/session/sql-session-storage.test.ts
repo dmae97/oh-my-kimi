@@ -175,13 +175,16 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 		await client.end();
 	});
 
-	it("readTextPrefix returns at most maxBytes from the head", async () => {
+	it("readTextSlices returns byte windows from the head and tail", async () => {
 		const { client, storage } = await createSqlite();
 		await storage.writeText("/sessions/p/big.jsonl", "abcdefghij");
 
-		expect(await storage.readTextPrefix("/sessions/p/big.jsonl", 4)).toBe("abcd");
-		expect(await storage.readTextPrefix("/sessions/p/big.jsonl", 100)).toBe("abcdefghij");
-		expect(await storage.readTextPrefix("/sessions/p/big.jsonl", 0)).toBe("");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 4, 0))[0]).toBe("abcd");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 100, 0))[0]).toBe("abcdefghij");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 0, 0))[0]).toBe("");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 0, 3))[1]).toBe("hij");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 0, 100))[1]).toBe("abcdefghij");
+		expect(await storage.readTextSlices("/sessions/p/big.jsonl", 4, 3)).toEqual(["abcd", "hij"]);
 		await client.end();
 	});
 

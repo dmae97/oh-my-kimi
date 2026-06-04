@@ -31,15 +31,15 @@ It focuses on current implementation behavior, including fallback paths and cave
 There are two different listing pipelines:
 
 1. `getRecentSessions(sessionDir, limit)` (welcome/summary view)
-   - Reads only a 4KB prefix (`readTextPrefix(..., 4096)` or equivalent direct read for file storage) from each file.
+   - Reads only a 4KB prefix (`readTextSlices(..., 4096, 0)[0]`) from each file.
    - Parses header + earliest user text preview.
    - Returns lightweight `RecentSessionInfo` with lazy `name` and `timeAgo` getters.
    - Sorts by file `mtime` descending.
 
 2. `SessionManager.list(...)` / `SessionManager.listAll()` (resume pickers and ID matching)
-   - Reads the same 4KB prefix per file, not the full JSONL file.
-   - Builds `SessionInfo` objects (`id`, `cwd`, `title`, `messageCount`, `firstMessage`, `allMessagesText`, timestamps).
-   - Uses prefix parsing plus marker counting; later messages beyond the prefix may not be present in `allMessagesText`.
+   - Reads a 4KB prefix plus a bounded 32 KiB tail in one `readTextSlices(...)` call per file, not the full JSONL file.
+   - Builds `SessionInfo` objects (`id`, `cwd`, `title`, `messageCount`, `firstMessage`, `allMessagesText`, timestamps, lifecycle status).
+   - Uses prefix parsing plus marker counting for list text, and tail parsing for the final-message lifecycle status; later messages beyond the prefix may not be present in `allMessagesText`.
    - Sorts by `modified` descending.
 
 ### Metadata fallback behavior
