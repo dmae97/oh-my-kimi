@@ -4,7 +4,6 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isEnoent } from "./fs-error";
 
 export const MIN_TAB_WIDTH = 1;
 export const MAX_TAB_WIDTH = 16;
@@ -14,7 +13,7 @@ const EDITORCONFIG_NAME = ".editorconfig";
 
 let defaultTabWidth = DEFAULT_TAB_WIDTH;
 
-const editorConfigCache = new Map<string, ParsedEditorConfig>();
+const editorConfigCache = new Map<string, ParsedEditorConfig | null>();
 const editorConfigChainCache = new Map<string, ChainEntry[]>();
 const indentationCache = new Map<string, number>();
 
@@ -145,15 +144,19 @@ function parseCachedEditorConfig(configPath: string): ParsedEditorConfig | undef
 	const key = path.resolve(configPath);
 	const hit = editorConfigCache.get(key);
 	if (hit !== undefined) {
-		return hit;
+		return hit ?? undefined;
 	}
 
 	let content: string;
 	try {
 		content = fs.readFileSync(key, "utf8");
-	} catch (err) {
-		if (isEnoent(err)) return undefined;
-		throw err;
+	} catch {
+		// Editorconfig probing is best-effort: any filesystem error (ENOENT,
+		// ENAMETOOLONG from oversized path segments, ENOTDIR, EACCES, EIO, …)
+		// means "no usable config here". Cache the miss so we don't re-probe
+		// the same bogus path on every render (issue #1871).
+		editorConfigCache.set(key, null);
+		return undefined;
 	}
 	const parsed = parseEditorConfigFile(content);
 	editorConfigCache.set(key, parsed);
