@@ -67,7 +67,7 @@ For `SessionInfo` list entries:
 3. If breadcrumb is invalid/missing, fall back to newest file by mtime in the session dir (`findMostRecentSession`)
 4. If none found, create a new session
 
-Terminal ID derivation prefers TTY path and falls back to env-based identifiers (`KITTY_WINDOW_ID`, `TMUX_PANE`, `TERM_SESSION_ID`, `WT_SESSION`).
+Terminal ID derivation prefers TTY path and falls back to env-based identifiers (`TMUX_PANE`, `CMUX_SURFACE_ID`, `KITTY_WINDOW_ID`, `TERM_SESSION_ID`, `WT_SESSION`).
 
 Breadcrumb writes are best-effort and non-fatal.
 

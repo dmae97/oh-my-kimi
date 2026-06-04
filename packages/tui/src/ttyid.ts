@@ -50,11 +50,15 @@ export function getTerminalId(): string | null {
 	}
 
 	// Fallback to terminal-specific env vars
-	const kittyId = process.env.KITTY_WINDOW_ID;
-	if (kittyId) return `kitty-${kittyId}`;
-
+	// Prefer inner multiplexers over host terminal emulators when stdin has no TTY path.
 	const tmuxPane = process.env.TMUX_PANE;
 	if (tmuxPane) return `tmux-${tmuxPane}`;
+
+	const cmuxSurface = process.env.CMUX_SURFACE_ID;
+	if (cmuxSurface) return `cmux-${cmuxSurface}`;
+
+	const kittyId = process.env.KITTY_WINDOW_ID;
+	if (kittyId) return `kitty-${kittyId}`;
 
 	const terminalSessionId = process.env.TERM_SESSION_ID; // macOS Terminal.app
 	if (terminalSessionId) return `apple-${terminalSessionId}`;
