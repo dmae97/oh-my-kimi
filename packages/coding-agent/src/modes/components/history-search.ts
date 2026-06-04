@@ -11,18 +11,82 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
+import {
+	matchesAppInterrupt,
+	matchesSelectDown,
+	matchesSelectPageDown,
+	matchesSelectPageUp,
+	matchesSelectUp,
+} from "../../modes/utils/keybinding-matchers";
 import type { HistoryEntry, HistoryStorage } from "../../session/history-storage";
 import { DynamicBorder } from "./dynamic-border";
+import { rawKeyHint } from "./keybinding-hints";
+
+/** Visible result rows; also the jump distance for PageUp/PageDown. */
+const MAX_VISIBLE = 10;
+
+/** Split a query the same way `HistoryStorage` tokenizes it, so highlights align with matches. */
+function queryTokens(query: string): string[] {
+	return query
+		.toLowerCase()
+		.split(/[^\p{L}\p{N}]+/u)
+		.filter(tok => tok.length > 0);
+}
+
+/** Wrap every case-insensitive occurrence of any token in `text` with the accent color. */
+function highlightTokens(text: string, tokens: string[]): string {
+	if (tokens.length === 0) return text;
+
+	const lower = text.toLowerCase();
+	const ranges: Array<[number, number]> = [];
+	for (const tok of tokens) {
+		let from = lower.indexOf(tok);
+		while (from !== -1) {
+			ranges.push([from, from + tok.length]);
+			from = lower.indexOf(tok, from + tok.length);
+		}
+	}
+	if (ranges.length === 0) return text;
+
+	ranges.sort((a, b) => a[0] - b[0]);
+	let out = "";
+	let pos = 0;
+	for (const [start, end] of ranges) {
+		if (end <= pos) continue; // fully covered by a previous (merged) range
+		const from = Math.max(start, pos);
+		if (from > pos) out += text.slice(pos, from);
+		out += theme.fg("accent", text.slice(from, end));
+		pos = end;
+	}
+	if (pos < text.length) out += text.slice(pos);
+	return out;
+}
+
+/** Compact "time since" label (e.g. `now`, `5m`, `2h`, `3d`, `2w`, `6mo`, `1y`) from epoch seconds. */
+function relativeTime(epochSeconds: number): string {
+	const seconds = Math.max(0, Math.floor(Date.now() / 1000) - epochSeconds);
+	if (seconds < 60) return "now";
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	const days = Math.floor(hours / 24);
+	if (days < 7) return `${days}d`;
+	if (days < 30) return `${Math.floor(days / 7)}w`;
+	if (days < 365) return `${Math.floor(days / 30)}mo`;
+	return `${Math.floor(days / 365)}y`;
+}
 
 class HistoryResultsList implements Component {
 	#results: HistoryEntry[] = [];
+	#tokens: string[] = [];
 	#selectedIndex = 0;
-	#maxVisible = 10;
+	#maxVisible = MAX_VISIBLE;
 
-	setResults(results: HistoryEntry[], selectedIndex: number): void {
+	setResults(results: HistoryEntry[], selectedIndex: number, tokens: string[]): void {
 		this.#results = results;
 		this.#selectedIndex = selectedIndex;
+		this.#tokens = tokens;
 	}
 
 	setSelectedIndex(selectedIndex: number): void {
@@ -37,9 +101,13 @@ class HistoryResultsList implements Component {
 		const lines: string[] = [];
 
 		if (this.#results.length === 0) {
-			lines.push(theme.fg("muted", "  No matching history"));
+			const message = this.#tokens.length > 0 ? "No matching history" : "No history yet";
+			lines.push(theme.fg("muted", `  ${theme.status.info} ${message}`));
 			return lines;
 		}
+
+		const cursorSymbol = `${theme.nav.cursor} `;
+		const gutterWidth = visibleWidth(cursorSymbol);
 
 		const startIndex = Math.max(
 			0,
@@ -51,18 +119,32 @@ class HistoryResultsList implements Component {
 			const entry = this.#results[i];
 			const isSelected = i === this.#selectedIndex;
 
-			const cursorSymbol = `${theme.nav.cursor} `;
-			const cursorWidth = visibleWidth(cursorSymbol);
-			const cursor = isSelected ? theme.fg("accent", cursorSymbol) : padding(cursorWidth);
-			const maxWidth = width - cursorWidth;
+			const timeStr = relativeTime(entry.created_at);
+			const timeWidth = visibleWidth(timeStr);
+			const showTime = width >= gutterWidth + 12 + timeWidth;
 
+			const promptBudget = Math.max(4, width - gutterWidth - (showTime ? timeWidth + 1 : 0));
 			const normalized = entry.prompt.replace(/\s+/g, " ").trim();
-			const truncated = truncateToWidth(normalized, maxWidth);
-			lines.push(cursor + (isSelected ? theme.bold(truncated) : truncated));
+			const plain = truncateToWidth(normalized, promptBudget);
+			const highlighted = highlightTokens(plain, this.#tokens);
+
+			const cursor = isSelected ? theme.fg("accent", cursorSymbol) : padding(gutterWidth);
+			let line = cursor + (isSelected ? theme.bold(highlighted) : highlighted);
+
+			if (showTime) {
+				// Pad the prompt region so the timestamp sits flush right with a one-cell gap.
+				line = `${truncateToWidth(line, width - timeWidth - 1, Ellipsis.Unicode, true)} ${theme.fg("dim", timeStr)}`;
+			}
+
+			lines.push(
+				isSelected
+					? theme.bg("selectedBg", truncateToWidth(line, width, Ellipsis.Omit, true))
+					: truncateToWidth(line, width),
+			);
 		}
 
 		if (startIndex > 0 || endIndex < this.#results.length) {
-			const scrollText = `  (${this.#selectedIndex + 1}/${this.#results.length})`;
+			const scrollText = `  ${this.#selectedIndex + 1}/${this.#results.length}`;
 			lines.push(theme.fg("muted", truncateToWidth(scrollText, width, Ellipsis.Omit)));
 		}
 
@@ -99,8 +181,12 @@ export class HistorySearchComponent extends Container {
 
 		this.#resultsList = new HistoryResultsList();
 
+		const title = theme.bold(theme.fg("accent", `${theme.icon.rewind} Search History`));
+		const dot = theme.fg("dim", theme.sep.dot);
+		const hint = [rawKeyHint("↑↓", "navigate"), rawKeyHint("enter", "select"), rawKeyHint("esc", "cancel")].join(dot);
+
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.bold("Search History (Ctrl+R)"), 1, 0));
+		this.addChild(new Text(title, 1, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
@@ -108,7 +194,7 @@ export class HistorySearchComponent extends Container {
 		this.addChild(new Spacer(1));
 		this.addChild(this.#resultsList);
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("muted", "up/down navigate  enter select  esc cancel"), 1, 0));
+		this.addChild(new Text(hint, 1, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 
@@ -126,6 +212,34 @@ export class HistorySearchComponent extends Container {
 		if (matchesSelectDown(keyData)) {
 			if (this.#results.length === 0) return;
 			this.#selectedIndex = Math.min(this.#results.length - 1, this.#selectedIndex + 1);
+			this.#resultsList.setSelectedIndex(this.#selectedIndex);
+			return;
+		}
+
+		if (matchesSelectPageUp(keyData)) {
+			if (this.#results.length === 0) return;
+			this.#selectedIndex = Math.max(0, this.#selectedIndex - MAX_VISIBLE);
+			this.#resultsList.setSelectedIndex(this.#selectedIndex);
+			return;
+		}
+
+		if (matchesSelectPageDown(keyData)) {
+			if (this.#results.length === 0) return;
+			this.#selectedIndex = Math.min(this.#results.length - 1, this.#selectedIndex + MAX_VISIBLE);
+			this.#resultsList.setSelectedIndex(this.#selectedIndex);
+			return;
+		}
+
+		if (matchesKey(keyData, "home")) {
+			if (this.#results.length === 0) return;
+			this.#selectedIndex = 0;
+			this.#resultsList.setSelectedIndex(this.#selectedIndex);
+			return;
+		}
+
+		if (matchesKey(keyData, "end")) {
+			if (this.#results.length === 0) return;
+			this.#selectedIndex = this.#results.length - 1;
 			this.#resultsList.setSelectedIndex(this.#selectedIndex);
 			return;
 		}
@@ -153,6 +267,6 @@ export class HistorySearchComponent extends Container {
 			? this.#historyStorage.search(query, this.#resultLimit)
 			: this.#historyStorage.getRecent(this.#resultLimit);
 		this.#selectedIndex = 0;
-		this.#resultsList.setResults(this.#results, this.#selectedIndex);
+		this.#resultsList.setResults(this.#results, this.#selectedIndex, query ? queryTokens(query) : []);
 	}
 }
