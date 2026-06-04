@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added deferred session-title generation so greetings no longer become the session title. A first user message that is only a greeting / acknowledgement / filler ("hi", "thanks", "ok", a bare number, emoji-only, etc.) is now detected deterministically and skips titling entirely — no title model is invoked. Title generation then retries on each subsequent user message while the session stays unnamed, so the title is deduced from the first message that actually describes work. A capable online title model may additionally answer `none` to decline a non-greeting taskless message (normalized to "no title").
+
 ### Fixed
 
 - Fixed `provider.appendOnlyContext: "auto"` staying inactive for Xiaomi Token Plan/SGLang endpoints, preserving prefix-cache hits without forcing append-only mode globally ([#1851](https://github.com/can1357/oh-my-pi/issues/1851)).

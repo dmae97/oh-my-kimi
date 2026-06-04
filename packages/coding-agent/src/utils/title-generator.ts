@@ -10,7 +10,7 @@ import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
 import { ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
-import { formatTitleUserMessage, normalizeGeneratedTitle } from "../tiny/text";
+import { formatTitleUserMessage, isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
 import { tinyTitleClient } from "../tiny/title-client";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
@@ -31,7 +31,8 @@ const setTitleTool: Tool = {
 		properties: {
 			title: {
 				type: "string",
-				description: "A concise 3-6 word title for the session.",
+				description:
+					'A concise 3-6 word title for the session, or exactly "none" when the message carries no concrete task yet (greeting, small talk, vague).',
 			},
 		},
 		required: ["title"],
@@ -144,6 +145,12 @@ export async function generateSessionTitle(
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 ): Promise<string | null> {
+	// Defer titling for greetings / acknowledgements / empty input. The default
+	// tiny title model can't reliably decline trivial input, so this happens
+	// deterministically before any model is invoked; the caller retries on the
+	// next user message while the session stays unnamed.
+	if (isLowSignalTitleInput(firstMessage)) return null;
+
 	const tinyModel = settings.get("providers.tinyModel");
 	if (tinyModel === ONLINE_TINY_TITLE_MODEL_KEY) {
 		return generateTitleOnline(firstMessage, registry, settings, sessionId, currentModel, metadataResolver);
