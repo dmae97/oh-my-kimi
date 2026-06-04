@@ -45,6 +45,10 @@ const LEGACY_PI_IMPORT_SPECIFIER_REGEX = new RegExp(
 	"g",
 );
 const resolvedSpecifierFallbacks = new Map<string, string>();
+const SOURCE_MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
+const PACKAGE_IMPORT_CONDITIONS = ["bun", "import", "default", "types"] as const;
+const packageRootCache = new Map<string, string | null>();
+const packageImportsCache = new Map<string, Record<string, unknown> | null>();
 
 // Extensions that imported `@sinclair/typebox` directly used to resolve against a
 // real `@sinclair/typebox` install. The runtime dep was replaced with the Zod-backed
@@ -224,30 +228,226 @@ function rewriteLegacyPiImports(source: string): string {
 const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])(@sinclair\/typebox)(["'])/g;
 
 /**
- * Rewrite the legacy specifiers a Pi extension may import — `@(scope)/pi-*` and
- * the bare `@sinclair/typebox` root — to absolute `file://` URLs pointing at the
- * bundled package or compat shim. Every other specifier (relative siblings, the
- * extension's own bare dependencies) is left untouched so Bun resolves it
+ * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
+ * `@(scope)/pi-*`, bare `@sinclair/typebox`, and package `imports` aliases like
+ * `#src/*` — to absolute `file://` URLs. Every other specifier (relative
+ * siblings and third-party dependencies) is left untouched so Bun resolves it
  * natively from the extension's real on-disk location.
  */
-function rewriteLegacyExtensionSource(source: string): string {
+async function rewriteLegacyExtensionSource(source: string, importerPath: string): Promise<string> {
 	const withPi = rewriteLegacyPiImports(source);
-	return withPi.replace(
+	const withTypeBox = withPi.replace(
 		TYPEBOX_IMPORT_SPECIFIER_REGEX,
 		(_match, prefix: string, _specifier: string, suffix: string) => {
 			return `${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`;
 		},
 	);
+	return rewriteExtensionPackageImports(withTypeBox, importerPath);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function pathExists(p: string): Promise<boolean> {
+	try {
+		await fs.stat(p);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function resolveSourceModuleFile(basePath: string): Promise<string | null> {
+	try {
+		const stats = await fs.stat(basePath);
+		if (stats.isFile()) {
+			return realpathOrSelf(basePath);
+		}
+		if (stats.isDirectory()) {
+			for (const extension of SOURCE_MODULE_EXTENSIONS) {
+				const resolved = await resolveSourceModuleFile(path.join(basePath, `index${extension}`));
+				if (resolved) return resolved;
+			}
+		}
+	} catch {
+		// Fall through to extension candidates below.
+	}
+
+	if (path.extname(basePath)) {
+		return null;
+	}
+
+	for (const extension of SOURCE_MODULE_EXTENSIONS) {
+		const resolved = await resolveSourceModuleFile(`${basePath}${extension}`);
+		if (resolved) return resolved;
+	}
+	return null;
+}
+
+async function findPackageRoot(importerPath: string): Promise<string | null> {
+	let dir = path.dirname(importerPath);
+	while (true) {
+		const cached = packageRootCache.get(dir);
+		if (cached !== undefined) {
+			return cached;
+		}
+
+		if (await pathExists(path.join(dir, "package.json"))) {
+			packageRootCache.set(path.dirname(importerPath), dir);
+			return dir;
+		}
+
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			packageRootCache.set(path.dirname(importerPath), null);
+			return null;
+		}
+		dir = parent;
+	}
+}
+
+async function readPackageImports(packageRoot: string): Promise<Record<string, unknown> | null> {
+	const cached = packageImportsCache.get(packageRoot);
+	if (cached !== undefined) {
+		return cached;
+	}
+
+	let imports: Record<string, unknown> | null = null;
+	try {
+		const pkg = await Bun.file(path.join(packageRoot, "package.json")).json();
+		if (isRecord(pkg) && isRecord(pkg.imports)) {
+			imports = pkg.imports;
+		}
+	} catch {
+		imports = null;
+	}
+	packageImportsCache.set(packageRoot, imports);
+	return imports;
+}
+
+function selectPackageImportTarget(entry: unknown): string | null {
+	if (typeof entry === "string") {
+		return entry;
+	}
+	if (Array.isArray(entry)) {
+		for (const item of entry) {
+			const target = selectPackageImportTarget(item);
+			if (target) return target;
+		}
+		return null;
+	}
+	if (!isRecord(entry)) {
+		return null;
+	}
+	for (const condition of PACKAGE_IMPORT_CONDITIONS) {
+		const target = selectPackageImportTarget(entry[condition]);
+		if (target) return target;
+	}
+	for (const value of Object.values(entry)) {
+		const target = selectPackageImportTarget(value);
+		if (target) return target;
+	}
+	return null;
+}
+
+async function resolvePackageImportTarget(
+	packageRoot: string,
+	target: string,
+	wildcard: string | null,
+): Promise<string | null> {
+	if (!target.startsWith("./")) {
+		return null;
+	}
+	const substituted = wildcard === null ? target : target.replaceAll("*", wildcard);
+	return resolveSourceModuleFile(path.resolve(packageRoot, substituted));
+}
+
+async function resolvePackageImportSpecifier(specifier: string, importerPath: string): Promise<string | null> {
+	if (!specifier.startsWith("#")) {
+		return null;
+	}
+
+	const packageRoot = await findPackageRoot(importerPath);
+	if (!packageRoot) {
+		return null;
+	}
+
+	const imports = await readPackageImports(packageRoot);
+	if (!imports) {
+		return null;
+	}
+
+	const exactTarget = selectPackageImportTarget(imports[specifier]);
+	if (exactTarget) {
+		return resolvePackageImportTarget(packageRoot, exactTarget, null);
+	}
+
+	let bestMatch: { keyLength: number; target: string; wildcard: string } | null = null;
+	for (const [key, entry] of Object.entries(imports)) {
+		const starIndex = key.indexOf("*");
+		if (starIndex === -1) continue;
+
+		const prefix = key.slice(0, starIndex);
+		const suffix = key.slice(starIndex + 1);
+		if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) {
+			continue;
+		}
+
+		const target = selectPackageImportTarget(entry);
+		if (!target) {
+			continue;
+		}
+
+		if (!bestMatch || key.length > bestMatch.keyLength) {
+			bestMatch = {
+				keyLength: key.length,
+				target,
+				wildcard: specifier.slice(prefix.length, specifier.length - suffix.length),
+			};
+		}
+	}
+
+	if (!bestMatch) {
+		return null;
+	}
+	return resolvePackageImportTarget(packageRoot, bestMatch.target, bestMatch.wildcard);
+}
+
+const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
+
+async function rewriteExtensionPackageImports(source: string, importerPath: string): Promise<string> {
+	let rewritten = "";
+	let lastIndex = 0;
+	for (const match of source.matchAll(PACKAGE_IMPORT_SPECIFIER_REGEX)) {
+		const matchIndex = match.index;
+		if (matchIndex === undefined) continue;
+
+		const [fullMatch, prefix, specifier, suffix] = match;
+		if (!prefix || !specifier || !suffix) continue;
+
+		const resolved = await resolvePackageImportSpecifier(specifier, importerPath);
+		if (!resolved) continue;
+
+		rewritten += source.slice(lastIndex, matchIndex);
+		rewritten += `${prefix}${toImportSpecifier(resolved)}${suffix}`;
+		lastIndex = matchIndex + fullMatch.length;
+	}
+
+	if (lastIndex === 0) {
+		return source;
+	}
+	return `${rewritten}${source.slice(lastIndex)}`;
 }
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Match relative import specifiers (static `from "./…"` and dynamic
-// `import("./…")`). Used to walk an extension's own module graph; bare and
-// absolute specifiers are deliberately excluded.
-const RELATIVE_IMPORT_SPECIFIER_REGEX = /(?:from\s+|import\s*\(\s*)["'](\.\.?\/[^"']+)["']/g;
+// Match source modules in an extension graph (relative imports and package
+// `imports` aliases such as `#src/*`). Bare third-party dependencies remain
+// native Bun resolutions.
+const EXTENSION_GRAPH_SPECIFIER_REGEX = /(?:from\s+|import\s*\(\s*)["']((?:\.\.?\/|#)[^"']+)["']/g;
 
 // Extension entry realpaths that already have a load-time rewrite hook
 // installed. Each `Bun.plugin()` registration is process-global and permanent,
@@ -287,10 +487,14 @@ async function collectExtensionModules(entryRealPath: string): Promise<Set<strin
 		}
 		modules.add(file);
 		const dir = path.dirname(file);
-		for (const match of source.matchAll(RELATIVE_IMPORT_SPECIFIER_REGEX)) {
+		for (const match of source.matchAll(EXTENSION_GRAPH_SPECIFIER_REGEX)) {
+			const specifier = match[1];
+			if (!specifier) continue;
 			try {
-				const resolved = await realpathOrSelf(Bun.resolveSync(match[1], dir));
-				if (!modules.has(resolved)) {
+				const resolved = specifier.startsWith("#")
+					? await resolvePackageImportSpecifier(specifier, file)
+					: await realpathOrSelf(Bun.resolveSync(specifier, dir));
+				if (resolved && !modules.has(resolved)) {
 					queue.push(resolved);
 				}
 			} catch {
@@ -303,11 +507,12 @@ async function collectExtensionModules(entryRealPath: string): Promise<Set<strin
 
 /**
  * Install a `Bun.plugin()` `onLoad` hook scoped to exactly the modules in an
- * extension's relative-import graph, so their legacy `@(scope)/pi-*` and bare
- * `@sinclair/typebox` imports are rewritten at load time. A runtime `onLoad`
- * cannot fall through (Bun requires a result object), so the filter is an
- * exact-path alternation of the graph's realpaths — it never matches the host,
- * other extensions, `node_modules` deps, or unrelated project source.
+ * extension's source graph, so their legacy `@(scope)/pi-*`, bare
+ * `@sinclair/typebox`, and local package-import aliases are rewritten at load
+ * time. A runtime `onLoad` cannot fall through (Bun requires a result object),
+ * so the filter is an exact-path alternation of the graph's realpaths — it
+ * never matches the host, other extensions, `node_modules` deps, or unrelated
+ * project source.
  */
 async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
 	if (hookedExtensionEntries.has(entryRealPath)) {
@@ -322,9 +527,8 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
 		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
 		setup(build) {
 			build.onLoad({ filter, namespace: "file" }, async args => {
-				// Re-read on every load so a `?mtime` reload picks up edited source.
 				const raw = await Bun.file(args.path).text();
-				return { contents: rewriteLegacyExtensionSource(raw), loader: getLoader(args.path) };
+				return { contents: await rewriteLegacyExtensionSource(raw, args.path), loader: getLoader(args.path) };
 			});
 		},
 	});
@@ -337,9 +541,8 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
  * and `__dirname`-relative `readFileSync` asset loads (HTML/CSS bundled next to
  * the entry) resolve exactly as they do under the original Pi runtime — no
  * temp-directory mirroring and no asset copying. An `onLoad` hook scoped to the
- * entry's relative-import graph rewrites only the legacy `@(scope)/pi-*` and
- * `@sinclair/typebox` imports in the extension's own source; everything else
- * resolves natively.
+ * entry's source graph rewrites only host-resolved compatibility imports in the
+ * extension's own source; everything else resolves natively.
  */
 export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown> {
 	// Bun reports the realpath of a loaded module to `onLoad` and exposes it as

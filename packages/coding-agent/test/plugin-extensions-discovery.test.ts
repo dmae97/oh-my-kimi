@@ -139,6 +139,64 @@ describe("plugin extension discovery", () => {
 		expect(extension?.tools.has("legacy-pi-ext")).toBe(true);
 	});
 
+	it("loads installed legacy Pi plugin extensions that use package imports", async () => {
+		const pluginsDir = getPluginsDir();
+		const pluginDir = path.join(pluginsDir, "node_modules", "package-import-plugin");
+		const extensionPath = path.join(pluginDir, "src", "index.ts");
+		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		fs.mkdirSync(path.join(pluginDir, "src", "feature"), { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins",
+				private: true,
+				dependencies: {
+					"package-import-plugin": "1.0.0",
+				},
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({
+				name: "package-import-plugin",
+				version: "1.0.0",
+				imports: {
+					"#src/*": "./src/*",
+				},
+				pi: {
+					extensions: ["./src/index.ts"],
+				},
+			}),
+		);
+		fs.writeFileSync(
+			extensionPath,
+			[
+				'import { commandName } from "#src/feature/command";',
+				"",
+				"export default function(pi) {",
+				"\tpi.registerCommand(commandName, { handler: async () => {} });",
+				"}",
+			].join("\n"),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "src", "feature", "command.ts"),
+			[
+				'import { isToolCallEventType as legacyExtensions } from "@earendil-works/pi-coding-agent/extensibility/extensions";',
+				`import { isToolCallEventType as modernExtensions } from ${JSON.stringify(currentPiExtensionsPath)};`,
+				"",
+				'if (legacyExtensions !== modernExtensions) throw new Error("legacy extension import did not remap");',
+				'export const commandName = "package-import-ext";',
+			].join("\n"),
+		);
+
+		const result = await discoverAndLoadExtensions([], projectDir.path());
+		const extension = result.extensions.find(ext => ext.path === extensionPath);
+
+		expect(result.errors).toHaveLength(0);
+		expect(extension).toBeDefined();
+		expect(extension?.commands.has("package-import-ext")).toBe(true);
+	});
+
 	it("loads installed plugin extensions whose manifest entry points at a directory with index.ts", async () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "dir-entry-plugin");
