@@ -34,6 +34,7 @@ import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./utils/oau
 import { loginDeepSeek } from "./utils/oauth/deepseek";
 import { loginOpenAICodexDevice } from "./utils/oauth/openai-codex";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
+import { loginXiaomi, loginXiaomiTokenPlan } from "./utils/oauth/xiaomi";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
@@ -1758,8 +1759,22 @@ export class AuthStorage {
 				return;
 			}
 			case "xiaomi": {
-				const { loginXiaomi } = await import("./utils/oauth/xiaomi");
 				const apiKey = await loginXiaomi(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "xiaomi-token-plan-sgp": {
+				const apiKey = await loginXiaomiTokenPlan(ctrl, "sgp");
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "xiaomi-token-plan-ams": {
+				const apiKey = await loginXiaomiTokenPlan(ctrl, "ams");
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "xiaomi-token-plan-cn": {
+				const apiKey = await loginXiaomiTokenPlan(ctrl, "cn");
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
