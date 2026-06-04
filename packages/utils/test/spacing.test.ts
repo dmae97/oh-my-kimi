@@ -72,6 +72,15 @@ describe("spacing", () => {
 		expect(getIndentation(overlong)).toBe(3);
 	});
 
+	it("normalizes paths before rejecting overlong components", async () => {
+		const longSegment = "amálpthgadasJennzier".repeat(40);
+		const noisyPath = path.join(tempDir, longSegment, "..", "src", "feature.ts");
+		await fs.writeFile(path.join(tempDir, ".editorconfig"), ["root = true", "", "[*]", "indent_size = 2"].join("\n"));
+
+		expect(Buffer.byteLength(longSegment)).toBeGreaterThan(255);
+		expect(" ".repeat(getIndentation(noisyPath))).toBe("  ");
+	});
+
 	it("tolerates filesystem errors while walking the editorconfig chain (ENOTDIR)", async () => {
 		// Defense in depth: when a non-directory sits where a directory is
 		// expected, `parseCachedEditorConfig` previously caught only `ENOENT`

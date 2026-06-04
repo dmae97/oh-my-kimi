@@ -317,16 +317,17 @@ export function getIndentation(file?: string | null, projectDir?: string | null)
 		return fallback;
 	}
 
-	// Renderers can hand us arbitrary strings (e.g. a malformed edit tool
-	// call whose `file_path` is gibberish). Reject paths with any component
-	// longer than `NAME_MAX_BYTES` before resolving — the editorconfig
-	// chain would only trip `ENAMETOOLONG` from `readFileSync` and escape.
-	if (hasOverlongPathComponent(file)) {
-		return fallback;
-	}
-
 	const cwd = projectDir ?? process.cwd();
 	const absoluteFile = resolveFilePath(cwd, file);
+
+	// Renderers can hand us arbitrary strings (e.g. a malformed edit tool
+	// call whose `file_path` is gibberish). Reject paths whose normalized
+	// absolute form still has any component longer than `NAME_MAX_BYTES` —
+	// the editorconfig chain would only trip `ENAMETOOLONG` from
+	// `readFileSync` and escape.
+	if (hasOverlongPathComponent(absoluteFile)) {
+		return fallback;
+	}
 	const absKey = absoluteFile;
 	const cached = indentationCache.get(absKey);
 	if (cached !== undefined) {
