@@ -822,10 +822,12 @@ export async function runRootCommand(
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		Bun.env.PI_NO_TITLE = "1";
 	}
-	const pipedInput = await logger.time("readPipedInput", readPipedInput);
+	const mode = parsedArgs.mode || "text";
+	const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
+	// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
+	const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
-	const mode = parsedArgs.mode || "text";
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", initializeWithSettings, settingsInstance);

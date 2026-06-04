@@ -17,6 +17,8 @@
 
 ### Fixed
 
+- Fixed ACP/RPC stdio startup so protocol frames are no longer consumed as one-shot piped prompt input before the JSON-RPC transport starts.
+- Fixed `omp completions` to await the completion script write before exiting.
 - Fixed `AssistantMessageComponent` exposing its stable-prefix completion API again so streamed assistant messages remain unstable until explicitly completed.
 - Fixed session restoration to ignore transient fallback model switches (such as automatic context-promotion or retry fallback) so resumed or resumed-switch sessions revert to the configured default model unless the last change was a user-selected temporary model
 - Fixed in-session `/resume` to restore both the last user-selected temporary model and persisted plan/goal mode state instead of falling back to the default model with plan mode off.

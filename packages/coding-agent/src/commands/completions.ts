@@ -51,7 +51,7 @@ export default class Completions extends Command {
 
 		const config: CliConfig = { bin: APP_NAME, version: VERSION, commands: map };
 		const spec = buildSpec(config, ROOT_COMMAND, aliasMap);
-		process.stdout.write(generateCompletion(shell, spec));
+		await Bun.write(Bun.stdout, generateCompletion(shell, spec));
 	}
 }
 
