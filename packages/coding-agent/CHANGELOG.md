@@ -1,13 +1,18 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added deferred session-title generation so greetings no longer become the session title. A first user message that is only a greeting / acknowledgement / filler ("hi", "thanks", "ok", a bare number, emoji-only, etc.) is now detected deterministically and skips titling entirely — no title model is invoked. Title generation then retries on each subsequent user message while the session stays unnamed, so the title is deduced from the first message that actually describes work. A capable online title model may additionally answer `none` to decline a non-greeting taskless message (normalized to "no title").
 
+### Changed
+
+- Changed the Agent Control Center's new-agent description field to use the multiline TUI editor, with Enter inserting lines and Ctrl+Enter generating the spec.
+- Refreshed the Ctrl+R history search overlay: the selected row now renders as a full-width `selectedBg` highlight bar, matched query tokens are highlighted in the accent color, each result shows a right-aligned relative timestamp, and the panel gained an icon'd accent title plus a two-tone keyhint footer. The selector also gained PageUp/PageDown (via the configurable `tui.select.pageUp`/`pageDown` keybindings) and Home/End navigation.
+
 ### Fixed
 
+- Fixed transcript scrollback stability on terminals with eager erase risk so completed assistant messages remain stable while new streaming lines are rendering
 - Fixed Ctrl+R history search results to remain globally sorted by prompt recency after merging FTS prefix matches with substring fallback matches.
 - Fixed Exa web search with no stored or environment credential to use the public Exa MCP fallback again, preserving the auth storage → `EXA_API_KEY` → `mcp.exa.ai` resolution order ([#1860](https://github.com/can1357/oh-my-pi/issues/1860)).
 - Fixed `provider.appendOnlyContext: "auto"` staying inactive for Xiaomi Token Plan/SGLang endpoints, preserving prefix-cache hits without forcing append-only mode globally ([#1851](https://github.com/can1357/oh-my-pi/issues/1851)).

@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added optional `Component#getStableLineCount(width)` method so components can report how many leading rendered rows are immutable
+- Added `TUI#setNativeScrollbackStableComponent(component)` to define the native-scrollback stability boundary for stability-aware rendering
+
+### Fixed
+
+- Kept streaming lines outside the declared stable prefix out of native scrollback so only newly stable output is committed without clearing existing terminal history
 
 ## [15.9.0] - 2026-06-04
 

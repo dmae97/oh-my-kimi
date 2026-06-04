@@ -17,6 +17,7 @@ export class AssistantMessageComponent extends Container {
 	#usageInfo?: Usage;
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
+	#complete: boolean;
 
 	constructor(
 		message?: AssistantMessage,
@@ -26,6 +27,7 @@ export class AssistantMessageComponent extends Container {
 		private readonly imageBudget?: ImageBudget,
 	) {
 		super();
+		this.#complete = message !== undefined;
 
 		// Container for text/thinking content
 		this.#contentContainer = new Container();
@@ -34,6 +36,15 @@ export class AssistantMessageComponent extends Container {
 		if (message) {
 			this.updateContent(message);
 		}
+	}
+
+	setComplete(): void {
+		this.#complete = true;
+	}
+
+	getStableLineCount(width: number): number {
+		if (!this.#complete || this.#kittyConversionsInFlight.size > 0) return 0;
+		return this.render(width).length;
 	}
 
 	override invalidate(): void {

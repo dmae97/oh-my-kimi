@@ -27,6 +27,18 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+class StablePrefixLinesComponent extends MutableLinesComponent {
+	#stableLineCount = 0;
+
+	setStableLineCount(count: number): void {
+		this.#stableLineCount = count;
+	}
+
+	getStableLineCount(): number {
+		return this.#stableLineCount;
+	}
+}
+
 class WrappingLinesComponent implements Component {
 	#lines: string[];
 
@@ -2313,6 +2325,66 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
+		});
+		it("keeps streaming rows out of native scrollback until the prefix is stable", async () => {
+			await withTerminalRisk(true, async () => {
+				const term = new UnknownViewportTerminal(32, 5, 200);
+				const writes = captureWrites(term);
+				const tui = new TUI(term);
+				const transcript = new StablePrefixLinesComponent(["thinking 0"]);
+				const footer = new MutableLinesComponent(["status", "prompt>"]);
+				tui.setNativeScrollbackStableComponent(transcript);
+				tui.addChild(transcript);
+				tui.addChild(footer);
+
+				try {
+					tui.start();
+					tui.setEagerNativeScrollbackRebuild(true);
+					await settle(term);
+
+					for (let i = 0; i < 8; i++) {
+						transcript.setLines([`thinking ${i + 1}`, ...rows("token-", i + 1)]);
+						tui.requestRender();
+						await settle(term);
+					}
+
+					const beforePosition = term.getBufferPosition();
+					expect(
+						term
+							.getScrollBuffer()
+							.slice(0, beforePosition.baseY)
+							.map(line => line.trimEnd()),
+					).toEqual([]);
+					expect(visible(term).map(line => line.trim())).toEqual([
+						"token-5",
+						"token-6",
+						"token-7",
+						"status",
+						"prompt>",
+					]);
+
+					transcript.setStableLineCount(9);
+					tui.requestRender();
+					await settle(term);
+
+					const position = term.getBufferPosition();
+					const committed = term
+						.getScrollBuffer()
+						.slice(0, position.baseY)
+						.map(line => line.trimEnd());
+					expect(committed).toEqual(["thinking 8", "token-0", "token-1", "token-2", "token-3", "token-4"]);
+					expect(visible(term).map(line => line.trim())).toEqual([
+						"token-5",
+						"token-6",
+						"token-7",
+						"status",
+						"prompt>",
+					]);
+					expect(writes.join("")).not.toContain("\x1b[3J");
+				} finally {
+					tui.stop();
+				}
+			});
 		});
 
 		it("keeps a scrolled-up reader anchored while streaming inserts arrive on POSIX (unknown viewport)", async () => {
