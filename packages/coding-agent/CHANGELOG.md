@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the SSH tool renderer inlining multiline remote commands into its single-line status header, which produced a malformed cell where the bordered output block opened mid-command. The renderer now drops the command from the header (which keeps only `[host]`) and renders the full command in a framed section above `Output`, mirroring the bash renderer. `renderStatusLine` also flattens any embedded CR/LF in `description`, `meta`, and `title` so no tool can accidentally expand the header into multiple rows ([#1828](https://github.com/can1357/oh-my-pi/issues/1828)).
+
 ## [15.9.0] - 2026-06-04
 
 ### Breaking Changes
