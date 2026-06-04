@@ -643,8 +643,11 @@ async function buildCodexRequestContext(
 	const url = resolveCodexResponsesUrl(baseUrl);
 	const promptCacheKey = resolveCodexPromptCacheKey(options);
 	const transportSessionId = resolveCodexTransportSessionId(options);
-	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
-	options?.onPayload?.(transformedBody);
+	let transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
+	const replacementPayload = await options?.onPayload?.(transformedBody, model);
+	if (replacementPayload !== undefined) {
+		transformedBody = replacementPayload as typeof transformedBody;
+	}
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
 	const rawRequestDump: RawHttpRequestDump = {
