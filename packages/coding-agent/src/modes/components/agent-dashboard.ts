@@ -20,6 +20,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
 	type Component,
 	Container,
+	Editor,
 	extractPrintableText,
 	fuzzyMatch,
 	Input,
@@ -49,7 +50,7 @@ import { createAgentSession } from "../../sdk";
 import { discoverAgents } from "../../task/discovery";
 import type { AgentDefinition, AgentSource } from "../../task/types";
 import { shortenPath } from "../../tools/render-utils";
-import { theme } from "../theme/theme";
+import { getEditorTheme, theme } from "../theme/theme";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -98,7 +99,6 @@ const SOURCE_LABEL: Record<AgentSource, string> = {
 };
 
 const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+){1,5}$/;
-
 function joinPatterns(patterns: string[]): string {
 	if (patterns.length === 0) return "(session model)";
 	return patterns.join(", ");
@@ -343,7 +343,7 @@ export class AgentDashboard extends Container {
 	#editInput: Input | null = null;
 	#editingAgentName: string | null = null;
 
-	#createInput: Input | null = null;
+	#createInput: Editor | null = null;
 	#createDescription = "";
 	#createScope: AgentScope = "project";
 	#createGenerating = false;
@@ -557,10 +557,15 @@ export class AgentDashboard extends Container {
 		this.#createError = null;
 		this.#createSpec = null;
 		this.#createDescription = "";
-		this.#createInput = new Input();
-		this.#createInput.onSubmit = value => {
-			void this.#generateAgentFromDescription(value);
+		const editor = new Editor(getEditorTheme());
+		editor.setBorderVisible(false);
+		editor.setPromptGutter("> ");
+		editor.setMaxHeight(Math.max(3, Math.min(8, this.terminalHeight - 12)));
+		editor.disableSubmit = true;
+		editor.onChange = value => {
+			this.#createDescription = value;
 		};
+		this.#createInput = editor;
 		this.#buildLayout();
 	}
 
@@ -575,6 +580,20 @@ export class AgentDashboard extends Container {
 
 	#toggleCreateScope(): void {
 		this.#createScope = this.#createScope === "project" ? "user" : "project";
+		this.#buildLayout();
+	}
+
+	#submitCreateDescription(): void {
+		if (!this.#createInput || this.#createGenerating) return;
+		const description = this.#createInput.getExpandedText();
+		this.#createDescription = description;
+		void this.#generateAgentFromDescription(description);
+	}
+
+	#insertCreateNewline(): void {
+		if (!this.#createInput || this.#createGenerating) return;
+		this.#createInput.handleInput("\n");
+		this.#createDescription = this.#createInput.getExpandedText();
 		this.#buildLayout();
 	}
 
@@ -626,7 +645,7 @@ export class AgentDashboard extends Container {
 			throw new Error("No available model to generate agent specification.");
 		}
 
-		const systemPrompt = prompt.render(agentCreationArchitectPrompt, { TASK_TOOL_NAME: "task" });
+		const systemPrompt = prompt.render(agentCreationArchitectPrompt, {});
 		const userPrompt = prompt.render(agentCreationUserPrompt, { request: description });
 
 		const { session } = await createAgentSession({
@@ -694,10 +713,14 @@ export class AgentDashboard extends Container {
 			}
 		}
 
-		const frontmatter = YAML.stringify({
-			name: spec.identifier,
-			description: spec.whenToUse,
-		}).trimEnd();
+		const frontmatter = YAML.stringify(
+			{
+				name: spec.identifier,
+				description: spec.whenToUse,
+			},
+			null,
+			2,
+		).trimEnd();
 		const content = `---\n${frontmatter}\n---\n\n${spec.systemPrompt.trim()}\n`;
 		await Bun.write(filePath, content);
 		await this.#reloadData();
@@ -789,13 +812,13 @@ export class AgentDashboard extends Container {
 		}
 		return parts.join("");
 	}
-
 	#renderCreateInput(): void {
 		this.addChild(new Text(theme.bold(theme.fg("accent", " Create New Agent")), 0, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("muted", "Describe what the new agent should do:"), 0, 0));
 		this.addChild(new Spacer(1));
 		if (this.#createInput) {
+			this.#createInput.setMaxHeight(Math.max(3, Math.min(8, this.terminalHeight - 12)));
 			this.addChild(this.#createInput);
 		}
 		this.addChild(new Spacer(1));
@@ -826,7 +849,9 @@ export class AgentDashboard extends Container {
 			this.addChild(new Text(theme.fg("error", replaceTabs(this.#createError)), 0, 0));
 		}
 		this.addChild(new Spacer(1));
-		const hints = this.#createGenerating ? " Generating..." : " Enter: generate  Tab: toggle scope  Esc: cancel";
+		const hints = this.#createGenerating
+			? " Generating..."
+			: " Ctrl+Enter: generate  Enter: newline  Tab: toggle scope  Esc: cancel";
 		this.addChild(new Text(theme.fg("dim", hints), 0, 0));
 	}
 
@@ -1024,13 +1049,24 @@ export class AgentDashboard extends Container {
 				}
 				return;
 			}
+			if (
+				!this.#createGenerating &&
+				(matchesKey(data, "ctrl+enter") || (data.charCodeAt(0) === 10 && data.length > 1))
+			) {
+				this.#submitCreateDescription();
+				return;
+			}
+			if (!this.#createGenerating && (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n")) {
+				this.#insertCreateNewline();
+				return;
+			}
 			if (!this.#createGenerating && (matchesKey(data, "tab") || matchesKey(data, "shift+tab"))) {
 				this.#toggleCreateScope();
 				return;
 			}
 			if (!this.#createGenerating && this.#createInput) {
 				this.#createInput.handleInput(data);
-				this.#createDescription = this.#createInput.getValue();
+				this.#createDescription = this.#createInput.getExpandedText();
 				this.#buildLayout();
 			}
 			return;
