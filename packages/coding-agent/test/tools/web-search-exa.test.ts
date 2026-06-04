@@ -449,12 +449,20 @@ describe("searchExa", () => {
 		expect(receivedKey).toBe("stored-key-xyz");
 	});
 
-	it("reports available without EXA_API_KEY or stored credentials", async () => {
+	it("reports unavailable for the auto chain without EXA_API_KEY or stored credentials", async () => {
 		delete process.env.EXA_API_KEY;
 		const available = await withLocalAuthStorage(authStorage =>
 			Promise.resolve(new ExaProvider().isAvailable(authStorage)),
 		);
-		expect(available).toBe(true);
+		expect(available).toBe(false);
+	});
+
+	it("reports explicitly available without credentials so the MCP fallback runs", async () => {
+		delete process.env.EXA_API_KEY;
+		const explicit = await withLocalAuthStorage(authStorage =>
+			Promise.resolve(new ExaProvider().isExplicitlyAvailable(authStorage)),
+		);
+		expect(explicit).toBe(true);
 	});
 
 	it("reports available with EXA_API_KEY", async () => {

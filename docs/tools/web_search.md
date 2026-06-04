@@ -149,7 +149,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include parsed free-text `answer`, `sources`, `requestId`.
   - **Exa** — `packages/coding-agent/src/web/search/providers/exa.ts`
-    - Availability: settings must not explicitly disable `exa.enabled` or `exa.enableSearch`; Exa can use public MCP when no credential exists.
+    - Availability: env or `agent.db` credential for `exa` admits Exa to the auto chain; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`. Explicit selection (`providers.webSearch: exa`) reaches Exa even without a credential and falls back to public MCP.
     - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key, otherwise JSON-RPC `tools/call` against `https://mcp.exa.ai/mcp` for remote MCP tool `web_search_exa`.
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output: synthesized `answer` from up to 3 result summaries, `sources`, `requestId`.
