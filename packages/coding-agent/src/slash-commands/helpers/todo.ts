@@ -1,12 +1,12 @@
 import * as path from "node:path";
-import type { TodoPhase } from "../../tools/todo-write";
+import type { TodoPhase } from "../../tools/todo";
 import {
 	applyOpsToPhases,
 	getLatestTodoPhasesFromEntries,
 	markdownToPhases,
 	phasesToMarkdown,
 	USER_TODO_EDIT_CUSTOM_TYPE,
-} from "../../tools/todo-write";
+} from "../../tools/todo";
 import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime } from "../types";
 import { commandConsumed, parseSubcommand, usage } from "./parse";
 

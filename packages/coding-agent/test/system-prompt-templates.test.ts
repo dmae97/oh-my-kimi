@@ -64,7 +64,7 @@ const baseRenderContext: prompt.TemplateContext = {
 		edit: "edit",
 		task: "task",
 		web_search: "web_search",
-		todo_write: "todo_write",
+		todo: "todo",
 		inspect_image: "inspect_image",
 		search_tool_bm25: "search_tool_bm25",
 		lsp: "lsp",
@@ -73,7 +73,7 @@ const baseRenderContext: prompt.TemplateContext = {
 		grep: "grep",
 		write: "write",
 	},
-	tools: ["read", "search", "find", "edit", "task", "web_search", "todo_write"],
+	tools: ["read", "search", "find", "edit", "task", "web_search", "todo"],
 	worktree: "/tmp/pi-issue-147",
 	writeToolName: "write",
 };

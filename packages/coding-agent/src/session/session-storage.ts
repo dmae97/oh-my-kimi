@@ -151,7 +151,6 @@ export class FileSessionStorage implements SessionStorage {
 		fs.writeFileSync(fpath, content);
 	}
 
-
 	statSync(path: string): SessionStorageStat {
 		const stats = fs.statSync(path);
 		return { size: stats.size, mtimeMs: stats.mtimeMs, mtime: stats.mtime };
@@ -464,7 +463,6 @@ export class MemorySessionStorage implements SessionStorage {
 		appendMemoryChunk(entry, chunk);
 		entry.mtimeMs = mtimeMs;
 	}
-
 
 	statSync(path: string): SessionStorageStat {
 		const entry = this.#requireEntry(path);

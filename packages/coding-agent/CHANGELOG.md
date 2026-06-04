@@ -37,7 +37,7 @@
 
 ### Changed
 
-- Changed the `todo-write` prompt to require initializing every item from a user-supplied multi-step plan as an individual todo task before execution
+- Changed the `todo` prompt to require initializing every item from a user-supplied multi-step plan as an individual todo task before execution
 - Changed context compaction (prune/shake) to protect reads of the active plan file the same way it already protects `skill://` reads, so the plan stays intact through automatic and manual compaction. Both the canonical `local://PLAN.md` alias and the session's current plan reference path (e.g. a titled `local://<title>.md` after approval) are kept, tolerating read selectors and `local:/` scheme spelling.
 
 ## [15.8.2] - 2026-06-03
@@ -273,7 +273,7 @@
 - Changed the `task` tool's streaming call preview to list each dispatched agent's `id` and UI description as a tree instead of a bare `N agents` count, so the individual agents are visible while the tool-call arguments are still streaming. The collapsed view caps at 12 entries (`… N more agents`); the expanded view shows all.
 - Changed Mnemopi `recall` tool output to include memory ids for explicit recall results so agents can target `memory_edit`; auto-injected memory context and `reflect` remain id-free.
 - Changed the system prompt to advertise `memory://root` only when the local memory backend is active.
-- Changed `todo_write` result rendering to animate completed items in place: the checkbox flips checked first, then the strikethrough reveals across the task text.
+- Changed `todo` result rendering to animate completed items in place: the checkbox flips checked first, then the strikethrough reveals across the task text.
 
 ### Fixed
 
@@ -353,7 +353,7 @@
 
 ### Changed
 
-- Changed the sticky `Todos` panel above the editor to advance as tasks close, instead of pinning to the first 5 tasks of the active phase. `selectStickyTodoWindow` now shows up to 5 open (pending / in_progress) tasks in original phase order and reports the count of remaining open tasks for the `+N more` hint, so every `todo_write` flip produces a visible row shift. Closed-phase tail falls back to the last 5 tasks (with the `+N more` line suppressed) until `getActivePhase` walks to the next phase.
+- Changed the sticky `Todos` panel above the editor to advance as tasks close, instead of pinning to the first 5 tasks of the active phase. `selectStickyTodoWindow` now shows up to 5 open (pending / in_progress) tasks in original phase order and reports the count of remaining open tasks for the `+N more` hint, so every `todo` flip produces a visible row shift. Closed-phase tail falls back to the last 5 tasks (with the `+N more` line suppressed) until `getActivePhase` walks to the next phase.
 - Linked the sticky `Todos` panel to the live `SessionObserverRegistry` so pending todos that have an in-flight subagent doing their work light up green with an animated spinner — the same `theme.spinnerFrames` ("status" preset) the `task` tool uses for its agent rows — instead of staying greyed out as if nothing is happening. A new exported `todoMatchesAnyDescription(content, descriptions)` does case- and whitespace-insensitive equality first with a 6-char minimum-overlap substring fallback in either direction, so "Sonnet #2: shallow bug scan" and a subagent description of "Sonnet #2" still link up. Completed todos now render with `theme.status.success` (✔ / `\uf00c` / `[ok]` per symbol preset, still wrapped in the `success` colour so themed palettes can keep their purple/green/whatever) and in_progress rows render with `theme.status.running`, matching the `task` tool's icon vocabulary. The spinner interval only ticks while at least one visible open todo has a matched active subagent, and self-stops once subagents finish, so plain in_progress todos do not animate forever in the absence of subagent activity.
 - Extracted the top-level CLI command table from `src/cli.ts` into a side-effect-free `src/cli-commands.ts` so test code can introspect the registered subcommands without triggering the entrypoint's top-level await.
 
@@ -1754,9 +1754,9 @@
 
 ### Breaking Changes
 
-- `todo_write`: renamed `replace` op to `init` and reshaped its input to `list: [{phase: string, items: string[]}]`. Tasks no longer accept a `status` field; all start `pending` and the first auto-promotes to `in_progress`. The `append` op's `items` is now `string[]` (was `{id, label}[]`)
-- `todo_write`: removed the synthetic `task-N` / `phase-N` ids — task identity is now its `content` and phase identity is its `name`. The `task` field on `start`/`done`/`drop`/`note` and the `phase` field on `done`/`drop`/`rm`/`append` take those values directly
-- `todo_write`: phase names no longer accept a numeric/roman prefix (`I.`, `1.`, `Phase 1:`, …). The renderer numbers phases visually (Ⅰ. Ⅱ. Ⅲ. …) and the model-facing state stores the bare noun phrase
+- `todo`: renamed `replace` op to `init` and reshaped its input to `list: [{phase: string, items: string[]}]`. Tasks no longer accept a `status` field; all start `pending` and the first auto-promotes to `in_progress`. The `append` op's `items` is now `string[]` (was `{id, label}[]`)
+- `todo`: removed the synthetic `task-N` / `phase-N` ids — task identity is now its `content` and phase identity is its `name`. The `task` field on `start`/`done`/`drop`/`note` and the `phase` field on `done`/`drop`/`rm`/`append` take those values directly
+- `todo`: phase names no longer accept a numeric/roman prefix (`I.`, `1.`, `Phase 1:`, …). The renderer numbers phases visually (Ⅰ. Ⅱ. Ⅲ. …) and the model-facing state stores the bare noun phrase
 
 ### Changed
 
@@ -1982,7 +1982,7 @@
 
 ### Added
 
-- Added `note` to todo-write operations so you can append follow-up text notes to a task via `op: "note"` and `text`
+- Added `note` to todo operations so you can append follow-up text notes to a task via `op: "note"` and `text`
 - Added markdown note-block support to `/todo export` and `/todo import` so task notes are written as blockquote lines and reloaded with the todo list
 - Added `/todo export <path>` to write the current todo list as Markdown to a file, defaulting to `TODO.md` when no path is provided
 - Added `/todo import <path>` to replace the current todo list from a Markdown file, defaulting to `TODO.md` when no path is provided
@@ -2046,7 +2046,7 @@
 - Removed multi-pattern array input from `ast_grep` by changing `pat` to a single pattern string, so call sites using `pat: [...]` must be updated to send one query per invocation
 - Removed `lang`, `glob`, and `sel` options from `ast_edit` and `ast_grep`, and moved those behaviors into the required `path` argument
 - Required `path` for `ast_edit` and `ast_grep`, so invocations that relied on implicit repo-root searching are no longer valid
-- Changed `todo_write` from multi-field verb payloads to an ordered array of flat operations, while retaining `replace` for harness bootstrap compatibility
+- Changed `todo` from multi-field verb payloads to an ordered array of flat operations, while retaining `replace` for harness bootstrap compatibility
 - Renamed atom edit operations from `before` and `after` to `pre` and `post`, so existing `atom` payloads using the old operation keys must be updated
 - Changed the hashline anchor format from `LINE#ID:content` to `LINEID:content` (no `#` separator, colon between anchor and content, no padding on line numbers); expanded the bigram alphabet from 40 hand-picked English bigrams to the full 647 single-token 2-letter bigrams — invalidates every previously captured `LINE#ID` reference
 - Renamed the subagent completion contract from `submit_result` to `yield`, so subagent sessions must now finish with the `yield` tool and the `requireYieldTool` option; `submit_result`/`requireSubmitResultTool` and old completion calls are no longer recognized
@@ -2065,10 +2065,10 @@
 
 - Updated `atom` and `hashline` edit anchor validation to auto-rebase a stale anchor within ±2 lines when the same hash matches a unique nearby line, continuing the edit with a warning instead of immediate failure
 - Changed bash command output labels from `[full result: artifact://…]` to `[raw output: artifact://…]` for artifact references produced from large command output
-- Changed `todo_write` `done`, `rm`, and `drop` operations to target all tasks when neither `task` nor `phase` is provided, and made `append` create the target phase automatically when missing
+- Changed `todo` `done`, `rm`, and `drop` operations to target all tasks when neither `task` nor `phase` is provided, and made `append` create the target phase automatically when missing
 - Updated `ast_edit` and `ast_grep` to pass file-selection intent through `path` (including inline globs and comma/space-separated path lists) instead of separate `glob` filters
 - Changed `ast_grep` pagination API from `offset` to `skip`
-- Flattened `todo_write` operation arguments to `{ op, task?, phase?, items? }[]` and removed task details from the persisted todo shape
+- Flattened `todo` operation arguments to `{ op, task?, phase?, items? }[]` and removed task details from the persisted todo shape
 - Changed `grep` truncation output to report `Result limit reached; narrow path.` and label match/result caps as `first N`
 - Changed JSON tree output to truncate inline argument pairs by available width and add an ellipsis when values no longer fit in the display
 - Changed JSON tree rendering to hide harness-internal `intent` and `__partialJson` fields from top-level tool output
@@ -2091,12 +2091,12 @@
 
 - Removed line-range support from `atom` mode selectors, including `loc` values like `160sr-170ab`, so edits must target a single anchor (`160sr`, `^`, or `$`) per entry
 - Removed the atom `del` verb and now require anchored-line deletion to be requested with `set: []`
-- Removed `todo_write` task details and the `add_notes` operation
+- Removed `todo` task details and the `add_notes` operation
 
 ### Fixed
 
 - Improved no-op edit diagnostics for `atom` and `hashline` operations so edits that leave content unchanged now fail with contextual details (edit index, locator, and reason), including guidance for `replace_range` no-op cases
-- Wrapped `todo_write` operations in an `ops` object so Codex/OpenAI function schemas always use a JSON Schema object.
+- Wrapped `todo` operations in an `ops` object so Codex/OpenAI function schemas always use a JSON Schema object.
 - Fixed JSON tree rendering for tool arguments by excluding injected internal keys from displayed root records
 - Printed assistant `errorMessage` text in print mode output to stderr so message-level errors are visible during non-interactive runs
 - Displayed assistant `errorMessage` text in the assistant message component for completed tool responses with non-terminal stop reasons
@@ -2197,14 +2197,14 @@
 
 ### Breaking Changes
 
-- Replaced the legacy `todo_write` `ops`-based API (`replace`, `update`, `add_task`, and `remove_task`) with direct top-level fields, requiring migration of any callers using the old request shape
-- Removed in-place updates to existing task `content`, `details`, and `notes` via `todo_write`; note changes now append through `add_notes`
-- Phased task definitions in `todo_write` now reject `notes` on initial creation, so notes must be added later with `add_notes`
+- Replaced the legacy `todo` `ops`-based API (`replace`, `update`, `add_task`, and `remove_task`) with direct top-level fields, requiring migration of any callers using the old request shape
+- Removed in-place updates to existing task `content`, `details`, and `notes` via `todo`; note changes now append through `add_notes`
+- Phased task definitions in `todo` now reject `notes` on initial creation, so notes must be added later with `add_notes`
 
 ### Added
 
-- Added `complete`, `start`, `abandon`, `remove`, `add_notes`, and `add_tasks` parameters to `todo_write` so callers can complete, jump to, drop, and annotate tasks without op wrappers
-- Added direct `add_phase` support as a top-level argument for inserting a new phase in `todo_write`
+- Added `complete`, `start`, `abandon`, `remove`, `add_notes`, and `add_tasks` parameters to `todo` so callers can complete, jump to, drop, and annotate tasks without op wrappers
+- Added direct `add_phase` support as a top-level argument for inserting a new phase in `todo`
 - Added `task.simple` with `default`, `schema-free`, and `independent` modes so the task tool can disable task-call `schema` and shared `context` inputs while preserving agent-defined and inherited subagent schemas
 
 ### Changed
@@ -4029,7 +4029,7 @@
 - Fixed workspace symbol search to query all configured LSP servers and filter out non-matching results
 - Fixed `references`/`rename`/`hover` symbol targeting to error when `symbol` is missing on the line or `occurrence` is out of bounds
 - Fixed `reload` without a file to reload all active configured language servers instead of only the first server
-- Fixed `todo_write` task normalization to auto-activate the first remaining task and include explicit remaining-items output in tool results, removing the need for an immediate follow-up start update
+- Fixed `todo` task normalization to auto-activate the first remaining task and include explicit remaining-items output in tool results, removing the need for an immediate follow-up start update
 
 ## [13.3.7] - 2026-02-27
 
@@ -4228,7 +4228,7 @@
 
 - Changed todo state management from file-based (`todos.json`) to in-memory session cache for improved performance and consistency
 - Changed todo phases to sync from session branch history when branching or rewriting entries
-- Changed `TodoWriteTool` to update session cache instead of writing to disk, with automatic persistence through session entries
+- Changed `TodoTool` to update session cache instead of writing to disk, with automatic persistence through session entries
 - Changed XML tag from `<swarm-context>` to `<context>` in subagent prompts and task rendering
 - Changed system reminder XML tags from underscore to kebab-case format (`<system-reminder>`)
 - Changed plan storage from `plan://` protocol to `local://PLAN.md` for draft plans and `local://<title>.md` for finalized approved plans
@@ -5289,7 +5289,7 @@
 ### Fixed
 
 - Fixed TUI crash when ask tool renders long user input exceeding terminal width by using Text component for word wrapping instead of raw line output
-- Fixed TUI crash when todo_write tool renders long todo content exceeding terminal width by using Text component for word wrapping instead of truncation
+- Fixed TUI crash when todo tool renders long todo content exceeding terminal width by using Text component for word wrapping instead of truncation
 
 ## [11.5.0] - 2026-02-06
 
@@ -5533,7 +5533,7 @@
 - Added new subcommands to help text: `commit` for AI-assisted git commits, `stats` for AI usage statistics dashboard, and `jupyter` for managing the shared Jupyter gateway
 - Added `grep` subcommand to help text for testing the grep tool
 - Added `browser` tool documentation for browser automation using Puppeteer
-- Added `todo_write` tool documentation for managing todo and task lists
+- Added `todo` tool documentation for managing todo and task lists
 - Added documentation for additional LLM provider API keys (Groq, Cerebras, xAI, OpenRouter, Mistral, z.ai, MiniMax, OpenCode, Cursor, Vercel AI Gateway) in environment variables reference
 - Added documentation for cloud provider configuration (AWS Bedrock, Google Vertex AI) in environment variables reference
 - Added documentation for search provider API keys (Perplexity, Anthropic Search) in environment variables reference
@@ -5685,7 +5685,7 @@
 - Tightened `ask` tool conditions to require multiple approaches with significantly different tradeoffs before prompting user
 - Strengthened `ask` tool guidance to default to action and only ask when genuinely blocked by decisions with materially different outcomes
 - Changed refactor workflow to automatically remove now-unused elements and note removals instead of asking for confirmation
-- Enforced exclusive concurrency mode for all file-modifying tools (edit, write, bash, python, ssh, todo-write) to prevent concurrent execution conflicts
+- Enforced exclusive concurrency mode for all file-modifying tools (edit, write, bash, python, ssh, todo) to prevent concurrent execution conflicts
 - Updated `ask` tool guidance to prioritize proactive problem-solving and default to action, asking only when truly blocked by decisions that materially change scope or behavior
 - Changed Python kernel initialization to require shared gateway mode; local gateway startup has been removed
 - Changed shared gateway error handling to retry on server errors (5xx status codes) before failing
@@ -5726,7 +5726,7 @@
 
 - Added `find.enabled`, `grep.enabled`, `ls.enabled`, `notebook.enabled`, `fetch.enabled`, `web_search.enabled`, `lsp.enabled`, and `calc.enabled` settings to control availability of individual tools
 - Added conditional tool documentation in system prompt that dynamically lists only enabled specialized tools
-- Added `todos.enabled` setting to control availability of the todo_write tool for task tracking
+- Added `todos.enabled` setting to control availability of the todo tool for task tracking
 - Added `tools` field to agent frontmatter for declaring agent-specific tool capabilities
 
 ### Changed
@@ -6290,10 +6290,10 @@
 - Changed Web Search result rendering to use renderOutputBlock with answer, sources, related questions, and metadata sections
 - Changed Find, Grep, and Ls tools to use renderFileList and renderTreeList for consistent file/item listing
 - Changed Calculator tool result rendering to use renderTreeList for result item display
-- Changed Notebook and TodoWrite tools to use new TUI rendering components for consistent output format
+- Changed Notebook and Todo tools to use new TUI rendering components for consistent output format
 - Refactored render-utils to move tree-related utilities to TUI module (getTreeBranch, getTreeContinuePrefix)
 - Changed import organization in sdk.ts for consistency
-- Changed tool result rendering to merge call and result displays, showing tool arguments (command, pattern, query, path) in result headers for Bash, Calculator, Fetch, Find, Grep, Ls, LSP, Notebook, Read, SSH, TodoWrite, Web Search, and Write tools
+- Changed tool result rendering to merge call and result displays, showing tool arguments (command, pattern, query, path) in result headers for Bash, Calculator, Fetch, Find, Grep, Ls, LSP, Notebook, Read, SSH, Todo, Web Search, and Write tools
 - Changed Read tool title to display line range when offset or limit arguments are provided
 - Changed worker instantiation to use direct URL import instead of pre-bundled worker files
 - Changed `omp commit` to use agentic mode by default with tool-based git inspection
@@ -6307,7 +6307,7 @@
 - Changed Calculator tool result display to show both expression and output (e.g., `2+2 = 4`) instead of just the result
 - Changed Python tool output to group status information under a labeled section for clearer organization
 - Changed SSH tool output to apply consistent styling to non-ANSI output lines
-- Changed Todo Write tool to respect expanded/collapsed state and use standard preview limits
+- Changed Todo tool to respect expanded/collapsed state and use standard preview limits
 - Changed Web Search related questions to respect expanded/collapsed state instead of always showing all items
 - Changed empty and error state rendering across multiple tools (Find, Grep, Ls, Notebook, Calculator, Ask) to include consistent status headers
 - Changed split commit to support hunk selectors (all, indices, or line ranges) instead of whole-file staging
@@ -6411,10 +6411,10 @@
 - Enhanced bash and python executors to save full output as artifacts when truncated
 - Improved abort signal handling across <caution>ith consistent ToolAbortError
 - Renamed task parameter from `vars` to `args` throughout task tool interface and updated template rendering to support built-in `{{id}}` and `{{description}}` placeholders
-- Simplified todo-write tool by removing active_form parameter, using single content field for task descriptions
+- Simplified todo tool by removing active_form parameter, using single content field for task descriptions
 - Updated system prompt structure with `<important>` and `<avoid>` tags, clearer critical sections, and standardized whitespace handling
 - Renamed web_fetch tool to fetch and removed internal URL handling (use read tool instead)
-- Standardized tool parameter names from camelCase to snake_case across edit, grep, python, and todo-write tools
+- Standardized tool parameter names from camelCase to snake_case across edit, grep, python, and todo tools
 - Unified timeout parameters across all tools with auto-conversion from milliseconds and reasonable clamping (1s-3600s for bash/ssh, 1s-600s for python/gemini-image)
 - Simplified web-search tool by removing advanced parameters (`max_tokens`, `model`, `search_domain_filter`, `search_context_size`, `return_related_questions`) and using `recency` instead of `search_recency_filter`
 - Restructured tool documentation with standardized `<instruction>`, `<output>`, `<critical>`, and `<avoid>` sections across all 18 tools
@@ -7023,11 +7023,11 @@
 
 ### Added
 
-- Added `todo_write` tool for creating and managing structured task lists during coding sessions
+- Added `todo` tool for creating and managing structured task lists during coding sessions
 - Added persistent todo panel above the editor that displays task progress
 - Added `Ctrl+T` keybinding to toggle todo list expansion
 - Added grouped display for consecutive Read tool calls, showing multiple file reads in a compact tree view
-- Added `todo_write` tool and persistent todo panel above the editor
+- Added `todo` tool and persistent todo panel above the editor
 
 ### Changed
 

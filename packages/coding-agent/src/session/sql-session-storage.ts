@@ -1,4 +1,8 @@
-import { IndexedSessionStorage, type SessionStorageBackend, type SessionStorageIndexEntry } from "./indexed-session-storage";
+import {
+	IndexedSessionStorage,
+	type SessionStorageBackend,
+	type SessionStorageIndexEntry,
+} from "./indexed-session-storage";
 
 /**
  * Supported `bun:sql` adapter dialects. `Bun.SQL` reports this string on
@@ -276,7 +280,9 @@ class SqlSessionStorageBackend implements SessionStorageBackend {
 
 	async readSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		const values =
-			this.#adapter === "postgres" ? [prefixBytes, suffixBytes, path] : [prefixBytes, suffixBytes, suffixBytes, path];
+			this.#adapter === "postgres"
+				? [prefixBytes, suffixBytes, path]
+				: [prefixBytes, suffixBytes, suffixBytes, path];
 		const rows = (await this.#client.unsafe(this.#q.readSlices, values)) as SliceRow[];
 		const row = rows[0];
 		if (!row) throw enoent(path);

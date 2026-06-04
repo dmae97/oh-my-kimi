@@ -10,7 +10,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
+import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 /**
@@ -53,7 +53,7 @@ describe("AgentSession newSession clears todo artifacts", () => {
 			initialState: {
 				model,
 				systemPrompt: ["test"],
-				tools: [new TodoWriteTool(toolSession)],
+				tools: [new TodoTool(toolSession)],
 			},
 		});
 

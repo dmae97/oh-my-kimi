@@ -1,5 +1,9 @@
 import { logger, toError } from "@oh-my-pi/pi-utils";
-import { IndexedSessionStorage, type SessionStorageBackend, type SessionStorageIndexEntry } from "./indexed-session-storage";
+import {
+	IndexedSessionStorage,
+	type SessionStorageBackend,
+	type SessionStorageIndexEntry,
+} from "./indexed-session-storage";
 
 /**
  * Minimal subset of the `bun:redis` `RedisClient` surface used by

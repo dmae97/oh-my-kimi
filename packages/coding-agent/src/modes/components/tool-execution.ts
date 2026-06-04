@@ -32,7 +32,7 @@ import {
 } from "../../tools/json-tree";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
-import { TODO_WRITE_STRIKE_TOTAL_FRAMES } from "../../tools/todo-write";
+import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
 import { renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
@@ -452,7 +452,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#updateTodoStrikeAnimation(): void {
-		if (this.#toolName !== "todo_write" || this.#isPartial || this.#result?.isError) {
+		if (this.#toolName !== "todo" || this.#isPartial || this.#result?.isError) {
 			this.#stopTodoStrikeAnimation();
 			return;
 		}
@@ -467,7 +467,7 @@ export class ToolExecutionComponent extends Container {
 		this.#renderState.spinnerFrame = 0;
 		this.#todoStrikeInterval = setInterval(() => {
 			const nextFrame = (this.#spinnerFrame ?? 0) + 1;
-			if (nextFrame > TODO_WRITE_STRIKE_TOTAL_FRAMES) {
+			if (nextFrame > TODO_STRIKE_TOTAL_FRAMES) {
 				this.#stopTodoStrikeAnimation();
 			} else {
 				this.#spinnerFrame = nextFrame;

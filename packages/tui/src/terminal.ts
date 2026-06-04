@@ -439,10 +439,7 @@ export class ProcessTerminal implements Terminal {
 			// settable or permanently-set modes are useful for features we enable.
 			const decrpmMatch = sequence.match(decrpmResponsePattern);
 			if (decrpmMatch) {
-				this.#resolvePrivateMode(
-					parseInt(decrpmMatch[1]!, 10),
-					decrpmMatch[2] !== "0" && decrpmMatch[2] !== "4",
-				);
+				this.#resolvePrivateMode(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2] !== "0" && decrpmMatch[2] !== "4");
 				return;
 			}
 

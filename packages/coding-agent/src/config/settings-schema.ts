@@ -2122,7 +2122,7 @@ export const SETTINGS_SCHEMA = {
 	"todo.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Todos", description: "Enable the todo_write tool for task tracking" },
+		ui: { tab: "tools", label: "Todos", description: "Enable the todo tool for task tracking" },
 	},
 
 	"todo.reminders": {

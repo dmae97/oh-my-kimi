@@ -53,7 +53,7 @@ import { reportFindingTool } from "./review";
 import { SearchTool } from "./search";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
-import { type TodoPhase, TodoWriteTool } from "./todo-write";
+import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { YieldTool } from "./yield";
 
@@ -94,7 +94,7 @@ export * from "./review";
 export * from "./search";
 export * from "./search-tool-bm25";
 export * from "./ssh";
-export * from "./todo-write";
+export * from "./todo";
 export * from "./tts";
 export * from "./write";
 export * from "./yield";
@@ -317,7 +317,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	task: s => TaskTool.create(s),
 	job: JobTool.createIf,
 	irc: IrcTool.createIf,
-	todo_write: s => new TodoWriteTool(s),
+	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
@@ -419,7 +419,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "bash") return true;
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
-		if (name === "todo_write") return !includeYield && session.settings.get("todo.enabled");
+		if (name === "todo") return !includeYield && session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "search") return session.settings.get("search.enabled");
 		if (name === "github") return session.settings.get("github.enabled");

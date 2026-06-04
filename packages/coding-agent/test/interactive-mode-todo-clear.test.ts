@@ -9,7 +9,7 @@ import { InteractiveMode } from "../src/modes/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
-import type { TodoPhase } from "../src/tools/todo-write";
+import type { TodoPhase } from "../src/tools/todo";
 
 function renderTodos(mode: InteractiveMode): string {
 	return Bun.stripANSI(mode.todoContainer.render(120).join("\n"));

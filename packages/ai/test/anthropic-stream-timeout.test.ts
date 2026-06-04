@@ -282,7 +282,7 @@ describe("anthropic first-event timeout retries", () => {
 						content_block: {
 							type: "tool_use",
 							id: "toolu_stalled_todo",
-							name: "todo_write",
+							name: "todo",
 							input: {},
 						},
 					},
@@ -308,7 +308,7 @@ describe("anthropic first-event timeout retries", () => {
 			{
 				type: "toolCall",
 				id: "toolu_stalled_todo",
-				name: "todo_write",
+				name: "todo",
 				arguments: {},
 			},
 		]);

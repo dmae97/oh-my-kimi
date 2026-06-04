@@ -86,7 +86,7 @@ import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo-write";
+import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
@@ -1067,7 +1067,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Auto-complete any pending/in_progress todo whose content matches a
 	 * subagent that has finished successfully. Fires on every observer
 	 * `onChange` so the visual state stays in sync with subagent lifecycle
-	 * without requiring the agent to issue a follow-up `todo_write`. Failed
+	 * without requiring the agent to issue a follow-up `todo`. Failed
 	 * and aborted subagents are intentionally NOT auto-completed — those
 	 * stay open so the user (or the next agent turn) can decide what to do.
 	 *

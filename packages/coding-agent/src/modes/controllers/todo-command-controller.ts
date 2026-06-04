@@ -8,7 +8,7 @@ import {
 	type TodoItem,
 	type TodoPhase,
 	USER_TODO_EDIT_CUSTOM_TYPE,
-} from "../../tools/todo-write";
+} from "../../tools/todo";
 import { copyToClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
