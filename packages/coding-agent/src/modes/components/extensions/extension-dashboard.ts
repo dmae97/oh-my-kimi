@@ -38,7 +38,7 @@ import {
 } from "./state-manager";
 import type { DashboardState } from "./types";
 
-const EXT_FOOTER = " ↑/↓: navigate  Space: toggle  Tab: next provider  Esc: close";
+const EXT_FOOTER = " ↑/↓: navigate  Space: toggle  ←/→: provider  Esc: close";
 
 export class ExtensionDashboard extends Container {
 	#state!: DashboardState;
@@ -335,12 +335,12 @@ export class ExtensionDashboard extends Container {
 			return;
 		}
 
-		// Tab/Shift+Tab: Cycle through tabs
-		if (matchesKey(data, "tab")) {
+		// Tab/Shift+Tab or Left/Right: Cycle through tabs
+		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
 			this.#switchTab(1);
 			return;
 		}
-		if (matchesKey(data, "shift+tab")) {
+		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
 			this.#switchTab(-1);
 			return;
 		}

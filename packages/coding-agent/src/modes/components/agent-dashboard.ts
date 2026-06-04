@@ -7,7 +7,7 @@
  *
  * Controls:
  * - Up/Down or j/k: move selection
- * - Tab / Shift+Tab: switch source tab
+ * - Tab / Shift+Tab or Left/Right: switch source tab
  * - Space: enable/disable selected agent
  * - Enter: edit model override for selected agent
  * - N: start agent creation flow
@@ -99,7 +99,7 @@ const SOURCE_LABEL: Record<AgentSource, string> = {
 };
 
 const LIST_FOOTER =
-	" ↑/↓: navigate  Space: toggle  Enter: model override  N: new agent  Tab: source  Ctrl+R: reload  Esc: close";
+	" ↑/↓: navigate  Space: toggle  Enter: model override  N: new agent  ←/→: source  Ctrl+R: reload  Esc: close";
 
 const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+){1,5}$/;
 function joinPatterns(patterns: string[]): string {

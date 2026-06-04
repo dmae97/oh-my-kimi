@@ -99,7 +99,7 @@ export class HttpTransport implements MCPTransport {
 		});
 		const timeoutPromise =
 			startupTimeoutMs > 0
-				? new Promise<null>((resolve) => {
+				? new Promise<null>(resolve => {
 						setTimeout(() => {
 							if (!startupFinished) {
 								timedOut = true;
@@ -122,7 +122,7 @@ export class HttpTransport implements MCPTransport {
 		}
 		if (response === null) {
 			if (this.#sseConnection === connection) this.#sseConnection = null;
-			void fetchPromise.then((lateResponse) => lateResponse.body?.cancel()).catch(() => {});
+			void fetchPromise.then(lateResponse => lateResponse.body?.cancel()).catch(() => {});
 			return;
 		}
 

@@ -269,10 +269,10 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 			tui.stop();
 			await term.flush();
 		}
-	// Real TUI + Ghostty WASM integration can exceed Bun's default budget on CI:
-	// startup, repeated native scrollback refreshes, and throttled render frames are
-	// intentionally exercised here. Keep the contract assertions above; only widen
-	// the integration-test budget.
+		// Real TUI + Ghostty WASM integration can exceed Bun's default budget on CI:
+		// startup, repeated native scrollback refreshes, and throttled render frames are
+		// intentionally exercised here. Keep the contract assertions above; only widen
+		// the integration-test budget.
 	}, 30_000);
 
 	test("the underlying diff genuinely oscillates (guard against a vacuous test)", async () => {
