@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { relativeLuminance } from "../src/utils/color";
+import { relativeLuminance } from "@oh-my-pi/pi-utils";
 import { getSessionAccentHex } from "../src/utils/session-color";
 
 const lum = (hex: string): number => relativeLuminance(hex) ?? 0;

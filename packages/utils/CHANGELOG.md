@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added color helpers `colorLuma` (perceptual luma), `relativeLuminance` (WCAG, linearized sRGB), and `hslToHex` to the color utilities. The luminance helpers parse `#rgb`/`#rrggbb` hex and 256-color palette indices, returning `undefined` for unparseable values.
+
 ## [15.7.3] - 2026-05-31
 ### Added
 

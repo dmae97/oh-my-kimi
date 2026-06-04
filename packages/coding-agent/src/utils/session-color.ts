@@ -1,4 +1,4 @@
-import { relativeLuminance } from "./color";
+import { hslToHex, relativeLuminance } from "@oh-my-pi/pi-utils";
 
 /**
  * Derive a stable hue (0-359) from a string using djb2 hash.
@@ -10,21 +10,6 @@ function nameToHue(name: string): number {
 		hash = hash >>> 0; // keep 32-bit unsigned
 	}
 	return hash % 360;
-}
-
-/**
- * Convert HSL (h: 0-360, s: 0-1, l: 0-1) to a CSS hex string.
- */
-function hslToHex(h: number, s: number, l: number): string {
-	const a = s * Math.min(l, 1 - l);
-	const f = (n: number) => {
-		const k = (n + h / 30) % 12;
-		const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-		return Math.round(255 * color)
-			.toString(16)
-			.padStart(2, "0");
-	};
-	return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 const ACCENT_SATURATION = 0.9;

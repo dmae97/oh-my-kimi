@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { colorLuma, relativeLuminance } from "../src/utils/color";
+import { colorLuma, hslToHex, relativeLuminance } from "../src/color";
 
 describe("relativeLuminance (WCAG, linearized sRGB)", () => {
 	it("hits the extremes", () => {
@@ -37,5 +37,18 @@ describe("colorLuma (perceptual classification)", () => {
 	it("returns undefined for malformed input", () => {
 		expect(colorLuma("nope")).toBeUndefined();
 		expect(colorLuma(-1)).toBeUndefined();
+	});
+});
+
+describe("hslToHex", () => {
+	it("maps primary hues at full saturation/half lightness", () => {
+		expect(hslToHex(0, 1, 0.5)).toBe("#ff0000");
+		expect(hslToHex(120, 1, 0.5)).toBe("#00ff00");
+		expect(hslToHex(240, 1, 0.5)).toBe("#0000ff");
+	});
+
+	it("collapses to grayscale at zero saturation", () => {
+		expect(hslToHex(0, 0, 0)).toBe("#000000");
+		expect(hslToHex(210, 0, 1)).toBe("#ffffff");
 	});
 });
