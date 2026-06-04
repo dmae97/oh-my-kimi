@@ -17,7 +17,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
@@ -82,7 +82,7 @@ interface ScopeDirs {
 function scopeDirs(ctx: LoadContext): ScopeDirs {
 	return {
 		project: path.join(ctx.cwd, ".omp"),
-		user: path.join(ctx.home, ".omp", "agent"),
+		user: getAgentDir(),
 	};
 }
 

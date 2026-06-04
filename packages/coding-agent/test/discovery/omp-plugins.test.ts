@@ -32,6 +32,7 @@ import {
 	clearOmpExtensionCliRoots,
 	injectOmpExtensionCliRoots,
 } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
+import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 const PROVIDER_ID = "omp-plugins";
 
@@ -39,6 +40,9 @@ let tempDir: string;
 let home: string;
 let project: string;
 let ext: string;
+
+const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 
 function writeFile(filePath: string, content: string): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -92,11 +96,18 @@ beforeEach(() => {
 	fs.mkdirSync(project, { recursive: true });
 	fs.mkdirSync(path.join(project, ".git"), { recursive: true });
 	buildExtensionPackage(ext);
+	setAgentDir(path.join(home, ".omp", "agent"));
 });
 
 afterEach(() => {
 	clearCache();
 	clearOmpExtensionCliRoots();
+	if (originalAgentDirEnv) {
+		setAgentDir(originalAgentDirEnv);
+	} else {
+		setAgentDir(fallbackAgentDir);
+		delete process.env.PI_CODING_AGENT_DIR;
+	}
 	fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

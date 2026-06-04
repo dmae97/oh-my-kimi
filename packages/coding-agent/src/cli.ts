@@ -154,7 +154,7 @@ export async function runCli(argv: string[]): Promise<void> {
 		await runSmokeTest();
 		return;
 	}
-	if (argv[0] === "--tiny-worker") {
+	if (resolvedArgv[0] === "--tiny-worker") {
 		await runTinyWorker();
 		return;
 	}

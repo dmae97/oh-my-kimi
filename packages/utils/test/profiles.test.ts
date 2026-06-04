@@ -146,10 +146,8 @@ describe("profile directories", () => {
 		process.env.XDG_DATA_HOME = path.join(tempRoot, "data");
 		process.env.XDG_STATE_HOME = path.join(tempRoot, "state");
 		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
-		// Named profiles only adopt XDG when their *own* XDG path already exists.
-		// Mkdir'ing only the base app root used to be enough (bug); the resolver
-		// now requires the profile-specific path so the profile location is stable
-		// across activations.
+		// Named profiles only adopt XDG when their *own* XDG path already exists,
+		// so the profile location stays stable across activations.
 		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, "omp", "profiles", "work"), { recursive: true });
 		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, "omp", "profiles", "work"), { recursive: true });
 		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, "omp", "profiles", "work"), { recursive: true });

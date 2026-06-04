@@ -5,6 +5,12 @@
 ### Added
 
 - Added isolated profile support via `--profile <name>` / `OMP_PROFILE` and shell alias bootstrap via `--alias <command>`, including launch/ACP bootstrap handling and extension-flag-safe parsing.
+
+### Fixed
+
+- Made native user-level config discovery follow the active profile. Skills, rules, slash commands, prompts, instructions, hooks, tools, settings, extensions, MCP servers, and the top-level `SYSTEM.md`/`RULES.md`/`AGENTS.md` now resolve the user scope through `getAgentDir()`, so a named profile sees only its own `~/.omp/profiles/<name>/agent` config instead of the default profile's `~/.omp/agent` leaking into every profile. This matches the `/mcp` config writer and `getMCPConfigPath("user")`.
+- Fixed symlinked extension directories being skipped by native auto-discovery. The glob walker runs with `follow_links=false`, so a symlinked directory under `extensions/` was yielded as a symlink but never descended into — its `index.{ts,js}`/`package.json` stayed invisible while real directories loaded normally. `discoverExtensionModulePaths` now detects top-level symlinked directories and resolves their entry points, so an extension shared across profiles via a symlink loads like a real directory (symlinked extension *files* were already handled).
+
 ## [15.9.0] - 2026-06-04
 
 ### Breaking Changes

@@ -14,7 +14,7 @@
  * consume the next token only when it doesn't look like another flag. Without
  * this, `omp --system-prompt --profile foo` silently activates profile `foo`
  * instead of passing the literal `--profile` to the system prompt and `foo`
- * as a positional message (issue raised by code review).
+ * as a positional message.
  *
  * The shared classification lives in {@link ./flag-tables}, imported below,
  * so the bootstrap and `args.ts` reference one source of truth instead of

@@ -24,7 +24,7 @@ describe("extractProfileFlags", () => {
 		expect(result.profile).toBeUndefined();
 		expect(result.argv).toEqual(["--system-prompt", "--profile", "foo", "bar"]);
 	});
-	it("does not eat the value of --approval-mode (regression: PR #1435 review)", () => {
+	it("does not eat the value of --approval-mode", () => {
 		// `--approval-mode` is a string-valued flag in args.ts (`args[++i]` with
 		// no `-` check). The pre-parser must mirror that contract or
 		// `omp --approval-mode --profile foo` silently activates profile `foo`
@@ -193,7 +193,7 @@ describe("extractProfileFlags", () => {
 		});
 	});
 
-	it("does not hide a global --profile/--alias behind an unknown flag with a flag-looking successor (regression: PR #1435 review)", () => {
+	it("does not hide a global --profile/--alias behind an unknown flag with a flag-looking successor", () => {
 		// `parseArgs` never hands a flag-looking successor to an extension flag:
 		// boolean extension flags consume nothing, and string extension flags only
 		// consume value-like (non-`-`) successors. So `omp --some-ext-flag --profile

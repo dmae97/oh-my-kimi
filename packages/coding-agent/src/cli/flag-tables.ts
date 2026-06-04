@@ -18,8 +18,7 @@
  * The deliberate consequence: a string-valued flag exists in this CLI surface
  * iff it has an entry here. Adding a new string-valued flag means adding a
  * setter/config entry in this file; both `args.ts` and the bootstrap pick it
- * up automatically. There is no inline `args[++i]` chain in `args.ts` left to
- * drift out of sync with the bootstrap.
+ * up automatically, so the two cannot drift out of sync.
  *
  * IMPORT RULE: this module MUST NOT import any runtime value from
  * `@oh-my-pi/pi-utils` (or anything that transitively does). That package's
@@ -65,11 +64,10 @@ export type OptionalSetter = (result: Args, value: string | undefined) => void;
  *
  * Every optional flag always rejects tokens that start with `-` — that shared
  * rule lives in the dispatch site. These booleans capture the *additional*
- * per-flag quirks that previously lived inline in `args.ts`:
+ * per-flag quirks:
  *
  * - `rejectEmpty`: treat `""` like “no value provided”. Needed for
- *   `--resume` / `-r` / `--session`, which historically used a truthiness
- *   check (`next && !next.startsWith("-")`). Without this, an empty string
+ *   `--resume` / `-r` / `--session`. Without it, an empty string
  *   gets consumed as the session prefix and downstream resolution can match
  *   every session.
  * - `rejectAtPrefix`: reject `@foo` as a value. Used only by
@@ -93,9 +91,7 @@ const setResume: OptionalSetter = (result, value) => {
 
 /**
  * Setters for flags that ALWAYS consume the next argv token, even when that
- * token starts with `-`. Mirrors the
- * `arg === "--xxx" && i + 1 < args.length ? args[++i]` pattern in the old
- * `parseArgs`.
+ * token starts with `-`.
  */
 export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--mode": (result, value) => {

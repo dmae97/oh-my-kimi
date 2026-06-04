@@ -4,7 +4,7 @@
  * Primary provider for OMP native configs. Supports all capabilities.
  */
 import * as path from "node:path";
-import { logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
+import { getAgentDir, logger, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
@@ -60,7 +60,9 @@ async function getConfigDirs(ctx: LoadContext): Promise<Array<{ dir: string; lev
 	if (projectDir) {
 		result.push({ dir: projectDir, level: "project" });
 	}
-	const userDir = await ifNonEmptyDir(ctx.home, PATHS.userAgent);
+	// Native user config is profile-scoped: getAgentDir() points at the active
+	// profile's agent dir (~/.omp/profiles/<name>/agent), like sessions and MCP.
+	const userDir = await ifNonEmptyDir(getAgentDir());
 	if (userDir) {
 		result.push({ dir: userDir, level: "user" });
 	}
@@ -186,11 +188,14 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 		return result;
 	};
 
+	// User scope tracks the active profile via getAgentDir() (not ctx.home), so it
+	// stays in sync with getMCPConfigPath("user") and the /mcp config writer.
+	const userAgentDir = getAgentDir();
 	const paths = [
 		{ path: path.join(ctx.cwd, PATHS.projectDir, "mcp.json"), level: "project" as const },
 		{ path: path.join(ctx.cwd, PATHS.projectDir, ".mcp.json"), level: "project" as const },
-		{ path: path.join(ctx.home, PATHS.userAgent, "mcp.json"), level: "user" as const },
-		{ path: path.join(ctx.home, PATHS.userAgent, ".mcp.json"), level: "user" as const },
+		{ path: path.join(userAgentDir, "mcp.json"), level: "user" as const },
+		{ path: path.join(userAgentDir, ".mcp.json"), level: "user" as const },
 	];
 
 	const contents = await Promise.allSettled(
@@ -225,7 +230,7 @@ registerProvider<MCPServer>(mcpCapability.id, {
 async function loadSystemPrompt(ctx: LoadContext): Promise<LoadResult<SystemPrompt>> {
 	const items: SystemPrompt[] = [];
 
-	const userPath = path.join(ctx.home, PATHS.userAgent, "SYSTEM.md");
+	const userPath = path.join(getAgentDir(), "SYSTEM.md");
 	const userContent = await readFile(userPath);
 	if (userContent) {
 		items.push({
@@ -276,7 +281,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 
 	// User-level scan from ~/.omp/agent/skills/
 	const userScan = scanSkillsFromDir(ctx, {
-		dir: path.join(ctx.home, PATHS.userAgent, "skills"),
+		dir: path.join(getAgentDir(), "skills"),
 		providerId: PROVIDER_ID,
 		level: "user",
 		requireDescription: true,
@@ -351,7 +356,7 @@ async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
 	// the current turn so they keep hold across long conversations".
 	// User scope:    ~/.omp/agent/RULES.md
 	// Project scope: nearest .omp/RULES.md walking up from cwd to repoRoot
-	const userRulesFile = path.join(ctx.home, PATHS.userAgent, "RULES.md");
+	const userRulesFile = path.join(getAgentDir(), "RULES.md");
 	const userRule = await loadStickyRulesFile(userRulesFile, "user");
 	if (userRule) items.push(userRule);
 
@@ -868,7 +873,7 @@ async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFil
 	const items: ContextFile[] = [];
 	const warnings: string[] = [];
 
-	const userPath = path.join(ctx.home, PATHS.userAgent, "AGENTS.md");
+	const userPath = path.join(getAgentDir(), "AGENTS.md");
 	const userContent = await readFile(userPath);
 	if (userContent) {
 		items.push({
