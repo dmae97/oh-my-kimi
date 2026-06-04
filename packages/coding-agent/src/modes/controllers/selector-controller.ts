@@ -133,7 +133,11 @@ export class SelectorController {
 							const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
 							return this.ctx.statusLine.getTopBorder(availableWidth).content;
 						},
-						onPluginsChanged: () => {
+						onPluginsChanged: async () => {
+							const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
+							clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+							await this.ctx.refreshSlashCommandState();
+							await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
 							this.ctx.ui.requestRender();
 						},
 						onCancel: () => {
