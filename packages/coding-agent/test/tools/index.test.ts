@@ -79,7 +79,7 @@ describe("createTools", () => {
 		expect(names).toContain("find");
 		expect(names).toContain("lsp");
 		expect(names).toContain("task");
-		expect(names).toContain("todo_write");
+		expect(names).toContain("todo");
 		expect(names).toContain("web_search");
 		expect(names).toContain("resolve");
 		expect(names).not.toContain("fetch");

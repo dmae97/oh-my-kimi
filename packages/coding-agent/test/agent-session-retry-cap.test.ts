@@ -129,6 +129,86 @@ describe("AgentSession retry delay cap", () => {
 		expect(session.isRetrying).toBe(false);
 	});
 
+	it("switches credentials instead of failing the delay cap for account rate limits", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) {
+			throw new Error("Expected bundled Anthropic test model to exist");
+		}
+
+		authStorage.removeRuntimeApiKey("anthropic");
+		await authStorage.set("anthropic", [
+			{ type: "api_key", key: "anthropic-key-1" },
+			{ type: "api_key", key: "anthropic-key-2" },
+		]);
+
+		const rateLimitError =
+			'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}} retry-after-ms=11180000';
+		const mock = createMockModel();
+		const requestedKeys: string[] = [];
+		let agent!: Agent;
+		agent = new Agent({
+			getApiKey: provider => modelRegistry.getApiKeyForProvider(provider, agent.sessionId),
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				const apiKey = options?.apiKey;
+				if (typeof apiKey !== "string") {
+					throw new Error("Expected API key to be resolved before streaming");
+				}
+				requestedKeys.push(apiKey);
+				if (requestedKeys.length === 1) {
+					mock.push({ throw: rateLimitError });
+				} else {
+					mock.push({ content: ["recovered after credential switch"] });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxDelayMs": 100,
+			"retry.maxRetries": 1,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		const waitSpy = vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const retryStartEvents: AutoRetryStartEvent[] = [];
+		const retryEndEvents: AutoRetryEndEvent[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+
+		await session.prompt("Trigger account rate limit with long retry-after");
+		await session.waitForIdle();
+
+		expect(requestedKeys).toHaveLength(2);
+		expect(new Set(requestedKeys).size).toBe(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({ delayMs: 0 });
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
+		for (const call of waitSpy.mock.calls) {
+			expect(call[0]).toBeLessThanOrEqual(100);
+		}
+		const last = lastAssistant(session);
+		expect(last.stopReason).toBe("stop");
+		expect(last.content).toContainEqual({ type: "text", text: "recovered after credential switch" });
+	});
+
 	it("still retries normally when the delay is under retry.maxDelayMs", async () => {
 		// Sanity check: a small retry-after MUST still go through the retry
 		// loop so we don't regress the existing transient-error recovery.

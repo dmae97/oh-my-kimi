@@ -14,7 +14,7 @@
 //! // JS: await native.glob({ pattern: "*.rs", path: "." })
 //! ```
 
-use std::path::Path;
+use std::{cmp::Ordering, collections::BinaryHeap, path::Path};
 
 use globset::GlobSet;
 use napi::{
@@ -81,6 +81,74 @@ struct GlobConfig {
 	use_cache:             bool,
 }
 
+#[derive(Clone)]
+struct RankedGlobMatch {
+	entry: GlobMatch,
+}
+
+impl PartialEq for RankedGlobMatch {
+	fn eq(&self, other: &Self) -> bool {
+		compare_matches_by_rank(&self.entry, &other.entry) == Ordering::Equal
+	}
+}
+
+impl Eq for RankedGlobMatch {}
+
+impl PartialOrd for RankedGlobMatch {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl Ord for RankedGlobMatch {
+	fn cmp(&self, other: &Self) -> Ordering {
+		if match_is_worse(&self.entry, &other.entry) {
+			Ordering::Greater
+		} else if match_is_worse(&other.entry, &self.entry) {
+			Ordering::Less
+		} else {
+			Ordering::Equal
+		}
+	}
+}
+
+fn match_mtime(entry: &GlobMatch) -> f64 {
+	entry.mtime.unwrap_or(0.0)
+}
+
+fn compare_matches_by_rank(a: &GlobMatch, b: &GlobMatch) -> Ordering {
+	match_mtime(b)
+		.total_cmp(&match_mtime(a))
+		.then_with(|| a.path.cmp(&b.path))
+}
+
+fn match_is_worse(a: &GlobMatch, b: &GlobMatch) -> bool {
+	compare_matches_by_rank(a, b) == Ordering::Greater
+}
+
+/// Returns `true` when `entry` was admitted into the bounded top-`limit` heap
+/// (either filling free space or evicting a worse existing entry).
+fn push_bounded_match(
+	heap: &mut BinaryHeap<RankedGlobMatch>,
+	entry: GlobMatch,
+	limit: usize,
+) -> bool {
+	if heap.len() < limit {
+		heap.push(RankedGlobMatch { entry });
+		return true;
+	}
+
+	let Some(worst) = heap.peek() else {
+		return false;
+	};
+	if match_is_worse(&worst.entry, &entry) {
+		heap.pop();
+		heap.push(RankedGlobMatch { entry });
+		return true;
+	}
+	false
+}
+
 fn resolve_symlink_target_type(root: &Path, relative_path: &str) -> Option<FileType> {
 	let target_path = root.join(relative_path);
 	let metadata = std::fs::metadata(target_path).ok()?;
@@ -143,7 +211,9 @@ fn filter_entries(
 		};
 		let mut matched_entry = entry.clone();
 		matched_entry.file_type = effective_file_type;
-		if let Some(callback) = on_match {
+		if !config.sort_by_mtime
+			&& let Some(callback) = on_match
+		{
 			callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 
@@ -153,6 +223,60 @@ fn filter_entries(
 			break;
 		}
 	}
+	Ok(matches)
+}
+
+fn collect_sorted_matches_uncached(
+	glob_set: &GlobSet,
+	config: &GlobConfig,
+	on_match: Option<&ThreadsafeFunction<GlobMatch>>,
+	ct: &task::CancelToken,
+) -> Result<Vec<GlobMatch>> {
+	let builder = fs_cache::build_walker(
+		&config.root,
+		config.include_hidden,
+		config.use_gitignore,
+		!config.mentions_node_modules,
+		false,
+	);
+	let mut top_matches = BinaryHeap::with_capacity(config.max_results.min(1024));
+	let mut visited = 0usize;
+
+	for entry in builder.build() {
+		if visited == 0 || visited >= 128 {
+			visited = 0;
+			ct.heartbeat()?;
+		}
+		visited += 1;
+
+		let Ok(entry) = entry else {
+			continue;
+		};
+		let Some(mut matched_entry) =
+			fs_cache::collect_entry(&config.root, &entry, fs_cache::ScanDetail::Full)
+		else {
+			continue;
+		};
+		if fs_cache::should_skip_path(Path::new(&matched_entry.path), config.mentions_node_modules) {
+			continue;
+		}
+		if !glob_set.is_match(&matched_entry.path) {
+			continue;
+		}
+		let Some(effective_file_type) = apply_file_type_filter(&matched_entry, config) else {
+			continue;
+		};
+		matched_entry.file_type = effective_file_type;
+		let streamable = on_match.map(|cb| (cb, matched_entry.clone()));
+		if push_bounded_match(&mut top_matches, matched_entry, config.max_results)
+			&& let Some((callback, payload)) = streamable
+		{
+			callback.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
+		}
+	}
+
+	let mut matches: Vec<GlobMatch> = top_matches.into_iter().map(|ranked| ranked.entry).collect();
+	matches.sort_by(compare_matches_by_rank);
 	Ok(matches)
 }
 
@@ -180,7 +304,11 @@ fn run_glob(
 			fs_cache::ScanDetail::Minimal
 		},
 	};
-	let mut matches = if config.use_cache {
+	let streams_bounded_sorted_partials =
+		config.sort_by_mtime && !config.use_cache && config.max_results != usize::MAX;
+	let mut matches = if streams_bounded_sorted_partials {
+		collect_sorted_matches_uncached(&glob_set, &config, on_match, &ct)?
+	} else if config.use_cache {
 		let scan = fs_cache::get_or_scan(&config.root, scan_options, &ct)?;
 		let mut matches = filter_entries(&scan.entries, &glob_set, &config, on_match, &ct)?;
 		// Empty-result recheck: if we got zero matches from a cached scan that's old
@@ -197,14 +325,13 @@ fn run_glob(
 
 	if config.sort_by_mtime {
 		// Sorting mode: rank by mtime descending, then apply max-results truncation.
-		matches.sort_by(|a, b| {
-			let a_mtime = a.mtime.unwrap_or(0.0);
-			let b_mtime = b.mtime.unwrap_or(0.0);
-			b_mtime
-				.partial_cmp(&a_mtime)
-				.unwrap_or(std::cmp::Ordering::Equal)
-		});
+		matches.sort_by(compare_matches_by_rank);
 		matches.truncate(config.max_results);
+		if !streams_bounded_sorted_partials && let Some(callback) = on_match {
+			for matched_entry in &matches {
+				callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
+			}
+		}
 	}
 	let total_matches = matches.len().min(u32::MAX as usize) as u32;
 	Ok(GlobResult { matches, total_matches })
@@ -215,8 +342,9 @@ fn run_glob(
 /// Resolves the search root, scans entries, applies glob and optional file-type
 /// filters, and optionally streams each accepted match through `on_match`.
 ///
-/// If `sortByMtime` is enabled, all matching entries are collected, sorted by
-/// descending mtime, then truncated to `maxResults`.
+/// If `sortByMtime` is enabled with a finite `maxResults`, uncached scans keep
+/// only the current top results while traversing instead of collecting the full
+/// tree.
 ///
 /// # Errors
 /// Returns an error when the search path cannot be resolved, the path is not a

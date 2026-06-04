@@ -944,7 +944,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("emits ACP plan updates from live todo_write results", async () => {
+	it("emits ACP plan updates from live todo results", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
@@ -956,7 +956,7 @@ describe("ACP agent", () => {
 				listener({
 					type: "tool_execution_end",
 					toolCallId: "todo_1",
-					toolName: "todo_write",
+					toolName: "todo",
 					isError: false,
 					result: {
 						content: [{ type: "text", text: "updated" }],
@@ -976,7 +976,7 @@ describe("ACP agent", () => {
 				listener({
 					type: "tool_execution_end",
 					toolCallId: "todo_empty",
-					toolName: "todo_write",
+					toolName: "todo",
 					isError: false,
 					result: {
 						content: [{ type: "text", text: "cleared" }],
@@ -1008,14 +1008,14 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("replays todo_write tool results as ACP plan updates", async () => {
+	it("replays todo tool results as ACP plan updates", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
 		stored.sessionManager.appendMessage({
 			role: "toolResult",
 			toolCallId: "todo_replay",
-			toolName: "todo_write",
+			toolName: "todo",
 			content: [{ type: "text", text: "updated" }],
 			details: {
 				phases: [{ name: "Replay", tasks: [{ content: "Restore plan", status: "pending" }] }],

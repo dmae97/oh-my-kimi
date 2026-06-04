@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { type Component, CURSOR_MARKER, type Focusable, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	CURSOR_MARKER,
+	type Focusable,
+	setTerminalScreenToScrollback,
+	TERMINAL,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -111,6 +118,16 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await nextTick.promise;
 	await Bun.sleep(1);
 	await term.flush();
+}
+
+function captureWrites(term: VirtualTerminal): string[] {
+	const writes: string[] = [];
+	const realWrite = term.write.bind(term);
+	vi.spyOn(term, "write").mockImplementation((data: string) => {
+		writes.push(data);
+		realWrite(data);
+	});
+	return writes;
 }
 
 function visible(term: VirtualTerminal): string[] {
@@ -1137,6 +1154,100 @@ describe("TUI terminal-state regressions", () => {
 					tui.stop();
 				}
 			});
+		});
+	});
+
+	describe("screen clearing", () => {
+		it("saves to scrollback and clears the viewport for supported non-destructive full paints", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(true);
+			const term = new VirtualTerminal(20, 5);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["hello"]));
+			const writes = captureWrites(term);
+
+			try {
+				tui.start();
+				await settle(term);
+				const out = writes.join("");
+				const screenToScrollback = out.indexOf("\x1b[22J");
+				const viewportClear = out.indexOf("\x1b[2J\x1b[H");
+				expect(screenToScrollback).toBeGreaterThanOrEqual(0);
+				expect(viewportClear).toBeGreaterThanOrEqual(0);
+				expect(screenToScrollback).toBeLessThan(viewportClear);
+				expect(out).not.toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("clears stale screen content on a supported non-destructive paint when the terminal ignores CSI 22 J", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(true);
+			const term = new VirtualTerminal(40, 8);
+			// A previous program's screen the TUI must not leave behind.
+			term.write("\x1b[H");
+			for (let r = 0; r < 6; r++) term.write(`STALE-ROW-${r} leftover content\r\n`);
+			await term.flush();
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["omp line 1", "omp line 2"]));
+
+			try {
+				tui.start();
+				await settle(term);
+				const viewport = term.getViewport().join("\n");
+				expect(viewport).not.toContain("STALE-ROW");
+				expect(viewport).toContain("omp line 1");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("keeps CSI 2 J as the non-destructive fallback", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(false);
+			const term = new VirtualTerminal(20, 5);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(["hello"]));
+			const writes = captureWrites(term);
+
+			try {
+				tui.start();
+				await settle(term);
+				const out = writes.join("");
+				expect(out).toContain("\x1b[2J\x1b[H");
+				expect(out).not.toContain("\x1b[22J");
+				expect(out).not.toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("uses ED3 for destructive rebuilds even when CSI 22 J is supported", async () => {
+			const saved = TERMINAL.supportsScreenToScrollback;
+			setTerminalScreenToScrollback(true);
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("line-", 6)));
+			const writes = captureWrites(term);
+
+			try {
+				tui.start();
+				await settle(term);
+				writes.length = 0;
+
+				tui.requestRender(true, { clearScrollback: true });
+				await settle(term);
+				const out = writes.join("");
+				expect(out).toContain("\x1b[2J\x1b[H\x1b[3J");
+				expect(out).not.toContain("\x1b[22J");
+			} finally {
+				tui.stop();
+				setTerminalScreenToScrollback(saved);
+			}
 		});
 	});
 
@@ -2897,21 +3008,15 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
-	describe("width model disagreement (renderer vs terminal)", () => {
-		// The renderer measures ZWJ emoji sequences as one 2-cell grapheme
-		// (unicode-width / Intl.Segmenter — matching ghostty and WezTerm), but many
-		// real terminals lay them out as separate glyphs: kitty and alacritty
-		// advance the cursor 4 cells for a 3-person family, Windows Terminal 5
-		// (https://mitchellh.com/writing/grapheme-clusters-in-terminals). The
-		// xterm.js test model (Unicode 6 tables) renders the same family as 3
-		// cells, so it stands in for this terminal class. The renderer cannot know
-		// which model the terminal uses; its contract is *containment*: every
-		// content write is wrapped in DECAWM-off (\x1b[?7l), so a line the terminal
-		// considers wider than the renderer believes is CLIPPED at the right margin
-		// — never wrapped. Wrapping would silently add rows, desync
-		// #previousLines/#scrollbackHighWater from the terminal, and produce the
-		// classic duplicated/phantom-row scrollback corruption.
-		const ZWJ_FAMILY = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"; // renderer: 2 cells, xterm.js: 3 cells
+	describe("ZWJ grapheme row containment", () => {
+		// Ghostty agrees with the renderer for this family sequence, so these
+		// regressions no longer use xterm's legacy width tables as the terminal
+		// model. They still pin the row-accounting boundary that used to corrupt
+		// scrollback when a terminal measured a grapheme wider than the renderer:
+		// content writes are wrapped in DECAWM-off (\x1b[?7l), so any future
+		// terminal-side overrun must be contained to the row instead of wrapping
+		// into a phantom spill row.
+		const ZWJ_FAMILY = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
 
 		// MutableLinesComponent pre-slices by UTF-16 code units, which would cut the
 		// ZWJ sequence before the renderer ever measures it. Width decisions must be
@@ -2930,14 +3035,14 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}
 
-		it("confines under-measured ZWJ rows to intra-line clipping; row accounting stays exact", async () => {
+		it("keeps ZWJ boundary rows on one terminal row; row accounting stays exact", async () => {
 			const width = 20;
 			const height = 6;
 			const term = new VirtualTerminal(width, height);
 			const tui = new TUI(term);
-			// Renderer width 18 + 2 = 20 (exact fit). xterm.js lays out 18 + 3 = 21
-			// cells, so the last cell of the family is clipped by the DECAWM-off
-			// guard. The row must still occupy exactly one terminal row.
+			// Renderer and Ghostty both fit 18 ASCII + the ZWJ family into this
+			// row. If either side drifts wider, DECAWM-off containment must still
+			// prevent a wrap into the following logical row.
 			const zwjRow = `${"B".repeat(18)}${ZWJ_FAMILY}`;
 			const lines = ["header", zwjRow, "tail"];
 			const component = new RawLinesComponent(lines);
@@ -2947,17 +3052,16 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				// One terminal row per logical line — the over-wide row did not wrap.
+				// One terminal row per logical line — the boundary row did not wrap.
 				expect(term.getScrollBuffer().length).toBe(height);
 				const viewport = visible(term);
 				expect(viewport[0]).toBe("header");
 				expect(viewport[2]).toBe("tail");
-				// The ZWJ row is clipped (terminal kept what fit), not spilled onto row 3.
 				expect(viewport[1]?.startsWith("B".repeat(18))).toBe(true);
 				expect(viewport[3]).toBe("");
 
 				// Push content into scrollback: accounting must track logical rows
-				// exactly even with the clipped row in history.
+				// exactly with the ZWJ boundary row in history.
 				const appended = [...lines, ...rows("after-", 10)];
 				component.setLines(appended);
 				tui.requestRender();
@@ -2968,14 +3072,14 @@ describe("TUI terminal-state regressions", () => {
 				expect(buffer[0]).toBe("header");
 				expect(buffer[2]).toBe("tail");
 				expect(buffer[buffer.length - 1]).toBe("after-9");
-				// The clipped row exists exactly once — no duplicate, no spill row.
+				// The ZWJ row exists exactly once — no duplicate, no spill row.
 				expect(countMatches(buffer, /^B{18}/)).toBe(1);
 			} finally {
 				tui.stop();
 			}
 		});
 
-		it("keeps differential row targeting exact after rendering a clipped ZWJ row", async () => {
+		it("keeps differential row targeting exact after rendering a ZWJ boundary row", async () => {
 			const width = 20;
 			const height = 8;
 			const term = new VirtualTerminal(width, height);
@@ -3010,13 +3114,12 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
-	describe("modern width model (renderer-terminal agreement)", () => {
-		// Counterpart of the disagreement tests above: on terminals whose width
-		// model matches the renderer's native engine (ghostty/WezTerm/kitty/iTerm2/
-		// Windows Terminal 1.22+, modeled by VirtualTerminal's "modern" width
-		// model), rendering must be cell-exact — an exact-fit line fills the row
-		// with nothing clipped, and the renderer's truncation boundary lands the
-		// last glyph exactly at the right margin.
+	describe("Ghostty-backed renderer/terminal agreement", () => {
+		// Counterpart of the disagreement tests above: VirtualTerminal is backed by
+		// Ghostty's grapheme-aware engine, so its terminal cell widths must agree
+		// with the renderer for emoji presentation, VS16, and keycap sequences. An
+		// exact-fit line fills the row with nothing clipped, and the renderer's
+		// truncation boundary lands the last glyph exactly at the right margin.
 
 		// MutableLinesComponent pre-slices by UTF-16 code units; width decisions
 		// must come from the renderer's #fitLineToWidth.
@@ -3036,10 +3139,10 @@ describe("TUI terminal-state regressions", () => {
 
 		it("renders an exact-fit emoji-presentation line without truncation or wrap", async () => {
 			const width = 20;
-			const term = new VirtualTerminal(width, 6, undefined, "modern");
+			const term = new VirtualTerminal(width, 6);
 			const tui = new TUI(term);
-			// 14 ASCII + ⚠️(2) + 🙂(2) + keycap(2) = 20 cells in BOTH the renderer's
-			// model and the modern terminal model — an exact fit.
+			// 14 ASCII + ⚠️(2) + 🙂(2) + keycap(2) = 20 cells for both Ghostty's
+			// grapheme-aware terminal and the renderer — an exact fit.
 			const line = `${"a".repeat(14)}\u26A0\uFE0F\u{1F642}1\uFE0F\u20E3`;
 			const component = new RawLinesComponent(["head", line, "tail"]);
 			tui.addChild(component);
@@ -3060,32 +3163,50 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("exposes Ghostty legacy-width/xterm-width overrun instead of accepting hidden truncation", () => {
+			const width = 12;
+			const term = new VirtualTerminal(width, 4);
+			const prefix = "012345678";
+			const wide = "\u{1F642}";
+			const sentinel = "sentinel";
+
+			// A legacy/xterm-width oracle that counts 🙂 as 1 would accept this as
+			// a 12-cell exact fit: 9 ASCII + 🙂 + ZZ. Ghostty counts the emoji as
+			// 2 cells, so the second Z overruns the row. Renderer paints run with
+			// DECAWM off; mirror that containment contract directly through
+			// VirtualTerminal instead of reaching into TUI internals.
+			term.write(`\x1b[?7l${prefix}${wide}ZZ\r\n${sentinel}\x1b[?7h`);
+			const viewport = term.getViewport();
+			expect(viewport[0]).toBe(`${prefix}${wide}Z`);
+			expect(viewport[0]).not.toContain("ZZ");
+			expect(viewport[1]).toBe(sentinel);
+			expect(term.getScrollBuffer().length).toBe(4);
+		});
+
 		it("lands the renderer's truncation boundary exactly at the right margin", async () => {
 			const width = 12;
-			const term = new VirtualTerminal(width, 4, undefined, "modern");
+			const term = new VirtualTerminal(width, 4);
 			const tui = new TUI(term);
 			// Renderer width: 10 ASCII + 2 + 2 + 2 = 16 > 12 → #fitLineToWidth
-			// truncates. The truncated text must occupy exactly 12 cells on a modern
-			// terminal: 10 ASCII + ⚠️ = 12, with 🙂 dropped whole (never split).
+			// truncates. The truncated text must occupy exactly 12 Ghostty cells:
+			// 10 ASCII + ⚠️ = 12, with 🙂 dropped whole (never split).
 			const line = `${"x".repeat(10)}\u26A0\uFE0F\u{1F642}1\uFE0F\u20E3`;
-			const component = new RawLinesComponent([line]);
+			const nextLine = "after";
+			const component = new RawLinesComponent([line, nextLine]);
 			tui.addChild(component);
 
 			try {
 				tui.start();
 				await settle(term);
 
-				const rendered = term.getViewport()[0] ?? "";
+				const viewport = term.getViewport();
+				const rendered = viewport[0] ?? "";
 				// The kept prefix is exactly the renderer's 12-cell truncation.
 				expect(rendered).toBe(`${"x".repeat(10)}\u26A0\uFE0F`);
-				// And it fills the row to the last column on the modern terminal —
-				// writing one more cell would have wrapped/clipped.
-				term.write("\r");
-				await term.flush();
-				const homed = term.getCursor();
-				term.write(rendered);
-				await term.flush();
-				expect(term.getCursor().col - homed.col).toBe(width);
+				// The exact-width row occupies one Ghostty row: the dropped glyphs
+				// neither split nor wrap into the following logical row.
+				expect(viewport[1]?.trimEnd()).toBe(nextLine);
+				expect(term.getScrollBuffer().length).toBe(4);
 			} finally {
 				tui.stop();
 			}
@@ -3247,9 +3368,8 @@ describe("TUI terminal-state regressions", () => {
 		// trails / phantom rows in scrollback. The renderer disables autowrap
 		// (\x1b[?7l) around every paint and restores it (\x1b[?7h) only at PAINT_END,
 		// after emitting explicit CRLFs, so an exact-width row never latches
-		// pending-wrap. These tests pin that on both the legacy (CJK 2-cell) and
-		// modern (emoji 2-cell) width models, across the initial, diff, and append
-		// emit paths.
+		// pending-wrap. These tests pin that with Ghostty-backed ASCII and wide-glyph
+		// rows across the initial, diff, and append emit paths.
 		class RawLinesComponent implements Component {
 			#lines: string[];
 			constructor(lines: string[]) {
@@ -3264,57 +3384,55 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}
 
-		for (const widthModel of ["legacy", "modern"] as const) {
-			it(`keeps exact-width rows on one terminal row without staircase (${widthModel})`, async () => {
-				const width = 10;
-				const height = 6;
-				const term = new VirtualTerminal(width, height, undefined, widthModel);
-				const tui = new TUI(term);
-				// Two exact-width (10-cell) rows: one ASCII, one ending on a 2-cell
-				// CJK glyph exactly at the right margin (the pending-wrap trigger).
-				const exactAscii = "0123456789";
-				const exactWide = "AAAA界界界"; // 4 + 2+2+2 = 10
-				const lines = ["top", exactAscii, exactWide, "bot"];
-				const component = new RawLinesComponent(lines);
-				tui.addChild(component);
+		it("keeps exact-width Ghostty-backed rows on one terminal row without staircase", async () => {
+			const width = 10;
+			const height = 6;
+			const term = new VirtualTerminal(width, height);
+			const tui = new TUI(term);
+			// Two exact-width (10-cell) rows: one ASCII, one ending on 2-cell wide
+			// glyphs exactly at the right margin (the pending-wrap trigger).
+			const exactAscii = "0123456789";
+			const exactWide = "AAAA界界界"; // 4 + 2+2+2 = 10
+			const lines = ["top", exactAscii, exactWide, "bot"];
+			const component = new RawLinesComponent(lines);
+			tui.addChild(component);
 
-				try {
-					tui.start();
-					await settle(term);
+			try {
+				tui.start();
+				await settle(term);
 
-					// Each logical row occupies exactly one terminal row — no wrap.
-					// Content (4 rows) fits the 6-row viewport, so the buffer is the
-					// viewport: 4 content rows + 2 trailing blanks, each on its own row.
-					const buffer = term.getScrollBuffer().map(line => line.trimEnd());
-					expect(buffer).toEqual(["top", exactAscii, exactWide, "bot", "", ""]);
+				// Each logical row occupies exactly one terminal row — no wrap.
+				// Content (4 rows) fits the 6-row viewport, so the buffer is the
+				// viewport: 4 content rows + 2 trailing blanks, each on its own row.
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(buffer).toEqual(["top", exactAscii, exactWide, "bot", "", ""]);
 
-					// Diff-edit the row below the exact-width wide row: if pending-wrap
-					// had latched, the relative cursor move would land a row off.
-					component.setLines(["top", exactAscii, exactWide, "EDIT"]);
-					tui.requestRender();
-					await settle(term);
-					expect(term.getViewport().map(line => line.trimEnd())).toEqual([
-						"top",
-						exactAscii,
-						exactWide,
-						"EDIT",
-						"",
-						"",
-					]);
+				// Diff-edit the row below the exact-width wide row: if pending-wrap
+				// had latched, the relative cursor move would land a row off.
+				component.setLines(["top", exactAscii, exactWide, "EDIT"]);
+				tui.requestRender();
+				await settle(term);
+				expect(term.getViewport().map(line => line.trimEnd())).toEqual([
+					"top",
+					exactAscii,
+					exactWide,
+					"EDIT",
+					"",
+					"",
+				]);
 
-					// Append past the viewport: exact-width rows must scroll into
-					// history one row each, contiguous, no phantom blank from a latched
-					// wrap.
-					component.setLines(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
-					tui.requestRender();
-					await settle(term);
-					const after = term.getScrollBuffer().map(line => line.trimEnd());
-					expect(after).toEqual(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
-				} finally {
-					tui.stop();
-				}
-			});
-		}
+				// Append past the viewport: exact-width rows must scroll into
+				// history one row each, contiguous, no phantom blank from a latched
+				// wrap.
+				component.setLines(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
+				tui.requestRender();
+				await settle(term);
+				const after = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(after).toEqual(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 	describe("hardware cursor preference", () => {
 		const SHOW_CURSOR = "\x1b[?25h";
@@ -3324,6 +3442,23 @@ describe("TUI terminal-state regressions", () => {
 			invalidate(): void {}
 			render(_width: number): string[] {
 				return [`prompt>${CURSOR_MARKER}`];
+			}
+		}
+
+		class CursorModeAware implements Component, Focusable {
+			focused = false;
+			useTerminalCursor = false;
+			seenModes: boolean[] = [];
+
+			setUseTerminalCursor(useTerminalCursor: boolean): void {
+				this.useTerminalCursor = useTerminalCursor;
+				this.seenModes.push(useTerminalCursor);
+			}
+
+			invalidate(): void {}
+
+			render(_width: number): string[] {
+				return [this.focused ? `prompt>${CURSOR_MARKER}` : "prompt>"];
 			}
 		}
 
@@ -3389,6 +3524,36 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("syncs focused component cursor rendering mode on focus and preference changes", () => {
+			const renderScheduler = {
+				now: () => 0,
+				scheduleImmediate: () => {},
+				scheduleRender: () => ({ cancel: () => {} }),
+			};
+			const tui = new TUI(new VirtualTerminal(20, 4), true, { renderScheduler });
+			const first = new CursorModeAware();
+			const second = new CursorModeAware();
+
+			tui.setFocus(first);
+			expect(first.focused).toBe(true);
+			expect(first.useTerminalCursor).toBe(true);
+			expect(first.seenModes).toEqual([true]);
+
+			tui.setShowHardwareCursor(false);
+			expect(first.useTerminalCursor).toBe(false);
+			expect(first.seenModes).toEqual([true, false]);
+
+			tui.setFocus(second);
+			expect(first.focused).toBe(false);
+			expect(second.focused).toBe(true);
+			expect(second.useTerminalCursor).toBe(false);
+			expect(second.seenModes).toEqual([false]);
+
+			tui.setShowHardwareCursor(true);
+			expect(first.useTerminalCursor).toBe(false);
+			expect(second.useTerminalCursor).toBe(true);
+			expect(second.seenModes).toEqual([false, true]);
+		});
 		it("shows the terminal cursor during stop even when paints keep it hidden", async () => {
 			// DECSC/DECRC restore cursor position and attributes, not DECTCEM
 			// visibility. The TUI hides the hardware cursor before paints, so stop()
@@ -3591,5 +3756,166 @@ describe("TUI terminal-state regressions", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("foreground-tool streaming on ED3-risk terminals", () => {
+	beforeEach(() => {
+		let monotonicNow = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => {
+			monotonicNow += 20;
+			return monotonicNow;
+		});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	// Repro of the "injected notification chip renders over the active tool
+	// render" report. A foreground tool (an active `write`) streams on an
+	// ED3-risk terminal (ghostty/kitty/…) whose viewport position is
+	// unobservable. Its header carries a live elapsed-time counter that ticks
+	// every frame; once output scrolls it above the viewport top, each tick is an
+	// OFFSCREEN edit. The agent requests an eager native-scrollback rebuild for
+	// the streaming turn, but that opt-in is gated off on ED3-risk terminals, so
+	// an offscreen-edit-with-growth frame repaints the viewport in place
+	// (`viewportRepaint`) — advancing the rendered line count WITHOUT committing
+	// the new overflow to native history. `#scrollbackHighWater` then lags the
+	// logical viewport top. A later shrink whose changes land in the visible
+	// region finds `naturalViewportTop >= #scrollbackHighWater`, slips past the
+	// shrink-across-boundary guard, and reaches the diff emitter, which anchors to
+	// `#maxLinesRendered - height`: it rewrites only the suffix, drops the newly
+	// exposed top row, and leaves a blank at the bottom — so every row below the
+	// edit renders one row too high, painting over the rows above. The shrink must
+	// instead re-anchor the bottom-anchored viewport.
+	it("re-anchors a visible-region shrink after an offscreen-edit grow lags native history", async () => {
+		await withTerminalRisk(true, async () => {
+			const term = new UnknownViewportTerminal(40, 6);
+			const tui = new TUI(term);
+			// done-* are completed messages that have scrolled into history; the
+			// "Write …s" header carries the ticking timer; code-* is the streamed
+			// preview; loader/todos/editor is the stable footer below the tool.
+			const frameA = [
+				"done-0",
+				"done-1",
+				"done-2",
+				"done-3",
+				"done-4",
+				"done-5",
+				"Write 0s",
+				"code-148",
+				"code-149",
+				"code-150",
+				"loader",
+				"todos",
+				"editor",
+			];
+			const component = new MutableLinesComponent(frameA);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				// Foreground tool active: the agent enables eager native-scrollback rebuild.
+				tui.setEagerNativeScrollbackRebuild(true);
+				await settle(term);
+				// The header has scrolled above the viewport top (offscreen).
+				expect(visible(term)).toEqual(["code-148", "code-149", "code-150", "loader", "todos", "editor"]);
+
+				// Frame B: the offscreen header ticks (0s -> 1s) AND four notification
+				// chips inject between the tool and the footer — an offscreen-edit grow
+				// that repaints in place and lags native history behind the new overflow.
+				const frameB = [
+					"done-0",
+					"done-1",
+					"done-2",
+					"done-3",
+					"done-4",
+					"done-5",
+					"Write 1s",
+					"code-148",
+					"code-149",
+					"code-150",
+					"chip-0",
+					"chip-1",
+					"chip-2",
+					"chip-3",
+					"loader",
+					"todos",
+					"editor",
+				];
+				component.setLines(frameB);
+				tui.requestRender();
+				await settle(term);
+				expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
+
+				// Frame C: a visible chip collapses (a shrink whose first change lands in
+				// the visible region) while the header does NOT tick this frame. The
+				// viewport must re-anchor one row up, not drift its content upward.
+				const frameC = [
+					"done-0",
+					"done-1",
+					"done-2",
+					"done-3",
+					"done-4",
+					"done-5",
+					"Write 1s",
+					"code-148",
+					"code-149",
+					"code-150",
+					"chip-0",
+					"chip-1",
+					"chip-2",
+					"loader",
+					"todos",
+					"editor",
+				];
+				component.setLines(frameC);
+				tui.requestRender();
+				await settle(term);
+				expect(visible(term)).toEqual(["chip-0", "chip-1", "chip-2", "loader", "todos", "editor"]);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	// Repro of the drag-resize line-duplication: dragging the terminal smaller
+	// fires a stream of height shrinks. While the transcript FITS the viewport,
+	// each shrink used to scroll live rows into native scrollback — the in-place
+	// viewport repaint parked the hardware cursor on the padded viewport bottom,
+	// BELOW the short content, so the terminal's shrink reflow pushed the live
+	// rows up to keep that cursor on screen and the next repaint redrew them,
+	// committing one duplicate copy of the visible block per resize step. The
+	// repaint must leave the cursor on the real content bottom instead.
+	it("does not duplicate fitting content into scrollback across a drag-resize", async () => {
+		await withTerminalRisk(true, async () => {
+			const term = new UnknownViewportTerminal(40, 24);
+			const tui = new TUI(term);
+			const body = rows("line-", 4);
+			const component = new MutableLinesComponent(body);
+			tui.addChild(component);
+			try {
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await settle(term);
+				// A drag-resize: a stream of height shrinks while the 4-line block
+				// keeps fitting the (still larger) viewport.
+				for (const height of [22, 20, 18, 16, 14, 12, 10, 8, 6]) {
+					term.resize(40, height);
+					tui.requestRender();
+					await settle(term);
+				}
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < body.length; i++) {
+					expect(
+						countMatches(scrollback, new RegExp(`\\bline-${i}\\b`)),
+						`line-${i} must not duplicate across resizes`,
+					).toBeLessThanOrEqual(1);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 });

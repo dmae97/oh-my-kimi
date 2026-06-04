@@ -40,6 +40,17 @@ function createFakeRedis(): FakeRedis {
 		async get(key) {
 			return strings.has(key) ? (strings.get(key) as string) : null;
 		},
+		async getrange(key, start, end) {
+			const bytes = Buffer.from(strings.get(key) ?? "", "utf-8");
+			if (bytes.length === 0) return "";
+			const from = Math.max(0, start < 0 ? bytes.length + start : start);
+			const to = Math.min(bytes.length - 1, end < 0 ? bytes.length + end : end);
+			if (to < from) return "";
+			return bytes.subarray(from, to + 1).toString("utf-8");
+		},
+		async strlen(key) {
+			return Buffer.byteLength(strings.get(key) ?? "", "utf-8");
+		},
 		async set(key, value) {
 			strings.set(key, value);
 			return "OK";
@@ -48,7 +59,7 @@ function createFakeRedis(): FakeRedis {
 			const current = strings.get(key) ?? "";
 			const next = current + value;
 			strings.set(key, next);
-			return next.length;
+			return Buffer.byteLength(next, "utf-8");
 		},
 		async del(...keys) {
 			let n = 0;

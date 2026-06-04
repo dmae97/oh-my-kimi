@@ -538,7 +538,7 @@ interface Terminal {
 **Built-in implementations:**
 
 - `ProcessTerminal` - Uses `process.stdin/stdout`
-- `VirtualTerminal` - For testing (uses `@xterm/headless`)
+- `VirtualTerminal` - For testing (uses ghostty-web)
 
 ## Utilities
 

@@ -267,6 +267,7 @@ export class UiHelpers {
 					this.ctx.hideThinkingBlock,
 					() => this.ctx.ui.requestRender(),
 					this.ctx.session.extensionRunner?.getAssistantThinkingRenderers(),
+					this.ctx.ui.imageBudget,
 				);
 				this.ctx.chatContainer.addChild(assistantComponent);
 				break;

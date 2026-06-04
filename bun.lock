@@ -175,8 +175,8 @@
         "marked": "catalog:",
       },
       "devDependencies": {
-        "@xterm/headless": "catalog:",
         "chalk": "catalog:",
+        "ghostty-web": "catalog:",
       },
     },
     "packages/typescript-edit-benchmark": {
@@ -281,6 +281,7 @@
     "diff": "^9.0.0",
     "fastembed": "2.1.0",
     "fflate": "0.8.3",
+    "ghostty-web": "^0.4.0",
     "handlebars": "^4.7.9",
     "linkedom": "^0.18.12",
     "lint-staged": "^17.0.5",
@@ -995,6 +996,8 @@
     "get-caller-file": ["get-caller-file@2.0.5", "", {}, "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg=="],
 
     "get-east-asian-width": ["get-east-asian-width@1.6.0", "", {}, "sha512-QRbvDIbx6YklUe6RxeTeleMR0yv3cYH6PsPZHcnVn7xv7zO1BHN8r0XETu8n6Ye3Q+ahtSarc3WgtNWmehIBfA=="],
+
+    "ghostty-web": ["ghostty-web@0.4.0", "", {}, "sha512-0puDBik2qapbD/QQBW9o5ZHfXnZBqZWx/ctBiVtKZ6ZLds4NYb+wZuw1cRLXZk9zYovIQ908z3rvFhexAvc5Hg=="],
 
     "global-agent": ["global-agent@3.0.0", "", { "dependencies": { "boolean": "^3.0.1", "es6-error": "^4.1.1", "matcher": "^3.0.0", "roarr": "^2.15.3", "semver": "^7.3.2", "serialize-error": "^7.0.1" } }, "sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q=="],
 

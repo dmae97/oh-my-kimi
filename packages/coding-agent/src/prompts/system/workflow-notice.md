@@ -62,7 +62,7 @@ Scale to the ask: "find any bugs" → a few finders, single-vote verify. "thorou
 </patterns>
 
 <execution>
-- Decompose the surface first; capture it in `todo_write` when it spans phases.
+- Decompose the surface first; capture it in `todo` when it spans phases.
 - Prefer `schema=` for any agent whose output you branch on.
 - After a fan-out returns, YOU own correctness: read the artifacts, run the gate, verify before acting. Subagents do the legwork; they don't get the last word.
 - Keep going until the task is closed — a returned fan-out is a step, not a stopping point.

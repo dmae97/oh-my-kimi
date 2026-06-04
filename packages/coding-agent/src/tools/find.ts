@@ -368,8 +368,8 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			let timedOut = false;
 			try {
 				const result = await doGlob(useGitignore);
-				// Sort by mtime descending (most recent first) in JS instead of native.
-				// This allows native glob to early-terminate at maxResults.
+				// Native glob returns a bounded mtime-ranked set; keep the JS sort for
+				// deterministic ordering across cached and uncached native paths.
 				result.matches.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
 				matches = result.matches;
 			} catch (error) {

@@ -31,6 +31,9 @@ function createContext(args: {
 			onTimeout?: () => void;
 			onLeft?: () => void;
 			onRight?: () => void;
+			selectionMarker?: "radio" | "checkbox";
+			checkedIndices?: readonly number[];
+			markableCount?: number;
 		},
 	) => Promise<string | undefined>;
 	editor?: (
@@ -1120,5 +1123,65 @@ describe("AskTool multi-question navigation", () => {
 		expect(result.details?.results?.[0]?.customInput).toBeUndefined();
 		expect(result.details?.results?.[1]?.selectedOptions).toEqual(["two"]);
 		expect(editor).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("AskTool option markers", () => {
+	it("renders single-choice call options with circular radio markers, not checkboxes", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const rendered = askToolRenderer.renderCall(
+			{ question: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] },
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const text = stripAnsi(rendered.render(120).join("\n"));
+		expect(text).toContain(theme!.radio.unselected);
+		expect(text).not.toContain(theme!.checkbox.unchecked);
+	});
+
+	it("renders multi-select call options with rectangular checkbox markers, not radios", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const rendered = askToolRenderer.renderCall(
+			{ question: "Pick many", options: [{ label: "Alpha" }, { label: "Beta" }], multi: true },
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const text = stripAnsi(rendered.render(120).join("\n"));
+		expect(text).toContain(theme!.checkbox.unchecked);
+		expect(text).not.toContain(theme!.radio.unselected);
+	});
+
+	it("renders single-choice result selection with a filled radio marker", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const rendered = askToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: { question: "Pick one", multi: false, selectedOptions: ["Alpha"] },
+			},
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const text = stripAnsi(rendered.render(120).join("\n"));
+		expect(text).toContain(theme!.radio.selected);
+		expect(text).not.toContain(theme!.checkbox.checked);
+	});
+
+	it("renders multi-select result selections with checkbox markers", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const rendered = askToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: { question: "Pick many", multi: true, selectedOptions: ["Alpha", "Beta"] },
+			},
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const text = stripAnsi(rendered.render(120).join("\n"));
+		expect(text).toContain(theme!.checkbox.checked);
+		expect(text).not.toContain(theme!.radio.selected);
 	});
 });

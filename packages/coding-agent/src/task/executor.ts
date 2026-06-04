@@ -147,6 +147,12 @@ export interface ExecutorOptions {
 	task: string;
 	assignment?: string;
 	context?: string;
+	/**
+	 * The session's active overall plan, handed off so subagents spawned during
+	 * plan execution share the same plan context as the main agent. Omitted when
+	 * the session did not start with a plan (or while plan mode is still active).
+	 */
+	planReference?: { path: string; content: string };
 	description?: string;
 	index: number;
 	id: string;
@@ -1230,6 +1236,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 							agent: agent.systemPrompt,
 							context: options.context?.trim() ?? "",
+							planReference: options.planReference?.content ?? "",
+							planReferencePath: options.planReference?.path ?? "",
 							worktree: worktree ?? "",
 							outputSchema: normalizedOutputSchema,
 							contextFile: contextFileForPrompt,
@@ -1276,7 +1284,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			const subagentToolNames = session.getActiveToolNames();
-			const parentOwnedToolNames = new Set(["todo_write"]);
+			const parentOwnedToolNames = new Set(["todo"]);
 			const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
 			if (filteredSubagentTools.length !== subagentToolNames.length) {
 				await awaitAbortable(session.setActiveToolsByName(filteredSubagentTools));

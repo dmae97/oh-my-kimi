@@ -27,6 +27,7 @@ interface InputState {
 export class Input implements Component, Focusable {
 	#value: string = "";
 	#cursor: number = 0; // Cursor position in the value
+	#useTerminalCursor = false;
 	onSubmit?: (value: string) => void;
 	onEscape?: () => void;
 
@@ -50,6 +51,14 @@ export class Input implements Component, Focusable {
 	setValue(value: string): void {
 		this.#value = value;
 		this.#cursor = Math.min(this.#cursor, value.length);
+	}
+
+	setUseTerminalCursor(useTerminalCursor: boolean): void {
+		this.#useTerminalCursor = useTerminalCursor;
+	}
+
+	getUseTerminalCursor(): boolean {
+		return this.#useTerminalCursor;
 	}
 
 	handleInput(data: string): void {
@@ -422,23 +431,21 @@ export class Input implements Component, Focusable {
 		let cursorDisplay = prefixText.length;
 		cursorDisplay = Math.max(0, Math.min(cursorDisplay, visibleText.length));
 
-		// Build line with fake cursor
-		// Insert cursor character at cursor position
+		// Build the visible line and insert the cursor marker at the buffer cursor.
 		const graphemes = [...segmenter.segment(visibleText.slice(cursorDisplay))];
 		const cursorGrapheme = graphemes[0];
 
 		const beforeCursor = visibleText.slice(0, cursorDisplay);
-		const atCursor = cursorGrapheme?.segment ?? " ";
+		const atCursor = cursorGrapheme?.segment ?? "";
 		const afterCursor = visibleText.slice(cursorDisplay + atCursor.length);
 
-		// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
+		// Hardware cursor marker (zero-width, emitted before the cursor cell for IME positioning)
 		const marker = this.focused ? CURSOR_MARKER : "";
-		// Use inverse video to show cursor
-		const cursorChar = `\x1b[7m${atCursor}\x1b[27m`; // ESC[7m = reverse video, ESC[27m = normal
+		const cursorChar = this.#useTerminalCursor ? atCursor : `\x1b[7m${atCursor || " "}\x1b[27m`;
 
 		// Clamp only the trailing text (measured in terminal cells), keeping the cursor marker intact.
 		const beforeWidth = visibleWidth(beforeCursor);
-		const cursorWidth = visibleWidth(atCursor);
+		const cursorWidth = this.#useTerminalCursor ? visibleWidth(atCursor) : visibleWidth(atCursor || " ");
 		const remainingAfterWidth = Math.max(0, availableWidth - beforeWidth - cursorWidth);
 		const clampedAfterCursor = sliceWithWidth(afterCursor, 0, remainingAfterWidth, true).text;
 		const renderedNoMarker = beforeCursor + cursorChar + clampedAfterCursor;

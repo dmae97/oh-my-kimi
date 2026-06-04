@@ -1,10 +1,10 @@
-# todo_write
+# todo
 
 > Applies ordered mutations to the session todo list and returns a text summary plus the full phase/task state.
 
 ## Source
-- Entry: `packages/coding-agent/src/tools/todo-write.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/todo-write.md`
+- Entry: `packages/coding-agent/src/tools/todo.ts`
+- Model-facing prompt: `packages/coding-agent/src/prompts/tools/todo.md`
 - Key collaborators:
   - `packages/coding-agent/src/tools/index.ts` — registers tool, exposes session hooks, gates availability.
   - `packages/coding-agent/src/modes/controllers/event-controller.ts` — updates the visible todo UI on tool completion.
@@ -59,10 +59,10 @@ The tool returns a single-shot `AgentToolResult`:
 - `TodoPhase`: `{ name: string, tasks: TodoItem[] }`
 - `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned", notes?: string[] }`
 
-The TUI renderer (`todoWriteToolRenderer`) merges call and result into one transcript block, renders phases as a tree, shows note counts as superscripts, and renders the note bodies only for the current `in_progress` task. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
+The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block, renders phases as a tree, shows note counts as superscripts, and renders the note bodies only for the current `in_progress` task. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
 
 ## Flow
-1. `TodoWriteTool.execute(...)` clones the current cached phases from `session.getTodoPhases?.() ?? []` (`packages/coding-agent/src/tools/todo-write.ts`).
+1. `TodoTool.execute(...)` clones the current cached phases from `session.getTodoPhases?.() ?? []` (`packages/coding-agent/src/tools/todo.ts`).
 2. `applyParams(...)` walks `params.ops` in order and applies each entry with `applyEntry(...)`.
 3. Each op mutates the working phase array:
    - `initPhases(...)` rebuilds the list from scratch.
@@ -77,7 +77,7 @@ The TUI renderer (`todoWriteToolRenderer`) merges call and result into one trans
    - if none are `in_progress`, the first `pending` task in phase/task order is auto-promoted to `in_progress`.
 6. `execute(...)` stores the normalized phases with `session.setTodoPhases?.(...)` and reports `storage` as `"session"` when `session.getSessionFile()` exists, else `"memory"`.
 7. `getCompletionTransitions(...)` compares the previous and updated phases; newly completed tasks are returned in `details.completedTasks`.
-8. The agent runtime also watches `todo_write` tool results in `packages/coding-agent/src/session/agent-session.ts`; successful results refresh cached todos, failed results inject a hidden next-turn reminder telling the model that todo progress is not visible until it retries.
+8. The agent runtime also watches `todo` tool results in `packages/coding-agent/src/session/agent-session.ts`; successful results refresh cached todos, failed results inject a hidden next-turn reminder telling the model that todo progress is not visible until it retries.
 9. The event controller updates the visible todo UI from `result.details.phases` on success, or shows a warning on error (`packages/coding-agent/src/modes/controllers/event-controller.ts`).
 
 ## Modes / Variants
@@ -113,16 +113,16 @@ The same file also exposes non-tool helpers used by `/todo`:
   - Mutates the session todo cache through `setTodoPhases`.
   - `storage` reports whether the session has a backing session file, but the tool does not append a custom session entry itself.
   - Successful tool-result messages carry `details.phases`; `getLatestTodoPhasesFromEntries(...)` can reconstruct state later from those transcript entries.
-  - Failed `todo_write` results cause `agent-session` to enqueue a hidden next-turn reminder (`customType: "todo-write-error-reminder"`).
+  - Failed `todo` results cause `agent-session` to enqueue a hidden next-turn reminder (`customType: "todo-error-reminder"`).
 - User-visible prompts / interactive UI
-  - Transcript block is rendered by `todoWriteToolRenderer` and merged with the call line.
+  - Transcript block is rendered by `todoToolRenderer` and merged with the call line.
   - `event-controller` updates the visible todo panel from successful results.
   - On error, `event-controller` shows `Todo update failed...`; the visible panel may stay stale until a later successful call.
 - Background work / cancellation
   - `AgentSession.setTodoPhases(...)` schedules auto-clear timers for `completed` / `abandoned` tasks via `tasks.todoClearDelay`.
 
 ## Limits & Caps
-- `ops` array: `minItems: 1` (`todoWriteSchema`).
+- `ops` array: `minItems: 1` (`todoSchema`).
 - `init.list[*].items`: `minItems: 1`.
 - `append.items`: `minItems: 1`.
 - Renderer collapsed preview: `PREVIEW_LIMITS.COLLAPSED_ITEMS = 8` (`packages/coding-agent/src/tools/render-utils.ts`).
@@ -131,7 +131,7 @@ The same file also exposes non-tool helpers used by `/todo`:
 
 ## Errors
 - Ordinary bad op payloads are accumulated as human-readable strings in `errors`; the tool still returns the mutated state, but marks the result `isError: true`.
-- Error strings come from the helpers in `packages/coding-agent/src/tools/todo-write.ts`, including:
+- Error strings come from the helpers in `packages/coding-agent/src/tools/todo.ts`, including:
   - `Missing list for init operation`
   - `Missing task content`
   - `Task "..." not found` with an extra empty-list hint when applicable
@@ -156,8 +156,8 @@ The same file also exposes non-tool helpers used by `/todo`:
 - `normalizeInProgressTask(...)` runs after the whole batch, not after each op. A single call can intentionally build an intermediate invalid state and rely on final normalization.
 - `storage: "session"` means the session has a session-file backing; it does not mean this tool wrote a durable custom entry.
 - Reload persistence differs by path:
-  - plain `todo_write` calls survive in transcript tool-result details;
+  - plain `todo` calls survive in transcript tool-result details;
   - `/todo` command edits additionally append `customType: "user_todo_edit"` entries and inject a visible-to-model `<system-reminder>` developer message describing the manual edit.
 - On session resume, `AgentSession.#syncTodoPhasesFromBranch()` strips `completed` and `abandoned` tasks before restoring the cached list. The `/todo` command works around that by reading the latest transcript/custom-entry state so historical done/dropped tasks still appear to the user.
 - Tool availability is gated by `todo.enabled`, and the registry excludes it when `includeYield` is enabled (`packages/coding-agent/src/tools/index.ts`).
-- Subagents do not inherit `todo_write`; `packages/coding-agent/src/task/executor.ts` filters it out as a parent-owned tool.
+- Subagents do not inherit `todo`; `packages/coding-agent/src/task/executor.ts` filters it out as a parent-owned tool.

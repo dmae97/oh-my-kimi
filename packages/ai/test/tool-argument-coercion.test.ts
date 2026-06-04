@@ -743,7 +743,7 @@ describe("Tool argument coercion", () => {
 	});
 	it("parses JSON-stringified array containing raw newlines inside string values", () => {
 		const tool: Tool = {
-			name: "todo_write_like",
+			name: "todo_like",
 			description: "",
 			parameters: z.object({
 				phases: z.array(
@@ -769,7 +769,7 @@ describe("Tool argument coercion", () => {
 		const toolCall: ToolCall = {
 			type: "toolCall",
 			id: "call-rawnl",
-			name: "todo_write_like",
+			name: "todo_like",
 			arguments: { phases: stringifiedPhases },
 		};
 

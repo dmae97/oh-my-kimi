@@ -3,9 +3,28 @@ import { Marked, marked, type Token, Tokenizer, type Tokens } from "marked";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
-import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
+import {
+	applyBackgroundToLine,
+	encodeTextSized,
+	getSegmenter,
+	padding,
+	replaceTabs,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../utils";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+
+// OSC 66 (Kitty text-sizing) heading spans are emitted as a single indivisible
+// unit by the H1 render path. Like image-protocol lines, they must bypass
+// ANSI wrapping and width padding: re-wrapping splits/normalizes the sized span
+// (recomputing the explicit `w=` cell count and hoisting SGR out of the OSC
+// payload), and padding would append trailing cells past the doubled glyph.
+const OSC66_LINE_PREFIX = "\x1b]66;";
+
+function isOsc66Line(line: string): boolean {
+	return line.includes(OSC66_LINE_PREFIX);
+}
 
 class StrictStrikethroughTokenizer extends Tokenizer {
 	override del(src: string): Tokens.Del | undefined {
@@ -128,6 +147,59 @@ function formatHyperlink(text: string, target: string): string {
 	}
 
 	return `\x1b]8;;${safeTarget}\x07${text}\x1b]8;;\x07`;
+}
+
+function isAsciiTextSizingPayload(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code < 0x20 || code > 0x7e) return false;
+	}
+	return true;
+}
+
+function encodeTextSizedHeading(text: string, scale: 1 | 2 | 3): string {
+	let out = "";
+	let asciiRun = "";
+	const flushAscii = () => {
+		if (asciiRun === "") return;
+		out += encodeTextSized(asciiRun, { scale });
+		asciiRun = "";
+	};
+
+	for (const { segment } of getSegmenter().segment(text)) {
+		if (isAsciiTextSizingPayload(segment)) {
+			asciiRun += segment;
+			continue;
+		}
+		flushAscii();
+		out += encodeTextSized(segment, { scale, widthCells: visibleWidth(segment) });
+	}
+	flushAscii();
+	return out;
+}
+
+function plainInlineTokens(tokens: Token[]): string {
+	let result = "";
+	for (const token of tokens) {
+		switch (token.type) {
+			case "text":
+				result += token.tokens && token.tokens.length > 0 ? plainInlineTokens(token.tokens) : token.text;
+				break;
+			case "strong":
+			case "em":
+			case "del":
+			case "link":
+				result += plainInlineTokens(token.tokens || []);
+				break;
+			case "codespan":
+				result += token.text;
+				break;
+			default:
+				if ("text" in token && typeof token.text === "string") result += token.text;
+				break;
+		}
+	}
+	return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +357,7 @@ export class Markdown implements Component {
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
 		const headingProbe = this.#theme.heading("");
-		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
 		const cached = renderCache.get(cacheKey);
 		if (cached !== undefined) {
 			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -311,8 +383,9 @@ export class Markdown implements Component {
 		// Wrap lines (NO padding, NO background yet)
 		const wrappedLines: string[] = [];
 		for (const line of renderedLines) {
-			// Skip wrapping for image protocol lines (would corrupt escape sequences)
-			if (TERMINAL.isImageLine(line)) {
+			// Skip wrapping for image protocol lines and OSC 66 sized headings
+			// (would corrupt escape sequences / split the indivisible sized span).
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
 				wrappedLines.push(line);
 			} else {
 				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
@@ -325,12 +398,28 @@ export class Markdown implements Component {
 		const bgFn = this.#defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
 
+		let previousLineWasOsc66 = false;
+
 		for (const line of wrappedLines) {
-			// Image lines must be output raw - no margins or background
-			if (TERMINAL.isImageLine(line)) {
-				contentLines.push(line);
+			// The first empty row after a scale>1 OSC 66 heading is structural:
+			// it reserves the lower cells occupied by the multicell glyphs. Do
+			// not pad or background-fill it, because real spaces on that row can
+			// interact with Kitty's multicell overwrite rules during the first
+			// paint. Leave it as a cursor-only newline.
+			if (previousLineWasOsc66 && line === "") {
+				contentLines.push("");
+				previousLineWasOsc66 = false;
 				continue;
 			}
+
+			// Image lines and OSC 66 sized headings must be output raw - no margins or background
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
+				contentLines.push(line);
+				previousLineWasOsc66 = isOsc66Line(line);
+				continue;
+			}
+
+			previousLineWasOsc66 = false;
 
 			const lineWithMargins = leftMargin + line + rightMargin;
 
@@ -459,7 +548,20 @@ export class Markdown implements Component {
 				const headingLevel = token.depth;
 				const headingPrefix = `${"#".repeat(headingLevel)} `;
 				const headingText = this.#renderInlineTokens(token.tokens || [], styleContext);
+				const headingPlainText = plainInlineTokens(token.tokens || []);
 				let styledHeading: string;
+				if (headingLevel === 1 && TERMINAL.textSizing) {
+					const plainWidth = visibleWidth(headingPlainText);
+					if (plainWidth > 0 && 2 * plainWidth <= width) {
+						const sizedHeading = encodeTextSizedHeading(headingPlainText, 2);
+						lines.push(this.#theme.heading(this.#theme.bold(this.#theme.underline(sizedHeading))));
+						lines.push(""); // reserve the heading's second visual row
+						if (nextTokenType && nextTokenType !== "space") {
+							lines.push(""); // Add spacing after headings (unless space token follows)
+						}
+						break;
+					}
+				}
 				if (headingLevel === 1) {
 					styledHeading = this.#theme.heading(this.#theme.bold(this.#theme.underline(headingText)));
 				} else if (headingLevel === 2) {

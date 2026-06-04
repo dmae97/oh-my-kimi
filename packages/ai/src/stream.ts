@@ -719,7 +719,7 @@ function mapOptionsForApi<TApi extends Api>(
 		minP: options?.minP,
 		presencePenalty: options?.presencePenalty,
 		repetitionPenalty: options?.repetitionPenalty,
-		maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32000),
+		maxTokens: options?.maxTokens ?? model.maxTokens,
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,
 		cacheRetention: options?.cacheRetention,

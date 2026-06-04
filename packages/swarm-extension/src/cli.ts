@@ -86,7 +86,6 @@ const result = await controller.run({
 			console.log();
 		}
 	},
-	authStorage,
 	modelRegistry,
 	settings,
 });

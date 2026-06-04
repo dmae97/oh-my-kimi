@@ -280,7 +280,7 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 			if (options.stripNullableKeyword && key === "nullable") continue;
 			result[key] = normalizeSchemaNode(entry, {
 				...options,
-				insideProperties: key === "properties",
+				insideProperties: !options.insideProperties && key === "properties",
 			});
 		}
 		applyDescriptionSpill(result, spill, options);
@@ -302,7 +302,7 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 		}
 		result[key] = normalizeSchemaNode(entry, {
 			...options,
-			insideProperties: key === "properties",
+			insideProperties: !options.insideProperties && key === "properties",
 		});
 	}
 

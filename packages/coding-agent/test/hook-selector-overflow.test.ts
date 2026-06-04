@@ -95,30 +95,48 @@ describe("HookSelectorComponent", () => {
 		}
 	});
 
-	it("counts description rows toward the visible row cap", () => {
+	it("collapses to labels with only the highlighted description when descriptions overflow", () => {
+		const options = [
+			{ label: "Path A", description: "Reuse existing credentials." },
+			{ label: "Path B", description: "Authorize a provider in the browser." },
+			{ label: "Path C", description: "Edit provider keys manually." },
+			{ label: "Path D", description: "Continue with offline-only tools." },
+		];
 		const component = new HookSelectorComponent(
 			"Which setup path should be used?",
-			[
-				{ label: "Path A", description: "Reuse existing credentials." },
-				{ label: "Path B", description: "Authorize a provider in the browser." },
-				{ label: "Path C", description: "Edit provider keys manually." },
-				{ label: "Path D", description: "Continue with offline-only tools." },
-			],
+			options,
 			() => {},
 			() => {},
-			{ outline: true, initialIndex: 0, maxVisible: 4 },
+			{ outline: true, initialIndex: 0, maxVisible: 6 },
 		);
 
 		const plain = component
 			.render(76)
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
+		// Every option label stays on screen so the user can see the whole menu...
 		expect(plain).toContain("Path A");
-		expect(plain).toContain("Reuse existing credentials.");
 		expect(plain).toContain("Path B");
-		expect(plain).toContain("Authorize a provider in the browser.");
-		expect(plain).not.toContain("Path C");
+		expect(plain).toContain("Path C");
+		expect(plain).toContain("Path D");
+		// ...but only the highlighted option expands its description.
+		expect(plain).toContain("Reuse existing credentials.");
+		expect(plain).not.toContain("Authorize a provider in the browser.");
+		expect(plain).not.toContain("Edit provider keys manually.");
 		expect(plain).toContain("(1/4)");
+
+		// The detail pane follows the cursor: moving down expands Path B and
+		// collapses Path A's description.
+		component.handleInput("\x1b[B");
+		const afterDown = component
+			.render(76)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(afterDown).toContain("Path A");
+		expect(afterDown).toContain("Path D");
+		expect(afterDown).toContain("Authorize a provider in the browser.");
+		expect(afterDown).not.toContain("Reuse existing credentials.");
+		expect(afterDown).toContain("(2/4)");
 	});
 
 	it("counts wrapped outlined rows toward the visible row cap", () => {
@@ -218,5 +236,66 @@ describe("HookSelectorComponent", () => {
 		);
 
 		expect(component.render(80).join("\n")).toContain(theme.fg("dim", "Disabled"));
+	});
+
+	it("renders radio markers instead of a cursor arrow for single-choice markable rows", () => {
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["Apple", "Banana", "Other (type your own)"],
+			() => {},
+			() => {},
+			{ selectionMarker: "radio", markableCount: 2, initialIndex: 0 },
+		);
+
+		const lines = Bun.stripANSI(component.render(80).join("\n")).split("\n");
+		const apple = lines.find(line => line.includes("Apple"));
+		const banana = lines.find(line => line.includes("Banana"));
+		expect(apple).toBeDefined();
+		expect(banana).toBeDefined();
+		// Cursor row shows the filled radio; the legacy cursor arrow is gone.
+		expect(apple).toContain(theme.radio.selected);
+		expect(apple).not.toContain(theme.nav.cursor);
+		// Non-cursor markable row shows the empty radio.
+		expect(banana).toContain(theme.radio.unselected);
+	});
+
+	it("keeps the cursor arrow on control rows beyond markableCount", () => {
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["Apple", "Banana", "Other (type your own)"],
+			() => {},
+			() => {},
+			{ selectionMarker: "radio", markableCount: 2, initialIndex: 2 },
+		);
+
+		const lines = Bun.stripANSI(component.render(80).join("\n")).split("\n");
+		const other = lines.find(line => line.includes("Other"));
+		expect(other).toBeDefined();
+		// The trailing action keeps the classic cursor and gets no radio marker.
+		expect(other).toContain(theme.nav.cursor);
+		expect(other).not.toContain(theme.radio.selected);
+	});
+
+	it("renders checkbox markers reflecting checked state and exempts control rows", () => {
+		const component = new HookSelectorComponent(
+			"Pick many",
+			["Apple", "Banana", "Done selecting", "Other (type your own)"],
+			() => {},
+			() => {},
+			{ selectionMarker: "checkbox", markableCount: 2, checkedIndices: [0], initialIndex: 1 },
+		);
+
+		const lines = Bun.stripANSI(component.render(80).join("\n")).split("\n");
+		const apple = lines.find(line => line.includes("Apple"));
+		const banana = lines.find(line => line.includes("Banana"));
+		const done = lines.find(line => line.includes("Done selecting"));
+		expect(apple).toBeDefined();
+		expect(banana).toBeDefined();
+		expect(done).toBeDefined();
+		expect(apple).toContain(theme.checkbox.checked);
+		expect(banana).toContain(theme.checkbox.unchecked);
+		// Control rows beyond markableCount carry no checkbox marker.
+		expect(done).not.toContain(theme.checkbox.checked);
+		expect(done).not.toContain(theme.checkbox.unchecked);
 	});
 });

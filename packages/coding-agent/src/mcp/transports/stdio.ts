@@ -25,22 +25,42 @@ interface FrameSink {
 	flush(): unknown;
 }
 
+/** Narrow a value to a thenable so a rejection handler can be attached. */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+	return (
+		value != null &&
+		(typeof value === "object" || typeof value === "function") &&
+		typeof (value as { then?: unknown }).then === "function"
+	);
+}
+
 /**
  * Write a newline-delimited JSON-RPC frame to the subprocess's stdin sink,
- * swallowing synchronous errors so the caller can decide how to react.
+ * swallowing both synchronous throws and asynchronous rejections so the caller
+ * can decide how to react.
  *
- * Bun's `FileSink` may throw synchronously (most reliably on Windows) when
- * the read end of the pipe has been closed by a subprocess that exited
- * between read-loop ticks. Letting that throw escape an `async` method
- * surfaces as an unhandled promise rejection at the call site.
+ * Bun's `FileSink.write()`/`flush()` can fail two ways once the read end of the
+ * pipe has been closed by a subprocess that exited between read-loop ticks:
+ *   - a synchronous throw (most reliably observed on Windows), and
+ *   - a *rejected Promise* returned from `write()`/`flush()`, i.e. the EPIPE is
+ *     surfaced asynchronously (note the `processTicksAndRejections` frame in the
+ *     stack traces on #1710 and the follow-up report).
  *
- * Returns `true` when the frame was accepted by the sink, `false` when the
- * sink threw — callers signal transport closure on `false`.
+ * A sibling `async` method's `try/catch` only catches the synchronous case; an
+ * un-awaited rejected Promise escapes as a fatal unhandled rejection. So we both
+ * catch the throw and neutralize any returned promise's rejection.
+ *
+ * Returns `true` when the frame was accepted synchronously, `false` when the
+ * sink threw — callers signal transport closure on `false`. An asynchronous
+ * failure cannot be reflected in the return value; it is neutralized here and
+ * the dead transport is detected by the read loop / request timeout instead.
  */
 export function writeFrame(stdin: FrameSink, frame: string): boolean {
 	try {
-		stdin.write(frame);
-		stdin.flush();
+		const wrote = stdin.write(frame);
+		const flushed = stdin.flush();
+		if (isThenable(wrote)) wrote.then(undefined, () => {});
+		if (isThenable(flushed)) flushed.then(undefined, () => {});
 		return true;
 	} catch {
 		return false;
@@ -287,11 +307,16 @@ export class StdioTransport implements MCPTransport {
 			}, timeout);
 		}
 
+		const stdin = this.#process.stdin;
 		const message = `${JSON.stringify(request)}\n`;
 		try {
-			// Bun's FileSink has write() method directly
-			this.#process.stdin.write(message);
-			this.#process.stdin.flush();
+			// Await both: Bun's FileSink can surface a broken pipe either as a
+			// synchronous throw or as a rejected Promise (the EPIPE arrives on a
+			// processTicksAndRejections tick). Awaiting funnels both into this catch
+			// so the request rejects cleanly instead of leaving a floating rejected
+			// promise that crashes the process via the unhandledRejection handler.
+			await stdin.write(message);
+			await stdin.flush();
 		} catch (error: unknown) {
 			cleanup();
 			reject(error instanceof Error ? error : new Error(String(error)));

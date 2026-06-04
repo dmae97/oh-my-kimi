@@ -372,7 +372,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 | `COLORFGBG`                                                                                                        | Terminal background light/dark auto-detection             |
 | `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TERMINAL_EMULATOR`                                                        | Terminal identity in system prompt/context                |
 | `KDE_FULL_SESSION`, `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`, `XDG_SESSION_DESKTOP`, `GDMSESSION`, `WINDOWMANAGER` | Desktop/window-manager detection in system prompt/context |
-| `KITTY_WINDOW_ID`, `TMUX_PANE`, `TERM_SESSION_ID`, `WT_SESSION`                                                    | Stable per-terminal session breadcrumb IDs                |
+| `TMUX_PANE`, `CMUX_SURFACE_ID`, `KITTY_WINDOW_ID`, `TERM_SESSION_ID`, `WT_SESSION`                                 | Stable per-terminal session breadcrumb IDs                |
 | `SHELL`, `ComSpec`, `TERM_PROGRAM`, `TERM`                                                                         | System info diagnostics                                   |
 | `APPDATA`, `XDG_CONFIG_HOME`                                                                                       | lspmux config path resolution                             |
 | `HOME`                                                                                                             | Path shortening in MCP command UI                         |
@@ -388,6 +388,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 | `PI_HARDWARE_CURSOR`      | If `1`, enables hardware cursor mode                                                  |
 | `PI_CLEAR_ON_SHRINK`      | If `1`, clears empty rows when content shrinks                                        |
 | `PI_NO_SYNC_OUTPUT`       | If `1`, disables DEC 2026 synchronized-output wrappers while keeping TUI autowrap guards |
+| `PI_NO_DECCARA`           | If set (truthy), disables Kitty DECCARA rectangular-SGR background fills (forces padded-string rendering) |
 | `PI_DEBUG_REDRAW`         | If `1`, enables redraw debug logging                                                  |
 | `PI_TUI_DEBUG`            | If `1`, enables deep TUI debug dump path                                              |
 | `PI_FORCE_IMAGE_PROTOCOL` | Forces terminal image protocol detection (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) |

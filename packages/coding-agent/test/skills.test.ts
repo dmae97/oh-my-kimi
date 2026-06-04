@@ -248,7 +248,33 @@ enabled: false
 			}
 		});
 
-		it("should have ignoredSkills take precedence over includeSkills", async () => {
+		it("should hide skills with disable-model-invocation frontmatter (Agent Skills spec)", async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dmi-skill-"));
+			const skillDir = path.join(tempDir, "hidden-by-spec");
+			await fs.mkdir(skillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(skillDir, "SKILL.md"),
+				`---\nname: hidden-by-spec\ndescription: Should be hidden via Agent Skills standard field.\ndisable-model-invocation: true\n---\n\n# Hidden Skill\n`,
+			);
+
+			try {
+				const { skills } = await loadSkills({
+					enableCodexUser: false,
+					enableClaudeUser: false,
+					enableClaudeProject: false,
+					enablePiUser: false,
+					enablePiProject: false,
+					customDirectories: [tempDir],
+				});
+				const skill = skills.find(s => s.name === "hidden-by-spec");
+				expect(skill).toBeDefined();
+				expect(skill!.hide).toBe(true);
+			} finally {
+				await fs.rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should let ignoredSkills override includeSkills", async () => {
 			const { skills } = await loadSkills({
 				enableCodexUser: false,
 				enableClaudeUser: false,
@@ -259,170 +285,169 @@ enabled: false
 				includeSkills: ["valid-*"],
 				ignoredSkills: ["valid-skill"],
 			});
-			// valid-skill should be excluded even though it matches includeSkills
 			expect(skills.every(s => s.name !== "valid-skill")).toBe(true);
 		});
+	});
 
-		it("should expand ~ in customDirectories", async () => {
-			const tempHomeSkillsDir = await fs.mkdtemp(path.join(os.homedir(), ".pi-skills-test-"));
-			const relativeToHome = path.relative(os.homedir(), tempHomeSkillsDir);
-			const tildeDir = `~/${relativeToHome.split(path.sep).join("/")}`;
-			const skillDir = path.join(tempHomeSkillsDir, "tilde-skill");
-			const skillPath = path.join(skillDir, "SKILL.md");
-			await fs.mkdir(skillDir, { recursive: true });
-			await fs.writeFile(
-				skillPath,
-				`---
+	it("should expand ~ in customDirectories", async () => {
+		const tempHomeSkillsDir = await fs.mkdtemp(path.join(os.homedir(), ".pi-skills-test-"));
+		const relativeToHome = path.relative(os.homedir(), tempHomeSkillsDir);
+		const tildeDir = `~/${relativeToHome.split(path.sep).join("/")}`;
+		const skillDir = path.join(tempHomeSkillsDir, "tilde-skill");
+		const skillPath = path.join(skillDir, "SKILL.md");
+		await fs.mkdir(skillDir, { recursive: true });
+		await fs.writeFile(
+			skillPath,
+			`---
 name: tilde-skill
 description: Skill loaded from a tilde-expanded custom directory.
 ---
 
 # Tilde Skill
 `,
-			);
+		);
 
-			try {
-				const { skills: withTilde } = await loadSkills({
-					enableCodexUser: false,
-					enableClaudeUser: false,
-					enableClaudeProject: false,
-					enablePiUser: false,
-					enablePiProject: false,
-					customDirectories: [tildeDir],
-				});
-				const { skills: withoutTilde } = await loadSkills({
-					enableCodexUser: false,
-					enableClaudeUser: false,
-					enableClaudeProject: false,
-					enablePiUser: false,
-					enablePiProject: false,
-					customDirectories: [tempHomeSkillsDir],
-				});
-				expect(withTilde.length).toBe(withoutTilde.length);
-				expect(withTilde.some(skill => skill.name === "tilde-skill")).toBe(true);
-			} finally {
-				await fs.rm(tempHomeSkillsDir, { recursive: true, force: true });
-			}
-		});
-
-		it("should return empty when all sources disabled and no custom dirs", async () => {
-			const { skills } = await loadSkills({
+		try {
+			const { skills: withTilde } = await loadSkills({
 				enableCodexUser: false,
 				enableClaudeUser: false,
 				enableClaudeProject: false,
 				enablePiUser: false,
 				enablePiProject: false,
+				customDirectories: [tildeDir],
 			});
-			expect(skills).toHaveLength(0);
-		});
-
-		it("should filter skills with includeSkills glob patterns", async () => {
-			// Load all skills from fixtures
-			const { skills: allSkills } = await loadSkills({
+			const { skills: withoutTilde } = await loadSkills({
 				enableCodexUser: false,
 				enableClaudeUser: false,
 				enableClaudeProject: false,
 				enablePiUser: false,
 				enablePiProject: false,
-				customDirectories: [fixturesDir],
+				customDirectories: [tempHomeSkillsDir],
 			});
-			expect(allSkills.length).toBeGreaterThan(0);
-
-			// Filter to only include "valid-skill"
-			const { skills: filtered } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-				includeSkills: ["valid-skill"],
-			});
-			expect(filtered).toHaveLength(1);
-			expect(filtered[0].name).toBe("valid-skill");
-		});
-
-		it("should support glob patterns in includeSkills", async () => {
-			const { skills } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-				includeSkills: ["valid-*"],
-			});
-			expect(skills.length).toBeGreaterThan(0);
-			expect(skills.every(s => s.name.startsWith("valid-"))).toBe(true);
-		});
-
-		it("should return all skills when includeSkills is empty", async () => {
-			const { skills: withEmpty } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-				includeSkills: [],
-			});
-			const { skills: withoutOption } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-			});
-			expect(withEmpty.length).toBe(withoutOption.length);
-		});
+			expect(withTilde.length).toBe(withoutTilde.length);
+			expect(withTilde.some(skill => skill.name === "tilde-skill")).toBe(true);
+		} finally {
+			await fs.rm(tempHomeSkillsDir, { recursive: true, force: true });
+		}
 	});
 
-	describe("collision handling", () => {
-		it("should detect name collisions and keep first skill", async () => {
-			// Load from first directory
-			const first = await loadSkillsFromDir({
-				dir: path.join(collisionFixturesDir, "first"),
-				source: "first",
-			});
+	it("should return empty when all sources disabled and no custom dirs", async () => {
+		const { skills } = await loadSkills({
+			enableCodexUser: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enablePiUser: false,
+			enablePiProject: false,
+		});
+		expect(skills).toHaveLength(0);
+	});
 
-			const second = await loadSkillsFromDir({
-				dir: path.join(collisionFixturesDir, "second"),
-				source: "second",
-			});
+	it("should filter skills with includeSkills glob patterns", async () => {
+		// Load all skills from fixtures
+		const { skills: allSkills } = await loadSkills({
+			enableCodexUser: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enablePiUser: false,
+			enablePiProject: false,
+			customDirectories: [fixturesDir],
+		});
+		expect(allSkills.length).toBeGreaterThan(0);
 
-			// Both directories should have loaded one skill each
-			expect(first.skills).toHaveLength(1);
-			expect(second.skills).toHaveLength(1);
+		// Filter to only include "valid-skill"
+		const { skills: filtered } = await loadSkills({
+			enableCodexUser: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enablePiUser: false,
+			enablePiProject: false,
+			customDirectories: [fixturesDir],
+			includeSkills: ["valid-skill"],
+		});
+		expect(filtered).toHaveLength(1);
+		expect(filtered[0].name).toBe("valid-skill");
+	});
 
-			// Both have the same name "calendar"
-			expect(first.skills[0].name).toBe("calendar");
-			expect(second.skills[0].name).toBe("calendar");
+	it("should support glob patterns in includeSkills", async () => {
+		const { skills } = await loadSkills({
+			enableCodexUser: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enablePiUser: false,
+			enablePiProject: false,
+			customDirectories: [fixturesDir],
+			includeSkills: ["valid-*"],
+		});
+		expect(skills.length).toBeGreaterThan(0);
+		expect(skills.every(s => s.name.startsWith("valid-"))).toBe(true);
+	});
 
-			// Simulate the collision behavior from loadSkills()
-			const skillMap = new Map<string, Skill>();
-			const collisionWarnings: Array<{ skillPath: string; message: string }> = [];
+	it("should return all skills when includeSkills is empty", async () => {
+		const { skills: withEmpty } = await loadSkills({
+			enableCodexUser: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enablePiUser: false,
+			enablePiProject: false,
+			customDirectories: [fixturesDir],
+			includeSkills: [],
+		});
+		const { skills: withoutOption } = await loadSkills({
+			enableCodexUser: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enablePiUser: false,
+			enablePiProject: false,
+			customDirectories: [fixturesDir],
+		});
+		expect(withEmpty.length).toBe(withoutOption.length);
+	});
+});
 
-			for (const skill of first.skills) {
+describe("collision handling", () => {
+	it("should detect name collisions and keep first skill", async () => {
+		// Load from first directory
+		const first = await loadSkillsFromDir({
+			dir: path.join(collisionFixturesDir, "first"),
+			source: "first",
+		});
+
+		const second = await loadSkillsFromDir({
+			dir: path.join(collisionFixturesDir, "second"),
+			source: "second",
+		});
+
+		// Both directories should have loaded one skill each
+		expect(first.skills).toHaveLength(1);
+		expect(second.skills).toHaveLength(1);
+
+		// Both have the same name "calendar"
+		expect(first.skills[0].name).toBe("calendar");
+		expect(second.skills[0].name).toBe("calendar");
+
+		// Simulate the collision behavior from loadSkills()
+		const skillMap = new Map<string, Skill>();
+		const collisionWarnings: Array<{ skillPath: string; message: string }> = [];
+
+		for (const skill of first.skills) {
+			skillMap.set(skill.name, skill);
+		}
+
+		for (const skill of second.skills) {
+			const existing = skillMap.get(skill.name);
+			if (existing) {
+				collisionWarnings.push({
+					skillPath: skill.filePath,
+					message: `name collision: "${skill.name}" already loaded from ${existing.filePath}`,
+				});
+			} else {
 				skillMap.set(skill.name, skill);
 			}
+		}
 
-			for (const skill of second.skills) {
-				const existing = skillMap.get(skill.name);
-				if (existing) {
-					collisionWarnings.push({
-						skillPath: skill.filePath,
-						message: `name collision: "${skill.name}" already loaded from ${existing.filePath}`,
-					});
-				} else {
-					skillMap.set(skill.name, skill);
-				}
-			}
-
-			expect(skillMap.size).toBe(1);
-			expect(skillMap.get("calendar")?.source).toBe("first");
-			expect(collisionWarnings).toHaveLength(1);
-			expect(collisionWarnings[0].message).toContain("name collision");
-		});
+		expect(skillMap.size).toBe(1);
+		expect(skillMap.get("calendar")?.source).toBe("first");
+		expect(collisionWarnings).toHaveLength(1);
+		expect(collisionWarnings[0].message).toContain("name collision");
 	});
 });

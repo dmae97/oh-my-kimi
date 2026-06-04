@@ -10,7 +10,7 @@ import type { Effort, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { SessionStats } from "../../session/agent-session";
-import type { TodoPhase } from "../../tools/todo-write";
+import type { TodoPhase } from "../../tools/todo";
 
 // ============================================================================
 // RPC Commands (stdin)
