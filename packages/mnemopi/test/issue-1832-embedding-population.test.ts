@@ -218,4 +218,53 @@ describe("issue #1832 — embedding write/read coverage", () => {
 			rmSync(dbPath, { force: true });
 		}
 	});
+
+	it("scopes embedQuery() cache per provider so two Mnemopi runtimes do not cross-contaminate", async () => {
+		// Repro for #1833 review comment: `embedQuery()` caches by query text only, so a
+		// second `Mnemopi` in the same process with a different provider would read back
+		// the first runtime's vector and score against it. Each Mnemopi here exposes a
+		// distinct projection for the same query token; recall MUST return that runtime's
+		// own projection, never the sibling's cached one.
+		const alphaProvider = {
+			async *embed(texts: readonly string[]) {
+				yield texts.map(() => [1, 0]);
+			},
+		};
+		const betaProvider = {
+			async *embed(texts: readonly string[]) {
+				yield texts.map(() => [0, 1]);
+			},
+		};
+
+		const alpha = new Mnemopi({
+			db: new Database(":memory:"),
+			embeddings: { provider: alphaProvider },
+		});
+		const beta = new Mnemopi({
+			db: new Database(":memory:"),
+			embeddings: { provider: betaProvider },
+		});
+
+		try {
+			alpha.remember("shared query text", { source: "test" });
+			beta.remember("shared query text", { source: "test" });
+			await alpha.flushExtractions();
+			await beta.flushExtractions();
+
+			// Drive recall on alpha first to seed the cache, then beta. Pre-fix, beta
+			// would read alpha's `[1, 0]` vector back out of `queryCache` and score
+			// itself against the wrong projection.
+			const alphaResults = await alpha.recall("shared query text", 1);
+			const betaResults = await beta.recall("shared query text", 1);
+
+			// Each runtime stored its own projection: alpha hits [1,0]·[1,0] = 1,
+			// beta hits [0,1]·[0,1] = 1. Without scoped keys, beta's dense_score
+			// collapses to [1,0]·[0,1] = 0.
+			expect(alphaResults[0]?.dense_score ?? 0).toBeCloseTo(1, 5);
+			expect(betaResults[0]?.dense_score ?? 0).toBeCloseTo(1, 5);
+		} finally {
+			alpha.close();
+			beta.close();
+		}
+	});
 });
