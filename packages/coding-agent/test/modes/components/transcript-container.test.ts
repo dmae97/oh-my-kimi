@@ -53,6 +53,29 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["a2", "b2"]);
 	});
 
+	it("seals the prior block at its final content when finalize+append coalesce (ED3-risk)", () => {
+		riskFlag.eagerEraseScrollbackRisk = true;
+		const container = new TranscriptContainer();
+		const a = new MutableBlock(["Nat"]);
+		container.addChild(a);
+		// `a` streamed a partial chunk and rendered while live.
+		expect(container.render(40)).toEqual(["Nat"]);
+
+		// TUI render coalescing: `a` finalizes AND a newer block is appended within
+		// one throttled frame, so no render happens between the two mutations.
+		a.set(["Natives built, now..."]);
+		const b = new MutableBlock(["b1"]);
+		container.addChild(b);
+
+		// The transition frame must seal `a` at its final content, not the stale
+		// mid-stream snapshot ("Nat") it last rendered while live.
+		expect(container.render(40)).toEqual(["Natives built, now...", "b1"]);
+
+		// Once sealed, a later re-layout of `a` stays frozen until the next thaw.
+		a.set(["a-collapsed"]);
+		expect(container.render(40)).toEqual(["Natives built, now...", "b1"]);
+	});
+
 	it("thaw() reconciles frozen blocks to their current state", () => {
 		riskFlag.eagerEraseScrollbackRisk = true;
 		const container = new TranscriptContainer();
