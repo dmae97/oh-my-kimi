@@ -1,4 +1,5 @@
 import { normalizedRecallWeights, temporalHalflifeHours } from "../../config";
+import { embedQuery } from "../embeddings";
 import { mmrRerank } from "../mmr";
 import { adjustWeights, classifyIntent } from "../query-intent";
 import { getSynonyms, normalizeQuery } from "../synonyms";
@@ -857,18 +858,26 @@ function collectMemoryCandidates(
 	return candidates;
 }
 
-export function recall(
+export async function recall(
 	beam: BeamMemoryState,
 	query: string,
 	topK = 40,
 	options: RecallOptionsInternal = {},
-): RecallResult[] {
+): Promise<RecallResult[]> {
 	if (topK <= 0) return [];
 	const temporalOptions = inferTemporalOptions(query, options);
 	if (queryAsksCurrent(query)) {
 		temporalOptions.queryTime ??= options.queryTime ?? new Date();
 		temporalOptions.temporalWeight ??= 0.45;
 		temporalOptions.currentSensitive = true;
+	}
+	if (temporalOptions.queryEmbedding === undefined) {
+		// Honour `null` (explicit "no embedding"); `undefined` means "derive from query text".
+		// `embedQuery()` returns null when embeddings are disabled or no provider is configured,
+		// so this is a no-op when the user has not wired one up. Float32Array → number[]
+		// because RecallOptions exposes the narrower public shape.
+		const derived = query.length > 0 ? await embedQuery(query) : null;
+		temporalOptions.queryEmbedding = derived === null ? null : Array.from(derived);
 	}
 	let weights = normalizedRecallWeights(
 		options.vecWeight ?? beam.config.vecWeight,
@@ -935,12 +944,12 @@ function diversifyByCoverage(
 	return selected;
 }
 
-export function recallEnhanced(
+export async function recallEnhanced(
 	beam: BeamMemoryState,
 	query: string,
 	topK = 40,
 	options: RecallEnhancedOptions & RecallOptionsInternal = {},
-): RecallResult[] {
+): Promise<RecallResult[]> {
 	const useSynonyms = options.useSynonyms !== false;
 	const enhancedOptions: RecallOptionsInternal = {
 		...options,
@@ -948,7 +957,7 @@ export function recallEnhanced(
 		useIntent: options.useIntent !== false,
 		useMmr: options.useMmr !== false,
 	};
-	const results = recall(beam, query, Math.max(topK * 2, topK), {
+	const results = await recall(beam, query, Math.max(topK * 2, topK), {
 		...enhancedOptions,
 		updateRecallCounts: false,
 	});

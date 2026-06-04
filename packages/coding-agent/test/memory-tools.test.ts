@@ -761,7 +761,7 @@ describe("memory_edit.execute (Mnemopi backend)", () => {
 		await MemoryRetainTool.createIf(makeSession(settings))!.execute("call-memory-edit-store", {
 			items: [{ content }],
 		});
-		const id = registeredMnemopiState?.recallResultsScoped(query)[0]?.id;
+		const id = (await registeredMnemopiState?.recallResultsScoped(query))?.[0]?.id;
 		expect(id).toBeString();
 		return id!;
 	}
@@ -779,7 +779,7 @@ describe("memory_edit.execute (Mnemopi backend)", () => {
 		});
 
 		expect((result.content[0] as { text: string }).text).toContain("updated");
-		const recalled = registeredMnemopiState!.recallResultsScoped("accent color");
+		const recalled = await registeredMnemopiState!.recallResultsScoped("accent color");
 		expect(recalled.map(memory => memory.content)).toContain("editor accent color is green");
 	});
 
@@ -794,7 +794,7 @@ describe("memory_edit.execute (Mnemopi backend)", () => {
 		});
 
 		expect((result.content[0] as { text: string }).text).toContain("deleted");
-		const recalled = registeredMnemopiState!.recallResultsScoped("deployment note");
+		const recalled = await registeredMnemopiState!.recallResultsScoped("deployment note");
 		expect(recalled.map(memory => memory.content)).not.toContain("temporary deployment note can be deleted");
 	});
 
@@ -809,7 +809,7 @@ describe("memory_edit.execute (Mnemopi backend)", () => {
 		});
 
 		expect((result.content[0] as { text: string }).text).toContain("invalidated");
-		const recalled = registeredMnemopiState!.recallResultsScoped("api key rotation");
+		const recalled = await registeredMnemopiState!.recallResultsScoped("api key rotation");
 		expect(recalled.map(memory => memory.content)).not.toContain("stale api key rotation policy");
 	});
 

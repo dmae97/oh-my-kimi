@@ -45,6 +45,14 @@ let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new LRUCache<string, Vector>({ max: QUERY_CACHE_MAX });
 
+// Provider identity table for the cache key. Each unique `provider` object/function
+// (configured via `withMnemopiRuntimeOptions`) gets a stable integer id so the cache
+// scope reflects the runtime's actual embedding source. Two Mnemopi instances in the
+// same process using different providers/models hash to disjoint keys and never
+// collide on the same query text. `0` is the sentinel for "env-default fallback".
+const providerIds = new WeakMap<object, number>();
+let nextProviderId = 1;
+
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	// Preload ORT 1.24 before fastembed's bundled ORT 1.21 — only on Windows,
 	// where loading the older binding first triggers a DLL-reuse crash. The 1.24
@@ -62,6 +70,31 @@ async function defaultLocalModelInitializer(options: LocalModelInitOptions): Pro
 
 function activeEmbeddingOptions() {
 	return getMnemopiRuntimeOptions()?.embeddings;
+}
+
+/**
+ * Compose the per-query cache key. Includes the active provider's identity, the
+ * resolved model name, and the API base URL so two `Mnemopi` instances in the same
+ * process that point at different providers/models never share a cached query
+ * vector. Provider identity comes from `providerIds` (WeakMap-assigned integer);
+ * `0` is the sentinel for "no provider configured, fall back to env defaults".
+ */
+function queryCacheKey(text: string): string {
+	const active = activeEmbeddingOptions();
+	const provider = active?.provider as object | undefined;
+	let providerId = 0;
+	if (provider !== undefined) {
+		const existing = providerIds.get(provider);
+		if (existing === undefined) {
+			providerId = nextProviderId++;
+			providerIds.set(provider, providerId);
+		} else {
+			providerId = existing;
+		}
+	}
+	const model = defaultModel();
+	const apiUrl = active?.apiUrl ?? "";
+	return `${providerId}::${model}::${apiUrl}::${text}`;
 }
 
 function inTestRuntime(): boolean {
@@ -98,6 +131,18 @@ function defaultModel(): string {
 		return active.model;
 	}
 	return $env.MNEMOPI_EMBEDDING_MODEL || "BAAI/bge-small-en-v1.5";
+}
+
+/**
+ * Resolve the embedding model name for the currently active runtime scope.
+ *
+ * Reads (in order): the active provider's `model` from `withMnemopiRuntimeOptions`,
+ * the `MNEMOPI_EMBEDDING_MODEL` env var, then the bundled fastembed default. Stored
+ * alongside each row in `memory_embeddings.model` so migrations can re-embed when
+ * the active model changes.
+ */
+export function currentEmbeddingModel(): string {
+	return defaultModel();
 }
 
 export function isApiModel(modelName: string): boolean {
@@ -309,14 +354,15 @@ export async function embedQuery(text: string): Promise<Vector | null> {
 	if (text === "" || embeddingsDisabled()) {
 		return null;
 	}
-	const cached = queryCache.get(text);
+	const key = queryCacheKey(text);
+	const cached = queryCache.get(key);
 	if (cached !== undefined) {
 		return cached;
 	}
 	const vectors = await embed([text]);
 	const vector = vectors?.[0] ?? null;
 	if (vector !== null) {
-		queryCache.set(text, vector);
+		queryCache.set(key, vector);
 	}
 	return vector;
 }
@@ -344,7 +390,8 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		return embedApi(texts);
 	}
 	if (texts.length === 1) {
-		const cached = queryCache.get(texts[0] ?? "");
+		const key = queryCacheKey(texts[0] ?? "");
+		const cached = queryCache.get(key);
 		if (cached !== undefined) {
 			return [cached];
 		}
@@ -358,7 +405,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		if (vectors.length === 1) {
 			const vector = vectors[0];
 			if (vector !== undefined) {
-				queryCache.set(texts[0] ?? "", vector);
+				queryCache.set(queryCacheKey(texts[0] ?? ""), vector);
 			}
 		}
 		return vectors;

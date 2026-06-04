@@ -52,9 +52,9 @@ export function listToolsJson(): ListToolsResponse {
 	return { tools: getToolDefinitions() };
 }
 
-export function callToolJson(name: string, args: ToolArguments = {}): CallToolResponse {
+export async function callToolJson(name: string, args: ToolArguments = {}): Promise<CallToolResponse> {
 	try {
-		const result = handleToolCall(name, args);
+		const result = await handleToolCall(name, args);
 		return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -65,7 +65,7 @@ export function callToolJson(name: string, args: ToolArguments = {}): CallToolRe
 	}
 }
 
-export function handleJsonRpc(request: JsonRpcRequest): JsonRpcResponse | null {
+export async function handleJsonRpc(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
 	const method = request.method ?? "";
 	if (method.startsWith("notifications/") || !hasRequestId(request)) return null;
 	const id = requestId(request);
@@ -85,7 +85,7 @@ export function handleJsonRpc(request: JsonRpcRequest): JsonRpcResponse | null {
 				? (params.arguments as ToolArguments)
 				: {};
 		if (name.length === 0) return err(id, -32602, "tools/call requires params.name");
-		return ok(id, callToolJson(name, args));
+		return ok(id, await callToolJson(name, args));
 	}
 	return err(id, -32601, `Unknown method: ${method}`);
 }
@@ -115,7 +115,7 @@ export async function runStdio(
 						newline = buffer.indexOf("\n");
 						continue;
 					}
-					const response = handleJsonRpc(parsed as JsonRpcRequest);
+					const response = await handleJsonRpc(parsed as JsonRpcRequest);
 					if (response !== null) output.write(`${JSON.stringify(response)}\n`);
 				}
 				newline = buffer.indexOf("\n");

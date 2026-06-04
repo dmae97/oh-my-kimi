@@ -52,17 +52,17 @@ describe("configurable recall scoring", () => {
 		expect(normalizedRecallWeights()).toEqual([0.7, 0.2, 0.1]);
 	});
 
-	it("uses explicit per-call weights for recall scoring", () => {
+	it("uses explicit per-call weights for recall scoring", async () => {
 		const beam = makeBeam();
 		beam.remember("alpha exact text match low priority", { importance: 0.1, source: "test" });
 		beam.remember("alpha exact text match critical priority", { importance: 0.9, source: "test" });
 
-		const highImportance = beam.recall("alpha exact text match", 2, {
+		const highImportance = await beam.recall("alpha exact text match", 2, {
 			vecWeight: 0,
 			ftsWeight: 0.1,
 			importanceWeight: 0.9,
 		});
-		const textDominant = beam.recall("critical priority", 2, {
+		const textDominant = await beam.recall("critical priority", 2, {
 			vecWeight: 0,
 			ftsWeight: 1,
 			importanceWeight: 0,
@@ -73,7 +73,7 @@ describe("configurable recall scoring", () => {
 		expect(highImportance[0]?.score ?? 0).toBeGreaterThan(highImportance[1]?.score ?? 0);
 	});
 
-	it("lets environment weights affect BeamMemory defaults", () => {
+	it("lets environment weights affect BeamMemory defaults", async () => {
 		process.env.MNEMOPI_VEC_WEIGHT = "0.1";
 		process.env.MNEMOPI_FTS_WEIGHT = "0.1";
 		process.env.MNEMOPI_IMPORTANCE_WEIGHT = "0.8";
@@ -81,7 +81,7 @@ describe("configurable recall scoring", () => {
 		beam.remember("Content A shared lexical anchor", { importance: 0.2, source: "test" });
 		beam.remember("Content B shared lexical anchor", { importance: 0.9, source: "test" });
 
-		const results = beam.recall("shared lexical anchor", 2, {
+		const results = await beam.recall("shared lexical anchor", 2, {
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
 
@@ -90,7 +90,7 @@ describe("configurable recall scoring", () => {
 		expect(results[0]?.importance ?? 0).toBeGreaterThan(results[1]?.importance ?? 0);
 	});
 
-	it("explicit BeamMemory config overrides environment weights", () => {
+	it("explicit BeamMemory config overrides environment weights", async () => {
 		process.env.MNEMOPI_VEC_WEIGHT = "0.1";
 		process.env.MNEMOPI_FTS_WEIGHT = "0.1";
 		process.env.MNEMOPI_IMPORTANCE_WEIGHT = "0.8";
@@ -103,17 +103,17 @@ describe("configurable recall scoring", () => {
 		beam.remember("Exact text match phrase low", { importance: 0.1, source: "test" });
 		beam.remember("Exact text distraction high", { importance: 0.9, source: "test" });
 
-		const results = beam.recall("exact text match phrase", 2, {
+		const results = await beam.recall("exact text match phrase", 2, {
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
 
 		expect(results[0]?.content).toContain("match phrase");
 	});
 
-	it("includes score breakdown fields and coexists with temporal scoring", () => {
+	it("includes score breakdown fields and coexists with temporal scoring", async () => {
 		const beam = makeBeam();
 		beam.remember("Recent event happened today", { importance: 0.5, source: "test" });
-		const results = beam.recall("event", 1, {
+		const results = await beam.recall("event", 1, {
 			vecWeight: 0.4,
 			ftsWeight: 0.3,
 			importanceWeight: 0.3,

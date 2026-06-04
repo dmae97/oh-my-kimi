@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe("Mnemopi facade", () => {
-	it("wraps BeamMemory for instance remember, recall, get, update, forget, stats, and context", () => {
+	it("wraps BeamMemory for instance remember, recall, get, update, forget, stats, and context", async () => {
 		const dbPath = join(tempRoot(), "mnemopi.db");
 		const memory = new Mnemopi({
 			dbPath,
@@ -70,7 +70,7 @@ describe("Mnemopi facade", () => {
 				metadata: { topic: "ui" },
 			});
 
-			expect(memory.recall("dark", 5, { authorId: "abdias" })[0]).toMatchObject({
+			expect((await memory.recall("dark", 5, { authorId: "abdias" }))[0]).toMatchObject({
 				id,
 				author_id: "abdias",
 				author_type: "human",
@@ -137,7 +137,7 @@ describe("Mnemopi facade", () => {
 		}
 	});
 
-	it("preserves legacy and Python-compatible aliases", () => {
+	it("preserves legacy and Python-compatible aliases", async () => {
 		const memory = new Mnemopi({
 			dbPath: join(tempRoot(), "mnemopi.db"),
 			session_id: "aliases",
@@ -146,11 +146,11 @@ describe("Mnemopi facade", () => {
 			const id = memory.addMemory("Alias memory", { source: "test" });
 			expect(memory.saveMemory("Saved alias")).toHaveLength(16);
 			expect(memory.storeMemory("Stored alias")).toHaveLength(16);
-			expect(memory.search("alias").some(row => row.id === id)).toBe(true);
-			expect(memory.query("alias").some(row => row.id === id)).toBe(true);
+			expect((await memory.search("alias")).some(row => row.id === id)).toBe(true);
+			expect((await memory.query("alias")).some(row => row.id === id)).toBe(true);
 			expect(memory.getContext(2).length).toBeGreaterThanOrEqual(1);
 			expect(memory.getStats().beam).toBeDefined();
-			expect(Array.isArray(memory.recallEnhanced("alias"))).toBe(true);
+			expect(Array.isArray(await memory.recallEnhanced("alias"))).toBe(true);
 			const scratchId = memory.scratchpadWrite("scratch alias");
 			expect(scratchId).toHaveLength(16);
 			expect(memory.scratchpadRead().map(row => (row as { content: string }).content)).toEqual(["scratch alias"]);
@@ -163,16 +163,16 @@ describe("Mnemopi facade", () => {
 		}
 	});
 
-	it("exposes module-level singleton functions and resets cleanly for tests", () => {
+	it("exposes module-level singleton functions and resets cleanly for tests", async () => {
 		useTempDataDir();
 		const id = remember("Module-level memory", { importance: 0.8 });
 
-		expect(recall("module", 5).some(row => row.id === id)).toBe(true);
+		expect((await recall("module", 5)).some(row => row.id === id)).toBe(true);
 		expect(get(id)).toMatchObject({ content: "Module-level memory" });
 		expect(getContext(1)[0]).toMatchObject({ id });
 		expect(getStats()).toMatchObject({ total_memories: 1 });
 		expect(update(id, "Module-level memory updated", 0.9)).toBe(true);
-		expect(Array.isArray(recallEnhanced("updated", 5))).toBe(true);
+		expect(Array.isArray(await recallEnhanced("updated", 5))).toBe(true);
 		const padId = scratchpadWrite("module scratch");
 		expect(padId).toHaveLength(16);
 		expect(scratchpadRead().map(row => (row as { content: string }).content)).toEqual(["module scratch"]);
@@ -185,7 +185,7 @@ describe("Mnemopi facade", () => {
 		expect(getBank()).toBe("default");
 	});
 
-	it("switches singleton banks and supports per-call bank selection", () => {
+	it("switches singleton banks and supports per-call bank selection", async () => {
 		useTempDataDir();
 		setBank("work");
 		expect(getBank()).toBe("work");
@@ -193,8 +193,8 @@ describe("Mnemopi facade", () => {
 		const personalId = remember("Personal bank memory", { bank: "personal" });
 
 		expect(getBank()).toBe("personal");
-		expect(recall("personal", 5).map(row => row.id)).toContain(personalId);
-		expect(recall("work", 5, { bank: "work" }).map(row => row.id)).toContain(workId);
+		expect((await recall("personal", 5)).map(row => row.id)).toContain(personalId);
+		expect((await recall("work", 5, { bank: "work" })).map(row => row.id)).toContain(workId);
 		expect(get(workId, "personal")).toBeNull();
 		expect(get(personalId, "personal")).toMatchObject({ content: "Personal bank memory" });
 	});

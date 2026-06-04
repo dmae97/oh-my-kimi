@@ -14,6 +14,10 @@
 
 - Fixed the TUI's `Settings → Plugins` panel reporting "No plugins installed" when only marketplace plugins were installed. The panel now merges `PluginManager.list()` with `MarketplaceManager.listInstalledPlugins()` — the same data source the `/plugins list` slash command and `omp plugin list` CLI already used — and tags each row with an `[npm]` / `[marketplace]` kind badge, a scope tag, and a shadow indicator for project-shadowed user installs. Selecting a marketplace row opens a new `MarketplacePluginDetailComponent` whose single `Enabled` toggle calls `MarketplaceManager.setPluginEnabled(pluginId, enabled, scope)`, with read-only metadata (version, install path, installed-at, last-updated, git commit SHA) listed below the toggle. The empty-state now lists both install commands (`omp plugin install <package>` and `omp plugin install <name>@<marketplace>`) ([#1842](https://github.com/can1357/oh-my-pi/issues/1842)).
 
+### Fixed
+
+- Fixed scoped mnemopi recall in `MnemopiSessionState.collectScopedRecallResults`/`recallResultsScoped` to await the async `Mnemopi.recallEnhanced` so the new auto-derived `queryEmbedding` flows through. Without this, the embedding-enabled mnemopi backend silently kept running FTS-only on every recall. ([#1832](https://github.com/can1357/oh-my-pi/issues/1832))
+
 ## [15.9.0] - 2026-06-04
 
 ### Breaking Changes

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { BeamMemory } from "../src/core/beam";
 
 describe("BeamMemory hub", () => {
-	it("wires index methods to beam module implementations", () => {
+	it("wires index methods to beam module implementations", async () => {
 		const beam = new BeamMemory({ dbPath: ":memory:" });
 		try {
 			const memoryId = beam.remember("Beam hub remembers project Alpha preferences", {
@@ -11,8 +11,8 @@ describe("BeamMemory hub", () => {
 			});
 
 			expect(memoryId).toHaveLength(16);
-			expect(beam.recall("Alpha", 5).some(row => row.id === memoryId)).toBe(true);
-			expect(beam.recallEnhanced("Alpha", 5).some(row => row.id === memoryId)).toBe(true);
+			expect((await beam.recall("Alpha", 5)).some(row => row.id === memoryId)).toBe(true);
+			expect((await beam.recallEnhanced("Alpha", 5)).some(row => row.id === memoryId)).toBe(true);
 			expect(beam.getContext(10).some(row => (row as { id?: string }).id === memoryId)).toBe(true);
 			expect(beam.getWorkingStats()).toMatchObject({ count: 1 });
 

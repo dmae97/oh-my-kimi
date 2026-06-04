@@ -1,4 +1,5 @@
 import type { BeamMemoryState, RecallOptions, RecallResult } from "./beam/types";
+import { embedQuery } from "./embeddings";
 import {
 	type PolyphonicMemoryResult,
 	type PolyphonicRecallOptions,
@@ -7,8 +8,8 @@ import {
 } from "./polyphonic-recall";
 
 export interface OrchestratorBeam extends BeamMemoryState {
-	recall?: (query: string, topK?: number, options?: RecallOptions) => RecallResult[];
-	recallEnhanced?: (query: string, topK?: number, options?: RecallOptions) => RecallResult[];
+	recall?: (query: string, topK?: number, options?: RecallOptions) => Promise<RecallResult[]>;
+	recallEnhanced?: (query: string, topK?: number, options?: RecallOptions) => Promise<RecallResult[]>;
 }
 
 export interface OrchestrateRecallOptions
@@ -35,18 +36,26 @@ function toLinearRecallOptions(options: OrchestrateRecallOptions): RecallOptions
 	return options as RecallOptions;
 }
 
-export function orchestrateRecall(
+export async function orchestrateRecall(
 	beam: OrchestratorBeam,
 	query: string,
 	topK = 20,
 	options: OrchestrateRecallOptions = {},
-): OrchestratedRecallResult[] {
-	if (!options.forceLinear && (options.forcePolyphonic === true || polyphonicRecallIsEnabled())) {
-		return polyphonicRecall(beam, query, topK, options);
+): Promise<OrchestratedRecallResult[]> {
+	const polyphonic = !options.forceLinear && (options.forcePolyphonic === true || polyphonicRecallIsEnabled());
+	let queryEmbedding: readonly number[] | Float32Array | null | undefined = options.queryEmbedding;
+	if (queryEmbedding === undefined && query.length > 0) {
+		// Auto-derive when the caller did not pass one. `embedQuery()` returns null when
+		// embeddings are disabled or no provider is configured, so this is a no-op for
+		// FTS-only deployments. `null` (explicit "no embedding") is preserved untouched.
+		queryEmbedding = await embedQuery(query);
 	}
-	const linearOptions = toLinearRecallOptions(options);
-	if (options.enhanced === true) {
-		if (typeof beam.recallEnhanced === "function") return beam.recallEnhanced(query, topK, linearOptions);
+	if (polyphonic) {
+		return polyphonicRecall(beam, query, topK, { ...options, queryEmbedding });
+	}
+	const linearOptions = toLinearRecallOptions({ ...options, queryEmbedding });
+	if (options.enhanced === true && typeof beam.recallEnhanced === "function") {
+		return beam.recallEnhanced(query, topK, linearOptions);
 	}
 	if (typeof beam.recall === "function") return beam.recall(query, topK, linearOptions);
 	return [];

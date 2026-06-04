@@ -75,7 +75,7 @@ describe("provider all-tools parity", () => {
 		expect(schemaFor("mnemopi_import").required).toContain("input_path");
 	});
 
-	it("returns user-facing argument errors instead of mutating on missing arguments", () => {
+	it("returns user-facing argument errors instead of mutating on missing arguments", async () => {
 		for (const [name, args, expected] of [
 			["mnemopi_remember", {}, "content is required"],
 			["mnemopi_recall", {}, "query is required"],
@@ -85,25 +85,25 @@ describe("provider all-tools parity", () => {
 			["mnemopi_export", {}, "output_path is required"],
 			["mnemopi_import", {}, "Either input_path (for file import) is required"],
 		] as const) {
-			const result = handleToolCall(name, args);
+			const result = await handleToolCall(name, args);
 			expect(result.error).toBe(expected);
 		}
 	});
 
-	it("exports provider data to a file and imports it into a fresh isolated bank", () => {
-		const remembered = handleToolCall("mnemopi_remember", {
+	it("exports provider data to a file and imports it into a fresh isolated bank", async () => {
+		const remembered = await handleToolCall("mnemopi_remember", {
 			content: "source provider memory for import parity",
 			importance: 0.7,
 			bank: "source",
 		});
 		expect(remembered.status).toBe("stored");
-		handleToolCall("mnemopi_scratchpad_write", {
+		await handleToolCall("mnemopi_scratchpad_write", {
 			content: "portable provider scratch",
 			bank: "source",
 		});
 
 		const exportPath = join(dataDir, "provider-export.json");
-		const exported = handleToolCall("mnemopi_export", {
+		const exported = await handleToolCall("mnemopi_export", {
 			output_path: exportPath,
 			bank: "source",
 		});
@@ -112,10 +112,10 @@ describe("provider all-tools parity", () => {
 		const payload = JSON.parse(readFileSync(exportPath, "utf8")) as { working_memory?: unknown[] };
 		expect(payload.working_memory?.length).toBe(1);
 
-		const imported = handleToolCall("mnemopi_import", { input_path: exportPath, bank: "dest" });
+		const imported = await handleToolCall("mnemopi_import", { input_path: exportPath, bank: "dest" });
 		expect(imported.status).toBe("imported");
 		expect(JSON.stringify(imported.stats)).toContain("inserted");
-		const recalled = handleToolCall("mnemopi_recall", {
+		const recalled = await handleToolCall("mnemopi_recall", {
 			query: "import parity",
 			bank: "dest",
 			limit: 5,
@@ -123,23 +123,23 @@ describe("provider all-tools parity", () => {
 		expect(recalled.count as number).toBeGreaterThanOrEqual(1);
 	});
 
-	it("diagnose, validate, graph, and shared handlers return structured provider results", () => {
-		const remembered = handleToolCall("mnemopi_remember", {
+	it("diagnose, validate, graph, and shared handlers return structured provider results", async () => {
+		const remembered = await handleToolCall("mnemopi_remember", {
 			content: "validate me through provider parity",
 			bank: "ops",
 		});
 		const memoryId = remembered.memory_id as string;
-		const validate = handleToolCall("mnemopi_validate", {
+		const validate = await handleToolCall("mnemopi_validate", {
 			memory_id: memoryId,
 			action: "attest",
 			validator: "test",
 			bank: "ops",
 		});
 		expect(validate.status).toBe("validation_attest");
-		const diagnose = handleToolCall("mnemopi_diagnose", { bank: "ops" });
+		const diagnose = await handleToolCall("mnemopi_diagnose", { bank: "ops" });
 		expect(diagnose.status).toBe("ok");
 		expect(diagnose.db_path).toContain("banks/ops/mnemopi.db");
-		const graphQuery = handleToolCall("mnemopi_graph_query", { seed_memory_id: memoryId, bank: "ops" });
+		const graphQuery = await handleToolCall("mnemopi_graph_query", { seed_memory_id: memoryId, bank: "ops" });
 		expect(graphQuery).toMatchObject({
 			status: "ok",
 			seed_memory_id: memoryId,
@@ -150,7 +150,7 @@ describe("provider all-tools parity", () => {
 			bank: "ops",
 		});
 		expect(
-			handleToolCall("mnemopi_graph_link", {
+			await handleToolCall("mnemopi_graph_link", {
 				source_id: memoryId,
 				target_id: "other",
 				relationship: "related",
@@ -166,11 +166,11 @@ describe("provider all-tools parity", () => {
 			bank: "ops",
 		});
 
-		const shared = handleToolCall("mnemopi_shared_remember", {
+		const shared = await handleToolCall("mnemopi_shared_remember", {
 			content: "Prefer concise parity notes",
 			kind: "preference",
 		});
 		expect(shared.status).toBe("stored_shared");
-		expect(handleToolCall("mnemopi_shared_forget", { memory_id: shared.memory_id }).status).toBe("deleted");
+		expect((await handleToolCall("mnemopi_shared_forget", { memory_id: shared.memory_id })).status).toBe("deleted");
 	});
 });

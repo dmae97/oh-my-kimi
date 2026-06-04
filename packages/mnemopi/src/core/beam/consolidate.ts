@@ -3,6 +3,7 @@ import { generateId, stableMemoryId } from "../../util/ids";
 import { aaakEncode } from "../aaak";
 import { heuristicExtractFacts } from "../extraction";
 import { clampVeracity } from "../veracity-consolidation";
+import { scheduleEmbedding } from "./helpers";
 import type { BeamMemoryState, BeamStats, JsonValue, MemoriaRetrieveResult, Metadata, SleepResult } from "./types";
 
 type Row = Record<string, unknown>;
@@ -298,6 +299,7 @@ export function consolidateToEpisodic(
 		],
 	);
 	extractAndStoreFacts(beam, summary, 0, memoryId);
+	scheduleEmbedding(beam, [{ memoryId, content: summary }]);
 	emitEvent(beam, "MEMORY_CONSOLIDATED", memoryId, summary, source, importance, {
 		summary_of: [...sourceWmIds],
 		...metadata,

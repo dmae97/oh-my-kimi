@@ -88,8 +88,8 @@ describe("MCP tool definitions", () => {
 });
 
 describe("MCP JSON handlers", () => {
-	it("lists tools through JSON-RPC", () => {
-		const response = handleJsonRpc({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+	it("lists tools through JSON-RPC", async () => {
+		const response = await handleJsonRpc({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 		if (response === null) throw new Error("expected tools/list response");
 		expect(response.error).toBeUndefined();
 		expect((response.result as { tools: unknown[] }).tools).toHaveLength(23);
@@ -103,8 +103,8 @@ describe("MCP JSON handlers", () => {
 				method: "tools/list",
 			})}\n`,
 		);
-		expect(handleJsonRpc({ jsonrpc: "2.0", method: "tools/list" })).toBeNull();
-		expect(handleJsonRpc({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
+		expect(await handleJsonRpc({ jsonrpc: "2.0", method: "tools/list" })).toBeNull();
+		expect(await handleJsonRpc({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
 		expect(responses).toHaveLength(1);
 		const response = responses[0] as { id?: unknown; result?: { tools?: unknown[] } };
 		expect(response.id).toBe(7);
@@ -124,8 +124,8 @@ describe("MCP JSON handlers", () => {
 		expect(validResponse.result?.tools).toHaveLength(23);
 	});
 
-	it("wraps tool results in MCP text content", () => {
-		const response = callToolJson("mnemopi_stats", { bank: "server" });
+	it("wraps tool results in MCP text content", async () => {
+		const response = await callToolJson("mnemopi_stats", { bank: "server" });
 		expect(response.isError).toBeUndefined();
 		const payload = JSON.parse(response.content[0]?.text ?? "{}") as {
 			status: string;
@@ -135,8 +135,8 @@ describe("MCP JSON handlers", () => {
 		expect(payload.bank).toBe("server");
 	});
 
-	it("dispatches remember, recall, stats, sleep, scratchpad, and bank operations", () => {
-		const remembered = handleToolCall("mnemopi_remember", {
+	it("dispatches remember, recall, stats, sleep, scratchpad, and bank operations", async () => {
+		const remembered = await handleToolCall("mnemopi_remember", {
 			content: "MCP server test remembers kombucha preference",
 			importance: 0.8,
 			bank: "work",
@@ -145,7 +145,7 @@ describe("MCP JSON handlers", () => {
 		expect(remembered.bank).toBe("work");
 		expect(typeof remembered.memory_id).toBe("string");
 
-		const recalled = handleToolCall("mnemopi_recall", {
+		const recalled = await handleToolCall("mnemopi_recall", {
 			query: "kombucha preference",
 			top_k: 3,
 			bank: "work",
@@ -154,49 +154,49 @@ describe("MCP JSON handlers", () => {
 		expect(recalled.bank).toBe("work");
 		expect(recalled.count as number).toBeGreaterThanOrEqual(1);
 
-		const scratchWrite = handleToolCall("mnemopi_scratchpad_write", {
+		const scratchWrite = await handleToolCall("mnemopi_scratchpad_write", {
 			content: "scratch note",
 			bank: "work",
 		});
 		expect(scratchWrite.status).toBe("written");
 		expect(scratchWrite.bank).toBe("work");
-		const scratchRead = handleToolCall("mnemopi_scratchpad_read", { bank: "work" });
+		const scratchRead = await handleToolCall("mnemopi_scratchpad_read", { bank: "work" });
 		expect(scratchRead.entries_count as number).toBeGreaterThanOrEqual(1);
 
-		const stats = handleToolCall("mnemopi_stats", { bank: "work" });
+		const stats = await handleToolCall("mnemopi_stats", { bank: "work" });
 		expect(stats.status).toBe("ok");
 		expect(stats.bank).toBe("work");
 		expect(stats.working).toBeDefined();
 
-		const sleep = handleToolCall("mnemopi_sleep", { dry_run: true, bank: "work" });
+		const sleep = await handleToolCall("mnemopi_sleep", { dry_run: true, bank: "work" });
 		expect(sleep.status).toBe("ok");
 		expect(sleep.dry_run).toBe(true);
 		expect(sleep.bank).toBe("work");
 	});
 
-	it("uses MNEMOPI_MCP_BANK when a call omits bank", () => {
+	it("uses MNEMOPI_MCP_BANK when a call omits bank", async () => {
 		process.env.MNEMOPI_MCP_BANK = "env-bank";
-		const remembered = handleToolCall("mnemopi_remember", { content: "env bank memory" });
+		const remembered = await handleToolCall("mnemopi_remember", { content: "env bank memory" });
 		expect(remembered.bank).toBe("env-bank");
-		const stats = handleToolCall("mnemopi_stats", {});
+		const stats = await handleToolCall("mnemopi_stats", {});
 		expect(stats.bank).toBe("env-bank");
 	});
 
-	it("routes bank paths through BankManager validation and canonical layout", () => {
-		const defaultStats = handleToolCall("mnemopi_diagnose", {});
+	it("routes bank paths through BankManager validation and canonical layout", async () => {
+		const defaultStats = await handleToolCall("mnemopi_diagnose", {});
 		expect(defaultStats.db_path).toBe(join(dataDir, "mnemopi.db"));
 
-		const workStats = handleToolCall("mnemopi_diagnose", { bank: "work" });
+		const workStats = await handleToolCall("mnemopi_diagnose", { bank: "work" });
 		expect(workStats.db_path).toBe(join(dataDir, "banks", "work", "mnemopi.db"));
-		expect(() => handleToolCall("mnemopi_diagnose", { bank: "../escape" })).toThrow();
+		await expect(handleToolCall("mnemopi_diagnose", { bank: "../escape" })).rejects.toThrow();
 	});
 
-	it("links graph edges and queries related memories through a real BeamMemory", () => {
-		const first = handleToolCall("mnemopi_remember", {
+	it("links graph edges and queries related memories through a real BeamMemory", async () => {
+		const first = await handleToolCall("mnemopi_remember", {
 			content: "Graph source memory about Ada and deterministic tests",
 			bank: "graph",
 		});
-		const second = handleToolCall("mnemopi_remember", {
+		const second = await handleToolCall("mnemopi_remember", {
 			content: "Graph target memory about Ada and reliable tests",
 			bank: "graph",
 		});
@@ -204,7 +204,7 @@ describe("MCP JSON handlers", () => {
 		const targetId = second.memory_id;
 		if (typeof sourceId !== "string" || typeof targetId !== "string") throw new Error("expected memory ids");
 
-		const link = handleToolCall("mnemopi_graph_link", {
+		const link = await handleToolCall("mnemopi_graph_link", {
 			source_id: sourceId,
 			target_id: targetId,
 			relationship: "supports",
@@ -214,7 +214,7 @@ describe("MCP JSON handlers", () => {
 		expect(link.status).toBe("linked");
 		expect(link.bank).toBe("graph");
 
-		const query = handleToolCall("mnemopi_graph_query", {
+		const query = await handleToolCall("mnemopi_graph_query", {
 			seed_memory_id: sourceId,
 			edge_type: "supports",
 			min_weight: 0.7,

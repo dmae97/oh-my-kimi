@@ -62,13 +62,13 @@ function lineValue(output: string, prefix: string): number {
 }
 
 describe("CLI stats parity", () => {
-	it("prints real working, episodic, triple, bank, and database counts", () => {
+	it("prints real working, episodic, triple, bank, and database counts", async () => {
 		const dbPath = join(root, "mnemopi.db");
 		const memory = seed(dbPath);
 		memory.close();
 
 		const io = capture();
-		expect(cmdStats([], io.context())).toBe(0);
+		expect(await cmdStats([], io.context())).toBe(0);
 		expect(lineValue(io.stdout, "Working memory")).toBeGreaterThanOrEqual(1);
 		expect(lineValue(io.stdout, "Episodic memory")).toBeGreaterThanOrEqual(1);
 		expect(lineValue(io.stdout, "Knowledge triples")).toBeGreaterThanOrEqual(1);
@@ -78,12 +78,12 @@ describe("CLI stats parity", () => {
 		expect(io.stderr).toBe("");
 	});
 
-	it("prints zero triples on a fresh initialized DB", () => {
+	it("prints zero triples on a fresh initialized DB", async () => {
 		const dbPath = join(root, "mnemopi.db");
 		const memory = new BeamMemory({ sessionId: "fresh-stats", dbPath });
 		memory.close();
 		const io = capture();
-		expect(cmdStats([], io.context())).toBe(0);
+		expect(await cmdStats([], io.context())).toBe(0);
 		expect(lineValue(io.stdout, "Knowledge triples")).toBe(0);
 	});
 
@@ -113,7 +113,7 @@ describe("CLI stats parity", () => {
 	it("stats commands read the configured data directory, not the default home path", async () => {
 		const customDataDir = join(root, "custom-data");
 		const io = capture();
-		expect(cmdRemember(["stats data dir probe"], io.context(customDataDir))).toBe(0);
+		expect(await cmdRemember(["stats data dir probe"], io.context(customDataDir))).toBe(0);
 		expect(existsSync(join(customDataDir, "mnemopi.db"))).toBe(true);
 
 		const statsIo = capture();

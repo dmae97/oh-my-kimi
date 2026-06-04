@@ -85,12 +85,12 @@ function insertEpisodic(
 }
 
 describe("beam recall free functions", () => {
-	it("orders deterministic FTS-only working-memory hits by lexical strength", () => {
+	it("orders deterministic FTS-only working-memory hits by lexical strength", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-weak", "banana appears once beside unrelated notes");
 		insertWorking(beam, "wm-strong", "banana banana banana release checklist");
 
-		const results = recall(beam, "banana", 2, { queryTime: "2026-05-30T12:00:00.000Z" });
+		const results = await recall(beam, "banana", 2, { queryTime: "2026-05-30T12:00:00.000Z" });
 
 		const top = results[0];
 		expect(results.map(result => result.id)).toEqual(["wm-strong", "wm-weak"]);
@@ -101,12 +101,12 @@ describe("beam recall free functions", () => {
 		expect(top.fts_score).toBeGreaterThan(0);
 	});
 
-	it("fuses working and episodic memory candidates", () => {
+	it("fuses working and episodic memory candidates", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-deploy", "deploy runbook says use the blue pipeline");
 		insertEpisodic(beam, "em-deploy", "deploy retrospective: blue pipeline avoided downtime");
 
-		const results = recall(beam, "deploy blue pipeline", 5, {
+		const results = await recall(beam, "deploy blue pipeline", 5, {
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
 
@@ -115,7 +115,7 @@ describe("beam recall free functions", () => {
 		expect(new Set(results.map(result => result.tier_label))).toEqual(new Set(["working", "episodic"]));
 	});
 
-	it("boosts memories near the requested temporal target", () => {
+	it("boosts memories near the requested temporal target", async () => {
 		const beam = makeBeam();
 		insertEpisodic(beam, "em-old", "incident alpha resolved by rotating credentials", {
 			timestamp: "2026-05-10T09:00:00.000Z",
@@ -126,7 +126,7 @@ describe("beam recall free functions", () => {
 			eventDate: "2026-05-29",
 		});
 
-		const results = recall(beam, "incident alpha", 2, {
+		const results = await recall(beam, "incident alpha", 2, {
 			queryTime: "2026-05-29T12:00:00.000Z",
 			temporalWeight: 1.0,
 			temporalHalflife: 12,
@@ -147,7 +147,7 @@ describe("beam recall free functions", () => {
 		expect(target.temporal_score).toBeGreaterThan(old.temporal_score);
 	});
 
-	it("accounts for importance and recency in deterministic fallback scoring", () => {
+	it("accounts for importance and recency in deterministic fallback scoring", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-low", "phoenix migration requires operator approval", {
 			timestamp: new Date().toISOString(),
@@ -158,7 +158,7 @@ describe("beam recall free functions", () => {
 			importance: 1.0,
 		});
 
-		const results = recall(beam, "phoenix migration", 2, {
+		const results = await recall(beam, "phoenix migration", 2, {
 			importanceWeight: 0.8,
 			ftsWeight: 0.1,
 			vecWeight: 0.1,
@@ -168,25 +168,25 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
 	});
 
-	it("handles CJK token queries without embeddings", () => {
+	it("handles CJK token queries without embeddings", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-cjk", "数据库 密码 已轮换");
 		insertWorking(beam, "wm-other", "unrelated english note");
 
-		const results = recall(beam, "数据库", 3);
+		const results = await recall(beam, "数据库", 3);
 
 		expect(results[0]?.id).toBe("wm-cjk");
 		expect(results.map(result => result.id)).not.toContain("wm-other");
 	});
 
-	it("does not retry scoped recall without the session filter when only another session matches", () => {
+	it("does not retry scoped recall without the session filter when only another session matches", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-private-other", "orion marker lives only in the other private session", {
 			sessionId: "s2",
 			scope: "session",
 		});
 
-		const results = recall(beam, "orion marker", 5);
+		const results = await recall(beam, "orion marker", 5);
 
 		expect(results).toHaveLength(0);
 	});
@@ -273,12 +273,12 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.content).toBe("postgres global database");
 	});
 
-	it("increments enhanced recall counts only for the final returned MMR results", () => {
+	it("increments enhanced recall counts only for the final returned MMR results", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-enhanced-keep", "calypso migration plan keeps postgres online", { importance: 1.0 });
 		insertWorking(beam, "wm-enhanced-drop", "calypso migration plan keeps redis online", { importance: 0.9 });
 
-		const results = recallEnhanced(beam, "calypso migration plan keeps online", 1, { useCache: false });
+		const results = await recallEnhanced(beam, "calypso migration plan keeps online", 1, { useCache: false });
 		const returned = results[0]?.id;
 		if (returned === undefined) throw new Error("expected enhanced recall to return one result");
 
@@ -291,12 +291,12 @@ describe("beam recall free functions", () => {
 		expect(counts.get(returned === "wm-enhanced-keep" ? "wm-enhanced-drop" : "wm-enhanced-keep")).toBe(0);
 	});
 
-	it("enhanced recall applies intent/synonym/MMR path without dropping required fields", () => {
+	it("enhanced recall applies intent/synonym/MMR path without dropping required fields", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-db", "database migration notes mention postgres");
 		insertWorking(beam, "wm-cache", "cache migration notes mention redis");
 
-		const results = recallEnhanced(beam, "db migration", 2, { useCache: false });
+		const results = await recallEnhanced(beam, "db migration", 2, { useCache: false });
 
 		expect(results).toHaveLength(2);
 		expect(results[0]?.id).toBeTruthy();

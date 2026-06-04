@@ -57,14 +57,14 @@ describe("all provider-compatible MCP tools", () => {
 		}
 	});
 
-	it("rejects unknown tools", () => {
-		expect(() => handleToolCall("mnemopi_nonexistent", {})).toThrow("Unknown tool");
+	it("rejects unknown tools", async () => {
+		await expect(handleToolCall("mnemopi_nonexistent", {})).rejects.toThrow("Unknown tool");
 	});
 });
 
 describe("representative provider-compatible handlers", () => {
-	it("stores, recalls, reads stats, updates, gets, invalidates, and forgets", () => {
-		const remembered = handleToolCall("mnemopi_remember", {
+	it("stores, recalls, reads stats, updates, gets, invalidates, and forgets", async () => {
+		const remembered = await handleToolCall("mnemopi_remember", {
 			content: "Provider handler stores durable espresso preference",
 			importance: 0.7,
 			bank: "provider",
@@ -73,7 +73,7 @@ describe("representative provider-compatible handlers", () => {
 		expect(remembered.status).toBe("stored");
 		expect(memoryId).toHaveLength(16);
 
-		const recalled = handleToolCall("mnemopi_recall", {
+		const recalled = await handleToolCall("mnemopi_recall", {
 			query: "espresso preference",
 			limit: 5,
 			bank: "provider",
@@ -81,78 +81,78 @@ describe("representative provider-compatible handlers", () => {
 		expect(recalled.status).toBe("ok");
 		expect(recalled.count as number).toBeGreaterThanOrEqual(1);
 
-		const updated = handleToolCall("mnemopi_update", {
+		const updated = await handleToolCall("mnemopi_update", {
 			memory_id: memoryId,
 			content: "Provider handler stores durable tea preference",
 			bank: "provider",
 		});
 		expect(updated.status).toBe("updated");
-		const got = handleToolCall("mnemopi_get", { memory_id: memoryId, bank: "provider" });
+		const got = await handleToolCall("mnemopi_get", { memory_id: memoryId, bank: "provider" });
 		expect(got.status).toBe("ok");
 		expect(JSON.stringify(got.memory)).toContain("tea preference");
 
-		const stats = handleToolCall("mnemopi_stats", { bank: "provider" });
+		const stats = await handleToolCall("mnemopi_stats", { bank: "provider" });
 		expect(stats.status).toBe("ok");
 		expect(stats.working).toBeDefined();
 
-		const invalidated = handleToolCall("mnemopi_invalidate", {
+		const invalidated = await handleToolCall("mnemopi_invalidate", {
 			memory_id: memoryId,
 			bank: "provider",
 		});
 		expect(invalidated.status).toBe("invalidated");
-		const forgotten = handleToolCall("mnemopi_forget", { memory_id: memoryId, bank: "provider" });
+		const forgotten = await handleToolCall("mnemopi_forget", { memory_id: memoryId, bank: "provider" });
 		expect(forgotten.status).toBe("deleted");
 	});
 
-	it("handles sleep and scratchpad operations", () => {
-		const write = handleToolCall("mnemopi_scratchpad_write", {
+	it("handles sleep and scratchpad operations", async () => {
+		const write = await handleToolCall("mnemopi_scratchpad_write", {
 			content: "provider scratch",
 			bank: "provider",
 		});
 		expect(write.status).toBe("written");
-		const read = handleToolCall("mnemopi_scratchpad_read", { bank: "provider" });
+		const read = await handleToolCall("mnemopi_scratchpad_read", { bank: "provider" });
 		expect(read.entries_count as number).toBe(1);
-		const clear = handleToolCall("mnemopi_scratchpad_clear", { bank: "provider" });
+		const clear = await handleToolCall("mnemopi_scratchpad_clear", { bank: "provider" });
 		expect(clear.status).toBe("cleared");
-		const sleep = handleToolCall("mnemopi_sleep", { dry_run: true, bank: "provider" });
+		const sleep = await handleToolCall("mnemopi_sleep", { dry_run: true, bank: "provider" });
 		expect(sleep.status).toBe("ok");
 		expect(sleep.dry_run).toBe(true);
 	});
 
-	it("handles bank-isolated operations", () => {
-		handleToolCall("mnemopi_remember", {
+	it("handles bank-isolated operations", async () => {
+		await handleToolCall("mnemopi_remember", {
 			content: "only alpha bank contains apricot",
 			bank: "alpha",
 		});
-		const alpha = handleToolCall("mnemopi_recall", { query: "apricot", bank: "alpha" });
-		const beta = handleToolCall("mnemopi_recall", { query: "apricot", bank: "beta" });
+		const alpha = await handleToolCall("mnemopi_recall", { query: "apricot", bank: "alpha" });
+		const beta = await handleToolCall("mnemopi_recall", { query: "apricot", bank: "beta" });
 		expect(alpha.count as number).toBeGreaterThanOrEqual(1);
 		expect(beta.count).toBe(0);
 	});
 
-	it("handles triple and shared-surface tools", () => {
-		const triple = handleToolCall("mnemopi_triple_add", {
+	it("handles triple and shared-surface tools", async () => {
+		const triple = await handleToolCall("mnemopi_triple_add", {
 			subject: "user",
 			predicate: "prefers",
 			object: "oolong",
 			bank: "provider",
 		});
 		expect(triple.status).toBe("stored");
-		const triples = handleToolCall("mnemopi_triple_query", {
+		const triples = await handleToolCall("mnemopi_triple_query", {
 			subject: "user",
 			predicate: "prefers",
 			bank: "provider",
 		});
 		expect(triples.results_count as number).toBeGreaterThanOrEqual(1);
 
-		const shared = handleToolCall("mnemopi_shared_remember", {
+		const shared = await handleToolCall("mnemopi_shared_remember", {
 			content: "User prefers concise answers",
 			kind: "preference",
 		});
 		expect(shared.status).toBe("stored_shared");
-		const sharedRecall = handleToolCall("mnemopi_shared_recall", { query: "concise answers" });
+		const sharedRecall = await handleToolCall("mnemopi_shared_recall", { query: "concise answers" });
 		expect(sharedRecall.count as number).toBeGreaterThanOrEqual(1);
-		const sharedStats = handleToolCall("mnemopi_shared_stats", {});
+		const sharedStats = await handleToolCall("mnemopi_shared_stats", {});
 		expect(sharedStats.provider).toBe("mnemopi_shared");
 	});
 });
