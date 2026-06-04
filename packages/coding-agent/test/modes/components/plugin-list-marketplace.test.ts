@@ -1,12 +1,17 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, spyOn } from "bun:test";
 import * as os from "node:os";
 import { stripVTControlCharacters } from "node:util";
-import type { InstalledPluginSummary } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
+import {
+	type InstalledPluginSummary,
+	MarketplaceManager,
+} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { InstalledPlugin } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/types";
 import {
 	MarketplacePluginDetailComponent,
 	PluginListComponent,
 	type PluginListEntry,
+	PluginSettingsComponent,
 } from "@oh-my-pi/pi-coding-agent/modes/components/plugin-settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
@@ -142,6 +147,47 @@ describe("PluginListComponent", () => {
 
 		expect(selected).not.toBeNull();
 		expect(selected!.id).toBe("pick@mkt");
+	});
+});
+
+describe("PluginSettingsComponent", () => {
+	it("awaits plugin-change reload callback after toggling a marketplace plugin", async () => {
+		const plugin = marketplace("toggle@mkt");
+		const order: string[] = [];
+		const reloaded = Promise.withResolvers<void>();
+		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
+		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([plugin]);
+		const setEnabledSpy = spyOn(MarketplaceManager.prototype, "setPluginEnabled").mockImplementation(
+			async (pluginId, enabled, scope) => {
+				order.push(`set:${pluginId}:${enabled}:${scope}`);
+			},
+		);
+
+		try {
+			const component = new PluginSettingsComponent(process.cwd(), {
+				onClose: () => {},
+				onPluginChanged: async () => {
+					order.push("reload");
+					reloaded.resolve();
+				},
+			});
+
+			for (let i = 0; i < 20; i++) {
+				if (stripVTControlCharacters(component.render(120).join("\n")).includes("toggle@mkt")) break;
+				await Bun.sleep(1);
+			}
+			expect(stripVTControlCharacters(component.render(120).join("\n"))).toContain("toggle@mkt");
+			component.handleInput("\n");
+			component.handleInput(" ");
+			await reloaded.promise;
+
+			expect(setEnabledSpy).toHaveBeenCalledWith("toggle@mkt", false, "user");
+			expect(order).toEqual(["set:toggle@mkt:false:user", "reload"]);
+		} finally {
+			npmListSpy.mockRestore();
+			listInstalledSpy.mockRestore();
+			setEnabledSpy.mockRestore();
+		}
 	});
 });
 

@@ -579,7 +579,7 @@ class ConfigInputSubmenu extends Container {
 
 export interface PluginSettingsCallbacks {
 	onClose: () => void;
-	onPluginChanged: () => void;
+	onPluginChanged: () => void | Promise<void>;
 }
 
 /** Component with handleInput method */
@@ -667,7 +667,7 @@ export class PluginSettingsComponent extends Container {
 		this.#viewComponent = new PluginDetailComponent(plugin, this.#manager, {
 			onEnabledChange: async enabled => {
 				await this.#manager.setEnabled(plugin.name, enabled);
-				this.callbacks.onPluginChanged();
+				await this.callbacks.onPluginChanged();
 			},
 			onFeatureChange: async (feature, enabled) => {
 				const current = new Set((await this.#manager.getEnabledFeatures(plugin.name)) ?? []);
@@ -677,11 +677,11 @@ export class PluginSettingsComponent extends Container {
 					current.delete(feature);
 				}
 				await this.#manager.setEnabledFeatures(plugin.name, [...current]);
-				this.callbacks.onPluginChanged();
+				await this.callbacks.onPluginChanged();
 			},
 			onConfigChange: async (key, value) => {
 				await this.#manager.setPluginSetting(plugin.name, key, value);
-				this.callbacks.onPluginChanged();
+				await this.callbacks.onPluginChanged();
 			},
 			onBack: () => this.#showPluginList(),
 		});
@@ -700,7 +700,7 @@ export class PluginSettingsComponent extends Container {
 				try {
 					const mgr = await this.#buildMarketplaceManager();
 					await mgr.setPluginEnabled(plugin.id, enabled, plugin.scope);
-					this.callbacks.onPluginChanged();
+					await this.callbacks.onPluginChanged();
 				} catch (err) {
 					logger.error("Settings → Plugins: failed to toggle marketplace plugin", {
 						pluginId: plugin.id,

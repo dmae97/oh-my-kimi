@@ -208,7 +208,7 @@ export interface SettingsCallbacks {
 	/** Get current rendered status line for inline preview */
 	getStatusLinePreview?: () => string;
 	/** Called when plugins change */
-	onPluginsChanged?: () => void;
+	onPluginsChanged?: () => void | Promise<void>;
 	/** Called when settings panel is closed */
 	onCancel: () => void;
 }
