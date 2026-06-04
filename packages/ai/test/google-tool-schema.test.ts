@@ -70,6 +70,37 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		});
 	});
 
+	it("strips schema keywords inside a property literally named properties", () => {
+		// Regression: the Resend MCP `create_contact` tool exposes a property
+		// literally named `properties`. The walker must not treat that property's
+		// value schema as a properties map — otherwise nested `propertyNames` /
+		// `additionalProperties` keywords leak to the CCA wire and get rejected
+		// with `Unknown name "propertyNames"` (HTTP 400).
+		const schema = {
+			type: "object",
+			properties: {
+				properties: {
+					description: "Custom property key-value pairs",
+					type: "object",
+					propertyNames: { type: "string" },
+					additionalProperties: { type: "string" },
+					properties: {},
+				},
+			},
+		} as unknown;
+
+		expect(normalizeSchemaForCCA(schema)).toEqual({
+			type: "object",
+			properties: {
+				properties: {
+					description: "Custom property key-value pairs",
+					type: "object",
+					properties: {},
+				},
+			},
+		});
+	});
+
 	it("uses sanitized parameters for claude models with deterministic output", () => {
 		const parameters = {
 			type: "object",
