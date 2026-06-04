@@ -15,7 +15,7 @@ import type { AgentSession } from "../session/agent-session";
 import { computeBankScope } from "./bank";
 import { createHindsightClient } from "./client";
 import { isHindsightConfigured, loadHindsightConfig } from "./config";
-import type { HindsightMessage } from "./content";
+import { hasSubstantiveContent, type HindsightMessage } from "./content";
 import { HindsightSessionState } from "./state";
 
 const STATIC_INSTRUCTIONS = [
@@ -181,7 +181,7 @@ function flattenMessagesForRecall(messages: AgentMessage[]): HindsightMessage[] 
 		if (msg.role === "user") {
 			const content = msg.content;
 			if (typeof content === "string") {
-				if (content.trim()) out.push({ role: "user", content });
+				if (hasSubstantiveContent(content)) out.push({ role: "user", content });
 				continue;
 			}
 			if (Array.isArray(content)) {
@@ -189,7 +189,7 @@ function flattenMessagesForRecall(messages: AgentMessage[]): HindsightMessage[] 
 					.filter((b): b is { type: "text"; text: string } => !!b && (b as { type?: unknown }).type === "text")
 					.map(b => b.text)
 					.join("\n");
-				if (text.trim()) out.push({ role: "user", content: text });
+				if (hasSubstantiveContent(text)) out.push({ role: "user", content: text });
 			}
 			continue;
 		}
@@ -198,7 +198,7 @@ function flattenMessagesForRecall(messages: AgentMessage[]): HindsightMessage[] 
 				.filter((b): b is { type: "text"; text: string } => b.type === "text")
 				.map(b => b.text)
 				.join("\n");
-			if (text.trim()) out.push({ role: "assistant", content: text });
+			if (hasSubstantiveContent(text)) out.push({ role: "assistant", content: text });
 		}
 	}
 	return out;
