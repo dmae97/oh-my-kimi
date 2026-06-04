@@ -313,45 +313,47 @@ describe("openai-completions convertMessages", () => {
 		expect(toolMessage?.content as string).toContain(NON_VISION_IMAGE_PLACEHOLDER);
 	});
 
-	it("preserves image_url for DashScope compatible-mode VL/Omni Qwen models", () => {
-		// Counter-case for the issue #1859 guard: qwen-vl-max on the same
-		// endpoint IS genuinely vision-capable, so the dashscope-text-only
-		// override must NOT kick in there.
-		const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
-		const model: Model<"openai-completions"> = {
-			...baseModel,
-			id: "qwen-vl-max",
-			provider: "bailian" as Model<"openai-completions">["provider"],
-			baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-			api: "openai-completions",
-			input: ["text", "image"],
-		};
+	it("preserves image_url for DashScope compatible-mode multimodal Qwen models", () => {
+		// Counter-cases for the issue #1859 guard: DashScope also exposes
+		// genuinely multimodal Qwen ids without `vl` in the name (`qwen3.7-plus`),
+		// so the text-only override must be limited to known text-only families.
+		for (const id of ["qwen3.7-plus", "qwen-vl-max"]) {
+			const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
+			const model: Model<"openai-completions"> = {
+				...baseModel,
+				id,
+				provider: "bailian" as Model<"openai-completions">["provider"],
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				api: "openai-completions",
+				input: ["text", "image"],
+			};
 
-		const now = Date.now();
-		const assistantMessage: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "img.png" } }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			usage: emptyUsage,
-			stopReason: "toolUse",
-			timestamp: now,
-		};
+			const now = Date.now();
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "img.png" } }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: emptyUsage,
+				stopReason: "toolUse",
+				timestamp: now,
+			};
 
-		const context: Context = {
-			messages: [
-				{ role: "user", content: "Read the image", timestamp: now - 2 },
-				assistantMessage,
-				buildToolResult("tool-1", now + 1),
-			],
-		};
+			const context: Context = {
+				messages: [
+					{ role: "user", content: "Read the image", timestamp: now - 2 },
+					assistantMessage,
+					buildToolResult("tool-1", now + 1),
+				],
+			};
 
-		const messages = convertMessages(model, context, compat);
-		const trailingUser = messages[messages.length - 1];
-		expect(trailingUser.role).toBe("user");
-		expect(Array.isArray(trailingUser.content)).toBe(true);
-		const imageParts = (trailingUser.content as Array<{ type?: string }>).filter(p => p?.type === "image_url");
-		expect(imageParts.length).toBe(1);
+			const messages = convertMessages(model, context, compat);
+			const trailingUser = messages[messages.length - 1];
+			expect(trailingUser.role).toBe("user");
+			expect(Array.isArray(trailingUser.content)).toBe(true);
+			const imageParts = (trailingUser.content as Array<{ type?: string }>).filter(p => p?.type === "image_url");
+			expect(imageParts.length).toBe(1);
+		}
 	});
 });
