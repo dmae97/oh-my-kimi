@@ -37,10 +37,10 @@ describe("mergeSessionRanking", () => {
 		expect(ids(mergeSessionRanking(all, fuzzy, ["b"]))).toEqual(["a", "b"]);
 	});
 
-	it("surfaces purely history-matched sessions ordered by history relevance", () => {
+	it("surfaces purely history-matched sessions ordered by prompt-history rank", () => {
 		const all = ["a", "b", "c"].map(makeSession);
 
-		// No fuzzy match at all; c is the most relevant prompt match, then a. b is excluded.
+		// No fuzzy match at all; c is the best prompt-history match, then a. b is excluded.
 		expect(ids(mergeSessionRanking(all, [], ["c", "a"]))).toEqual(["c", "a"]);
 	});
 

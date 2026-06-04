@@ -51,10 +51,10 @@ export type SessionHistoryMatcher = (query: string) => string[];
  *
  * - `fuzzy` is the ordered fuzzy-filter result over session metadata (best first).
  * - `historyIds` are session IDs whose recorded prompts matched the query,
- *   ordered by history relevance (best first); duplicates are tolerated.
+ *   ordered by prompt-history rank (typically newest matching prompt first); duplicates are tolerated.
  *
  * Ranking: sessions matched by **both** signals lead (keeping fuzzy order), then
- * fuzzy-only matches, then history-only matches (by history order). A fuzzy match
+ * fuzzy-only matches, then history-only matches (by prompt-history order). A fuzzy match
  * is never dropped, and history matches not present in `allSessions` (e.g. deleted
  * or out-of-scope sessions) are ignored since they cannot be resumed from here.
  */
