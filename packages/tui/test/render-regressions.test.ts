@@ -3825,4 +3825,43 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 			}
 		});
 	});
+
+	// Repro of the drag-resize line-duplication: dragging the terminal smaller
+	// fires a stream of height shrinks. While the transcript FITS the viewport,
+	// each shrink used to scroll live rows into native scrollback — the in-place
+	// viewport repaint parked the hardware cursor on the padded viewport bottom,
+	// BELOW the short content, so the terminal's shrink reflow pushed the live
+	// rows up to keep that cursor on screen and the next repaint redrew them,
+	// committing one duplicate copy of the visible block per resize step. The
+	// repaint must leave the cursor on the real content bottom instead.
+	it("does not duplicate fitting content into scrollback across a drag-resize", async () => {
+		await withTerminalRisk(true, async () => {
+			const term = new UnknownViewportTerminal(40, 24);
+			const tui = new TUI(term);
+			const body = rows("line-", 4);
+			const component = new MutableLinesComponent(body);
+			tui.addChild(component);
+			try {
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await settle(term);
+				// A drag-resize: a stream of height shrinks while the 4-line block
+				// keeps fitting the (still larger) viewport.
+				for (const height of [22, 20, 18, 16, 14, 12, 10, 8, 6]) {
+					term.resize(40, height);
+					tui.requestRender();
+					await settle(term);
+				}
+				const scrollback = term.getScrollBuffer();
+				for (let i = 0; i < body.length; i++) {
+					expect(
+						countMatches(scrollback, new RegExp(`\\bline-${i}\\b`)),
+						`line-${i} must not duplicate across resizes`,
+					).toBeLessThanOrEqual(1);
+				}
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });

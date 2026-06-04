@@ -1555,30 +1555,19 @@ export class TUI extends Container {
 			// which can clear or reposition native scrollback and yank a scrolled-up
 			// reader (issue #1635), so it is unsafe while the probe is unavailable.
 			//
-			// When the shrunk transcript now fits entirely in the viewport there is no
-			// new native history to preserve during the live frame: repaint the screen
-			// in place (no `\x1b[3J`) and defer stale-scrollback cleanup to the next
-			// checkpoint rebuild (e.g. prompt submit -> `refreshNativeScrollbackIfDirty`).
-			if (nativeViewportAtBottom === undefined && newLines.length <= height) {
-				this.#markNativeScrollbackDirty();
-				return { kind: "viewportRepaint" };
-			}
-			// The shrunk transcript still overflows the viewport. A plain viewport
-			// repaint can leave stale high-water rows in native scrollback, while a
-			// destructive history rebuild (`CSI 3 J`) can yank readers in ED3-risk
-			// terminals whose viewport position is unobservable.
+			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
+			// ED3-risk terminals with an unobservable viewport cannot safely clear
+			// saved lines, and a live repaint can overwrite/yank a reader parked in
+			// history. If the shrunk transcript no longer reaches the old viewport
+			// top, freeze the native view and reconcile at checkpoint; otherwise
+			// repaint a padded frame so bottom-following users do not get duplicate
+			// boundary rows in scrollback.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				// During a foreground tool the user follows the live tail and we were
-				// asked to keep it fresh (eager rebuild): repaint the true
-				// bottom-anchored tail in place and reconcile stale scrollback at the
-				// next checkpoint. `deferredShrink` would pin the viewport to the
-				// pre-shrink top and pad blank rows, drifting the live tail up by the
-				// shrink delta so later rows render over the ones above (e.g. an
-				// injected notification chip painting over the active tool render).
-				// Outside foreground streaming a literal no-op keeps the old visible
-				// history frozen so a scrolled reader is not yanked.
-				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
+				if (newLines.length <= paddedViewportTop) {
+					return { kind: "deferredMutation" };
+				}
+				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. If the shrink still
@@ -1587,7 +1576,6 @@ export class TUI extends Container {
 			// native scrollback. When the shrink jumps above that padded viewport
 			// top, `deferredShrink` would draw only blank padding and hide the live
 			// prompt, so rebuild history instead (ED3 is safe on these terminals).
-			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			if (newLines.length <= paddedViewportTop) {
 				return { kind: "historyRebuild" };
 			}
