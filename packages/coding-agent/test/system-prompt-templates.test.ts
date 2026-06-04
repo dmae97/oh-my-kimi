@@ -198,6 +198,29 @@ describe("system Handlebars prompt templates", () => {
 		expect(subagentUser).not.toMatch(/CONTEXT\n=+/);
 		expect(subagentUser).not.toContain("Shared task background");
 	});
+	test("subagent system injects the overall plan when handed off, omits it otherwise", async () => {
+		const systemTemplate = await Bun.file(path.join(systemPromptsDir, "subagent-system-prompt.md")).text();
+
+		const withPlan = prompt.render(systemTemplate, {
+			...baseRenderContext,
+			agent: "You are a task agent.",
+			planReference: "1. Migrate the store\n2. Update callers",
+			planReferencePath: "local://wp-migration.md",
+		});
+		expect(withPlan).toMatch(/PLAN\n=+/);
+		expect(withPlan).toContain('<plan path="local://wp-migration.md">');
+		expect(withPlan).toContain("1. Migrate the store\n2. Update callers");
+		expect(withPlan).toContain("executing an approved plan");
+
+		const withoutPlan = prompt.render(systemTemplate, {
+			...baseRenderContext,
+			agent: "You are a task agent.",
+			planReference: "",
+			planReferencePath: "",
+		});
+		expect(withoutPlan).not.toMatch(/PLAN\n=+/);
+		expect(withoutPlan).not.toContain("<plan");
+	});
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();

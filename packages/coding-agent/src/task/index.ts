@@ -41,6 +41,7 @@ import {
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import type { LocalProtocolOptions } from "../internal-urls";
+import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { discoverAgents, getAgent } from "./discovery";
@@ -808,6 +809,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// across the whole tree and outputs land flat in the parent's dir.
 		const parentArtifactManager = this.session.getArtifactManager?.() ?? undefined;
 
+		// When the session is executing an approved plan, hand the overall plan to
+		// every subagent so they share the main agent's plan context. Skipped in
+		// plan mode (read-only exploration uses planModeSubagentPrompt instead) and
+		// when no plan file exists at the session's reference path.
+		const planReference = planModeState?.enabled
+			? undefined
+			: await loadOverallPlanReference(
+					this.session.getPlanReferencePath?.() ?? "local://PLAN.md",
+					localProtocolOptions,
+				);
+
 		// Initialize progress tracking
 		const progressMap = new Map<number, AgentProgress>();
 
@@ -934,6 +946,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						task: renderSubagentUserPrompt(task.assignment, simpleMode),
 						assignment: task.assignment.trim(),
 						context: sharedContext,
+						planReference,
 						description: task.description,
 						index,
 						id: task.id,
@@ -991,6 +1004,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						task: renderSubagentUserPrompt(task.assignment, simpleMode),
 						assignment: task.assignment.trim(),
 						context: sharedContext,
+						planReference,
 						description: task.description,
 						index,
 						id: task.id,
