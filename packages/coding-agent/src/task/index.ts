@@ -41,6 +41,7 @@ import {
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import type { LocalProtocolOptions } from "../internal-urls";
+import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { discoverAgents, getAgent } from "./discovery";
@@ -131,6 +132,37 @@ export {
 	taskSchema,
 } from "./types";
 
+// Built-in tools whose approval tier is "read" (see tool classes' `approval`).
+// An agent is read-only iff its declared tools are a non-empty subset of this set.
+// Fail-safe: any unknown tool makes the agent not read-only.
+export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"read",
+	"search",
+	"find",
+	"web_search",
+	"ast_grep",
+	"yield",
+	"irc",
+	"ask",
+	"job",
+	"todo",
+	"recall",
+	"reflect",
+	"retain",
+	"memory_edit",
+	"render_mermaid",
+	"inspect_image",
+	"checkpoint",
+	"rewind",
+	"resolve",
+	"report_finding",
+	"search_tool_bm25",
+]);
+
+export function isReadOnlyAgent(agent: AgentDefinition): boolean {
+	return !!agent.tools?.length && agent.tools.every(tool => READ_ONLY_TOOL_NAMES.has(tool));
+}
+
 /**
  * Render the tool description from a cached agent list and current settings.
  */
@@ -157,9 +189,14 @@ function renderDescription(
 		);
 		filteredAgents = filteredAgents.filter(a => allowed.has(a.name));
 	}
+	const renderedAgents = filteredAgents.map(agent => ({
+		name: agent.name,
+		description: agent.description,
+		readOnly: isReadOnlyAgent(agent),
+	}));
 	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
 	return prompt.render(taskDescriptionTemplate, {
-		agents: filteredAgents,
+		agents: renderedAgents,
 		spawningDisabled,
 		MAX_CONCURRENCY: maxConcurrency,
 		isolationEnabled,
@@ -772,6 +809,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// across the whole tree and outputs land flat in the parent's dir.
 		const parentArtifactManager = this.session.getArtifactManager?.() ?? undefined;
 
+		// When the session is executing an approved plan, hand the overall plan to
+		// every subagent so they share the main agent's plan context. Skipped in
+		// plan mode (read-only exploration uses planModeSubagentPrompt instead) and
+		// when no plan file exists at the session's reference path.
+		const planReference = planModeState?.enabled
+			? undefined
+			: await loadOverallPlanReference(
+					this.session.getPlanReferencePath?.() ?? "local://PLAN.md",
+					localProtocolOptions,
+				);
+
 		// Initialize progress tracking
 		const progressMap = new Map<number, AgentProgress>();
 
@@ -898,6 +946,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						task: renderSubagentUserPrompt(task.assignment, simpleMode),
 						assignment: task.assignment.trim(),
 						context: sharedContext,
+						planReference,
 						description: task.description,
 						index,
 						id: task.id,
@@ -955,6 +1004,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						task: renderSubagentUserPrompt(task.assignment, simpleMode),
 						assignment: task.assignment.trim(),
 						context: sharedContext,
+						planReference,
 						description: task.description,
 						index,
 						id: task.id,

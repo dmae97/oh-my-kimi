@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { getKittyGraphics, type KittyGraphicsFeatures, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
+import {
+	type CellDimensions,
+	getCellDimensions,
+	getTerminalInfo,
+	ImageProtocol,
+	setCellDimensions,
+	setTerminalImageProtocol,
+	TERMINAL,
+} from "@oh-my-pi/pi-tui/terminal-capabilities";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const processPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+const stdoutRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
 const originalWslInterop = Bun.env.WSL_INTEROP;
@@ -351,13 +363,16 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		expect(writes.some(w => w.includes("\x1b[>31u"))).toBe(false);
 		expect(writes).toContain("\x1b[?u\x1b[c");
 
-		// Two DA1 sentinels are in flight at startup (keyboard probe + OSC 11).
-		// Consume them in send-order and verify neither leaks to the input handler.
+		// Four DA1 sentinels are in flight at startup: keyboard probe, OSC 11, and
+		// the DECRQM probes for DEC 2026 and 2048 (each rides the shared FIFO).
+		// Consume them in send-order and verify none leaks to the input handler.
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual([]);
 
-		// A third stray DA1 has no owner and must reach the input handler — it is
+		// A fifth stray DA1 has no owner and must reach the input handler — it is
 		// no longer ours to swallow.
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual(["\x1b[?1;2c"]);
@@ -394,5 +409,231 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 		const pops = writes.filter(w => w === "\x1b[<u").length;
 		expect(pops).toBe(1);
+	});
+});
+
+describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
+	let originalCellDims: CellDimensions;
+
+	beforeEach(() => {
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
+		originalCellDims = { ...getCellDimensions() };
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
+		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
+		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
+		restoreProperty(process, "platform", processPlatformDescriptor);
+		restoreProperty(process.stdout, "columns", stdoutColumnsDescriptor);
+		restoreProperty(process.stdout, "rows", stdoutRowsDescriptor);
+		setCellDimensions(originalCellDims);
+	});
+
+	function setup() {
+		const writes: string[] = [];
+		const received: string[] = [];
+		let resizeCount = 0;
+		const reports: Array<{ mode: number; supported: boolean }> = [];
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdin, "setEncoding").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+
+		const terminal = new ProcessTerminal();
+		terminal.onPrivateModeReport?.((mode, supported) => reports.push({ mode, supported }));
+		terminal.start(
+			data => received.push(data),
+			() => {
+				resizeCount++;
+			},
+		);
+		return { terminal, writes, received, reports, resizeCount: () => resizeCount };
+	}
+
+	it("queries DECRQM for DEC 2026 and 2048 at startup", () => {
+		const { terminal, writes } = setup();
+		expect(writes.some(w => w.includes("\x1b[?2026$p"))).toBe(true);
+		expect(writes.some(w => w.includes("\x1b[?2048$p"))).toBe(true);
+		terminal.stop();
+	});
+
+	it("reports DECRPM statuses 1, 2, and 3 as supported private modes", () => {
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;1$y");
+		process.stdin.emit("data", "\x1b[?2048;2$y");
+		process.stdin.emit("data", "\x1b[?2031;3$y");
+		expect(reports).toContainEqual({ mode: 2026, supported: true });
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		expect(reports).toContainEqual({ mode: 2031, supported: true });
+		terminal.stop();
+	});
+
+	it("reports DECRPM status 4 as unsupported for modes the TUI enables", () => {
+		const { terminal, writes, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;4$y");
+		process.stdin.emit("data", "\x1b[?2048;4$y");
+		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		expect(reports).toContainEqual({ mode: 2048, supported: false });
+		expect(writes).not.toContain("\x1b[?2048h");
+		terminal.stop();
+		expect(writes).not.toContain("\x1b[?2048l");
+	});
+
+	it("reports a private mode unsupported when DECRPM status is 0", () => {
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;0$y");
+		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		terminal.stop();
+	});
+
+	it("enables DEC 2048 only after DECRPM confirms support, and disables it on stop", () => {
+		const { terminal, writes, reports } = setup();
+		expect(writes).not.toContain("\x1b[?2048h");
+		process.stdin.emit("data", "\x1b[?2048;2$y");
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		expect(writes).toContain("\x1b[?2048h");
+		terminal.stop();
+		expect(writes).toContain("\x1b[?2048l");
+	});
+
+	it("does not enable DEC 2048 when reported unsupported", () => {
+		const { terminal, writes, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2048;0$y");
+		expect(reports).toContainEqual({ mode: 2048, supported: false });
+		expect(writes).not.toContain("\x1b[?2048h");
+		terminal.stop();
+		expect(writes).not.toContain("\x1b[?2048l");
+	});
+
+	it("falls back to unsupported when the DA1 sentinel beats the DECRPM reply", () => {
+		const { terminal, reports } = setup();
+		// Drain keyboard + osc11 sentinels, then 2026's DA1 (no DECRPM arrived).
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		terminal.stop();
+	});
+
+	it("updates geometry and cell size without resizing when an in-band report is unchanged", () => {
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+		process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
+		expect(terminal.rows).toBe(30);
+		expect(terminal.columns).toBe(100);
+		expect(getCellDimensions()).toEqual({ widthPx: 10, heightPx: 20 });
+		expect(resizeCount()).toBe(0);
+		expect(received).toEqual([]);
+		terminal.stop();
+	});
+
+	it("fires resize once when an in-band report changes rows or columns", () => {
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+		process.stdin.emit("data", "\x1b[48;31;120;620;1200t");
+		expect(terminal.rows).toBe(31);
+		expect(terminal.columns).toBe(120);
+		expect(getCellDimensions()).toEqual({ widthPx: 10, heightPx: 20 });
+		expect(resizeCount()).toBe(1);
+		expect(received).toEqual([]);
+		terminal.stop();
+	});
+
+	it("reassembles a DECRPM reply split across stdin reads", () => {
+		vi.useFakeTimers();
+		const { terminal, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "$y");
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		terminal.stop();
+	});
+});
+
+describe("ProcessTerminal Kitty graphics temp-file probe", () => {
+	const originalProtocol = TERMINAL.imageProtocol;
+	let originalGraphics: KittyGraphicsFeatures;
+
+	beforeEach(() => {
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
+		originalGraphics = { ...getKittyGraphics() };
+		Bun.env.PI_TUI_KITTY_GRAPHICS_PROBE = "1";
+		setTerminalImageProtocol(ImageProtocol.Kitty);
+		setKittyGraphics({ transmissionMedium: "direct" });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
+		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
+		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
+		delete Bun.env.PI_TUI_KITTY_GRAPHICS_PROBE;
+		setTerminalImageProtocol(originalProtocol);
+		setKittyGraphics(originalGraphics);
+	});
+
+	function startProbed() {
+		const writes: string[] = [];
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdin, "setEncoding").mockImplementation(() => process.stdin);
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+		const terminal = new ProcessTerminal();
+		terminal.start(
+			() => {},
+			() => {},
+		);
+		return { terminal, writes };
+	}
+
+	it("emits an a=q,t=t probe and promotes to temp-file transmission on OK", () => {
+		const { terminal, writes } = startProbed();
+		const probe = writes.find(w => w.includes("\x1b_Ga=q,t=t"));
+		expect(probe).toBeDefined();
+		const id = probe?.match(/i=(\d+)/)?.[1];
+		expect(id).toBeDefined();
+		expect(getKittyGraphics().transmissionMedium).toBe("direct");
+		process.stdin.emit("data", `\x1b_Gi=${id};OK\x1b\\`);
+		expect(getKittyGraphics().transmissionMedium).toBe("temp-file");
+		terminal.stop();
+	});
+
+	it("stays on direct transmission when the probe reports an error", () => {
+		const { terminal, writes } = startProbed();
+		const id = writes.find(w => w.includes("\x1b_Ga=q,t=t"))?.match(/i=(\d+)/)?.[1];
+		expect(id).toBeDefined();
+		process.stdin.emit("data", `\x1b_Gi=${id};ENOTSUP:bad\x1b\\`);
+		expect(getKittyGraphics().transmissionMedium).toBe("direct");
+		terminal.stop();
+	});
+});
+
+describe("OSC 66 text-sizing capability", () => {
+	it("advertises text sizing only for Kitty", () => {
+		// OSC 66 is a Kitty-only protocol; any other terminal must report the
+		// capability as false so the renderer never emits raw escape bytes there.
+		expect(getTerminalInfo("kitty").textSizing).toBe(true);
+		for (const id of ["ghostty", "wezterm", "iterm2", "vscode", "alacritty", "base", "trueColor"] as const) {
+			expect(getTerminalInfo(id).textSizing).toBe(false);
+		}
 	});
 });

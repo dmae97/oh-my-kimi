@@ -981,8 +981,8 @@
         return out;
       }
 
-      function renderTodoWrite(name, args, result, ctx) {
-        let html = toolHead('todo_write');
+      function renderTodo(name, args, result, ctx) {
+        let html = toolHead('todo');
         const ops = Array.isArray(args.ops) ? args.ops : null;
         if (ops) {
           html += '<div class="tool-args">';
@@ -1520,7 +1520,7 @@
         search: renderSearch,
         find: renderFind,
         lsp: renderLsp,
-        todo_write: renderTodoWrite,
+        todo: renderTodo,
         task: renderTask,
         web_search: renderWebSearch,
         fetch: renderFetch,

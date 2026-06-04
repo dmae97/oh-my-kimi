@@ -6,7 +6,7 @@ import chalk from "chalk";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
-import todoWriteDescription from "../prompts/tools/todo-write.md" with { type: "text" };
+import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-manager";
 import { renderStatusLine, renderTreeList } from "../tui";
@@ -40,7 +40,7 @@ export interface TodoCompletionTransition {
 	content: string;
 }
 
-export interface TodoWriteToolDetails {
+export interface TodoToolDetails {
 	phases: TodoPhase[];
 	storage: "session" | "memory";
 	completedTasks?: TodoCompletionTransition[];
@@ -68,14 +68,14 @@ const TodoOpEntry = z.object({
 	text: z.string().optional().describe("note text"),
 });
 
-const todoWriteSchema = z
+const todoSchema = z
 	.object({
 		ops: z.array(TodoOpEntry).min(1).describe("ordered todo operations"),
 	})
 	.describe("apply ordered todo operations");
 
-type TodoWriteParams = z.infer<typeof todoWriteSchema>;
-type TodoOpEntryValue = TodoWriteParams["ops"][number];
+type TodoParams = z.infer<typeof todoSchema>;
+type TodoOpEntryValue = TodoParams["ops"][number];
 
 // =============================================================================
 // State helpers
@@ -159,7 +159,7 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 		}
 		if (entry.type !== "message") continue;
 		const message = entry.message as { role?: string; toolName?: string; details?: unknown; isError?: boolean };
-		if (message.role !== "toolResult" || message.toolName !== "todo_write" || message.isError) continue;
+		if (message.role !== "toolResult" || message.toolName !== "todo" || message.isError) continue;
 
 		const details = message.details as { phases?: unknown } | undefined;
 		if (!details || !Array.isArray(details.phases)) continue;
@@ -178,7 +178,7 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
  * the caller can render a `+N more` hint. When every task in `tasks` is
  * closed (completed or abandoned), returns the trailing `maxVisible` tasks
  * with `hiddenOpenCount = 0`, so the panel keeps useful context until the
- * active-phase pointer advances on the next `todo_write`.
+ * active-phase pointer advances on the next `todo`.
  *
  * Task identity and order are preserved — this is a slice, never a sort.
  */
@@ -383,7 +383,7 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string
 	}
 }
 
-function applyParams(phases: TodoPhase[], params: TodoWriteParams): { phases: TodoPhase[]; errors: string[] } {
+function applyParams(phases: TodoPhase[], params: TodoParams): { phases: TodoPhase[]; errors: string[] } {
 	const errors: string[] = [];
 	let next = phases;
 	for (const entry of params.ops) {
@@ -393,10 +393,10 @@ function applyParams(phases: TodoPhase[], params: TodoWriteParams): { phases: To
 	return { phases: next, errors };
 }
 
-/** Apply an array of `todo_write`-style ops to existing phases. Used by /todo slash command. */
+/** Apply an array of `todo`-style ops to existing phases. Used by /todo slash command. */
 export function applyOpsToPhases(
 	currentPhases: TodoPhase[],
-	ops: TodoWriteParams["ops"],
+	ops: TodoParams["ops"],
 ): { phases: TodoPhase[]; errors: string[] } {
 	return applyParams(clonePhases(currentPhases), { ops });
 }
@@ -586,33 +586,33 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 // Tool Class
 // =============================================================================
 
-export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWriteToolDetails> {
-	readonly name = "todo_write";
+export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
+	readonly name = "todo";
 	readonly approval = "read" as const;
-	readonly label = "Todo Write";
+	readonly label = "Todo";
 	readonly summary = "Write a structured todo list to track progress within a session";
 	readonly description: string;
-	readonly parameters = todoWriteSchema;
+	readonly parameters = todoSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(todoWriteDescription);
+		this.description = prompt.render(todoDescription);
 	}
 
 	async execute(
 		_toolCallId: string,
-		params: TodoWriteParams,
+		params: TodoParams,
 		_signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<TodoWriteToolDetails>,
+		_onUpdate?: AgentToolUpdateCallback<TodoToolDetails>,
 		_context?: AgentToolContext,
-	): Promise<AgentToolResult<TodoWriteToolDetails>> {
+	): Promise<AgentToolResult<TodoToolDetails>> {
 		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
 		const { phases: updated, errors } = applyParams(clonePhases(previousPhases), params);
 		const completedTasks = getCompletionTransitions(previousPhases, updated);
 		this.session.setTodoPhases?.(updated);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
-		const details: TodoWriteToolDetails = { phases: updated, storage };
+		const details: TodoToolDetails = { phases: updated, storage };
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
 
 		return {
@@ -627,7 +627,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 // TUI Renderer
 // =============================================================================
 
-type TodoWriteRenderArgs = {
+type TodoRenderArgs = {
 	ops?: Array<{
 		op?: string;
 		task?: string;
@@ -701,9 +701,9 @@ function noteMarker(count: number, uiTheme: Theme): string {
 	return uiTheme.fg("dim", chalk.italic(` \u207a${toSuperscript(count)}`));
 }
 
-export const TODO_WRITE_STRIKE_HOLD_FRAMES = 2;
-export const TODO_WRITE_STRIKE_REVEAL_FRAMES = 12;
-export const TODO_WRITE_STRIKE_TOTAL_FRAMES = TODO_WRITE_STRIKE_HOLD_FRAMES + TODO_WRITE_STRIKE_REVEAL_FRAMES;
+export const TODO_STRIKE_HOLD_FRAMES = 2;
+export const TODO_STRIKE_REVEAL_FRAMES = 12;
+export const TODO_STRIKE_TOTAL_FRAMES = TODO_STRIKE_HOLD_FRAMES + TODO_STRIKE_REVEAL_FRAMES;
 const EMPTY_COMPLETION_KEYS = new Set<string>();
 const STRIKE_START = "\x1b[9m";
 const STRIKE_END = "\x1b[29m";
@@ -721,11 +721,11 @@ function partialStrikethrough(text: string, visibleChars: number): string {
 
 function strikeRevealCount(text: string, frame: number | undefined): number | undefined {
 	if (frame === undefined) return undefined;
-	if (frame <= TODO_WRITE_STRIKE_HOLD_FRAMES) return 0;
+	if (frame <= TODO_STRIKE_HOLD_FRAMES) return 0;
 	const chars = [...text];
 	if (chars.length === 0) return undefined;
-	const revealFrame = Math.min(frame - TODO_WRITE_STRIKE_HOLD_FRAMES, TODO_WRITE_STRIKE_REVEAL_FRAMES);
-	return Math.ceil((chars.length * revealFrame) / TODO_WRITE_STRIKE_REVEAL_FRAMES);
+	const revealFrame = Math.min(frame - TODO_STRIKE_HOLD_FRAMES, TODO_STRIKE_REVEAL_FRAMES);
+	return Math.ceil((chars.length * revealFrame) / TODO_STRIKE_REVEAL_FRAMES);
 }
 
 function formatTodoLine(
@@ -775,8 +775,8 @@ function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
 	return lines;
 }
 
-export const todoWriteToolRenderer = {
-	renderCall(args: TodoWriteRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+export const todoToolRenderer = {
+	renderCall(args: TodoRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const ops = args?.ops?.map(entry => {
 			const parts = [entry.op ?? "update"];
 			if (entry.task) parts.push(entry.task);
@@ -784,15 +784,15 @@ export const todoWriteToolRenderer = {
 			if (entry.items?.length) parts.push(`${entry.items.length} item${entry.items.length === 1 ? "" : "s"}`);
 			return parts.join(" ");
 		}) ?? ["update"];
-		const text = renderStatusLine({ icon: "pending", title: "Todo Write", meta: ops }, uiTheme);
+		const text = renderStatusLine({ icon: "pending", title: "Todo", meta: ops }, uiTheme);
 		return new Text(text, 0, 0);
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: TodoWriteToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: TodoToolDetails },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		_args?: TodoWriteRenderArgs,
+		_args?: TodoRenderArgs,
 	): Component {
 		const phases = (result.details?.phases ?? []).filter(phase => phase.tasks.length > 0);
 		const completedTasks = result.details?.completedTasks ?? [];
@@ -806,10 +806,7 @@ export const todoWriteToolRenderer = {
 			keys.add(task.content);
 		}
 		const allTasks = phases.flatMap(phase => phase.tasks);
-		const header = renderStatusLine(
-			{ icon: "success", title: "Todo Write", meta: [`${allTasks.length} tasks`] },
-			uiTheme,
-		);
+		const header = renderStatusLine({ icon: "success", title: "Todo", meta: [`${allTasks.length} tasks`] }, uiTheme);
 		if (allTasks.length === 0) {
 			const fallback = result.content?.find(content => content.type === "text")?.text ?? "No todos";
 			return new Text(`${header}\n${uiTheme.fg("dim", fallback)}`, 0, 0);

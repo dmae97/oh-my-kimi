@@ -48,6 +48,12 @@ describe("Settings", () => {
 			fs.rmSync(testDir, { recursive: true });
 		}
 	});
+	describe("defaults", () => {
+		it("keeps eight inline images live by default", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("tui.maxInlineImages")).toBe(8);
+		});
+	});
 
 	// Tests that SettingsManager merges with DB state on save rather than blindly overwriting.
 	// This ensures external edits (via AgentStorage directly) aren't lost when the app saves.

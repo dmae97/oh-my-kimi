@@ -105,7 +105,7 @@ describe("Duplicate Tool Results Regression", () => {
 				{
 					type: "toolCall",
 					id: toolCallId,
-					name: "todo_write",
+					name: "todo",
 					arguments: { ops: [{ op: "update", id: "task-1", status: "completed" }] },
 				},
 			],
@@ -134,7 +134,7 @@ describe("Duplicate Tool Results Regression", () => {
 			{
 				role: "toolResult" as const,
 				toolCallId,
-				toolName: "todo_write",
+				toolName: "todo",
 				content: [{ type: "text" as const, text: "todo updated" }],
 				isError: false,
 				timestamp: Date.now(),

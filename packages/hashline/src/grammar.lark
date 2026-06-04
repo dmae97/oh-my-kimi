@@ -7,11 +7,12 @@ file_header: "¶" filename "#" file_hash LF
 file_hash: /[0-9A-F]{4}/
 filename: /[^\s#]+/
 
-hunk: body_hunk | delete_hunk | delete_block_hunk
-body_hunk:   body_header emit_op+
+hunk: replace_hunk | replace_block_hunk | insert_hunk | delete_hunk | delete_block_hunk
+replace_hunk: replace_anchor LF emit_op*
+replace_block_hunk: replace_block_anchor LF emit_op+
+insert_hunk: insert_anchor LF emit_op+
 delete_hunk: "delete " header_range LF
 delete_block_hunk: "delete block " LID LF
-body_header: (replace_anchor | replace_block_anchor | insert_anchor) LF
 replace_anchor: "replace " header_range ":"
 replace_block_anchor: "replace block " LID ":"
 insert_anchor:  "insert " insert_pos ":"

@@ -447,8 +447,10 @@ describe("hashline parser — range-anchor syntax", () => {
 		expect(() => parseHashline(repl("orphan")).edits).toThrow(/payload line has no preceding/);
 	});
 
-	it("rejects empty replace bodies; use delete instead", () => {
-		expect(() => parseHashline(`${sameLineRange(tag(2, "bbb"))}`)).toThrow(/To delete lines, use `delete/);
+	it("treats empty replace bodies as deletes", () => {
+		expect(parseHashline(`${sameLineRange(tag(2, "bbb"))}`).edits).toEqual([
+			{ kind: "delete", anchor: { line: 2 }, lineNum: 1, index: 0 },
+		]);
 		expect(parseHashline(`delete ${tag(2, "bbb")}`).edits).toEqual([
 			{ kind: "delete", anchor: { line: 2 }, lineNum: 1, index: 0 },
 		]);
@@ -1120,10 +1122,10 @@ describe("hashline parser — delete and empty-block semantics", () => {
 		expect(applyDiff(text, diff)).toBe("line1\nline4\n");
 	});
 
-	it("empty replace errors; delete removes the range", () => {
+	it("empty replace removes the range", () => {
 		const text = "line1\nline2\nline3\n";
-		expect(() => splitHashlineInput(`¶a.ts\nreplace 2..2:\n`).diff).not.toThrow();
-		expect(() => applyDiff(text, `replace 2..2:`)).toThrow(/To delete lines, use `delete/);
+		const { diff } = splitHashlineInput(`¶a.ts\nreplace 2..2:\n`);
+		expect(applyDiff(text, diff)).toBe("line1\nline3\n");
 	});
 
 	it("`2..2=replacement` (old format) parses as orphan body, not as inline payload", () => {

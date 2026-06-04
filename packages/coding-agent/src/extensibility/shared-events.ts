@@ -18,7 +18,7 @@ import type { ImageContent, TextContent, ToolResultMessage } from "@oh-my-pi/pi-
 import type { Rule } from "../capability/rule";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-manager";
-import type { TodoItem } from "../tools/todo-write";
+import type { TodoItem } from "../tools/todo";
 
 // ============================================================================
 // Session Events

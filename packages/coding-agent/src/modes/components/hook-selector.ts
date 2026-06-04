@@ -4,6 +4,7 @@
  */
 import {
 	Container,
+	Ellipsis,
 	extractPrintableText,
 	fuzzyFilter,
 	Markdown,
@@ -15,6 +16,7 @@ import {
 	Spacer,
 	Text,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
@@ -71,6 +73,17 @@ export interface HookSelectorOptions {
 	/** Indices into the original options that cannot be selected: they render
 	 *  dimmed, are skipped during navigation, and reject enter/timeout. */
 	disabledIndices?: readonly number[];
+	/** Render a leading radio/checkbox marker before each markable option,
+	 *  matching the ask transcript. "radio" fills the marker on the cursor row
+	 *  (single-choice); "checkbox" reflects {@link checkedIndices} per row
+	 *  (multi-select). Options at or beyond {@link markableCount} keep the plain
+	 *  cursor prefix — used for trailing control rows like "Other"/"Done". */
+	selectionMarker?: "radio" | "checkbox";
+	/** For `selectionMarker: "checkbox"`: original-indices currently checked. */
+	checkedIndices?: readonly number[];
+	/** Number of leading options (original order) that receive a selection
+	 *  marker. Defaults to every option when {@link selectionMarker} is set. */
+	markableCount?: number;
 }
 
 export interface HookSelectorOption {
@@ -140,6 +153,9 @@ export class HookSelectorComponent extends Container {
 	#searchQuery = "";
 	#selectedIndex: number;
 	#disabledIndices: Set<number>;
+	#selectionMarker: "radio" | "checkbox" | undefined;
+	#checkedIndices: Set<number>;
+	#markableCount: number;
 	#maxVisible: number;
 	#listContainer: Container | undefined;
 	#outlinedList: OutlinedList | undefined;
@@ -171,6 +187,13 @@ export class HookSelectorComponent extends Container {
 				index => Number.isInteger(index) && index >= 0 && index < this.#options.length,
 			),
 		);
+		this.#selectionMarker = opts?.selectionMarker;
+		this.#checkedIndices = new Set(
+			(opts?.checkedIndices ?? []).filter(
+				index => Number.isInteger(index) && index >= 0 && index < this.#options.length,
+			),
+		);
+		this.#markableCount = Math.max(0, Math.min(opts?.markableCount ?? this.#options.length, this.#options.length));
 		this.#selectedIndex = this.#coerceSelectedIndex(opts?.initialIndex ?? 0);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
 		this.#onSelectCallback = onSelect;
@@ -278,18 +301,69 @@ export class HookSelectorComponent extends Container {
 		isSelected: boolean,
 		isDisabled: boolean,
 		mdTheme: MarkdownTheme,
+		descRows: number | "full",
+		renderWidth?: number,
+		index?: number,
 	): string[] {
 		const textColor = isDisabled ? "dim" : isSelected ? "accent" : "text";
 		const prefixColor = isDisabled ? "dim" : "accent";
 		const label = renderInlineMarkdown(option.label, mdTheme, t => theme.fg(textColor, t));
-		const prefix = isSelected ? theme.fg(prefixColor, `${theme.nav.cursor} `) : "  ";
+		const marker = index !== undefined ? this.#renderMarkerPrefix(index, isSelected, isDisabled) : undefined;
+		const prefix = marker ?? (isSelected ? theme.fg(prefixColor, `${theme.nav.cursor} `) : "  ");
 		const lines = [prefix + label];
-		if (option.description) {
-			const descriptionColor = isDisabled ? "dim" : "muted";
-			const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg(descriptionColor, t));
-			lines.push(`    ${description}`);
+		if (option.description && descRows !== 0) {
+			const descriptionColor: ThemeColor = isDisabled ? "dim" : "muted";
+			if (descRows === "full") {
+				const description = renderInlineMarkdown(option.description, mdTheme, t => theme.fg(descriptionColor, t));
+				lines.push(`    ${description}`);
+			} else {
+				lines.push(
+					...this.#wrapDescriptionRows(option.description, descRows, descriptionColor, mdTheme, renderWidth),
+				);
+			}
 		}
 		return lines;
+	}
+
+	/** Styled leading marker (`"<glyph> "`) for a markable option row, or
+	 *  `undefined` when no marker applies (control rows beyond `markableCount`,
+	 *  or when {@link selectionMarker} is unset) so the caller falls back to the
+	 *  classic cursor prefix. Radio fills on the cursor row; checkbox reflects
+	 *  the per-row checked state, with the cursor row drawn in accent. */
+	#renderMarkerPrefix(index: number, isSelected: boolean, isDisabled: boolean): string | undefined {
+		if (this.#selectionMarker === undefined || index >= this.#markableCount) return undefined;
+		if (this.#selectionMarker === "radio") {
+			const glyph = isSelected ? theme.radio.selected : theme.radio.unselected;
+			const color = isDisabled ? "dim" : isSelected ? "accent" : "dim";
+			return theme.fg(color, `${glyph} `);
+		}
+		const checked = this.#checkedIndices.has(index);
+		const glyph = checked ? theme.checkbox.checked : theme.checkbox.unchecked;
+		const color = isDisabled ? "dim" : isSelected ? "accent" : checked ? "success" : "dim";
+		return theme.fg(color, `${glyph} `);
+	}
+
+	/** Wrap an option description into indented rows, truncating to `maxRows`
+	 *  with an ellipsis. Pre-wrapping (rather than emitting one long line that the
+	 *  list re-wraps) lets compact mode bound how much of the highlighted option's
+	 *  detail is shown, so every option label stays on screen on short terminals. */
+	#wrapDescriptionRows(
+		description: string,
+		maxRows: number,
+		color: ThemeColor,
+		mdTheme: MarkdownTheme,
+		renderWidth = this.#lastRenderWidth,
+	): string[] {
+		if (maxRows <= 0) return [];
+		const indent = "    ";
+		const innerWidth = Math.max(1, (renderWidth ?? 80) - 2);
+		const bodyWidth = Math.max(1, innerWidth - indent.length);
+		const colored = renderInlineMarkdown(description, mdTheme, t => theme.fg(color, t));
+		const wrapped = wrapTextWithAnsi(colored, bodyWidth);
+		if (wrapped.length <= maxRows) return wrapped.map(row => indent + row);
+		const kept = wrapped.slice(0, maxRows);
+		kept[maxRows - 1] = truncateToWidth(wrapped.slice(maxRows - 1).join(" "), bodyWidth, Ellipsis.Unicode);
+		return kept.map(row => indent + row);
 	}
 
 	#renderedLineRowCount(line: string, renderWidth: number): number {
@@ -309,10 +383,11 @@ export class HookSelectorComponent extends Container {
 		renderWidth: number | undefined,
 		isSelected: boolean,
 		mdTheme: MarkdownTheme,
+		descRows: number | "full",
 	): number {
-		if (renderWidth === undefined) return option.description ? 2 : 1;
+		if (renderWidth === undefined) return option.description && descRows !== 0 ? 2 : 1;
 		let rows = 0;
-		for (const line of this.#renderOptionLines(option, isSelected, false, mdTheme)) {
+		for (const line of this.#renderOptionLines(option, isSelected, false, mdTheme, descRows, renderWidth)) {
 			rows += this.#renderedLineRowCount(line, renderWidth);
 		}
 		return rows;
@@ -322,7 +397,7 @@ export class HookSelectorComponent extends Container {
 		const themeForRows = mdTheme ?? getMarkdownTheme();
 		let rows = 0;
 		for (const option of options) {
-			rows += this.#optionRowCount(option, renderWidth, false, themeForRows);
+			rows += this.#optionRowCount(option, renderWidth, false, themeForRows, "full");
 		}
 		return rows;
 	}
@@ -331,19 +406,37 @@ export class HookSelectorComponent extends Container {
 		total: number,
 		renderWidth?: number,
 		mdTheme: MarkdownTheme = getMarkdownTheme(),
+		compact = false,
 	): { startIndex: number; endIndex: number } {
 		if (total === 0) return { startIndex: 0, endIndex: 0 };
 
+		// In compact mode every option contributes only its label rows; the
+		// highlighted option's description is layered on afterwards (see
+		// #updateList), so the window is sized to keep as many labels visible as
+		// possible rather than letting one long description swallow the budget.
+		const descMode: number | "full" = compact ? 0 : "full";
 		const rowBudget = Math.max(1, this.#maxVisible);
 		const selectedIndex = Math.max(0, Math.min(this.#selectedIndex, total - 1));
 		let startIndex = selectedIndex;
 		let endIndex = selectedIndex + 1;
-		let rows = this.#optionRowCount(this.#filteredOptions[selectedIndex]!.option, renderWidth, true, mdTheme);
+		let rows = this.#optionRowCount(
+			this.#filteredOptions[selectedIndex]!.option,
+			renderWidth,
+			true,
+			mdTheme,
+			descMode,
+		);
 		let beforeRows = 0;
 		const targetBeforeRows = Math.max(0, Math.floor((rowBudget - rows) / 2));
 
 		while (startIndex > 0) {
-			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!.option, renderWidth, false, mdTheme);
+			const cost = this.#optionRowCount(
+				this.#filteredOptions[startIndex - 1]!.option,
+				renderWidth,
+				false,
+				mdTheme,
+				descMode,
+			);
 			if (beforeRows + cost > targetBeforeRows || rows + cost > rowBudget) break;
 			startIndex--;
 			beforeRows += cost;
@@ -351,14 +444,26 @@ export class HookSelectorComponent extends Container {
 		}
 
 		while (endIndex < total) {
-			const cost = this.#optionRowCount(this.#filteredOptions[endIndex]!.option, renderWidth, false, mdTheme);
+			const cost = this.#optionRowCount(
+				this.#filteredOptions[endIndex]!.option,
+				renderWidth,
+				false,
+				mdTheme,
+				descMode,
+			);
 			if (rows + cost > rowBudget) break;
 			endIndex++;
 			rows += cost;
 		}
 
 		while (startIndex > 0) {
-			const cost = this.#optionRowCount(this.#filteredOptions[startIndex - 1]!.option, renderWidth, false, mdTheme);
+			const cost = this.#optionRowCount(
+				this.#filteredOptions[startIndex - 1]!.option,
+				renderWidth,
+				false,
+				mdTheme,
+				descMode,
+			);
 			if (rows + cost > rowBudget) break;
 			startIndex--;
 			rows += cost;
@@ -371,13 +476,43 @@ export class HookSelectorComponent extends Container {
 		const lines: string[] = [];
 		const total = this.#filteredOptions.length;
 		const mdTheme = getMarkdownTheme();
-		const { startIndex, endIndex } = this.#getVisibleOptionRange(total, renderWidth, mdTheme);
+		// Compact mode kicks in exactly when the fully-expanded list (all
+		// descriptions) would overflow the row budget — the same condition that
+		// enables search. There we collapse every option to its label and show
+		// only the highlighted option's description, so the whole menu stays
+		// visible on short terminals instead of collapsing to a single entry.
+		const compact = this.#isSearchEnabled(renderWidth, mdTheme);
+		const { startIndex, endIndex } = this.#getVisibleOptionRange(total, renderWidth, mdTheme, compact);
+
+		let selectedDescRows = 0;
+		if (compact && renderWidth !== undefined) {
+			let labelRows = 0;
+			for (let i = startIndex; i < endIndex; i++) {
+				const filtered = this.#filteredOptions[i];
+				if (filtered === undefined) continue;
+				labelRows += this.#optionRowCount(filtered.option, renderWidth, i === this.#selectedIndex, mdTheme, 0);
+			}
+			// Reserve one row for the status line; give the remainder to the
+			// highlighted option's description.
+			selectedDescRows = Math.max(0, Math.max(1, this.#maxVisible) - labelRows - 1);
+		}
 
 		for (let i = startIndex; i < endIndex; i++) {
 			const filtered = this.#filteredOptions[i];
 			if (filtered === undefined) continue;
 			const isSelected = i === this.#selectedIndex;
-			lines.push(...this.#renderOptionLines(filtered.option, isSelected, this.#isDisabled(filtered.index), mdTheme));
+			const descMode: number | "full" = compact ? (isSelected ? selectedDescRows : 0) : "full";
+			lines.push(
+				...this.#renderOptionLines(
+					filtered.option,
+					isSelected,
+					this.#isDisabled(filtered.index),
+					mdTheme,
+					descMode,
+					renderWidth,
+					filtered.index,
+				),
+			);
 		}
 
 		if (total === 0) {

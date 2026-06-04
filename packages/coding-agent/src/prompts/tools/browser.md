@@ -25,7 +25,7 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
   - `tab.waitForUrl(pattern, { timeout? })` — pattern is a substring or `RegExp`. Polls `location.href` so it works for SPA pushState navigations, not just real navigations. Returns the matched URL.
   - `tab.waitForResponse(pattern, { timeout? })` — pattern is a substring, `RegExp`, or `(response) => boolean`. Returns the raw puppeteer `HTTPResponse` (call `.text()` / `.json()` / `.status()` / `.headers()` on it).
   - `tab.evaluate(fn, …args)` — sugar for `page.evaluate` with the abort signal already wired. Use this instead of dropping to `page.evaluate` for ad-hoc DOM reads.
-  - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — auto-attaches the image to the tool output unless `silent: true`. Saves full-res to `save` (or `browser.screenshotDir` setting) and a downscaled copy to the model.
+  - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — captures a screenshot and **auto-attaches it to the tool output for you to view** (unless `silent: true`). `save` is **strictly optional**: OMIT it when you just want to look at the page — the downscaled image is shown to you regardless, and the full-res capture is written to a temp file automatically. Pass `save` (a path) ONLY when you deliberately need to keep a full-res copy on disk for later use; `browser.screenshotDir` does the same for every shot. Do NOT invent a `save` path for a throwaway/temporal screenshot.
   - `tab.extract(format = "markdown")` — Readability-extracted page content.
 - Selectors accept CSS as well as puppeteer query handlers: `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`. Playwright-style `p-aria/[name="…"]`, `p-text/…`, etc. are normalized.
 - Default to `tab.observe()` over `tab.screenshot()` for understanding page state. Screenshot only when visual appearance matters.
@@ -46,7 +46,10 @@ Drives a real Chromium tab with full puppeteer access via JS execution.
 # Click an observed element by id
 `{"action":"run","name":"docs","code":"const obs = await tab.observe(); const link = obs.elements.find(e => e.role === 'link' && e.name === 'Sign in'); assert(link, 'Sign in link missing'); await (await tab.id(link.id)).click();"}`
 
-# Save a full-page screenshot to disk
+# Take a transient screenshot just to look at the page — NO save path needed; the image is shown to you
+`{"action":"run","name":"docs","code":"await tab.screenshot();"}`
+
+# Persist a full-page screenshot to disk (only when you deliberately need to keep the file)
 `{"action":"run","name":"docs","code":"await tab.screenshot({ fullPage: true, save: 'screenshot.png' });"}`
 
 # Fill and submit a form via selectors

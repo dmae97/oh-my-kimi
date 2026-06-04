@@ -7,14 +7,22 @@ import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { ToolError } from "./tool-errors";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
-const FILE_LINE_RANGE_RE = /^(?:L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*|raw|conflicts)$/i;
-const FILE_LINE_RANGE_ONLY_RE = /^L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*$/i;
+// A single line-range chunk: `N`, `N-M`, `N+K`, or open-ended `N-`. `..` is
+// accepted everywhere `-` is, as a forgiving alias for Rust/Python-style ranges
+// (e.g. `2724..2727` == `2724-2727`, `2724..` == `2724-`); it is normalized to
+// `-` in parseLineRangeChunk. Keep this fragment and LINE_RANGE_CHUNK_RE in sync.
+const RANGE_CHUNK_SRC = String.raw`L?\d+(?:(?:[-+]|\.\.)L?\d+|-|\.\.)?`;
+const RANGE_LIST_SRC = `${RANGE_CHUNK_SRC}(?:,${RANGE_CHUNK_SRC})*`;
+const FILE_LINE_RANGE_RE = new RegExp(`^(?:${RANGE_LIST_SRC}|raw|conflicts)$`, "i");
+const FILE_LINE_RANGE_ONLY_RE = new RegExp(`^${RANGE_LIST_SRC}$`, "i");
 const FILE_RAW_ONLY_RE = /^raw$/i;
 // Permissive selector chunk for internal URLs — accepts well-formed selectors
 // plus common malformed shapes (e.g. `:-N`) so the read tool peels the entire
 // selector chain off before dispatching to a protocol handler.
-const INTERNAL_URL_SELECTOR_PART_RE =
-	/^(?:raw|conflicts|L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*|-\d+(?:[-+]\d+)?)$/i;
+const INTERNAL_URL_SELECTOR_PART_RE = new RegExp(
+	String.raw`^(?:raw|conflicts|${RANGE_LIST_SRC}|-\d+(?:[-+]\d+)?)$`,
+	"i",
+);
 // Schemes whose host grammar is identifier-shaped, so any trailing
 // `:<selector-chunk>` is unambiguously a read-tool selector. `mcp://` is
 // excluded because mcp resource URIs may legitimately contain colons.
@@ -144,9 +152,9 @@ export interface LineRange {
 	endLine: number | undefined;
 }
 
-const LINE_RANGE_CHUNK_RE = /^L?(\d+)(?:([-+])L?(\d+)?)?$/i;
+const LINE_RANGE_CHUNK_RE = /^L?(\d+)(?:(\.\.|[-+])L?(\d+)?)?$/i;
 
-/** Parse a single `N`, `N-M`, `N-`, or `N+K` chunk. Throws via {@link ToolError} on invalid bounds. */
+/** Parse a single `N`, `N-M`, `N-`, `N+K`, or `..`-aliased (`N..M`, `N..`) chunk. Throws via {@link ToolError} on invalid bounds. */
 export function parseLineRangeChunk(sel: string): LineRange | null {
 	const lineMatch = LINE_RANGE_CHUNK_RE.exec(sel);
 	if (!lineMatch) return null;
@@ -154,7 +162,8 @@ export function parseLineRangeChunk(sel: string): LineRange | null {
 	if (rawStart < 1) {
 		throw new ToolError("Line selector 0 is invalid; lines are 1-indexed. Use :1.");
 	}
-	const sep = lineMatch[2];
+	// `..` is a forgiving alias for `-` (e.g. `2724..2727` == `2724-2727`).
+	const sep = lineMatch[2] === ".." ? "-" : lineMatch[2];
 	const rhs = lineMatch[3] ? Number.parseInt(lineMatch[3], 10) : undefined;
 	let rawEnd: number | undefined;
 	if (sep === "+") {

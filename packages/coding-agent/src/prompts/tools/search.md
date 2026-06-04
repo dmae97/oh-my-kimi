@@ -2,7 +2,7 @@ Searches files using powerful regex matching.
 
 <instruction>
 - Supports Rust regex syntax (RE2-style — no lookaround or backreferences). Use line anchors or post-filters instead of (?!…)/(?<!…)
-- `paths` is required and accepts either one string or an array of files, directories, globs, or internal URLs
+- `paths` accepts either one string or an array of files, directories, globs, or internal URLs. Optional: when omitted or empty it searches the workspace root (`.`). Prefer scoping to specific paths when you know them.
 - For multiple targets, pass an array with one target per element: `["src", "tests"]`.
 - Cross-line patterns are detected from literal `\n` or escaped `\\n` in `pattern`
 </instruction>

@@ -16,7 +16,7 @@ This is an autonomous continuation. The objective persists across turns; do not 
 
 Before calling `goal({op:"complete"})`, you MUST perform a completion audit against the current repo state:
 
-1. **Restate the objective as concrete deliverables.** What files, behaviors, tests, gates, or artifacts must exist for the objective to be true? Write them down (todo_write, or in your reasoning).
+1. **Restate the objective as concrete deliverables.** What files, behaviors, tests, gates, or artifacts must exist for the objective to be true? Write them down (todo, or in your reasoning).
 2. **Map each deliverable to evidence.** For every requirement, identify the authoritative source that would prove it: a file's contents, a command's output, a test's pass status, a PR/issue state.
 3. **Inspect the actual current state.** Read the files. Run the commands. Check the tests. Do not rely on memory of earlier work in this session — the repo may have changed.
 4. **Match verification scope to claim scope.** A narrow check (one file passes its unit test) does not prove a broad claim (the feature works end-to-end).

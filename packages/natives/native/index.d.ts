@@ -136,7 +136,7 @@ export declare class Shell {
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV15_8_2(): void
+export declare function __piNativesV15_8_3(): void
 
 /**
  * Apply conservative pre-execution rewrites to a bash command.
@@ -544,8 +544,9 @@ export declare function getWorkProfile(lastSeconds: number): WorkProfile
  * Resolves the search root, scans entries, applies glob and optional file-type
  * filters, and optionally streams each accepted match through `on_match`.
  *
- * If `sortByMtime` is enabled, all matching entries are collected, sorted by
- * descending mtime, then truncated to `maxResults`.
+ * If `sortByMtime` is enabled with a finite `maxResults`, uncached scans keep
+ * only the current top results while traversing instead of collecting the full
+ * tree.
  *
  * # Errors
  * Returns an error when the search path cannot be resolved, the path is not a

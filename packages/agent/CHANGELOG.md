@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.8.3] - 2026-06-03
+### Added
+
+- Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection` to extract a paired `read` tool call's `path` for embedders building read-targeted protection matchers
+- Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection`: the shared primitive that extracts a paired `read` tool call's `path` argument, so embedders can build their own read-targeted compaction protection matchers (e.g. plan-file reads) the same way `isSkillReadToolResult` does.
+
 ## [15.8.2] - 2026-06-03
 
 ### Added

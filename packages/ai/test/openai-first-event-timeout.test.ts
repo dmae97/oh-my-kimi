@@ -116,7 +116,7 @@ function createNoProgressOpenAIResponsesStream(signal: AbortSignal | undefined):
 						type: "function_call",
 						id: "fc_stalled",
 						call_id: "call_stalled",
-						name: "todo_write",
+						name: "todo",
 						arguments: "",
 						status: "in_progress",
 					},
@@ -407,7 +407,7 @@ describe("OpenAI-family first-event timeouts", () => {
 			{
 				type: "toolCall",
 				id: "call_stalled|fc_stalled",
-				name: "todo_write",
+				name: "todo",
 				arguments: {},
 				partialJson: "",
 			},

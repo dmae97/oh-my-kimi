@@ -403,7 +403,11 @@ fn collect_entries(
 	Ok(entries)
 }
 
-fn collect_entry(root: &Path, entry: &ignore::DirEntry, detail: ScanDetail) -> Option<GlobMatch> {
+pub(crate) fn collect_entry(
+	root: &Path,
+	entry: &ignore::DirEntry,
+	detail: ScanDetail,
+) -> Option<GlobMatch> {
 	let path = entry.path();
 	let relative = normalize_relative_path(root, path);
 	if relative.is_empty() {

@@ -6,7 +6,7 @@
  * - Waves execute sequentially (wave N+1 starts after wave N completes)
  * - For pipeline mode, iterations repeat the full DAG execution
  */
-import type { AgentSource, AuthStorage, ModelRegistry, Settings, SingleResult } from "@oh-my-pi/pi-coding-agent";
+import type { AgentSource, ModelRegistry, Settings, SingleResult } from "@oh-my-pi/pi-coding-agent";
 import { executeSwarmAgent } from "./executor";
 import type { SwarmDefinition } from "./schema";
 import type { StateTracker } from "./state";
@@ -19,7 +19,6 @@ export interface PipelineOptions {
 	workspace: string;
 	signal?: AbortSignal;
 	onProgress?: (state: PipelineProgress) => void;
-	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
 }
@@ -55,7 +54,7 @@ export class PipelineController {
 	}
 
 	async run(options: PipelineOptions): Promise<PipelineResult> {
-		const { workspace, signal, onProgress, authStorage, modelRegistry, settings } = options;
+		const { workspace, signal, onProgress, modelRegistry, settings } = options;
 		const allResults = new Map<string, SingleResult[]>();
 		const errors: string[] = [];
 
@@ -93,7 +92,6 @@ export class PipelineController {
 					workspace,
 					signal,
 					emitProgress,
-					authStorage,
 					modelRegistry,
 					settings,
 				});
@@ -127,7 +125,6 @@ export class PipelineController {
 			workspace: string;
 			signal?: AbortSignal;
 			emitProgress: (currentWave: number) => void;
-			authStorage?: AuthStorage;
 			modelRegistry?: ModelRegistry;
 			settings?: Settings;
 		},
@@ -169,7 +166,6 @@ export class PipelineController {
 							onProgress: (_name, _progress) => {
 								options.emitProgress(waveIdx);
 							},
-							authStorage: options.authStorage,
 							modelRegistry: options.modelRegistry,
 							settings: options.settings,
 							stateTracker: this.#stateTracker,

@@ -612,7 +612,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 	return stream;
 };
 
-type ToolCallState = ToolCall & { index: number; partialJson?: string; kind: "mcp" | "todo_write" };
+type ToolCallState = ToolCall & { index: number; partialJson?: string; kind: "mcp" | "todo" };
 
 interface BlockState {
 	currentTextBlock: (TextContent & { index: number }) | null;
@@ -1872,7 +1872,7 @@ interface CursorUpdateTodosToolCall {
 	updateTodosToolCall?: { args?: { todos?: CursorTodoItem[] } };
 }
 
-function buildTodoWriteArgs(toolCall: CursorUpdateTodosToolCall): {
+function buildTodoArgs(toolCall: CursorUpdateTodosToolCall): {
 	todos: Array<{ id?: string; content: string; activeForm: string; status: "pending" | "in_progress" | "completed" }>;
 } | null {
 	const todos = toolCall.updateTodosToolCall?.args?.todos;
@@ -2016,16 +2016,16 @@ function processInteractionUpdate(
 				return;
 			}
 
-			const todoArgs = buildTodoWriteArgs(toolCall);
+			const todoArgs = buildTodoArgs(toolCall);
 			if (todoArgs) {
 				const callId = update.message.value.callId || crypto.randomUUID();
 				const block: ToolCallState = {
 					type: "toolCall",
 					id: callId,
-					name: "todo_write",
+					name: "todo",
 					arguments: todoArgs,
 					index: output.content.length,
-					kind: "todo_write",
+					kind: "todo",
 				};
 				output.content.push(block);
 				state.setToolCall(block);
@@ -2048,8 +2048,8 @@ function processInteractionUpdate(
 				if (decodedArgs) {
 					state.currentToolCall.arguments = decodedArgs;
 				}
-			} else if (state.currentToolCall.kind === "todo_write" && toolCall) {
-				const todoArgs = buildTodoWriteArgs(toolCall);
+			} else if (state.currentToolCall.kind === "todo" && toolCall) {
+				const todoArgs = buildTodoArgs(toolCall);
 				if (todoArgs) {
 					state.currentToolCall.arguments = todoArgs;
 				}
@@ -2109,7 +2109,7 @@ function readCursorBlob(blobStore: Map<string, Uint8Array>, blobId: Uint8Array):
 	return data;
 }
 
-const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo_write"]);
+const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo"]);
 
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
 	if (!tools || tools.length === 0) {

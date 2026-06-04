@@ -5,7 +5,7 @@
  * The harness mirrors only the surface the storage actually uses; it is *not*
  * a general-purpose mock. Each test exercises one contract:
  *
- * - the mirror keeps `existsSync`/`statSync`/`readTextSync`/`listFilesSync`
+ * - the metadata index keeps `existsSync`/`statSync`/`listFilesSync`
  *   coherent with `writeText`/`writer.writeLineSync`;
  * - `drain()` waits for fire-and-forget background writes;
  * - `deleteSessionWithArtifacts` removes both the JSONL key and any sidecar
@@ -72,6 +72,21 @@ function createFakeRedis(): FakeRedis {
 			checkFailure("get");
 			return strings.has(key) ? (strings.get(key) as string) : null;
 		},
+		async getrange(key, start, end) {
+			record("getrange", [key, start, end]);
+			checkFailure("getrange");
+			const bytes = Buffer.from(strings.get(key) ?? "", "utf-8");
+			if (bytes.length === 0) return "";
+			const from = Math.max(0, start < 0 ? bytes.length + start : start);
+			const to = Math.min(bytes.length - 1, end < 0 ? bytes.length + end : end);
+			if (to < from) return "";
+			return bytes.subarray(from, to + 1).toString("utf-8");
+		},
+		async strlen(key) {
+			record("strlen", [key]);
+			checkFailure("strlen");
+			return Buffer.byteLength(strings.get(key) ?? "", "utf-8");
+		},
 		async set(key, value) {
 			record("set", [key, value]);
 			checkFailure("set");
@@ -84,7 +99,7 @@ function createFakeRedis(): FakeRedis {
 			const current = strings.get(key) ?? "";
 			const next = current + value;
 			strings.set(key, next);
-			return next.length;
+			return Buffer.byteLength(next, "utf-8");
 		},
 		async del(...keys) {
 			record("del", keys);
@@ -156,17 +171,27 @@ describe("RedisSessionStorage", () => {
 		redis = createFakeRedis();
 	});
 
-	it("mirrors writeText into Redis and exposes content via sync reads", async () => {
+	it("indexes writeText metadata and reads content asynchronously", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		await storage.writeText("/sessions/p/a.jsonl", "line1\nline2\n");
 
 		expect(storage.existsSync("/sessions/p/a.jsonl")).toBe(true);
-		expect(storage.readTextSync("/sessions/p/a.jsonl")).toBe("line1\nline2\n");
+		expect(await storage.readText("/sessions/p/a.jsonl")).toBe("line1\nline2\n");
 		expect(redis.strings.get("omp:sessions:file:/sessions/p/a.jsonl")).toBe("line1\nline2\n");
 
 		const stat = storage.statSync("/sessions/p/a.jsonl");
 		expect(stat.size).toBe(12);
 		expect(typeof stat.mtimeMs).toBe("number");
+	});
+
+	it("create() warms the metadata index with STRLEN and never GETs full content", async () => {
+		redis.strings.set("omp:sessions:file:/sessions/p/huge.jsonl", "0123456789");
+		redis.hashes.set("omp:sessions:meta", new Map([["/sessions/p/huge.jsonl", String(Date.now())]]));
+
+		const storage = await RedisSessionStorage.create({ client: redis });
+		expect(storage.statSync("/sessions/p/huge.jsonl").size).toBe(10);
+		expect(redis.calls.some(call => call.method === "get")).toBe(false);
+		expect(redis.calls.some(call => call.method === "strlen")).toBe(true);
 	});
 
 	it("listFilesSync returns only direct children matching the glob", async () => {
@@ -202,8 +227,8 @@ describe("RedisSessionStorage", () => {
 		writer.writeLineSync('{"type":"session"}\n');
 		writer.writeLineSync('{"type":"message"}\n');
 
-		// Mirror reflects the writes synchronously.
-		expect(storage.readTextSync("/sessions/p/session.jsonl")).toBe('{"type":"session"}\n{"type":"message"}\n');
+		// Reads await queued appends and fetch content from Redis.
+		expect(await storage.readText("/sessions/p/session.jsonl")).toBe('{"type":"session"}\n{"type":"message"}\n');
 
 		// Redis has not necessarily caught up yet — drain to force.
 		await storage.drain();
@@ -214,7 +239,7 @@ describe("RedisSessionStorage", () => {
 		await writer.close();
 	});
 
-	it("flags='w' truncates both mirror and Redis", async () => {
+	it("flags='w' truncates both index metadata and Redis", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		await storage.writeText("/sessions/p/keep.jsonl", "old content\n");
 
@@ -222,7 +247,7 @@ describe("RedisSessionStorage", () => {
 		writer.writeLineSync("fresh\n");
 		await writer.close();
 
-		expect(storage.readTextSync("/sessions/p/keep.jsonl")).toBe("fresh\n");
+		expect(await storage.readText("/sessions/p/keep.jsonl")).toBe("fresh\n");
 		expect(redis.strings.get("omp:sessions:file:/sessions/p/keep.jsonl")).toBe("fresh\n");
 	});
 
@@ -254,20 +279,20 @@ describe("RedisSessionStorage", () => {
 		expect(redis.strings.has("omp:sessions:file:/sessions/p/other.jsonl")).toBe(true);
 	});
 
-	it("rename moves content and meta atomically inside the mirror", async () => {
+	it("rename moves content and meta atomically inside the index", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		await storage.writeText("/sessions/p/orig.jsonl", "payload\n");
 		const originalMtime = storage.statSync("/sessions/p/orig.jsonl").mtimeMs;
 
 		await storage.rename("/sessions/p/orig.jsonl", "/sessions/p/renamed.jsonl");
 		expect(storage.existsSync("/sessions/p/orig.jsonl")).toBe(false);
-		expect(storage.readTextSync("/sessions/p/renamed.jsonl")).toBe("payload\n");
+		expect(await storage.readText("/sessions/p/renamed.jsonl")).toBe("payload\n");
 		expect(storage.statSync("/sessions/p/renamed.jsonl").mtimeMs).toBe(originalMtime);
 		expect(redis.strings.get("omp:sessions:file:/sessions/p/renamed.jsonl")).toBe("payload\n");
 		expect(redis.strings.has("omp:sessions:file:/sessions/p/orig.jsonl")).toBe(false);
 	});
 
-	it("rename rolls back the mirror when Redis RENAME fails", async () => {
+	it("rename rolls back the index when Redis RENAME fails", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		await storage.writeText("/sessions/p/a.jsonl", "keep\n");
 		redis.failNext("rename", new Error("ERR redis rejected rename"));
@@ -280,7 +305,7 @@ describe("RedisSessionStorage", () => {
 		expect(storage.existsSync("/sessions/p/b.jsonl")).toBe(false);
 	});
 
-	it("refresh() reloads the mirror from Redis after out-of-band writes", async () => {
+	it("refresh() reloads the metadata index from Redis after out-of-band writes", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		// Simulate a peer process writing directly to Redis.
 		redis.strings.set("omp:sessions:file:/peer/x.jsonl", "from peer\n");
@@ -291,16 +316,30 @@ describe("RedisSessionStorage", () => {
 		expect(storage.existsSync("/peer/x.jsonl")).toBe(false);
 		await storage.refresh();
 		expect(storage.existsSync("/peer/x.jsonl")).toBe(true);
-		expect(storage.readTextSync("/peer/x.jsonl")).toBe("from peer\n");
+		expect(await storage.readText("/peer/x.jsonl")).toBe("from peer\n");
 	});
 
-	it("readTextPrefix returns at most maxBytes from the head", async () => {
+	it("readTextSlices returns byte windows from the head and tail", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		await storage.writeText("/sessions/p/big.jsonl", "abcdefghij");
 
-		expect(await storage.readTextPrefix("/sessions/p/big.jsonl", 4)).toBe("abcd");
-		expect(await storage.readTextPrefix("/sessions/p/big.jsonl", 100)).toBe("abcdefghij");
-		expect(await storage.readTextPrefix("/sessions/p/big.jsonl", 0)).toBe("");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 4, 0))[0]).toBe("abcd");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 100, 0))[0]).toBe("abcdefghij");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 0, 0))[0]).toBe("");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 0, 3))[1]).toBe("hij");
+		expect((await storage.readTextSlices("/sessions/p/big.jsonl", 0, 100))[1]).toBe("abcdefghij");
+		expect(await storage.readTextSlices("/sessions/p/big.jsonl", 4, 3)).toEqual(["abcd", "hij"]);
+	});
+
+	it("readTextSlices uses GETRANGE instead of GET", async () => {
+		const storage = await RedisSessionStorage.create({ client: redis });
+		await storage.writeText("/sessions/p/big.jsonl", "abcdefghij");
+
+		redis.calls.length = 0;
+		expect(await storage.readTextSlices("/sessions/p/big.jsonl", 4, 3)).toEqual(["abcd", "hij"]);
+		expect(redis.calls.map(call => call.method)).toEqual(["getrange", "getrange"]);
+		expect(redis.calls[0].args).toEqual(["omp:sessions:file:/sessions/p/big.jsonl", 0, 3]);
+		expect(redis.calls[1].args).toEqual(["omp:sessions:file:/sessions/p/big.jsonl", -3, -1]);
 	});
 
 	it("custom prefix isolates keyspaces", async () => {

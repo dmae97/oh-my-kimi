@@ -21,6 +21,13 @@ export interface SkillFrontmatter {
 	 * rather than ones the model should auto-discover.
 	 */
 	hide?: boolean;
+	/**
+	 * Agent Skills standard equivalent of `hide`.
+	 * When `true`, the skill is excluded from the system prompt listing.
+	 * Normalized from kebab-case `disable-model-invocation` in YAML frontmatter.
+	 * @see https://agentskills.io/specification
+	 */
+	disableModelInvocation?: boolean;
 	[key: string]: unknown;
 }
 

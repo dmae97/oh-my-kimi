@@ -136,6 +136,9 @@ export type SymbolKey =
 	// Checkboxes
 	| "checkbox.checked"
 	| "checkbox.unchecked"
+	// Radio (single-choice)
+	| "radio.selected"
+	| "radio.unselected"
 	// Text Formatting
 	| "format.bullet"
 	| "format.dash"
@@ -302,6 +305,9 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Checkboxes
 	"checkbox.checked": "☑",
 	"checkbox.unchecked": "☐",
+	// Radio (single-choice)
+	"radio.selected": "◉",
+	"radio.unselected": "○",
 	// Formatting
 	"format.bullet": "•",
 	"format.dash": "—",
@@ -559,6 +565,11 @@ const NERD_SYMBOLS: SymbolMap = {
 	"checkbox.checked": "\uf14a",
 	// pick:  | alt: 
 	"checkbox.unchecked": "\uf096",
+	// Radio (single-choice)
+	// pick:  (fa-dot-circle-o) | alt:  ◉
+	"radio.selected": "\uf192",
+	// pick:  (fa-circle-o) | alt:  ○
+	"radio.unselected": "\uf10c",
 	// pick:  | alt:   •
 	"format.bullet": "\uf111",
 	// pick: – | alt: — ― -
@@ -731,6 +742,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Checkboxes
 	"checkbox.checked": "[x]",
 	"checkbox.unchecked": "[ ]",
+	"radio.selected": "(o)",
+	"radio.unselected": "( )",
 	"format.bullet": "*",
 	"format.dash": "-",
 	"format.bracketLeft": "[",
@@ -1592,6 +1605,13 @@ export class Theme {
 		return {
 			checked: this.#symbols["checkbox.checked"],
 			unchecked: this.#symbols["checkbox.unchecked"],
+		};
+	}
+
+	get radio() {
+		return {
+			selected: this.#symbols["radio.selected"],
+			unselected: this.#symbols["radio.unselected"],
 		};
 	}
 

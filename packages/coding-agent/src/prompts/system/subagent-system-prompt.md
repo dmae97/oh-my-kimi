@@ -10,6 +10,17 @@ CONTEXT
 {{context}}
 {{/if}}
 
+{{#if planReference}}
+PLAN
+===================================
+
+This session is executing an approved plan. Your assignment above is one part of it — use the plan to understand how your piece fits the whole and to stay consistent with decisions already made. Where the plan and your specific assignment conflict, the assignment wins. The plan path is for reference; you already have its full contents below, so NEVER re-read it.
+
+<plan path="{{planReferencePath}}">
+{{planReference}}
+</plan>
+{{/if}}
+
 COOP
 ===================================
 

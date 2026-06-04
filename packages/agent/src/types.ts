@@ -436,7 +436,7 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * Controls how the INTENT_FIELD (`_i`) is handled for this tool.
 	 * - `"require"` (default): `_i` is injected and required in the parameter schema.
 	 * - `"optional"`: `_i` is injected as an optional/nullable field.
-	 * - `"omit"`: `_i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo_write, …).
+	 * - `"omit"`: `_i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo, …).
 	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
 	 */
 	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);

@@ -1974,20 +1974,24 @@ export function litellmModelManagerOptions(
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "http://localhost:4000/v1";
-	const references = createBundledReferenceMap<"openai-completions">("litellm");
 	return {
 		providerId: "litellm",
-		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels({
+		// litellm is a local-only proxy whose /v1/models returns bare ids with no
+		// metadata, and it is never bundled in models.json (that would leak the
+		// machine's localhost catalog). It proxies known upstream models, so we
+		// enrich discovered ids against models.dev — the same reference source the
+		// gateway providers (fireworks et al.) use — instead of a bundled map.
+		fetchDynamicModels: async () => {
+			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">();
+			return fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "litellm",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) => {
-					const reference = references.get(defaults.id);
-					return mapWithBundledReference(entry, defaults, reference);
-				},
-			}),
+				mapModel: (entry, defaults) =>
+					mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id)),
+			});
+		},
 	};
 }
 
