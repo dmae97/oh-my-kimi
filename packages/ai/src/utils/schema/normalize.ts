@@ -1036,6 +1036,36 @@ function primitiveJsonTypeOf(value: unknown): StrictPrimitiveType | undefined {
 			return undefined;
 	}
 }
+function jsonSchemaTypeAcceptsValue(type: string, value: unknown): boolean {
+	switch (type) {
+		case "null":
+			return value === null;
+		case "string":
+			return typeof value === "string";
+		case "number":
+			return typeof value === "number";
+		case "integer":
+			return typeof value === "number" && Number.isInteger(value);
+		case "boolean":
+			return typeof value === "boolean";
+		case "array":
+			return Array.isArray(value);
+		case "object":
+			return isJsonObject(value);
+		default:
+			return true;
+	}
+}
+
+function narrowEnumToType(schema: Record<string, unknown>, type: string): boolean {
+	const enumValues = schema.enum;
+	if (!Array.isArray(enumValues)) return true;
+
+	const narrowed = enumValues.filter(value => jsonSchemaTypeAcceptsValue(type, value));
+	if (narrowed.length === 0) return false;
+	if (narrowed.length !== enumValues.length) schema.enum = narrowed;
+	return true;
+}
 
 /**
  * Returns the primitive `type` keyword that fully describes the constraint
@@ -1250,7 +1280,8 @@ export function sanitizeSchemaForStrictMode(
 		// `enforceStrictSchema` and the typical OpenAI strict-mode "description
 		// on the union" shape.
 		const { description, ...variantBase } = sanitizedWithoutType;
-		const variants = typeVariants.map(variantType => {
+		const variants: Record<string, unknown>[] = [];
+		for (const variantType of typeVariants) {
 			const variantSchema: Record<string, unknown> = { ...variantBase, type: variantType };
 			if (variantType !== "object") {
 				delete variantSchema.properties;
@@ -1260,8 +1291,14 @@ export function sanitizeSchemaForStrictMode(
 			if (variantType !== "array") {
 				delete variantSchema.items;
 			}
-			return sanitizeSchemaForStrictMode(variantSchema, epoch, cache, root);
-		});
+			if (!narrowEnumToType(variantSchema, variantType)) continue;
+			variants.push(sanitizeSchemaForStrictMode(variantSchema, epoch, cache, root));
+		}
+
+		if (variants.length === 0) {
+			cache.set(schema, sanitizedWithoutType);
+			return sanitizedWithoutType;
+		}
 
 		if (variants.length === 1) {
 			const sole = variants[0] as Record<string, unknown>;

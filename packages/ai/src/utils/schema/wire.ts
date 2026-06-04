@@ -128,6 +128,23 @@ function hasIntegerType(type: unknown): boolean {
 	return type === "integer" || (Array.isArray(type) && type.includes("integer"));
 }
 
+function copyNullableScalarConstraints(schema: Record<string, unknown>, scalarVariant: Record<string, unknown>): void {
+	for (const key in scalarVariant) {
+		if (key === "type" || key === "enum" || key === "const" || Object.hasOwn(schema, key)) continue;
+		schema[key] = scalarVariant[key];
+	}
+
+	if (Object.hasOwn(scalarVariant, "const")) {
+		schema.enum = [scalarVariant.const, null];
+		return;
+	}
+
+	const enumValues = scalarVariant.enum;
+	if (Array.isArray(enumValues)) {
+		schema.enum = enumValues.includes(null) ? enumValues : [...enumValues, null];
+	}
+}
+
 function rewriteNullableScalarAnyOf(schema: Record<string, unknown>): void {
 	if (hasSchemaDefiningSibling(schema)) return;
 	const variants = schema.anyOf;
@@ -150,9 +167,7 @@ function rewriteNullableScalarAnyOf(schema: Record<string, unknown>): void {
 	if (!sawNull || !scalarVariant || !scalarType) return;
 
 	delete schema.anyOf;
-	for (const key in scalarVariant) {
-		if (key !== "type" && !Object.hasOwn(schema, key)) schema[key] = scalarVariant[key];
-	}
+	copyNullableScalarConstraints(schema, scalarVariant);
 	schema.type = [scalarType, "null"];
 }
 

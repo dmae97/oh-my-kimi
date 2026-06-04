@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import {
+	adaptSchemaForStrict,
 	enforceStrictSchema,
 	isJsonSchemaValueValid,
 	isValidJsonSchema,
+	sanitizeSchemaForOpenAIResponses,
 	sanitizeSchemaForStrictMode,
+	toolWireSchema,
 	tryEnforceStrictSchema,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai/utils/schema";
@@ -84,6 +87,68 @@ describe("sanitizeSchemaForStrictMode", () => {
 		expect(nullVariant).toEqual({ type: "null" });
 		expect((objectVariant as Record<string, unknown>).required).toEqual(["data"]);
 		expect((objectVariant as Record<string, unknown>).properties).toEqual({ data: { type: "string" } });
+	});
+
+	it("distributes enum values to matching nullable type-array branches", () => {
+		const sanitized = sanitizeSchemaForStrictMode({
+			type: ["string", "null"],
+			enum: ["javascript", "python", null],
+			description: "guide",
+		});
+
+		expect(sanitized).toEqual({
+			anyOf: [
+				{ enum: ["javascript", "python"], type: "string" },
+				{ enum: [null], type: "null" },
+			],
+			description: "guide",
+		});
+	});
+
+	it("drops type-array branches that cannot satisfy enum constraints", () => {
+		const sanitized = sanitizeSchemaForStrictMode({
+			type: ["string", "null"],
+			enum: ["javascript", "python"],
+		});
+
+		expect(sanitized).toEqual({
+			enum: ["javascript", "python"],
+			type: "string",
+		});
+	});
+
+	it("keeps OpenAI Responses strict schemas valid for nullable MCP enum parameters", () => {
+		const guideEnum = ["javascript", "python"];
+		const raw = {
+			type: "object",
+			properties: {
+				guide: {
+					anyOf: [{ type: "string", enum: guideEnum, description: "guide" }, { type: "null" }],
+					default: null,
+					description: "guide",
+				},
+			},
+			required: ["guide"],
+			additionalProperties: false,
+		};
+
+		const wired = toolWireSchema({
+			name: "mcp__sentry_search_docs",
+			description: "",
+			parameters: structuredClone(raw),
+		});
+		const responses = sanitizeSchemaForOpenAIResponses(wired);
+		const strict = adaptSchemaForStrict(responses, true);
+		const properties = strict.schema.properties as Record<string, Record<string, unknown>>;
+
+		expect(strict.strict).toBe(true);
+		expect(properties.guide).toEqual({
+			anyOf: [
+				{ enum: ["javascript", "python"], type: "string" },
+				{ enum: [null], type: "null" },
+			],
+			description: "guide (default: null)",
+		});
 	});
 
 	it("keeps existing anyOf constraints inside each normalized type variant", () => {
