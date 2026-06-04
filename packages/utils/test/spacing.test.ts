@@ -47,4 +47,15 @@ describe("spacing", () => {
 
 		expect(" ".repeat(getIndentation(filePath))).toBe("      ");
 	});
+
+	it("does not throw when the path's segment exceeds NAME_MAX (#1871)", () => {
+		// A garbage path segment (e.g. 2KiB of garbage Unicode produced by a
+		// hallucinating model) makes `fs.readFileSync` reject with
+		// ENAMETOOLONG. The editorconfig probe MUST swallow it and fall back to
+		// the default tab width — anything else crashes the TUI mid-render.
+		const huge = "a".repeat(2048);
+		const phonyPath = path.join(tempDir, huge, "leaf.ts");
+		expect(() => getIndentation(phonyPath)).not.toThrow();
+		expect(getIndentation(phonyPath)).toBe(3);
+	});
 });
