@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `omitMaxOutputTokens` to `models.yml` model definitions and `modelOverrides`, so users can opt a model out of the on-the-wire `max_output_tokens` / `max_tokens` cap while keeping the catalog `maxTokens` for local budgeting. Intended for Ollama-style proxies whose upstream output limit OMP cannot discover. ([#1881](https://github.com/can1357/oh-my-pi/issues/1881))
+
 ## [15.9.1] - 2026-06-04
 
 ### Added

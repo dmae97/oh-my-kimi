@@ -1180,7 +1180,7 @@ function buildParams(
 		params.store = false;
 	}
 
-	if (effectiveMaxTokens) {
+	if (effectiveMaxTokens && !model.omitMaxOutputTokens) {
 		if (compat.maxTokensField === "max_tokens") {
 			params.max_tokens = effectiveMaxTokens;
 		} else {
