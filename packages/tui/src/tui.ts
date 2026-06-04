@@ -306,11 +306,6 @@ export class Container implements Component {
 	}
 }
 
-interface DeferredCursorUpdate {
-	position: { row: number; col: number } | null;
-	totalLines: number;
-}
-
 /**
  * Render intent. `#planRender` decides which one a frame is, and the
  * corresponding `#emit*` method owns the bytes written and the state update.
@@ -329,10 +324,7 @@ interface DeferredCursorUpdate {
  *   native history. Keep row indices stable with blank tail padding, repaint
  *   only the viewport, and defer the real shorter replay to a checkpoint.
  * - `deferredMutation`: a row-inserting edit would reindex native scrollback
- *   while the user is scrolled, or an offscreen-only shrink left the visible
- *   rows byte-identical (merely renumbered). Defer the content bytes until a
- *   safe rebuild checkpoint; a remapped cursor update may still be emitted so a
- *   caret-only move lands while the preserved rows stay put.
+ *   while the user is scrolled. Defer all bytes until a safe rebuild checkpoint.
  * - `shrink`: trailing rows were dropped — clear extras inline.
  * - `diff`: differential repaint of visible rows / append new rows below.
  */
@@ -344,7 +336,7 @@ type RenderIntent =
 	| { kind: "overlayRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "deferredShrink"; paddedLength: number }
-	| { kind: "deferredMutation"; cursor?: DeferredCursorUpdate }
+	| { kind: "deferredMutation" }
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
 
@@ -1397,7 +1389,6 @@ export class TUI extends Container {
 		// 3. Classify intent.
 		const intent = this.#planRender(
 			lines,
-			cursorPos,
 			widthChanged,
 			heightChanged,
 			prevViewportTop,
@@ -1464,7 +1455,6 @@ export class TUI extends Container {
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
 			case "deferredMutation":
-				if (intent.cursor) this.#writeCursorPosition(intent.cursor.position, intent.cursor.totalLines);
 				return;
 			case "deferredShrink":
 				this.#emitViewportRepaint(
@@ -1494,46 +1484,6 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Resolve a content shrink that re-exposes committed scrollback rows into the
-	 * safe deferred intent. `deferredShrink` blank-pads the tail to keep the
-	 * viewport's pre-shrink absolute indices — correct only when the rows above
-	 * the change are unchanged (a pure trailing shrink). An offscreen *middle*
-	 * deletion shifts every later row up, so that padded slice would draw
-	 * post-shift content at the old viewport indices and hide the live rows. For
-	 * an offscreen-only change, compare the new bottom-anchored viewport against
-	 * the still-displayed window: when they match the visible set is merely
-	 * renumbered, so a no-op preserves it (re-anchoring the cursor onto the
-	 * displayed rows); when the visible tail truly changed, repaint it. A change
-	 * landing at or inside the viewport keeps `deferredShrink`, whose blank-pad
-	 * semantics are correct for visible drops/edits.
-	 */
-	#planDeferredShrink(
-		newLines: string[],
-		height: number,
-		paddedViewportTop: number,
-		firstChanged: number,
-		cursorPos: { row: number; col: number } | null,
-	): RenderIntent {
-		if (firstChanged < paddedViewportTop) {
-			const newViewportTop = Math.max(0, newLines.length - height);
-			for (let row = 0; row < height; row++) {
-				if ((newLines[newViewportTop + row] ?? "") !== (this.#previousLines[paddedViewportTop + row] ?? "")) {
-					return { kind: "viewportRepaint" };
-				}
-			}
-			const mappedCursor =
-				cursorPos === null
-					? null
-					: { row: paddedViewportTop + (cursorPos.row - newViewportTop), col: cursorPos.col };
-			return {
-				kind: "deferredMutation",
-				cursor: { position: mappedCursor, totalLines: this.#previousLines.length },
-			};
-		}
-		return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
-	}
-
-	/**
 	 * Map the current frame onto a single render intent. Order matters: forced
 	 * resets and session replacement short-circuit before any diff work. A real
 	 * resize (geometry change) that invalidates native scrollback rebuilds it now;
@@ -1543,7 +1493,6 @@ export class TUI extends Container {
 	 */
 	#planRender(
 		newLines: string[],
-		cursorPos: { row: number; col: number } | null,
 		widthChanged: boolean,
 		heightChanged: boolean,
 		prevViewportTop: number,
@@ -1645,7 +1594,7 @@ export class TUI extends Container {
 				if (newLines.length <= paddedViewportTop) {
 					return { kind: "deferredMutation" };
 				}
-				return this.#planDeferredShrink(newLines, height, paddedViewportTop, diff.firstChanged, cursorPos);
+				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. If the shrink still
@@ -1658,7 +1607,7 @@ export class TUI extends Container {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
-			return this.#planDeferredShrink(newLines, height, paddedViewportTop, diff.firstChanged, cursorPos);
+			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
 		// Multiplexer panes do not give us a safe native-history rebuild path, but
