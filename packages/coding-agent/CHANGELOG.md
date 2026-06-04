@@ -91,6 +91,7 @@
 - Migrated the Kagi web search provider to Kagi's V1 Search API (`POST /api/v1/search`), replacing the sunset V0 endpoint while keeping the `kagi` provider id, `KAGI_API_KEY` credential, and `/login kagi` flow unchanged ([#1272](https://github.com/can1357/oh-my-pi/pull/1272) by [@thismat](https://github.com/thismat))
 
 ### Fixed
+- Fixed the web-search provider selectors in TUI settings/setup to derive from the shared provider metadata, so newly added providers cannot be omitted from the preference list.
 
 - Fixed `read`, `search`, `find`, `ast_grep`, and `ast_edit` recovering when a model flattens multiple existing paths into one comma-, semicolon-, or space-delimited string while preserving real paths that contain delimiters.
 - Fixed Exa web search reporting available without Exa credentials, which could route searches into the unauthenticated public MCP fallback and stall before trying the next provider. Availability and `searchExa()` now resolve through the standard `AuthStorage` cascade (`EXA_API_KEY` env or stored credential) ([#1695](https://github.com/can1357/oh-my-pi/issues/1695)).

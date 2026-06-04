@@ -13,6 +13,7 @@ import {
 import { WebSearchTab } from "../src/modes/setup-wizard/scenes/web-search";
 import { initTheme, theme } from "../src/modes/theme/theme";
 import type { InteractiveModeContext } from "../src/modes/types";
+import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "../src/web/search/types";
 
 function fakeContextWithConfiguredModel(): InteractiveModeContext {
 	return {
@@ -174,6 +175,12 @@ describe("setup wizard glyph scene", () => {
 });
 
 describe("setup wizard web search tab", () => {
+	it("exposes every web-search provider preference in the schema-backed TUI list", () => {
+		const schema = SETTINGS_SCHEMA["providers.webSearch"];
+		expect(schema.values).toEqual(SEARCH_PROVIDER_PREFERENCES);
+		expect(schema.ui.options).toEqual(SEARCH_PROVIDER_OPTIONS);
+	});
+
 	it("persists the highlighted provider as the web search preference", async () => {
 		const settings = Settings.isolated();
 		const host = {
@@ -195,6 +202,30 @@ describe("setup wizard web search tab", () => {
 		const expected = SETTINGS_SCHEMA["providers.webSearch"].ui.options[1].value;
 		expect(expected).not.toBe("auto");
 		expect(settings.get("providers.webSearch")).toBe(expected);
+	});
+
+	it("can select the last provider in the setup TUI list", async () => {
+		const settings = Settings.isolated();
+		const host = {
+			ctx: {
+				settings,
+				session: { modelRegistry: { authStorage: { hasAuth: () => false } } },
+			},
+			requestRender: () => {},
+			finish: () => {},
+			setFocus: () => {},
+			restoreFocus: () => {},
+		} as unknown as SetupSceneHost;
+
+		const tab = new WebSearchTab(host);
+		for (let i = 1; i < SEARCH_PROVIDER_OPTIONS.length; i++) {
+			tab.handleInput("\x1b[B");
+		}
+		tab.handleInput("\n");
+		await Bun.sleep(20);
+
+		const lastOption = SEARCH_PROVIDER_OPTIONS[SEARCH_PROVIDER_OPTIONS.length - 1]!;
+		expect(settings.get("providers.webSearch")).toBe(lastOption.value);
 	});
 });
 

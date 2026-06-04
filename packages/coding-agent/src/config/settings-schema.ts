@@ -23,6 +23,7 @@ import {
 	TINY_TITLE_MODEL_VALUES,
 } from "../tiny/models";
 import { EDIT_MODES } from "../utils/edit-mode";
+import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "../web/search/types";
 
 /** Unified settings schema - single source of truth for all settings.
  * Unified settings schema - single source of truth for all settings.
@@ -2884,65 +2885,13 @@ export const SETTINGS_SCHEMA = {
 	// Provider selection
 	"providers.webSearch": {
 		type: "enum",
-		values: [
-			"auto",
-			"exa",
-			"brave",
-			"jina",
-			"kimi",
-			"zai",
-			"perplexity",
-			"anthropic",
-			"gemini",
-			"codex",
-			"tavily",
-			"kagi",
-			"synthetic",
-			"parallel",
-			"searxng",
-		] as const,
+		values: SEARCH_PROVIDER_PREFERENCES,
 		default: "auto",
 		ui: {
 			tab: "providers",
 			label: "Web Search Provider",
 			description: "Provider for web search tool",
-			options: [
-				{
-					value: "auto",
-					label: "Auto",
-					description: "Preferred web-search provider",
-				},
-				{ value: "exa", label: "Exa", description: "Requires EXA_API_KEY" },
-				{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
-				{ value: "jina", label: "Jina", description: "Requires JINA_API_KEY" },
-				{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
-				{
-					value: "perplexity",
-					label: "Perplexity",
-					description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY",
-				},
-				{
-					value: "anthropic",
-					label: "Anthropic",
-					description: "Claude's native web_search tool (uses Anthropic OAuth or ANTHROPIC_API_KEY)",
-				},
-				{
-					value: "codex",
-					label: "OpenAI",
-					description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
-				},
-				{
-					value: "gemini",
-					label: "Gemini",
-					description: "Google Search grounding via Gemini (uses google-gemini-cli or google-antigravity OAuth)",
-				},
-				{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
-				{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
-				{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY (Kagi V1 Search API)" },
-				{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
-				{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
-				{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
-			],
+			options: SEARCH_PROVIDER_OPTIONS,
 		},
 	},
 	"providers.image": {
