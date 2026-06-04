@@ -60,6 +60,7 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 
 	it("logs into the selected Token Plan region and stores that provider key", async () => {
 		const seen: string[] = [];
+		let authUrl = "";
 		const fetchMock = Object.assign(
 			async (input: string | URL | Request) => {
 				seen.push(String(input));
@@ -73,11 +74,14 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 		await storage.reload();
 
 		await storage.login("xiaomi-token-plan-sgp", {
-			onAuth: () => {},
+			onAuth: info => {
+				authUrl = info.url;
+			},
 			onPrompt: async () => TP_KEY,
 		});
 
 		expect(seen).toEqual([`${SGP_BASE_URL}/chat/completions`]);
+		expect(authUrl).toBe("https://platform.xiaomimimo.com/console/plan-manage");
 		expect(store.getApiKey("xiaomi-token-plan-sgp")).toBe(TP_KEY);
 		expect(store.getApiKey("xiaomi")).toBeNull();
 	});

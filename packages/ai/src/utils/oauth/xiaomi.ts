@@ -4,10 +4,8 @@
  * Xiaomi MiMo provides OpenAI-compatible models via
  * https://api.xiaomimimo.com/v1.
  *
- * This is not OAuth - it's a simple API key flow:
- * 1. Open browser to Xiaomi MiMo API key console
- * 2. User copies their API key
- * 3. User pastes the API key into the CLI
+ * Standard Xiaomi login opens the pay-as-you-go API key console. Token Plan
+ * login opens plan management so users copy the regional `tp-...` key.
  */
 
 import type { OAuthController } from "./types";
@@ -15,6 +13,7 @@ import type { OAuthController } from "./types";
 const PROVIDER_ID = "xiaomi";
 const PROVIDER_NAME = "Xiaomi MiMo";
 const STANDARD_AUTH_URL = "https://platform.xiaomimimo.com/#/console/api-keys";
+const TOKEN_PLAN_AUTH_URL = "https://platform.xiaomimimo.com/console/plan-manage";
 const STANDARD_API_BASE_URL = "https://api.xiaomimimo.com/v1";
 const TOKEN_PLAN_KEY_PREFIX = "tp-";
 const STANDARD_VALIDATION_MODEL = "mimo-v2-flash";
@@ -174,7 +173,7 @@ export async function loginXiaomiTokenPlan(options: OAuthController, region: Xia
 		throw new Error(`Xiaomi Token Plan (${TOKEN_PLAN_REGION_NAMES[region]}) login requires onPrompt callback`);
 	}
 	options.onAuth?.({
-		url: STANDARD_AUTH_URL,
+		url: TOKEN_PLAN_AUTH_URL,
 		instructions: `Copy your token-plan API key for the ${TOKEN_PLAN_REGION_NAMES[region]} region`,
 	});
 	const apiKey = await options.onPrompt({
