@@ -41,7 +41,7 @@ afterEach(() => {
 describe("handoff helpers", () => {
 	test("renders custom focus into the handoff prompt", () => {
 		const rendered = renderHandoffPrompt("preserve failing test name");
-		expect(rendered).toContain("Write a handoff document");
+		expect(rendered).toContain("Write handoff doc for another instance.");
 		expect(rendered).toContain("Additional focus: preserve failing test name");
 	});
 
@@ -108,7 +108,7 @@ describe("handoff helpers", () => {
 		if (promptBlock?.type !== "text") {
 			throw new Error("Expected text handoff prompt block");
 		}
-		expect(promptBlock.text).toContain("Write a handoff document");
+		expect(promptBlock.text).toContain("Write handoff doc for another instance.");
 		expect(promptBlock.text).toContain("Additional focus: preserve failing test name");
 	});
 });

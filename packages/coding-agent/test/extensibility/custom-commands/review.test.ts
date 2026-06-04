@@ -9,7 +9,7 @@ import * as git from "../../../src/utils/git";
 import * as jj from "../../../src/utils/jj";
 
 const LEGACY_TASK_INSTRUCTION = 'Use the Task tool with `agent: "reviewer"` to execute this review.';
-const REVIEWER_TASK_INSTRUCTION = 'Use the `task` tool with `agent: "reviewer"` and a `tasks` array.';
+const REVIEWER_TASK_INSTRUCTION = 'Use `task` tool with `agent: "reviewer"` and `tasks` array.';
 
 const SAMPLE_JJ_DIFF = `diff --git a/src/workspace.ts b/src/workspace.ts
 --- a/src/workspace.ts

@@ -68,6 +68,26 @@ describe("HTTP MCP transport", () => {
 		}
 	});
 
+	it("reports required initialize request failures", async () => {
+		activeServer = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				if (request.method === "DELETE") {
+					return new Response(null, { status: 204 });
+				}
+				return new Response("initialize exploded", { status: 500 });
+			},
+		});
+
+		await expect(
+			connectToServer("broken", {
+				type: "http",
+				url: String(activeServer.url),
+				timeout: 1_000,
+			}),
+		).rejects.toThrow("HTTP 500: initialize exploded");
+	});
+
 	describe("resolveSSEConnectTimeoutMs", () => {
 		const originalEnv = process.env.OMP_MCP_TIMEOUT_MS;
 

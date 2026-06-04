@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { AgentDashboard } from "@oh-my-pi/pi-coding-agent/modes/components/agent-dashboard";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
@@ -53,6 +54,7 @@ function stubStdoutGeometry(cols: number): { setRows(n: number): void; restore()
 }
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -124,6 +126,50 @@ describe("AgentDashboard layout", () => {
 			expect(shrunk.length).toBe(18);
 			// Footer survives the shrink instead of being clipped off the bottom.
 			expect(shrunk.map(line => line.replace(ANSI_PATTERN, "")).join("\n")).toContain("Esc: close");
+		} finally {
+			geo.restore();
+		}
+	});
+});
+
+describe("AgentDashboard tab navigation", () => {
+	test("left/right arrows switch source tabs", async () => {
+		await initTheme(false);
+		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
+			projectAgentsDir: null,
+			agents: [
+				{ name: "proj-agent", description: "p", systemPrompt: "", source: "project" },
+				{ name: "bundled-agent", description: "b", systemPrompt: "", source: "bundled" },
+			],
+		});
+		const geo = stubStdoutGeometry(120);
+		try {
+			geo.setRows(30);
+			const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 30, {});
+			const strip = () => dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+
+			// "All" tab shows every source.
+			const all = strip();
+			expect(all).toContain("proj-agent");
+			expect(all).toContain("bundled-agent");
+
+			// Right arrow advances to the "Project" tab, filtering out bundled agents.
+			dashboard.handleInput("\x1b[C");
+			const project = strip();
+			expect(project).toContain("proj-agent");
+			expect(project).not.toContain("bundled-agent");
+
+			// Right again lands on "Bundled".
+			dashboard.handleInput("\x1b[C");
+			const bundled = strip();
+			expect(bundled).toContain("bundled-agent");
+			expect(bundled).not.toContain("proj-agent");
+
+			// Left arrow walks back to "Project".
+			dashboard.handleInput("\x1b[D");
+			const back = strip();
+			expect(back).toContain("proj-agent");
+			expect(back).not.toContain("bundled-agent");
 		} finally {
 			geo.restore();
 		}

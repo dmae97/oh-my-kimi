@@ -193,7 +193,7 @@ describe("system Handlebars prompt templates", () => {
 
 		expect(subagentSystem).toMatch(/CONTEXT\n=+\n\nShared task background/);
 		expect(subagentSystem).toMatch(/ROLE\n=+/);
-		expect(subagentUser).toContain("Complete the assignment below, thoroughly:");
+		expect(subagentUser).toContain("Complete assignment below, thoroughly:");
 		expect(subagentUser).toContain("Do the task.");
 		expect(subagentUser).not.toMatch(/CONTEXT\n=+/);
 		expect(subagentUser).not.toContain("Shared task background");
@@ -210,7 +210,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(withPlan).toMatch(/PLAN\n=+/);
 		expect(withPlan).toContain('<plan path="local://wp-migration.md">');
 		expect(withPlan).toContain("1. Migrate the store\n2. Update callers");
-		expect(withPlan).toContain("executing an approved plan");
+		expect(withPlan).toContain("Session executing approved plan.");
 
 		const withoutPlan = prompt.render(systemTemplate, {
 			...baseRenderContext,
@@ -233,7 +233,7 @@ describe("system Handlebars prompt templates", () => {
 		});
 
 		expect(rendered).toContain("## Discovery");
-		expect(rendered).toContain("Discoverable MCP servers in this session: github (2 tools), slack (1 tool).");
+		expect(rendered).toContain("Discoverable MCP servers in session: github (2 tools), slack (1 tool).");
 		expect(rendered).not.toContain("Example discoverable MCP tools:");
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
@@ -285,9 +285,9 @@ describe("system Handlebars prompt templates", () => {
 			expect(systemPrompt[0]).not.toContain("current working directory");
 			expect(systemPrompt[1]).toContain("<workstation>");
 			expect(systemPrompt[1]).toContain("<workspace-tree>");
-			expect(systemPrompt[1]).toContain("Today is ");
-			expect(systemPrompt[1]).toContain(`current working directory is '${dir}'.`);
-			expect(systemPrompt[1].indexOf("</workspace-tree>")).toBeLessThan(systemPrompt[1].indexOf("Today is "));
+			expect(systemPrompt[1]).toContain("Today ");
+			expect(systemPrompt[1]).toContain(`cwd \`${dir}\`.`);
+			expect(systemPrompt[1].indexOf("</workspace-tree>")).toBeLessThan(systemPrompt[1].indexOf("Today "));
 		});
 	});
 	test("buildSystemPrompt renders workspace tree after directory context in project prompt", async () => {
@@ -310,8 +310,8 @@ describe("system Handlebars prompt templates", () => {
 			const projectPrompt = systemPrompt[1] ?? "";
 
 			expect(projectPrompt).toContain("<workspace-tree>");
-			expect(projectPrompt).toContain("Working directory layout (sorted by mtime, recent first; depth ≤ 3):");
-			expect(projectPrompt).toContain("(some entries elided to keep the tree short");
+			expect(projectPrompt).toContain("Working directory layout (sorted mtime, recent first; depth ≤ 3):");
+			expect(projectPrompt).toContain("(some entries elided keep tree short");
 			expect(projectPrompt.indexOf("</dir-context>")).toBeLessThan(projectPrompt.indexOf("<workspace-tree>"));
 		});
 	});
