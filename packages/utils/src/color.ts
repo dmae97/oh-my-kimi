@@ -5,9 +5,7 @@
  * ```ts
  * import { hexToHsv, hsvToHex } from "@oh-my-pi/pi-utils";
  *
- * // Work with HSV directly
- *
- * // Or work with HSV directly
+ * // Rotate the hue by 90°
  * const hsv = hexToHsv("#4ade80");
  * hsv.h = (hsv.h + 90) % 360;
  * const newHex = hsvToHex(hsv);
@@ -201,4 +199,104 @@ export function adjustHsv(hex: string, adj: HSVAdjustment): string {
 		hsv.v = Math.max(0, Math.min(1, hsv.v * adj.v));
 	}
 	return hsvToHex(hsv);
+}
+
+/**
+ * Convert HSL (h: 0-360, s: 0-1, l: 0-1) to a CSS hex string.
+ */
+export function hslToHex(h: number, s: number, l: number): string {
+	const a = s * Math.min(l, 1 - l);
+	const f = (n: number) => {
+		const k = (n + h / 30) % 12;
+		const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+		return Math.round(255 * color)
+			.toString(16)
+			.padStart(2, "0");
+	};
+	return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+// Conventional xterm RGB for the 16 base ANSI colors. Terminals may remap these,
+// so they're a best-effort approximation for light/dark classification.
+const ANSI_16: readonly (readonly [number, number, number])[] = [
+	[0, 0, 0],
+	[128, 0, 0],
+	[0, 128, 0],
+	[128, 128, 0],
+	[0, 0, 128],
+	[128, 0, 128],
+	[0, 128, 128],
+	[192, 192, 192],
+	[128, 128, 128],
+	[255, 0, 0],
+	[0, 255, 0],
+	[255, 255, 0],
+	[0, 0, 255],
+	[255, 0, 255],
+	[0, 255, 255],
+	[255, 255, 255],
+];
+const CUBE_STEPS = [0, 95, 135, 175, 215, 255] as const;
+
+/** Parse a 256-color palette index (0–255) to RGB (0..255). */
+function paletteToRgb(index: number): RGB | undefined {
+	if (!Number.isInteger(index) || index < 0 || index > 255) return undefined;
+	if (index < 16) {
+		const rgb = ANSI_16[index];
+		return rgb ? { r: rgb[0], g: rgb[1], b: rgb[2] } : undefined;
+	}
+	if (index < 232) {
+		const n = index - 16;
+		return {
+			r: CUBE_STEPS[Math.floor(n / 36) % 6] ?? 0,
+			g: CUBE_STEPS[Math.floor(n / 6) % 6] ?? 0,
+			b: CUBE_STEPS[n % 6] ?? 0,
+		};
+	}
+	const gray = 8 + (index - 232) * 10;
+	return { r: gray, g: gray, b: gray };
+}
+
+/** Parse a theme color value — `#rgb`/`#rrggbb` hex or 256-color palette index — to RGB (0..255). */
+function toRgb(value: string | number): RGB | undefined {
+	if (typeof value === "number") return paletteToRgb(value);
+	if (typeof value !== "string" || value[0] !== "#") return undefined;
+	if (value.length !== 4 && value.length !== 7) return undefined;
+	const rgb = hexToRgb(value);
+	if (Number.isNaN(rgb.r) || Number.isNaN(rgb.g) || Number.isNaN(rgb.b)) return undefined;
+	return rgb;
+}
+
+/** Gamma-decode a single 0..255 sRGB channel to linear 0..1. */
+function linearizeChannel(channel: number): number {
+	const c = channel / 255;
+	return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+/**
+ * Perceptual luma (gamma-encoded BT.709 weights over raw sRGB), normalized to 0..1.
+ *
+ * Accepts a hex string (`#rgb` / `#rrggbb`) or a 256-color palette index; returns
+ * `undefined` for var refs, empty strings, or anything unparseable.
+ *
+ * Cheap and good enough for a light/dark *classification* threshold. NOT suitable
+ * for contrast ratios — use {@link relativeLuminance} for those.
+ */
+export function colorLuma(value: string | number): number | undefined {
+	const rgb = toRgb(value);
+	if (!rgb) return undefined;
+	return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+}
+
+/**
+ * WCAG 2.x relative luminance (BT.709 weights over linearized sRGB), normalized to
+ * 0..1. This is the value the WCAG contrast-ratio formula expects.
+ *
+ * Accepts a hex string (`#rgb` / `#rrggbb`) or a 256-color palette index; returns
+ * `undefined` for var refs, empty strings, or anything unparseable.
+ */
+export function relativeLuminance(value: string | number): number | undefined {
+	const rgb = toRgb(value);
+	if (!rgb) return undefined;
+	return 0.2126 * linearizeChannel(rgb.r) + 0.7152 * linearizeChannel(rgb.g) + 0.0722 * linearizeChannel(rgb.b);
 }

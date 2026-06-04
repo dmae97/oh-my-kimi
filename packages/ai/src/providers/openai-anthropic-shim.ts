@@ -81,7 +81,7 @@ export function streamOpenAIAnthropicShim(
 					minP: options?.minP,
 					presencePenalty: options?.presencePenalty,
 					repetitionPenalty: options?.repetitionPenalty,
-					maxTokens: options?.maxTokens ?? Math.min(model.maxTokens, 32000),
+					maxTokens: options?.maxTokens ?? model.maxTokens,
 					signal: options?.signal,
 					headers: mergedHeaders,
 					sessionId: options?.sessionId,

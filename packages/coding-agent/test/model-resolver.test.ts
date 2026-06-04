@@ -160,6 +160,26 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 	},
 ];
 
+function createOpusModel(provider: string, id: string, name: string): Model<"anthropic-messages"> {
+	return {
+		id,
+		name,
+		api: "anthropic-messages",
+		provider,
+		baseUrl: provider === "anthropic" ? "https://api.anthropic.com" : "https://api.githubcopilot.com",
+		reasoning: true,
+		thinking: {
+			mode: "budget",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.XHigh,
+		},
+		input: ["text", "image"],
+		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+		contextWindow: 200000,
+		maxTokens: 32000,
+	};
+}
+
 const canonicalVariantModels: Model<"anthropic-messages">[] = [
 	{
 		id: "claude-sonnet-4-5",
@@ -546,6 +566,31 @@ describe("resolveAgentModelPatterns", () => {
 		});
 
 		expect(result).toEqual(["openai/gpt-4o"]);
+	});
+
+	test("slow priority falls forward to Opus 4.8 before older Opus aliases", () => {
+		const settings = Settings.isolated();
+		const patterns = resolveAgentModelPatterns({ agentModel: "pi/slow", settings });
+
+		const dottedRegistry = {
+			getAvailable: () => [
+				createOpusModel("github-copilot", "claude-opus-4.7", "Claude Opus 4.7"),
+				createOpusModel("github-copilot", "claude-opus-4.8", "Claude Opus 4.8"),
+			],
+		} as Parameters<typeof resolveModelOverride>[1];
+		const dotted = resolveModelOverride(patterns, dottedRegistry, settings);
+		expect(dotted.model?.provider).toBe("github-copilot");
+		expect(dotted.model?.id).toBe("claude-opus-4.8");
+
+		const dashedRegistry = {
+			getAvailable: () => [
+				createOpusModel("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
+				createOpusModel("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
+			],
+		} as Parameters<typeof resolveModelOverride>[1];
+		const dashed = resolveModelOverride(patterns, dashedRegistry, settings);
+		expect(dashed.model?.provider).toBe("anthropic");
+		expect(dashed.model?.id).toBe("claude-opus-4-8");
 	});
 });
 

@@ -1,51 +1,85 @@
 import { describe, it } from "bun:test";
+import type { Subprocess } from "bun";
 import {
-	applyStressEnv,
 	buildScenarios,
 	formatSeed,
-	restoreStressEnv,
+	runNoReflowResizeNotificationRegression,
 	runPreexistingScrollbackRegression,
 	type Scenario,
-	type StressWorkerFailure,
-	type StressWorkerRequest,
-	type StressWorkerResponse,
+	type StressScenarioFailure,
+	type StressScenarioResult,
 } from "./render-stress-harness";
 
 const DEFAULT_STRESS_WORKERS = 8;
 const CORE_BATCH_TIMEOUT_MS = 60_000;
 const SOAK_BATCH_TIMEOUT_MS = 150_000;
+// Per-wave allowance for `bun` startup + Ghostty WASM compile in each fresh
+// subprocess, added on top of the slowest scenario's own timeout.
+const SUBPROCESS_SPAWN_OVERHEAD_MS = 5_000;
+
+const SUBPROCESS_ENTRY = `${import.meta.dir}/render-stress-subprocess.ts`;
+
+// The randomized render stress sweep spawns many `bun` subprocesses (each
+// compiling Ghostty WASM) and is far too slow/heavy for CI. Run it locally only.
+const SKIP_IN_CI = Boolean(Bun.env.CI);
+
+type StressSubprocess = Subprocess<Blob, "pipe", "pipe">;
+
+// Every spawned stress subprocess, tracked process-wide. Each scenario child
+// busy-loops in Ghostty WASM without yielding to its JS event loop, so a SIGTERM
+// handler would never run — only SIGKILL reliably stops one. And if the parent
+// test process is interrupted (Ctrl-C) or killed before a scenario's own timeout
+// fires, its children would be reparented to init and spin a core forever; the
+// exit/signal hooks below force-kill them on every parent-exit path.
+const liveSubprocesses = new Set<StressSubprocess>();
+
+function killAllSubprocesses(): void {
+	for (const proc of liveSubprocesses) proc.kill("SIGKILL");
+	liveSubprocesses.clear();
+}
+
+let subprocessCleanupInstalled = false;
+function installSubprocessCleanup(): void {
+	if (subprocessCleanupInstalled) return;
+	subprocessCleanupInstalled = true;
+	process.on("exit", killAllSubprocesses);
+	const onSignal = (signal: NodeJS.Signals): void => {
+		killAllSubprocesses();
+		// Restore default disposition and re-raise so the process still exits
+		// from the signal instead of hanging on this listener.
+		process.removeListener(signal, onSignal);
+		process.kill(process.pid, signal);
+	};
+	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+		process.once(signal, onSignal);
+	}
+}
 
 function parsePositiveInt(name: string, fallback: number): number {
 	const raw = Bun.env[name];
 	if (raw === undefined || raw.length === 0) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+	if (!/^[1-9]\d*$/.test(raw)) {
+		throw new Error(`${name} must be a positive integer; received ${JSON.stringify(raw)}`);
+	}
+	return Number.parseInt(raw, 10);
 }
 
-function stressWorkerCount(scenarios: readonly Scenario[]): number {
+function stressConcurrency(scenarios: readonly Scenario[]): number {
 	if (scenarios.length === 0) return 0;
 	return Math.min(scenarios.length, parsePositiveInt("TUI_STRESS_WORKERS", DEFAULT_STRESS_WORKERS));
 }
 
-interface ScenarioGroup {
-	envMode: Scenario["envMode"];
-	scenarios: Scenario[];
-}
-
 function stressBatchTimeoutMs(scenarios: readonly Scenario[]): number {
+	const fallback = Bun.env.TUI_STRESS_SOAK === "1" ? SOAK_BATCH_TIMEOUT_MS : CORE_BATCH_TIMEOUT_MS;
 	const raw = Bun.env.TUI_STRESS_BATCH_TIMEOUT_MS;
 	if (raw !== undefined && raw.length > 0) {
-		const fallback = Bun.env.TUI_STRESS_SOAK === "1" ? SOAK_BATCH_TIMEOUT_MS : CORE_BATCH_TIMEOUT_MS;
 		return parsePositiveInt("TUI_STRESS_BATCH_TIMEOUT_MS", fallback);
 	}
-	let total = 0;
-	for (const group of groupScenariosByEnv(scenarios)) {
-		const workers = stressWorkerCount(group.scenarios);
-		const batches = Math.ceil(group.scenarios.length / Math.max(1, workers));
-		const slowest = group.scenarios.reduce((max, scenario) => Math.max(max, scenario.timeoutMs), 0);
-		total += batches * slowest;
-	}
-	return Math.max(Bun.env.TUI_STRESS_SOAK === "1" ? SOAK_BATCH_TIMEOUT_MS : CORE_BATCH_TIMEOUT_MS, total);
+	const concurrency = stressConcurrency(scenarios);
+	if (concurrency === 0) return fallback;
+	const waves = Math.ceil(scenarios.length / concurrency);
+	const slowest = scenarios.reduce((max, scenario) => Math.max(max, scenario.timeoutMs), 0);
+	return Math.max(fallback, waves * (slowest + SUBPROCESS_SPAWN_OVERHEAD_MS));
 }
 
 function stressBatchLabel(scenarios: readonly Scenario[]): string {
@@ -57,124 +91,122 @@ function stressBatchLabel(scenarios: readonly Scenario[]): string {
 	return `${scenarios.length} scenarios x ${first.iterations} ops`;
 }
 
-async function runScenariosInWorkers(scenarios: readonly Scenario[]): Promise<void> {
-	for (const group of groupScenariosByEnv(scenarios)) {
-		const envSnapshot = applyStressEnv(group.envMode);
-		try {
-			await runScenarioGroupInWorkers(group.scenarios);
-		} finally {
-			restoreStressEnv(envSnapshot);
-		}
-	}
-}
-
-function groupScenariosByEnv(scenarios: readonly Scenario[]): ScenarioGroup[] {
-	const groups: ScenarioGroup[] = [];
-	for (const scenario of scenarios) {
-		let group = groups.find(candidate => candidate.envMode === scenario.envMode);
-		if (group === undefined) {
-			group = { envMode: scenario.envMode, scenarios: [] };
-			groups.push(group);
-		}
-		group.scenarios.push(scenario);
-	}
-	return groups;
-}
-
-async function runScenarioGroupInWorkers(scenarios: readonly Scenario[]): Promise<void> {
-	const workerCount = stressWorkerCount(scenarios);
-	const workers = Array.from({ length: workerCount }, () => spawnStressWorker());
-	let nextScenario = 0;
-	try {
-		await Promise.all(
-			workers.map(async worker => {
-				for (;;) {
-					const scenarioIndex = nextScenario++;
-					const scenario = scenarios[scenarioIndex];
-					if (scenario === undefined) return;
-					await runScenarioOnWorker(worker, scenarioIndex, scenario);
-				}
-			}),
-		);
-	} finally {
-		for (const worker of workers) {
-			worker.terminate();
-		}
-	}
-}
-
-function spawnStressWorker(): Worker {
-	return new Worker(new URL("./render-stress-worker.ts", import.meta.url).href, { type: "module" });
-}
-
-async function runScenarioOnWorker(worker: Worker, id: number, scenario: Scenario): Promise<void> {
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
-	const request: StressWorkerRequest = { id, scenario, patchEnv: false };
-	let done = false;
-	const cleanup = (): void => {
-		worker.removeEventListener("message", onMessage);
-		worker.removeEventListener("error", onError);
-		worker.removeEventListener("messageerror", onMessageError);
+/**
+ * Run every scenario in its own `bun` subprocess, at most `concurrency` at once.
+ * The first failing (or timed-out) scenario aborts the batch: its error is
+ * recorded and every surviving subprocess is killed, so a real renderer
+ * regression surfaces promptly instead of hiding behind a later batch timeout.
+ * Each drain loop catches its own scenario error, and the batch rejects as soon
+ * as the first error is recorded, so killed siblings cannot mask it later.
+ */
+async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promise<void> {
+	const concurrency = stressConcurrency(scenarios);
+	if (concurrency === 0) return;
+	installSubprocessCleanup();
+	let next = 0;
+	let firstError: unknown;
+	let signalFailure!: () => void;
+	const failed = new Promise<void>(resolve => {
+		signalFailure = resolve;
+	});
+	const fail = (error: unknown): void => {
+		if (firstError !== undefined) return;
+		firstError = error;
+		killAllSubprocesses();
+		signalFailure();
 	};
-	const finish = (complete: () => void): void => {
-		if (done) return;
-		done = true;
-		cleanup();
-		complete();
-	};
-	const onMessage = (event: MessageEvent): void => {
-		const message = event.data as StressWorkerResponse;
-		if (message.id !== id) return;
-		if (message.ok) {
-			finish(resolve);
-		} else {
-			finish(() => reject(workerFailureError(message)));
+	const drain = async (): Promise<void> => {
+		while (firstError === undefined) {
+			const scenario = scenarios[next++];
+			if (scenario === undefined) return;
+			try {
+				await runScenarioInSubprocess(scenario);
+			} catch (error) {
+				fail(error);
+				return;
+			}
 		}
 	};
-	const onError = (event: ErrorEvent): void => {
-		finish(() => reject(new Error(`TUI stress worker crashed while running ${scenario.name}: ${event.message}`)));
-	};
-	const onMessageError = (): void => {
-		finish(() => reject(new Error(`TUI stress worker could not deserialize result for ${scenario.name}`)));
-	};
-	worker.addEventListener("message", onMessage);
-	worker.addEventListener("error", onError);
-	worker.addEventListener("messageerror", onMessageError);
-	worker.postMessage(request);
-	void Bun.sleep(scenario.timeoutMs).then(() => {
-		finish(() =>
+	const drains = Array.from({ length: concurrency }, drain);
+	await Promise.race([Promise.all(drains), failed]);
+	if (firstError !== undefined) throw firstError;
+}
+
+async function runScenarioInSubprocess(scenario: Scenario): Promise<void> {
+	const proc = Bun.spawn([process.execPath, SUBPROCESS_ENTRY], {
+		stdin: new Blob([JSON.stringify(scenario)]),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	liveSubprocesses.add(proc);
+	const stdoutPromise = new Response(proc.stdout).text();
+	const stderrPromise = new Response(proc.stderr).text();
+	const completed = (async (): Promise<StressScenarioResult> => {
+		const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
+		return parseScenarioResult(stdout, stderr, scenario, exitCode);
+	})();
+	void completed.catch(() => {});
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timedOut = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			proc.kill("SIGKILL");
 			reject(
 				new Error(
 					`TUI stress scenario timed out after ${scenario.timeoutMs}ms: ${scenario.name} seed=${formatSeed(scenario.seed)} ops=${scenario.iterations}`,
 				),
-			),
-		);
+			);
+		}, scenario.timeoutMs);
 	});
-	await promise;
+	try {
+		const result = await Promise.race([completed, timedOut]);
+		if (!result.ok) throw scenarioFailureError(result);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		liveSubprocesses.delete(proc);
+	}
 }
 
-function workerFailureError(message: StressWorkerFailure): Error {
-	const stack =
-		message.stack === undefined
-			? ""
-			: `
-${message.stack}`;
-	return new Error(
-		`TUI stress worker failed: ${message.scenario} seed=${message.seed}
-${message.error}${stack}`,
-	);
+function parseScenarioResult(
+	stdout: string,
+	stderr: string,
+	scenario: Scenario,
+	exitCode: number | null,
+): StressScenarioResult {
+	const trimmed = stdout.trim();
+	const tail = stderr.trim().length > 0 ? `\n${stderr.trim()}` : "";
+	if (trimmed.length === 0) {
+		throw new Error(
+			`TUI stress subprocess produced no result for ${scenario.name} seed=${formatSeed(scenario.seed)} (exit=${exitCode})${tail}`,
+		);
+	}
+	try {
+		return JSON.parse(trimmed) as StressScenarioResult;
+	} catch {
+		throw new Error(
+			`TUI stress subprocess produced unparseable result for ${scenario.name} seed=${formatSeed(scenario.seed)} (exit=${exitCode}):\n${trimmed}${tail}`,
+		);
+	}
 }
 
-describe("TUI randomized render stress", () => {
+function scenarioFailureError(message: StressScenarioFailure): Error {
+	const stack = message.stack === undefined ? "" : `\n${message.stack}`;
+	return new Error(`TUI stress scenario failed: ${message.scenario} seed=${message.seed}\n${message.error}${stack}`);
+}
+
+describe.skipIf(SKIP_IN_CI)("TUI randomized render stress", () => {
 	it("preserves preexisting shell scrollback during visible structural mutations", async () => {
 		await runPreexistingScrollbackRegression();
 	});
 
+	it("keeps no-reflow resize notifications non-destructive during foreground streaming", async () => {
+		await runNoReflowResizeNotificationRegression();
+	});
+
 	const scenarios = buildScenarios();
 	it(
-		`preserves render invariants across ${stressBatchLabel(scenarios)} using ${stressWorkerCount(scenarios)} workers`,
+		`preserves render invariants across ${stressBatchLabel(scenarios)} using ${stressConcurrency(scenarios)} subprocesses`,
 		async () => {
-			await runScenariosInWorkers(scenarios);
+			await runScenariosInSubprocesses(scenarios);
 		},
 		stressBatchTimeoutMs(scenarios),
 	);

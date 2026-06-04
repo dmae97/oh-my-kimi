@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { extractSegments, sliceWithWidth, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import {
+	encodeTextSized,
+	extractSegments,
+	sliceWithWidth,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui/utils";
 
 describe("text utils", () => {
 	it("computes visible width for ANSI and tabs", () => {
@@ -76,5 +82,66 @@ describe("text utils", () => {
 		expect(result.before).toContain("hel");
 		expect(result.after.startsWith("\x1b[31m")).toBe(true);
 		expect(result.afterWidth).toBeGreaterThan(0);
+	});
+
+	it("encodes OSC 66 text sizing spans with ST terminators", () => {
+		const encoded = encodeTextSized("Hi", {
+			scale: 2,
+			widthCells: 3,
+			verticalAlign: "center",
+			horizontalAlign: "right",
+		});
+		expect(encoded).toBe("\x1b]66;s=2:w=3:v=2:h=1;Hi\x1b\\");
+		expect(visibleWidth(encoded)).toBe(6);
+		expect(encodeTextSized("A\nB", { scale: 1 })).toBe("\x1b]66;s=1;A B\x1b\\");
+	});
+
+	it("counts OSC 66 text-sizing spans as visible text", () => {
+		expect(visibleWidth("\x1b]66;s=2;Hi\x1b\\")).toBe(4);
+		expect(visibleWidth("\x1b]66;w=5;Hi\x1b\\")).toBe(5);
+		expect(visibleWidth("\x1b]66;s=3:w=4;X\x1b\\")).toBe(12);
+		expect(visibleWidth("\x1b]66;;abc\x1b\\")).toBe(3);
+		expect(visibleWidth(`A${"\x1b]66;s=2;Hi\x1b\\"}Z`)).toBe(1 + 4 + 1);
+		const family = "👨‍👩‍👧‍👦";
+		expect(visibleWidth(encodeTextSized(family, { scale: 2, widthCells: 2 }))).toBe(4);
+	});
+
+	it("slices and truncates OSC 66 spans atomically", () => {
+		const osc66 = "\x1b]66;s=2;Hi\x1b\\";
+
+		const fullSlice = sliceWithWidth(`A${osc66}Z`, 1, 4, true);
+		expect(fullSlice.text).toBe(osc66);
+		expect(fullSlice.width).toBe(4);
+		expect(visibleWidth(fullSlice.text)).toBe(4);
+
+		const fullTruncate = truncateToWidth(osc66, 4);
+		expect(fullTruncate).toBe(osc66);
+		expect(visibleWidth(fullTruncate)).toBe(4);
+
+		const partialSlice = sliceWithWidth(osc66, 0, 2, true);
+		expect(partialSlice.text).toBe("H");
+		expect(partialSlice.width).toBe(1);
+		expect(partialSlice.text.includes("\x1b]66")).toBe(false);
+
+		const trailingSlice = sliceWithWidth(osc66, 2, 2, true);
+		expect(trailingSlice.text).toBe("i");
+		expect(trailingSlice.width).toBe(1);
+		expect(trailingSlice.text.includes("\x1b]66")).toBe(false);
+
+		const partialTruncate = truncateToWidth(osc66, 3);
+		expect(partialTruncate.includes("\x1b]66")).toBe(false);
+		expect(partialTruncate.includes("\x1b]")).toBe(false);
+		expect(visibleWidth(partialTruncate)).toBe(3);
+	});
+
+	it("extracts OSC 66 spans without emitting partial wrappers", () => {
+		const osc66 = "\x1b]66;s=2;Hi\x1b\\";
+		const result = extractSegments(`A${osc66}Z`, 1, 1, 2, true);
+
+		expect(result.before).toBe("A");
+		expect(result.beforeWidth).toBe(1);
+		expect(result.after).toBe("H");
+		expect(result.afterWidth).toBe(1);
+		expect(result.after.includes("\x1b]66")).toBe(false);
 	});
 });

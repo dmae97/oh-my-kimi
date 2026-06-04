@@ -14,10 +14,33 @@ import {
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
-import type { SessionInfo } from "../../session/session-manager";
+import type { SessionInfo, SessionStatus } from "../../session/session-manager";
 import { shortenPath } from "../../tools/render-utils";
 import { DynamicBorder } from "./dynamic-border";
 import { HookSelectorComponent } from "./hook-selector";
+
+/**
+ * Themed glyph + colored label for a session's lifecycle status, or `undefined`
+ * when there is nothing useful to show (`unknown`/unset) so the metadata line
+ * stays uncluttered. The glyph resolves through the active symbol preset
+ * (nerdfont / unicode / ascii) via `theme.status.*`.
+ */
+function formatSessionStatus(status: SessionStatus | undefined): string | undefined {
+	switch (status) {
+		case "complete":
+			return theme.fg("success", `${theme.status.success} done`);
+		case "interrupted":
+			return theme.fg("warning", `${theme.status.warning} interrupted`);
+		case "aborted":
+			return theme.fg("muted", `${theme.status.aborted} aborted`);
+		case "error":
+			return theme.fg("error", `${theme.status.error} error`);
+		case "pending":
+			return theme.fg("accent", `${theme.status.pending} pending`);
+		default:
+			return undefined;
+	}
+}
 
 /** Returns the IDs of sessions whose recorded prompts match a query, best first. */
 export type SessionHistoryMatcher = (query: string) => string[];
@@ -227,13 +250,21 @@ class SessionList implements Component {
 				lines.push(messageLine);
 			}
 
-			// Metadata line: date + file size (+ project dir in all-projects scope)
+			// Metadata line: date + file size + lifecycle status (+ project dir in
+			// all-projects scope). The status segment carries its own color, so each
+			// segment is dimmed individually rather than wrapping the whole line.
+			const dim = (s: string) => theme.fg("dim", s);
+			const dot = dim(theme.sep.dot);
 			const modified = formatDate(session.modified);
-			let metadata = `  ${modified} ${theme.sep.dot} ${formatBytes(session.size)}`;
-			if (this.#showCwd && session.cwd) {
-				metadata += ` ${theme.sep.dot} ${shortenPath(session.cwd)}`;
+			let metadata = `  ${dim(modified)} ${dot} ${dim(formatBytes(session.size))}`;
+			const status = formatSessionStatus(session.status);
+			if (status) {
+				metadata += ` ${dot} ${status}`;
 			}
-			const metadataLine = theme.fg("dim", truncateToWidth(metadata, width));
+			if (this.#showCwd && session.cwd) {
+				metadata += ` ${dot} ${dim(shortenPath(session.cwd))}`;
+			}
+			const metadataLine = truncateToWidth(metadata, width);
 
 			lines.push(metadataLine);
 			lines.push(""); // Blank line between sessions

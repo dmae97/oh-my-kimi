@@ -16,7 +16,15 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type Component, Container, Markdown, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	Markdown,
+	type MarkdownTheme,
+	renderInlineMarkdown,
+	TERMINAL,
+	Text,
+} from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -164,6 +172,9 @@ interface UIContext {
 			onLeft?: () => void;
 			onRight?: () => void;
 			helpText?: string;
+			selectionMarker?: "radio" | "checkbox";
+			checkedIndices?: readonly number[];
+			markableCount?: number;
 		},
 	): Promise<string | undefined>;
 	editor(
@@ -191,6 +202,7 @@ async function askSingleQuestion(
 		prompt: string,
 		optionsToShow: ExtensionUISelectItem[],
 		initialIndex?: number,
+		marker?: { selectionMarker: "radio" | "checkbox"; checkedIndices?: readonly number[]; markableCount: number },
 	): Promise<{ choice: string | undefined; timedOut: boolean; navigation?: "back" | "forward" }> => {
 		let timeoutTriggered = false;
 		const onTimeout = () => {
@@ -207,6 +219,9 @@ async function askSingleQuestion(
 			outline: true,
 			onTimeout,
 			helpText,
+			selectionMarker: marker?.selectionMarker,
+			checkedIndices: marker?.checkedIndices,
+			markableCount: marker?.markableCount,
 			onLeft: navigation?.allowBack
 				? () => {
 						navigationAction = "back";
@@ -245,25 +260,27 @@ async function askSingleQuestion(
 			if (selectedIndex >= 0) cursorIndex = selectedIndex;
 		}
 		while (true) {
-			const opts: ExtensionUISelectItem[] = [];
-
-			for (const opt of questionOptions) {
-				const checkbox = selected.has(opt.label) ? theme.checkbox.checked : theme.checkbox.unchecked;
-				const displayLabel = `${checkbox} ${opt.label}`;
-				opts.push(toSelectOption(opt, displayLabel));
-			}
+			const opts: ExtensionUISelectItem[] = questionOptions.map(opt => toSelectOption(opt));
 
 			if (!navigation?.allowForward && selected.size > 0) {
 				opts.push(doneLabel);
 			}
 			opts.push(OTHER_OPTION);
 
+			const checkedIndices: number[] = [];
+			for (let i = 0; i < questionOptions.length; i++) {
+				if (selected.has(questionOptions[i]!.label)) checkedIndices.push(i);
+			}
 			const prefix = selected.size > 0 ? `(${selected.size} selected) ` : "";
 			const {
 				choice,
 				timedOut: selectTimedOut,
 				navigation: arrowNavigation,
-			} = await selectOption(`${prefix}${promptWithProgress}`, opts, cursorIndex);
+			} = await selectOption(`${prefix}${promptWithProgress}`, opts, cursorIndex, {
+				selectionMarker: "checkbox",
+				checkedIndices,
+				markableCount: questionOptions.length,
+			});
 
 			if (arrowNavigation) {
 				return { selectedOptions: Array.from(selected), customInput, timedOut, navigation: arrowNavigation };
@@ -295,20 +312,10 @@ async function askSingleQuestion(
 				cursorIndex = selectedIdx;
 			}
 
-			const checkedPrefix = `${theme.checkbox.checked} `;
-			const uncheckedPrefix = `${theme.checkbox.unchecked} `;
-			let opt: string | undefined;
-			if (choice.startsWith(checkedPrefix)) {
-				opt = choice.slice(checkedPrefix.length);
-			} else if (choice.startsWith(uncheckedPrefix)) {
-				opt = choice.slice(uncheckedPrefix.length);
-			}
-			if (opt) {
-				if (selected.has(opt)) {
-					selected.delete(opt);
-				} else {
-					selected.add(opt);
-				}
+			if (selected.has(choice)) {
+				selected.delete(choice);
+			} else {
+				selected.add(choice);
 			}
 
 			if (selectTimedOut) {
@@ -338,7 +345,10 @@ async function askSingleQuestion(
 			choice,
 			timedOut: selectTimedOut,
 			navigation: arrowNavigation,
-		} = await selectOption(promptWithProgress, optionsWithNavigation, initialIndex);
+		} = await selectOption(promptWithProgress, optionsWithNavigation, initialIndex, {
+			selectionMarker: "radio",
+			markableCount: displayOptions.length,
+		});
 		timedOut = selectTimedOut;
 
 		if (arrowNavigation) {
@@ -419,7 +429,13 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	#sendAskNotification(): void {
 		const method = this.session.settings.get("ask.notify");
 		if (method === "off") return;
-		TERMINAL.sendNotification("Waiting for input");
+		TERMINAL.sendNotification({
+			title: "Oh My Pi",
+			body: "Waiting for input",
+			type: "ask",
+			urgency: "normal",
+			actions: "focus",
+		});
 	}
 
 	async execute(
@@ -629,7 +645,65 @@ function renderCustomInput(
 	return text;
 }
 
+/**
+ * Marker glyph for a question option. Single-choice questions render circular radio
+ * buttons (pick one); multi-select questions render rectangular checkboxes (pick many).
+ */
+function optionMarker(uiTheme: Theme, multi: boolean | undefined, selected: boolean): string {
+	if (multi) return selected ? uiTheme.checkbox.checked : uiTheme.checkbox.unchecked;
+	return selected ? uiTheme.radio.selected : uiTheme.radio.unselected;
+}
+
+/**
+ * Render the answered option list for a question: every offered option with its
+ * selection marker filled in, plus any custom free-text answer. This keeps the
+ * result visually identical to the question form (`renderCall`) so the answer
+ * reads in place rather than as a detached summary block.
+ *
+ * `linePrefix` is the indent that precedes each entry's tree branch — a single
+ * leading space for top-level (single-question) entries, or the question's
+ * vertical continuation for nested (multi-question) entries.
+ */
+function renderAnswerOptions(
+	uiTheme: Theme,
+	mdTheme: MarkdownTheme,
+	linePrefix: string,
+	options: string[] | undefined,
+	selectedOptions: string[] | undefined,
+	multi: boolean | undefined,
+	customInput: string | undefined,
+): string {
+	const selected = new Set(selectedOptions ?? []);
+	// Prefer the full recorded option set; fall back to the selected labels when
+	// details omit the options array.
+	const list = options && options.length > 0 ? options : (selectedOptions ?? []);
+
+	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
+	if (selected.size === 0 && customInput === undefined) {
+		return `${linePrefix}${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`;
+	}
+
+	let text = "";
+	for (let i = 0; i < list.length; i++) {
+		const label = list[i];
+		const isSelected = selected.has(label);
+		const isLastEntry = i === list.length - 1 && customInput === undefined;
+		const branch = isLastEntry ? uiTheme.tree.last : uiTheme.tree.branch;
+		const marker = optionMarker(uiTheme, multi, isSelected);
+		const markerStyled = isSelected ? uiTheme.fg("success", marker) : uiTheme.fg("dim", marker);
+		const labelStyled = renderInlineMarkdown(label, mdTheme, t =>
+			isSelected ? uiTheme.fg("toolOutput", t) : uiTheme.fg("muted", t),
+		);
+		text += `${text ? "\n" : ""}${linePrefix}${uiTheme.fg("dim", branch)} ${markerStyled} ${labelStyled}`;
+	}
+	if (customInput !== undefined) {
+		text += renderCustomInput(uiTheme, linePrefix, customInput, true, text.length > 0);
+	}
+	return text;
+}
+
 export const askToolRenderer = {
+	mergeCallAndResult: true,
 	renderCall(args: AskRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const label = formatTitle("Ask", uiTheme);
 		const mdTheme = getMarkdownTheme();
@@ -663,7 +737,7 @@ export const askToolRenderer = {
 						const isLastOpt = j === q.options.length - 1;
 						const optBranch = isLastOpt ? uiTheme.tree.last : uiTheme.tree.branch;
 						const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-						optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("dim", uiTheme.checkbox.unchecked)} ${optLabel}`;
+						optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("dim", optionMarker(uiTheme, q.multi, false))} ${optLabel}`;
 						if (opt.description?.trim()) {
 							const optContinuation = isLastOpt ? " " : uiTheme.tree.vertical;
 							const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t =>
@@ -697,7 +771,7 @@ export const askToolRenderer = {
 				const isLast = i === args.options.length - 1;
 				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
 				const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-				optText += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("dim", uiTheme.checkbox.unchecked)} ${optLabel}`;
+				optText += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("dim", optionMarker(uiTheme, args.multi, false))} ${optLabel}`;
 				if (opt.description?.trim()) {
 					const continuation = isLast ? " " : uiTheme.tree.vertical;
 					const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
@@ -745,43 +819,27 @@ export const askToolRenderer = {
 			for (let i = 0; i < details.results.length; i++) {
 				const r = details.results[i];
 				const isLastQuestion = i === details.results.length - 1;
-				const branch = isLastQuestion ? uiTheme.tree.last : uiTheme.tree.branch;
-				const continuation = isLastQuestion ? "   " : `${uiTheme.fg("dim", uiTheme.tree.vertical)}  `;
-				const hasSelection = r.customInput !== undefined || r.selectedOptions.length > 0;
-				const statusIcon = hasSelection
-					? uiTheme.styledSymbol("status.success", "success")
-					: uiTheme.styledSymbol("status.warning", "warning");
+				const qBranch = isLastQuestion ? uiTheme.tree.last : uiTheme.tree.branch;
+				const continuation = isLastQuestion ? " " : uiTheme.tree.vertical;
+				const linePrefix = ` ${uiTheme.fg("dim", continuation)}   `;
 
-				container.addChild(
-					new Text(` ${uiTheme.fg("dim", branch)} ${statusIcon} ${uiTheme.fg("dim", `[${r.id}]`)}`, 0, 0),
-				);
+				container.addChild(new Text(` ${uiTheme.fg("dim", qBranch)} ${uiTheme.fg("dim", `[${r.id}]`)}`, 0, 0));
 				container.addChild(new Markdown(r.question, 3, 0, mdTheme, accentStyle));
-
-				const answerLines: string[] = [];
-				for (let j = 0; j < r.selectedOptions.length; j++) {
-					const isLast = j === r.selectedOptions.length - 1 && r.customInput === undefined;
-					const optBranch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
-					const selectedLabel = renderInlineMarkdown(r.selectedOptions[j], mdTheme, t =>
-						uiTheme.fg("toolOutput", t),
-					);
-					answerLines.push(
-						`${continuation}${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("success", uiTheme.checkbox.checked)} ${selectedLabel}`,
-					);
-				}
-				if (answerLines.length > 0) {
-					container.addChild(new Text(answerLines.join("\n"), 0, 0));
-				}
-				if (r.customInput !== undefined) {
-					container.addChild(new Text(renderCustomInput(uiTheme, continuation, r.customInput, true, false), 0, 0));
-				} else if (r.selectedOptions.length === 0) {
-					container.addChild(
-						new Text(
-							`${continuation}${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`,
-							0,
-							0,
+				container.addChild(
+					new Text(
+						renderAnswerOptions(
+							uiTheme,
+							mdTheme,
+							linePrefix,
+							r.options,
+							r.selectedOptions,
+							r.multi,
+							r.customInput,
 						),
-					);
-				}
+						0,
+						0,
+					),
+				);
 			}
 			return container;
 		}
@@ -800,33 +858,21 @@ export const askToolRenderer = {
 		container.addChild(new Text(header, 0, 0));
 		container.addChild(new Markdown(details.question, 1, 0, mdTheme, accentStyle));
 
-		const answerLines: string[] = [];
-		if (details.selectedOptions && details.selectedOptions.length > 0) {
-			for (let i = 0; i < details.selectedOptions.length; i++) {
-				const isLast = i === details.selectedOptions.length - 1 && details.customInput === undefined;
-				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
-				const selectedLabel = renderInlineMarkdown(details.selectedOptions[i], mdTheme, t =>
-					uiTheme.fg("toolOutput", t),
-				);
-				answerLines.push(
-					` ${uiTheme.fg("dim", branch)} ${uiTheme.fg("success", uiTheme.checkbox.checked)} ${selectedLabel}`,
-				);
-			}
-		}
-		if (answerLines.length > 0) {
-			container.addChild(new Text(answerLines.join("\n"), 0, 0));
-		}
-		if (details.customInput !== undefined) {
-			container.addChild(new Text(renderCustomInput(uiTheme, " ", details.customInput, true, false), 0, 0));
-		} else if (!details.selectedOptions || details.selectedOptions.length === 0) {
-			container.addChild(
-				new Text(
-					` ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`,
-					0,
-					0,
+		container.addChild(
+			new Text(
+				renderAnswerOptions(
+					uiTheme,
+					mdTheme,
+					" ",
+					details.options,
+					details.selectedOptions,
+					details.multi,
+					details.customInput,
 				),
-			);
-		}
+				0,
+				0,
+			),
+		);
 
 		return container;
 	},

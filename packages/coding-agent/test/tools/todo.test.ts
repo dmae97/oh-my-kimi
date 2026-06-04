@@ -4,13 +4,13 @@ import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	selectStickyTodoWindow,
-	TODO_WRITE_STRIKE_HOLD_FRAMES,
+	TODO_STRIKE_HOLD_FRAMES,
 	type TodoItem,
 	type TodoPhase,
 	type TodoStatus,
-	TodoWriteTool,
+	TodoTool,
 	todoMatchesAnyDescription,
-	todoWriteToolRenderer,
+	todoToolRenderer,
 } from "@oh-my-pi/pi-coding-agent/tools";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
@@ -32,9 +32,9 @@ beforeAll(async () => {
 	await initTheme();
 });
 
-describe("TodoWriteTool auto-start behavior", () => {
+describe("TodoTool auto-start behavior", () => {
 	it("auto-starts the first task after init", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		const result = await tool.execute("call-1", {
 			ops: [
 				{
@@ -47,14 +47,14 @@ describe("TodoWriteTool auto-start behavior", () => {
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
 		const summary = result.content.find(part => part.type === "text");
-		if (summary?.type !== "text") throw new Error("Expected text summary from todo_write");
+		if (summary?.type !== "text") throw new Error("Expected text summary from todo");
 		expect(summary.text).toContain("Remaining items (2):");
 		expect(summary.text).toContain("status [in_progress] (Execution)");
 		expect(summary.text).toContain("diagnostics [pending] (Execution)");
 	});
 
 	it("auto-promotes the next pending task when current task is completed", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{
@@ -70,40 +70,40 @@ describe("TodoWriteTool auto-start behavior", () => {
 		expect(tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
 		expect(result.details?.completedTasks).toEqual([{ phase: "Execution", content: "status" }]);
 		const summary = result.content.find(part => part.type === "text");
-		if (summary?.type !== "text") throw new Error("Expected text summary from todo_write");
+		if (summary?.type !== "text") throw new Error("Expected text summary from todo");
 		expect(summary.text).toContain("Remaining items (1):");
 		expect(summary.text).toContain("diagnostics [in_progress] (Execution)");
 		const completedResult = await tool.execute("call-3", { ops: [{ op: "done", task: "diagnostics" }] });
 		const completedSummary = completedResult.content.find(part => part.type === "text");
 		if (completedSummary?.type !== "text") {
-			throw new Error("Expected text summary from todo_write");
+			throw new Error("Expected text summary from todo");
 		}
 		expect(completedSummary.text).toContain("Remaining items: none.");
 	});
 });
 
 it("renders completed tasks as checked before revealing strikethrough", async () => {
-	const tool = new TodoWriteTool(createSession());
+	const tool = new TodoTool(createSession());
 	await tool.execute("call-1", {
 		ops: [{ op: "init", list: [{ phase: "Execution", items: ["finish"] }] }],
 	});
 	const result = await tool.execute("call-2", { ops: [{ op: "done", task: "finish" }] });
 	const options = { expanded: true, isPartial: false, spinnerFrame: 0 };
-	const component = todoWriteToolRenderer.renderResult(result, options, theme);
+	const component = todoToolRenderer.renderResult(result, options, theme);
 
 	const firstFrame = component.render(120).join("\n");
 	expect(Bun.stripANSI(firstFrame)).toContain("finish");
 	expect(firstFrame).not.toContain("\x1b[9m");
 
-	options.spinnerFrame = TODO_WRITE_STRIKE_HOLD_FRAMES + 1;
+	options.spinnerFrame = TODO_STRIKE_HOLD_FRAMES + 1;
 	const revealFrame = component.render(120).join("\n");
 	expect(Bun.stripANSI(revealFrame)).toContain("finish");
 	expect(revealFrame).toContain("\x1b[9m");
 });
 
-describe("TodoWriteTool ops operations", () => {
+describe("TodoTool ops operations", () => {
 	it("jumps to a specific task out of order", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{
@@ -120,7 +120,7 @@ describe("TodoWriteTool ops operations", () => {
 	});
 
 	it("demotes the current in_progress task when starting another", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{
@@ -140,7 +140,7 @@ describe("TodoWriteTool ops operations", () => {
 	});
 
 	it("appends items to an existing phase", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [{ op: "init", list: [{ phase: "Work", items: ["First"] }] }],
 		});
@@ -163,7 +163,7 @@ describe("TodoWriteTool ops operations", () => {
 	});
 
 	it("creates a phase when append targets a missing phase", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [{ op: "init", list: [{ phase: "Work", items: ["First"] }] }],
 		});
@@ -183,7 +183,7 @@ describe("TodoWriteTool ops operations", () => {
 	});
 
 	it("marks all tasks in a phase done", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{
@@ -202,7 +202,7 @@ describe("TodoWriteTool ops operations", () => {
 	});
 
 	it("removes all tasks when rm omits task and phase", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{
@@ -220,7 +220,7 @@ describe("TodoWriteTool ops operations", () => {
 	});
 
 	it("drops all tasks in a phase", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
 				{

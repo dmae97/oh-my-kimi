@@ -58,8 +58,8 @@ describe("hashline body contracts", () => {
 		expect(applyPatch(FILE, "replace 2..2:\n+-literal\n++plus")).toBe("a\n-literal\n+plus\nc\nd\ne");
 	});
 
-	it("rejects empty replace and insert hunks", () => {
-		expect(() => parsePatch("replace 2..2:")).toThrow(/To delete lines, use `delete/);
+	it("treats empty replace as delete and still rejects empty insert", () => {
+		expect(applyPatch(FILE, "replace 2..2:")).toBe("a\nc\nd\ne");
 		expect(() => parsePatch("insert tail:")).toThrow(/`insert` needs/);
 	});
 

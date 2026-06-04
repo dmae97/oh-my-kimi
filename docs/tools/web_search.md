@@ -90,7 +90,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - **Provider selection**
   - **Forced provider**: internal callers may pass `provider`; unavailable forced providers fall back to the auto chain instead of hard-failing (`packages/coding-agent/src/web/search/index.ts`). This field is not in the model-facing schema.
   - **Preferred provider**: `setPreferredSearchProvider()` sets a module-global default used by `resolveProviderChain()`. `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/modes/controllers/selector-controller.ts` wire this from settings.
-  - **Auto chain order**: `tavily`, `perplexity`, `brave`, `jina`, `kimi`, `anthropic`, `gemini`, `codex`, `zai`, `exa`, `parallel`, `kagi`, `synthetic`, `searxng` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/provider.ts`).
+  - **Auto chain order**: `tavily`, `perplexity`, `brave`, `jina`, `kimi`, `anthropic`, `gemini`, `codex`, `zai`, `exa`, `parallel`, `kagi`, `synthetic`, `searxng` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/types.ts`).
 - **Provider adapters**
   - **Tavily** — `packages/coding-agent/src/web/search/providers/tavily.ts`
     - Availability: API key from env or `agent.db` via `findCredential()`.
@@ -192,7 +192,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
   - Many provider adapters accept `AbortSignal`; `WebSearchTool.execute()` passes the tool call signal into `executeSearch()`, which forwards it as `params.signal` to providers and rethrows cancellation during fallback.
 
 ## Limits & Caps
-- Provider auto-order length: 14 providers (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/provider.ts`).
+- Provider auto-order length: 14 providers (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/types.ts`).
 - `formatForLLM()` truncates source snippets and citation text to 240 chars (`packages/coding-agent/src/web/search/index.ts`).
 - `formatForLLM()` emits at most 3 search queries, each truncated to 120 chars (`packages/coding-agent/src/web/search/index.ts`).
 - Brave result count: default `10`, max `20` (`DEFAULT_NUM_RESULTS`, `MAX_NUM_RESULTS` in `packages/coding-agent/src/web/search/providers/brave.ts`).
@@ -224,5 +224,5 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity is the only implementation that preserves both concepts.
 - The prompt says `recency` is for Brave and Perplexity, but code also implements it for Tavily and SearXNG.
 - The year rewrite in `executeSearch()` is blunt: any `2020`-`2029` substring is replaced with the current year.
-- `packages/coding-agent/src/config/settings-schema.ts` exposes provider preferences for `auto`, `exa`, `brave`, `jina`, `kimi`, `perplexity`, `anthropic`, `zai`, `tavily`, `kagi`, `synthetic`, `parallel`, and `searxng`. Gemini and Codex are in the registry and auto chain but not in that settings enum.
-- Exa availability is optimistic. Unless settings disable it, the provider stays in the chain even without an API key because it can fall back to MCP.
+- `packages/coding-agent/src/config/settings-schema.ts` uses the shared `SEARCH_PROVIDER_PREFERENCES` / `SEARCH_PROVIDER_OPTIONS` metadata, so the settings selector and setup wizard expose `auto` plus every provider in the auto chain.
+- Exa requires an API key from the environment or credential store; it no longer falls back to unauthenticated MCP search.

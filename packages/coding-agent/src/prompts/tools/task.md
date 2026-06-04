@@ -38,6 +38,8 @@ Subagents have no conversation history. Every fact, file path, and direction the
 - Pass large payloads via `local://<path>` URIs, not inline. {{#if contextEnabled}} (other than the context){{/if}}
 {{#if contextEnabled}}- Put shared constraints in `context` once; do not duplicate across assignments.{{/if}}
 - Prefer agents that investigate **and** edit in one pass; only spin a read-only discovery step when affected files are genuinely unknown.
+- **Read-only agents**: Agents tagged READ-ONLY (e.g. `explore`) have no edit/write/command tools. NEVER hand them an assignment that requires changing files or running commands — they cannot do it and the turn is wasted. Use them to investigate and report back; do the edits yourself or delegate to a writing agent (`task`, `oracle`, `designer`).
+- **No reasoning offload**: NEVER offload reasoning, analysis, design, or decision-making to `quick_task` or `explore` — they run minimal-effort / small models for mechanical lookups and data collection only. Keep judgment and synthesis in your own context; delegate hard thinking to `task`, `plan`, or `oracle`.
 </rules>
 
 <parallelization>
@@ -71,7 +73,7 @@ Parallel when tasks touch disjoint files or are independent refactors/tests.
 Agent spawning is disabled for this context.
 {{else}}
 {{#list agents join="\n"}}
-# {{name}}
+# {{name}}{{#if readOnly}} — READ-ONLY (no edit/write/exec tools){{/if}}
 {{description}}
 {{/list}}
 {{/if}}

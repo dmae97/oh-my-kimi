@@ -35,8 +35,9 @@ describe("hashline format v4", () => {
 		expect(applyPatch(text, "insert tail:\n+TAIL")).toBe("a\nb\nTAIL");
 	});
 
-	it("rejects empty body-bearing hunks", () => {
-		expect(() => parsePatch("replace 2..2:")).toThrow(/needs at least one/);
+	it("treats an empty replace hunk as a delete and still rejects empty inserts", () => {
+		const text = "a\nb\nc";
+		expect(applyPatch(text, "replace 2..2:")).toBe("a\nc");
 		expect(() => parsePatch("insert head:")).toThrow(/needs at least one/);
 	});
 
@@ -56,8 +57,13 @@ describe("hashline format v4", () => {
 		expect(() => applyEdits("a\nb", edits)).toThrow(/Line 4 does not exist/);
 	});
 
-	it("does not flush a streaming pending empty replace block", () => {
+	it("does not flush a trailing streaming pending empty replace hunk", () => {
 		const result = parsePatchStreaming("replace 5..5:\n");
 		expect(result.edits).toEqual([]);
+	});
+
+	it("flushes a streaming empty replace hunk when another hunk starts", () => {
+		const result = parsePatchStreaming("replace 2..2:\ninsert tail:\n");
+		expect(result.edits).toEqual([{ kind: "delete", anchor: { line: 2 }, lineNum: 1, index: 0 }]);
 	});
 });

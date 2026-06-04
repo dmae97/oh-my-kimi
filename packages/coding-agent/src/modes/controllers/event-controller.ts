@@ -282,6 +282,7 @@ export class EventController {
 				this.ctx.hideThinkingBlock,
 				() => this.ctx.ui.requestRender(),
 				this.ctx.session.extensionRunner?.getAssistantThinkingRenderers(),
+				this.ctx.ui.imageBudget,
 			);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
@@ -586,18 +587,18 @@ export class EventController {
 				this.ctx.ui.requestRender();
 			}
 		}
-		// Update todo display when todo_write tool completes
-		if (event.toolName === "todo_write" && !event.isError) {
+		// Update todo display when todo tool completes
+		if (event.toolName === "todo" && !event.isError) {
 			const details = event.result.details as { phases?: TodoPhase[] } | undefined;
 			if (details?.phases) {
 				this.ctx.setTodos(details.phases);
 			}
-		} else if (event.toolName === "todo_write" && event.isError) {
+		} else if (event.toolName === "todo" && event.isError) {
 			const textContent = event.result.content.find(
 				(content: { type: string; text?: string }) => content.type === "text",
 			)?.text;
 			this.ctx.showWarning(
-				`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo_write succeeds."}`,
+				`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo succeeds."}`,
 			);
 		}
 		if (event.toolName === "resolve" && !event.isError) {
@@ -847,9 +848,13 @@ export class EventController {
 		const last = this.ctx.session.getLastAssistantMessage?.();
 		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
 
-		const title = this.ctx.sessionManager.getSessionName();
-		const message = title ? `${title}: Complete` : "Complete";
-		TERMINAL.sendNotification(message);
+		const sessionName = this.ctx.sessionManager.getSessionName();
+		TERMINAL.sendNotification({
+			title: sessionName || "Oh My Pi",
+			body: "Complete",
+			type: "completion",
+			actions: "focus",
+		});
 	}
 
 	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {

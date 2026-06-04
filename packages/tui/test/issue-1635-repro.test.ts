@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1635
@@ -73,26 +73,51 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => T | Promise
 	}
 }
 
+type MutableTerminalInfo = { eagerEraseScrollbackRisk: boolean };
+const mutableTerminalInfo = TERMINAL as unknown as MutableTerminalInfo;
+
+// Pin the ED3-yank risk so the "unreportable viewport" contract is deterministic
+// rather than inherited from the host terminal. On POSIX the viewport probe is
+// always `undefined`; the renderer only defers the destructive `\x1b[3J` rebuild
+// when the terminal is known to disturb a scrolled reader on ED3
+// (`eagerEraseScrollbackRisk`). On a non-risk terminal a clean history rebuild —
+// `\x1b[3J` included — is the documented, safe behavior, so the no-ED3 guarantee
+// this file asserts is meaningful only when the terminal would actually yank.
+// Without this pin the test passes under ghostty/kitty/etc. (risk = true) and
+// fails on a bare CI terminal (risk = false). Sibling repro tests (#1610, #1682,
+// #1746) pin it the same way.
+async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Promise<T> {
+	const saved = TERMINAL.eagerEraseScrollbackRisk;
+	mutableTerminalInfo.eagerEraseScrollbackRisk = risk;
+	try {
+		return await run();
+	} finally {
+		mutableTerminalInfo.eagerEraseScrollbackRisk = saved;
+	}
+}
+
 const ERASE_SCROLLBACK = /\x1b\[3J/g;
 
 describe("issue #1635: TUI must not emit \\x1b[3J when probe is unreliable", () => {
 	it("content shrink with unreportable viewport must not emit \\x1b[3J", async () => {
-		const term = new VirtualTerminal(100, 24);
-		overrideProbe(term, undefined);
-		const tui = new TUI(term);
-		const component = new LineList(Array.from({ length: 80 }, (_, i) => `init-${i}`));
-		tui.addChild(component);
-		try {
-			tui.start();
-			await settle(term);
-			const writes = capture(term);
-			component.setLines(Array.from({ length: 20 }, (_, i) => `shrunk-${i}`));
-			tui.requestRender();
-			await settle(term);
-			expect(writes.join("").match(ERASE_SCROLLBACK)).toBeNull();
-		} finally {
-			tui.stop();
-		}
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(100, 24);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const component = new LineList(Array.from({ length: 80 }, (_, i) => `init-${i}`));
+			tui.addChild(component);
+			try {
+				tui.start();
+				await settle(term);
+				const writes = capture(term);
+				component.setLines(Array.from({ length: 20 }, (_, i) => `shrunk-${i}`));
+				tui.requestRender();
+				await settle(term);
+				expect(writes.join("").match(ERASE_SCROLLBACK)).toBeNull();
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 
 	it("content shrink with scrolled-up viewport must not emit \\x1b[3J", async () => {

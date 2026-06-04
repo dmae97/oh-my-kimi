@@ -203,7 +203,7 @@ import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
-import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
+import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
@@ -1807,21 +1807,21 @@ export class AgentSession {
 				if (toolName === "edit" && details?.path) {
 					this.#invalidateFileCacheForPath(details.path);
 				}
-				if (toolName === "todo_write" && !isError && Array.isArray(details?.phases)) {
+				if (toolName === "todo" && !isError && Array.isArray(details?.phases)) {
 					this.setTodoPhases(details.phases);
 				}
-				if (toolName === "todo_write" && isError) {
+				if (toolName === "todo" && isError) {
 					const errorText = content?.find(part => part.type === "text")?.text;
 					const reminderText = [
 						"<system-reminder>",
-						"todo_write failed, so todo progress is not visible to the user.",
-						errorText ? `Failure: ${errorText}` : "Failure: todo_write returned an error.",
-						"Fix the todo payload and call todo_write again before continuing.",
+						"todo failed, so todo progress is not visible to the user.",
+						errorText ? `Failure: ${errorText}` : "Failure: todo returned an error.",
+						"Fix the todo payload and call todo again before continuing.",
 						"</system-reminder>",
 					].join("\n");
 					await this.sendCustomMessage(
 						{
-							customType: "todo-write-error-reminder",
+							customType: "todo-error-reminder",
 							content: reminderText,
 							display: false,
 							details: { toolName, errorText },
@@ -4994,7 +4994,7 @@ export class AgentSession {
 	// splice mutated canonical `#todoPhases` between tool calls, so the model
 	// observed phase totals shrinking ("5 → 4") after marking tasks done. The
 	// `tasks.todoClearDelay` setting is now inert; completed tasks survive
-	// until the next explicit `todo_write` call removes them via `rm`/`drop`.
+	// until the next explicit `todo` call removes them via `rm`/`drop`.
 
 	/**
 	 * Abort current operation and wait for agent to become idle.
@@ -6553,16 +6553,16 @@ export class AgentSession {
 			return undefined;
 		}
 
-		if (!this.#toolRegistry.has("todo_write")) {
-			logger.warn("Eager todo enforcement skipped because todo_write is unavailable", {
+		if (!this.#toolRegistry.has("todo")) {
+			logger.warn("Eager todo enforcement skipped because todo is unavailable", {
 				activeToolNames: this.agent.state.tools.map(tool => tool.name),
 			});
 			return undefined;
 		}
 
-		const todoWriteToolChoice = buildNamedToolChoice("todo_write", this.model);
-		if (!todoWriteToolChoice) {
-			logger.warn("Eager todo enforcement skipped because the current model does not support forcing todo_write", {
+		const todoToolChoice = buildNamedToolChoice("todo", this.model);
+		if (!todoToolChoice) {
+			logger.warn("Eager todo enforcement skipped because the current model does not support forcing todo", {
 				modelApi: this.model?.api,
 				modelId: this.model?.id,
 			});
@@ -6580,7 +6580,7 @@ export class AgentSession {
 				attribution: "agent",
 				timestamp: Date.now(),
 			},
-			toolChoice: todoWriteToolChoice,
+			toolChoice: todoToolChoice,
 		};
 	}
 	/**

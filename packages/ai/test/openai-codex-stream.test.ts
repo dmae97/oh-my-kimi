@@ -106,7 +106,7 @@ function createNoProgressCodexSse(signal: AbortSignal | undefined): Response {
 						type: "function_call",
 						id: "fc_stalled",
 						call_id: "call_stalled",
-						name: "todo_write",
+						name: "todo",
 						arguments: "",
 					},
 				}),
@@ -333,7 +333,7 @@ describe("openai-codex streaming", () => {
 			{
 				type: "toolCall",
 				id: "call_stalled|fc_stalled",
-				name: "todo_write",
+				name: "todo",
 				arguments: {},
 				partialJson: "",
 			},
@@ -2045,7 +2045,7 @@ describe("openai-codex streaming", () => {
 						type: "function_call",
 						id: "fc_ws_stalled",
 						call_id: "call_ws_stalled",
-						name: "todo_write",
+						name: "todo",
 						arguments: "",
 					},
 				});
@@ -2055,7 +2055,7 @@ describe("openai-codex streaming", () => {
 						type: "function_call",
 						id: "fc_ws_stalled",
 						call_id: "call_ws_stalled",
-						name: "todo_write",
+						name: "todo",
 						arguments: "{}",
 					},
 				});
@@ -2090,7 +2090,7 @@ describe("openai-codex streaming", () => {
 			expect.objectContaining({
 				type: "toolCall",
 				id: "call_ws_stalled|fc_ws_stalled",
-				name: "todo_write",
+				name: "todo",
 				arguments: {},
 			}),
 		]);

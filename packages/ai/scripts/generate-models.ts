@@ -42,6 +42,16 @@ import type { OAuthProvider } from "../src/utils/oauth/types";
 
 const packageRoot = path.join(import.meta.dir, "..");
 
+/**
+ * Local/self-hosted providers (Ollama, vLLM, LM Studio, LiteLLM). Their model
+ * catalogs are whatever happens to be running on the machine that invokes the
+ * generator — bundling them would leak machine-specific endpoints (e.g.
+ * `http://localhost:4000/v1`) into the committed snapshot. They are discovered
+ * dynamically at runtime instead, so they are never fetched during generation
+ * and never written to models.json.
+ */
+const DISCOVERY_ONLY_PROVIDERS = new Set(["ollama", "vllm", "lm-studio", "litellm"]);
+
 async function resolveProviderApiKey(providerId: string, catalog: CatalogDiscoveryConfig): Promise<string | undefined> {
 	for (const envVar of catalog.envVars) {
 		const value = $env[envVar as keyof typeof $env];
@@ -314,7 +324,9 @@ async function generateModels() {
 	const modelsDevModels = await loadModelsDevData();
 	const catalogProviderModels = (
 		await Promise.all(
-			PROVIDER_DESCRIPTORS.filter(isCatalogDescriptor).map(descriptor => fetchProviderModelsFromCatalog(descriptor)),
+			PROVIDER_DESCRIPTORS.filter(
+				descriptor => isCatalogDescriptor(descriptor) && !DISCOVERY_ONLY_PROVIDERS.has(descriptor.providerId),
+			).map(descriptor => fetchProviderModelsFromCatalog(descriptor as CatalogProviderDescriptor)),
 		)
 	).flat();
 	const gitLabDuoModels = getGitLabDuoModels();
@@ -365,14 +377,13 @@ async function generateModels() {
 	// the upstream list exactly, so retired entries from the previous snapshot do
 	// not reappear during regeneration.
 	// Discovery-only providers (local inference servers) — never bundle static models.
-	const discoveryOnlyProviders = new Set(["ollama", "vllm"]);
 	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
 
 	for (const models of Object.values(prevModelsJson as Record<string, Record<string, Model>>)) {
 		for (const model of Object.values(models)) {
 			if (
 				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
-				!discoveryOnlyProviders.has(model.provider) &&
+				!DISCOVERY_ONLY_PROVIDERS.has(model.provider) &&
 				!modelsDevAuthoritativeProviders.has(model.provider)
 			) {
 				allModels.push(model);
@@ -389,7 +400,7 @@ async function generateModels() {
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, Model>> = {};
 	for (const model of allModels) {
-		if (discoveryOnlyProviders.has(model.provider)) continue;
+		if (DISCOVERY_ONLY_PROVIDERS.has(model.provider)) continue;
 		if (!providers[model.provider]) {
 			providers[model.provider] = {};
 		}

@@ -1,5 +1,13 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import {
+	encodeKittyTempFileTransmit,
+	getKittyGraphics,
+	isPngBase64,
+	KITTY_PLACEHOLDER,
+	kittyPlaceholdersFit,
+	renderKittyPlaceholderLines,
+} from "./kitty-graphics";
 
 export enum ImageProtocol {
 	Kitty = "\x1b_G",
@@ -25,6 +33,10 @@ export class TerminalInfo {
 		public readonly hyperlinks: boolean,
 		public readonly notifyProtocol: NotifyProtocol = NotifyProtocol.Bell,
 		public readonly eagerEraseScrollbackRisk: boolean = false,
+		public readonly deccara: boolean = false,
+		readonly supportsScreenToScrollback: boolean = false,
+		/** Renders the Kitty OSC 66 text-sizing protocol (scaled spans). Kitty only. */
+		public readonly textSizing: boolean = false,
 	) {}
 
 	isImageLine(line: string): boolean {
@@ -32,17 +44,27 @@ export class TerminalInfo {
 		if (this.imageProtocol === ImageProtocol.Sixel) {
 			return SIXEL_DCS_START_REGEX.test(line.slice(0, 128));
 		}
-		return line.slice(0, 64).includes(this.imageProtocol);
+		const head = line.slice(0, 64);
+		return head.includes(this.imageProtocol) || head.includes(KITTY_PLACEHOLDER);
 	}
 
-	formatNotification(message: string): string {
+	formatNotification(message: string | TerminalNotification): string {
 		if (this.notifyProtocol === NotifyProtocol.Bell) {
 			return NotifyProtocol.Bell;
+		}
+		// Structured notifications use OSC 99's rich metadata only once the
+		// terminal confirms support; otherwise collapse to a single message line
+		// (basic OSC 99 / OSC 9 still work).
+		if (typeof message !== "string") {
+			if (this.notifyProtocol === NotifyProtocol.Osc99 && osc99CapabilitiesConfirmed) {
+				return formatOsc99Notification(message);
+			}
+			return `${this.notifyProtocol}${notificationToLine(message)}\x1b\\`;
 		}
 		return `${this.notifyProtocol}${message}\x1b\\`;
 	}
 
-	sendNotification(message: string): void {
+	sendNotification(message: string | TerminalNotification): void {
 		if (isNotificationSuppressed()) return;
 		process.stdout.write(this.formatNotification(message));
 	}
@@ -143,6 +165,37 @@ export function detectTerminalEagerEraseScrollbackRisk(
 			return false;
 	}
 }
+
+/**
+ * Whether the terminal applies Kitty-style DECCARA rectangular SGR changes
+ * (`CSI Pt ; Pl ; Pb ; Pr ; <sgr> $ r`) extended to background color, so large
+ * filled regions can be painted as rectangles instead of background-padded
+ * strings on every row.
+ *
+ * Verified against terminal sources rather than terminfo, because a bare
+ * `Cara`/DECCARA terminfo capability does not imply the Kitty SGR-background
+ * extension:
+ * - Kitty implements it for *all* SGR attributes including background (see
+ *   kitty `docs/deccara.rst` and the `test_deccara` parser test).
+ * - Ghostty does NOT: its `CSI $ r` dispatch falls through to an "unknown CSI"
+ *   warning and DECCARA/DECSACE are tracked as unsupported
+ *   (ghostty-org/ghostty#632). Enabling it there would silently drop panel
+ *   backgrounds, so ghostty stays on the padded-string fallback.
+ *
+ * Disabled under tmux/screen/zellij multiplexers — screen-coordinate rectangle
+ * protocols are not safe to assume through a multiplexer — and via the
+ * `PI_NO_DECCARA` kill switch. Pure helper for tests and `TERMINAL` construction.
+ */
+export function detectRectangularSgrSupport(terminalId: TerminalId, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (terminalId !== "kitty") return false;
+	const kill = env.PI_NO_DECCARA;
+	if (kill && kill !== "0" && kill.toLowerCase() !== "false") return false;
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
+		return false;
+	}
+	return true;
+}
 function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null {
 	if (!process.stdout.isTTY) return null;
 	if (terminalId === "vscode" || terminalId === "alacritty") return null;
@@ -157,7 +210,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
-	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true),
+	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true, true),
 	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
 	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9, true),
@@ -206,61 +259,73 @@ export const TERMINAL_ID: TerminalId = (() => {
 	return "base";
 })();
 
+/** Clone a {@link TerminalInfo} with selected fields overridden, preserving the rest. */
+function withTerminalOverrides(
+	base: TerminalInfo,
+	overrides: {
+		imageProtocol?: ImageProtocol | null;
+		hyperlinks?: boolean;
+		eagerEraseScrollbackRisk?: boolean;
+		deccara?: boolean;
+		supportsScreenToScrollback?: boolean;
+	},
+): TerminalInfo {
+	return new TerminalInfo(
+		base.id,
+		overrides.imageProtocol !== undefined ? overrides.imageProtocol : base.imageProtocol,
+		base.trueColor,
+		overrides.hyperlinks !== undefined ? overrides.hyperlinks : base.hyperlinks,
+		base.notifyProtocol,
+		overrides.eagerEraseScrollbackRisk !== undefined
+			? overrides.eagerEraseScrollbackRisk
+			: base.eagerEraseScrollbackRisk,
+		overrides.deccara !== undefined ? overrides.deccara : base.deccara,
+		overrides.supportsScreenToScrollback !== undefined
+			? overrides.supportsScreenToScrollback
+			: base.supportsScreenToScrollback,
+	);
+}
+
 export const TERMINAL = (() => {
 	let resolved = getTerminalInfo(TERMINAL_ID);
 	const eagerEraseScrollbackRisk = detectTerminalEagerEraseScrollbackRisk(Bun.env, process.platform);
 	if (resolved.eagerEraseScrollbackRisk !== eagerEraseScrollbackRisk) {
-		resolved = new TerminalInfo(
-			resolved.id,
-			resolved.imageProtocol,
-			resolved.trueColor,
-			resolved.hyperlinks,
-			resolved.notifyProtocol,
-			eagerEraseScrollbackRisk,
-		);
+		resolved = withTerminalOverrides(resolved, { eagerEraseScrollbackRisk });
 	}
 
 	const forcedImageProtocol = getForcedImageProtocol();
 	if (forcedImageProtocol !== undefined) {
-		resolved = new TerminalInfo(
-			resolved.id,
-			forcedImageProtocol,
-			resolved.trueColor,
-			resolved.hyperlinks,
-			resolved.notifyProtocol,
-			resolved.eagerEraseScrollbackRisk,
-		);
+		resolved = withTerminalOverrides(resolved, { imageProtocol: forcedImageProtocol });
 	} else if (!resolved.imageProtocol) {
 		const fallbackImageProtocol = getFallbackImageProtocol(resolved.id);
 		if (fallbackImageProtocol) {
-			resolved = new TerminalInfo(
-				resolved.id,
-				fallbackImageProtocol,
-				resolved.trueColor,
-				resolved.hyperlinks,
-				resolved.notifyProtocol,
-				resolved.eagerEraseScrollbackRisk,
-			);
+			resolved = withTerminalOverrides(resolved, { imageProtocol: fallbackImageProtocol });
 		}
 	}
 	// tmux and screen multiplexers do not reliably forward OSC 8 hyperlinks
 	// to the outer terminal, so force them off regardless of detected terminal.
 	const term = Bun.env.TERM?.toLowerCase() ?? "";
 	if (resolved.hyperlinks && (Bun.env.TMUX || term.startsWith("tmux") || term.startsWith("screen"))) {
-		resolved = new TerminalInfo(
-			resolved.id,
-			resolved.imageProtocol,
-			resolved.trueColor,
-			false,
-			resolved.notifyProtocol,
-			resolved.eagerEraseScrollbackRisk,
-		);
+		resolved = withTerminalOverrides(resolved, { hyperlinks: false });
+	}
+	// DECCARA rectangular-SGR background fills. The static per-terminal capability
+	// lives on KNOWN_TERMINALS; here we fold in runtime context — multiplexer and
+	// the PI_NO_DECCARA kill switch via detectRectangularSgrSupport — and force it
+	// off inside the test runtime so the xterm.js-backed virtual terminal (which
+	// ignores DECCARA) exercises the padded-string fallback. Integration tests opt
+	// in explicitly through setTerminalDeccara.
+	const deccara = detectRectangularSgrSupport(resolved.id, Bun.env) && !isBunTestRuntime();
+	if (resolved.deccara !== deccara) {
+		resolved = withTerminalOverrides(resolved, { deccara });
 	}
 	return resolved;
 })();
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
+	deccara: boolean;
+	supportsScreenToScrollback: boolean;
+	textSizing: boolean;
 };
 
 /**
@@ -268,6 +333,29 @@ type MutableTerminalInfo = {
  */
 export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): void {
 	(TERMINAL as unknown as MutableTerminalInfo).imageProtocol = imageProtocol;
+}
+
+/**
+ * Override DECCARA rectangular-SGR capability at runtime. Used by tests to
+ * exercise the optimizer and fallback paths deterministically — the default is
+ * resolved once at import and force-disabled under the test runtime.
+ */
+export function setTerminalDeccara(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).deccara = enabled;
+}
+
+/** Override screen-to-scrollback clear support for targeted renderer tests. */
+export function setTerminalScreenToScrollback(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).supportsScreenToScrollback = enabled;
+}
+
+/**
+ * Enable/disable OSC 66 text-sizing at runtime. The coding-agent calls this from
+ * the `tui.textSizing` setting (gated on the terminal's static `textSizing`
+ * capability); tests flip it directly to exercise the scaled-heading path.
+ */
+export function setTerminalTextSizing(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).textSizing = enabled;
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {
@@ -288,6 +376,16 @@ export interface ImageRenderOptions {
 	maxWidthCells?: number;
 	maxHeightCells?: number;
 	preserveAspectRatio?: boolean;
+	/**
+	 * Stable Kitty image id (`i=`). When set, the image is displayed via a
+	 * transmit-once + placement scheme keyed off this id instead of re-sending the
+	 * base64 each frame.
+	 */
+	imageId?: number;
+	/** Stable Kitty placement id (`p=`); defaults to {@link imageId}. */
+	placementId?: number;
+	/** When true (Kitty + {@link imageId}), also return the one-time transmit sequence. */
+	includeTransmit?: boolean;
 }
 
 // Default cell dimensions - updated by TUI when terminal responds to query
@@ -301,24 +399,10 @@ export function setCellDimensions(dims: CellDimensions): void {
 	cellDimensions = dims;
 }
 
-export function encodeKitty(
-	base64Data: string,
-	options: {
-		columns?: number;
-		rows?: number;
-		imageId?: number;
-	} = {},
-): string {
+function chunkKittyApc(leadParams: string, base64Data: string): string {
 	const CHUNK_SIZE = 4096;
-
-	const params: string[] = ["a=T", "f=100", "q=2"];
-
-	if (options.columns) params.push(`c=${options.columns}`);
-	if (options.rows) params.push(`r=${options.rows}`);
-	if (options.imageId) params.push(`i=${options.imageId}`);
-
 	if (base64Data.length <= CHUNK_SIZE) {
-		return `\x1b_G${params.join(",")};${base64Data}\x1b\\`;
+		return `\x1b_G${leadParams};${base64Data}\x1b\\`;
 	}
 
 	const chunks: string[] = [];
@@ -330,7 +414,7 @@ export function encodeKitty(
 		const isLast = offset + CHUNK_SIZE >= base64Data.length;
 
 		if (isFirst) {
-			chunks.push(`\x1b_G${params.join(",")},m=1;${chunk}\x1b\\`);
+			chunks.push(`\x1b_G${leadParams},m=1;${chunk}\x1b\\`);
 			isFirst = false;
 		} else if (isLast) {
 			chunks.push(`\x1b_Gm=0;${chunk}\x1b\\`);
@@ -342,6 +426,63 @@ export function encodeKitty(
 	}
 
 	return chunks.join("");
+}
+
+/** Transmit-and-display (`a=T`) — the self-contained form used when no stable id is available. */
+export function encodeKitty(
+	base64Data: string,
+	options: {
+		columns?: number;
+		rows?: number;
+		imageId?: number;
+	} = {},
+): string {
+	const params: string[] = ["a=T", "f=100", "q=2"];
+	if (options.columns) params.push(`c=${options.columns}`);
+	if (options.rows) params.push(`r=${options.rows}`);
+	if (options.imageId) params.push(`i=${options.imageId}`);
+	return chunkKittyApc(params.join(","), base64Data);
+}
+
+/**
+ * Transmit image data only (`a=t`), keyed by `imageId`, without displaying it.
+ * Sent once per image; the data then persists in the terminal's store (it
+ * survives scroll-off and text clears for images with a non-zero id), so
+ * subsequent frames display it with the tiny {@link encodeKittyPlacement}
+ * sequence instead of re-sending the base64.
+ */
+export function encodeKittyTransmit(base64Data: string, imageId: number): string {
+	return chunkKittyApc(`a=t,f=100,q=2,i=${imageId}`, base64Data);
+}
+
+/**
+ * Display a previously transmitted image (`a=p`) at the cursor. Carrying a
+ * stable `placementId` (`p=`) means re-emitting the sequence on a repaint
+ * *replaces* the existing placement (moving/resizing it without flicker) rather
+ * than stacking a duplicate.
+ */
+export function encodeKittyPlacement(options: {
+	imageId: number;
+	placementId?: number;
+	columns?: number;
+	rows?: number;
+}): string {
+	const params: string[] = ["a=p", "q=2", `i=${options.imageId}`];
+	if (options.placementId) params.push(`p=${options.placementId}`);
+	if (options.columns) params.push(`c=${options.columns}`);
+	if (options.rows) params.push(`r=${options.rows}`);
+	return `\x1b_G${params.join(",")}\x1b\\`;
+}
+
+/**
+ * Kitty graphics delete command for a single image id. Uses `d=I` (capital)
+ * which removes the image and every one of its placements — on screen *and* in
+ * scrollback — and frees the backing data. `q=2` suppresses the terminal reply.
+ * Text-clearing escapes (`CSI 2 J` / `CSI 3 J`) do not remove Kitty graphics, so
+ * this is the only way to actually purge a placed image.
+ */
+export function encodeKittyDeleteImage(imageId: number): string {
+	return `\x1b_Ga=d,d=I,i=${imageId},q=2\x1b\\`;
 }
 
 export function encodeITerm2(
@@ -555,7 +696,7 @@ export function renderImage(
 	base64Data: string,
 	imageDimensions: ImageDimensions,
 	options: ImageRenderOptions = {},
-): { sequence: string; rows: number } | null {
+): { sequence?: string; lines?: string[]; rows: number; transmit?: string } | null {
 	if (!TERMINAL.imageProtocol) {
 		return null;
 	}
@@ -564,6 +705,43 @@ export function renderImage(
 	const fit = calculateImageFit(imageDimensions, options, cellDims);
 
 	if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
+		if (options.imageId != null) {
+			const placementId = options.placementId ?? options.imageId;
+			const graphics = getKittyGraphics();
+			// Transmit-once (keyed by id). Prefer a local temp file for PNGs when the
+			// medium has been promoted; otherwise send in-band base64. Repaints reuse
+			// the stored image, so the transmit is only emitted when requested.
+			let transmit: string | undefined;
+			if (options.includeTransmit) {
+				const tempFile =
+					graphics.transmissionMedium === "temp-file" && isPngBase64(base64Data)
+						? encodeKittyTempFileTransmit(base64Data, options.imageId)
+						: null;
+				transmit = tempFile ?? encodeKittyTransmit(base64Data, options.imageId);
+			}
+			// Unicode placeholders render the image as real text cells (which survive
+			// horizontal slicing, reflow and overlaps) instead of a cursor-positioned
+			// `a=p` placement. Falls back to direct placement when disabled or when the
+			// grid exceeds the diacritic table's addressable cell range.
+			if (graphics.unicodePlaceholders && kittyPlaceholdersFit(fit.columns, fit.rows)) {
+				const lines = renderKittyPlaceholderLines({
+					imageId: options.imageId,
+					placementId,
+					columns: fit.columns,
+					rows: fit.rows,
+				});
+				return { lines, rows: fit.rows, transmit };
+			}
+			// Direct placement: re-emit only the tiny `a=p` on repaints.
+			const sequence = encodeKittyPlacement({
+				imageId: options.imageId,
+				placementId,
+				columns: fit.columns,
+				rows: fit.rows,
+			});
+			return { sequence, rows: fit.rows, transmit };
+		}
+		// No stable id (e.g. no budget): self-contained transmit-and-display.
 		const sequence = encodeKitty(base64Data, {
 			columns: fit.columns,
 			rows: fit.rows,
@@ -600,4 +778,168 @@ export function imageFallback(mimeType: string, dimensions?: ImageDimensions, fi
 	parts.push(`[${mimeType}]`);
 	if (dimensions) parts.push(`${dimensions.widthPx}x${dimensions.heightPx}`);
 	return `[Image: ${parts.join(" ")}]`;
+}
+
+/**
+ * Structured terminal notification. Rich fields are honored only by OSC 99
+ * (Kitty) once support is confirmed; other protocols and the unconfirmed Kitty
+ * path collapse to a single `title: body` line.
+ */
+export interface TerminalNotification {
+	title?: string;
+	body?: string;
+	id?: string;
+	type?: string | string[];
+	urgency?: "low" | "normal" | "critical";
+	iconName?: string;
+	sound?: "silent" | "system" | "info" | "warning" | "error" | "question";
+	actions?: "focus" | "report" | "focus-report" | "none";
+	expiresMs?: number;
+}
+
+/**
+ * Whether the terminal confirmed OSC 99 desktop-notification support via the
+ * `p=?` query probe. Until confirmed, structured notifications collapse to a
+ * single message line.
+ */
+let osc99CapabilitiesConfirmed = false;
+
+/** Record the OSC 99 capability-probe result (called by ProcessTerminal). */
+export function setOsc99Supported(supported: boolean): void {
+	osc99CapabilitiesConfirmed = supported;
+}
+
+/** True when OSC 99 structured notifications have been confirmed available. */
+export function isOsc99Supported(): boolean {
+	return osc99CapabilitiesConfirmed;
+}
+
+/** Collapse a structured notification to a single line for non-OSC-99 sinks. */
+function notificationToLine(n: TerminalNotification): string {
+	if (n.title && n.body) return `${n.title}: ${n.body}`;
+	return n.title ?? n.body ?? "";
+}
+
+// C0/C1 control characters that are unsafe inside an OSC payload (must base64).
+const OSC99_UNSAFE = /[\x00-\x1f\x7f\x80-\x9f]/u;
+const OSC99_MAX_PAYLOAD_BYTES = 2048;
+const OSC99_APP_NAME = "Oh My Pi";
+let nextOsc99NotificationId = 1;
+
+function base64Utf8(value: string): string {
+	return Buffer.from(value, "utf8").toString("base64");
+}
+
+function sanitizeOsc99Id(id: string | undefined): string {
+	if (!id) return "";
+	const safe = id.replace(/[^a-zA-Z0-9_+\-.]/gu, "");
+	return safe === "0" ? "" : safe;
+}
+
+function osc99Id(id: string | undefined): string {
+	return sanitizeOsc99Id(id) || `omp-${nextOsc99NotificationId++}`;
+}
+
+function utf8CodePointBytes(char: string): number {
+	const codePoint = char.codePointAt(0) ?? 0;
+	if (codePoint <= 0x7f) return 1;
+	if (codePoint <= 0x7ff) return 2;
+	if (codePoint <= 0xffff) return 3;
+	return 4;
+}
+
+function chunkUtf8(payload: string): string[] {
+	if (payload === "") return [""];
+	const chunks: string[] = [];
+	let start = 0;
+	let index = 0;
+	let bytes = 0;
+	for (const char of payload) {
+		const charBytes = utf8CodePointBytes(char);
+		if (bytes > 0 && bytes + charBytes > OSC99_MAX_PAYLOAD_BYTES) {
+			chunks.push(payload.slice(start, index));
+			start = index;
+			bytes = 0;
+		}
+		bytes += charBytes;
+		index += char.length;
+	}
+	chunks.push(payload.slice(start));
+	return chunks;
+}
+
+function osc99Chunk(meta: string[], payload: string): string {
+	if (OSC99_UNSAFE.test(payload)) {
+		return `\x1b]99;${[...meta, "e=1"].join(":")};${base64Utf8(payload)}\x1b\\`;
+	}
+	return `\x1b]99;${meta.join(":")};${payload}\x1b\\`;
+}
+
+function osc99Payload(meta: string[], payload: string, holdUntilLaterPayload: boolean): string {
+	const chunks = chunkUtf8(payload);
+	let out = "";
+	for (let i = 0; i < chunks.length; i++) {
+		const chunkMeta = [...meta];
+		if (holdUntilLaterPayload || i < chunks.length - 1) chunkMeta.push("d=0");
+		out += osc99Chunk(chunkMeta, chunks[i]!);
+	}
+	return out;
+}
+
+function osc99Urgency(urgency: TerminalNotification["urgency"]): string | undefined {
+	switch (urgency) {
+		case "low":
+			return "0";
+		case "normal":
+			return "1";
+		case "critical":
+			return "2";
+		default:
+			return undefined;
+	}
+}
+
+function osc99Actions(actions: TerminalNotification["actions"]): string | undefined {
+	switch (actions) {
+		case "focus":
+			return "focus";
+		case "report":
+			return "report";
+		case "focus-report":
+			return "focus,report";
+		case "none":
+			return "-focus";
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Format a structured notification as OSC 99 title/body payloads. Title and
+ * body chunks share one id. Every non-final chunk carries `d=0`; the final
+ * title or body chunk displays the notification. Metadata values that require
+ * it (application name, type, icon name, sound) are base64-encoded.
+ */
+function formatOsc99Notification(n: TerminalNotification): string {
+	const id = osc99Id(n.id);
+	const meta: string[] = [`i=${id}`, `f=${base64Utf8(OSC99_APP_NAME)}`];
+	const actions = osc99Actions(n.actions);
+	if (actions) meta.push(`a=${actions}`);
+	const urgency = osc99Urgency(n.urgency);
+	if (urgency) meta.push(`u=${urgency}`);
+	const types = n.type === undefined ? [] : Array.isArray(n.type) ? n.type : [n.type];
+	for (const t of types) meta.push(`t=${base64Utf8(t)}`);
+	if (n.iconName) meta.push(`n=${base64Utf8(n.iconName)}`);
+	if (n.sound) meta.push(`s=${base64Utf8(n.sound)}`);
+	if (n.expiresMs !== undefined && Number.isFinite(n.expiresMs)) {
+		meta.push(`w=${Math.max(-1, Math.trunc(n.expiresMs))}`);
+	}
+
+	const title = n.title ?? n.body ?? "";
+	const body = n.title ? n.body : undefined;
+
+	if (body !== undefined && body !== "") {
+		return osc99Payload(meta, title, true) + osc99Payload([`i=${id}`, "p=body"], body, false);
+	}
+	return osc99Payload(meta, title, false);
 }

@@ -224,7 +224,7 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 
 - `task` — fan out subagents in parallel, optionally workspace-isolated.
 - `irc` — short prose between live agents in this process.
-- `todo_write` — ordered mutations over the session todo list with phase tracking.
+- `todo` — ordered mutations over the session todo list with phase tracking.
 - `job` — wait on or cancel background jobs.
 - `ask` — structured follow-up questions for interactive runs.
 

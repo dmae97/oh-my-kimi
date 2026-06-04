@@ -103,4 +103,34 @@ describe("parseReadUrlTarget", () => {
 			offset: 80,
 		});
 	});
+
+	it("repairs a collapsed scheme `https:/` → `https://` (regression: path.normalize → 404)", () => {
+		// A URL run through Node's path.normalize/path.resolve loses one slash from the scheme.
+		// Without the repair it falls through to filesystem resolution → "Path not found".
+		expect(
+			parseReadUrlTarget(
+				"https:/github.com/kovidgoyal/kitty/blob/8996aa798c774ca48432c55f7d5135ebbd9390c3/kitty/graphics.c",
+			),
+		).toEqual({
+			path: "https://github.com/kovidgoyal/kitty/blob/8996aa798c774ca48432c55f7d5135ebbd9390c3/kitty/graphics.c",
+			raw: false,
+		});
+		expect(parseReadUrlTarget("http:/example.com/foo")).toEqual({
+			path: "http://example.com/foo",
+			raw: false,
+		});
+	});
+
+	it("repairs a collapsed scheme while still peeling selectors", () => {
+		expect(parseReadUrlTarget("https:/example.com/foo:50-100")).toEqual({
+			path: "https://example.com/foo",
+			raw: false,
+			offset: 50,
+			limit: 51,
+		});
+		expect(parseReadUrlTarget("https:/example.com/foo:raw")).toEqual({
+			path: "https://example.com/foo",
+			raw: true,
+		});
+	});
 });

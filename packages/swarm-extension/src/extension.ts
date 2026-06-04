@@ -11,7 +11,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AuthStorage, ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { buildDependencyGraph, buildExecutionWaves, detectCycles } from "./swarm/dag";
 import { PipelineController } from "./swarm/pipeline";
@@ -141,26 +141,17 @@ async function handleRun(yamlPath: string, ctx: ExtensionCommandContext, pi: Ext
 	};
 	updateWidget();
 
-	// 9. Resolve infrastructure for agent execution
-	let authStorage: AuthStorage | undefined;
-	try {
-		authStorage = await pi.pi.discoverAuthStorage();
-	} catch {
-		// Let runSubprocess discover auth per-agent as fallback
-	}
-
-	// 10. Run pipeline
+	// 9. Run pipeline
 	const controller = new PipelineController(def, waves, stateTracker);
 
 	const result = await controller.run({
 		workspace,
 		onProgress: () => updateWidget(),
-		authStorage,
 		modelRegistry: ctx.modelRegistry,
 		settings: pi.pi.settings,
 	});
 
-	// 11. Clear widget and show summary
+	// 10. Clear widget and show summary
 	ctx.ui.setWidget(widgetKey, undefined);
 
 	const elapsed = stateTracker.state.completedAt
@@ -185,7 +176,7 @@ async function handleRun(yamlPath: string, ctx: ExtensionCommandContext, pi: Ext
 		pi.logger.warn("Swarm completed with errors", { errors: result.errors });
 	}
 
-	// 12. Send summary to the conversation so the LLM knows what happened
+	// 11. Send summary to the conversation so the LLM knows what happened
 	const summaryMessage = buildSummaryMessage(def, result, stateTracker, workspace);
 	pi.sendMessage(
 		{

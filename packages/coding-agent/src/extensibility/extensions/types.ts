@@ -124,6 +124,17 @@ export interface ExtensionUIDialogOptions {
 	onExternalEditor?: () => void;
 	/** Optional footer hint text rendered by interactive selector */
 	helpText?: string;
+	/** Render a leading radio/checkbox marker before each markable option in
+	 *  select dialogs (matches the ask transcript). "radio" fills the cursor row
+	 *  for single-choice; "checkbox" reflects `checkedIndices` per row for
+	 *  multi-select. Options beyond `markableCount` keep the plain cursor. */
+	selectionMarker?: "radio" | "checkbox";
+	/** For `selectionMarker: "checkbox"`: option indices currently checked. */
+	checkedIndices?: readonly number[];
+	/** Number of leading options that receive a selection marker; the remaining
+	 *  trailing options (e.g. "Other"/"Done" actions) keep the plain cursor.
+	 *  Defaults to all options when `selectionMarker` is set. */
+	markableCount?: number;
 }
 
 /** Raw terminal input listener for extensions. */

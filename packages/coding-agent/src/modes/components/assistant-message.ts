@@ -1,5 +1,5 @@
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
-import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { Container, Image, type ImageBudget, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
@@ -23,6 +23,7 @@ export class AssistantMessageComponent extends Container {
 		private hideThinkingBlock = false,
 		private readonly onImageUpdate?: () => void,
 		private readonly thinkingRenderers: readonly AssistantThinkingRenderer[] = [],
+		private readonly imageBudget?: ImageBudget,
 	) {
 		super();
 
@@ -124,7 +125,7 @@ export class AssistantMessageComponent extends Container {
 						displayImage.data,
 						displayImage.mimeType,
 						{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
-						resolveImageOptions(),
+						{ ...resolveImageOptions(), budget: this.imageBudget, imageKey: key },
 					),
 				);
 				continue;

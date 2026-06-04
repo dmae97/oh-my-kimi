@@ -114,7 +114,7 @@ Artifacts and side channels:
    - auto-add `task` when the agent has `spawns` and recursion depth allows it
    - remove `task` at or past `task.maxRecursionDepth`
    - expand `exec` to `eval` and `bash`
-   - strip parent-owned `todo_write` after session creation
+   - strip parent-owned `todo` after session creation
 17. `runSubprocess(...)` subscribes to child agent events, coalesces progress updates every 150 ms, forwards lifecycle/progress events on the parent event bus, and extracts tool data through `subprocessToolRegistry`.
 18. The child must finish through the hidden `yield` tool. If it does not, `runSubprocess(...)` sends up to 3 reminder prompts; the last reminder forces `toolChoice = yield` when supported.
 19. Finalization uses `finalizeSubprocessOutput(...)` to reconcile raw assistant text, `yield` payloads, structured schemas, `report_finding` data, and abort states. Output is truncated with `MAX_OUTPUT_BYTES` / `MAX_OUTPUT_LINES` before returning to the parent, but the full raw output is still written to `<id>.md`.

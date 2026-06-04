@@ -49,7 +49,7 @@ describe("SessionManager rewrite EPERM replacement fallback", () => {
 		storage.failNextSessionReplace = true;
 		await expect(session.setSessionName("renamed session", "user")).resolves.toBe(true);
 
-		const rewritten = storage.readTextSync(sessionFile);
+		const rewritten = await storage.readText(sessionFile);
 		expect(rewritten).toContain('"title":"renamed session"');
 		const backupPath = storage.backupCleanupPath;
 		if (!backupPath) throw new Error("Expected EPERM fallback to create a rollback backup");
@@ -121,7 +121,7 @@ describe("recoverOrphanedBackups", () => {
 
 		expect(storage.existsSync(primary)).toBe(true);
 		expect(storage.existsSync(backup)).toBe(false);
-		expect(storage.readTextSync(primary)).toBe('{"type":"session","id":"abc"}\n');
+		expect(await storage.readText(primary)).toBe('{"type":"session","id":"abc"}\n');
 	});
 
 	it("leaves the backup alone when the primary already exists", async () => {
@@ -134,7 +134,7 @@ describe("recoverOrphanedBackups", () => {
 
 		await recoverOrphanedBackups(dir, storage);
 
-		expect(storage.readTextSync(primary)).toContain('"keep":true');
+		expect(await storage.readText(primary)).toContain('"keep":true');
 		expect(storage.existsSync(backup)).toBe(true);
 	});
 
@@ -152,6 +152,6 @@ describe("recoverOrphanedBackups", () => {
 		await recoverOrphanedBackups(dir, storage);
 
 		expect(storage.existsSync(primary)).toBe(true);
-		expect(storage.readTextSync(primary)).toBe("newer");
+		expect(await storage.readText(primary)).toBe("newer");
 	});
 });

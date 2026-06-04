@@ -39,6 +39,7 @@ export * from "./sdk";
 export * from "./session/agent-session";
 // Auth and model registry
 export * from "./session/auth-storage";
+export * from "./session/indexed-session-storage";
 export * from "./session/messages";
 export * from "./session/redis-session-storage";
 export * from "./session/session-dump-format";
