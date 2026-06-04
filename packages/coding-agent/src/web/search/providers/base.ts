@@ -61,8 +61,25 @@ export abstract class SearchProvider {
 	 * Indicates whether this provider has the credentials/config it needs to
 	 * service a request right now. Implementations consult the passed
 	 * {@link AuthStorage} — never a sibling store.
+	 *
+	 * Drives auto-chain admission: providers that return `false` are skipped
+	 * when {@link resolveProviderChain} walks the order. Explicit selection
+	 * uses {@link isExplicitlyAvailable} instead.
 	 */
 	abstract isAvailable(authStorage: AuthStorage): Promise<boolean> | boolean;
+
+	/**
+	 * Returns `true` when this provider should run when the user explicitly
+	 * selects it, even if {@link isAvailable} would reject it for the auto
+	 * chain. Providers that ship an unauthenticated fallback (e.g. Exa's
+	 * public MCP) override this so explicit selection still routes through
+	 * the fallback rather than silently falling back to another provider.
+	 *
+	 * Defaults to mirroring {@link isAvailable}.
+	 */
+	isExplicitlyAvailable(authStorage: AuthStorage): Promise<boolean> | boolean {
+		return this.isAvailable(authStorage);
+	}
 
 	/**
 	 * Execute a search. Credentials MUST be resolved through `params.authStorage`.

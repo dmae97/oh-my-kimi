@@ -164,6 +164,7 @@ describe("executeSearch abort propagation", () => {
 			id,
 			label: "Anthropic",
 			isAvailable: () => true,
+			isExplicitlyAvailable: () => true,
 			search: behaviour,
 		};
 	}

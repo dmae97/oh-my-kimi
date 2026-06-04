@@ -131,7 +131,9 @@ async function executeSearch(
 	const providers =
 		params.provider && params.provider !== "auto"
 			? await getSearchProvider(params.provider).then(async provider =>
-					(await provider.isAvailable(authStorage)) ? [provider] : resolveProviderChain(authStorage, "auto"),
+					(await provider.isExplicitlyAvailable(authStorage))
+						? [provider]
+						: resolveProviderChain(authStorage, "auto"),
 				)
 			: await resolveProviderChain(authStorage);
 	if (providers.length === 0) {
