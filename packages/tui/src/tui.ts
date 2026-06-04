@@ -1493,7 +1493,16 @@ export class TUI extends Container {
 				// ED3 mid-stream and yank a reader scrolled into history. The pin keeps
 				// native scrollback dirty, so the post-stream checkpoint still rebuilds.
 				this.#clearScrollbackOnNextRender = false;
-				this.#emitLiveRegionPinnedRepaint(lines, width, height, cursorPos, intent.appendFrom, intent.appendTo);
+				this.#emitLiveRegionPinnedRepaint(
+					lines,
+					width,
+					height,
+					cursorPos,
+					intent.appendFrom,
+					intent.appendTo,
+					prevViewportTop,
+					prevHardwareCursorRow,
+				);
 				this.#hasEverRendered = true;
 				return;
 			case "viewportRepaint":
@@ -2295,10 +2304,15 @@ export class TUI extends Container {
 
 	/**
 	 * Foreground-stream live-region paint for ED3-risk terminals with an
-	 * unobservable viewport. Newly sealed rows are appended to native history by
-	 * writing only that sealed chunk plus the final viewport after an ED2 viewport
-	 * clear; transient live rows are written only into the active grid, never into
-	 * saved lines.
+	 * unobservable viewport. Commits the newly-sealed chunk to native scrollback
+	 * (so finished blocks stay scrollable) and repaints the live tail in place,
+	 * leaving the transient live region out of saved lines.
+	 *
+	 * Uses only the no-scroll-snap vocabulary of {@link #emitDiff}: relative
+	 * cursor moves, per-line `\x1b[2K`, and `\r\n` to push the sealed chunk into
+	 * history. It deliberately avoids a full-screen erase (`\x1b[2J`) and absolute
+	 * cursor home (`\x1b[H`): on Ghostty those snap a reader scrolled into history
+	 * back to the bottom on every frame (the live tail repaints every token).
 	 */
 	#emitLiveRegionPinnedRepaint(
 		lines: string[],
@@ -2307,23 +2321,39 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 		appendFrom: number,
 		appendTo: number,
+		prevViewportTop: number,
+		prevHardwareCursorRow: number,
 	): void {
 		this.#fullRedrawCount += 1;
 		const viewportTop = Math.max(0, lines.length - height);
 		const boundedAppendTo = Math.max(0, Math.min(appendTo, viewportTop, lines.length));
 		const boundedAppendFrom = Math.max(0, Math.min(appendFrom, boundedAppendTo));
-		let buffer = `${this.#paintBeginSequence}\x1b[H\x1b[2J`;
+
+		// Position at the top visible row with a relative move. Terminals clamp the
+		// hardware cursor to the viewport on resize, so clamp our tracking to match
+		// before computing the delta (mirrors #emitDiff).
+		const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
+		const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
+		let buffer = this.#paintBeginSequence;
+		if (currentScreenRow > 0) buffer += `\x1b[${currentScreenRow}A`;
+		buffer += "\r";
+
+		// Write the sealed chunk followed by the full viewport from the top row.
+		// The first (boundedAppendTo - boundedAppendFrom) rows scroll into native
+		// history; the trailing `height` rows fill the viewport. Each row clears
+		// itself with `\x1b[2K` instead of relying on a screen-wide erase.
 		let wroteLine = false;
 		for (let i = boundedAppendFrom; i < boundedAppendTo; i++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[i] ?? "", width);
+			buffer += `\x1b[2K${this.#fitLineToWidth(lines[i] ?? "", width)}`;
 			wroteLine = true;
 		}
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
+			buffer += `\x1b[2K${this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width)}`;
 			wroteLine = true;
 		}
+
 		const viewportBottomRow = viewportTop + height - 1;
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
