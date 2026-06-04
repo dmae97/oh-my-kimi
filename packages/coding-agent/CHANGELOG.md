@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.0] - 2026-06-04
+
 ### Breaking Changes
 
 - Removed synchronous `readTextSync` from `SessionStorage` and core implementations (`MemorySessionStorage`, `FileSessionStorage`, `RedisSessionStorage`, `SqlSessionStorage`), requiring callers to use async text reads

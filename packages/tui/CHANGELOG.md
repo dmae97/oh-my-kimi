@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.0] - 2026-06-04
+
 ### Added
 
 - Added Kitty `CSI 22 J` screen-to-scrollback clears for non-destructive full paints, while keeping ED3 for destructive history/session rebuilds.

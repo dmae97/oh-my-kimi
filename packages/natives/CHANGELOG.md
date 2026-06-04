@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.0] - 2026-06-04
+
 ### Fixed
 
 - Bounded sorted `glob()` scans to `maxResults` during uncached traversal and emitted `onMatch` callbacks only for entries admitted to the bounded top-`maxResults` heap so broad OMP `find` progress and timeout partials stay consistent with the returned mtime-ranked set while keeping parent-process memory bounded ([#1761](https://github.com/can1357/oh-my-pi/issues/1761)).
