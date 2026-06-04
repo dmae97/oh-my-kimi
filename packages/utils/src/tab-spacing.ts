@@ -4,11 +4,19 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isEnoent } from "./fs-error";
+import { isFsError } from "./fs-error";
 
 export const MIN_TAB_WIDTH = 1;
 export const MAX_TAB_WIDTH = 16;
 export const DEFAULT_TAB_WIDTH = 3;
+
+/**
+ * Per-component path length cap on common filesystems (`NAME_MAX = 255` on
+ * Linux ext4 / macOS APFS / Windows NTFS). Paths with components longer than
+ * this cannot be opened at all, so editorconfig discovery short-circuits to
+ * the default instead of running into `ENAMETOOLONG` from `readFileSync`.
+ */
+const NAME_MAX_BYTES = 255;
 
 const EDITORCONFIG_NAME = ".editorconfig";
 
@@ -152,7 +160,11 @@ function parseCachedEditorConfig(configPath: string): ParsedEditorConfig | undef
 	try {
 		content = fs.readFileSync(key, "utf8");
 	} catch (err) {
-		if (isEnoent(err)) return undefined;
+		// editorconfig discovery is best-effort. Any filesystem error
+		// (`ENOENT`, `ENAMETOOLONG`, `ENOTDIR`, `EACCES`, `ELOOP`, `EINVAL`,
+		// …) means "no usable config at this path" — never a fatal condition
+		// for callers like the edit renderer that hand us arbitrary strings.
+		if (isFsError(err)) return undefined;
 		throw err;
 	}
 	const parsed = parseEditorConfigFile(content);
@@ -279,6 +291,15 @@ function resolveEditorConfigTabWidth(match: EditorConfigMatch | undefined, fallb
 	return undefined;
 }
 
+function hasOverlongPathComponent(filePath: string): boolean {
+	for (const part of filePath.split(/[\\/]/)) {
+		if (part.length > 0 && Buffer.byteLength(part) > NAME_MAX_BYTES) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export function getDefaultTabWidth(): number {
 	return defaultTabWidth;
 }
@@ -293,6 +314,14 @@ export function setDefaultTabWidth(width: number): void {
 export function getIndentation(file?: string | null, projectDir?: string | null): number {
 	const fallback = defaultTabWidth;
 	if (file === undefined || file === null || file === "") {
+		return fallback;
+	}
+
+	// Renderers can hand us arbitrary strings (e.g. a malformed edit tool
+	// call whose `file_path` is gibberish). Reject paths with any component
+	// longer than `NAME_MAX_BYTES` before resolving — the editorconfig
+	// chain would only trip `ENAMETOOLONG` from `readFileSync` and escape.
+	if (hasOverlongPathComponent(file)) {
 		return fallback;
 	}
 
