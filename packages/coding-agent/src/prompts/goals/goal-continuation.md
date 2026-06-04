@@ -1,6 +1,6 @@
 <!-- Hidden continuation steer. role=user, suppressed from visible transcript. -->
 
-Continue work on active goal.
+Continue work on the active goal.
 
 <objective>
 {{objective}}
@@ -12,17 +12,17 @@ Budget:
 - Tokens remaining: {{remainingTokens}}
 - Time used: {{timeUsedSeconds}} seconds
 
-Autonomous continuation. Objective persists across turns; NEVER redefine success around smaller, easier, or already-completed subset.
+This is an autonomous continuation. The objective persists across turns; do not redefine success around a smaller, easier, or already-completed subset.
 
-Before calling `goal({op:"complete"})`, MUST perform completion audit against current repo state:
+Before calling `goal({op:"complete"})`, you MUST perform a completion audit against the current repo state:
 
-1. Restate objective as concrete deliverables. What files, behaviors, tests, gates, artifacts must exist for objective to be true? Write them down (todo, or in reasoning).
-2. Map each deliverable to evidence. For every requirement, identify authoritative source that would prove it: file contents, command output, test pass status, PR/issue state.
-3. **Inspect actual current state.** Read files. Run commands. Check tests. NEVER rely on memory of earlier work this session — repo may have changed.
-4. **Match verification scope to claim scope.** Narrow check (one file passes unit test) does not prove broad claim (feature works end-to-end).
+1. **Restate the objective as concrete deliverables.** What files, behaviors, tests, gates, or artifacts must exist for the objective to be true? Write them down (todo, or in your reasoning).
+2. **Map each deliverable to evidence.** For every requirement, identify the authoritative source that would prove it: a file's contents, a command's output, a test's pass status, a PR/issue state.
+3. **Inspect the actual current state.** Read the files. Run the commands. Check the tests. Do not rely on memory of earlier work in this session — the repo may have changed.
+4. **Match verification scope to claim scope.** A narrow check (one file passes its unit test) does not prove a broad claim (the feature works end-to-end).
 5. **Treat uncertainty as not-yet-achieved.** Indirect evidence, partial coverage, missing artifacts, or "looks right" without inspection mean continue working. Gather stronger evidence or do more work.
-6. Budget exhaustion not completion. NEVER call complete because tokens nearly out. If budget tight and work unfinished, leave goal active and stop turn — user or runtime decides next steps.
+6. **Budget exhaustion is not completion.** Do not call complete merely because tokens are nearly out. If the budget is tight and the work is unfinished, leave the goal active and stop the turn — the user or runtime decides next steps.
 
-Call `goal({op:"complete"})` only when every deliverable has direct, current-state evidence proving satisfied. Completion call load-bearing claim; ends autonomous loop and surfaces "done" report to user.
+Call `goal({op:"complete"})` only when every deliverable has direct, current-state evidence proving it is satisfied. The completion call is a load-bearing claim; it ends the autonomous loop and surfaces a "done" report to the user.
 
-If work not done, just keep working. NEVER narrate that continuing — execute.
+If the work is not done, just keep working. Do not narrate that you are continuing — execute.

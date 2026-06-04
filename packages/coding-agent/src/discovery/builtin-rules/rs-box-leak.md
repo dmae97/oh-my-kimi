@@ -4,14 +4,14 @@ condition: "Box::leak"
 scope: "tool:edit(*.rs), tool:write(*.rs)"
 ---
 
-NEVER use `Box::leak` to satisfy a lifetime. Intentionally leaks allocation for rest of process.
+Never use `Box::leak` to satisfy a lifetime. It intentionally leaks the allocation for the rest of the process.
 
 ## Why
 
-- Allocation never freed.
-- Hides ownership bugs.
-- Turns lifetime errors into process lifetime growth.
-- Makes tests pass while production memory grows.
+- The allocation is never freed.
+- It hides ownership bugs.
+- It turns lifetime errors into process lifetime growth.
+- It makes tests pass while production memory grows.
 
 ## Use instead
 

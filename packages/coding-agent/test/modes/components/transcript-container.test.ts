@@ -19,18 +19,6 @@ class MutableBlock implements Component {
 	}
 }
 
-class StableBlock extends MutableBlock {
-	#stableLineCount = 0;
-
-	setStableLineCount(count: number): void {
-		this.#stableLineCount = count;
-	}
-
-	getStableLineCount(): number {
-		return this.#stableLineCount;
-	}
-}
-
 const riskFlag = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
 const original = riskFlag.eagerEraseScrollbackRisk;
 
@@ -63,24 +51,6 @@ describe("TranscriptContainer", () => {
 		// The live block still updates freely.
 		b.set(["b2"]);
 		expect(container.render(40)).toEqual(["a2", "b2"]);
-	});
-
-	it("reports frozen blocks plus the live block's immutable prefix", () => {
-		riskFlag.eagerEraseScrollbackRisk = true;
-		const container = new TranscriptContainer();
-		const frozen = new MutableBlock(["a1", "a2"]);
-		const live = new StableBlock(["b1", "b2", "b3"]);
-		live.setStableLineCount(1);
-		container.addChild(frozen);
-		container.addChild(live);
-
-		expect(container.render(40)).toEqual(["a1", "a2", "b1", "b2", "b3"]);
-		expect(container.getStableLineCount(40)).toBe(3);
-
-		frozen.set(["a-mutated"]);
-		live.setStableLineCount(3);
-		expect(container.render(40)).toEqual(["a1", "a2", "b1", "b2", "b3"]);
-		expect(container.getStableLineCount(40)).toBe(5);
 	});
 
 	it("thaw() reconciles frozen blocks to their current state", () => {

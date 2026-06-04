@@ -5,13 +5,13 @@ scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 interruptMode: never
 ---
 
-NEVER extract function whose body is one expression or one `return`. Inline unless name creates durable contract.
+Do not extract a function whose whole body is one expression or one `return`. Inline it unless the name creates a durable contract.
 
 ## Why
 
 - One-line wrappers hide no real behavior.
-- Readers MUST jump to verify trivial code.
-- Signature freezes shape too early.
+- Readers must jump to verify trivial code.
+- The signature freezes a shape too early.
 - Search and type flow work better with inline expressions.
 
 ## Avoid
@@ -41,10 +41,10 @@ const doubled = value * 2;
 
 ## Allowed tiny functions
 
-- Three or more call sites Need lockstep behavior.
-- Exported name represents stable domain concept.
+- Three or more call sites need lockstep behavior.
+- Exported name represents a stable domain concept.
 - Callback identity matters.
 - Type guard preserves narrowing.
-- Need indirection if public API, test seam, or DI boundary.
+- Public API, test seam, or DI boundary needs indirection.
 
-If none apply, inline.
+If none apply, inline it.

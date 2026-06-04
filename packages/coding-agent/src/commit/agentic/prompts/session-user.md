@@ -6,7 +6,7 @@ User context:
 {{/if}}
 
 {{#if changelog_targets}}
-Changelog targets (MUST call propose_changelog for these files):
+Changelog targets (must call propose_changelog for these files):
 {{changelog_targets}}
 {{/if}}
 
@@ -22,4 +22,4 @@ May include entries from list in propose_changelog `deletions` field for removal
 {{/each}}
 {{/if}}
 
-Use `git_*` tools inspect changes. Call `analyze_files` deeper per-file summaries. Finish `propose_commit` or `split_commit`.
+Use git_* tools to inspect changes. Call analyze_files for deeper per-file summaries. Finish with propose_commit or split_commit.

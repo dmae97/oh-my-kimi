@@ -1,7 +1,7 @@
 Runs commands on remote hosts.
 
 <instruction>
-MUST build commands from reference below
+You MUST build commands from the reference below
 </instruction>
 
 <commands>
@@ -22,14 +22,14 @@ MUST build commands from reference below
 </commands>
 
 <critical>
-MUST verify shell type from "Available hosts" and use matching commands.
+You MUST verify the shell type from "Available hosts" and use matching commands.
 </critical>
 
 <examples>
 # List files: Linux
-Host: server1 (10.0.0.1) | linux/bash. Run `ls -la /home/user`
+Host: server1 (10.0.0.1) | linux/bash. Command: `ls -la /home/user`
 # Show running processes: Windows cmd
-Host: winbox (192.168.1.5) | windows/cmd. Run `tasklist /v`
+Host: winbox (192.168.1.5) | windows/cmd. Command: `tasklist /v`
 # Get system info: macOS
-Host: macbook (10.0.0.20) | macos/zsh. Run `uname -a && sw_vers`
+Host: macbook (10.0.0.20) | macos/zsh. Command: `uname -a && sw_vers`
 </examples>

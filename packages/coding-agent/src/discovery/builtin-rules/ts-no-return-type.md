@@ -4,14 +4,14 @@ condition: "ReturnType<"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 ---
 
-NEVER publish contracts through `ReturnType<typeof fn>`. Need name type at module owning value; import that name at consumers.
+Do not publish contracts through `ReturnType<typeof fn>`. Name the type at the module that owns the value and import that name at consumers.
 
 ## Why
 
-- Named types document contract directly.
+- Named types document the contract directly.
 - Consumers stop coupling to implementation helpers.
-- JSDoc and changelog notes attach to exported type.
-- Type errors point at intended API boundary.
+- JSDoc and changelog notes attach to the exported type.
+- Type errors point at the intended API boundary.
 
 ## Avoid
 
@@ -40,6 +40,6 @@ import type { LoadedConfig } from "./config";
 ## Exceptions
 
 - Timer handles: `ReturnType<typeof setTimeout>` / `setInterval`.
-- Generic type utilities where function is type parameter.
+- Generic type utilities where the function is a type parameter.
 
-Concrete function? Export concrete type.
+Concrete function? Export a concrete type.

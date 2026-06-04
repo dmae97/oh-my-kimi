@@ -23,13 +23,13 @@ _No files to review._
 
 ### Distribution Guidelines
 
-Use `task` tool with `agent: "reviewer"` and `tasks` array.
+Use the `task` tool with `agent: "reviewer"` and a `tasks` array.
 {{#when agentCount "==" 1}}Create exactly **1 reviewer task**.{{else}}Spawn **{{agentCount}} reviewer agents** in parallel.{{/when}}
 {{#if multiAgent}}
 Group files by locality, e.g.:
 - Same directory/module → same agent
 - Related functionality → same agent
-- Tests with implementation files → same agent
+- Tests with their implementation files → same agent
 {{/if}}
 
 ### Reviewer Instructions
@@ -37,7 +37,7 @@ Group files by locality, e.g.:
 Reviewer MUST:
 1. Focus ONLY on assigned files
 2. {{#if skipDiff}}{{diffInstruction}}{{else}}MUST use diff hunks below (NEVER re-run git diff){{/if}}
-3. MAY read full file context via `read`
+3. MAY read full file context as needed via `read`
 4. Call `report_finding` per issue
 5. Call `yield` with verdict when done
 

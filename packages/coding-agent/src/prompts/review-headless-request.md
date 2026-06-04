@@ -6,7 +6,7 @@ Headless review request
 
 ### Distribution Guidelines
 
-Use `task` tool with `agent: "reviewer"` and `tasks` array.
+Use the `task` tool with `agent: "reviewer"` and a `tasks` array.
 Create exactly **1 reviewer task** for recent code changes.
 
 {{#if focus}}

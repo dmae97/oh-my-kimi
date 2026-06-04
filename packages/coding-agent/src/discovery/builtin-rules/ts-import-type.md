@@ -4,12 +4,12 @@ condition: "import\\("
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 ---
 
-Use top-level `import type` for type-only deps. NEVER `import("pkg").Type` inside source annotations.
+Use top-level `import type` declarations for type-only dependencies. NEVER write `import("pkg").Type` inside source annotations.
 
 ## Why
 
-- Top-level imports expose deps immediately.
-- Import sorting and dedup manage them.
+- Top-level imports expose dependencies immediately.
+- Import sorting and deduplication can manage them.
 - Signatures stay readable and reviewable.
 - Re-exports do not inherit noisy inline paths.
 
@@ -36,7 +36,7 @@ const options: ClientOptions = { ... };
 
 ## Exceptions
 
-- Ambient `.d.ts` globals MUST NOT become modules.
+- Ambient `.d.ts` globals that must not become modules.
 - Generated files whose generator owns import management.
 
 In normal `.ts` / `.tsx` source, use `import type`.

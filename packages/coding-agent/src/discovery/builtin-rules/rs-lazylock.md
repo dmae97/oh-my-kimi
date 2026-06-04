@@ -6,9 +6,9 @@ condition:
 scope: "tool:edit(*.rs), tool:write(*.rs)"
 ---
 
-Prefer `std::sync::LazyLock` over `OnceLock` and `once_cell` crate when initializer known at declaration time.
+Prefer `std::sync::LazyLock` over `OnceLock` and the `once_cell` crate when the initializer is known at declaration time.
 
-`LazyLock` stores cell and initializer together. No separate `init()` function, no repeated `get_or_init`, no missing initialization path.
+`LazyLock` stores the cell and initializer together. There is no separate `init()` function, no repeated `get_or_init`, and no missing initialization path.
 
 ## once_cell → std
 
@@ -48,4 +48,4 @@ fn init_database(url: &str) {
 }
 ```
 
-NEVER add `once_cell` for new code. Use standard library equivalent.
+Do not add `once_cell` for new code. Use the standard library equivalent.

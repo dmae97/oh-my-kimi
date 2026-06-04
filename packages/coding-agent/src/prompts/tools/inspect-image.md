@@ -1,14 +1,14 @@
-Inspects image file with vision-capable model; returns compact text analysis.
+Inspects an image file with a vision-capable model and returns compact text analysis.
 
 <instruction>
-- Use for image understanding tasks (OCR, UI/screenshot debugging, scene/object questions)
-- Provide `path` to local image file
+- Use this for image understanding tasks (OCR, UI/screenshot debugging, scene/object questions)
+- Provide `path` to the local image file
 - Write a specific `question`:
-  - what inspect
-  - constraints (example: "quote visible text verbatim", "only report confirmed findings")
+  - what to inspect
+  - constraints (for example: "quote visible text verbatim", "only report confirmed findings")
   - desired output format (bullets/table/JSON/short answer)
-- Keep `question` grounded in observable evidence; ask for uncertainty when details unclear
-- Use this tool over `read` when goal is image analysis
+- Keep `question` grounded in observable evidence and ask for uncertainty when details are unclear
+- Use this tool over `read` when the goal is image analysis
 </instruction>
 
 <examples>
@@ -21,12 +21,12 @@ Inspects image file with vision-capable model; returns compact text analysis.
 </examples>
 
 <output>
-- Returns text-only analysis from vision model
-- No image content blocks returned in tool output
+- Returns text-only analysis from the vision model
+- No image content blocks are returned in tool output
 </output>
 
 <critical>
-- Parameters strict: only `path` and `question` allowed
-- If image submission blocked by settings, tool fails with actionable error
-- If configured model does not support image input, configure vision-capable model role before retry
+- Parameters are strict: only `path` and `question` are allowed
+- If image submission is blocked by settings, the tool will fail with an actionable error
+- If configured model does not support image input, configure a vision-capable model role before retrying
 </critical>

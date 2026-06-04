@@ -4,7 +4,7 @@ condition: "catch \\(_"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 ---
 
-Unused catch value? Bare `catch {}`. Underscore-prefixed binding adds noise, still allocates local name.
+Use bare `catch {}` when the caught value is unused. An underscore-prefixed binding adds noise and still allocates a local name.
 
 ## Replace
 
@@ -35,4 +35,4 @@ try {
 }
 ```
 
-Unused error? Bare `catch`. Used error? Name for what it carries.
+Unused error? Bare `catch`. Used error? Name it for what it carries.

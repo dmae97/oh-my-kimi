@@ -19,7 +19,7 @@
 {{/if}}
 {{#if git.isRepo}}
 ## Version Control
-Snapshot; no updates during conversation.
+Snapshot; does not update during conversation.
 Current branch: {{git.currentBranch}}
 Main branch: {{git.mainBranch}}
 {{git.status}}
@@ -29,8 +29,8 @@ Main branch: {{git.mainBranch}}
 </project>
 {{/ifAny}}
 {{#if skills.length}}
-Skills specialized knowledge. Scan descriptions for task domain.
-If skill applies, MUST read `skill://<name>` before proceeding.
+Skills are specialized knowledge. Scan descriptions for your task domain.
+If a skill applies, you MUST read `skill://<name>` before proceeding.
 <skills>
 {{#list skills join="\n"}}
 <skill name="{{name}}">
@@ -45,7 +45,7 @@ If skill applies, MUST read `skill://<name>` before proceeding.
 {{/each}}
 {{/if}}
 {{#if rules.length}}
-Rules are local constraints. MUST read `rule://<name>` when working in that domain.
+Rules are local constraints. You MUST read `rule://<name>` when working in that domain.
 <rules>
 {{#list rules join="\n"}}
 <rule name="{{name}}">
@@ -59,6 +59,6 @@ Rules are local constraints. MUST read `rule://<name>` when working in that doma
 {{/if}}
 {{#if secretsEnabled}}
 <redacted-content>
-Some values in tool output redacted for security. Appear as `#XXXX#` tokens (4 uppercase-alphanumeric characters wrapped in `#`). These **not errors** — intentional placeholders for sensitive values (API keys, passwords, tokens). Treat as opaque strings. Do not attempt decode, fix, or report as problems.
+Some values in tool output are redacted for security. They appear as `#XXXX#` tokens (4 uppercase-alphanumeric characters wrapped in `#`). These are **not errors** — they are intentional placeholders for sensitive values (API keys, passwords, tokens). Treat them as opaque strings. Do not attempt to decode, fix, or report them as problems.
 </redacted-content>
 {{/if}}

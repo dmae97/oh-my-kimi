@@ -6,7 +6,7 @@ condition:
 scope: "tool:edit(*.rs), tool:write(*.rs)"
 ---
 
-Use match ergonomics; borrow scrutinee, let bindings receive references. Drop explicit `ref` / `ref mut`.
+Use match ergonomics instead of explicit `ref` / `ref mut` patterns. Borrow the scrutinee and let bindings receive references.
 
 ## Shared references
 
@@ -64,4 +64,4 @@ match &result {
 }
 ```
 
-Modern Rust rarely needs `ref` in patterns. Borrow value being matched.
+Modern Rust rarely needs `ref` in patterns. Borrow the value being matched.

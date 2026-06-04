@@ -1,2 +1,2 @@
-User explored different branch; returned here.
-Summary of exploration:
+The user explored a different conversation branch before returning here.
+Summary of that exploration:

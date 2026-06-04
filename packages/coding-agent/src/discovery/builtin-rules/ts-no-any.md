@@ -4,15 +4,15 @@ condition: ": any|as any"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 ---
 
-NEVER use `: any` or `as any`. Disables type checking exactly where boundary needs precision.
+Never use `: any` or `as any`. They disable type checking exactly where the boundary needs precision.
 
 ## Use instead
 
 - `unknown` for unvalidated input.
-- Domain type when shape known.
-- Generic when caller supplies shape.
-- Type guard when runtime checks establish shape.
-- `satisfies` for object literals MUST match contract.
+- A domain type when the shape is known.
+- A generic when the caller supplies the shape.
+- A type guard when runtime checks establish shape.
+- `satisfies` for object literals that must match a contract.
 
 ## Parameters and returns
 
@@ -53,4 +53,4 @@ const config = { port: 3000 } as any as ServerConfig;
 const config = { port: 3000 } satisfies ServerConfig;
 ```
 
-If library boundary truly requires unchecked cast, use `as unknown as T` with short reason. NEVER leave bare `any`.
+If a library boundary truly requires an unchecked cast, use `as unknown as T` with a short reason. Never leave a bare `any`.

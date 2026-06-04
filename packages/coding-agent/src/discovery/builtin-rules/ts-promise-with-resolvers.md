@@ -4,7 +4,7 @@ condition: "new Promise\\("
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 ---
 
-Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`. Keeps control flow linear; exposes typed resolver functions without callback nesting.
+Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`. It keeps control flow linear and exposes typed resolver functions without callback nesting.
 
 ## Basic operation
 
@@ -62,4 +62,4 @@ class Gate {
 }
 ```
 
-Use constructor only when API specifically requires executor form.
+Use the constructor only when an API specifically requires the executor form.

@@ -100,13 +100,6 @@ export interface Component {
 	render(width: number): string[];
 
 	/**
-	 * Number of leading rendered rows that are immutable and may be appended to
-	 * native scrollback. Components that omit this are treated as unstable by
-	 * stability-aware containers.
-	 */
-	getStableLineCount?(width: number): number;
-
-	/**
 	 * Optional handler for keyboard input when component has focus
 	 */
 	handleInput?(data: string): void;
@@ -281,25 +274,20 @@ export interface OverlayHandle {
  */
 export class Container implements Component {
 	children: Component[] = [];
-	#lastRenderWidth = 0;
-	#lastChildLineCounts: number[] = [];
 
 	addChild(component: Component): void {
 		this.children.push(component);
-		this.#lastChildLineCounts = [];
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
-			this.#lastChildLineCounts = [];
 		}
 	}
 
 	clear(): void {
 		this.children = [];
-		this.#lastChildLineCounts = [];
 	}
 
 	invalidate(): void {
@@ -311,30 +299,10 @@ export class Container implements Component {
 	render(width: number): string[] {
 		width = Math.max(1, width);
 		const lines: string[] = [];
-		const counts: number[] = [];
 		for (const child of this.children) {
-			const rendered = child.render(width);
-			counts.push(rendered.length);
-			lines.push(...rendered);
+			lines.push(...child.render(width));
 		}
-		this.#lastRenderWidth = width;
-		this.#lastChildLineCounts = counts;
 		return lines;
-	}
-
-	getRenderedChildOffset(component: Component, width: number): { offset: number; length: number } | null {
-		if (this.#lastRenderWidth !== Math.max(1, width) || this.#lastChildLineCounts.length !== this.children.length) {
-			return null;
-		}
-		let offset = 0;
-		for (let i = 0; i < this.children.length; i++) {
-			const length = this.#lastChildLineCounts[i] ?? 0;
-			if (this.children[i] === component) {
-				return { offset, length };
-			}
-			offset += length;
-		}
-		return null;
 	}
 }
 
@@ -350,9 +318,8 @@ export class Container implements Component {
  *   wrapped at the old size — clear viewport and scrollback so it rewraps at the
  *   new geometry. Also flushes deferred content-only rewrites.
  * - `viewportRepaint`: rewrite the visible viewport in place. If `appendFrom`
- *   is set, emit those tail rows as scrollback growth first.
- * - `stablePrefixCommit`: append newly stable rows to native scrollback without
- *   clearing existing history, then repaint the live viewport.
+ *   is set, emit those tail rows as scrollback growth first so streaming
+ *   output reaches terminal history before the corrected viewport is drawn.
  * - `deferredShrink`: pure content shrink would re-expose rows already in
  *   native history. Keep row indices stable with blank tail padding, repaint
  *   only the viewport, and defer the real shorter replay to a checkpoint.
@@ -368,7 +335,6 @@ type RenderIntent =
 	| { kind: "historyRebuild" }
 	| { kind: "overlayRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
-	| { kind: "stablePrefixCommit"; target: number }
 	| { kind: "deferredShrink"; paddedLength: number }
 	| { kind: "deferredMutation" }
 	| { kind: "shrink" }
@@ -440,8 +406,6 @@ export class TUI extends Container {
 	// between the viewport and scrollback, so the previous frame no longer
 	// describes the screen. Tracking only the dimension delta misses this.
 	#resizeEventPending = false;
-	#nativeScrollbackStableComponent: Component | undefined;
-
 	#stopped = false;
 
 	// Overlay stack for modal components rendered on top of base content
@@ -463,14 +427,6 @@ export class TUI extends Container {
 		if (isFocusable(component)) {
 			component.setUseTerminalCursor?.(this.#showHardwareCursor);
 		}
-	}
-
-	/**
-	 * Limit native scrollback growth to the immutable prefix reported by this
-	 * child. Rows after that prefix are treated as live viewport-only content.
-	 */
-	setNativeScrollbackStableComponent(component: Component | undefined): void {
-		this.#nativeScrollbackStableComponent = component;
 	}
 
 	get fullRedraws(): number {
@@ -1412,11 +1368,6 @@ export class TUI extends Container {
 			this.#extractCursorPosition(baseLines, height);
 			baseLines = this.#fitLinesToWidth(this.#applyLineResets(baseLines), width);
 		}
-		const stableScrollbackBoundary =
-			this.#nativeScrollbackStableComponent !== undefined && visibleOverlayComponents.length === 0;
-		const stableLineCount = stableScrollbackBoundary
-			? this.#getNativeScrollbackStableLineCount(width, lines.length)
-			: lines.length;
 
 		// 2. Capture transition + pre-render state before any emitter runs.
 		const prevViewportTop = this.#viewportTopRow;
@@ -1442,8 +1393,6 @@ export class TUI extends Container {
 			heightChanged,
 			prevViewportTop,
 			height,
-			stableLineCount,
-			stableScrollbackBoundary,
 			visibleOverlayComponents.length > 0,
 			overlayVisibilityReduced,
 			allowUnknownViewportMutation,
@@ -1505,10 +1454,6 @@ export class TUI extends Container {
 				}
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
-			case "stablePrefixCommit":
-				this.#emitStablePrefixCommit(lines, width, height, intent.target);
-				this.#emitViewportRepaint(lines, width, height, cursorPos);
-				return;
 			case "deferredMutation":
 				return;
 			case "deferredShrink":
@@ -1552,8 +1497,6 @@ export class TUI extends Container {
 		heightChanged: boolean,
 		prevViewportTop: number,
 		height: number,
-		stableLineCount: number,
-		stableScrollbackBoundary: boolean,
 		hasVisibleOverlay: boolean,
 		overlayVisibilityReduced: boolean,
 		allowUnknownViewportMutation: boolean,
@@ -1606,9 +1549,6 @@ export class TUI extends Container {
 		// stale high-water rows in native scrollback and duplicates the new tail above
 		// the viewport.
 		const naturalViewportTop = Math.max(0, newLines.length - height);
-		const overflowRows = Math.max(0, newLines.length - height);
-		const stableScrollbackTarget = Math.min(stableLineCount, overflowRows);
-		const hasUnstableOverflow = stableScrollbackTarget < overflowRows;
 		if (
 			diff.firstChanged !== -1 &&
 			newLines.length < this.#previousLines.length &&
@@ -1754,20 +1694,6 @@ export class TUI extends Container {
 		}
 
 		if (diff.firstChanged === -1) {
-			if (
-				stableScrollbackBoundary &&
-				stableScrollbackTarget > this.#scrollbackHighWater &&
-				!isMultiplexerSession()
-			) {
-				const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-				if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
-					this.#markNativeScrollbackDirty();
-					return this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)
-						? { kind: "deferredMutation" }
-						: { kind: "viewportRepaint" };
-				}
-				return { kind: "stablePrefixCommit", target: stableScrollbackTarget };
-			}
 			// A geometry change reflows the terminal's own buffer, moving rows between
 			// the viewport and native scrollback. When content overflows and the
 			// viewport position is unobservable (POSIX/ED3-risk/Windows), an in-place
@@ -1816,36 +1742,6 @@ export class TUI extends Container {
 		const contentGrew = newLines.length > this.#previousLines.length;
 		const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
 		const structuralMutation = newLines.length !== this.#previousLines.length || diff.firstChanged < prevViewportTop;
-		if (stableScrollbackBoundary && stableScrollbackTarget > this.#scrollbackHighWater && !isMultiplexerSession()) {
-			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
-				this.#markNativeScrollbackDirty();
-				return this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)
-					? { kind: "deferredMutation" }
-					: { kind: "viewportRepaint" };
-			}
-			return { kind: "stablePrefixCommit", target: stableScrollbackTarget };
-		}
-		// Unstable content (a live block) overflows the viewport. Withholding its
-		// scrollback commit is only safe while the rows bound for offscreen are
-		// still volatile — committing a row we can never repaint would strand a
-		// stale duplicate above the live region on ED3-risk terminals. That holds
-		// only when this frame actually rewrites a row at or above the new viewport
-		// top (`diff.firstChanged < overflowRows`, e.g. a streaming markdown block
-		// re-wrapping). When the frame only grows at or below the viewport top the
-		// rows scrolling off are immutable, so dropping them here instead of
-		// committing would lose them entirely (a box taller than the viewport whose
-		// top is neither in scrollback nor on screen). Fall through to the normal
-		// commit paths in that case so nothing scrolled off becomes unreachable.
-		if (
-			stableScrollbackBoundary &&
-			hasUnstableOverflow &&
-			contentGrew &&
-			diff.firstChanged < overflowRows &&
-			!isMultiplexerSession()
-		) {
-			return { kind: "viewportRepaint" };
-		}
 		if (pureAppend && contentGrew && this.#previousLines.length > height && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
@@ -1981,8 +1877,9 @@ export class TUI extends Container {
 
 		// Offscreen edit: repainting only the viewport leaves native history stale
 		// while the user is bottom-anchored. Rebuild whenever replay is safe. If
-		// replay is not safe, mark history dirty and repaint only the live viewport;
-		// stability-aware callers have already appended any newly immutable prefix.
+		// replay is not safe, keep the viewport stable, mark history dirty, and only
+		// scroll a clean appended tail so newly streamed rows remain reachable until
+		// the next checkpoint rebuild.
 		if (diff.firstChanged < prevViewportTop) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			const cleanTailAppend =
@@ -1994,10 +1891,7 @@ export class TUI extends Container {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
-			return {
-				kind: "viewportRepaint",
-				appendFrom: cleanTailAppend ? this.#previousLines.length : undefined,
-			};
+			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
 		}
 
 		if (forceViewportRepaint) {
@@ -2018,15 +1912,6 @@ export class TUI extends Container {
 		};
 	}
 
-	#getNativeScrollbackStableLineCount(width: number, totalLines: number): number {
-		const component = this.#nativeScrollbackStableComponent;
-		if (!component) return totalLines;
-		const offset = this.getRenderedChildOffset(component, width);
-		if (!offset) return 0;
-		const childStable = component.getStableLineCount?.(width) ?? 0;
-		return Math.max(0, Math.min(totalLines, offset.offset + Math.min(offset.length, childStable)));
-	}
-
 	/**
 	 * Two-pointer diff over `#previousLines` and `newLines`. `firstChanged` is
 	 * `-1` when the two are identical; otherwise it is the first differing
@@ -2036,7 +1921,6 @@ export class TUI extends Container {
 	#diffLines(newLines: string[]): { firstChanged: number; lastChanged: number; appendedLines: boolean } {
 		let firstChanged = -1;
 		let lastChanged = -1;
-
 		const maxLines = Math.max(newLines.length, this.#previousLines.length);
 		for (let i = 0; i < maxLines; i++) {
 			const oldLine = i < this.#previousLines.length ? this.#previousLines[i] : "";
@@ -2360,26 +2244,6 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Append newly immutable rows into native scrollback without clearing saved
-	 * lines. The replay starts at the previously committed prefix and writes just
-	 * enough rows for the terminal's normal linefeed scrolling to push `target`
-	 * rows into history; the caller immediately repaints the true live viewport.
-	 */
-	#emitStablePrefixCommit(lines: string[], width: number, height: number, target: number): void {
-		const start = this.#scrollbackHighWater;
-		if (target <= start) return;
-		const replayEnd = Math.min(lines.length, target + height);
-		let buffer = `${this.#paintBeginSequence}\x1b[2J\x1b[H`;
-		for (let i = start; i < replayEnd; i++) {
-			if (i > start) buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[i], width);
-		}
-		buffer += this.#paintEndSequence;
-		this.terminal.write(buffer);
-		this.#scrollbackHighWater = target;
-	}
-
-	/**
 	 * Trailing-shrink: prior content shared a prefix with the new content; the
 	 * extra rows below the new tail need to be cleared without scrolling. Falls
 	 * back to {@link #emitViewportRepaint} when more rows must be cleared than
@@ -2581,9 +2445,7 @@ export class TUI extends Container {
 				? `${intent.kind}(first=${intent.firstChanged}, last=${intent.lastChanged}, appended=${intent.appendedLines})`
 				: intent.kind === "viewportRepaint" && intent.appendFrom !== undefined
 					? `${intent.kind}(appendFrom=${intent.appendFrom})`
-					: intent.kind === "stablePrefixCommit"
-						? `${intent.kind}(target=${intent.target})`
-						: intent.kind;
+					: intent.kind;
 		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height})\n`;
 		fs.appendFileSync(getDebugLogPath(), msg);
 	}

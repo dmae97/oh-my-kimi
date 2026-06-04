@@ -186,17 +186,6 @@ describe("AssistantMessageComponent thinking renderers", () => {
 	});
 });
 
-describe("AssistantMessageComponent stable prefix", () => {
-	it("keeps streamed messages unstable until completion", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("final text"));
-
-		expect(component.getStableLineCount(80)).toBe(0);
-		component.setComplete();
-		expect(component.getStableLineCount(80)).toBe(component.render(80).length);
-	});
-});
-
 describe("AssistantMessageComponent tool images", () => {
 	it("converts WebP tool images for Kitty terminal rendering", async () => {
 		const webpBase64 = Buffer.from(

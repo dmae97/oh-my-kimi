@@ -11,10 +11,10 @@ Use `parking_lot::{Mutex, RwLock}` instead of `std::sync::{Mutex, RwLock}` when 
 
 ## Why
 
-- `lock()`, `read()`, `write()` return guards directly.
+- `lock()`, `read()`, and `write()` return guards directly.
 - No poisoning error path to unwrap.
-- Guards smaller, faster in common contention cases.
-- Call site shows locking, not error handling boilerplate.
+- Guards are smaller and faster in common contention cases.
+- The call site shows locking, not error handling boilerplate.
 
 ## Migration
 
@@ -41,4 +41,4 @@ let guard = data.lock();
 
 ## Keep async locks async
 
-Use `tokio::sync::Mutex` / `tokio::sync::RwLock` when guard held across `.await` or lock belongs to async coordination.
+Use `tokio::sync::Mutex` / `tokio::sync::RwLock` when a guard is held across `.await` or the lock belongs to async coordination.

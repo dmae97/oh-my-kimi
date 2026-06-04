@@ -1,35 +1,35 @@
-**Tasks referenced by verbatim content string, not auto-generated ID. No "task-1"/"task-N" identifier — tool never emits one. Pass task's content text in `task` field.**
+**Tasks are referenced by their verbatim content string, not by any auto-generated ID. There is no "task-1"/"task-N" identifier — the tool never emits one. Pass the task's content text in the `task` field.**
 
-Manages phased task list. Pass `ops`: flat array of operations.
-Next pending task auto-promoted to `in_progress` after each completion.
-Allowed `op` values: `init`, `start`, `done`, `drop`, `rm`, `append`, `note` only. `pending` is status, not `op`; leave not-yet-started tasks implicit in `init`/`append` lists.
+Manages a phased task list. Pass `ops`: a flat array of operations.
+The next pending task is auto-promoted to `in_progress` after each completion.
+Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, and `note`. `pending` is a task status, not an `op`; leave not-yet-started tasks implicit in `init`/`append` lists.
 
 ## Operations
 
 |`op`|Required fields|Effect|
 |---|---|---|
-|`init`|`list: [{phase, items: string[]}]`|Initialize full list (replaces existing)|
+|`init`|`list: [{phase, items: string[]}]`|Initialize the full list (replaces any existing list)|
 |`start`|`task`|Mark in progress|
 |`done`|`task` or `phase`|Mark completed|
 |`drop`|`task` or `phase`|Mark abandoned|
 |`rm`|`task` or `phase`|Remove|
 |`append`|`phase`, `items: string[]`|Append tasks to `phase`; lazily creates phase|
-|`note`|`task`, `text`|Append note to task. Reminders for future-you only.|
+|`note`|`task`, `text`|Append a note to a task. Reminders for future-you only.|
 
 ## Anatomy
-- **Task content**: 5–10 words, what is being done, not how. Used as task identifier — unique.
-- **Phase name**: short noun phrase (e.g. `Foundation`, `Auth`, `Verification`). Phase identifier — unique. NEVER add prefixes like `1.`, `A)`, `Phase 1:`, etc.
+- **Task content**: 5–10 words, what is being done, not how. Used as the task identifier — unique.
+- **Phase name**: short noun phrase (e.g. `Foundation`, `Auth`, `Verification`). Used as the phase identifier — unique. Do not add prefixes like `1.`, `A)`, `Phase 1:`, etc.
 
 ## Rules
 - Mark tasks done immediately after finishing.
 - Complete phases in order.
-- On blockers, `append` new task to active phase to unblock, or `drop`.
-- `task` and `phase` fields reference content/name verbatim; keep stable once introduced.
+- On blockers, `append` a new task to the active phase to unblock yourself, or `drop`.
+- `task` and `phase` fields reference content/name verbatim; keep them stable once introduced.
 
 ## When to create a list
 - Task requires 3+ distinct steps
 - User explicitly requests one
-- User provides set of tasks to complete
+- User provides a set of tasks to complete
 - New instructions arrive mid-task — capture before proceeding
 
 <examples>
@@ -50,9 +50,9 @@ Allowed `op` values: `init`, `start`, `done`, `drop`, `rm`, `append`, `note` onl
 </examples>
 
 <critical>
-When user hands multi-step plan — phased todo, numbered or bulleted checklist, or "N bugs/items/tasks" to work through:
-- MUST `init` list with EVERY item as own task before doing work.
-- Enumerate all;
-- NEVER summarize plan into fewer tasks, sample "important ones", drop items, or rely on memory to track rest.
-Entire point is remember every one.
+When the user hands you a multi-step plan — a phased todo, a numbered or bulleted checklist, or "N bugs/items/tasks" to work through:
+- You MUST `init` the list with EVERY item as its own task before doing the work.
+- Enumerate all of them;
+- NEVER summarize the plan into fewer tasks, sample "the important ones", drop items, or rely on memory to track the rest.
+The entire point is to remember every one.
 </critical>
