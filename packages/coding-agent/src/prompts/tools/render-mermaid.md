@@ -5,5 +5,5 @@ Parameters:
 - `config` (optional): JSON render configuration (spacing and layout options).
 Behavior:
 - Returns ASCII diagram text.
-- Saves full output to `artifact://<id>` when storage is available.
-- Returns error when Mermaid input is invalid or rendering fails.
+- Saves full output to `artifact://<id>` when storage available.
+- Returns error when Mermaid input invalid or rendering fails.

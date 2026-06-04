@@ -4,14 +4,14 @@ condition: "@deprecated"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 ---
 
-Do not use `@deprecated` as a substitute for finishing a refactor. If an API is obsolete inside the code you control, update every call site and remove the old name in the same change.
+NEVER use `@deprecated` as substitute for finishing refactor. If API obsolete inside code you control, update every call site and remove old name in same change.
 
 ## Why
 
 - Deprecated aliases keep two contracts alive.
-- Future maintainers must preserve behavior nobody should call.
-- Tests can pass while production code keeps using the old path.
-- The next refactor has to unwind both the real API and the compatibility layer.
+- Future maintainers MUST preserve behavior nobody should call.
+- Tests pass while production code uses old path.
+- Next refactor unwinds real API plus compatibility layer.
 
 ## Avoid
 
@@ -37,8 +37,8 @@ export function createClient(options: ClientOptions): Client { ... }
 
 ## Exceptions
 
-- Public package APIs with a documented migration window.
-- Third-party declarations where the deprecated marker reflects an external contract.
-- Tests that intentionally verify deprecated API behavior during a supported transition.
+- Public package APIs with documented migration window.
+- Third-party declarations where deprecated marker reflects external contract.
+- Tests intentionally verify deprecated API behavior during supported transition.
 
-If an exception applies, state the external compatibility requirement. Otherwise, finish the refactor and delete the deprecated symbol.
+If exception applies, state external compatibility requirement. Otherwise finish refactor and delete deprecated symbol.

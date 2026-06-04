@@ -1,4 +1,4 @@
-You MUST summarize what was done in this conversation, written like a pull request description.
+MUST summarize what was done in this conversation, written like a pull request description.
 
 Rules:
 - MUST be 2-3 sentences max

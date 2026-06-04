@@ -18,9 +18,9 @@ Determine:
 <output-format>
 Each detail point:
 - Start with past-tense verb (added, fixed, moved, extracted)
-- Under 120 chars, ends with period
-- Group related cross-file changes
-Priority: user-visible behavior > performance/security > architecture > internal implementation
+- Under 120 chars, ends with period.
+- Group related cross-file changes.
+Priority: user-visible behavior > performance/security > architecture > internal implementation.
 changelog_category: Added|Changed|Fixed|Deprecated|Removed|Security
 user_visible: true for features, user-facing bugs, breaking changes, security
 </output-format>

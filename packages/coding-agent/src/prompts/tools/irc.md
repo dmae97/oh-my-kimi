@@ -1,38 +1,38 @@
-Sends short text messages to other live agents in this process and receives their prose replies.
+Sends short text to other live agents in this process; receives their prose replies.
 
 <instruction>
-- The main agent is addressable as `Main`. Subagents reuse their task id (e.g. `AuthLoader`, or `AuthLoader-2` when the name repeats).
-- `op: "list"` returns the current set of visible peers. Use it before sending if you are not sure who is live.
-- `op: "send"` delivers `message` to `to`. `to` may be a specific id or `"all"` to broadcast.
-- The recipient generates the reply via an ephemeral side-channel turn that uses their current model, system prompt, and history — it does **not** wait for the recipient's main loop to be free, so it is safe to IRC an agent that is currently inside a long-running tool call.
-- The exchange (incoming question + auto-reply) is queued for injection into the recipient's persisted history; the recipient sees it on its next turn and can follow up if needed.
+- Main agent addressable as `Main`. Subagents reuse task id (e.g. `AuthLoader`, or `AuthLoader-2` when name repeats).
+- `op: "list"` returns current set of visible peers. Use before sending if not sure who is live.
+- `op: "send"` delivers `message` to `to`. `to` maybe specific id or `"all"` broadcast.
+- Recipient generates reply via ephemeral side-channel turn; uses current model, system prompt, history. NEVER waits for recipient main loop free; safe IRC agent inside long-running tool call.
+- Exchange (incoming question + auto-reply) queued for injection into recipient persisted history; recipient sees next turn, can follow up if needed.
 </instruction>
 
 <when_to_use>
-You SHOULD reach for `irc` proactively when continuing alone is wasteful or wrong. When in doubt, prefer messaging.
-- **Unexpected state.** You hit something the original task did not describe — a missing file, a config that contradicts the assignment, an API behaving differently than you were told, a tool failing in a way that suggests the spec is wrong. DM `Main` (or the spawning agent) for guidance instead of guessing.
-- **Blocked by another agent.** A peer holds the file/branch/resource you need, has already started the change you are about to make, or owns a decision you depend on. DM that peer (or broadcast to discover who) before duplicating or stepping on work.
-- **Decision points outside your scope.** A genuine fork in the road that the assignment did not pre-decide (e.g. which of two viable APIs to use, whether to refactor adjacent code). Ask the requester rather than picking unilaterally.
-- **Coordination opportunities.** You realize a peer's in-flight work would benefit from yours, or vice-versa.
+SHOULD reach for `irc` proactively when continuing alone wasteful or wrong. When in doubt, prefer messaging.
+- **Unexpected state.** Hit something original task did not describe — missing file, config contradicts assignment, API behaving differently than told, tool failing suggests spec wrong. DM `Main` (or spawning agent) for guidance instead of guessing.
+- **Blocked by another agent.** Peer holds file/branch/resource needed, already started change about to make, or owns decision depend on. DM that peer (or broadcast to discover who) before duplicating or stepping on work.
+- **Decision points outside your scope.** Genuine fork assignment didn't pre-decide (which of two viable APIs, whether refactor adjacent code). Ask requester; NEVER pick unilaterally.
+- **Coordination opportunities.** Peer's in-flight work would benefit from yours, or vice-versa.
 
-Do **not** use `irc` for: routine progress updates, things you can verify with a tool call, or questions whose answer is already in your assignment / repo / docs.
+NEVER use `irc` for: routine progress updates, things you can verify with tool call, or questions whose answer already in assignment / repo / docs.
 </when_to_use>
 
 <etiquette>
-These rules apply to both sending and replying.
-- **Plain prose only.** Do not send structured JSON status payloads (e.g. `{"type":"task_completed",…}`). Write a normal sentence: "Done with the auth refactor — left a TODO in `src/server/auth.ts` for the rate limiter."
-- **Do not quote the message you are replying to.** The sender already saw it; the TUI already renders it. Lead with the answer.
-- **Use IRC, not terminal tools, to learn about peers.** Do not `grep` artifacts, read other sessions' JSONL files, or shell-poke around to figure out what another agent is doing. DM them — they have the live answer and you do not.
-- **One round-trip is enough.** Replies arrive synchronously when the recipient is reachable. Do not follow up with "did you get my message?" — they did. If `delivered` is empty or the result was `failed`, the peer is unavailable; move on or report the blocker, do not retry in a loop.
-- **Stay terse.** A DM is a chat message, not a memo. One question per send when you can. Share file paths and artifacts via `local://` / `memory://` / `artifact://` URLs instead of pasting blobs.
-- **Address peers by id.** Use the exact id from `op: "list"` (e.g. `AuthLoader`, `Main`). Do not invent friendly names.
-- **Do not IRC for things a tool would answer.** If a `read`, `grep`, or build command would resolve the question, do that first.
-- **When you receive an IRC message, answer it before continuing.** The recipient injects the question + your auto-reply into your history; address it directly, do not repeat it back to the user.
+Rules apply both sending and replying.
+- **Plain prose only.** NEVER send structured JSON status payloads (e.g. `{"type":"task_completed",…}`). Write normal sentence: "Done with the auth refactor — left a TODO in `src/server/auth.ts` for the rate limiter."
+- **NEVER quote the message you are replying to.** Sender already saw it; TUI already renders it. Lead with answer.
+- **Use IRC, not terminal tools, to learn about peers.** NEVER `grep` artifacts, read other sessions' JSONL files, or shell-poke around to figure out what another agent doing. DM them — they have live answer and you do not.
+- **One round-trip enough.** Replies arrive synchronously when recipient reachable. NEVER follow up with "did you get my message?" — they did. If `delivered` empty or result `failed`, peer unavailable; move on or report blocker, NEVER retry in loop.
+- **Stay terse.** DM is chat message, not memo. One question per send when you can. Share file paths and artifacts via `local://` / `memory://` / `artifact://` URLs instead of pasting blobs.
+- **Address peers by id.** Use exact id from `op: "list"` (e.g. `AuthLoader`, `Main`). NEVER invent friendly names.
+- **NEVER IRC for things tool would answer.** If `read`, `grep`, or build command resolves question, run that first.
+- **When receive IRC message, answer before continuing.** Recipient injects question + auto-reply into history; address directly, NEVER repeat back.
 </etiquette>
 
 <output>
-- `send`: returns each recipient that received the message and any prose replies that arrived.
-- `list`: returns peers and channels visible to the caller.
+- `send` returns each recipient that received message and any prose replies arrived.
+- `list` returns peers and channels visible to caller.
 </output>
 
 <examples>

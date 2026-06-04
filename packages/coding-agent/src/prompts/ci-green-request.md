@@ -1,6 +1,6 @@
 <critical>
-Keep going until the current branch CI is green.
-Do not stop after a single fix attempt.
+Keep going until current branch CI green.
+NEVER stop after single fix attempt.
 </critical>
 
 <instruction>
@@ -11,26 +11,26 @@ Do not stop after a single fix attempt.
 
 <procedure>
 1. Watch workflow runs for current HEAD commit.
-2. If any run fails, inspect failing job output and logs.
-3. Identify root cause and make minimal correct fix.
-4. Run local verification if it reduces chance of another failing push.
-5. Push the branch.
+2. If run fails, inspect failing job output and logs.
+3. Identify root cause; make minimal correct fix.
+4. Run local verification if reduces chance another failing push.
+5. Push branch.
 6. Watch workflow runs for new HEAD commit again.
 7. Repeat until workflow runs for latest HEAD commit succeed.
 </procedure>
 
 <caution>
 - Treat each push as fresh CI attempt. Re-watch new HEAD immediately.
-- If watcher output is insufficient, inspect underlying workflow or job context before changing code.
+- If watcher output insufficient, inspect underlying workflow or job context before changing code.
 </caution>
 
 {{#if headTag}}
 <instruction>
-Once CI is green, ensure the final commit is tagged `{{headTag}}` and push that tag.
+Once CI green, ensure final commit tagged `{{headTag}}` and push that tag.
 </instruction>
 {{/if}}
 
 <critical>
-The task is complete only when the workflow runs for the latest HEAD commit succeed.
-{{#if headTag}}The final green commit must be tagged `{{headTag}}` and that tag must be pushed.{{/if}}
+Task complete only when workflow runs for latest HEAD commit succeed.
+{{#if headTag}}Final green commit MUST be tagged `{{headTag}}` and that tag MUST be pushed.{{/if}}
 </critical>

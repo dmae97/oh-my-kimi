@@ -42,11 +42,11 @@ Returns success/failure; on failure, error message indicates:
 </output>
 
 <critical>
-- You MUST read the target file before editing
-- You MUST copy anchors and context lines verbatim (including whitespace)
-- You NEVER use anchors as comments (no line numbers, location labels, placeholders like `@@ @@`)
-- You NEVER place new lines outside the intended block
-- If edit fails or breaks structure, you MUST re-read the file and produce a new patch from current content — you NEVER retry the same diff
+- MUST read target file before editing
+- MUST copy anchors and context lines verbatim (including whitespace)
+- NEVER use anchors as comments (no line numbers, location labels, placeholders like `@@ @@`)
+- NEVER place new lines outside the intended block
+- If edit fails or breaks structure, MUST re-read file and produce new patch from current content—NEVER retry same diff
 - NEVER use edit to fix indentation, whitespace, or reformat code. Formatting is a single command run once at the end (`bun fmt`, `cargo fmt`, `prettier —write`, etc.)—not N individual edits. If you see inconsistent indentation after an edit, leave it; the formatter will fix all of it in one pass.
 </critical>
 
@@ -60,11 +60,11 @@ Returns success/failure; on failure, error message indicates:
 # Delete
 `edit {"path":"obsolete.txt","edits":[{"op":"delete"}]}`
 # Multiple entries
-All entries in one call apply to the top-level `path`; use separate calls for different files.
+All entries in one call apply to top-level `path`; use separate calls for different files.
 </examples>
 
 <avoid>
 - Generic anchors: `import`, `export`, `describe`, `function`, `const`
-- Repeating same addition in multiple hunks (duplicate blocks)
-- Full-file overwrites for minor changes (acceptable for major restructures or short files)
+- Repeating same addition in multiple hunks; duplicate blocks
+- Full-file overwrites for minor changes; acceptable for major restructures or short files
 </avoid>

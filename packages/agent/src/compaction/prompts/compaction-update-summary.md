@@ -1,26 +1,26 @@
-You MUST incorporate new messages above into the existing handoff summary in <previous-summary> tags, used by another LLM to resume task.
+MUST incorporate new messages above into existing handoff summary in <previous-summary> tags, used by another LLM to resume task.
 RULES:
 - MUST preserve all information from previous summary
-- MUST add new progress, decisions, and context from new messages
-- MUST update Progress: move items from "In Progress" to "Done" when completed
+- MUST add new progress, decisions, context from new messages
+- MUST move items from "In Progress" to "Done" when completed
 - MUST update "Next Steps" based on what was accomplished
 - MUST preserve exact file paths, function names, and error messages
-- You MAY remove anything no longer relevant
+- MAY remove anything no longer relevant
 
-IMPORTANT: If new messages end with unanswered question or request to user, you MUST add it to Critical Context (replacing any previous pending question if answered).
+IMPORTANT: If new messages end with unanswered question or request to user, MUST add it to Critical Context (replacing any previous pending question if answered).
 
-You MUST use this format (omit sections if not applicable):
+MUST use this format (omit sections if not applicable):
 
 ## Goal
-[Preserve existing goals; add new ones if task expanded]
+Preserve existing goals; add new if task expanded
 
 ## Constraints & Preferences
-- [Preserve existing; add new ones discovered]
+- Preserve existing; add new discovered
 
 ## Progress
 
 ### Done
-- [x] [Include previously done and newly completed items]
+- [x] Include previously done and newly completed
 
 ### In Progress
 - [ ] [Current work—update based on progress]
@@ -32,14 +32,14 @@ You MUST use this format (omit sections if not applicable):
 - **[Decision]**: [Brief rationale] (preserve all previous, add new)
 
 ## Next Steps
-1. [Update based on current state]
+1. Need update from current state
 
 ## Critical Context
-- [Preserve important context; add new if needed]
+- Preserve important context; add new if needed
 
 ## Additional Notes
-[Other important info not fitting above]
+Other important info not fitting above
 
-You MUST output only the structured summary; you NEVER include extra text.
+MUST output only structured summary; NEVER include extra text.
 
-Sections MUST be kept concise. You MUST preserve relevant tool outputs/command results. You MUST include repository state changes (branch, uncommitted changes) if mentioned.
+Sections MUST be concise. MUST preserve relevant tool outputs/command results. MUST include repository state changes (branch, uncommitted changes) if mentioned.

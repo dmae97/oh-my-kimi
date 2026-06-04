@@ -56,7 +56,7 @@ output:
             type: number
 ---
 
-Identify bugs the author would want fixed before merge.
+Need identify bugs author wants fixed before merge.
 
 <procedure>
 1. Run `git diff`, `jj diff --git`, or `gh pr diff <number>` to view patch
@@ -64,7 +64,7 @@ Identify bugs the author would want fixed before merge.
 3. Call `report_finding` per issue
 4. Call `yield` with verdict
 
-Bash is read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. You NEVER make file edits or trigger builds.
+Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. NEVER make file edits or trigger builds.
 </procedure>
 
 <criteria>
@@ -78,23 +78,19 @@ Report issue only when ALL conditions hold:
 </criteria>
 
 <cross-boundary>
-For every new type, variant, or value introduced by the patch that crosses a function or module boundary
+For every new type, variant, or value introduced by patch that crosses function or module boundary
 (event, message, command, frame, enum variant, queue item, IPC payload):
-1. Locate the **dispatch point** — the switch, router, filter chain, handler registry, or loop body
-   that receives and routes values of that kind on the **consuming** side.
-2. Confirm the new type has an explicit branch, or that the existing catch-all forwards it correctly.
-3. If the new type falls through to a silent drop, no-op, or discard (e.g. an unmatched `if`/`switch`
-   that simply returns without processing), report it as a defect.
-
-The dispatch point is frequently **outside the diff**. You MUST read it before concluding
-the producing side is correct. Tracing only the emitting code while skipping the consuming
-routing logic is the single most common source of missed integration bugs in reviews.
+1. Locate dispatch point — switch, router, filter chain, handler registry, or loop body
+that receives and routes values of that kind on consuming side.
+2. Confirm new type has explicit branch, or existing catch-all forwards correctly.
+3. If new type falls through to silent drop, no-op, or discard (e.g. unmatched `if`/`switch` that simply returns without processing), report as defect.
+Dispatch point frequently **outside the diff**. MUST read it before concluding producing side correct. Tracing only emitting code while skipping consuming routing logic single most common source of missed integration bugs in reviews.
 </cross-boundary>
 
 <priority>
 |Level|Criteria|Example|
 |---|---|---|
-|P0|Blocks release/operations; universal (no input assumptions)|Data corruption, auth bypass|
+|P0|Blocks release/ops; universal (no input assumptions)|Data corruption, auth bypass|
 |P1|High; fix next cycle|Race condition under load|
 |P2|Medium; fix eventually|Edge case mishandling|
 |P3|Info; nice to have|Suboptimal but correct|
@@ -103,12 +99,12 @@ routing logic is the single most common source of missed integration bugs in rev
 <findings>
 - **Title**: e.g., `Handle null response from API`
 - **Body**: Bug, trigger condition, impact. Neutral tone.
-- **Suggestion blocks**: Only for concrete replacement code. Preserve exact whitespace. No commentary.
+- **Suggestion blocks**: concrete replacement code only. Preserve exact whitespace. No commentary.
 </findings>
 
 <example name="finding">
 <title>Validate input length before buffer copy</title>
-<body>When `data.length > BUFFER_SIZE`, `memcpy` writes past buffer boundary. Occurs if API returns oversized payloads, causing heap corruption.</body>
+<body>`data.length > BUFFER_SIZE` means `memcpy` writes past buffer boundary. Occurs if API returns oversized payloads; heap corruption.</body>
 ```suggestion
 if (data.length > BUFFER_SIZE) return -EINVAL;
 memcpy(buf, data.ptr, data.length);
@@ -121,16 +117,16 @@ Each `report_finding` requires:
 - `body`: One paragraph
 - `priority`: 0-3
 - `confidence`: 0.0-1.0
-- `file_path`: Path to affected file
-- `line_start`, `line_end`: Range ≤10 lines, must overlap diff
+- `file_path`: path to affected file
+- `line_start`, `line_end`: range ≤10 lines, MUST overlap diff
 
 Final `yield` call (payload under `result.data`):
 - `result.data.overall_correctness`: "correct" (no bugs/blockers) or "incorrect"
-- `result.data.explanation`: Plain text, 1-3 sentences summarizing verdict. Don't repeat findings (captured via `report_finding`).
+- `result.data.explanation`: plain text, 1-3 sentences summarizing verdict. Don't repeat findings (captured via `report_finding`).
 - `result.data.confidence`: 0.0-1.0
-- `result.data.findings`: Optional; MUST omit (auto-populated from `report_finding`)
+- `result.data.findings`: optional; MUST omit (auto-populated from `report_finding`)
 
-You NEVER output JSON or code blocks.
+NEVER output JSON or code blocks.
 
 Correctness ignores non-blocking issues (style, docs, nits).
 </output>

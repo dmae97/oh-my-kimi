@@ -1,14 +1,14 @@
-Resume autoresearch on the active session.
+Resume autoresearch on active session.
 
 {{branch_status_line}}
 {{#if has_resume_context}}
 
-Additional context from the user:
+Additional context from user:
 
 {{resume_context}}
 {{/if}}
 
-- Use the active session context above as the source of truth for goal, scope, constraints, and run history.
-- Inspect recent git history for context.
-- Continue the most promising unfinished direction.
-- Keep iterating until interrupted or until the configured iteration cap is reached.
+- Use active session context above as source of truth for goal, scope, constraints, run history.
+- Check recent git history for context.
+- Continue most promising unfinished direction.
+- Keep iterating until interrupted or until iteration cap reached.

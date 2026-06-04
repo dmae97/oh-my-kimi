@@ -1,6 +1,6 @@
 <system-reminder>
-The previous assistant turn ended with no text, reasoning, or tool call.
-Continue the active task from the current context. If the work is complete, reply with a concise final summary instead of an empty response.
+Previous assistant turn ended with no text, reasoning, or tool call.
+Continue active task from current context. If work complete, reply with concise final summary instead of empty response.
 
 (Empty response retry {{retryCount}}/{{maxRetries}})
 </system-reminder>

@@ -1,25 +1,25 @@
 Plan approved.
 {{#if contextPreserved}}
-- Context preserved. Use conversation history when useful; this plan is the source of truth if it conflicts with earlier exploration.
+- Context preserved. Use conversation history when useful; this plan source of truth if conflicts with earlier exploration.
 {{/if}}
 
 <instruction>
-You MUST execute this plan step by step. You have full tool access.
-You MUST verify each step before proceeding to the next.
+MUST execute this plan step by step. Full tool access.
+MUST verify each step before proceeding to next.
 {{#has tools "todo"}}
 Before execution, initialize todo tracking with `todo`.
 After each completed step, immediately update `todo`.
-If `todo` fails, fix the payload and retry before continuing.
+If `todo` fails, fix payload and retry before continuing.
 {{/has}}
-The plan path is for subagent handoff only. You already have the plan; NEVER read it.
+Plan path for subagent handoff only. You already have plan; NEVER read it.
 </instruction>
 
-The full plan is injected below. You MUST execute it now:
+Full plan injected below. MUST execute now:
 
 <plan path="{{finalPlanFilePath}}">
 {{planContent}}
 </plan>
 
 <critical>
-You MUST keep going until complete. This matters.
+MUST keep going until complete. Matters.
 </critical>

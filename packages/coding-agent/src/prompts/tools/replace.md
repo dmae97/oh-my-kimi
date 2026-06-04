@@ -1,10 +1,10 @@
 Performs string replacements in files with fuzzy whitespace matching.
 
 <instruction>
-- Params MUST be `{ path, edits }`; `path` is required at the top level and applies to every replacement
-- You MUST use the smallest `old_text` that uniquely identifies the change
-- If `old_text` is not unique, you MUST expand it with more context or use `all: true` to replace all occurrences
-- You SHOULD prefer editing existing files over creating new ones
+- Params MUST be `{ path, edits }`; `path` required at top level, applies to every replacement
+- MUST use smallest `old_text` that uniquely identifies change
+- If `old_text` not unique, MUST expand with more context or use `all: true` to replace all occurrences
+- SHOULD prefer editing existing files over creating new ones
 </instruction>
 
 <output>
@@ -12,11 +12,11 @@ Returns success/failure status. On success, file modified in place with replacem
 </output>
 
 <critical>
-- You MUST read the file at least once in the conversation before editing. Tool errors if you attempt edit without reading file first.
+- MUST read file at least once before editing. Tool errors if attempt edit without reading first.
 </critical>
 
 <bash-alternatives>
-Replace for content-addressed changes—you identify \_what* to change by its text.
+Replace for content-addressed changes—identify what to change by its text.
 
 For position-addressed or pattern-addressed changes, bash more efficient:
 

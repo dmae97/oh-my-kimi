@@ -1,4 +1,4 @@
 <turn-aborted>
-The previous turn was aborted. Any running tools/commands were terminated. 
-If tools were aborted, they may have partially executed; verify current state before retrying.
+Previous turn aborted. Running tools/commands terminated.
+If tools aborted, maybe partial execution; verify state before retry.
 </turn-aborted>

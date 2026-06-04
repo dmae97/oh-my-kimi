@@ -1,7 +1,7 @@
 <critical>
-Write a handoff document for another instance of yourself.
-The handoff MUST be sufficient for seamless continuation without access to this conversation.
-Output ONLY the handoff document. No preamble, no commentary, no wrapper text.
+Write handoff doc for another instance.
+Handoff MUST suffice for seamless continuation without access to this conversation.
+Output ONLY handoff doc. No preamble, no commentary, no wrapper text.
 </critical>
 
 <instruction>
@@ -9,17 +9,17 @@ Capture exact technical state, not abstractions.
 - File paths, symbol names, commands run
 - Test results, observed failures
 - Decisions made
-- Partial work affecting the next step
+- Partial work affects next step
 </instruction>
 
 <output>
 Use exactly this structure:
 
 ## Goal
-[What the user is trying to accomplish]
+[What user trying accomplish]
 
 ## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned]
+- [Constraints, preferences, requirements mentioned]
 
 ## Progress
 ### Done
@@ -29,7 +29,7 @@ Use exactly this structure:
 - [ ] [Current work if any]
 
 ### Pending
-- [ ] [Tasks mentioned but not started]
+- [ ] Tasks mentioned but not started
 
 ## Key Decisions
 - **[Decision]**: [Rationale]

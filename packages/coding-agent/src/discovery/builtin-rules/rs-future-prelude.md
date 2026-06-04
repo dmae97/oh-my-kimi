@@ -6,7 +6,7 @@ scope: "tool:edit(*.rs), tool:write(*.rs)"
 
 Use `Future` directly instead of `std::future::Future` in type positions.
 
-Rust 2024 includes `Future` in the standard prelude. Older editions can import it once with `use std::future::Future;`. Repeating the fully qualified path makes signatures harder to read without adding safety.
+Rust 2024 includes `Future` in prelude. Older editions import once with `use std::future::Future;`. Repeating fully qualified path makes signatures harder to read without adding safety.
 
 ## Examples
 
@@ -20,4 +20,4 @@ fn fetch() -> impl Future<Output = Result<Data>> { ... }
 fn poll(fut: Pin<&mut dyn Future<Output = i32>>) { ... }
 ```
 
-Pre-2024 edition? Add `use std::future::Future;` at the top.
+Pre-2024 edition? Add `use std::future::Future;` at top.

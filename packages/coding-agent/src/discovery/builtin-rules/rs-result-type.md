@@ -4,7 +4,7 @@ condition: "type\\s+Result<[A-Za-z_]\\w*>\\s*="
 scope: "tool:edit(*.rs), tool:write(*.rs)"
 ---
 
-`Result` aliases must expose the error type as a defaulted parameter.
+Need `Result` aliases expose error type as defaulted parameter.
 
 ```rust
 pub type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
@@ -16,4 +16,4 @@ Never write:
 type Result<T> = std::result::Result<T, anyhow::Error>;
 ```
 
-The default keeps common call sites short while preserving escape hatches for precise errors.
+Default keeps common call sites short; preserves escape hatches for precise errors.
