@@ -434,11 +434,15 @@ export class ProcessTerminal implements Terminal {
 
 			// DECRPM private-mode report. Resolves the matching probe by mode; the
 			// owner stays in the FIFO and is drained by its DA1 sentinel (a no-op
-			// once resolved). Per DECRPM, status 0 = unrecognized; 1/2 = set/reset,
-			// and 3/4 = permanently set/reset, still recognized.
+			// once resolved). Per DECRPM, status 0 = unrecognized, 1/2 =
+			// set/reset, 3 = permanently set, and 4 = permanently reset. Only
+			// settable or permanently-set modes are useful for features we enable.
 			const decrpmMatch = sequence.match(decrpmResponsePattern);
 			if (decrpmMatch) {
-				this.#resolvePrivateMode(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2] !== "0");
+				this.#resolvePrivateMode(
+					parseInt(decrpmMatch[1]!, 10),
+					decrpmMatch[2] !== "0" && decrpmMatch[2] !== "4",
+				);
 				return;
 			}
 
@@ -812,9 +816,11 @@ export class ProcessTerminal implements Terminal {
 	/**
 	 * Apply an in-band resize report. Stores reported geometry so `rows`/`columns`
 	 * reflect in-band values, derives cell pixel size, and drives the resize
-	 * handler so the renderer reflows.
+	 * handler only when the report changes the effective row/column geometry.
 	 */
 	#handleInBandResizeReport(rowsRaw: string, colsRaw: string, yPixelsRaw: string, xPixelsRaw: string): void {
+		const previousRows = this.rows;
+		const previousColumns = this.columns;
 		const rows = parseInt(rowsRaw, 10);
 		const cols = parseInt(colsRaw, 10);
 		const yPixels = parseInt(yPixelsRaw, 10);
@@ -827,7 +833,9 @@ export class ProcessTerminal implements Terminal {
 				heightPx: Math.max(1, Math.round(yPixels / rows)),
 			});
 		}
-		this.#resizeHandler?.();
+		if (rows > 0 && cols > 0 && (rows !== previousRows || cols !== previousColumns)) {
+			this.#resizeHandler?.();
+		}
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
