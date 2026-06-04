@@ -1519,11 +1519,13 @@ export class AcpAgent implements Agent {
 	}
 
 	/**
-	 * Ask the ACP client to confirm plan approval. Returns `true` when the user
-	 * approves and `false` when they choose to refine. Clients without
-	 * `elicitation.form` support auto-approve so plan mode never strands the
-	 * agent — without the elicitation surface there is no way to dismiss the
-	 * gate, and stranding the agent here was the bug this method exists to fix.
+	 * Ask the ACP client to confirm plan approval. Returns `true` only on an
+	 * explicit `APPROVE_OPTION` selection. Refine, dismissal (`undefined`), or
+	 * any unrecognized value falls through to refine semantics — the caller
+	 * keeps plan mode active and surfaces guidance text to the agent. Clients
+	 * without `elicitation.form` support auto-approve because there is no
+	 * confirmation surface available; without that, plan mode would strand
+	 * the agent (the bug this method exists to fix).
 	 */
 	async #requestAcpPlanApprovalChoice(sessionId: string, title: string, planContent: string): Promise<boolean> {
 		const supportsForm = this.#clientCapabilities?.elicitation?.form != null;
@@ -1542,10 +1544,10 @@ export class AcpAgent implements Agent {
 			{ type: "string", enum: [APPROVE_OPTION, REFINE_OPTION] },
 			undefined,
 		);
-		// Treat dismissal / unknown values as approval rather than refinement so
-		// that "close the dialog" doesn't put the agent into a refine loop. The
-		// agent already gated by writing the plan; explicit refine is opt-in.
-		return value !== REFINE_OPTION;
+		// Approve ONLY on the explicit approve selection. Dismissal, cancel,
+		// timeout, or any other non-approve response falls through to refine
+		// semantics so closing the dialog can never grant write access.
+		return value === APPROVE_OPTION;
 	}
 
 	#buildModeState(session: AgentSession): SessionModeState {

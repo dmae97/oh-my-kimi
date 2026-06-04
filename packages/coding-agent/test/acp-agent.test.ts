@@ -407,7 +407,9 @@ afterEach(async () => {
 	}
 });
 
-async function createHarness(): Promise<AgentHarness> {
+async function createHarness(
+	options: { elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse> } = {},
+): Promise<AgentHarness> {
 	const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-acp-test-"));
 	cleanupRoots.push(root);
 	const agentDir = path.join(root, "agent");
@@ -426,6 +428,9 @@ async function createHarness(): Promise<AgentHarness> {
 		sessionUpdate: async (notification: SessionNotification) => {
 			updates.push(notification);
 		},
+		unstable_createElicitation: options.elicitationHandler
+			? async (req: CreateElicitationRequest) => options.elicitationHandler!(req)
+			: undefined,
 		signal: abortController.signal,
 		closed: Promise.withResolvers<void>().promise,
 	} as unknown as AgentSideConnection;
@@ -438,8 +443,18 @@ async function createHarness(): Promise<AgentHarness> {
 		return session as unknown as AgentSession;
 	};
 
+	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession);
+	if (options.elicitationHandler) {
+		// Drive `initialize` so the agent caches `clientCapabilities.elicitation.form`
+		// and `#requestAcpPlanApprovalChoice` actually goes through the elicitation.
+		await agent.initialize({
+			protocolVersion: 1,
+			clientCapabilities: { elicitation: { form: {} } },
+		} as Parameters<typeof agent.initialize>[0]);
+	}
+
 	return {
-		agent: new AcpAgent(connection, factory, initialSession as unknown as AgentSession),
+		agent,
 		updates,
 		abortController,
 		sessions,
@@ -656,6 +671,56 @@ describe("ACP agent", () => {
 			| { currentValue?: unknown }
 			| undefined;
 		expect(modeConfig?.currentValue).toBe("default");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("plan-approval standing handler treats dismissed elicitation as refine, never approves", async () => {
+		// Regression for the P1 review finding on #1870: when a form-capable
+		// ACP client dismissed/cancelled the elicitation, the handler was
+		// returning the dismissal as approval — silently granting write
+		// access without explicit consent. Dismissal MUST fall through to
+		// refine semantics: plan mode stays active, the plan file stays put,
+		// and no mode/config updates are emitted.
+		const harness = await createHarness({
+			elicitationHandler: async () => ({ action: "cancel" }),
+		});
+		Settings.instance.set("plan.enabled", true);
+
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+
+		const artifactsDir = session.sessionManager.getArtifactsDir();
+		const planPath = path.join(artifactsDir!, "local", "PLAN.md");
+		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
+
+		const updatesBefore = harness.updates.length;
+		const handler = session.standingResolveHandler!;
+		const result = (await handler({
+			action: "apply",
+			reason: "Plan complete.",
+			extra: { title: "words-counter" },
+		})) as { content: Array<{ type: string; text: string }> };
+
+		expect(result.content[0]?.text).toMatch(/refinement requested/i);
+		// Plan file stays put; no rename, no write-access grant.
+		expect(await Bun.file(planPath).exists()).toBe(true);
+		expect(await Bun.file(path.join(artifactsDir!, "local", "words-counter.md")).exists()).toBe(false);
+		// Plan mode + standing handler stay active so the agent can iterate.
+		expect(session.planModeState?.enabled).toBe(true);
+		expect(typeof session.standingResolveHandler).toBe("function");
+		expect(session.planReferencePath).toBeUndefined();
+		// No mode-exit notifications were emitted.
+		const postDismissUpdates = harness.updates.slice(updatesBefore);
+		expect(
+			postDismissUpdates.some(
+				notification =>
+					notification.update.sessionUpdate === "current_mode_update" &&
+					notification.update.currentModeId === "default",
+			),
+		).toBe(false);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
