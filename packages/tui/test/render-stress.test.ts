@@ -25,6 +25,36 @@ const SKIP_IN_CI = Boolean(Bun.env.CI);
 
 type StressSubprocess = Subprocess<Blob, "pipe", "pipe">;
 
+// Every spawned stress subprocess, tracked process-wide. Each scenario child
+// busy-loops in Ghostty WASM without yielding to its JS event loop, so a SIGTERM
+// handler would never run — only SIGKILL reliably stops one. And if the parent
+// test process is interrupted (Ctrl-C) or killed before a scenario's own timeout
+// fires, its children would be reparented to init and spin a core forever; the
+// exit/signal hooks below force-kill them on every parent-exit path.
+const liveSubprocesses = new Set<StressSubprocess>();
+
+function killAllSubprocesses(): void {
+	for (const proc of liveSubprocesses) proc.kill("SIGKILL");
+	liveSubprocesses.clear();
+}
+
+let subprocessCleanupInstalled = false;
+function installSubprocessCleanup(): void {
+	if (subprocessCleanupInstalled) return;
+	subprocessCleanupInstalled = true;
+	process.on("exit", killAllSubprocesses);
+	const onSignal = (signal: NodeJS.Signals): void => {
+		killAllSubprocesses();
+		// Restore default disposition and re-raise so the process still exits
+		// from the signal instead of hanging on this listener.
+		process.removeListener(signal, onSignal);
+		process.kill(process.pid, signal);
+	};
+	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+		process.once(signal, onSignal);
+	}
+}
+
 function parsePositiveInt(name: string, fallback: number): number {
 	const raw = Bun.env[name];
 	if (raw === undefined || raw.length === 0) return fallback;
@@ -72,7 +102,7 @@ function stressBatchLabel(scenarios: readonly Scenario[]): string {
 async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promise<void> {
 	const concurrency = stressConcurrency(scenarios);
 	if (concurrency === 0) return;
-	const live = new Set<StressSubprocess>();
+	installSubprocessCleanup();
 	let next = 0;
 	let firstError: unknown;
 	let signalFailure!: () => void;
@@ -82,7 +112,7 @@ async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promi
 	const fail = (error: unknown): void => {
 		if (firstError !== undefined) return;
 		firstError = error;
-		for (const proc of live) proc.kill();
+		killAllSubprocesses();
 		signalFailure();
 	};
 	const drain = async (): Promise<void> => {
@@ -90,7 +120,7 @@ async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promi
 			const scenario = scenarios[next++];
 			if (scenario === undefined) return;
 			try {
-				await runScenarioInSubprocess(scenario, live);
+				await runScenarioInSubprocess(scenario);
 			} catch (error) {
 				fail(error);
 				return;
@@ -102,13 +132,13 @@ async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promi
 	if (firstError !== undefined) throw firstError;
 }
 
-async function runScenarioInSubprocess(scenario: Scenario, live: Set<StressSubprocess>): Promise<void> {
+async function runScenarioInSubprocess(scenario: Scenario): Promise<void> {
 	const proc = Bun.spawn([process.execPath, SUBPROCESS_ENTRY], {
 		stdin: new Blob([JSON.stringify(scenario)]),
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	live.add(proc);
+	liveSubprocesses.add(proc);
 	const stdoutPromise = new Response(proc.stdout).text();
 	const stderrPromise = new Response(proc.stderr).text();
 	const completed = (async (): Promise<StressScenarioResult> => {
@@ -119,7 +149,7 @@ async function runScenarioInSubprocess(scenario: Scenario, live: Set<StressSubpr
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timedOut = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => {
-			proc.kill();
+			proc.kill("SIGKILL");
 			reject(
 				new Error(
 					`TUI stress scenario timed out after ${scenario.timeoutMs}ms: ${scenario.name} seed=${formatSeed(scenario.seed)} ops=${scenario.iterations}`,
@@ -132,7 +162,7 @@ async function runScenarioInSubprocess(scenario: Scenario, live: Set<StressSubpr
 		if (!result.ok) throw scenarioFailureError(result);
 	} finally {
 		if (timer !== undefined) clearTimeout(timer);
-		live.delete(proc);
+		liveSubprocesses.delete(proc);
 	}
 }
 
