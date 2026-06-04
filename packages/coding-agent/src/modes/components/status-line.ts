@@ -764,7 +764,7 @@ export class StatusLineComponent implements Component {
 		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
 		const sessionName =
 			effectiveSettings.sessionAccent !== false ? this.session.sessionManager?.getSessionName() : undefined;
-		const accentHex = sessionName ? getSessionAccentHex(sessionName) : undefined;
+		const accentHex = sessionName ? getSessionAccentHex(sessionName, theme.accentSurfaceLuminance) : undefined;
 		const gapColor = getSessionAccentAnsi(accentHex) ?? theme.getFgAnsi("border");
 		const gapFill = `${gapColor}${theme.boxRound.horizontal.repeat(gapWidth)}\x1b[39m`;
 		return leftGroup + gapFill + rightGroup;

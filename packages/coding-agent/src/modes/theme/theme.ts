@@ -10,7 +10,7 @@ import {
 	supportsLanguage as nativeSupportsLanguage,
 } from "@oh-my-pi/pi-natives";
 import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
-import { adjustHsv, getCustomThemesDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import * as z from "zod/v4";
 // Embed theme JSON files at build time
@@ -1290,6 +1290,16 @@ export class Theme {
 	#bgColors: Record<ThemeBg, string>;
 	#symbols: SymbolMap;
 	#spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>>;
+	/**
+	 * Perceptual luma (0..1) of the status-line background — used to classify the
+	 * theme light/dark. Undefined when it can't be resolved. Classified against the
+	 * status line (the surface session accents render on) rather than the chat bubble
+	 * (`userMessageBg`), which some themes (e.g. `porcelain`) style dark on an
+	 * otherwise-light theme.
+	 */
+	readonly statusLineLuminance: number | undefined;
+	/** WCAG relative luminance of the status-line background — basis for accent contrast. */
+	readonly #statusLineContrastLuminance: number | undefined;
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
@@ -1299,6 +1309,8 @@ export class Theme {
 		symbolOverrides: Partial<Record<SymbolKey, string>>,
 		spinnerFramesOverrides: Partial<Record<SpinnerType, string[]>> = {},
 	) {
+		this.statusLineLuminance = colorLuma(bgColors.statusLineBg);
+		this.#statusLineContrastLuminance = relativeLuminance(bgColors.statusLineBg);
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
 			this.#fgColors[key] = fgAnsi(value, mode);
@@ -1318,6 +1330,19 @@ export class Theme {
 			}
 		}
 		this.#spinnerFramesOverrides = spinnerFramesOverrides;
+	}
+
+	/** True when the active theme has a light status-line background. */
+	get isLight(): boolean {
+		return this.statusLineLuminance !== undefined && this.statusLineLuminance > 0.5;
+	}
+
+	/**
+	 * Surface luminance to size session accents against on light themes; undefined on
+	 * dark themes so accents stay vivid. Pass straight to `getSessionAccentHex`.
+	 */
+	get accentSurfaceLuminance(): number | undefined {
+		return this.isLight ? this.#statusLineContrastLuminance : undefined;
 	}
 
 	fg(color: ThemeColor, text: string): string {
@@ -2332,13 +2357,8 @@ export function isLightTheme(themeName?: string): boolean {
 	}
 	try {
 		const resolved = resolveVarRefs(themeJson.colors.userMessageBg, themeJson.vars ?? {});
-		if (typeof resolved !== "string" || !resolved.startsWith("#") || resolved.length !== 7) return false;
-		const r = parseInt(resolved.slice(1, 3), 16) / 255;
-		const g = parseInt(resolved.slice(3, 5), 16) / 255;
-		const b = parseInt(resolved.slice(5, 7), 16) / 255;
-		// Relative luminance (ITU-R BT.709)
-		const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-		return luminance > 0.5;
+		const luminance = colorLuma(resolved);
+		return luminance !== undefined && luminance > 0.5;
 	} catch {
 		return false;
 	}

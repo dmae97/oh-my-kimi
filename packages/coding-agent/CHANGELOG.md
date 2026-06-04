@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## Fixed
+
+- Fixed the status line session name (and the editor border / status-line gap fill) being nearly illegible on light themes.
 ### Breaking Changes
 
 - Removed synchronous `readTextSync` from `SessionStorage` and core implementations (`MemorySessionStorage`, `FileSessionStorage`, `RedisSessionStorage`, `SqlSessionStorage`), requiring callers to use async text reads
