@@ -1237,11 +1237,15 @@ export class AcpAgent implements Agent {
 	}
 
 	async #pushConfigOptionUpdate(record: ManagedSessionRecord): Promise<void> {
+		await this.#pushConfigOptionUpdateForSession(record.session);
+	}
+
+	async #pushConfigOptionUpdateForSession(session: AgentSession): Promise<void> {
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: session.sessionId,
 			update: {
 				sessionUpdate: "config_option_update",
-				configOptions: this.#buildConfigOptions(record.session),
+				configOptions: this.#buildConfigOptions(session),
 			},
 		});
 	}
@@ -1405,7 +1409,7 @@ export class AcpAgent implements Agent {
 	 * this handler validates the plan file, normalizes the title, asks the ACP
 	 * client to confirm (via `unstable_createElicitation` when supported), and on
 	 * approval renames the plan to `local://<title>.md`, exits plan mode, and
-	 * notifies the client of the mode change so the agent regains full tools.
+	 * notifies the client of both mode surfaces so the agent regains full tools.
 	 *
 	 * Mirrors `InteractiveMode.#runPlanApprovalResolve` for the parts the agent
 	 * sees (same `PlanApprovalDetails` shape, same source tool name `plan_approval`).
@@ -1471,8 +1475,9 @@ export class AcpAgent implements Agent {
 						sessionId: session.sessionId,
 						update: this.#buildCurrentModeUpdate(session),
 					});
+					await this.#pushConfigOptionUpdateForSession(session);
 				} catch (error) {
-					logger.warn("Failed to emit current_mode_update after plan approval", {
+					logger.warn("Failed to emit mode updates after plan approval", {
 						sessionId: session.sessionId,
 						error,
 					});

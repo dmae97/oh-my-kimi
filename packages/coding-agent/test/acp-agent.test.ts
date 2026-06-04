@@ -613,6 +613,7 @@ describe("ACP agent", () => {
 		const planPath = path.join(artifactsDir!, "local", "PLAN.md");
 		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
 
+		const updatesBefore = harness.updates.length;
 		const handler = session.standingResolveHandler!;
 		const result = (await handler({
 			action: "apply",
@@ -635,14 +636,26 @@ describe("ACP agent", () => {
 		expect(session.planModeState).toBeUndefined();
 		expect(session.standingResolveHandler).toBeUndefined();
 		expect(session.planReferencePath).toBe("local://words-counter.md");
-		// Mode-change notification reached the client so Zed's UI reflects the exit.
+		const approvalUpdates = harness.updates.slice(updatesBefore);
+		// Mode-change notifications reached the client so Zed's UI and config
+		// selector both reflect the approval-driven exit.
 		expect(
-			harness.updates.some(
+			approvalUpdates.some(
 				notification =>
 					notification.update.sessionUpdate === "current_mode_update" &&
 					notification.update.currentModeId === "default",
 			),
 		).toBe(true);
+		const configUpdate = approvalUpdates.find(
+			notification => notification.update.sessionUpdate === "config_option_update",
+		);
+		if (configUpdate?.update.sessionUpdate !== "config_option_update") {
+			throw new Error("expected config_option_update after plan approval");
+		}
+		const modeConfig = configUpdate.update.configOptions.find(option => option.id === "mode") as
+			| { currentValue?: unknown }
+			| undefined;
+		expect(modeConfig?.currentValue).toBe("default");
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
