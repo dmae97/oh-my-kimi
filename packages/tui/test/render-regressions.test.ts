@@ -2477,7 +2477,10 @@ describe("TUI terminal-state regressions", () => {
 
 							// Every logical row is reachable through native scrollback ∪ viewport.
 							const baseY = term.getBufferPosition().baseY;
-							const history = term.getScrollBuffer().slice(0, baseY).map(line => line.trimEnd());
+							const history = term
+								.getScrollBuffer()
+								.slice(0, baseY)
+								.map(line => line.trimEnd());
 							const reachable = new Set([...history, ...visible(term)].map(line => line.trim()));
 							for (const row of grown) {
 								expect(reachable.has(row), `${row} must stay reachable`).toBe(true);

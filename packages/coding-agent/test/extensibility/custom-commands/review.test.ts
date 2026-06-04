@@ -8,7 +8,6 @@ import type { HookCommandContext } from "../../../src/extensibility/hooks/types"
 import * as git from "../../../src/utils/git";
 import * as jj from "../../../src/utils/jj";
 
-
 const SAMPLE_JJ_DIFF = `diff --git a/src/workspace.ts b/src/workspace.ts
 --- a/src/workspace.ts
 +++ b/src/workspace.ts
@@ -141,7 +140,6 @@ describe("ReviewCommand", () => {
 			gitDiffSpy.mockRestore();
 		}
 	});
-
 
 	it("includes JJ diff context for custom review prompts", async () => {
 		const dir = await createTempDir();

@@ -166,13 +166,6 @@ function parseCachedEditorConfig(configPath: string): ParsedEditorConfig | undef
 		// for callers like the edit renderer that hand us arbitrary strings.
 		if (isFsError(err)) return undefined;
 		throw err;
-	} catch {
-		// Editorconfig probing is best-effort: any filesystem error (ENOENT,
-		// ENAMETOOLONG from oversized path segments, ENOTDIR, EACCES, EIO, …)
-		// means "no usable config here". Cache the miss so we don't re-probe
-		// the same bogus path on every render (issue #1871).
-		editorConfigCache.set(key, null);
-		return undefined;
 	}
 	const parsed = parseEditorConfigFile(content);
 	editorConfigCache.set(key, parsed);

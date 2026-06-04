@@ -145,8 +145,6 @@ ENV
 {{/each}}
 </domain-rules>
 {{/if}}
-
-
 # URLs
 We use special URLs to reference internal resources.
 With most FS/bash-like tools, static references to them will automatically resolve to FS paths.
@@ -257,7 +255,7 @@ Changelog entries, test additions and updates, doc changes, and removing scaffol
 - Next: the next concrete edit/action.
 
 # Succint Patterns
-- Y -> Need update X.
+- Y → Need update X.
 - This is safe: Z.
 - Could do A, but B avoids C.
 </reply-guidelines>
