@@ -93,10 +93,7 @@ function transmissionOverride(): KittyTransmissionMedium | "auto" {
  * non-supporting outer terminal); `PI_KITTY_PLACEHOLDERS=1` forces on (e.g.
  * for a wezterm nightly that has merged placeholder support).
  */
-export function detectKittyUnicodePlaceholdersSupport(
-	terminalId: string,
-	env: NodeJS.ProcessEnv = Bun.env,
-): boolean {
+export function detectKittyUnicodePlaceholdersSupport(terminalId: string, env: NodeJS.ProcessEnv = Bun.env): boolean {
 	const offRaw = env.PI_NO_KITTY_PLACEHOLDERS?.trim().toLowerCase();
 	if (offRaw === "1" || offRaw === "true" || offRaw === "on" || offRaw === "yes" || offRaw === "y") return false;
 	const force = env.PI_KITTY_PLACEHOLDERS?.trim().toLowerCase();
