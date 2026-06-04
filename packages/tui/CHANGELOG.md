@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `NativeScrollbackLiveRegion` component seam (`getNativeScrollbackLiveRegionStart()`): a component reports the local line index where its live/transient suffix begins, and `TUI` treats that suffix — plus every root child rendered below it — as not yet safe to commit to native scrollback on ED3-risk terminals whose viewport position is unobservable (Ghostty/kitty/Alacritty/VTE/iTerm2 on POSIX).
+
+### Fixed
+
+- Fixed persistent line duplication in native scrollback while a foreground turn streamed on ED3-risk terminals with an unobservable viewport. The bottom-most live block scrolled its overflow into native history during growth; when that same block later re-laid-out, shrank, or collapsed (a tool preview collapsing to its compact result, a Markdown list/table reflow, a reasoning re-wrap) the viewport repaint correctly showed the new tail, but the stale overflow rows stayed in committed history and re-appeared above the live region — and they cannot be removed without ED3 (`CSI 3 J`), which is forbidden mid-turn because it yanks a reader scrolled into history (#1682). The renderer now pins the reported live region: during eager streaming it repaints that suffix bottom-anchored without ever committing transient rows to native scrollback (only sealed rows below the live boundary are appended), so the live block never pollutes history. Completed/sealed blocks stay scrollable mid-turn and the prompt-submit checkpoint still reconciles a clean, duplicate-free transcript.
+- Fixed a viewport yank on ED3-risk hosts when a pending forced scrollback wipe (`requestRender(true, { clearScrollback: true })`, an image-budget demotion, or a checkpoint) was requested while the live-region pin was active: the pin suppressed the wipe but never consumed the flag, so a later frame where the pin disengaged (e.g. content collapsing to empty) emitted the deferred `CSI 3 J` and snapped a scrolled-up reader to the tail. The pin now consumes the flag while keeping native scrollback dirty, so the wipe is deferred to the post-stream checkpoint instead.
+
 ## [15.9.1] - 2026-06-04
 ### Fixed
 
