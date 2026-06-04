@@ -285,6 +285,22 @@ class FakeAgentSession {
 		this.planModeState = state;
 	}
 
+	standingResolveHandler: ((input: unknown) => Promise<unknown> | unknown) | undefined;
+
+	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
+		this.standingResolveHandler = handler ?? undefined;
+	}
+
+	peekStandingResolveHandler(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
+		return this.standingResolveHandler;
+	}
+
+	planReferencePath: string | undefined;
+
+	setPlanReferencePath(path: string): void {
+		this.planReferencePath = path;
+	}
+
 	getToolByName(_name: string): undefined {
 		return undefined;
 	}
@@ -547,8 +563,86 @@ describe("ACP agent", () => {
 				: undefined;
 		expect(currentModeConfig?.currentValue).toBe("plan");
 
+		// Regression for #1869: entering plan mode must wire a standing
+		// resolve handler so the agent's `resolve { action: "apply" }` has a
+		// gate to dispatch to instead of throwing "No pending action".
+		expect(typeof session.standingResolveHandler).toBe("function");
+
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "default" });
 		expect(session.planModeState).toBeUndefined();
+		expect(session.standingResolveHandler).toBeUndefined();
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("plan-approval standing handler errors when the plan file is missing", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+
+		const handler = session.standingResolveHandler;
+		expect(typeof handler).toBe("function");
+
+		// No plan file written → handler surfaces a ToolError telling the
+		// agent to write the plan before requesting approval.
+		await expect(handler!({ action: "apply", reason: "Plan done.", extra: { title: "demo" } })).rejects.toThrow(
+			/Plan file not found/,
+		);
+		// Plan mode must remain active so the agent can recover.
+		expect(session.planModeState?.enabled).toBe(true);
+		expect(typeof session.standingResolveHandler).toBe("function");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("plan-approval standing handler renames the plan and exits plan mode on apply", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+
+		const artifactsDir = session.sessionManager.getArtifactsDir();
+		expect(artifactsDir).not.toBeNull();
+		const planPath = path.join(artifactsDir!, "local", "PLAN.md");
+		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
+
+		const handler = session.standingResolveHandler!;
+		const result = (await handler({
+			action: "apply",
+			reason: "Plan complete and self-contained.",
+			extra: { title: "words-counter" },
+		})) as {
+			content: Array<{ type: string; text: string }>;
+			details: { sourceToolName: string; sourceResultDetails: { finalPlanFilePath: string; title: string } };
+		};
+
+		// Plan-approval payload is shaped for `event-controller` / ACP renderers.
+		expect(result.details.sourceToolName).toBe("plan_approval");
+		expect(result.details.sourceResultDetails.title).toBe("words-counter");
+		expect(result.details.sourceResultDetails.finalPlanFilePath).toBe("local://words-counter.md");
+		expect(result.content[0]?.text).toMatch(/Plan approved/);
+		// Plan file is renamed and the source path no longer exists.
+		expect(await Bun.file(path.join(artifactsDir!, "local", "words-counter.md")).exists()).toBe(true);
+		expect(await Bun.file(planPath).exists()).toBe(false);
+		// Mode + handler are cleared; the agent regains write tools next turn.
+		expect(session.planModeState).toBeUndefined();
+		expect(session.standingResolveHandler).toBeUndefined();
+		expect(session.planReferencePath).toBe("local://words-counter.md");
+		// Mode-change notification reached the client so Zed's UI reflects the exit.
+		expect(
+			harness.updates.some(
+				notification =>
+					notification.update.sessionUpdate === "current_mode_update" &&
+					notification.update.currentModeId === "default",
+			),
+		).toBe(true);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
