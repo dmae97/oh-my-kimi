@@ -85,9 +85,6 @@ class CloseHoldingStorage implements SessionStorage {
 	writeTextSync(p: string, content: string): void {
 		this.#inner.writeTextSync(p, content);
 	}
-	readTextSync(p: string): string {
-		return this.#inner.readTextSync(p);
-	}
 	statSync(p: string) {
 		return this.#inner.statSync(p);
 	}

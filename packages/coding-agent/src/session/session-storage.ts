@@ -31,7 +31,6 @@ export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
 	writeTextSync(path: string, content: string): void;
-	readTextSync(path: string): string;
 	statSync(path: string): SessionStorageStat;
 	listFilesSync(dir: string, pattern: string): string[];
 
@@ -152,9 +151,6 @@ export class FileSessionStorage implements SessionStorage {
 		fs.writeFileSync(fpath, content);
 	}
 
-	readTextSync(fpath: string): string {
-		return fs.readFileSync(fpath, "utf-8");
-	}
 
 	statSync(path: string): SessionStorageStat {
 		const stats = fs.statSync(path);
@@ -469,9 +465,6 @@ export class MemorySessionStorage implements SessionStorage {
 		entry.mtimeMs = mtimeMs;
 	}
 
-	readTextSync(path: string): string {
-		return materializeMemoryEntry(this.#requireEntry(path));
-	}
 
 	statSync(path: string): SessionStorageStat {
 		const entry = this.#requireEntry(path);

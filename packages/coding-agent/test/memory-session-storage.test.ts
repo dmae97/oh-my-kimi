@@ -17,7 +17,7 @@ describe("MemorySessionStorage indexed mirror", () => {
 
 		// Construct the baseline from the same parts.
 		const expected = Array.from({ length: 1000 }, (_, i) => `{"i":${i}}\n`).join("");
-		const actual = storage.readTextSync(path);
+		const actual = await storage.readText(path);
 		expect(actual).toBe(expected);
 		expect(actual.length).toBe(expected.length);
 	});
@@ -104,7 +104,7 @@ describe("MemorySessionStorage indexed mirror", () => {
 		expect(await storage.readTextSlices(path, 0, 4)).toEqual(["", "本\n"]);
 	});
 
-	test("subsequent writeLineSync after readTextSync appends after materialized content", () => {
+	test("subsequent writeLineSync after readText appends after materialized content", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/cont.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
@@ -113,22 +113,22 @@ describe("MemorySessionStorage indexed mirror", () => {
 			writer.writeLineSync("second\n");
 			// Materialise once — implementation may collapse previous chunks into one
 			// string, but future appends must still retain content and byte accounting.
-			expect(storage.readTextSync(path)).toBe("first\nsecond\n");
+			expect(await storage.readText(path)).toBe("first\nsecond\n");
 			writer.writeLineSync("third\n");
-			expect(storage.readTextSync(path)).toBe("first\nsecond\nthird\n");
+			expect(await storage.readText(path)).toBe("first\nsecond\nthird\n");
 			expect(storage.statSync(path).size).toBe(Buffer.byteLength("first\nsecond\nthird\n", "utf-8"));
 		} finally {
 			void writer.close();
 		}
 	});
 
-	test("writeTextSync resets the chunks and byte counter (overwrite semantics)", () => {
+	test("writeTextSync resets the chunks and byte counter (overwrite semantics)", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/overwrite.jsonl";
 		storage.writeTextSync(path, "abcdef");
 		expect(storage.statSync(path).size).toBe(6);
 		storage.writeTextSync(path, "xy");
 		expect(storage.statSync(path).size).toBe(2);
-		expect(storage.readTextSync(path)).toBe("xy");
+		expect(await storage.readText(path)).toBe("xy");
 	});
 });
