@@ -361,10 +361,7 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
  * the original "no matching version" message instead of `EBADPLATFORM`.
  * See #1824.
  */
-export function buildBunInstallArgs(
-	expectedVersion: string,
-	nativeTag: string = currentNativeTag(),
-): string[] {
+export function buildBunInstallArgs(expectedVersion: string, nativeTag: string = currentNativeTag()): string[] {
 	const args = [
 		"install",
 		"-g",
