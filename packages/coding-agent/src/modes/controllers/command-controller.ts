@@ -13,6 +13,7 @@ import {
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
+import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
@@ -397,10 +398,10 @@ export class CommandController {
 		// Append-only context
 		{
 			const setting = this.ctx.settings.get("provider.appendOnlyContext") ?? "auto";
-			const provider = this.ctx.session.model?.provider;
-			const mode = setting === "on" ? true : setting === "off" ? false : provider === "deepseek";
+			const model = this.ctx.session.model;
+			const mode = shouldEnableAppendOnlyContext(setting, model);
 			const activeLabel = mode ? theme.fg("success", "active") : theme.fg("dim", "inactive");
-			const settingLabel = setting === "auto" ? `${setting} (${provider ?? "?"})` : setting;
+			const settingLabel = setting === "auto" ? `${setting} (${model?.provider ?? "?"})` : setting;
 			info += `${theme.fg("dim", "Append-Only:")} ${activeLabel} (setting: ${settingLabel})\n`;
 		}
 		info += `${theme.bold("Tokens")}\n`;
