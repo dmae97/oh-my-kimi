@@ -2067,13 +2067,27 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settle(term);
-				expect(visible(term).map(l => l.trim())).toEqual(["line-24", "line-25", "line-26", "line-27", "line-28", "line-29"]);
+				expect(visible(term).map(l => l.trim())).toEqual([
+					"line-24",
+					"line-25",
+					"line-26",
+					"line-27",
+					"line-28",
+					"line-29",
+				]);
 				// Delete one offscreen row (index 5): the last six rows are unchanged,
 				// only their absolute indices shift.
 				component.setLines([...initial.slice(0, 5), ...initial.slice(6)]);
 				tui.requestRender(true, { allowUnknownViewportMutation: true });
 				await settle(term);
-				expect(visible(term).map(l => l.trim())).toEqual(["line-24", "line-25", "line-26", "line-27", "line-28", "line-29"]);
+				expect(visible(term).map(l => l.trim())).toEqual([
+					"line-24",
+					"line-25",
+					"line-26",
+					"line-27",
+					"line-28",
+					"line-29",
+				]);
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 				tui.stop();
@@ -2096,7 +2110,14 @@ describe("TUI terminal-state regressions", () => {
 				component.setLines([...initial.slice(0, 5), ...initial.slice(6, -1), "prompt-updated"]);
 				tui.requestRender(true, { allowUnknownViewportMutation: true });
 				await settle(term);
-				expect(visible(term).map(l => l.trim())).toEqual(["line-24", "line-25", "line-26", "line-27", "line-28", "prompt-updated"]);
+				expect(visible(term).map(l => l.trim())).toEqual([
+					"line-24",
+					"line-25",
+					"line-26",
+					"line-27",
+					"line-28",
+					"prompt-updated",
+				]);
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 				tui.stop();
@@ -2121,7 +2142,14 @@ describe("TUI terminal-state regressions", () => {
 				component.setLines([...initial.slice(0, 5), ...initial.slice(6, -1), `prompt>ab${CURSOR_MARKER}`]);
 				tui.requestRender(true, { allowUnknownViewportMutation: true });
 				await settle(term);
-				expect(visible(term).map(l => l.trim())).toEqual(["line-24", "line-25", "line-26", "line-27", "line-28", "prompt>ab"]);
+				expect(visible(term).map(l => l.trim())).toEqual([
+					"line-24",
+					"line-25",
+					"line-26",
+					"line-27",
+					"line-28",
+					"prompt>ab",
+				]);
 				expect(term.getCursor()).toEqual({ row: 5, col: "prompt>ab".length });
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -2146,7 +2174,14 @@ describe("TUI terminal-state regressions", () => {
 					component.setLines([...initial.slice(0, 5), ...initial.slice(6)]);
 					tui.requestRender();
 					await settle(term);
-					expect(visible(term).map(l => l.trim())).toEqual(["line-24", "line-25", "line-26", "line-27", "line-28", "line-29"]);
+					expect(visible(term).map(l => l.trim())).toEqual([
+						"line-24",
+						"line-25",
+						"line-26",
+						"line-27",
+						"line-28",
+						"line-29",
+					]);
 				} finally {
 					tui.stop();
 				}

@@ -851,7 +851,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							if (toolCall.id) block.id = toolCall.id;
 							if (toolCall.function?.name) block.name = toolCall.function.name;
 							let delta = "";
-							const rawArgs: unknown = toolCall.function?.arguments;
+							// The OpenAI SDK types `function.arguments` as a JSON string, but MiniMax-compatible
+							// hosts stream a fully-formed object instead. Model both shapes so the branches below
+							// narrow honestly rather than widening through `unknown`.
+							const rawArgs = toolCall.function?.arguments as string | Record<string, unknown> | undefined;
 							if (typeof rawArgs === "string") {
 								if (rawArgs.length > 0) {
 									delta = rawArgs;
@@ -868,10 +871,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								// single delta instead of the OpenAI JSON-string contract. Hold the object directly
 								// — no `[object Object]` round-trip through the string buffer — and serialize once for
 								// the wire delta that proxy servers forward verbatim as `input_json_delta`.
-								const objectArgs = rawArgs as Record<string, unknown>;
-								block.partialArgs = objectArgs;
-								block.arguments = objectArgs;
-								delta = JSON.stringify(objectArgs);
+								block.partialArgs = rawArgs;
+								block.arguments = rawArgs;
+								delta = JSON.stringify(rawArgs);
 							}
 							stream.push({
 								type: "toolcall_delta",

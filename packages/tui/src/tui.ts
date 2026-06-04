@@ -1525,7 +1525,10 @@ export class TUI extends Container {
 				cursorPos === null
 					? null
 					: { row: paddedViewportTop + (cursorPos.row - newViewportTop), col: cursorPos.col };
-			return { kind: "deferredMutation", cursor: { position: mappedCursor, totalLines: this.#previousLines.length } };
+			return {
+				kind: "deferredMutation",
+				cursor: { position: mappedCursor, totalLines: this.#previousLines.length },
+			};
 		}
 		return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 	}
