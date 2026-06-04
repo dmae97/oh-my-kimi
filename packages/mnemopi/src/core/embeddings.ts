@@ -100,6 +100,18 @@ function defaultModel(): string {
 	return $env.MNEMOPI_EMBEDDING_MODEL || "BAAI/bge-small-en-v1.5";
 }
 
+/**
+ * Resolve the embedding model name for the currently active runtime scope.
+ *
+ * Reads (in order): the active provider's `model` from `withMnemopiRuntimeOptions`,
+ * the `MNEMOPI_EMBEDDING_MODEL` env var, then the bundled fastembed default. Stored
+ * alongside each row in `memory_embeddings.model` so migrations can re-embed when
+ * the active model changes.
+ */
+export function currentEmbeddingModel(): string {
+	return defaultModel();
+}
+
 export function isApiModel(modelName: string): boolean {
 	if (
 		modelName.startsWith("openai/") ||

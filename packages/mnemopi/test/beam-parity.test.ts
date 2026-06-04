@@ -24,7 +24,7 @@ function closeAndRemoveAll(): void {
 afterEach(closeAndRemoveAll);
 
 describe("Beam TS parity integration", () => {
-	it("constructs on string DB paths, creates parents, remembers, and recalls from an isolated file DB", () => {
+	it("constructs on string DB paths, creates parents, remembers, and recalls from an isolated file DB", async () => {
 		const db = tempDb(join("nested", "beam.db"));
 		const beam = new BeamMemory({ sessionId: "path-coercion", dbPath: db.path });
 		try {
@@ -38,7 +38,7 @@ describe("Beam TS parity integration", () => {
 			expect(beam.getContext(5)).toMatchObject([
 				{ id, content: "Prefers Neovim for editing", source: "preference" },
 			]);
-			const recalled = beam.recall("Neovim editing", 5);
+			const recalled = await beam.recall("Neovim editing", 5);
 			expect(recalled.some(row => row.id === id && row.tier === "working")).toBe(true);
 		} finally {
 			beam.close();
@@ -80,7 +80,7 @@ describe("Beam TS parity integration", () => {
 		}
 	});
 
-	it("rememberBatch threads veracity into storage and recall scoring", () => {
+	it("rememberBatch threads veracity into storage and recall scoring", async () => {
 		const db = tempDb();
 		const beam = new BeamMemory({ sessionId: "veracity", dbPath: db.path });
 		try {
@@ -90,7 +90,7 @@ describe("Beam TS parity integration", () => {
 					veracity: label,
 				});
 			}
-			const results = beam.recall(token, 20);
+			const results = await beam.recall(token, 20);
 			const scores = new Map(results.map(row => [row.veracity, row.score ?? 0]));
 			expect([...scores.keys()].sort()).toEqual(["imported", "inferred", "stated", "tool", "unknown"]);
 			expect(scores.get("stated") ?? 0).toBeGreaterThan(scores.get("unknown") ?? 0);

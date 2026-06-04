@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed scoped mnemopi recall in `MnemopiSessionState.collectScopedRecallResults`/`recallResultsScoped` to await the async `Mnemopi.recallEnhanced` so the new auto-derived `queryEmbedding` flows through. Without this, the embedding-enabled mnemopi backend silently kept running FTS-only on every recall. ([#1832](https://github.com/can1357/oh-my-pi/issues/1832))
+
 ## [15.9.0] - 2026-06-04
 
 ### Breaking Changes

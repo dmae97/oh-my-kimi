@@ -7,8 +7,8 @@ import { closeQuietly, openDatabase } from "../src/db";
 interface FakeBeam extends BeamMemoryState {
 	linearCalls: number;
 	enhancedCalls: number;
-	recall: (query: string, topK?: number) => RecallResult[];
-	recallEnhanced: (query: string, topK?: number) => RecallResult[];
+	recall: (query: string, topK?: number) => Promise<RecallResult[]>;
+	recallEnhanced: (query: string, topK?: number) => Promise<RecallResult[]>;
 }
 
 function fakeBeam(): FakeBeam {
@@ -39,11 +39,11 @@ function fakeBeam(): FakeBeam {
 		},
 		linearCalls: 0,
 		enhancedCalls: 0,
-		recall(query: string, topK = 20): RecallResult[] {
+		async recall(query: string, topK = 20): Promise<RecallResult[]> {
 			this.linearCalls += 1;
 			return [{ id: "linear", content: `${query}:${topK}`, score: 1 }];
 		},
-		recallEnhanced(query: string, topK = 20): RecallResult[] {
+		async recallEnhanced(query: string, topK = 20): Promise<RecallResult[]> {
 			this.enhancedCalls += 1;
 			return [{ id: "enhanced", content: `${query}:${topK}`, score: 2 }];
 		},
@@ -69,11 +69,11 @@ afterEach(() => {
 });
 
 describe("orchestrateRecall", () => {
-	it("delegates to the Beam linear recall surface when the polyphonic gate is off", () => {
+	it("delegates to the Beam linear recall surface when the polyphonic gate is off", async () => {
 		const beam = fakeBeam();
 		try {
 			process.env.MNEMOPI_POLYPHONIC_RECALL = "0";
-			const results = orchestrateRecall(beam, "needle", 7);
+			const results = await orchestrateRecall(beam, "needle", 7);
 			expect(results).toEqual([{ id: "linear", content: "needle:7", score: 1 }]);
 			expect(beam.linearCalls).toBe(1);
 			expect(beam.enhancedCalls).toBe(0);
@@ -82,11 +82,11 @@ describe("orchestrateRecall", () => {
 		}
 	});
 
-	it("delegates to enhanced recall when requested on the non-polyphonic path", () => {
+	it("delegates to enhanced recall when requested on the non-polyphonic path", async () => {
 		const beam = fakeBeam();
 		try {
 			delete process.env.MNEMOPI_POLYPHONIC_RECALL;
-			const results = orchestrateRecall(beam, "needle", 3, { enhanced: true });
+			const results = await orchestrateRecall(beam, "needle", 3, { enhanced: true });
 			expect(results).toEqual([{ id: "enhanced", content: "needle:3", score: 2 }]);
 			expect(beam.linearCalls).toBe(0);
 			expect(beam.enhancedCalls).toBe(1);
@@ -95,7 +95,7 @@ describe("orchestrateRecall", () => {
 		}
 	});
 
-	it("uses polyphonic recall instead of fake Beam recall when the gate is on", () => {
+	it("uses polyphonic recall instead of fake Beam recall when the gate is on", async () => {
 		const beam = fakeBeam();
 		try {
 			const engine = new PolyphonicRecallEngine({ db: beam.db });
@@ -107,7 +107,7 @@ describe("orchestrateRecall", () => {
 			);
 			beam.caches.polyphonicEngine = engine;
 			process.env.MNEMOPI_POLYPHONIC_RECALL = "1";
-			const results = orchestrateRecall(beam, "Alice", 5);
+			const results = await orchestrateRecall(beam, "Alice", 5);
 			expect(beam.linearCalls).toBe(0);
 			expect(beam.enhancedCalls).toBe(0);
 			expect(results[0]?.id).toBe("m-poly");
@@ -117,11 +117,11 @@ describe("orchestrateRecall", () => {
 		}
 	});
 
-	it("forceLinear bypasses the env gate for A/B callers", () => {
+	it("forceLinear bypasses the env gate for A/B callers", async () => {
 		const beam = fakeBeam();
 		try {
 			process.env.MNEMOPI_POLYPHONIC_RECALL = "1";
-			const results = orchestrateRecall(beam, "needle", 2, { forceLinear: true });
+			const results = await orchestrateRecall(beam, "needle", 2, { forceLinear: true });
 			expect(results[0]?.id).toBe("linear");
 			expect(beam.linearCalls).toBe(1);
 		} finally {

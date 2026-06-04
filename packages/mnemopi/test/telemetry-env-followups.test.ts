@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("telemetry and env follow-up parity", () => {
-	it("fallback episodic rows expose explicit zero dense_score and linear voice_scores", () => {
+	it("fallback episodic rows expose explicit zero dense_score and linear voice_scores", async () => {
 		const beam = new BeamMemory({ sessionId: "s1", dbPath: tempDb() });
 		try {
 			beam.db.run(
@@ -36,7 +36,7 @@ describe("telemetry and env follow-up parity", () => {
 				],
 			);
 
-			const hit = beam.recall("zorblax", 10).find(row => row.id === "ep-no-emb");
+			const hit = (await beam.recall("zorblax", 10)).find(row => row.id === "ep-no-emb");
 			expect(hit).toBeDefined();
 			expect(hit?.tier).toBe("episodic");
 			expect(hit?.dense_score).toBe(0);
@@ -52,14 +52,14 @@ describe("telemetry and env follow-up parity", () => {
 		}
 	});
 
-	it("main recall path preserves numeric dense_score and voice_scores on working memory", () => {
+	it("main recall path preserves numeric dense_score and voice_scores on working memory", async () => {
 		const beam = new BeamMemory({ sessionId: "s1", dbPath: tempDb() });
 		try {
 			const id = beam.remember("The user wants dark mode for the editor", {
 				source: "conversation",
 				importance: 0.8,
 			});
-			const hit = beam.recall("dark mode", 10).find(row => row.id === id);
+			const hit = (await beam.recall("dark mode", 10)).find(row => row.id === id);
 			expect(hit).toBeDefined();
 			expect(typeof hit?.dense_score).toBe("number");
 			const scores = hit?.voice_scores;
@@ -73,7 +73,7 @@ describe("telemetry and env follow-up parity", () => {
 		}
 	});
 
-	it("all linear recall results have numeric voice score entries", () => {
+	it("all linear recall results have numeric voice score entries", async () => {
 		const beam = new BeamMemory({ sessionId: "s1", dbPath: tempDb() });
 		try {
 			beam.remember("The deployment plan is approved", { importance: 0.7 });
@@ -89,7 +89,7 @@ describe("telemetry and env follow-up parity", () => {
 				],
 			);
 
-			const results = beam.recall("deployment", 10);
+			const results = await beam.recall("deployment", 10);
 			expect(results.length).toBeGreaterThan(0);
 			for (const row of results) {
 				expect(row.voice_scores).toBeDefined();

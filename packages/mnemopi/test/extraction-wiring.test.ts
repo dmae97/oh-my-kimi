@@ -76,7 +76,7 @@ describe("remember(extract) wires the LLM fact extractor", () => {
 		await expect(memory.flushExtractions()).resolves.toBeUndefined();
 
 		// The memory itself is still durably stored and recallable.
-		const recalled = memory.recall("opaque payload", 5);
+		const recalled = await memory.recall("opaque payload", 5);
 		expect(recalled.some(row => row.id === id)).toBe(true);
 	});
 });

@@ -180,12 +180,13 @@ export const cmdRemember: CommandHandler = (args, context) => {
 	});
 };
 
-export const cmdRecall: CommandHandler = (args, context) => {
+export const cmdRecall: CommandHandler = async (args, context) => {
 	if (args.length === 0) usage("Usage: mnemopi recall <query> [top_k]");
 	const query = args[0] ?? "";
 	const topK = args[1] === undefined ? 5 : parseIntArg(args[1], "top_k");
-	return withMemory(context, memory => {
-		const results = memory.recall(query, topK);
+	const { memory, owned } = getMemory(context);
+	try {
+		const results = await memory.recall(query, topK);
 		out(context, `\nResults for: ${query}\n`);
 		for (const result of results) {
 			const content = result.content ?? "";
@@ -197,7 +198,9 @@ export const cmdRecall: CommandHandler = (args, context) => {
 			out(context);
 		}
 		return 0;
-	});
+	} finally {
+		if (owned) memory.close();
+	}
 };
 
 export const cmdUpdate: CommandHandler = (args, context) => {

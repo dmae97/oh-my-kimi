@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 describe("Beam E3/E4/E6 parity integration", () => {
-	it("sleep is additive, marks consolidated_at, preserves recallability, and is idempotent", () => {
+	it("sleep is additive, marks consolidated_at, preserves recallability, and is idempotent", async () => {
 		const db = tempDb();
 		const beam = new BeamMemory({ sessionId: "s1", dbPath: db.path });
 		try {
@@ -101,7 +101,9 @@ describe("Beam E3/E4/E6 parity integration", () => {
 			}[];
 			expect(marked.every(row => row.consolidated_at !== null)).toBe(true);
 			for (const row of marked) expect(() => new Date(row.consolidated_at ?? "bad").toISOString()).not.toThrow();
-			expect(beam.recall("token1", 10).some(row => row.id === "wm-old-2" && row.tier === "working")).toBe(true);
+			expect((await beam.recall("token1", 10)).some(row => row.id === "wm-old-2" && row.tier === "working")).toBe(
+				true,
+			);
 			expect(beam.sleep(false).status).toBe("no_op");
 			expect(beam.db.query("SELECT COUNT(*) AS count FROM episodic_memory").get()).toEqual({
 				count: 1,
@@ -155,7 +157,7 @@ describe("Beam E3/E4/E6 parity integration", () => {
 		}
 	});
 
-	it("cross-tier recall deduplicates summary/source pairs before recall_count attribution", () => {
+	it("cross-tier recall deduplicates summary/source pairs before recall_count attribution", async () => {
 		const db = tempDb();
 		const beam = new BeamMemory({ sessionId: "s1", dbPath: db.path });
 		try {
@@ -188,7 +190,7 @@ describe("Beam E3/E4/E6 parity integration", () => {
 				"INSERT INTO working_memory (id, content, source, timestamp, session_id, importance, veracity) VALUES (?, ?, ?, ?, ?, ?, ?)",
 				["wm-2", "deployment notes for staging", "conversation", new Date().toISOString(), "s1", 0.5, "stated"],
 			);
-			const results = beam.recall("deployment", 2);
+			const results = await beam.recall("deployment", 2);
 			const ids = results.map(row => row.id);
 			expect(new Set(ids).size).toBe(ids.length);
 			expect(ids.includes("wm-1") && ids.includes("ep-1")).toBe(false);

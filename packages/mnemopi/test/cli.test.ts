@@ -30,7 +30,7 @@ function capture() {
 }
 
 describe("CLI command handlers", () => {
-	it("remember stores through BeamMemory and recall prints real results", () => {
+	it("remember stores through BeamMemory and recall prints real results", async () => {
 		const root = tempRoot();
 		try {
 			const io = capture();
@@ -39,7 +39,7 @@ describe("CLI command handlers", () => {
 			expect(io.stdout).toContain("Stored:");
 
 			const recallIo = capture();
-			expect(cmdRecall(["Alpha", "5"], recallIo.context(root))).toBe(0);
+			expect(await cmdRecall(["Alpha", "5"], recallIo.context(root))).toBe(0);
 			expect(recallIo.stdout).toContain("Results for: Alpha");
 			expect(recallIo.stdout).toContain("Project Alpha prefers terse answers");
 			expect(recallIo.stderr).toBe("");

@@ -447,13 +447,25 @@ function sharedBeam(): BeamMemory {
 	return new BeamMemory({ sessionId: "mcp_shared_surface", dbPath });
 }
 
-function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T): T {
+function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => Promise<T>): Promise<T>;
+function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T): T;
+function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T | Promise<T>): T | Promise<T> {
 	const bank = resolveBank(args);
 	const beam = createBeam(args, bank);
+	let settled = false;
 	try {
-		return fn(beam, bank);
+		const result = fn(beam, bank);
+		if (result instanceof Promise) {
+			// Defer close until the async handler resolves; otherwise the beam closes
+			// out from under in-flight `recall`/`embed` work and downstream queries see
+			// "Cannot use a closed database".
+			settled = true;
+			return result.finally(() => beam.close());
+		}
+		settled = true;
+		return result;
 	} finally {
-		beam.close();
+		if (!settled) beam.close();
 	}
 }
 
@@ -518,10 +530,10 @@ function handleRemember(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleRecall(args: ToolArguments): ToolResult {
+async function handleRecall(args: ToolArguments): Promise<ToolResult> {
 	const query = required(args, "query");
 	if (typeof query !== "string") return query;
-	return withBeam(args, (beam, bank) => {
+	return withBeam(args, async (beam, bank) => {
 		const topK = Math.trunc(numberArg(args, "top_k", numberArg(args, "limit", 5)));
 		const options: RecallOptions & Record<string, unknown> = {
 			temporalWeight: numberArg(args, "temporal_weight", 0.0),
@@ -534,7 +546,7 @@ function handleRecall(args: ToolArguments): ToolResult {
 		for (const key of ["vec_weight", "fts_weight", "importance_weight"] as const) {
 			if (key in args) options[key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())] = args[key];
 		}
-		const results = beam.recall(query, topK, options).map(row => ({ ...row, bank }));
+		const results = (await beam.recall(query, topK, options)).map(row => ({ ...row, bank }));
 		return { status: "ok", query, count: results.length, results: serialize(results), bank };
 	});
 }
@@ -732,12 +744,21 @@ function surfaceLabel(content: string, kind: string): string {
 	return `${label}: ${content}`;
 }
 
-function withSharedBeam<T>(fn: (beam: BeamMemory) => T): T {
+function withSharedBeam<T>(fn: (beam: BeamMemory) => Promise<T>): Promise<T>;
+function withSharedBeam<T>(fn: (beam: BeamMemory) => T): T;
+function withSharedBeam<T>(fn: (beam: BeamMemory) => T | Promise<T>): T | Promise<T> {
 	const beam = sharedBeam();
+	let settled = false;
 	try {
-		return fn(beam);
+		const result = fn(beam);
+		if (result instanceof Promise) {
+			settled = true;
+			return result.finally(() => beam.close());
+		}
+		settled = true;
+		return result;
 	} finally {
-		beam.close();
+		if (!settled) beam.close();
 	}
 }
 
@@ -765,13 +786,15 @@ function handleSharedRemember(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleSharedRecall(args: ToolArguments): ToolResult {
+async function handleSharedRecall(args: ToolArguments): Promise<ToolResult> {
 	const query = required(args, "query");
 	if (typeof query !== "string") return query;
-	return withSharedBeam(beam => {
-		const results = beam
-			.recall(query, Math.trunc(numberArg(args, "limit", 5)))
-			.map(row => ({ ...row, bank: "surface", shared_surface: true }));
+	return withSharedBeam(async beam => {
+		const results = (await beam.recall(query, Math.trunc(numberArg(args, "limit", 5)))).map(row => ({
+			...row,
+			bank: "surface",
+			shared_surface: true,
+		}));
 		return { query, count: results.length, results: serialize(results) };
 	});
 }
@@ -922,7 +945,7 @@ function handleGraphLink(args: ToolArguments): ToolResult {
 	});
 }
 
-type Handler = (args: ToolArguments) => ToolResult;
+type Handler = (args: ToolArguments) => ToolResult | Promise<ToolResult>;
 
 const TOOL_HANDLERS: Record<string, Handler> = {
 	mnemopi_remember: handleRemember,
@@ -951,7 +974,7 @@ const TOOL_HANDLERS: Record<string, Handler> = {
 	mnemopi_graph_link: handleGraphLink,
 };
 
-export function handleToolCall(name: string, args: ToolArguments = {}): ToolResult {
+export async function handleToolCall(name: string, args: ToolArguments = {}): Promise<ToolResult> {
 	const handler = TOOL_HANDLERS[name];
 	if (handler === undefined) throw new Error(`Unknown tool: ${name}`);
 	return handler(args);

@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
+import { currentEmbeddingModel, embed } from "../embeddings";
+import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "../runtime-options";
 import { cosineSimilarity as vectorCosineSimilarity } from "../vector-math";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
 
@@ -918,3 +920,58 @@ export {
 	quantizeInt8,
 } from "../binary-vectors";
 export { sha256Hex16 };
+
+/** Identifies one freshly stored memory whose embedding still needs to be derived. */
+export interface EmbedItem {
+	readonly memoryId: string;
+	readonly content: string;
+}
+
+async function runEmbedding(beam: BeamMemoryState, items: readonly EmbedItem[]): Promise<void> {
+	try {
+		const matrix = await embed(items.map(item => item.content));
+		if (matrix === null) return;
+		const model = currentEmbeddingModel();
+		const insertEmbedding = beam.db.prepare(
+			"INSERT OR REPLACE INTO memory_embeddings(memory_id, embedding_json, model) VALUES (?, ?, ?)",
+		);
+		const insertMany = beam.db.transaction((rows: readonly EmbedItem[]) => {
+			for (let i = 0; i < rows.length; i += 1) {
+				const vector = matrix[i];
+				const item = rows[i];
+				if (vector === undefined || item === undefined) continue;
+				insertEmbedding.run(item.memoryId, JSON.stringify(Array.from(vector)), model);
+			}
+		});
+		insertMany(items);
+	} catch {
+		// Background embedding generation is best-effort: a failing provider, a closed DB
+		// during shutdown, or a transient API error must never disrupt the synchronous
+		// remember()/consolidate() that scheduled it. Production recall silently degrades
+		// to FTS-only for the affected rows, which is the same shape as a misconfigured
+		// provider.
+	}
+}
+
+/**
+ * Schedule background embedding generation for one or more freshly stored memories.
+ *
+ * Mirrors the `scheduleFactExtraction` pattern in `beam/store.ts`: `remember()`,
+ * `rememberBatch()`, and `consolidateToEpisodic()` are synchronous, but `embed()` is
+ * async (it may hit an HTTP provider), so the task is fired-and-forgotten and tracked
+ * on `beam.pendingExtractions` so tests and graceful shutdown can drain it via
+ * `flushExtractions()`. The active runtime options (provider, model, API URL/key) are
+ * captured here and re-entered inside the task because the `AsyncLocalStorage` scope
+ * set by `Mnemopi.#withRuntimeOptions` has already exited by the time the task runs.
+ */
+export function scheduleEmbedding(beam: BeamMemoryState, items: readonly EmbedItem[]): void {
+	const cleaned = items.filter(item => item.content.trim() !== "");
+	if (cleaned.length === 0) return;
+	const runtimeOptions = getMnemopiRuntimeOptions();
+	const task = withMnemopiRuntimeOptions(runtimeOptions, () => runEmbedding(beam, cleaned));
+	const pending = beam.pendingExtractions;
+	if (pending !== undefined) {
+		pending.add(task);
+		void task.finally(() => pending.delete(task));
+	}
+}
