@@ -72,7 +72,6 @@ function moonshotKimiModel(id: string, reasoning = true): Model<"openai-completi
 	};
 }
 
-
 function openRouterKimiModel(id: string): Model<"openai-completions"> {
 	return {
 		...getBundledModel("openai", "gpt-4o-mini"),
