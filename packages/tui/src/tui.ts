@@ -2168,14 +2168,23 @@ export class TUI extends Container {
 		// the cleared cells written above are what the rectangles repaint.
 		buffer += sequence;
 		// The loop unconditionally writes `height` rows from screen row 0, so the
-		// hardware cursor lands at screen row `height - 1` regardless of how many
-		// of those rows held actual content. Tracking it as `lines.length - 1`
-		// when the content is shorter than the viewport makes the relative
-		// `rowDelta` math in `#cursorControlSequence` underestimate the upward
-		// move and the IME cursor stays pinned to the viewport bottom on
-		// height-grow resizes.
-		const finalRow = viewportTop + height - 1;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
+		// hardware cursor lands at the padded viewport bottom (`viewportTop +
+		// height - 1`) even when the content is shorter than the viewport and the
+		// trailing rows are blank. Parking it below the content is unsafe: a later
+		// terminal height *shrink* scrolls the live content rows up into native
+		// scrollback to keep that cursor on screen, and the next repaint redraws
+		// them — committing a duplicate copy of the visible block to history once
+		// per resize step (a drag-resize multiplies it). Move the cursor up to the
+		// real content bottom so it matches the post-paint invariant every other
+		// emitter holds and the reflow has no live rows to scroll away. The move is
+		// physical (not just tracked), so `#cursorControlSequence`'s relative
+		// `rowDelta` stays correct and the IME cursor still lands on its row after a
+		// height-grow resize.
+		const viewportBottomRow = viewportTop + height - 1;
+		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
+		const parkUp = viewportBottomRow - contentBottomRow;
+		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
+		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
 		buffer += seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
