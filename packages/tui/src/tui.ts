@@ -1826,7 +1826,24 @@ export class TUI extends Container {
 			}
 			return { kind: "stablePrefixCommit", target: stableScrollbackTarget };
 		}
-		if (stableScrollbackBoundary && hasUnstableOverflow && contentGrew && !isMultiplexerSession()) {
+		// Unstable content (a live block) overflows the viewport. Withholding its
+		// scrollback commit is only safe while the rows bound for offscreen are
+		// still volatile — committing a row we can never repaint would strand a
+		// stale duplicate above the live region on ED3-risk terminals. That holds
+		// only when this frame actually rewrites a row at or above the new viewport
+		// top (`diff.firstChanged < overflowRows`, e.g. a streaming markdown block
+		// re-wrapping). When the frame only grows at or below the viewport top the
+		// rows scrolling off are immutable, so dropping them here instead of
+		// committing would lose them entirely (a box taller than the viewport whose
+		// top is neither in scrollback nor on screen). Fall through to the normal
+		// commit paths in that case so nothing scrolled off becomes unreachable.
+		if (
+			stableScrollbackBoundary &&
+			hasUnstableOverflow &&
+			contentGrew &&
+			diff.firstChanged < overflowRows &&
+			!isMultiplexerSession()
+		) {
 			return { kind: "viewportRepaint" };
 		}
 		if (pureAppend && contentGrew && this.#previousLines.length > height && !isMultiplexerSession()) {

@@ -2387,6 +2387,75 @@ describe("TUI terminal-state regressions", () => {
 			});
 		});
 
+		it("keeps a live block's scrolled-off top reachable when it overflows the viewport", async () => {
+			// Regression (cbdff129b): the stable-prefix scrollback commit capped native
+			// history growth at the stable prefix. A single live block taller than the
+			// viewport — e.g. a streaming tool-preview box — then had its top rows
+			// neither committed to scrollback nor on screen: they vanished ("box top
+			// cut"). Unlike a re-wrapping markdown block, the box grows append-only at
+			// its bottom, so the rows scrolling above the viewport are immutable and
+			// MUST reach native scrollback rather than being dropped.
+			await withTerminalRisk(true, async () => {
+				const height = 8;
+				const term = new UnknownViewportTerminal(40, height, 500);
+				const writes = captureWrites(term);
+				const tui = new TUI(term);
+				const prefix = ["intro-0", "intro-1", "intro-2"];
+				const transcript = new StablePrefixLinesComponent(prefix);
+				const footer = new MutableLinesComponent(["status", "prompt>"]);
+				transcript.setStableLineCount(prefix.length); // only the prefix is stable; the box is live
+				tui.setNativeScrollbackStableComponent(transcript);
+				tui.addChild(transcript);
+				tui.addChild(footer);
+
+				try {
+					tui.start();
+					await settle(term);
+
+					// Grow the box well past the viewport, appending at its bottom edge.
+					for (let body = 1; body <= 14; body++) {
+						transcript.setLines([...prefix, "box-top", ...rows("box-", body)]);
+						tui.requestRender();
+						await settle(term);
+
+						// Every row that has scrolled above the bottom-anchored viewport must
+						// stay reachable through native scrollback (history ++ active grid).
+						const reachable = term.getScrollBuffer().map(line => line.trimEnd());
+						for (const row of [...prefix, "box-top", ...rows("box-", body)]) {
+							expect(
+								countMatches(reachable, new RegExp(`\\b${row}\\b`)),
+								`${row} must stay reachable at body=${body}`,
+							).toBeGreaterThanOrEqual(1);
+						}
+					}
+
+					// Viewport stays bottom-anchored on the live tail (box bottom + footer).
+					expect(visible(term).map(line => line.trim())).toEqual([
+						"box-8",
+						"box-9",
+						"box-10",
+						"box-11",
+						"box-12",
+						"box-13",
+						"status",
+						"prompt>",
+					]);
+					// The box top scrolled into committed history rather than being dropped.
+					const baseY = term.getBufferPosition().baseY;
+					expect(
+						term
+							.getScrollBuffer()
+							.slice(0, baseY)
+							.map(line => line.trimEnd()),
+					).toContain("box-top");
+					// Anti-yank guarantee preserved: no destructive saved-lines erase.
+					expect(writes.join("")).not.toContain("\x1b[3J");
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+
 		it("keeps a scrolled-up reader anchored while streaming inserts arrive on POSIX (unknown viewport)", async () => {
 			// POSIX terminals cannot report scrollback position, so isNativeViewportAtBottom()
 			// is undefined. Before the fix the planner optimistically treated "unknown" as
