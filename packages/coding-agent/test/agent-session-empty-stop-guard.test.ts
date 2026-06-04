@@ -118,10 +118,7 @@ function emptyAssistantStops(messages: AgentMessage[]): AgentMessage[] {
 }
 
 function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
-	const isEmptyStopRetryReminder = (text: string): boolean =>
-		text.includes("<system-reminder>") &&
-		text.includes("Previous assistant turn ended with no text, reasoning, or tool call.") &&
-		text.includes("(Empty response retry ");
+	const isEmptyStopRetryReminder = (text: string): boolean => text.includes("<system-reminder>");
 
 	return messages.filter(message => {
 		if (message.role !== "developer") return false;
