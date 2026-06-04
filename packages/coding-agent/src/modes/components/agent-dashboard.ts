@@ -1136,11 +1136,11 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		if (matchesKey(data, "tab")) {
+		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
 			this.#switchTab(1);
 			return;
 		}
-		if (matchesKey(data, "shift+tab")) {
+		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
 			this.#switchTab(-1);
 			return;
 		}
