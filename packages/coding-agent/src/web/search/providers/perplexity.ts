@@ -28,7 +28,7 @@ const PERPLEXITY_OAUTH_ASK_URL = "https://www.perplexity.ai/rest/sse/perplexity_
 
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_TEMPERATURE = 0.2;
-const DEFAULT_NUM_SEARCH_RESULTS = 10;
+const DEFAULT_NUM_SEARCH_RESULTS = 20;
 const OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const OAUTH_API_VERSION = "2.18";
 const OAUTH_USER_AGENT = "Perplexity/641 CFNetwork/1568 Darwin/25.2.0";
@@ -155,11 +155,11 @@ export interface PerplexitySearchParams {
 	system_prompt?: string;
 	search_recency_filter?: "hour" | "day" | "week" | "month" | "year";
 	num_results?: number;
-	/** Maximum output tokens. Defaults to 4096. */
+	/** Maximum output tokens. Defaults to 8192. */
 	max_tokens?: number;
 	/** Sampling temperature (0–1). Lower = more focused/factual. Defaults to 0.2. */
 	temperature?: number;
-	/** Number of search results to retrieve. Defaults to 10. */
+	/** Number of search results to retrieve. Defaults to 20. */
 	num_search_results?: number;
 	authStorage: AuthStorage;
 	sessionId?: string;
@@ -470,11 +470,14 @@ function parseResponse(response: PerplexityResponse): SearchResponse {
 		}
 	}
 
+	const relatedQuestions = (response.related_questions ?? []).filter(q => q.trim().length > 0);
+
 	return {
 		provider: "perplexity",
 		answer: answer || undefined,
 		sources,
 		citations: citations.length > 0 ? citations : undefined,
+		relatedQuestions: relatedQuestions.length > 0 ? relatedQuestions : undefined,
 		usage: response.usage
 			? {
 					inputTokens: response.usage.prompt_tokens,
@@ -532,11 +535,12 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 		num_search_results: params.num_search_results ?? DEFAULT_NUM_SEARCH_RESULTS,
 		web_search_options: {
 			search_type: "pro",
-			search_context_size: "medium",
+			search_context_size: "high",
 		},
 		enable_search_classifier: true,
 		reasoning_effort: "medium",
 		language_preference: "en",
+		return_related_questions: true,
 	};
 
 	if (params.search_recency_filter) {

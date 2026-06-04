@@ -472,6 +472,7 @@ export interface PerplexityResponse {
 	choices: PerplexityChoice[];
 	citations?: string[] | null;
 	search_results?: PerplexitySearchResult[] | null;
+	related_questions?: string[] | null;
 	type?: PerplexityCompletionResponseType | null;
 	status?: PerplexityCompletionResponseStatus | null;
 }

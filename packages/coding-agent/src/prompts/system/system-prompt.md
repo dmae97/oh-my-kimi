@@ -73,9 +73,9 @@ Most FS/bash-like tools: static references auto-resolve to FS paths.
    - ``/<path>``: file within skill
 - `rule://<name>`: Rule details
 {{#if hasMemoryRoot}}
-- ``memory://root``: project memory summary
+- `memory://root`: project memory summary
 {{/if}}
-- ``agent://<id>``: full agent output artifact
+- `agent://<id>`: full agent output artifact
    - `/<path>`: JSON field extraction
 - `artifact://<id>`: Artifact content
 - `local://<name>.md`: plan artifacts and shared content with subagents
@@ -131,7 +131,6 @@ Use tools whenever materially improve correctness, completeness, or grounding.
 {{/if}}
 
 ## Inputs
-- Keep inputs concise where possible.
 - For tools taking `path` or path-like field, try relative paths.
 {{#if intentTracing}}
 - Most tools have `{{intentField}}` parameter. Fill with concise intent in present participle form, 2-6 words, no period, capitalized.
