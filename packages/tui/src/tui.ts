@@ -843,13 +843,18 @@ export class TUI extends Container {
 			this.#clearNativeScrollbackDirty();
 			return false;
 		}
-		const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-		if (
-			!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, options?.allowUnknownViewport === true)
-		) {
+		let nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+		const allowUnknownViewport = options?.allowUnknownViewport === true;
+		if (nativeViewportAtBottom === false && allowUnknownViewport) {
+			const retriedViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (this.#canReplayNativeScrollbackAtCheckpoint(retriedViewportAtBottom, allowUnknownViewport)) {
+				nativeViewportAtBottom = retriedViewportAtBottom;
+			}
+		}
+		if (!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewport)) {
 			return false;
 		}
-		this.#prepareForcedRender(true, options?.allowUnknownViewport === true);
+		this.#prepareForcedRender(true, allowUnknownViewport);
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
 		this.#doRender();
@@ -1557,13 +1562,17 @@ export class TUI extends Container {
 			//
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			// ED3-risk terminals with an unobservable viewport cannot safely clear
-			// saved lines, and a live repaint can overwrite/yank a reader parked in
-			// history. If the shrunk transcript no longer reaches the old viewport
-			// top, freeze the native view and reconcile at checkpoint; otherwise
-			// repaint a padded frame so bottom-following users do not get duplicate
-			// boundary rows in scrollback.
+			// saved lines. During an active eager streaming turn, still paint an
+			// overflowing shrink's live tail in place: otherwise the UI freezes until
+			// the next input even though the frame still has a bottom viewport to show
+			// (issue #1682). Native history remains dirty and reconciles at the next
+			// checkpoint. If there is no active eager turn, or the shrink no longer
+			// overflows, defer rather than repainting blanks over a possibly scrolled reader.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
+				if (this.#eagerNativeScrollbackRebuild && newLines.length > height) {
+					return { kind: "viewportRepaint" };
+				}
 				if (newLines.length <= paddedViewportTop) {
 					return { kind: "deferredMutation" };
 				}
