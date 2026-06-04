@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added deferred session-title generation so greetings no longer become the session title. A first user message that is only a greeting / acknowledgement / filler ("hi", "thanks", "ok", a bare number, emoji-only, etc.) is now detected deterministically and skips titling entirely — no title model is invoked. Title generation then retries on each subsequent user message while the session stays unnamed, so the title is deduced from the first message that actually describes work. A capable online title model may additionally answer `none` to decline a non-greeting taskless message (normalized to "no title").
@@ -15,13 +16,14 @@
 
 ### Fixed
 
+- Fixed session restoration to ignore transient fallback model switches (such as automatic context-promotion or retry fallback) so resumed or resumed-switch sessions revert to the configured default model unless the last change was a user-selected temporary model
+- Fixed in-session `/resume` to restore both the last user-selected temporary model and persisted plan/goal mode state instead of falling back to the default model with plan mode off.
 - Fixed transcript scrollback stability on terminals with eager erase risk so completed assistant messages remain stable while new streaming lines are rendering
 - Fixed the `/resume` session picker overflowing short viewports: the visible window was hardcoded to 5 entries (and assumed 3 lines each), but titled sessions render 4 lines, so on a typical-height terminal the picker's header and search box scrolled off the top and the first entry was hidden until you scrolled the terminal up. The visible-entry count is now derived from the live terminal height (budgeting the worst-case 4-line titled entry plus the picker's chrome), so the whole picker fits the viewport and grows on taller terminals.
 - Fixed the Agent Control Center and Extension Control Center dashboards overflowing the terminal: they were mounted inline below the chat transcript, so the combined height exceeded the viewport — the tab bar and controls scrolled off the top into native scrollback, and every state change yanked the view back to the bottom. Both dashboards now render as full-screen overlays sized to the live terminal height (`process.stdout.rows`), re-fit on resize, fill the viewport, and reserve space for the footer keyhints so the controls stay visible.
 - Fixed Ctrl+R history search results to remain globally sorted by prompt recency after merging FTS prefix matches with substring fallback matches.
 - Fixed Exa web search with no stored or environment credential to use the public Exa MCP fallback again, preserving the auth storage → `EXA_API_KEY` → `mcp.exa.ai` resolution order ([#1860](https://github.com/can1357/oh-my-pi/issues/1860)).
 - Fixed ACP plan-mode writes to `local://PLAN.md` so session-local plan artifacts are written to OMP's local artifact root instead of being routed through the editor `writeTextFile` bridge, avoiding Zen's `Internal error` and making the plan readable after creation ([#1863](https://github.com/can1357/oh-my-pi/issues/1863)).
-
 - Fixed `provider.appendOnlyContext: "auto"` staying inactive for Xiaomi Token Plan/SGLang endpoints, preserving prefix-cache hits without forcing append-only mode globally ([#1851](https://github.com/can1357/oh-my-pi/issues/1851)).
 - Fixed `models.yml` compatibility parsing to preserve `compat.cacheControlFormat: "anthropic"` for custom OpenAI-compatible Claude proxies. ([#1845](https://github.com/can1357/oh-my-pi/issues/1845))
 - Fixed the TUI's `Settings → Plugins` panel reporting "No plugins installed" when only marketplace plugins were installed. The panel now merges `PluginManager.list()` with `MarketplaceManager.listInstalledPlugins()` — the same data source the `/plugins list` slash command and `omp plugin list` CLI already used — and tags each row with an `[npm]` / `[marketplace]` kind badge, a scope tag, and a shadow indicator for project-shadowed user installs. Selecting a marketplace row opens a new `MarketplacePluginDetailComponent` whose single `Enabled` toggle calls `MarketplaceManager.setPluginEnabled(pluginId, enabled, scope)`, with read-only metadata (version, install path, installed-at, last-updated, git commit SHA) listed below the toggle. The empty-state now lists both install commands (`omp plugin install <package>` and `omp plugin install <name>@<marketplace>`) ([#1842](https://github.com/can1357/oh-my-pi/issues/1842)).
