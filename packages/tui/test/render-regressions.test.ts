@@ -3445,6 +3445,23 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}
 
+		class CursorModeAware implements Component, Focusable {
+			focused = false;
+			useTerminalCursor = false;
+			seenModes: boolean[] = [];
+
+			setUseTerminalCursor(useTerminalCursor: boolean): void {
+				this.useTerminalCursor = useTerminalCursor;
+				this.seenModes.push(useTerminalCursor);
+			}
+
+			invalidate(): void {}
+
+			render(_width: number): string[] {
+				return [this.focused ? `prompt>${CURSOR_MARKER}` : "prompt>"];
+			}
+		}
+
 		class CursorVisibilityTerminal extends VirtualTerminal {
 			visibilityWrites: string[] = [];
 
@@ -3507,6 +3524,36 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("syncs focused component cursor rendering mode on focus and preference changes", () => {
+			const renderScheduler = {
+				now: () => 0,
+				scheduleImmediate: () => {},
+				scheduleRender: () => ({ cancel: () => {} }),
+			};
+			const tui = new TUI(new VirtualTerminal(20, 4), true, { renderScheduler });
+			const first = new CursorModeAware();
+			const second = new CursorModeAware();
+
+			tui.setFocus(first);
+			expect(first.focused).toBe(true);
+			expect(first.useTerminalCursor).toBe(true);
+			expect(first.seenModes).toEqual([true]);
+
+			tui.setShowHardwareCursor(false);
+			expect(first.useTerminalCursor).toBe(false);
+			expect(first.seenModes).toEqual([true, false]);
+
+			tui.setFocus(second);
+			expect(first.focused).toBe(false);
+			expect(second.focused).toBe(true);
+			expect(second.useTerminalCursor).toBe(false);
+			expect(second.seenModes).toEqual([false]);
+
+			tui.setShowHardwareCursor(true);
+			expect(first.useTerminalCursor).toBe(false);
+			expect(second.useTerminalCursor).toBe(true);
+			expect(second.seenModes).toEqual([false, true]);
+		});
 		it("shows the terminal cursor during stop even when paints keep it hidden", async () => {
 			// DECSC/DECRC restore cursor position and attributes, not DECTCEM
 			// visibility. The TUI hides the hardware cursor before paints, so stop()

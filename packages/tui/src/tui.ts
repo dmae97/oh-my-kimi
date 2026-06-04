@@ -118,14 +118,21 @@ export interface Component {
 }
 
 /**
- * Interface for components that can receive focus and display a hardware cursor.
+ * Interface for components that can receive focus and display a cursor.
  * When focused, the component should emit CURSOR_MARKER at the cursor position
  * in its render output. TUI will find this marker and position the hardware
  * cursor there for proper IME candidate window positioning.
+ *
+ * Components that can switch between terminal-cursor and software-cursor
+ * rendering expose `setUseTerminalCursor`; TUI keeps that mode in sync with
+ * its resolved hardware-cursor preference whenever focus or the preference
+ * changes.
  */
 export interface Focusable {
 	/** Set by TUI when focus changes. Component should emit CURSOR_MARKER when true. */
 	focused: boolean;
+	/** Set by TUI when hardware cursor rendering is enabled or disabled. */
+	setUseTerminalCursor?(useTerminalCursor: boolean): void;
 }
 
 /** Options for scheduling a TUI render. */
@@ -416,6 +423,12 @@ export class TUI extends Container {
 		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
 	}
 
+	#syncTerminalCursorMode(component: Component | null): void {
+		if (isFocusable(component)) {
+			component.setUseTerminalCursor?.(this.#showHardwareCursor);
+		}
+	}
+
 	get fullRedraws(): number {
 		return this.#fullRedrawCount;
 	}
@@ -441,6 +454,7 @@ export class TUI extends Container {
 	setShowHardwareCursor(enabled: boolean): void {
 		if (this.#showHardwareCursor === enabled) return;
 		this.#showHardwareCursor = enabled;
+		this.#syncTerminalCursorMode(this.#focusedComponent);
 		if (!enabled) {
 			this.terminal.hideCursor();
 		}
@@ -509,9 +523,11 @@ export class TUI extends Container {
 
 		this.#focusedComponent = component;
 
-		// Set focused flag on new component
+		// Set focused flag on new component and keep its software/hardware cursor
+		// rendering mode aligned with TUI's single cursor-visibility preference.
 		if (isFocusable(component)) {
 			component.focused = true;
+			this.#syncTerminalCursorMode(component);
 		}
 	}
 

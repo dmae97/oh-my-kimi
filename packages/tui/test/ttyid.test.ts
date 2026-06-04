@@ -2,13 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { getTerminalId } from "@oh-my-pi/pi-tui/ttyid";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const terminalEnvKeys = [
-	"TMUX_PANE",
-	"CMUX_SURFACE_ID",
-	"KITTY_WINDOW_ID",
-	"TERM_SESSION_ID",
-	"WT_SESSION",
-] as const;
+const terminalEnvKeys = ["TMUX_PANE", "CMUX_SURFACE_ID", "KITTY_WINDOW_ID", "TERM_SESSION_ID", "WT_SESSION"] as const;
 const originalTerminalEnv = Object.fromEntries(terminalEnvKeys.map(key => [key, process.env[key]]));
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {

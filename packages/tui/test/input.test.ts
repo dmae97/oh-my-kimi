@@ -215,4 +215,18 @@ describe("Input component", () => {
 		const expectedCol = 2 + visibleWidth(input.getValue());
 		expect(col).toBe(expectedCol);
 	});
+
+	it("terminal cursor mode emits marker without inverse-video software cursor", () => {
+		const input = new Input();
+		input.focused = true;
+		input.setUseTerminalCursor(true);
+		input.setValue("abc");
+		input.handleInput("\x01"); // Ctrl+A (start)
+
+		const [line] = input.render(20);
+		expect(line).toContain(CURSOR_MARKER);
+		expect(line).not.toContain("\x1b[7m");
+		expect(line.replaceAll(CURSOR_MARKER, "")).toContain("abc");
+		expect(input.getUseTerminalCursor()).toBe(true);
+	});
 });
