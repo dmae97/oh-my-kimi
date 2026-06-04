@@ -173,7 +173,7 @@ export class MnemopiSessionState {
 		return lines.join("\n\n");
 	}
 
-	collectScopedRecallResults(query: string): RecallResult[] {
+	async collectScopedRecallResults(query: string): Promise<RecallResult[]> {
 		const merged: RecallResult[] = [];
 		const byId = new Map<string, number>();
 		const byContent = new Map<string, number>();
@@ -187,7 +187,7 @@ export class MnemopiSessionState {
 				target.bank === this.scoped.global?.bank && sharedFallbackQuery ? [query, sharedFallbackQuery] : [query];
 			try {
 				for (const recallQuery of queries) {
-					const results = target.memory.recallEnhanced(recallQuery, this.config.recallLimit, {
+					const results = await target.memory.recallEnhanced(recallQuery, this.config.recallLimit, {
 						includeFacts: true,
 						channelId: target.bank,
 					});
@@ -209,7 +209,7 @@ export class MnemopiSessionState {
 		return merged;
 	}
 
-	recallResultsScoped(query: string): RecallResult[] {
+	recallResultsScoped(query: string): Promise<RecallResult[]> {
 		return this.collectScopedRecallResults(query);
 	}
 
@@ -242,7 +242,7 @@ export class MnemopiSessionState {
 	}
 
 	async recallForContext(query: string): Promise<string | undefined> {
-		const results = this.collectScopedRecallResults(query);
+		const results = await this.collectScopedRecallResults(query);
 		if (results.length === 0) return undefined;
 		return formatRecallBlock(results);
 	}

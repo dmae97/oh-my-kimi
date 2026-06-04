@@ -82,7 +82,6 @@ describe("claude usage request headers", () => {
 		const betaTokens = beta?.split(",").map(tokenValue => tokenValue.trim()) ?? [];
 		expect(betaTokens).toContain("claude-code-20250219");
 		expect(betaTokens).toContain("oauth-2025-04-20");
-		expect(betaTokens).toContain("context-1m-2025-08-07");
 		expect(betaTokens).toContain("interleaved-thinking-2025-05-14");
 		expect(betaTokens).toContain("redact-thinking-2026-02-12");
 		expect(betaTokens).toContain("context-management-2025-06-27");

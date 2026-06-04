@@ -149,8 +149,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include parsed free-text `answer`, `sources`, `requestId`.
   - **Exa** — `packages/coding-agent/src/web/search/providers/exa.ts`
-    - Availability: env or `agent.db` credential for `exa`; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`.
-    - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key.
+    - Availability: env or `agent.db` credential for `exa` admits Exa to the auto chain; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`. Explicit selection (`providers.webSearch: exa`) reaches Exa even without a credential and falls back to public MCP.
+    - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key, otherwise JSON-RPC `tools/call` against `https://mcp.exa.ai/mcp` for remote MCP tool `web_search_exa`.
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output: synthesized `answer` from up to 3 result summaries, `sources`, `requestId`.
   - **Parallel** — `packages/coding-agent/src/web/search/providers/parallel.ts`, `packages/coding-agent/src/web/parallel.ts`
@@ -225,4 +225,4 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - The prompt says `recency` is for Brave and Perplexity, but code also implements it for Tavily and SearXNG.
 - The year rewrite in `executeSearch()` is blunt: any `2020`-`2029` substring is replaced with the current year.
 - `packages/coding-agent/src/config/settings-schema.ts` uses the shared `SEARCH_PROVIDER_PREFERENCES` / `SEARCH_PROVIDER_OPTIONS` metadata, so the settings selector and setup wizard expose `auto` plus every provider in the auto chain.
-- Exa requires an API key from the environment or credential store; it no longer falls back to unauthenticated MCP search.
+- Exa uses `authStorage.getApiKey("exa")`, then `EXA_API_KEY`, then unauthenticated `https://mcp.exa.ai/mcp` fallback.

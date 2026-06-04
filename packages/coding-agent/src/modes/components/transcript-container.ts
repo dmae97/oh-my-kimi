@@ -38,6 +38,11 @@ export class TranscriptContainer extends Container {
 	// Bumped to invalidate every block's snapshot at once; a snapshot is only
 	// honored when its stored generation still matches.
 	#generation = 0;
+	// The block that was bottom-most (live) on the previous render. When the live
+	// position moves past it, its snapshot was last refreshed mid-stream and may
+	// predate content that finalized in the same coalesced frame that appended the
+	// block now below it — so it must recompute once on the live→frozen transition.
+	#prevLiveChild: Component | undefined;
 
 	override invalidate(): void {
 		// A theme/global invalidation forces a full recompute on the rebuild that
@@ -67,22 +72,35 @@ export class TranscriptContainer extends Container {
 
 		const lines: string[] = [];
 		const liveIndex = this.children.length - 1;
+		const liveChild = this.children[liveIndex];
+		const prevLiveChild = this.#prevLiveChild;
+		this.#prevLiveChild = liveChild;
 		for (let i = 0; i < this.children.length; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
-			if (i !== liveIndex) {
+			if (child !== liveChild) {
 				const snapshot = child[kSnapshot];
 				// Replay the block's last render from while it was live. A stale
 				// generation (post-thaw) or width mismatch (resize in flight, an
 				// explicit rebuild that reconciles history anyway) recomputes instead.
-				if (snapshot && snapshot.generation === this.#generation && snapshot.width === width) {
+				// The block that was live on the previous render is also recomputed
+				// here: TUI render coalescing can advance its content (final streamed
+				// tokens) in the very frame that appends the block now below it, so its
+				// cached snapshot predates that final content. Recomputing on the
+				// transition seals the block at its true final state, not a mid-stream one.
+				if (
+					child !== prevLiveChild &&
+					snapshot &&
+					snapshot.generation === this.#generation &&
+					snapshot.width === width
+				) {
 					lines.push(...snapshot.lines);
 					continue;
 				}
 			}
 			const rendered = child.render(width);
 			// Cache every block's latest render. While a block is live this keeps its
-			// snapshot current; the frame it stops being live the cache already holds
-			// its final live render, so nothing recomputes underneath it.
+			// snapshot current; on the frame it stops being live the recompute above
+			// refreshes it to the final state before it freezes.
 			child[kSnapshot] = { width, lines: rendered, generation: this.#generation };
 			lines.push(...rendered);
 		}

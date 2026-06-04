@@ -222,6 +222,35 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
+	it("poll timer stops once DECRQM confirms Mode 2031 support", () => {
+		vi.useFakeTimers();
+		const { terminal, queryCount } = setupTerminal();
+
+		// Complete initial OSC 11 + DA1 cycle (keyboard + OSC 11 sentinels).
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
+
+		// Poll fires at 2s while Mode 2031 support is still unknown.
+		const afterInitial = queryCount();
+		vi.advanceTimersByTime(2000);
+		expect(queryCount()).toBe(afterInitial + 1);
+		// Drain the poll's OSC 11 reply so it is no longer pending.
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+
+		// DECRQM confirms Mode 2031 support — push notifications supersede polling,
+		// so the poll must stop (its repeated OSC 11/DA1 writes otherwise clobber
+		// the user's active text selection every 2s).
+		process.stdin.emit("data", "\x1b[?2031;3$y");
+		const afterConfirm = queryCount();
+
+		// Advance well past several poll intervals — no further OSC 11 queries fire.
+		vi.advanceTimersByTime(6000);
+		expect(queryCount()).toBe(afterConfirm);
+
+		terminal.stop();
+	});
+
 	it("does not start the OSC 11 poll timer under WSL", () => {
 		vi.useFakeTimers();
 		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -363,16 +392,17 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		expect(writes.some(w => w.includes("\x1b[>31u"))).toBe(false);
 		expect(writes).toContain("\x1b[?u\x1b[c");
 
-		// Four DA1 sentinels are in flight at startup: keyboard probe, OSC 11, and
-		// the DECRQM probes for DEC 2026 and 2048 (each rides the shared FIFO).
-		// Consume them in send-order and verify none leaks to the input handler.
+		// Five DA1 sentinels are in flight at startup: keyboard probe, OSC 11, and
+		// the DECRQM probes for DEC 2026, 2048, and 2031 (each rides the shared
+		// FIFO). Consume them in send-order and verify none leaks to the input handler.
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual([]);
 
-		// A fifth stray DA1 has no owner and must reach the input handler — it is
+		// A sixth stray DA1 has no owner and must reach the input handler — it is
 		// no longer ours to swallow.
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual(["\x1b[?1;2c"]);
@@ -459,10 +489,11 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		return { terminal, writes, received, reports, resizeCount: () => resizeCount };
 	}
 
-	it("queries DECRQM for DEC 2026 and 2048 at startup", () => {
+	it("queries DECRQM for DEC 2026, 2048, and 2031 at startup", () => {
 		const { terminal, writes } = setup();
 		expect(writes.some(w => w.includes("\x1b[?2026$p"))).toBe(true);
 		expect(writes.some(w => w.includes("\x1b[?2048$p"))).toBe(true);
+		expect(writes.some(w => w.includes("\x1b[?2031$p"))).toBe(true);
 		terminal.stop();
 	});
 

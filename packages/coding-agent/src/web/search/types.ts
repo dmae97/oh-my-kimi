@@ -53,7 +53,7 @@ export const SEARCH_PROVIDER_OPTIONS = [
 		description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
 	},
 	{ value: "zai", label: "Z.AI", description: "Calls Z.AI webSearchPrime MCP" },
-	{ value: "exa", label: "Exa", description: "Requires EXA_API_KEY" },
+	{ value: "exa", label: "Exa", description: "Uses Exa API when EXA_API_KEY is set; falls back to Exa MCP" },
 	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	{ value: "kagi", label: "Kagi", description: "Requires KAGI_API_KEY and Kagi Search API beta access" },
 	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
@@ -472,6 +472,7 @@ export interface PerplexityResponse {
 	choices: PerplexityChoice[];
 	citations?: string[] | null;
 	search_results?: PerplexitySearchResult[] | null;
+	related_questions?: string[] | null;
 	type?: PerplexityCompletionResponseType | null;
 	status?: PerplexityCompletionResponseStatus | null;
 }

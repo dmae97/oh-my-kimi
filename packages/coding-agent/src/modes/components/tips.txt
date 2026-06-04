@@ -12,3 +12,7 @@ Say `workflow` in your message to drive the task with parallel subagents in eval
 Log in to several accounts of the same provider — `/login` again — and omp load-balances across them automatically
 Run `omp auth-broker serve` once and every machine pulls live tokens over the wire — refresh keys never leave the host; `omp auth-gateway` fronts it as a drop-in proxy any OpenAI-compatible client can hit
 Press alt+p (or /switch) to switch provider, and ctrl+p to cycle role models smol -> slow -> etc
+Press ctrl+r to search your prompt history and reuse a past message
+`/force read` pins the next turn to one specific tool when the model keeps reaching for the wrong one
+`/copy code` grabs the last code block to your clipboard — `/copy cmd` grabs the last shell/python command
+`/shake` rips heavy tool results out of context to reclaim tokens without a full /compact — `/shake images` drops just images

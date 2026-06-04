@@ -30,16 +30,16 @@ function capture() {
 }
 
 describe("CLI command handlers", () => {
-	it("remember stores through BeamMemory and recall prints real results", () => {
+	it("remember stores through BeamMemory and recall prints real results", async () => {
 		const root = tempRoot();
 		try {
 			const io = capture();
 			const context = io.context(root);
-			expect(cmdRemember(["Project Alpha prefers terse answers", "cli", "0.7"], context)).toBe(0);
+			expect(await cmdRemember(["Project Alpha prefers terse answers", "cli", "0.7"], context)).toBe(0);
 			expect(io.stdout).toContain("Stored:");
 
 			const recallIo = capture();
-			expect(cmdRecall(["Alpha", "5"], recallIo.context(root))).toBe(0);
+			expect(await cmdRecall(["Alpha", "5"], recallIo.context(root))).toBe(0);
 			expect(recallIo.stdout).toContain("Results for: Alpha");
 			expect(recallIo.stdout).toContain("Project Alpha prefers terse answers");
 			expect(recallIo.stderr).toBe("");
@@ -48,7 +48,7 @@ describe("CLI command handlers", () => {
 		}
 	});
 
-	it("stats prints working, episodic, triple, bank, and DB path counts", () => {
+	it("stats prints working, episodic, triple, bank, and DB path counts", async () => {
 		const root = tempRoot();
 		try {
 			const dbPath = join(root, "mnemopi.db");
@@ -64,7 +64,7 @@ describe("CLI command handlers", () => {
 			}
 
 			const io = capture();
-			expect(cmdStats([], io.context(root))).toBe(0);
+			expect(await cmdStats([], io.context(root))).toBe(0);
 			expect(io.stdout).toContain("Working memory: 1");
 			expect(io.stdout).toContain("Episodic memory: 1");
 			expect(io.stdout).toContain("Knowledge triples: 1");

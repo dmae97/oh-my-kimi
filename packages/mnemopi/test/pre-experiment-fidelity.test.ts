@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("pre-experiment no-LLM fidelity", () => {
-	it("recalls deterministic FTS-only memories without extraction or embeddings", () => {
+	it("recalls deterministic FTS-only memories without extraction or embeddings", async () => {
 		const beam = makeBeam();
 		beam.remember("The Nimbus launch checklist lives in the release binder.", {
 			source: "fixture",
@@ -33,7 +33,7 @@ describe("pre-experiment no-LLM fidelity", () => {
 			extractEntities: false,
 		});
 
-		const results = beam.recall("Nimbus launch checklist", 2, {
+		const results = await beam.recall("Nimbus launch checklist", 2, {
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
 
@@ -43,7 +43,7 @@ describe("pre-experiment no-LLM fidelity", () => {
 		expect(results[0]?.fts_score ?? 0).toBeGreaterThan(0);
 	});
 
-	it("does not let high importance override an exact FTS-only match when configured for lexical fidelity", () => {
+	it("does not let high importance override an exact FTS-only match when configured for lexical fidelity", async () => {
 		const beam = makeBeam();
 		beam.remember("low priority: cedar backup target is vault-seven", {
 			source: "fixture",
@@ -54,7 +54,7 @@ describe("pre-experiment no-LLM fidelity", () => {
 			importance: 1.0,
 		});
 
-		const results = beam.recall("cedar backup target vault-seven", 2, {
+		const results = await beam.recall("cedar backup target vault-seven", 2, {
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
 

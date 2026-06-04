@@ -72,7 +72,11 @@ import {
 import { detectOpenAICompat, type ResolvedOpenAICompat, resolveOpenAICompat } from "./openai-completions-compat";
 import { createInitialResponsesAssistantMessage } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
-import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
+import {
+	isDashscopeCompatibleModeTextOnlyQwen,
+	joinTextWithImagePlaceholder,
+	NON_VISION_IMAGE_PLACEHOLDER,
+} from "./vision-guard";
 
 /**
  * Normalize tool call ID for Mistral.
@@ -255,7 +259,7 @@ type OpenAICompletionsParams = OpenAI.Chat.Completions.ChatCompletionCreateParam
 	top_k?: number;
 	min_p?: number;
 	repetition_penalty?: number;
-	thinking?: { type: "enabled" | "disabled" };
+	thinking?: { type: "enabled" | "disabled"; keep?: "all" };
 	enable_thinking?: boolean;
 	chat_template_kwargs?: { enable_thinking: boolean };
 	reasoning?: { effort?: string } | { enabled: false };
@@ -1147,7 +1151,7 @@ function buildParams(
 	}
 	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const messages = convertMessages(model, context, compat);
-	maybeAddOpenRouterAnthropicCacheControl(model, messages);
+	maybeAddAnthropicCacheControl(compat, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";
 
 	// Kimi (including via OpenRouter and Fireworks router-form IDs such as
@@ -1252,6 +1256,9 @@ function buildParams(
 		// Must explicitly disable since z.ai defaults to thinking enabled.
 		const enabled = options?.reasoning && !options?.disableReasoning;
 		params.thinking = { type: enabled ? "enabled" : "disabled" };
+		if (enabled && compat.thinkingKeep) {
+			params.thinking.keep = compat.thinkingKeep;
+		}
 	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses top-level enable_thinking: boolean
 		params.enable_thinking = !!options?.reasoning && !options?.disableReasoning;
@@ -1430,12 +1437,8 @@ function mapReasoningEffort(
 	return reasoningEffortMap[effort] ?? effort;
 }
 
-function maybeAddOpenRouterAnthropicCacheControl(
-	model: Model<"openai-completions">,
-	messages: ChatCompletionMessageParam[],
-): void {
-	if (model.provider !== "openrouter" || !model.id.startsWith("anthropic/")) return;
-
+function maybeAddAnthropicCacheControl(compat: ResolvedOpenAICompat, messages: ChatCompletionMessageParam[]): void {
+	if (compat.cacheControlFormat !== "anthropic") return;
 	// Anthropic-style caching requires cache_control on a text part. Add a breakpoint
 	// on the last user/assistant message (walking backwards until we find text content).
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -1567,7 +1570,7 @@ export function convertMessages(
 					content: text,
 				});
 			} else {
-				const supportsImages = model.input.includes("image");
+				const supportsImages = model.input.includes("image") && !isDashscopeCompatibleModeTextOnlyQwen(model);
 				const content: ChatCompletionContentPart[] = [];
 				let omittedImages = false;
 				for (const item of msg.content) {
@@ -1810,7 +1813,7 @@ export function convertMessages(
 					.filter(c => c.type === "text")
 					.map(c => (c as TextContent).text)
 					.join("\n");
-				const supportsImages = model.input.includes("image");
+				const supportsImages = model.input.includes("image") && !isDashscopeCompatibleModeTextOnlyQwen(model);
 				const hasImages = toolMsg.content.some(c => c.type === "image");
 				const omittedImages = hasImages && !supportsImages;
 

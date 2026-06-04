@@ -39,7 +39,7 @@ describe("temporal recall scoring", () => {
 		expect(() => parseQueryTime(12345 as never)).toThrow();
 	});
 
-	it("boosts recent memories over older matches when temporal scoring is enabled", () => {
+	it("boosts recent memories over older matches when temporal scoring is enabled", async () => {
 		const beam = makeBeam();
 		beam.remember("Meeting about project alpha", { source: "test", importance: 0.5 });
 		beam.remember("Meeting about project beta", { source: "test", importance: 0.5 });
@@ -50,11 +50,11 @@ describe("temporal recall scoring", () => {
 			.prepare("UPDATE working_memory SET timestamp = ? WHERE content LIKE ?")
 			.run(iso("2026-05-30T10:00:00.000Z"), "%beta%");
 
-		const noTemporal = beam.recall("meeting", 5, {
+		const noTemporal = await beam.recall("meeting", 5, {
 			temporalWeight: 0,
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
-		const temporal = beam.recall("meeting", 5, {
+		const temporal = await beam.recall("meeting", 5, {
 			temporalWeight: 0.5,
 			temporalHalflife: 24,
 			queryTime: "2026-05-30T12:00:00.000Z",
@@ -67,13 +67,13 @@ describe("temporal recall scoring", () => {
 		expect(beta?.temporal_score ?? 0).toBeGreaterThan(alpha?.temporal_score ?? 0);
 	});
 
-	it("leaves ordering stable when temporal weight is zero", () => {
+	it("leaves ordering stable when temporal weight is zero", async () => {
 		const beam = makeBeam();
 		beam.remember("Test content A", { source: "test", importance: 0.5 });
 		beam.remember("Test content B", { source: "test", importance: 0.5 });
 
-		const implicit = beam.recall("test content", 5, { queryTime: "2026-05-30T12:00:00.000Z" });
-		const explicit = beam.recall("test content", 5, {
+		const implicit = await beam.recall("test content", 5, { queryTime: "2026-05-30T12:00:00.000Z" });
+		const explicit = await beam.recall("test content", 5, {
 			temporalWeight: 0,
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
@@ -82,19 +82,19 @@ describe("temporal recall scoring", () => {
 		expect(explicit.map(result => result.score)).toEqual(implicit.map(result => result.score));
 	});
 
-	it("uses per-call temporal halflife overrides", () => {
+	it("uses per-call temporal halflife overrides", async () => {
 		const beam = makeBeam();
 		beam.remember("Memory from two days ago", { source: "test", importance: 0.5 });
 		beam.db
 			.prepare("UPDATE working_memory SET timestamp = ? WHERE content LIKE ?")
 			.run("2026-05-28T12:00:00.000Z", "%two days ago%");
 
-		const short = beam.recall("memory", 1, {
+		const short = await beam.recall("memory", 1, {
 			temporalWeight: 0.5,
 			temporalHalflife: 6,
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
-		const long = beam.recall("memory", 1, {
+		const long = await beam.recall("memory", 1, {
 			temporalWeight: 0.5,
 			temporalHalflife: 168,
 			queryTime: "2026-05-30T12:00:00.000Z",
@@ -103,7 +103,7 @@ describe("temporal recall scoring", () => {
 		expect(long[0]?.score ?? 0).toBeGreaterThan(short[0]?.score ?? 0);
 	});
 
-	it("infers temporal query targets from natural language", () => {
+	it("infers temporal query targets from natural language", async () => {
 		const beam = makeBeam();
 		beam.db
 			.prepare(
@@ -128,7 +128,7 @@ describe("temporal recall scoring", () => {
 				"2026-05-29",
 			);
 
-		const results = beam.recall("incident alpha on 2026-05-29", 2, {
+		const results = await beam.recall("incident alpha on 2026-05-29", 2, {
 			includeWorking: false,
 			temporalHalflife: 12,
 		});

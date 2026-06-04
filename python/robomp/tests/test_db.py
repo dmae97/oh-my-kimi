@@ -55,6 +55,66 @@ def test_claim_next_event_singleton_under_contention(db: Database) -> None:
     assert all(db.get_event(f"d-{i}").state == "running" for i in range(5))
 
 
+def test_claim_next_event_leaves_same_issue_queued_while_running(db: Database) -> None:
+    key = issue_key("octo/widget", 4)
+    db.record_event(
+        delivery_id="running",
+        event_type="issue_comment",
+        repo="octo/widget",
+        issue_key=key,
+        payload={"action": "created"},
+        state="running",
+    )
+    db.record_event(
+        delivery_id="queued",
+        event_type="issue_comment",
+        repo="octo/widget",
+        issue_key=key,
+        payload={"action": "created"},
+    )
+
+    assert db.claim_next_event() is None
+    assert db.get_event("queued").state == "queued"
+
+    db.mark_event("running", "done")
+    claimed = db.claim_next_event()
+    assert claimed is not None
+    assert claimed.delivery_id == "queued"
+    assert db.get_event("queued").state == "running"
+
+
+def test_claim_next_event_skips_blocked_issue_without_stalling_others(db: Database) -> None:
+    blocked = issue_key("octo/widget", 4)
+    ready = issue_key("octo/widget", 5)
+    db.record_event(
+        delivery_id="running",
+        event_type="issue_comment",
+        repo="octo/widget",
+        issue_key=blocked,
+        payload={"action": "created"},
+        state="running",
+    )
+    db.record_event(
+        delivery_id="blocked",
+        event_type="issue_comment",
+        repo="octo/widget",
+        issue_key=blocked,
+        payload={"action": "created"},
+    )
+    db.record_event(
+        delivery_id="ready",
+        event_type="issues",
+        repo="octo/widget",
+        issue_key=ready,
+        payload={"action": "opened"},
+    )
+
+    claimed = db.claim_next_event()
+    assert claimed is not None
+    assert claimed.delivery_id == "ready"
+    assert db.get_event("blocked").state == "queued"
+
+
 def test_requeue_event_can_be_restricted_by_source_state(db: Database) -> None:
     db.record_event(
         delivery_id="done-event",

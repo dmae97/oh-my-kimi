@@ -116,18 +116,18 @@ describe("CLI usage and operation failure parity", () => {
 		expect(malformed.stderr).not.toContain("Traceback");
 	});
 
-	it("export and import report actual memory counts", () => {
+	it("export and import report actual memory counts", async () => {
 		const source = join(root, "source");
 		const sourceIo = capture();
-		expect(cmdRemember(["exported memory", "cli", "0.7"], sourceIo.context(source))).toBe(0);
+		expect(await cmdRemember(["exported memory", "cli", "0.7"], sourceIo.context(source))).toBe(0);
 		const exportPath = join(root, "export.json");
 		const exportIo = capture();
-		expect(cmdExport([exportPath], exportIo.context(source))).toBe(0);
+		expect(await cmdExport([exportPath], exportIo.context(source))).toBe(0);
 		expect(exportIo.stdout).toContain("Exported 1 working, 0 episodic");
 		expect(exportIo.stdout).not.toContain("Exported 0 memories");
 
 		const importIo = capture();
-		expect(cmdImport([exportPath], importIo.context(join(root, "imported")))).toBe(0);
+		expect(await cmdImport([exportPath], importIo.context(join(root, "imported")))).toBe(0);
 		expect(importIo.stdout).toContain("Imported 1 working, 0 episodic");
 		expect(importIo.stdout).not.toContain("Imported 0 memories");
 	});

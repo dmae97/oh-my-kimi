@@ -5,6 +5,13 @@
 ### Added
 
 - Added profile-aware directory helpers and isolated profile state roots, while keeping the install ID shared across profiles.
+## [15.9.1] - 2026-06-04
+
+### Fixed
+
+- Hardened `getIndentation` against malformed paths: any filesystem error from the `.editorconfig` probe (e.g. `ENAMETOOLONG` on oversized garbage path segments) is now swallowed and cached as a miss instead of escaping and crashing the TUI mid-render ([#1871](https://github.com/can1357/oh-my-pi/issues/1871)).
+- Fixed `getIndentation` (and the edit renderer's `replaceTabs` callers) crashing with `ENAMETOOLONG`/`ENOTDIR`/etc. when handed a path with an overlong component or a non-directory in its parent chain. Editorconfig discovery now short-circuits to the default tab width on any path component above `NAME_MAX` (255 bytes) and absorbs any `FsError` while walking the editorconfig chain — best-effort discovery must never escape as an uncaught exception ([#1872](https://github.com/can1357/oh-my-pi/issues/1872)).
+
 ## [15.9.0] - 2026-06-04
 
 ### Added
@@ -15,6 +22,7 @@
 - Added `peekFileTail`, the tail mirror of `peekFile`: reads up to the last `maxBytes` of a file ending at EOF, reusing the same pooled-buffer strategy (no per-call allocation for small reads).
 
 ## [15.7.3] - 2026-05-31
+
 ### Added
 
 - Added `getFastembedCacheDir` to return the FastEmbed model cache directory under ~/.omp/cache/fastembed

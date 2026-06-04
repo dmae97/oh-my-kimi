@@ -39,6 +39,7 @@ import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
+import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	formatModelString,
@@ -101,7 +102,7 @@ import {
 import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
 import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
-import { type CustomMessage, convertToLlm } from "./session/messages";
+import { type CustomMessage, convertToLlm, wrapSteeringForModel } from "./session/messages";
 import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
@@ -644,24 +645,6 @@ function registerPythonCleanup(): void {
 	if (pythonCleanupRegistered) return;
 	pythonCleanupRegistered = true;
 	postmortem.register("python-cleanup", disposeAllKernelSessions);
-}
-
-/**
- * Resolve whether to enable append-only context mode based on the setting and provider.
- *
- * - `"on"` → always enable
- * - `"off"` → never enable
- * - `"auto"` → enable for DeepSeek (prefix-caching provider)
- */
-function resolveAppendOnlyMode(setting: "auto" | "on" | "off" | undefined, provider: string): boolean {
-	switch (setting ?? "auto") {
-		case "on":
-			return true;
-		case "off":
-			return false;
-		default:
-			return provider === "deepseek";
-	}
 }
 
 function customToolToDefinition(tool: CustomTool): ToolDefinition {
@@ -1905,7 +1888,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return obfuscateMessages(obfuscator, converted);
 		};
 		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
-			return await extensionRunner.emitContext(messages);
+			const withContext = await extensionRunner.emitContext(messages);
+			return wrapSteeringForModel(withContext);
 		};
 		const onPayload = async (payload: unknown, _model?: Model) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload);
@@ -2028,7 +2012,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getToolChoice: () => session?.nextToolChoice(),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
-				? resolveAppendOnlyMode(settings.get("provider.appendOnlyContext"), model.provider)
+				? shouldEnableAppendOnlyContext(settings.get("provider.appendOnlyContext"), model)
 					? new AppendOnlyContextManager()
 					: undefined
 				: undefined,

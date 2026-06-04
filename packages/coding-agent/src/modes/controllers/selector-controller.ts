@@ -133,7 +133,11 @@ export class SelectorController {
 							const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
 							return this.ctx.statusLine.getTopBorder(availableWidth).content;
 						},
-						onPluginsChanged: () => {
+						onPluginsChanged: async () => {
+							const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
+							clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+							await this.ctx.refreshSlashCommandState();
+							await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
 							this.ctx.ui.requestRender();
 						},
 						onCancel: () => {
@@ -184,16 +188,19 @@ export class SelectorController {
 	 */
 	async showExtensionsDashboard(): Promise<void> {
 		const dashboard = await ExtensionDashboard.create(getProjectDir(), this.ctx.settings, this.ctx.ui.terminal.rows);
-		this.showSelector(done => {
-			dashboard.onClose = () => {
-				done();
-				this.ctx.ui.requestRender();
-			};
-			dashboard.onRequestRender = () => {
-				this.ctx.ui.requestRender();
-			};
-			return { component: dashboard, focus: dashboard };
+		const overlay = this.ctx.ui.showOverlay(dashboard, {
+			width: "100%",
+			maxHeight: "100%",
+			anchor: "top-left",
+			margin: 0,
 		});
+		dashboard.onClose = () => {
+			overlay.hide();
+			this.ctx.ui.requestRender();
+		};
+		dashboard.onRequestRender = () => {
+			this.ctx.ui.requestRender();
+		};
 	}
 
 	/**
@@ -208,16 +215,19 @@ export class SelectorController {
 			activeModelPattern,
 			defaultModelPattern,
 		});
-		this.showSelector(done => {
-			dashboard.onClose = () => {
-				done();
-				this.ctx.ui.requestRender();
-			};
-			dashboard.onRequestRender = () => {
-				this.ctx.ui.requestRender();
-			};
-			return { component: dashboard, focus: dashboard };
+		const overlay = this.ctx.ui.showOverlay(dashboard, {
+			width: "100%",
+			maxHeight: "100%",
+			anchor: "top-left",
+			margin: 0,
 		});
+		dashboard.onClose = () => {
+			overlay.hide();
+			this.ctx.ui.requestRender();
+		};
+		dashboard.onRequestRender = () => {
+			this.ctx.ui.requestRender();
+		};
 	}
 
 	/**
@@ -763,6 +773,7 @@ export class SelectorController {
 					loadAllSessions: () => SessionManager.listAll(),
 					allSessions,
 					startInAllScope,
+					getTerminalRows: () => this.ctx.ui.terminal.rows,
 				},
 			);
 			selector.setOnRequestRender(() => this.ctx.ui.requestRender());

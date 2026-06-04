@@ -3,12 +3,13 @@ import { convertAnthropicMessages } from "../src/providers/anthropic";
 import { convertMessages as convertGoogleMessages } from "../src/providers/google-shared";
 import { convertCodexResponsesMessages } from "../src/providers/openai-codex-responses";
 import { convertMessages as convertOpenAICompletionsMessages } from "../src/providers/openai-completions";
+import type { ResolvedOpenAICompat } from "../src/providers/openai-completions-compat";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesInputContent,
 } from "../src/providers/openai-responses-shared";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "../src/providers/vision-guard";
-import type { Api, AssistantMessage, Context, Model, OpenAICompat, ToolResultMessage, Usage } from "../src/types";
+import type { Api, AssistantMessage, Context, Model, ToolResultMessage, Usage } from "../src/types";
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -19,7 +20,7 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const compat: Required<OpenAICompat> = {
+const compat: ResolvedOpenAICompat = {
 	supportsStore: true,
 	supportsDeveloperRole: true,
 	supportsMultipleSystemMessages: true,

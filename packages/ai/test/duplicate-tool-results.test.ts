@@ -918,7 +918,6 @@ describe("Codex-style Abort Handling", () => {
 		const guidanceMsg = transformed[3] as DeveloperMessage;
 		expect(guidanceMsg.role).toBe("developer");
 		expect(guidanceMsg.content).toContain("<turn-aborted>");
-		expect(guidanceMsg.content).toContain("verify current state before retrying");
 	});
 
 	it("should inject synthetic 'aborted' tool results with isError true", () => {

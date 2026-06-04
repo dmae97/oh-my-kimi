@@ -89,7 +89,7 @@ describe("identity memory parity", () => {
 		}
 	});
 
-	it("isolates recall by author, author type, and channel while preserving same-channel cross-session recall", () => {
+	it("isolates recall by author, author type, and channel while preserving same-channel cross-session recall", async () => {
 		const dbPath = tempDb();
 		const abdias = new Mnemopi({
 			dbPath,
@@ -117,13 +117,13 @@ describe("identity memory parity", () => {
 			sarah.remember("Launch is Friday", { scope: "channel" });
 			ci.remember("Deploy succeeded", { scope: "channel" });
 
-			expect(abdias.recall("dark", 5, { authorId: "abdias" })[0]?.author_id).toBe("abdias");
-			expect(abdias.recall("dark", 5, { authorId: "sarah" })).toHaveLength(0);
-			expect(ci.recall("deploy", 5, { authorType: "agent" })[0]?.author_type).toBe("agent");
+			expect((await abdias.recall("dark", 5, { authorId: "abdias" }))[0]?.author_id).toBe("abdias");
+			expect(await abdias.recall("dark", 5, { authorId: "sarah" })).toHaveLength(0);
+			expect((await ci.recall("deploy", 5, { authorType: "agent" }))[0]?.author_type).toBe("agent");
 
-			const launch = abdias.recall("launch", 5, { channelId: "team-a" });
+			const launch = await abdias.recall("launch", 5, { channelId: "team-a" });
 			expect(launch.some(row => row.author_id === "sarah" && row.channel_id === "team-a")).toBe(true);
-			const teamASecrets = abdias.recall("deploy", 5, { channelId: "team-a" });
+			const teamASecrets = await abdias.recall("deploy", 5, { channelId: "team-a" });
 			expect(teamASecrets.some(row => row.channel_id === "team-b")).toBe(false);
 		} finally {
 			abdias.close();

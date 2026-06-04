@@ -209,10 +209,6 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 			logger.debug("HistoryStorage FTS query failed, using substring only", { error: String(error) });
 		}
 
-		if (ftsRows.length >= safeLimit) {
-			return ftsRows.map(row => this.#toEntry(row));
-		}
-
 		// 2. Substring fallback (token-AND LIKE). Catches infix matches FTS5's
 		//    prefix-only wildcard cannot reach (e.g. "mit" -> "commit"). Bounded
 		//    by safeLimit, ordered by recency - no full-table load into JS.
@@ -227,27 +223,24 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 			return subRows.map(row => this.#toEntry(row));
 		}
 
-		const seen = new Set<number>();
-		const merged: HistoryEntry[] = [];
+		const rowsById = new Map<number, HistoryRow>();
 		for (const row of ftsRows) {
-			if (seen.has(row.id)) continue;
-			seen.add(row.id);
-			merged.push(this.#toEntry(row));
+			rowsById.set(row.id, row);
 		}
 		for (const row of subRows) {
-			if (merged.length >= safeLimit) break;
-			if (seen.has(row.id)) continue;
-			seen.add(row.id);
-			merged.push(this.#toEntry(row));
+			if (!rowsById.has(row.id)) rowsById.set(row.id, row);
 		}
-		return merged;
+
+		return [...rowsById.values()]
+			.sort((a, b) => b.created_at - a.created_at || b.id - a.id)
+			.slice(0, safeLimit)
+			.map(row => this.#toEntry(row));
 	}
 
 	/**
-	 * IDs of the sessions whose stored prompts match `query`, ordered by match
-	 * relevance (most relevant/recent first) and de-duplicated. Prompts with no
-	 * recorded session are skipped. Used to augment session ranking in the
-	 * resume picker with prompts that the 4KB session-list prefix never sees.
+	 * IDs of the sessions whose stored prompts match `query`, ordered by prompt
+	 * recency and de-duplicated. Used to augment session ranking in the resume
+	 * picker with prompts that the 4KB session-list prefix never sees.
 	 */
 	matchingSessionIds(query: string, limit = 500): string[] {
 		const seen = new Set<string>();

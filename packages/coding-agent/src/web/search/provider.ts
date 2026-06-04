@@ -140,7 +140,7 @@ export async function resolveProviderChain(
 
 	if (preferredProvider !== "auto") {
 		const provider = await getSearchProvider(preferredProvider);
-		if (await provider.isAvailable(authStorage)) {
+		if (await provider.isExplicitlyAvailable(authStorage)) {
 			providers.push(provider);
 		}
 	}

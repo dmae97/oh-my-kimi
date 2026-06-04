@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [15.9.1] - 2026-06-04
+### Fixed
+
+- Fixed the OSC 11 appearance poll re-querying every 2s forever on terminals that support Mode 2031 but never change theme, whose repeated OSC 11/DA1 writes cleared the user's active text selection (breaking copy every 2 seconds). The poll now stops as soon as DECRQM confirms Mode 2031 support, since push notifications make polling redundant.
+
 ## [15.9.0] - 2026-06-04
 
 ### Added

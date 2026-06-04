@@ -632,6 +632,7 @@ describe("ModelRegistry", () => {
 					compat: {
 						supportsUsageInStreaming: false,
 						maxTokensField: "max_tokens",
+						cacheControlFormat: "anthropic",
 					},
 					models: [
 						{
@@ -651,6 +652,7 @@ describe("ModelRegistry", () => {
 			const compat = getOpenAICompat(model);
 			expect(compat?.supportsUsageInStreaming).toBe(false);
 			expect(compat?.maxTokensField).toBe("max_tokens");
+			expect(compat?.cacheControlFormat).toBe("anthropic");
 		});
 
 		test("model-level compat overrides provider-level compat for custom models", () => {

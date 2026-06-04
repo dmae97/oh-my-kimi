@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { formatTitleUserMessage, MAX_TITLE_INPUT_CHARS, prepareTitleInput, stripCodeBlocks } from "../src/tiny/text";
+import {
+	formatTitleUserMessage,
+	isLowSignalTitleInput,
+	MAX_TITLE_INPUT_CHARS,
+	NO_TITLE_SENTINEL,
+	normalizeGeneratedTitle,
+	prepareTitleInput,
+	stripCodeBlocks,
+} from "../src/tiny/text";
 
 describe("stripCodeBlocks", () => {
 	it("drops fenced code blocks but keeps the surrounding prose", () => {
@@ -56,5 +64,68 @@ describe("formatTitleUserMessage", () => {
 		expect(formatted.endsWith("\n</user-message>")).toBe(true);
 		expect(formatted).toContain("plan a thing");
 		expect(formatted).not.toContain("noise");
+	});
+});
+
+describe("normalizeGeneratedTitle", () => {
+	it("returns the cleaned first line of a real title", () => {
+		expect(normalizeGeneratedTitle('"Investigate the resolver"')).toBe("Investigate the resolver");
+		expect(normalizeGeneratedTitle("Investigate the resolver.")).toBe("Investigate the resolver");
+	});
+
+	it("treats the bare none sentinel as no title (case/punctuation-insensitive)", () => {
+		expect(NO_TITLE_SENTINEL).toBe("none");
+		expect(normalizeGeneratedTitle("none")).toBeNull();
+		expect(normalizeGeneratedTitle("None.")).toBeNull();
+		expect(normalizeGeneratedTitle('"none"')).toBeNull();
+	});
+
+	it("keeps a title that merely contains the word none", () => {
+		expect(normalizeGeneratedTitle("Explain python None keyword")).toBe("Explain python None keyword");
+	});
+
+	it("returns null for empty or whitespace-only output", () => {
+		expect(normalizeGeneratedTitle("")).toBeNull();
+		expect(normalizeGeneratedTitle("   ")).toBeNull();
+		expect(normalizeGeneratedTitle(null)).toBeNull();
+	});
+});
+
+describe("isLowSignalTitleInput", () => {
+	it("treats greetings and acknowledgements as low signal (defer)", () => {
+		for (const msg of [
+			"hi",
+			"Hi!",
+			"hey there",
+			"hello :)",
+			"good morning",
+			"thanks!",
+			"ok cool",
+			"yo",
+			"test",
+			"ping",
+		]) {
+			expect(isLowSignalTitleInput(msg)).toBe(true);
+		}
+	});
+
+	it("treats empty / punctuation / emoji-only input as low signal", () => {
+		expect(isLowSignalTitleInput("")).toBe(true);
+		expect(isLowSignalTitleInput("   ")).toBe(true);
+		expect(isLowSignalTitleInput("👋👋")).toBe(true);
+		expect(isLowSignalTitleInput("?!")).toBe(true);
+		expect(isLowSignalTitleInput("42")).toBe(true);
+	});
+
+	it("treats messages with a real task as title-worthy", () => {
+		for (const msg of [
+			"fix the resolver bug",
+			"deploy",
+			"hi, can you fix the login flow",
+			"add a test for the parser",
+			"what does this regex do",
+		]) {
+			expect(isLowSignalTitleInput(msg)).toBe(false);
+		}
 	});
 });

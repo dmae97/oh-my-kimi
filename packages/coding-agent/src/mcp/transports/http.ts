@@ -87,45 +87,62 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		let response: Response;
+		let response: Response | null;
 		let timedOut = false;
+		let startupFinished = false;
+		const connection = this.#sseConnection;
 		const startupTimeoutMs = resolveSSEConnectTimeoutMs(this.config.timeout);
-		const timeoutId =
+		const fetchPromise = fetch(this.config.url, {
+			method: "GET",
+			headers,
+			signal: connection.signal,
+		});
+		const timeoutPromise =
 			startupTimeoutMs > 0
-				? setTimeout(() => {
-						timedOut = true;
-						this.#sseConnection?.abort();
-					}, startupTimeoutMs)
+				? new Promise<null>(resolve => {
+						setTimeout(() => {
+							if (!startupFinished) {
+								timedOut = true;
+								connection.abort();
+							}
+							resolve(null);
+						}, startupTimeoutMs);
+					})
 				: null;
 		try {
-			response = await fetch(this.config.url, {
-				method: "GET",
-				headers,
-				signal: this.#sseConnection.signal,
-			});
+			response = timeoutPromise === null ? await fetchPromise : await Promise.race([fetchPromise, timeoutPromise]);
 		} catch (error) {
-			this.#sseConnection = null;
+			if (this.#sseConnection === connection) this.#sseConnection = null;
 			if (error instanceof Error && error.name !== "AbortError" && !timedOut) {
 				this.onError?.(error);
 			}
 			return;
 		} finally {
-			if (timeoutId !== null) clearTimeout(timeoutId);
+			startupFinished = true;
+		}
+		if (response === null) {
+			if (this.#sseConnection === connection) this.#sseConnection = null;
+			void fetchPromise.then(lateResponse => lateResponse.body?.cancel()).catch(() => {});
+			return;
 		}
 
+		if (this.#sseConnection !== connection) {
+			await response.body?.cancel();
+			return;
+		}
 		if (response.status === 405 || !response.ok || !response.body) {
 			await response.body?.cancel();
-			this.#sseConnection = null;
+			if (this.#sseConnection === connection) this.#sseConnection = null;
 			return;
 		}
 
 		// Connection established — read messages in background.
 		// If the stream ends unexpectedly (server restart, network drop),
 		// fire onClose so the manager can trigger reconnection.
-		const signal = this.#sseConnection.signal;
+		const signal = connection.signal;
 		void this.#readSSEStream(response.body!, signal).finally(() => {
 			const wasConnected = this.#connected;
-			this.#sseConnection = null;
+			if (this.#sseConnection === connection) this.#sseConnection = null;
 			if (wasConnected) this.onClose?.();
 		});
 	}

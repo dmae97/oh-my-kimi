@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [15.9.1] - 2026-06-04
+
+### Added
+
+- Added regional Xiaomi Token Plan login/provider entries (`xiaomi-token-plan-sgp`, `xiaomi-token-plan-ams`, `xiaomi-token-plan-cn`) so `omp login` can store token-plan keys against the selected region. ([#1846](https://github.com/can1357/oh-my-pi/issues/1846))
+
+### Fixed
+
+- Removed the `context-1m-2025-08-07` (1M long-context) beta from the Anthropic agent request headers, the OAuth model-discovery header, and the Claude usage-API header. Sending it caused subscription/OAuth requests without long-context credits to fail with `429 Usage credits are required for long context requests`, breaking Sonnet. The remaining betas are unchanged.
+- Fixed Kimi K2.x `maxTokens` on Fireworks and Fire Pass (`fireworks/kimi-k2.5`, `fireworks/kimi-k2.6`, `firepass/kimi-k2.6-turbo`) being inherited from Fireworks `/v1/models` discovery (`max_completion_tokens: 65536`) rather than the published Kimi-on-Fireworks output budget, which let callers (and the openai-completions default-injection safety net) ship a budget the router cannot honor and made runaway reasoning traces more likely. The Fireworks resolver now clamps every Kimi K2.x id (public catalog ids and the canonical `accounts/fireworks/{models,routers}/kimi-k2…` wire form) to 32,768 output tokens, and the generator applies the same cap as a post-processing safety net so the `firepass` static fallback and the bundled `fireworks` entries stay in sync across regens. ([#1849](https://github.com/can1357/oh-my-pi/issues/1849))
+- Fixed Xiaomi Token Plan MiMo OpenAI-compatible tool-call continuations omitting required `reasoning_content` replay. ([#1846](https://github.com/can1357/oh-my-pi/issues/1846))
+- Fixed Anthropic prompt caching for OpenAI-compatible Claude proxies by honoring `compat.cacheControlFormat: "anthropic"` outside OpenRouter. ([#1845](https://github.com/can1357/oh-my-pi/issues/1845))
+- Fixed Moonshot Kimi K2.6 silently pausing for many seconds between tool calls because the server discarded the `reasoning_content` that omp was already sending with every assistant tool-call replay. The K2.6 `thinking` parameter takes an extra `keep` field whose default (`null`) ignores historical reasoning, so K2.6 had to re-derive its full chain-of-thought from the user prompt on every iteration of the agent loop. The Moonshot direct (`api.moonshot.ai`) and Kimi Code (`api.kimi.com`) wire bodies now send `thinking: { type: "enabled", keep: "all" }` for `kimi-k2.6` requests with reasoning enabled, matching Moonshot's documented best practice for multi-step tool-calling agents. The flag is gated on the K2.6 id and the two native hosts because earlier Moonshot models (K2.5 and below) 400 on the unknown field and every Kimi gateway (OpenRouter, OpenCode, Kilo, Fireworks, …) speaks its own thinking shape. ([#1838](https://github.com/can1357/oh-my-pi/issues/1838))
+- Fixed Alibaba DashScope (Bailian) compatible-mode endpoint `400 InternalError.Algo.InvalidParameter: The provided messages input is invalid. The error info is [Unexpected item type in content.]` when a screenshot or other image-producing tool result was folded into a known text-only Qwen turn (e.g. `qwen3.7-max`, `qwen-max`, `qwen3-coder-*`) hosted at `dashscope.aliyuncs.com/compatible-mode/v1`. `convertMessages` in `openai-completions` no longer forwards `image_url` content parts for those text-only id families even when a misconfigured custom provider claims `input: ["text", "image"]`; multimodal compatible-mode ids such as `qwen3.7-plus` and `qwen-vl-max` still rely on the catalog `input` field. The tool-result branch and the user-content branch both fall back to the standard `[image omitted: model does not support vision]` placeholder for text-only ids so the model still sees the attachment intent. ([#1859](https://github.com/can1357/oh-my-pi/issues/1859))
+
 ## [15.9.0] - 2026-06-04
 
 ### Fixed
@@ -18,6 +33,7 @@
 - Fixed MiniMax Coding Plan China login opening the international `platform.minimax.io` subscription page instead of the China `platform.minimaxi.com` page.
 
 ## [15.8.0] - 2026-06-02
+
 ### Added
 
 - Added `AnthropicMessagesClient` and related Anthropic wire types/errors via `anthropic-client` export so callers can build a standalone Anthropic Messages client without depending on `@anthropic-ai/sdk`

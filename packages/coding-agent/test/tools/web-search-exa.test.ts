@@ -366,20 +366,67 @@ describe("searchExa", () => {
 		expect(result.answer).toContain("**Has URL**: real summary");
 	});
 
-	it("requires Exa credentials before starting a search", async () => {
+	it("uses Exa MCP when API key is missing", async () => {
 		delete process.env.EXA_API_KEY;
-		const fetchSpy = vi.fn(async () => {
-			return new Response(JSON.stringify(makeMockExaResponse()), {
+		let calledUrl = "";
+		using _hook = hookFetch((url, init) => {
+			calledUrl = String(url);
+			if (init?.body) {
+				capturedRequestBody = JSON.parse(init.body as string);
+			}
+			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "mcp-1", result: makeMockExaResponse() }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
 		});
-		using _hook = hookFetch(fetchSpy);
 
-		await expect(searchExa({ query: "no key" })).rejects.toThrow(
-			"Exa credentials not found. Set EXA_API_KEY or login with 'omp /login exa'.",
-		);
-		expect(fetchSpy).not.toHaveBeenCalled();
+		const result = await searchExa({ query: "no key" });
+
+		expect(result.provider).toBe("exa");
+		expect(result.sources).toHaveLength(3);
+		expect(calledUrl).toContain("https://mcp.exa.ai/mcp");
+		expect(calledUrl).toContain("tools=web_search_exa");
+		expect(calledUrl).not.toContain("exaApiKey=");
+		expect(capturedRequestBody?.method).toBe("tools/call");
+		expect(capturedRequestBody?.params).toEqual({
+			name: "web_search_exa",
+			arguments: { query: "no key" },
+		});
+	});
+
+	it("parses Exa MCP plain-text payloads when API key is missing", async () => {
+		delete process.env.EXA_API_KEY;
+		using _hook = hookFetch(() => {
+			return new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: "mcp-text",
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Title: Plain Result\nURL: https://plain.example\nAuthor: Reporter\nPublished Date: 2024-06-01\nText: Plain text body",
+							},
+						],
+					},
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		});
+
+		const result = await searchExa({ query: "plain text" });
+
+		expect(result.provider).toBe("exa");
+		expect(result.sources).toEqual([
+			{
+				title: "Plain Result",
+				url: "https://plain.example",
+				snippet: "Plain text body",
+				publishedDate: "2024-06-01",
+				ageSeconds: expect.any(Number),
+				author: "Reporter",
+			},
+		]);
 	});
 
 	it("uses AuthStorage credentials when EXA_API_KEY is unset", async () => {
@@ -402,12 +449,20 @@ describe("searchExa", () => {
 		expect(receivedKey).toBe("stored-key-xyz");
 	});
 
-	it("reports unavailable without EXA_API_KEY or stored credentials", async () => {
+	it("reports unavailable for the auto chain without EXA_API_KEY or stored credentials", async () => {
 		delete process.env.EXA_API_KEY;
 		const available = await withLocalAuthStorage(authStorage =>
 			Promise.resolve(new ExaProvider().isAvailable(authStorage)),
 		);
 		expect(available).toBe(false);
+	});
+
+	it("reports explicitly available without credentials so the MCP fallback runs", async () => {
+		delete process.env.EXA_API_KEY;
+		const explicit = await withLocalAuthStorage(authStorage =>
+			Promise.resolve(new ExaProvider().isExplicitlyAvailable(authStorage)),
+		);
+		expect(explicit).toBe(true);
 	});
 
 	it("reports available with EXA_API_KEY", async () => {

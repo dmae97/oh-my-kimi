@@ -33,21 +33,21 @@ function seedPrecisionFixture(beam: TestBeam): void {
 	}
 }
 
-function expectTopContains(beam: TestBeam, query: string, expected: string): void {
-	const results = beam.recall(query, 5, { queryTime: "2026-05-30T12:00:00.000Z" });
+async function expectTopContains(beam: TestBeam, query: string, expected: string): Promise<void> {
+	const results = await beam.recall(query, 5, { queryTime: "2026-05-30T12:00:00.000Z" });
 	expect(results.length).toBeGreaterThan(0);
 	expect(results[0]?.content.toLowerCase()).toContain(expected.toLowerCase());
 }
 
 describe("recall precision regressions", () => {
-	it("prefers the artifact memory for a natural deployment question", () => {
+	it("prefers the artifact memory for a natural deployment question", async () => {
 		const beam = makeBeam();
 		seedPrecisionFixture(beam);
 
-		expectTopContains(beam, "Where is the Orion runner jar and how should it bind?", "orion-runner-2026.4.jar");
+		await expectTopContains(beam, "Where is the Orion runner jar and how should it bind?", "orion-runner-2026.4.jar");
 	});
 
-	it("ranks the correct fact first for specific memory probes", () => {
+	it("ranks the correct fact first for specific memory probes", async () => {
 		const beam = makeBeam();
 		seedPrecisionFixture(beam);
 
@@ -57,11 +57,11 @@ describe("recall precision regressions", () => {
 			["What Hotel Meridian running route plan should be used?", "Central Park Loop"],
 			["What inference routing rule says avoid BudgetCloud?", "avoid BudgetCloud"],
 		] as const) {
-			expectTopContains(beam, query, expected);
+			await expectTopContains(beam, query, expected);
 		}
 	});
 
-	it("abstains on nonsense and single-token overlap noise", () => {
+	it("abstains on nonsense and single-token overlap noise", async () => {
 		const beam = makeBeam();
 		seedPrecisionFixture(beam);
 		beam.remember("Quantum field theory research notes are stored in the physics archive.", {
@@ -75,12 +75,12 @@ describe("recall precision regressions", () => {
 			scope: "global",
 		});
 
-		expect(beam.recall("zxqvplm norf greeble snargle twompset", 5)).toEqual([]);
-		expect(beam.recall("purple bicycle quantum oatmeal unrelated", 5)).toEqual([]);
-		expect(beam.recall("customer invoices quantum", 5)).toEqual([]);
+		expect(await beam.recall("zxqvplm norf greeble snargle twompset", 5)).toEqual([]);
+		expect(await beam.recall("purple bicycle quantum oatmeal unrelated", 5)).toEqual([]);
+		expect(await beam.recall("customer invoices quantum", 5)).toEqual([]);
 	});
 
-	it("keeps separate aspects of a multi-fact query in top results", () => {
+	it("keeps separate aspects of a multi-fact query in top results", async () => {
 		const beam = makeBeam();
 		seedPrecisionFixture(beam);
 		beam.remember("Ava profile URL is https://example.test/ava for her professional page.", {
@@ -100,10 +100,11 @@ describe("recall precision regressions", () => {
 			);
 		}
 
-		const joined = beam
-			.recall("What is Ava profile URL and professional branding preference?", 5, {
+		const joined = (
+			await beam.recall("What is Ava profile URL and professional branding preference?", 5, {
 				queryTime: "2026-05-30T12:00:00.000Z",
 			})
+		)
 			.map(result => result.content.toLowerCase())
 			.join("\n");
 
@@ -111,7 +112,7 @@ describe("recall precision regressions", () => {
 		expect(joined).toContain("grounded software builder");
 	});
 
-	it("prefers a current correction over stale history", () => {
+	it("prefers a current correction over stale history", async () => {
 		const beam = makeBeam();
 		const oldId = beam.remember(
 			"Project Atlas deployment target was legacy-cluster and should use Model-Old for background work.",
@@ -124,7 +125,7 @@ describe("recall precision regressions", () => {
 		beam.db.prepare("UPDATE working_memory SET timestamp = ? WHERE id = ?").run("2025-01-01T00:00:00.000Z", oldId);
 		beam.db.prepare("UPDATE working_memory SET timestamp = ? WHERE id = ?").run("2026-05-24T00:00:00.000Z", newId);
 
-		const results = beam.recall("What should Project Atlas deployment use now?", 3, {
+		const results = await beam.recall("What should Project Atlas deployment use now?", 3, {
 			queryTime: "2026-05-30T12:00:00.000Z",
 		});
 

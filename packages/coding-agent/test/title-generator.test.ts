@@ -82,6 +82,40 @@ describe("title generator", () => {
 		expect(title).toBe("Text Title");
 	});
 
+	it("defers titling for a greeting without invoking the model", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
+
+		const title = await generateSessionTitle("hi", createRegistry(model), createSettings(model));
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+	});
+
+	it("returns null when the model rejects a non-greeting taskless message with the none sentinel", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [
+				{
+					type: "toolCall",
+					id: "call-title",
+					name: "set_title",
+					arguments: { title: "none" },
+				},
+			],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("uses a reasoning-safe output budget for reasoning models", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({

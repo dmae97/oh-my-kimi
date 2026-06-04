@@ -64,6 +64,7 @@ export async function selectSession(
 				loadAllSessions: () => SessionManager.listAll(storage),
 				allSessions: options?.allSessions,
 				startInAllScope: options?.startInAllScope,
+				getTerminalRows: () => ui.terminal.rows,
 			},
 		);
 		return selector;

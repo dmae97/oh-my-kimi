@@ -20,6 +20,7 @@ import {
 	Text,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import { Settings } from "../../../config/settings";
 import { DynamicBorder } from "../../../modes/components/dynamic-border";
@@ -37,11 +38,15 @@ import {
 } from "./state-manager";
 import type { DashboardState } from "./types";
 
+const EXT_FOOTER = " ↑/↓: navigate  Space: toggle  ←/→: provider  Esc: close";
+
 export class ExtensionDashboard extends Container {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
 	#refreshToken = 0;
+	#builtRows = -1;
+	#builtCols = -1;
 
 	onClose?: () => void;
 	onRequestRender?: () => void;
@@ -71,7 +76,7 @@ export class ExtensionDashboard extends Container {
 
 		// Calculate max visible items based on terminal height
 		// Reserve ~10 lines for header, tabs, help text, borders
-		const maxVisible = Math.max(5, Math.floor((this.terminalHeight - 10) / 2));
+		const maxVisible = this.#maxVisibleItems();
 
 		// Create main list - always focused
 		this.#mainList = new ExtensionList(
@@ -107,6 +112,45 @@ export class ExtensionDashboard extends Container {
 		return tab && tab.id !== "all" ? tab.id : null;
 	}
 
+	/** Live terminal height so the dashboard tracks resize while open. */
+	#terminalRows(): number {
+		return process.stdout.rows || this.terminalHeight || 24;
+	}
+
+	#uiWidth(): number {
+		return Math.max(20, process.stdout.columns || 80);
+	}
+
+	#footerLines(): number {
+		return Math.max(1, wrapTextWithAnsi(theme.fg("dim", EXT_FOOTER), this.#uiWidth()).length);
+	}
+
+	/** Height budget for the two-column body, sized to the live terminal. */
+	#computeBodyHeight(): number {
+		// Chrome: top border + title + tab bar + spacer (4), then spacer + footer + bottom border.
+		const chrome = 4 + 1 + this.#footerLines() + 1;
+		return Math.max(5, this.#terminalRows() - chrome);
+	}
+
+	#maxVisibleItems(): number {
+		// List chrome inside the body: search line, blank line, scroll indicator.
+		return Math.max(3, this.#computeBodyHeight() - 3);
+	}
+
+	override render(width: number): string[] {
+		// Rebuild when terminal geometry changes so the full-screen overlay
+		// re-fits on resize.
+		if (this.#terminalRows() !== this.#builtRows || this.#uiWidth() !== this.#builtCols) {
+			this.#buildLayout();
+		}
+		const lines = super.render(width);
+		// Pad to the full viewport so the dashboard covers the screen instead of
+		// letting the transcript peek through below it.
+		const rows = this.#terminalRows();
+		while (lines.length < rows) lines.push("");
+		return lines;
+	}
+
 	#buildLayout(): void {
 		this.clear();
 
@@ -120,16 +164,18 @@ export class ExtensionDashboard extends Container {
 		this.addChild(new Text(this.#renderTabBar(), 0, 0));
 		this.addChild(new Spacer(1));
 
-		// 2-column body with height limit
-		// Reserve ~8 lines for header, tabs, help text, borders
-		const bodyMaxHeight = Math.max(5, this.terminalHeight - 8);
+		// 2-column body sized to fill the live terminal viewport.
+		const bodyMaxHeight = this.#computeBodyHeight();
+		this.#mainList.setMaxVisible(this.#maxVisibleItems());
 		this.addChild(new TwoColumnBody(this.#mainList, this.#inspector, bodyMaxHeight));
 
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("dim", " ↑/↓: navigate  Space: toggle  Tab: next provider  Esc: close"), 0, 0));
+		this.addChild(new Text(theme.fg("dim", EXT_FOOTER), 0, 0));
 
 		// Bottom border
 		this.addChild(new DynamicBorder());
+		this.#builtRows = this.#terminalRows();
+		this.#builtCols = this.#uiWidth();
 	}
 
 	#renderTabBar(): string {
@@ -289,12 +335,12 @@ export class ExtensionDashboard extends Container {
 			return;
 		}
 
-		// Tab/Shift+Tab: Cycle through tabs
-		if (matchesKey(data, "tab")) {
+		// Tab/Shift+Tab or Left/Right: Cycle through tabs
+		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
 			this.#switchTab(1);
 			return;
 		}
-		if (matchesKey(data, "shift+tab")) {
+		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
 			this.#switchTab(-1);
 			return;
 		}
@@ -328,8 +374,8 @@ class TwoColumnBody implements Component {
 		const leftLines = this.leftPane.render(leftWidth);
 		const rightLines = this.rightPane.render(rightWidth);
 
-		// Limit to maxHeight lines
-		const numLines = Math.min(this.maxHeight, Math.max(leftLines.length, rightLines.length));
+		// Fill the full body height so the dashboard reads as a full-screen view.
+		const numLines = this.maxHeight;
 		const combined: string[] = [];
 		const separator = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
 

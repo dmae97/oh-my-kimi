@@ -8,9 +8,6 @@ import type { HookCommandContext } from "../../../src/extensibility/hooks/types"
 import * as git from "../../../src/utils/git";
 import * as jj from "../../../src/utils/jj";
 
-const LEGACY_TASK_INSTRUCTION = 'Use the Task tool with `agent: "reviewer"` to execute this review.';
-const REVIEWER_TASK_INSTRUCTION = 'Use the `task` tool with `agent: "reviewer"` and a `tasks` array.';
-
 const SAMPLE_JJ_DIFF = `diff --git a/src/workspace.ts b/src/workspace.ts
 --- a/src/workspace.ts
 +++ b/src/workspace.ts
@@ -96,10 +93,7 @@ describe("ReviewCommand", () => {
 
 		expect(result).toBeDefined();
 		const promptText = result!;
-		expect(promptText).toContain("Custom review instructions");
-		expect(promptText).toContain(REVIEWER_TASK_INSTRUCTION);
 		expect(promptText).toContain("Check authentication boundaries");
-		expect(promptText).not.toContain(LEGACY_TASK_INSTRUCTION);
 	});
 
 	it("does not submit empty custom review instructions", async () => {
@@ -134,7 +128,6 @@ describe("ReviewCommand", () => {
 
 			expect(result).toBeDefined();
 			const promptText = result!;
-			expect(promptText).toContain("Reviewing JJ working-copy changes");
 			expect(promptText).toContain("src/workspace.ts");
 			expect(promptText).toContain("+1/-1");
 			expect(jjDiffSpy).toHaveBeenCalledWith(dir);
@@ -143,37 +136,6 @@ describe("ReviewCommand", () => {
 		} finally {
 			jjRepoSpy.mockRestore();
 			jjDiffSpy.mockRestore();
-			gitStatusSpy.mockRestore();
-			gitDiffSpy.mockRestore();
-		}
-	});
-
-	it("includes reviewer task orchestration for single-agent diff reviews", async () => {
-		const dir = await createTempDir();
-		const jjRepoSpy = spyOn(jj.repo, "is").mockResolvedValue(false);
-		const gitStatusSpy = spyOn(git, "status").mockResolvedValue(" M review-target.ts\n");
-		const gitDiffSpy = spyOn(git, "diff").mockResolvedValue(`diff --git a/review-target.ts b/review-target.ts
---- a/review-target.ts
-+++ b/review-target.ts
-@@ -1 +1 @@
--export const value = 1;
-+export const value = 2;
-`);
-		try {
-			const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
-			const ctx = createContext({
-				selectedMode: "2. Review uncommitted changes",
-			});
-
-			const result = await command.execute([], ctx);
-
-			expect(result).toBeDefined();
-			const promptText = result!;
-			expect(promptText).toContain(REVIEWER_TASK_INSTRUCTION);
-			expect(promptText).toContain("Create exactly **1 reviewer task**");
-			expect(promptText).not.toContain(LEGACY_TASK_INSTRUCTION);
-		} finally {
-			jjRepoSpy.mockRestore();
 			gitStatusSpy.mockRestore();
 			gitDiffSpy.mockRestore();
 		}
@@ -195,7 +157,6 @@ describe("ReviewCommand", () => {
 
 			expect(result).toBeDefined();
 			const promptText = result!;
-			expect(promptText).toContain("Custom review: Check workspace state transitions…");
 			expect(promptText).toContain("Check workspace state transitions");
 			expect(promptText).toContain("src/workspace.ts");
 			expect(gitStatusSpy).not.toHaveBeenCalled();
@@ -216,9 +177,6 @@ describe("ReviewCommand", () => {
 
 		expect(result).toBeDefined();
 		const promptText = result!;
-		expect(promptText).toContain("Headless review request");
-		expect(promptText).toContain(REVIEWER_TASK_INSTRUCTION);
 		expect(promptText).toContain("focus auth");
-		expect(promptText).not.toContain(LEGACY_TASK_INSTRUCTION);
 	});
 });

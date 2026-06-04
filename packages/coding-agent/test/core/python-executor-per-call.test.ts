@@ -122,13 +122,17 @@ describe("executePython (per-call)", () => {
 		using tempDir = TempDir.createSync("@omp-python-executor-per-call-");
 
 		let shutdownCalls = 0;
+		let executeTimeoutMs: number | undefined;
 		const kernel: KernelStub = {
-			execute: async () => ({
-				status: "ok",
-				cancelled: true,
-				timedOut: true,
-				stdinRequested: false,
-			}),
+			execute: async (_code: string, options?: KernelExecuteOptions) => {
+				executeTimeoutMs = options?.timeoutMs;
+				return {
+					status: "ok",
+					cancelled: true,
+					timedOut: true,
+					stdinRequested: false,
+				};
+			},
 			shutdown: async () => {
 				shutdownCalls += 1;
 			},
@@ -144,7 +148,10 @@ describe("executePython (per-call)", () => {
 
 		expect(result.cancelled).toBe(true);
 		expect(result.exitCode).toBeUndefined();
-		expect(result.output).toContain("eval cell timed out after 2s");
+		expect(executeTimeoutMs).toBeGreaterThan(0);
+		expect(executeTimeoutMs).toBeLessThanOrEqual(2000);
+		const expectedSeconds = Math.max(1, Math.round((executeTimeoutMs ?? 0) / 1000));
+		expect(result.output).toContain(`eval cell timed out after ${expectedSeconds}s`);
 		expect(shutdownCalls).toBe(1);
 	});
 });

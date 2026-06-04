@@ -118,16 +118,14 @@ function emptyAssistantStops(messages: AgentMessage[]): AgentMessage[] {
 }
 
 function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
-	return messages.filter(
-		message =>
-			message.role === "developer" &&
-			(typeof message.content === "string"
-				? message.content.includes("previous assistant turn ended with no text")
-				: message.content.some(
-						content =>
-							content.type === "text" && content.text.includes("previous assistant turn ended with no text"),
-					)),
-	);
+	const isEmptyStopRetryReminder = (text: string): boolean => text.includes("<system-reminder>");
+
+	return messages.filter(message => {
+		if (message.role !== "developer") return false;
+		return typeof message.content === "string"
+			? isEmptyStopRetryReminder(message.content)
+			: message.content.some(content => content.type === "text" && isEmptyStopRetryReminder(content.text));
+	});
 }
 
 async function expectPromptCompletes(prompt: Promise<void>): Promise<void> {

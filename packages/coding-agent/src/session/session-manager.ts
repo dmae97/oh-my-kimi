@@ -254,13 +254,19 @@ export interface SessionContext {
 	modeData?: Record<string, unknown>;
 }
 
+export const EPHEMERAL_MODEL_CHANGE_ROLE = "fallback";
+
 /** Lists session model strings to try when restoring, in fallback order. */
 export function getRestorableSessionModels(
 	models: Readonly<Record<string, string>>,
 	lastModelChangeRole: string | undefined,
 ): string[] {
 	const defaultModel = models.default;
-	if (!lastModelChangeRole || lastModelChangeRole === "default" || lastModelChangeRole === "temporary") {
+	if (
+		!lastModelChangeRole ||
+		lastModelChangeRole === "default" ||
+		lastModelChangeRole === EPHEMERAL_MODEL_CHANGE_ROLE
+	) {
 		return defaultModel ? [defaultModel] : [];
 	}
 

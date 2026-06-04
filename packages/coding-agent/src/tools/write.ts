@@ -135,6 +135,15 @@ function maybeWriteSnapshotHeader(session: ToolSession, absolutePath: string, co
 	return formatHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag);
 }
 
+function shouldRouteWriteThroughBridge(session: ToolSession, requestedPath: string, absolutePath: string): boolean {
+	if (isInternalUrlPath(requestedPath)) return false;
+
+	const state = session.getPlanModeState?.();
+	if (!state?.enabled || !isInternalUrlPath(state.planFilePath)) return true;
+
+	return absolutePath !== resolvePlanPath(session, state.planFilePath);
+}
+
 /**
  * Append a trailing note line to the first text block of a tool result.
  * Mutates `result` in place (the result object is owned by this call).
@@ -845,8 +854,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				await assertEditableFile(absolutePath, path);
 			}
 
-			// Try ACP bridge first — no disk write when client handles it
-			const bridgePromise = this.#routeWriteThroughBridge(absolutePath, cleanContent);
+			// Try ACP bridge first for editor-visible filesystem paths. Internal
+			// artifacts such as local:// plans are owned by OMP, not the editor.
+			const bridgePromise = shouldRouteWriteThroughBridge(this.session, path, absolutePath)
+				? this.#routeWriteThroughBridge(absolutePath, cleanContent)
+				: undefined;
 			if (bridgePromise !== undefined) {
 				try {
 					await bridgePromise;

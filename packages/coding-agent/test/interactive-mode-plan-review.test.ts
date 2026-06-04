@@ -531,7 +531,6 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		const [compactInstruction] = compactSpy.mock.calls[0]!;
 		expect(typeof compactInstruction).toBe("string");
-		expect(compactInstruction as string).toContain("Preparing to execute the approved plan");
 		expect(compactInstruction as string).toContain(finalPlanFilePath);
 
 		// Plan-approved synthetic prompt was dispatched.

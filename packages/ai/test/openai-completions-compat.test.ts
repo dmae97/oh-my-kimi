@@ -6,7 +6,7 @@ import {
 	detectCompat,
 	streamOpenAICompletions,
 } from "../src/providers/openai-completions";
-import { resolveOpenAICompat } from "../src/providers/openai-completions-compat";
+import { type ResolvedOpenAICompat, resolveOpenAICompat } from "../src/providers/openai-completions-compat";
 import type { AssistantMessage, Context, Model, OpenAICompat } from "../src/types";
 
 const originalFetch = global.fetch;
@@ -66,6 +66,46 @@ function baseContext(): Context {
 	};
 }
 
+async function captureOpenAICompletionsPayload(
+	model: Model<"openai-completions">,
+	context: Context = baseContext(),
+): Promise<unknown> {
+	const { promise, resolve } = Promise.withResolvers<unknown>();
+	global.fetch = createMockFetch(["[DONE]"]);
+	streamOpenAICompletions(model, context, {
+		apiKey: "test-key",
+		signal: createAbortedSignal(),
+		onPayload: payload => resolve(payload),
+	});
+	return promise;
+}
+
+function getPayloadMessages(payload: unknown): object[] {
+	const payloadObject = toObject(payload);
+	const messages = payloadObject ? Reflect.get(payloadObject, "messages") : undefined;
+	if (!Array.isArray(messages)) throw new Error("payload messages missing");
+	return messages.map(message => {
+		const messageObject = toObject(message);
+		if (!messageObject) throw new Error("payload message is not an object");
+		return messageObject;
+	});
+}
+
+function getLastPayloadContent(payload: unknown): unknown {
+	const lastMessage = getPayloadMessages(payload).at(-1);
+	if (!lastMessage) throw new Error("payload has no messages");
+	return Reflect.get(lastMessage, "content");
+}
+
+function getLastTextPart(content: unknown): object | undefined {
+	if (!Array.isArray(content)) return undefined;
+	for (let index = content.length - 1; index >= 0; index--) {
+		const part = toObject(content[index]);
+		if (part && Reflect.get(part, "type") === "text") return part;
+	}
+	return undefined;
+}
+
 describe("openai-completions compatibility", () => {
 	it("serializes assistant text content as a plain string", () => {
 		const model: Model<"openai-completions"> = {
@@ -97,7 +137,7 @@ describe("openai-completions compatibility", () => {
 			extraBody: {},
 			supportsStrictMode: true,
 			toolStrictMode: "none",
-		} satisfies Required<OpenAICompat>;
+		} satisfies ResolvedOpenAICompat;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -561,10 +601,17 @@ describe("kimi model detection via detectCompat", () => {
 	// `compat.thinkingFormat` per catalog entry (e.g. kimi-code, wafer-serverless).
 	it("reserves zai for native Kimi hosts and defaults proxies to OpenAI reasoning_effort", () => {
 		// Native Moonshot surface → z.ai binary thinking.
-		expect(detectCompat(kimiMoonshotModel("kimi-k2.5")).thinkingFormat).toBe("zai");
+		const moonshotK25 = detectCompat(kimiMoonshotModel("kimi-k2.5"));
+		expect(moonshotK25.thinkingFormat).toBe("zai");
+		expect(moonshotK25.thinkingKeep).toBeUndefined();
+		const moonshotK26 = detectCompat(kimiMoonshotModel("kimi-k2.6"));
+		expect(moonshotK26.thinkingFormat).toBe("zai");
+		expect(moonshotK26.thinkingKeep).toBe("all");
 
 		// OpenAI-compatible proxies → reasoning_effort ("openai").
-		expect(detectCompat(kimiOpenCodeModel("kimi-k2.6")).thinkingFormat).toBe("openai");
+		const opencodeK26 = detectCompat(kimiOpenCodeModel("kimi-k2.6"));
+		expect(opencodeK26.thinkingFormat).toBe("openai");
+		expect(opencodeK26.thinkingKeep).toBeUndefined();
 		const kiloKimi: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
 			api: "openai-completions",
@@ -1363,6 +1410,49 @@ describe("applyOpenRouterRoutingVariant", () => {
 	});
 });
 
+describe("anthropic cache control for OpenAI-compatible chat completions", () => {
+	function claudeProxyModel(compat?: OpenAICompat): Model<"openai-completions"> {
+		return {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "https://litellm.example/v1",
+			id: "claude-opus-4-8",
+			compat,
+		};
+	}
+
+	function cacheContext(): Context {
+		return { messages: [{ role: "user", content: "cache me", timestamp: 0 }] };
+	}
+
+	it("injects Anthropic cache_control when compat requests Anthropic cache markers", async () => {
+		const payload = await captureOpenAICompletionsPayload(
+			claudeProxyModel({ cacheControlFormat: "anthropic" }),
+			cacheContext(),
+		);
+		const content = getLastPayloadContent(payload);
+		const textPart = getLastTextPart(content);
+
+		expect(Reflect.get(textPart ?? {}, "text")).toBe("cache me");
+		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+	});
+
+	it("preserves OpenRouter Anthropic cache_control detection", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const payload = await captureOpenAICompletionsPayload(model, cacheContext());
+		const content = getLastPayloadContent(payload);
+		const textPart = getLastTextPart(content);
+
+		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+	});
+
+	it("does not infer Anthropic cache_control for custom Claude ids without compat", async () => {
+		const payload = await captureOpenAICompletionsPayload(claudeProxyModel(), cacheContext());
+
+		expect(getLastPayloadContent(payload)).toBe("cache me");
+	});
+});
 describe("openrouterVariant request integration", () => {
 	it("appends the configured variant suffix to params.model for OpenRouter requests", async () => {
 		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;

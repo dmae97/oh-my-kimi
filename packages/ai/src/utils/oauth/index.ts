@@ -103,6 +103,21 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
+		id: "xiaomi-token-plan-sgp",
+		name: "Xiaomi Token Plan (Singapore)",
+		available: true,
+	},
+	{
+		id: "xiaomi-token-plan-ams",
+		name: "Xiaomi Token Plan (Europe)",
+		available: true,
+	},
+	{
+		id: "xiaomi-token-plan-cn",
+		name: "Xiaomi Token Plan (China)",
+		available: true,
+	},
+	{
 		id: "firepass",
 		name: "Fire Pass (Fireworks Kimi K2.6 Turbo subscription)",
 		available: true,
@@ -364,6 +379,9 @@ export async function refreshOAuthToken(
 		case "ollama":
 		case "ollama-cloud":
 		case "xiaomi":
+		case "xiaomi-token-plan-sgp":
+		case "xiaomi-token-plan-ams":
+		case "xiaomi-token-plan-cn":
 		case "zai":
 		case "zhipu-coding-plan":
 		case "qianfan":

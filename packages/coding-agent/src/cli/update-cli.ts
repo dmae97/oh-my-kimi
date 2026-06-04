@@ -27,6 +27,33 @@ const PACKAGE = "@oh-my-pi/pi-coding-agent";
  */
 const NPM_REGISTRY = "https://registry.npmjs.org/";
 
+/**
+ * Core native addon package. Bumped in lock-step with {@link PACKAGE} so the
+ * version sentinel the loader looks up at runtime matches the `.node` on
+ * disk; see {@link buildBunInstallArgs} for why this must be installed
+ * explicitly rather than inherited as a transitive dependency.
+ */
+const NATIVES_PACKAGE = "@oh-my-pi/pi-natives";
+
+/**
+ * Platform tags the release pipeline publishes as
+ * `@oh-my-pi/pi-natives-<tag>` leaves. Mirrors `SUPPORTED_PLATFORMS` in
+ * `packages/natives/native/loader-state.js` and `LEAF_TARGETS` in
+ * `packages/natives/scripts/gen-npm-packages.ts`; kept here as the local
+ * source of truth so the update path stays free of cross-package imports.
+ */
+const SUPPORTED_NATIVE_TAGS: ReadonlySet<string> = new Set([
+	"linux-x64",
+	"linux-arm64",
+	"darwin-x64",
+	"darwin-arm64",
+	"win32-x64",
+]);
+
+function currentNativeTag(): string {
+	return `${process.platform}-${process.arch}`;
+}
+
 interface ReleaseInfo {
 	tag: string;
 	version: string;
@@ -319,9 +346,34 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
  *
  * Together these two flags make `omp update` produce exactly the registry
  * lookup the version check just performed. See #1686.
+ *
+ * Also pins {@link NATIVES_PACKAGE} and the platform-specific
+ * `@oh-my-pi/pi-natives-<tag>` leaf to `expectedVersion`. `bun install -g`
+ * does not reliably refresh transitive `optionalDependencies` when the
+ * top-level package is the only one bumped, so the native addon and its
+ * version sentinel can drift out of sync with the freshly installed
+ * `@oh-my-pi/pi-coding-agent` and the loader aborts at
+ * `validateLoadedBindings` on the next launch
+ * (`The .node file on disk is from a different release than this loader`).
+ * Listing the natives explicitly forces bun to replace them in lock-step.
+ * The leaf is added only on tags the release pipeline actually publishes
+ * ({@link SUPPORTED_NATIVE_TAGS}) so unsupported platforms still fail with
+ * the original "no matching version" message instead of `EBADPLATFORM`.
+ * See #1824.
  */
-export function buildBunInstallArgs(expectedVersion: string): string[] {
-	return ["install", "-g", "--no-cache", `--registry=${NPM_REGISTRY}`, `${PACKAGE}@${expectedVersion}`];
+export function buildBunInstallArgs(expectedVersion: string, nativeTag: string = currentNativeTag()): string[] {
+	const args = [
+		"install",
+		"-g",
+		"--no-cache",
+		`--registry=${NPM_REGISTRY}`,
+		`${PACKAGE}@${expectedVersion}`,
+		`${NATIVES_PACKAGE}@${expectedVersion}`,
+	];
+	if (SUPPORTED_NATIVE_TAGS.has(nativeTag)) {
+		args.push(`${NATIVES_PACKAGE}-${nativeTag}@${expectedVersion}`);
+	}
+	return args;
 }
 
 /**

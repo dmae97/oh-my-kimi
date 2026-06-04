@@ -31,6 +31,16 @@ export function matchesSelectDown(data: string): boolean {
 	return getKeybindings().matches(data, "tui.select.down");
 }
 
+/** Match the generic selector page-up keybinding. */
+export function matchesSelectPageUp(data: string): boolean {
+	return getKeybindings().matches(data, "tui.select.pageUp");
+}
+
+/** Match the generic selector page-down keybinding. */
+export function matchesSelectPageDown(data: string): boolean {
+	return getKeybindings().matches(data, "tui.select.pageDown");
+}
+
 export function matchesAppExternalEditor(data: string): boolean {
 	const keybindings = getKeybindings();
 	const externalEditorKeys = keybindings.getKeys("app.editor.external");

@@ -265,11 +265,11 @@ export class BeamMemory implements BeamMemoryState {
 		return memoriaRetrieve(this, query, ability, topK);
 	}
 
-	recall(query: string, topK = 40, options: RecallOptions = {}): RecallResult[] {
+	recall(query: string, topK = 40, options: RecallOptions = {}): Promise<RecallResult[]> {
 		return recall(this, query, topK, options);
 	}
 
-	recallEnhanced(query: string, topK = 40, options: RecallEnhancedOptions = {}): RecallResult[] {
+	recallEnhanced(query: string, topK = 40, options: RecallEnhancedOptions = {}): Promise<RecallResult[]> {
 		return recallEnhanced(this, query, topK, options);
 	}
 

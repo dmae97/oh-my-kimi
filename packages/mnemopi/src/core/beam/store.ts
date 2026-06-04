@@ -6,7 +6,7 @@ import { EpisodicGraph } from "../episodic-graph";
 import { extractFactsSafe } from "../extraction";
 import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "../runtime-options";
 import { storeFactStrings } from "./consolidate";
-import { vecAvailable, vecInsert } from "./helpers";
+import { scheduleEmbedding, vecAvailable, vecInsert } from "./helpers";
 import type {
 	BeamEvent,
 	BeamMemoryState,
@@ -341,6 +341,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 		importance,
 		metadata: metadata ?? undefined,
 	});
+	scheduleEmbedding(beam, [{ memoryId, content }]);
 	if (options.extract === true) scheduleFactExtraction(beam, memoryId, content);
 	invalidateCaches(beam);
 	return memoryId;
@@ -404,6 +405,13 @@ export function rememberBatch(
 		trimWorkingMemory(beam);
 	});
 	invalidateCaches(beam);
+	const embeddingItems: { memoryId: string; content: string }[] = [];
+	items.forEach((item, index) => {
+		const id = ids[index];
+		if (id === undefined) return;
+		embeddingItems.push({ memoryId: id, content: item.content });
+	});
+	scheduleEmbedding(beam, embeddingItems);
 	items.forEach((item, index) => {
 		const id = ids[index];
 		if (id !== undefined && (item.extract === true || options.extract === true)) {
@@ -508,7 +516,10 @@ export function updateWorking(
 	const result = beam.db
 		.prepare(`UPDATE working_memory SET ${assignments.join(", ")} WHERE id = ? AND session_id = ?`)
 		.run(...params);
-	if (result.changes > 0) invalidateCaches(beam);
+	if (result.changes > 0) {
+		invalidateCaches(beam);
+		if (content !== null) scheduleEmbedding(beam, [{ memoryId, content }]);
+	}
 	return result.changes > 0;
 }
 

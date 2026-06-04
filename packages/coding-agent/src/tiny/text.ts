@@ -43,6 +43,116 @@ export function formatTitleUserMessage(message: string): string {
 	return `<user-message>\n${prepareTitleInput(message)}\n</user-message>`;
 }
 
+/**
+ * Greeting / acknowledgement / filler tokens. A first user message composed
+ * entirely of these (or of bare numbers / punctuation / emoji) carries no
+ * concrete task, so titling is deferred to a later message instead of latching
+ * onto "hi". See {@link isLowSignalTitleInput}.
+ */
+const FILLER_TITLE_TOKENS = new Set<string>([
+	// greetings
+	"hi",
+	"hii",
+	"hiii",
+	"hiya",
+	"hey",
+	"heya",
+	"hello",
+	"helo",
+	"hullo",
+	"yo",
+	"ya",
+	"sup",
+	"wassup",
+	"whatsup",
+	"howdy",
+	"greetings",
+	"hola",
+	"ciao",
+	"aloha",
+	"gm",
+	"gn",
+	"good",
+	"morning",
+	"afternoon",
+	"evening",
+	"night",
+	"day",
+	// politeness / acknowledgement
+	"thanks",
+	"thank",
+	"thx",
+	"ty",
+	"tysm",
+	"cheers",
+	"please",
+	"pls",
+	"plz",
+	"ok",
+	"okay",
+	"okey",
+	"k",
+	"kk",
+	"yep",
+	"yes",
+	"yeah",
+	"yup",
+	"nope",
+	"no",
+	"nah",
+	"sure",
+	"cool",
+	"nice",
+	"great",
+	"awesome",
+	"perfect",
+	"lol",
+	"lmao",
+	"haha",
+	"hehe",
+	// poking the agent / fillers
+	"test",
+	"tests",
+	"testing",
+	"ping",
+	"pong",
+	"there",
+	"you",
+	"u",
+	"hmm",
+	"hmmm",
+	"um",
+	"uh",
+	"so",
+	"well",
+	"anyway",
+]);
+
+const TITLE_WORD = /[\p{L}\p{N}]+/gu;
+
+/**
+ * True when a first user message is too low-signal to title (greeting, ack,
+ * bare number, or empty once code/punctuation/emoji are stripped).
+ *
+ * Deterministic pre-filter: the default tiny title model (~350M local) cannot
+ * reliably follow a "respond with none" instruction and tends to hallucinate a
+ * title for trivial input, so we never ask it — the caller defers titling to
+ * the next message instead.
+ */
+export function isLowSignalTitleInput(message: string): boolean {
+	const tokens = stripCodeBlocks(message).toLowerCase().match(TITLE_WORD);
+	if (!tokens) return true;
+	return tokens.every(token => FILLER_TITLE_TOKENS.has(token) || /^\d+$/.test(token));
+}
+
+/**
+ * Sentinel a capable title model may emit when a message carries no concrete
+ * task. Treated as "no title yet" so the caller can defer titling. Backstop for
+ * the deterministic {@link isLowSignalTitleInput} filter; kept in sync with the
+ * `none` instruction in `prompts/system/title-system.md`.
+ */
+export const NO_TITLE_SENTINEL = "none";
+
 export function normalizeGeneratedTitle(value: string | null | undefined): string | null {
 	const firstLine = value?.trim().split(/\r?\n/, 1)[0]?.trim();
 	if (!firstLine) return null;
@@ -50,5 +160,6 @@ export function normalizeGeneratedTitle(value: string | null | undefined): strin
 		.replace(/^["']|["']$/g, "")
 		.replace(/[.!?]$/, "")
 		.trim();
-	return title || null;
+	if (!title || title.toLowerCase() === NO_TITLE_SENTINEL) return null;
+	return title;
 }

@@ -18,7 +18,10 @@ import type {
 	MessageAttribution,
 	TextContent,
 	ToolResultMessage,
+	UserMessage,
 } from "@oh-my-pi/pi-ai";
+import { prompt } from "@oh-my-pi/pi-utils";
+import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 
 export {
 	type BranchSummaryMessage,
@@ -103,6 +106,83 @@ export function stripInternalDetailsFields<T>(details: T | undefined): T | undef
 		delete cleaned[key];
 	}
 	return cleaned as T;
+}
+
+function isSteeringUserMessage(message: AgentMessage | undefined): message is UserMessage & { steering: true } {
+	return message?.role === "user" && message.steering === true;
+}
+
+function userMessageWithoutSteering(message: UserMessage): UserMessage {
+	const { steering, ...rest } = message;
+	void steering;
+	return rest;
+}
+
+function renderSteeringEnvelope(message: string): string {
+	return prompt.render(userInterjectionTemplate, { message });
+}
+
+function getArrayContentText(content: (TextContent | ImageContent)[]): string {
+	let firstText: string | undefined;
+	let textParts: string[] | undefined;
+	for (const part of content) {
+		if (part.type !== "text") continue;
+		if (firstText === undefined) {
+			firstText = part.text;
+			continue;
+		}
+		if (textParts === undefined) {
+			textParts = [firstText];
+		}
+		textParts.push(part.text);
+	}
+	return textParts === undefined ? (firstText ?? "") : textParts.join("\n");
+}
+
+function getArrayContentImages(content: (TextContent | ImageContent)[]): ImageContent[] {
+	let images: ImageContent[] | undefined;
+	for (const part of content) {
+		if (part.type !== "image") continue;
+		if (images === undefined) images = [];
+		images.push(part);
+	}
+	return images ?? [];
+}
+
+function wrapSteeringUserMessage(message: UserMessage): UserMessage {
+	if (typeof message.content === "string") {
+		if (message.content.length === 0) return message;
+		return { ...userMessageWithoutSteering(message), content: renderSteeringEnvelope(message.content) };
+	}
+
+	const text = getArrayContentText(message.content);
+	if (text.length === 0) return message;
+	const content: (TextContent | ImageContent)[] = [{ type: "text", text: renderSteeringEnvelope(text) }];
+	content.push(...getArrayContentImages(message.content));
+	return { ...userMessageWithoutSteering(message), content };
+}
+
+export function wrapSteeringForModel(messages: AgentMessage[]): AgentMessage[] {
+	const last = messages[messages.length - 1];
+	if (!isSteeringUserMessage(last)) return messages;
+
+	let firstSteer = messages.length - 1;
+	while (firstSteer > 0 && isSteeringUserMessage(messages[firstSteer - 1])) {
+		firstSteer--;
+	}
+
+	let wrappedMessages: AgentMessage[] | undefined;
+	for (let i = firstSteer; i < messages.length; i++) {
+		const message = messages[i];
+		if (!isSteeringUserMessage(message)) continue;
+		const wrappedMessage = wrapSteeringUserMessage(message);
+		if (wrappedMessage === message) continue;
+		if (wrappedMessages === undefined) {
+			wrappedMessages = messages.slice();
+		}
+		wrappedMessages[i] = wrappedMessage;
+	}
+	return wrappedMessages ?? messages;
 }
 
 function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent)[] {

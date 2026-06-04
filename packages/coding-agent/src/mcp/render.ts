@@ -51,6 +51,9 @@ export function renderMCPResult(
 ): Component {
 	const { expanded } = options;
 	const lines: string[] = [];
+	const isError = result.isError ?? result.details?.isError ?? false;
+	const title = result.details ? `${result.details.serverName}/${result.details.mcpToolName}` : "MCP";
+	lines.push(renderStatusLine({ icon: isError ? "error" : "success", title }, theme));
 
 	// Args section (when expanded)
 	if (expanded && args && typeof args === "object" && Object.keys(args).length > 0) {

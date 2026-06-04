@@ -447,16 +447,21 @@ function sharedBeam(): BeamMemory {
 	return new BeamMemory({ sessionId: "mcp_shared_surface", dbPath });
 }
 
-function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T): T {
+async function withBeam<T>(args: ToolArguments, fn: (beam: BeamMemory, bank: string) => T | Promise<T>): Promise<T> {
 	const bank = resolveBank(args);
 	const beam = createBeam(args, bank);
 	try {
-		return fn(beam, bank);
+		const result = await fn(beam, bank);
+		// Drain background fact-extraction and embedding tasks before close so
+		// the SQLite handle stays open until in-flight `embed()` writes commit;
+		// otherwise the short-lived MCP `remember`/`update`/`sleep` paths race
+		// the close and silently drop the new dense-recall rows.
+		await beam.flushExtractions();
+		return result;
 	} finally {
 		beam.close();
 	}
 }
-
 function serialize(value: unknown): unknown {
 	if (value instanceof Date) return value.toISOString();
 	if (Array.isArray(value)) return value.map(serialize);
@@ -501,7 +506,7 @@ function required(args: ToolArguments, key: string): string | ToolResult {
 	return value.length > 0 ? value : { error: `${key} is required` };
 }
 
-function handleRemember(args: ToolArguments): ToolResult {
+async function handleRemember(args: ToolArguments): Promise<ToolResult> {
 	const content = required(args, "content");
 	if (typeof content !== "string") return content;
 	return withBeam(args, (beam, bank) => {
@@ -518,10 +523,10 @@ function handleRemember(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleRecall(args: ToolArguments): ToolResult {
+async function handleRecall(args: ToolArguments): Promise<ToolResult> {
 	const query = required(args, "query");
 	if (typeof query !== "string") return query;
-	return withBeam(args, (beam, bank) => {
+	return withBeam(args, async (beam, bank) => {
 		const topK = Math.trunc(numberArg(args, "top_k", numberArg(args, "limit", 5)));
 		const options: RecallOptions & Record<string, unknown> = {
 			temporalWeight: numberArg(args, "temporal_weight", 0.0),
@@ -534,12 +539,12 @@ function handleRecall(args: ToolArguments): ToolResult {
 		for (const key of ["vec_weight", "fts_weight", "importance_weight"] as const) {
 			if (key in args) options[key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())] = args[key];
 		}
-		const results = beam.recall(query, topK, options).map(row => ({ ...row, bank }));
+		const results = (await beam.recall(query, topK, options)).map(row => ({ ...row, bank }));
 		return { status: "ok", query, count: results.length, results: serialize(results), bank };
 	});
 }
 
-function handleSleep(args: ToolArguments): ToolResult {
+async function handleSleep(args: ToolArguments): Promise<ToolResult> {
 	return withBeam(args, (beam, bank) => {
 		const dryRun = booleanArg(args, "dry_run");
 		const allSessions = booleanArg(args, "all_sessions");
@@ -556,7 +561,7 @@ function handleSleep(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleStats(args: ToolArguments): ToolResult {
+async function handleStats(args: ToolArguments): Promise<ToolResult> {
 	return withBeam(args, (beam, bank) => ({
 		status: "ok",
 		provider: "mnemopi",
@@ -572,7 +577,7 @@ function handleStats(args: ToolArguments): ToolResult {
 	}));
 }
 
-function handleScratchpadWrite(args: ToolArguments): ToolResult {
+async function handleScratchpadWrite(args: ToolArguments): Promise<ToolResult> {
 	const content = required(args, "content");
 	if (typeof content !== "string") return content;
 	return withBeam(args, (beam, bank) => {
@@ -581,7 +586,7 @@ function handleScratchpadWrite(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleScratchpadRead(args: ToolArguments): ToolResult {
+async function handleScratchpadRead(args: ToolArguments): Promise<ToolResult> {
 	return withBeam(args, (beam, bank) => {
 		const entries = beam.scratchpadRead();
 		return {
@@ -594,14 +599,14 @@ function handleScratchpadRead(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleScratchpadClear(args: ToolArguments): ToolResult {
+async function handleScratchpadClear(args: ToolArguments): Promise<ToolResult> {
 	return withBeam(args, (beam, bank) => {
 		beam.scratchpadClear();
 		return { status: "cleared", bank };
 	});
 }
 
-function handleInvalidate(args: ToolArguments): ToolResult {
+async function handleInvalidate(args: ToolArguments): Promise<ToolResult> {
 	const memoryId = required(args, "memory_id");
 	if (typeof memoryId !== "string") return memoryId;
 	return withBeam(args, (beam, bank) => ({
@@ -611,7 +616,7 @@ function handleInvalidate(args: ToolArguments): ToolResult {
 	}));
 }
 
-function handleGet(args: ToolArguments): ToolResult {
+async function handleGet(args: ToolArguments): Promise<ToolResult> {
 	const memoryId = required(args, "memory_id");
 	if (typeof memoryId !== "string") return memoryId;
 	return withBeam(args, (beam, bank) => {
@@ -622,7 +627,7 @@ function handleGet(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleUpdate(args: ToolArguments): ToolResult {
+async function handleUpdate(args: ToolArguments): Promise<ToolResult> {
 	const memoryId = required(args, "memory_id");
 	if (typeof memoryId !== "string") return memoryId;
 	return withBeam(args, (beam, bank) => {
@@ -639,7 +644,7 @@ function handleUpdate(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleForget(args: ToolArguments): ToolResult {
+async function handleForget(args: ToolArguments): Promise<ToolResult> {
 	const memoryId = required(args, "memory_id");
 	if (typeof memoryId !== "string") return memoryId;
 	return withBeam(args, (beam, bank) => ({
@@ -649,7 +654,7 @@ function handleForget(args: ToolArguments): ToolResult {
 	}));
 }
 
-function handleTripleAdd(args: ToolArguments): ToolResult {
+async function handleTripleAdd(args: ToolArguments): Promise<ToolResult> {
 	const subject = required(args, "subject");
 	if (typeof subject !== "string") return subject;
 	const predicate = required(args, "predicate");
@@ -666,7 +671,7 @@ function handleTripleAdd(args: ToolArguments): ToolResult {
 	return { status: "stored", triple_id: tripleId, store: "triples", bank };
 }
 
-function handleTripleQuery(args: ToolArguments): ToolResult {
+async function handleTripleQuery(args: ToolArguments): Promise<ToolResult> {
 	const bank = resolveBank(args);
 	const results = queryTriples({
 		dbPath: bankDbPath(bank),
@@ -684,7 +689,7 @@ function handleTripleQuery(args: ToolArguments): ToolResult {
 	};
 }
 
-function handleExport(args: ToolArguments): ToolResult {
+async function handleExport(args: ToolArguments): Promise<ToolResult> {
 	const outputPath = required(args, "output_path");
 	if (typeof outputPath !== "string") return outputPath;
 	return withBeam(args, (beam, bank) => {
@@ -700,7 +705,7 @@ function handleExport(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleImport(args: ToolArguments): ToolResult {
+async function handleImport(args: ToolArguments): Promise<ToolResult> {
 	const inputPath = required(args, "input_path");
 	if (typeof inputPath !== "string") return { error: "Either input_path (for file import) is required" };
 	if (!existsSync(inputPath)) return { error: `input_path does not exist: ${inputPath}` };
@@ -732,16 +737,18 @@ function surfaceLabel(content: string, kind: string): string {
 	return `${label}: ${content}`;
 }
 
-function withSharedBeam<T>(fn: (beam: BeamMemory) => T): T {
+async function withSharedBeam<T>(fn: (beam: BeamMemory) => T | Promise<T>): Promise<T> {
 	const beam = sharedBeam();
 	try {
-		return fn(beam);
+		const result = await fn(beam);
+		await beam.flushExtractions();
+		return result;
 	} finally {
 		beam.close();
 	}
 }
 
-function handleSharedRemember(args: ToolArguments): ToolResult {
+async function handleSharedRemember(args: ToolArguments): Promise<ToolResult> {
 	const content = required(args, "content");
 	if (typeof content !== "string") return content;
 	const kind = stringArg(args, "kind", "meta").trim().toLowerCase();
@@ -765,18 +772,20 @@ function handleSharedRemember(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleSharedRecall(args: ToolArguments): ToolResult {
+async function handleSharedRecall(args: ToolArguments): Promise<ToolResult> {
 	const query = required(args, "query");
 	if (typeof query !== "string") return query;
-	return withSharedBeam(beam => {
-		const results = beam
-			.recall(query, Math.trunc(numberArg(args, "limit", 5)))
-			.map(row => ({ ...row, bank: "surface", shared_surface: true }));
+	return withSharedBeam(async beam => {
+		const results = (await beam.recall(query, Math.trunc(numberArg(args, "limit", 5)))).map(row => ({
+			...row,
+			bank: "surface",
+			shared_surface: true,
+		}));
 		return { query, count: results.length, results: serialize(results) };
 	});
 }
 
-function handleSharedForget(args: ToolArguments): ToolResult {
+async function handleSharedForget(args: ToolArguments): Promise<ToolResult> {
 	const memoryId = required(args, "memory_id");
 	if (typeof memoryId !== "string") return memoryId;
 	return withSharedBeam(beam => ({
@@ -785,7 +794,7 @@ function handleSharedForget(args: ToolArguments): ToolResult {
 	}));
 }
 
-function handleSharedStats(): ToolResult {
+async function handleSharedStats(): Promise<ToolResult> {
 	return withSharedBeam(beam => ({
 		provider: "mnemopi_shared",
 		working: serialize(beam.getWorkingStats()),
@@ -793,7 +802,7 @@ function handleSharedStats(): ToolResult {
 	}));
 }
 
-function handleValidate(args: ToolArguments): ToolResult {
+async function handleValidate(args: ToolArguments): Promise<ToolResult> {
 	const memoryId = required(args, "memory_id");
 	if (typeof memoryId !== "string") return memoryId;
 	const action = stringArg(args, "action");
@@ -822,7 +831,7 @@ function handleValidate(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleDiagnose(args: ToolArguments): ToolResult {
+async function handleDiagnose(args: ToolArguments): Promise<ToolResult> {
 	return withBeam(args, (beam, bank) => ({
 		status: "ok",
 		bank,
@@ -863,7 +872,7 @@ function graphLinkApi(beam: BeamMemory): GraphLinkApi | null {
 	return typeof candidate.addEdge === "function" ? (candidate as GraphLinkApi) : null;
 }
 
-function handleGraphQuery(args: ToolArguments): ToolResult {
+async function handleGraphQuery(args: ToolArguments): Promise<ToolResult> {
 	const seedId = required(args, "seed_memory_id");
 	if (typeof seedId !== "string") return seedId;
 	const maxHops = Math.max(0, Math.trunc(numberArg(args, "max_hops", 2)));
@@ -885,7 +894,7 @@ function handleGraphQuery(args: ToolArguments): ToolResult {
 	});
 }
 
-function handleGraphLink(args: ToolArguments): ToolResult {
+async function handleGraphLink(args: ToolArguments): Promise<ToolResult> {
 	const sourceId = required(args, "source_id");
 	if (typeof sourceId !== "string") return sourceId;
 	const targetId = required(args, "target_id");
@@ -922,7 +931,7 @@ function handleGraphLink(args: ToolArguments): ToolResult {
 	});
 }
 
-type Handler = (args: ToolArguments) => ToolResult;
+type Handler = (args: ToolArguments) => ToolResult | Promise<ToolResult>;
 
 const TOOL_HANDLERS: Record<string, Handler> = {
 	mnemopi_remember: handleRemember,
@@ -951,7 +960,7 @@ const TOOL_HANDLERS: Record<string, Handler> = {
 	mnemopi_graph_link: handleGraphLink,
 };
 
-export function handleToolCall(name: string, args: ToolArguments = {}): ToolResult {
+export async function handleToolCall(name: string, args: ToolArguments = {}): Promise<ToolResult> {
 	const handler = TOOL_HANDLERS[name];
 	if (handler === undefined) throw new Error(`Unknown tool: ${name}`);
 	return handler(args);

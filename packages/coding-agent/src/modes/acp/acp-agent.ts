@@ -42,8 +42,9 @@ import {
 	type SetSessionModeResponse,
 	type Usage,
 } from "@agentclientprotocol/sdk";
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { logger, VERSION } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, VERSION } from "@oh-my-pi/pi-utils";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -56,10 +57,12 @@ import { runExtensionCompact } from "../../extensibility/extensions/compact-hand
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { buildSkillPromptMessage, getSkillSlashCommandName } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
+import { resolveLocalUrlToPath } from "../../internal-urls";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
+import { type PlanApprovalDetails, renameApprovedPlanFile, resolvePlanTitle } from "../../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
 import {
@@ -69,6 +72,9 @@ import {
 } from "../../session/session-manager";
 import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
+import { normalizeLocalScheme } from "../../tools/path-utils";
+import { runResolveInvocation } from "../../tools/resolve";
+import { ToolError } from "../../tools/tool-errors";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	buildToolCallStartUpdate,
@@ -80,6 +86,8 @@ import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
 const ACP_DEFAULT_MODE_ID = "default";
 const ACP_PLAN_MODE_ID = "plan";
 const DEFAULT_PLAN_FILE_URL = "local://PLAN.md";
+const APPROVE_OPTION = "Approve and execute";
+const REFINE_OPTION = "Refine plan";
 const MODE_CONFIG_ID = "mode";
 const MODEL_CONFIG_ID = "model";
 const THINKING_CONFIG_ID = "thinking";
@@ -1229,11 +1237,15 @@ export class AcpAgent implements Agent {
 	}
 
 	async #pushConfigOptionUpdate(record: ManagedSessionRecord): Promise<void> {
+		await this.#pushConfigOptionUpdateForSession(record.session);
+	}
+
+	async #pushConfigOptionUpdateForSession(session: AgentSession): Promise<void> {
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: session.sessionId,
 			update: {
 				sessionUpdate: "config_option_update",
-				configOptions: this.#buildConfigOptions(record.session),
+				configOptions: this.#buildConfigOptions(session),
 			},
 		});
 	}
@@ -1380,9 +1392,162 @@ export class AcpAgent implements Agent {
 				workflow: previous?.workflow ?? "parallel",
 				reentry: previous !== undefined,
 			});
+			// Mirror `InteractiveMode.#enterPlanMode`: register the standing resolve
+			// handler that consumes `resolve { action: "apply" }` from plan-mode.
+			// Without this, the agent's resolve call falls through to the "No
+			// pending action to resolve" error (issue #1869).
+			session.setStandingResolveHandler?.(input => this.#runAcpPlanApprovalResolve(session, input));
 		} else {
+			session.setStandingResolveHandler?.(null);
 			session.setPlanModeState(undefined);
 		}
+	}
+
+	/**
+	 * Standing resolve handler installed while ACP plan mode is active. The agent
+	 * submits the finalized plan via `resolve { action: "apply", extra: { title } }`;
+	 * this handler validates the plan file, normalizes the title, asks the ACP
+	 * client to confirm (via `unstable_createElicitation` when supported), and on
+	 * approval renames the plan to `local://<title>.md`, exits plan mode, and
+	 * notifies the client of both mode surfaces so the agent regains full tools.
+	 *
+	 * Mirrors `InteractiveMode.#runPlanApprovalResolve` for the parts the agent
+	 * sees (same `PlanApprovalDetails` shape, same source tool name `plan_approval`).
+	 * Clients without form-mode elicitation get an auto-approve so plan mode is
+	 * never stranded — the agent always has a way out.
+	 */
+	#runAcpPlanApprovalResolve(session: AgentSession, input: unknown): Promise<AgentToolResult<unknown>> {
+		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
+			sourceToolName: "plan_approval",
+			label: "Plan ready for approval",
+			apply: async (_reason, extra) => {
+				const state = session.getPlanModeState();
+				if (!state?.enabled) {
+					throw new ToolError("Plan mode is not active.");
+				}
+				const planFilePath = state.planFilePath;
+				const planContent = await this.#readAcpPlanFile(session, planFilePath);
+				if (planContent === null) {
+					throw new ToolError(
+						`Plan file not found at ${planFilePath}. Write the finalized plan to ${planFilePath} before requesting approval.`,
+					);
+				}
+				const normalized = resolvePlanTitle({
+					suppliedTitle: extra?.title,
+					planContent,
+					planFilePath,
+				});
+				const finalPlanFilePath = `local://${normalized.fileName}`;
+				const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, normalized.title, planContent);
+				const details: PlanApprovalDetails = {
+					planFilePath,
+					finalPlanFilePath,
+					title: normalized.title,
+					planExists: true,
+				};
+				if (!approved) {
+					// User chose to refine: leave plan mode active so the agent
+					// keeps the read-only toolset and can iterate on the plan file.
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: 'Plan refinement requested. Update the plan file, then call `resolve { action: "apply" }` again when ready.',
+							},
+						],
+						details,
+					};
+				}
+				// Approved. Rename plan to its titled filename, set the plan
+				// reference so the next turn injects the plan content as
+				// context, then exit plan mode so the agent regains full tools.
+				await renameApprovedPlanFile({
+					planFilePath,
+					finalPlanFilePath,
+					getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+					getSessionId: () => session.sessionManager.getSessionId(),
+				});
+				session.setPlanReferencePath(finalPlanFilePath);
+				session.setStandingResolveHandler?.(null);
+				session.setPlanModeState(undefined);
+				try {
+					await this.#connection.sessionUpdate({
+						sessionId: session.sessionId,
+						update: this.#buildCurrentModeUpdate(session),
+					});
+					await this.#pushConfigOptionUpdateForSession(session);
+				} catch (error) {
+					logger.warn("Failed to emit mode updates after plan approval", {
+						sessionId: session.sessionId,
+						error,
+					});
+				}
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Plan approved at ${finalPlanFilePath}. Plan mode exited; proceed with the implementation.`,
+						},
+					],
+					details,
+				};
+			},
+		});
+	}
+
+	#resolveAcpPlanFilePath(session: AgentSession, planFilePath: string): string {
+		if (planFilePath.startsWith("local:")) {
+			const normalized = normalizeLocalScheme(planFilePath);
+			return resolveLocalUrlToPath(normalized, {
+				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+				getSessionId: () => session.sessionManager.getSessionId(),
+			});
+		}
+		return path.resolve(session.sessionManager.getCwd(), planFilePath);
+	}
+
+	async #readAcpPlanFile(session: AgentSession, planFilePath: string): Promise<string | null> {
+		const resolvedPath = this.#resolveAcpPlanFilePath(session, planFilePath);
+		try {
+			return await Bun.file(resolvedPath).text();
+		} catch (error) {
+			if (isEnoent(error)) {
+				return null;
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * Ask the ACP client to confirm plan approval. Returns `true` only on an
+	 * explicit `APPROVE_OPTION` selection. Refine, dismissal (`undefined`), or
+	 * any unrecognized value falls through to refine semantics — the caller
+	 * keeps plan mode active and surfaces guidance text to the agent. Clients
+	 * without `elicitation.form` support auto-approve because there is no
+	 * confirmation surface available; without that, plan mode would strand
+	 * the agent (the bug this method exists to fix).
+	 */
+	async #requestAcpPlanApprovalChoice(sessionId: string, title: string, planContent: string): Promise<boolean> {
+		const supportsForm = this.#clientCapabilities?.elicitation?.form != null;
+		if (!supportsForm) return true;
+		// Include a short preview of the plan so the user has context in the
+		// dialog. Keep the body bounded — Zed renders elicitation messages
+		// inline and a multi-thousand-line plan blows out the dialog.
+		const previewLines = planContent.split("\n").slice(0, 12).join("\n");
+		const ellipsis = planContent.split("\n").length > 12 ? "\n…" : "";
+		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}`;
+		const value = await elicitFromAcpClient(
+			this.#connection,
+			sessionId,
+			"select",
+			message,
+			{ type: "string", enum: [APPROVE_OPTION, REFINE_OPTION] },
+			undefined,
+		);
+		// Approve ONLY on the explicit approve selection. Dismissal, cancel,
+		// timeout, or any other non-approve response falls through to refine
+		// semantics so closing the dialog can never grant write access.
+		return value === APPROVE_OPTION;
 	}
 
 	#buildModeState(session: AgentSession): SessionModeState {

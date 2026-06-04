@@ -28,38 +28,13 @@ When a user describes what they want an agent to do:
    - MUST clearly indicate the agent's primary function
    - SHOULD be memorable and easy to type
    - NEVER use generic terms like "helper" or "assistant"
-6. Example agent descriptions
-   - In the `whenToUse` field, SHOULD include examples of when this agent SHOULD be used
-   - Format examples as:
-     ```
-     <example>
-       Context: The user is creating a test-runner agent that should be called after a logical chunk of code is written.
-       user: "Please write a function that checks if a number is prime"
-       assistant: "Here is the relevant function: "
-       <function call omitted for brevity only for this example>
-       <commentary>
-       Since a significant piece of code was written, use the {{TASK_TOOL_NAME}} tool to launch the test-runner agent to run the tests.
-       </commentary>
-       assistant: "Now let me use the test-runner agent to run the tests"
-     </example>
-     <example>
-       Context: User is creating an agent to respond to the word "hello" with a friendly joke.
-       user: "Hello"
-       assistant: "I'm going to use the {{TASK_TOOL_NAME}} tool to launch the greeting-responder agent to respond with a friendly joke"
-       <commentary>
-       Since the user is greeting, use the greeting-responder agent to respond with a friendly joke.
-       </commentary>
-     </example>
-     ```
-   - If the user mentioned or implied proactive use, SHOULD include proactive examples
-   - MUST ensure examples show the assistant using the Agent tool, not responding directly
 
 Your output MUST be a valid JSON object with exactly these fields:
 
 ```json
 {
   "identifier": "A unique, descriptive identifier using lowercase letters, numbers, and hyphens (e.g., 'test-runner', 'api-docs-writer', 'code-formatter')",
-  "whenToUse": "A precise, actionable description starting with 'Use this agent when…' that clearly defines the triggering conditions and use cases. Include examples as described above.",
+  "whenToUse": "A precise, single-sentence trigger description starting with 'Use this agent when…' that defines the conditions and use cases. Keep it concise and self-contained — NEVER embed <example>/<commentary> blocks, multi-turn transcripts, or escaped newlines.",
   "systemPrompt": "The complete system prompt that will govern the agent's behavior, written in second person ('You are…', 'You will…') and structured for maximum clarity and effectiveness"
 }
 ```

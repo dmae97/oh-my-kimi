@@ -7,7 +7,11 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import {
+	EPHEMERAL_MODEL_CHANGE_ROLE,
+	getRestorableSessionModels,
+	SessionManager,
+} from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession model persistence", () => {
@@ -302,14 +306,18 @@ describe("AgentSession model persistence", () => {
 		expect(created.session.model?.id).toBe(defaultModel.id);
 	});
 
-	it("restores the saved default model when switch-session last role is temporary", async () => {
+	it("restores the saved default model when switch-session last role is fallback", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const fallbackModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 		const defaultRoleValue = modelValue(defaultModel);
-		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
+		const targetSessionFile = await writeRoleModelSession(
+			defaultRoleValue,
+			modelValue(fallbackModel),
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+		);
 
 		const created = await createSession({
-			initialModel: temporaryModel,
+			initialModel: fallbackModel,
 			modelRoles: { default: defaultRoleValue },
 			persist: true,
 		});
@@ -331,16 +339,85 @@ describe("AgentSession model persistence", () => {
 		expect(result.session.model?.id).toBe(defaultModel.id);
 	});
 
-	it("restores the saved default model when startup last role is temporary", async () => {
+	it("restores the saved default model when startup last role is fallback", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const fallbackModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(
+			defaultRoleValue,
+			modelValue(fallbackModel),
+			EPHEMERAL_MODEL_CHANGE_ROLE,
+		);
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(fallbackModel));
+
+		const result = await createStartupResumeSession(targetSessionFile, settings);
+
+		expect(result.session.model?.id).toBe(defaultModel.id);
+	});
+
+	it("restores a temporary model when switching sessions", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const defaultRoleValue = modelValue(defaultModel);
+		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
+
+		const created = await createSession({
+			initialModel: defaultModel,
+			modelRoles: { default: defaultRoleValue },
+			persist: true,
+		});
+
+		await expect(created.session.switchSession(targetSessionFile)).resolves.toBe(true);
+		expect(created.session.model?.id).toBe(temporaryModel.id);
+	});
+
+	it("restores a temporary model during startup resume", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const temporaryModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 		const defaultRoleValue = modelValue(defaultModel);
 		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
 		const settings = Settings.isolated();
-		settings.setModelRole("default", modelValue(temporaryModel));
+		settings.setModelRole("default", defaultRoleValue);
 
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
-		expect(result.session.model?.id).toBe(defaultModel.id);
+		expect(result.session.model?.id).toBe(temporaryModel.id);
+	});
+
+	it("lists restorable temporary model before the default fallback", () => {
+		expect(
+			getRestorableSessionModels(
+				{
+					default: "anthropic/claude-sonnet-4-5",
+					temporary: "anthropic/claude-sonnet-4-6",
+				},
+				"temporary",
+			),
+		).toEqual(["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-5"]);
+	});
+
+	it("lists only the default model for ephemeral fallback restores", () => {
+		expect(
+			getRestorableSessionModels(
+				{
+					default: "anthropic/claude-sonnet-4-5",
+					[EPHEMERAL_MODEL_CHANGE_ROLE]: "anthropic/claude-sonnet-4-6",
+				},
+				EPHEMERAL_MODEL_CHANGE_ROLE,
+			),
+		).toEqual(["anthropic/claude-sonnet-4-5"]);
+	});
+
+	it("lists a named role model before the default fallback", () => {
+		expect(
+			getRestorableSessionModels(
+				{
+					default: "anthropic/claude-sonnet-4-5",
+					smol: "anthropic/claude-sonnet-4-6",
+				},
+				"smol",
+			),
+		).toEqual(["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-5"]);
 	});
 });
