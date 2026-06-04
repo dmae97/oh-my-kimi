@@ -9,7 +9,18 @@ from pathlib import Path
 
 import pytest
 
-from robomp.git_ops import GitCommandError
+from robomp.git_ops import (
+    GitCommandError,
+)
+from robomp.git_ops import (
+    fetch_pr_head as git_fetch_pr_head,
+)
+from robomp.git_ops import (
+    fetch_prune as git_fetch_prune,
+)
+from robomp.git_ops import (
+    fetch_ref as git_fetch_ref,
+)
 from robomp.sandbox import (
     SandboxManager,
     Workspace,
@@ -1311,6 +1322,189 @@ def test_run_git_kills_hung_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         _run_git(["status"], cwd=tmp_path, token=None, timeout=0.5)
     assert exc.value.returncode == 124
     assert "timed out" in exc.value.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# Partial-clone blob backfill (oh-my-pi#1818)
+# ---------------------------------------------------------------------------
+
+
+def _partial_clone_upstream(tmp_path: Path) -> Path:
+    """Bare upstream that advertises ``uploadpack.allowFilter`` so partial
+    clones over ``file://`` actually skip blobs (local-protocol clones
+    otherwise ignore ``--filter``)."""
+    repo = tmp_path / "partial-upstream.git"
+    repo.mkdir()
+    _git(["init", "--initial-branch=main", "--bare", str(repo)], cwd=tmp_path)
+    _git(["-C", str(repo), "config", "uploadpack.allowFilter", "true"], cwd=tmp_path)
+    _git(["-C", str(repo), "config", "uploadpack.allowAnySHA1InWant", "true"], cwd=tmp_path)
+    seed = tmp_path / "partial-seed"
+    seed.mkdir()
+    _git(["init", "--initial-branch=main", str(seed)], cwd=tmp_path)
+    (seed / "README.md").write_text("hello\n", encoding="utf-8")
+    _git(["-C", str(seed), "add", "."], cwd=tmp_path)
+    subprocess.run(
+        ["git", "-C", str(seed), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ
+        | {
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        },
+    )
+    _git(["-C", str(seed), "remote", "add", "origin", str(repo)], cwd=tmp_path)
+    _git(["-C", str(seed), "push", "origin", "main"], cwd=tmp_path)
+    return repo
+
+
+def _commit_new_blob_upstream(upstream: Path, tmp_path: Path, *, path: str, content: str, ref: str = "main") -> str:
+    """Add a fresh blob upstream and return the new commit SHA."""
+    contrib = tmp_path / f"contrib-{path.replace('/', '_')}"
+    _git(["clone", f"file://{upstream}", str(contrib)], cwd=tmp_path)
+    (contrib / path).write_text(content, encoding="utf-8")
+    _git(["-C", str(contrib), "add", path], cwd=tmp_path)
+    subprocess.run(
+        ["git", "-C", str(contrib), "commit", "-m", f"add {path}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ
+        | {
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        },
+    )
+    sha = subprocess.run(
+        ["git", "-C", str(contrib), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(["-C", str(contrib), "push", "origin", f"HEAD:{ref}"], cwd=tmp_path)
+    return sha
+
+
+def _missing_object_oids(repo: Path, rev: str) -> list[str]:
+    """OIDs of promisor-deferred objects reachable from ``rev``."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--objects", "--missing=print", rev],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [line[1:].split()[0] for line in proc.stdout.splitlines() if line.startswith("?")]
+
+
+def test_fetch_ref_backfills_missing_blobs_into_partial_clone(tmp_path: Path) -> None:
+    """Regression for oh-my-pi#1818: ``fetch_ref`` is called immediately before
+    ``git worktree add origin/<ref>``. On a ``--filter=blob:none`` pool whose
+    periodic ``fetch --prune`` inherited that filter, the ref's blobs are
+    absent and the worktree-add triggers a promisor lazy fetch that — under
+    proxy transport — has no PAT and dies. ``fetch_ref`` MUST materialize
+    every reachable blob so the checkout never hits the lazy path."""
+    upstream = _partial_clone_upstream(tmp_path)
+    pool = tmp_path / "pool"
+    _git(
+        [
+            "clone",
+            "--filter=blob:none",
+            "--no-tags",
+            "--branch",
+            "main",
+            f"file://{upstream}",
+            str(pool),
+        ],
+        cwd=tmp_path,
+    )
+
+    # New upstream commit → fresh blob not yet pulled into the pool.
+    _commit_new_blob_upstream(upstream, tmp_path, path="payload.txt", content="v2 contents here\n")
+
+    # Pool refresh mirrors `SandboxManager.ensure_clone` → inherits filter.
+    git_fetch_prune(pool, token=None)
+    missing_before = _missing_object_oids(pool, "origin/main")
+    assert missing_before, (
+        "test precondition broken: partial-clone fetch should leave at least one blob promisor-deferred"
+    )
+
+    # Pool config must show the partial-clone state we're recovering from.
+    cfg_before = (pool / ".git" / "config").read_text(encoding="utf-8")
+    assert "partialclonefilter = blob:none" in cfg_before
+    assert "promisor = true" in cfg_before
+
+    # The fix: fetch_ref backfills every reachable blob in a single call.
+    git_fetch_ref(pool, "main", token=None)
+
+    missing_after = _missing_object_oids(pool, "origin/main")
+    assert missing_after == [], f"fetch_ref left missing objects: {missing_after}"
+
+    # And the partial-clone config is intact — `fetch_prune` stays cheap on
+    # the next pool refresh; only the explicit pre-checkout fetch eagerly
+    # fills blobs.
+    cfg_after = (pool / ".git" / "config").read_text(encoding="utf-8")
+    assert "partialclonefilter = blob:none" in cfg_after
+    assert "promisor = true" in cfg_after
+
+    # End-to-end: worktree add must succeed even if origin is unreachable —
+    # the blobs are local now, no lazy fetch can fire.
+    _git(["-C", str(pool), "remote", "set-url", "origin", "https://example.invalid/missing.git"], cwd=tmp_path)
+    ws_dir = tmp_path / "ws"
+    subprocess.run(
+        ["git", "-C", str(pool), "worktree", "add", "-b", "verify-1818", str(ws_dir), "origin/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ | {"GIT_TERMINAL_PROMPT": "0"},
+    )
+    assert (ws_dir / "payload.txt").read_text(encoding="utf-8") == "v2 contents here\n"
+
+
+def test_fetch_pr_head_backfills_missing_blobs_into_partial_clone(tmp_path: Path) -> None:
+    """Same regression as ``test_fetch_ref_backfills…`` but on the PR-review
+    path: ``fetch_pr_head`` precedes ``git worktree add --detach FETCH_HEAD``
+    and so MUST eagerly fetch blobs reachable from the PR head."""
+    upstream = _partial_clone_upstream(tmp_path)
+    pool = tmp_path / "pool"
+    _git(
+        [
+            "clone",
+            "--filter=blob:none",
+            "--no-tags",
+            "--branch",
+            "main",
+            f"file://{upstream}",
+            str(pool),
+        ],
+        cwd=tmp_path,
+    )
+
+    # Publish a PR head with a fresh blob.
+    pr_sha = _commit_new_blob_upstream(
+        upstream, tmp_path, path="pr.txt", content="pr blob payload\n", ref="refs/pull/7/head"
+    )
+
+    git_fetch_pr_head(pool, 7, token=None)
+    missing_after = _missing_object_oids(pool, pr_sha)
+    assert missing_after == [], f"fetch_pr_head left missing objects: {missing_after}"
+
+    # End-to-end: a detached worktree add against the freshly-fetched PR head
+    # succeeds without lazy-fetching against (now-broken) origin.
+    _git(["-C", str(pool), "remote", "set-url", "origin", "https://example.invalid/missing.git"], cwd=tmp_path)
+    ws_dir = tmp_path / "pr-ws"
+    subprocess.run(
+        ["git", "-C", str(pool), "worktree", "add", "--detach", str(ws_dir), "FETCH_HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ | {"GIT_TERMINAL_PROMPT": "0"},
+    )
+    assert (ws_dir / "pr.txt").read_text(encoding="utf-8") == "pr blob payload\n"
 
 
 # ---------------------------------------------------------------------------
