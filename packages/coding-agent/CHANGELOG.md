@@ -17,6 +17,8 @@
 
 ### Changed
 
+- Changed the `task` tool description to tag read-only agents and explicitly forbid assigning them file edits/commands or offloading reasoning to `quick_task`/`explore`.
+
 - Changed Redis and SQL session storage initialization to load only indexed metadata (`size`, `mtimeMs`) instead of full session content
 - Changed `SessionStorage` read paths to rely on backend-backed metadata/indexed storage, so session content is fetched on demand rather than cached as full in-memory mirrors
 - Changed session-list slice reads to go through `SessionStorage.readTextSlices` across all backends, removing the file-only single-open branch and caller-managed buffers. `FileSessionStorage` now reads both windows via `peekFileEnds`, while Redis and SQL backends encode session content once per combined read.

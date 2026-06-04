@@ -52,10 +52,6 @@ const DEFAULT_SCAN_COUNT = 500;
  * `listFilesSync` calls remain available without mirroring full content.
  */
 export class RedisSessionStorage extends IndexedSessionStorage {
-	constructor(backend: SessionStorageBackend) {
-		super(backend);
-	}
-
 	/**
 	 * Warm the metadata index with every existing session key under the configured
 	 * prefix and return the ready-to-use storage. Must be awaited before passing
