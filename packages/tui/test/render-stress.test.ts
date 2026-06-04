@@ -19,7 +19,7 @@ const SUBPROCESS_SPAWN_OVERHEAD_MS = 5_000;
 
 const SUBPROCESS_ENTRY = `${import.meta.dir}/render-stress-subprocess.ts`;
 
-type StressSubprocess = Subprocess<"pipe", "pipe", "pipe">;
+type StressSubprocess = Subprocess<Blob, "pipe", "pipe">;
 
 function parsePositiveInt(name: string, fallback: number): number {
 	const raw = Bun.env[name];
@@ -62,8 +62,8 @@ function stressBatchLabel(scenarios: readonly Scenario[]): string {
  * The first failing (or timed-out) scenario aborts the batch: its error is
  * recorded and every surviving subprocess is killed, so a real renderer
  * regression surfaces promptly instead of hiding behind a later batch timeout.
- * Each drain loop catches its own scenario error, so a single rejection never
- * leaks as an unhandled promise rejection while the rest of the pool unwinds.
+ * Each drain loop catches its own scenario error, and the batch rejects as soon
+ * as the first error is recorded, so killed siblings cannot mask it later.
  */
 async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promise<void> {
 	const concurrency = stressConcurrency(scenarios);
@@ -71,9 +71,15 @@ async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promi
 	const live = new Set<StressSubprocess>();
 	let next = 0;
 	let firstError: unknown;
+	let signalFailure!: () => void;
+	const failed = new Promise<void>(resolve => {
+		signalFailure = resolve;
+	});
 	const fail = (error: unknown): void => {
-		if (firstError === undefined) firstError = error;
+		if (firstError !== undefined) return;
+		firstError = error;
 		for (const proc of live) proc.kill();
+		signalFailure();
 	};
 	const drain = async (): Promise<void> => {
 		while (firstError === undefined) {
@@ -87,40 +93,41 @@ async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promi
 			}
 		}
 	};
-	await Promise.all(Array.from({ length: concurrency }, drain));
+	const drains = Array.from({ length: concurrency }, drain);
+	await Promise.race([Promise.all(drains), failed]);
 	if (firstError !== undefined) throw firstError;
 }
 
 async function runScenarioInSubprocess(scenario: Scenario, live: Set<StressSubprocess>): Promise<void> {
 	const proc = Bun.spawn([process.execPath, SUBPROCESS_ENTRY], {
-		cwd: import.meta.dir,
-		stdin: "pipe",
+		stdin: new Blob([JSON.stringify(scenario)]),
 		stdout: "pipe",
 		stderr: "pipe",
 	});
 	live.add(proc);
-	let timedOut = false;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		proc.kill();
-	}, scenario.timeoutMs);
-	try {
-		proc.stdin.write(JSON.stringify(scenario));
-		proc.stdin.end();
-		const [stdout, stderr] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-		]);
-		await proc.exited;
-		if (timedOut) {
-			throw new Error(
-				`TUI stress scenario timed out after ${scenario.timeoutMs}ms: ${scenario.name} seed=${formatSeed(scenario.seed)} ops=${scenario.iterations}`,
+	const stdoutPromise = new Response(proc.stdout).text();
+	const stderrPromise = new Response(proc.stderr).text();
+	const completed = (async (): Promise<StressScenarioResult> => {
+		const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
+		return parseScenarioResult(stdout, stderr, scenario, exitCode);
+	})();
+	void completed.catch(() => {});
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timedOut = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			proc.kill();
+			reject(
+				new Error(
+					`TUI stress scenario timed out after ${scenario.timeoutMs}ms: ${scenario.name} seed=${formatSeed(scenario.seed)} ops=${scenario.iterations}`,
+				),
 			);
-		}
-		const result = parseScenarioResult(stdout, stderr, scenario, proc.exitCode);
+		}, scenario.timeoutMs);
+	});
+	try {
+		const result = await Promise.race([completed, timedOut]);
 		if (!result.ok) throw scenarioFailureError(result);
 	} finally {
-		clearTimeout(timer);
+		if (timer !== undefined) clearTimeout(timer);
 		live.delete(proc);
 	}
 }

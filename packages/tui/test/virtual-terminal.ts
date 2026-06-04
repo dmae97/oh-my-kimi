@@ -65,7 +65,6 @@ const SYNC_OUTPUT_BEGIN = "\x1b[?2026h";
 const SYNC_OUTPUT_END = "\x1b[?2026l";
 const OSC_SEQUENCE = /\x1b\][\s\S]*?(?:\x07|\x1b\\)/g;
 
-
 const DEFAULT_FG_G = (DEFAULT_FG_RGB >> 8) & 0xff;
 const DEFAULT_FG_B = DEFAULT_FG_RGB & 0xff;
 const DEFAULT_BG_R = (DEFAULT_BG_RGB >> 16) & 0xff;
@@ -101,6 +100,12 @@ export class VirtualTerminal implements Terminal {
 	#inputHandler?: (data: string) => void;
 	#resizeHandler?: () => void;
 	#pendingEngineResize = false;
+	// Memoized text of committed scrollback rows, keyed by absolute offset. Safe
+	// because the engine never evicts (its byte budget sits far above the line
+	// cap), so an offset's content is stable until a resize (rewrap) or recreate
+	// (clear) — both reset this. Eliminates the per-op O(history) WASM re-reads
+	// that made long streaming runs O(n²) in committed rows.
+	#historyTextCache: string[] = [];
 
 	constructor(columns = 80, rows = 24, scrollback?: number) {
 		this.#columns = columns;
@@ -196,6 +201,7 @@ export class VirtualTerminal implements Terminal {
 			this.#pendingEngineResize = true;
 		} else {
 			this.#term.resize(columns, rows);
+			this.#historyTextCache.length = 0; // engine rewraps scrollback on resize
 			this.#refollowBottom(wasBottom);
 		}
 		this.#resizeHandler?.();
@@ -371,13 +377,13 @@ export class VirtualTerminal implements Terminal {
 			data = data.slice(0, clearIndex) + data.slice(clearIndex + clearScrollbackAfterFullClear.length);
 		} else if (this.#pendingEngineResize) {
 			this.#term.resize(this.#columns, this.#rows);
+			this.#historyTextCache.length = 0; // engine rewraps scrollback on resize
 			this.#pendingEngineResize = false;
 		}
 		data = this.#stripSynchronizedOutput(data);
 		this.#writeToGhostty(data);
 		this.#refollowBottom(wasBottom);
 	}
-
 
 	#stripSynchronizedOutput(data: string): string {
 		if (!data.includes(SYNC_OUTPUT_BEGIN) && !data.includes(SYNC_OUTPUT_END) && !data.includes("\x1b]")) return data;
@@ -431,6 +437,7 @@ export class VirtualTerminal implements Terminal {
 		this.#term = createGhosttyTerminal(this.#ghostty, this.#columns, this.#rows, this.#scrollbackCap);
 		this.#pendingEngineResize = false;
 		this.#viewportY = 0;
+		this.#historyTextCache.length = 0; // fresh engine: prior scrollback is gone
 	}
 
 	/** Cells of the presented viewport row (history when scrolled up, else active grid). */
@@ -464,6 +471,8 @@ export class VirtualTerminal implements Terminal {
 
 	/** Reconstruct a scrollback-history row's text by line offset (0 = oldest). */
 	#historyRowText(offset: number): string {
+		const cached = this.#historyTextCache[offset];
+		if (cached !== undefined) return cached;
 		const cells = this.#term.getScrollbackLine(offset);
 		if (!cells) return "";
 		let text = "";
@@ -479,7 +488,9 @@ export class VirtualTerminal implements Terminal {
 						: String.fromCodePoint(cell.codepoint);
 			}
 		}
-		return text.replace(/\s+$/u, "");
+		text = text.replace(/\s+$/u, "");
+		this.#historyTextCache[offset] = text;
+		return text;
 	}
 
 	#isDefaultBg(cell: GhosttyCell): boolean {
