@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed parallel `function_call` items on the OpenAI Responses API losing arguments on every call except the last when the upstream server interleaves their stream events (observed against llama.cpp and other local Responses-compat hosts). `processResponsesStream` no longer routes `function_call_arguments.{delta,done}`, `output_item.done`, content_part/text/refusal/reasoning events through a singleton `currentItem`/`currentBlock` reference; it now tracks every open item in registries keyed by `output_index` and `item_id` so each event is folded into the matching block and the emitted `toolcall_end` carries the correct `contentIndex`. ([#1880](https://github.com/can1357/oh-my-pi/issues/1880))
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
