@@ -1562,15 +1562,17 @@ export class TUI extends Container {
 			//
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			// ED3-risk terminals with an unobservable viewport cannot safely clear
-			// saved lines. During an active eager streaming turn, still paint an
-			// overflowing shrink's live tail in place: otherwise the UI freezes until
-			// the next input even though the frame still has a bottom viewport to show
-			// (issue #1682). Native history remains dirty and reconciles at the next
-			// checkpoint. If there is no active eager turn, or the shrink no longer
-			// overflows, defer rather than repainting blanks over a possibly scrolled reader.
+			// saved lines. During an active eager streaming turn the user follows the
+			// live tail, so paint the shrink's bottom-anchored viewport in place
+			// whether it still overflows OR now fits — otherwise the UI freezes on
+			// stale rows until the next input even though the frame has a fresh bottom
+			// viewport to show (issues #1682, foreground-stream fidelity on collapse).
+			// Native history stays dirty and reconciles at the next checkpoint. With no
+			// active eager turn the reader may be scrolled, so defer rather than
+			// repainting over their history.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				if (this.#eagerNativeScrollbackRebuild && newLines.length > height) {
+				if (this.#eagerNativeScrollbackRebuild) {
 					return { kind: "viewportRepaint" };
 				}
 				if (newLines.length <= paddedViewportTop) {
