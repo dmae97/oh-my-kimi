@@ -41,7 +41,7 @@ const PI_SUBPATH_REMAPS: ReadonlyMap<string, string> = new Map<string, string>([
 
 const LEGACY_PI_SPECIFIER_FILTER = new RegExp(`^@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/.*)?$`);
 const LEGACY_PI_IMPORT_SPECIFIER_REGEX = new RegExp(
-	`((?:from\\s+|import\\s*\\(\\s*)["'])(@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/[^"'()\\s]+)?)(["'])`,
+	`((?:from\\s+|import\\s+|import\\s*\\(\\s*)["'])(@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/[^"'()\\s]+)?)(["'])`,
 	"g",
 );
 const resolvedSpecifierFallbacks = new Map<string, string>();
@@ -225,7 +225,7 @@ function rewriteLegacyPiImports(source: string): string {
 // Match the bare `@sinclair/typebox` import specifier (static + dynamic).
 // Subpath imports like `@sinclair/typebox/compiler` are intentionally excluded —
 // they expose TypeBox-only APIs the Zod-backed shim does not provide.
-const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])(@sinclair\/typebox)(["'])/g;
+const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(@sinclair\/typebox)(["'])/g;
 
 /**
  * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
@@ -414,7 +414,7 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 	return resolvePackageImportTarget(packageRoot, bestMatch.target, bestMatch.wildcard);
 }
 
-const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
+const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
 
 async function rewriteExtensionPackageImports(source: string, importerPath: string): Promise<string> {
 	let rewritten = "";
@@ -447,7 +447,7 @@ function escapeRegExp(value: string): string {
 // Match source modules in an extension graph (relative imports and package
 // `imports` aliases such as `#src/*`). Bare third-party dependencies remain
 // native Bun resolutions.
-const EXTENSION_GRAPH_SPECIFIER_REGEX = /(?:from\s+|import\s*\(\s*)["']((?:\.\.?\/|#)[^"']+)["']/g;
+const EXTENSION_GRAPH_SPECIFIER_REGEX = /(?:from\s+|import\s+|import\s*\(\s*)["']((?:\.\.?\/|#)[^"']+)["']/g;
 
 // Extension entry realpaths that already have a load-time rewrite hook
 // installed. Each `Bun.plugin()` registration is process-global and permanent,
