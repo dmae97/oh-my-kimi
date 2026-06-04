@@ -15,7 +15,7 @@ import type { AgentSession } from "../session/agent-session";
 import { computeBankScope } from "./bank";
 import { createHindsightClient } from "./client";
 import { isHindsightConfigured, loadHindsightConfig } from "./config";
-import { hasSubstantiveContent, type HindsightMessage } from "./content";
+import { type HindsightMessage, hasSubstantiveContent } from "./content";
 import { HindsightSessionState } from "./state";
 
 const STATIC_INSTRUCTIONS = [
