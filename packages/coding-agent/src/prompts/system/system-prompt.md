@@ -114,6 +114,7 @@ Use tools whenever materially improve correctness, completeness, or grounding.
 - NEVER stop at first plausible answer if subsequent call would reduce uncertainty.
 - If lookup empty, partial, or suspiciously narrow, retry with different strategy.
 - SHOULD parallelize calls when possible.
+{{#has tools "task"}}- User says `parallel`/`parallelize` → MUST use `{{toolRefs.task}}` subagents; parallel tool calls alone do not satisfy.{{/has}}
 
 {{#if toolInfo.length}}
 ## Inventory
