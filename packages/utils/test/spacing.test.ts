@@ -58,4 +58,30 @@ describe("spacing", () => {
 		expect(() => getIndentation(phonyPath)).not.toThrow();
 		expect(getIndentation(phonyPath)).toBe(3);
 	});
+
+	it("returns the default tab width for paths with an overlong component (no syscall)", () => {
+		// Repro of #1872: a malformed edit tool call lands a long gibberish
+		// string in `file_path`, the renderer routes it through `replaceTabs ->
+		// getIndentation`, and `readFileSync` of `<dir>/.editorconfig` would
+		// throw `ENAMETOOLONG`. The path gate must short-circuit before any
+		// syscall so renderers never see the exception.
+		const longSegment = "amálpthgadasJennzier".repeat(40);
+		const overlong = `${longSegment}/inner.ts`;
+		expect(Buffer.byteLength(longSegment)).toBeGreaterThan(255);
+		expect(() => getIndentation(overlong)).not.toThrow();
+		expect(getIndentation(overlong)).toBe(3);
+	});
+
+	it("tolerates filesystem errors while walking the editorconfig chain (ENOTDIR)", async () => {
+		// Defense in depth: when a non-directory sits where a directory is
+		// expected, `parseCachedEditorConfig` previously caught only `ENOENT`
+		// and let `ENOTDIR` (and `ENAMETOOLONG`, `EACCES`, `ELOOP`, …)
+		// escape. Editorconfig discovery is best-effort and must absorb any
+		// `FsError`.
+		const notADir = path.join(tempDir, "not-a-dir");
+		await fs.writeFile(notADir, "");
+		const fakeChild = path.join(notADir, "inner.ts");
+		expect(() => getIndentation(fakeChild)).not.toThrow();
+		expect(getIndentation(fakeChild)).toBe(3);
+	});
 });
