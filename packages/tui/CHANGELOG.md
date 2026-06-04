@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Changed TUI tests to use Ghostty's VT engine (`ghostty-web`) instead of `@xterm/headless`.
 - Changed the default inline-image live graphics budget from 3 to 8 images.
 
 ### Fixed

@@ -14,6 +14,8 @@ import {
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const processPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+const stdoutRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
 const originalWslInterop = Bun.env.WSL_INTEROP;
@@ -427,6 +429,8 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
 		restoreProperty(process, "platform", processPlatformDescriptor);
+		restoreProperty(process.stdout, "columns", stdoutColumnsDescriptor);
+		restoreProperty(process.stdout, "rows", stdoutRowsDescriptor);
 		setCellDimensions(originalCellDims);
 	});
 
@@ -462,20 +466,26 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
-	it("reports a private mode supported when DECRPM status is 1 or 2", () => {
+	it("reports DECRPM statuses 1, 2, and 3 as supported private modes", () => {
 		const { terminal, reports } = setup();
 		process.stdin.emit("data", "\x1b[?2026;1$y");
+		process.stdin.emit("data", "\x1b[?2048;2$y");
+		process.stdin.emit("data", "\x1b[?2031;3$y");
 		expect(reports).toContainEqual({ mode: 2026, supported: true });
+		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		expect(reports).toContainEqual({ mode: 2031, supported: true });
 		terminal.stop();
 	});
 
-	it("reports permanent DECRPM statuses 3 and 4 as recognized private modes", () => {
-		const { terminal, reports } = setup();
-		process.stdin.emit("data", "\x1b[?2026;3$y");
+	it("reports DECRPM status 4 as unsupported for modes the TUI enables", () => {
+		const { terminal, writes, reports } = setup();
+		process.stdin.emit("data", "\x1b[?2026;4$y");
 		process.stdin.emit("data", "\x1b[?2048;4$y");
-		expect(reports).toContainEqual({ mode: 2026, supported: true });
-		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		expect(reports).toContainEqual({ mode: 2048, supported: false });
+		expect(writes).not.toContain("\x1b[?2048h");
 		terminal.stop();
+		expect(writes).not.toContain("\x1b[?2048l");
 	});
 
 	it("reports a private mode unsupported when DECRPM status is 0", () => {
@@ -514,16 +524,30 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
-	it("applies an in-band resize report: geometry, cell size, and resize handler", () => {
+	it("updates geometry and cell size without resizing when an in-band report is unchanged", () => {
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
 		const { terminal, received, resizeCount } = setup();
-		// Enable in-band resize so reported geometry is authoritative.
 		process.stdin.emit("data", "\x1b[?2048;1$y");
 		process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
 		expect(terminal.rows).toBe(30);
 		expect(terminal.columns).toBe(100);
 		expect(getCellDimensions()).toEqual({ widthPx: 10, heightPx: 20 });
-		expect(resizeCount()).toBeGreaterThan(0);
-		// The report must not leak into the input handler.
+		expect(resizeCount()).toBe(0);
+		expect(received).toEqual([]);
+		terminal.stop();
+	});
+
+	it("fires resize once when an in-band report changes rows or columns", () => {
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+		process.stdin.emit("data", "\x1b[48;31;120;620;1200t");
+		expect(terminal.rows).toBe(31);
+		expect(terminal.columns).toBe(120);
+		expect(getCellDimensions()).toEqual({ widthPx: 10, heightPx: 20 });
+		expect(resizeCount()).toBe(1);
 		expect(received).toEqual([]);
 		terminal.stop();
 	});

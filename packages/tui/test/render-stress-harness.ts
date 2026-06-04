@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { ProcessTerminal } from "../src/terminal";
 import { TERMINAL } from "../src/terminal-capabilities";
 import {
 	type Component,
@@ -12,9 +13,17 @@ import {
 	type OverlayOptions,
 	TUI,
 } from "../src/tui";
-import { Ellipsis, extractSegments, sliceByColumn, sliceWithWidth, truncateToWidth, visibleWidth } from "../src/utils";
+import {
+	Ellipsis,
+	extractSegments,
+	sliceByColumn,
+	sliceWithWidth,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../src/utils";
 import { StressRenderScheduler } from "./render-stress-scheduler";
-import { VirtualTerminal, type VirtualTerminalWidthModel } from "./virtual-terminal";
+import { VirtualTerminal } from "./virtual-terminal";
 
 const BASE_SEEDS = [
 	0x00c0ffee, 0x1badb002, 0x5eed1234, 0xdecafbad, 0x8badf00d, 0x0ddc0ffe, 0xcafed00d, 0xb16b00b5,
@@ -43,8 +52,7 @@ export type ScenarioTag =
 	| "strictScrollback"
 	| "unknownViewport"
 	| "foregroundStream"
-	| "ed3Risk"
-	| "modernWidth";
+	| "ed3Risk";
 const ENV_KEYS = [
 	"TMUX",
 	"STY",
@@ -244,11 +252,6 @@ export interface Scenario {
 	terminalMode: TerminalMode;
 	envMode: EnvMode;
 	geometryMode: GeometryMode;
-	// Terminal cell-width semantics. "legacy" (default) = xterm.js Unicode 6
-	// tables (emoji/VS16 narrow); "modern" = grapheme-aware widths matching the
-	// renderer's native engine (ghostty/WezTerm/kitty/iTerm2/WT 1.22+). Modern
-	// scenarios make geometric oracles cell-exact for emoji content.
-	widthModel?: VirtualTerminalWidthModel;
 	columns: number;
 	rows: number;
 	widthChoices: readonly number[];
@@ -272,8 +275,8 @@ export interface Scenario {
 	// Renders each logical line wrapped to the viewport width, so a width resize
 	// changes the physical line COUNT (reflow), not just per-row truncation —
 	// exercising the geometry-change + line-count-change interaction the
-	// fixed-line components never produced. Paired with the modern width model so
-	// the wrap agrees with the terminal's cell widths.
+	// fixed-line components never produced. Wrapped content must agree with the
+	// real Ghostty-backed terminal's cell widths.
 	reflow: boolean;
 	tags: readonly ScenarioTag[];
 	replayOperations?: readonly OperationKind[];
@@ -289,7 +292,6 @@ interface TerminalStressTraits {
 	readonly ed3ScrollbackEraseRisk: boolean;
 	readonly conptyHostScrollbackUnobservable: boolean;
 	readonly foregroundStreaming: boolean;
-	readonly widthModel: VirtualTerminalWidthModel;
 }
 
 interface Snapshot {
@@ -570,12 +572,11 @@ function terminalStressTraits(scenario: Scenario): TerminalStressTraits {
 		ed3ScrollbackEraseRisk: isEd3RiskScenario(scenario.terminalMode, scenario.envMode),
 		conptyHostScrollbackUnobservable: scenario.platform === "win32" && scenario.terminalMode === "unknown",
 		foregroundStreaming: scenario.foregroundStream,
-		widthModel: scenario.widthModel ?? "legacy",
 	};
 }
 
 function scenarioTags(
-	template: Pick<Scenario, "envMode" | "terminalMode" | "geometryMode" | "widthModel">,
+	template: Pick<Scenario, "envMode" | "terminalMode" | "geometryMode">,
 	strictNativeScrollback: boolean,
 	foregroundStreaming: boolean,
 ): readonly ScenarioTag[] {
@@ -585,7 +586,6 @@ function scenarioTags(
 	if (template.terminalMode !== "normal") tags.push("unknownViewport");
 	if (foregroundStreaming) tags.push("foregroundStream");
 	if (isEd3RiskScenario(template.terminalMode, template.envMode)) tags.push("ed3Risk");
-	if (template.widthModel === "modern") tags.push("modernWidth");
 	return tags;
 }
 
@@ -964,10 +964,9 @@ class StressModel {
 // Wrap a rendered line set to the viewport width, ANSI- and grapheme-aware, so
 // a logical line can occupy a width-dependent NUMBER of physical rows — the
 // reflow that real wrapped/markdown content performs and that fixed-line
-// components never exercised. Because BOTH the live render and the expected
-// frame run through this same deterministic transform (StressComponent.render),
-// the geometric oracles stay consistent; the renderer's own truncation
-// normalizes any residual width-model disagreement on each physical row.
+// components never exercised. Use the renderer's native wrapper rather than
+// Bun.wrapAnsi so combining marks stay with their base grapheme instead of
+// starting a physical row the terminal will fold back into the previous cell.
 function reflowToWidth(lines: readonly string[], width: number): string[] {
 	const target = Math.max(1, width);
 	const out: string[] = [];
@@ -976,8 +975,7 @@ function reflowToWidth(lines: readonly string[], width: number): string[] {
 			out.push("");
 			continue;
 		}
-		const wrapped = Bun.wrapAnsi(line, target, { hard: true, wordWrap: false, trim: false });
-		for (const physical of wrapped.split("\n")) out.push(physical);
+		for (const physical of wrapTextWithAnsi(line, target)) out.push(physical);
 	}
 	return out;
 }
@@ -2663,21 +2661,15 @@ class StressDriver {
 }
 
 function createTerminal(scenario: Scenario): VirtualTerminal {
-	const widthModel = scenario.widthModel ?? "legacy";
 	switch (scenario.terminalMode) {
 		case "unknown":
-			return new UnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback, widthModel);
+			return new UnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
 		case "intermittentUnknown":
-			return new IntermittentUnknownViewportTerminal(
-				scenario.columns,
-				scenario.rows,
-				scenario.scrollback,
-				widthModel,
-			);
+			return new IntermittentUnknownViewportTerminal(scenario.columns, scenario.rows, scenario.scrollback);
 		case "staleBottom":
-			return new StaleBottomTerminal(scenario.columns, scenario.rows, scenario.scrollback, widthModel);
+			return new StaleBottomTerminal(scenario.columns, scenario.rows, scenario.scrollback);
 		case "normal":
-			return new VirtualTerminal(scenario.columns, scenario.rows, scenario.scrollback, widthModel);
+			return new VirtualTerminal(scenario.columns, scenario.rows, scenario.scrollback);
 		default:
 			return assertNever(scenario.terminalMode);
 	}
@@ -3083,18 +3075,14 @@ function arabicCombiningText(label: string): string {
 
 function emojiPresentationText(label: string): string {
 	// Text-default symbols promoted to emoji presentation by VS16 (U+FE0F) plus a
-	// keycap sequence. The renderer's native width engine (unicode-width, matching
-	// ghostty/WezTerm/kitty) measures each as 2 cells, while the xterm.js test
-	// model (Unicode 6 tables) renders them as 1 cell (VS16 = combining, width 0).
-	// This deliberately models the legacy-terminal disagreement direction: the
-	// renderer OVER-measures, so its truncation is conservative and written lines
-	// can never overflow the model terminal. The opposite direction (renderer
-	// under-measures, e.g. ZWJ families on kitty/alacritty) clips intra-line and
-	// is locked by deterministic regression tests instead — randomized text-fidelity
-	// oracles would mis-report that unavoidable clipping as a renderer bug.
-	// Width facts: xterm.js UnicodeV6.ts (VS16 in BMP_COMBINING), unicode-width
-	// tests ("\u{26A0}\u{FE0F}" == 2), kitty text-sizing-protocol.rst (VS16
-	// promotes the previous cell to width 2).
+	// keycap sequence. With the Ghostty-backed terminal, these are now cell-exact:
+	// Ghostty is the real modern terminal oracle, and both the renderer and the
+	// terminal measure each sequence here as 2 cells.
+	//
+	// Keep randomized stress to VS16/keycap emoji for this migration baseline.
+	// ZWJ and regional-indicator content should be enabled separately as renderer
+	// bug triage: Ghostty will expose real under-measure and overrun failures
+	// instead of hiding them behind a legacy model mismatch.
 	return `${label} \u26A0\uFE0F\u2139\uFE0F 1\uFE0F\u20E3`;
 }
 
@@ -3579,23 +3567,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			scrollbackRows: 10_000,
 		},
 		{
-			// Modern grapheme-aware terminal (ghostty/WezTerm/kitty/iTerm2/WT 1.22+):
-			// the terminal's width model agrees with the renderer's native engine for
-			// all stress content (emoji presentation = 2 cells, VS16 promotion), so
-			// text-fidelity oracles double as cell-exact geometric oracles here.
-			name: "darwin-normal-modern-small",
-			platform: "darwin",
-			terminalMode: "normal",
-			envMode: "plain",
-			geometryMode: "small",
-			widthModel: "modern",
-			columns: 32,
-			rows: 4,
-			widthChoices: [10, 16, 24, 32, 40],
-			heightChoices: [3, 4, 6],
-			scrollbackRows: 10_000,
-		},
-		{
 			// Native-Windows ConPTY host (Windows Terminal, Tabby, Hyper, VS Code,
 			// conhost behind ConPTY — #1635/#1746). kernel32 cannot see the host
 			// UI's scrollback (the pseudo-console buffer is pinned to the visible
@@ -3654,9 +3625,10 @@ function coreTemplates(): ScenarioTemplate[] {
 			foregroundStream: true,
 		},
 		{
-			// Width-reflowing content (wrapped/markdown-style) on the modern grapheme
-			// width model, where the wrap agrees with the terminal's cell widths. A
-			// width resize changes the physical line count, so the renderer must
+			// Width-reflowing content (wrapped/markdown-style) uses the same grapheme
+			// width semantics as the real Ghostty-backed terminal, so the wrap agrees
+			// with the terminal's cell widths. A width resize changes the physical
+			// line count, so the renderer must
 			// re-anchor the viewport and rebuild native history across a line-count
 			// change — not just retruncate rows. Combined with the full random op
 			// space (scroll, overlay, append, shrink) it covers reflow interactions
@@ -3666,7 +3638,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			terminalMode: "normal",
 			envMode: "plain",
 			geometryMode: "small",
-			widthModel: "modern",
 			columns: 32,
 			rows: 4,
 			widthChoices: [8, 12, 16, 24, 32, 40],
@@ -3679,7 +3650,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			terminalMode: "unknown",
 			envMode: "ghostty",
 			geometryMode: "large",
-			widthModel: "modern",
 			columns: 80,
 			rows: 12,
 			widthChoices: [24, 40, 80, 120],
@@ -3738,27 +3708,6 @@ function soakTemplates(): ScenarioTemplate[] {
 			widthChoices: large ? [80, 120] : [2, 10, 16, 24, 32, 40],
 			heightChoices: large ? [12, 24] : [3, 4, 6],
 		});
-	}
-	// Modern grapheme-aware width model (ghostty/WezTerm/kitty/iTerm2/WT 1.22+):
-	// terminal cell widths agree with the renderer's native engine, so the
-	// text-fidelity oracles double as cell-exact geometric oracles. Cover the
-	// observable probe modes on both geometries.
-	for (const terminalMode of ["normal", "unknown"] as const) {
-		for (const geometryMode of geometries) {
-			const large = geometryMode === "large";
-			templates.push({
-				name: `darwin-${terminalMode}-modern-${geometryMode}`,
-				platform: "darwin",
-				terminalMode,
-				envMode: "plain",
-				geometryMode,
-				widthModel: "modern",
-				columns: large ? 80 : 32,
-				rows: large ? 12 : 4,
-				widthChoices: large ? [80, 120] : [2, 10, 16, 24, 32, 40],
-				heightChoices: large ? [12, 24] : [3, 4, 6],
-			});
-		}
 	}
 	// Foreground tool streaming on an ED3-risk terminal with an unobservable
 	// viewport (ghostty/kitty/…): the eager native-scrollback rebuild opt-in is
@@ -3890,19 +3839,11 @@ async function withPatchedPlatform<T>(platform: Scenario["platform"], run: () =>
 	}
 }
 
-export interface StressWorkerRequest {
-	id: number;
-	scenario: Scenario;
-	patchEnv?: boolean;
-}
-
-export interface StressWorkerSuccess {
-	id: number;
+export interface StressScenarioSuccess {
 	ok: true;
 }
 
-export interface StressWorkerFailure {
-	id: number;
+export interface StressScenarioFailure {
 	ok: false;
 	scenario: string;
 	seed: string;
@@ -3910,7 +3851,12 @@ export interface StressWorkerFailure {
 	stack?: string;
 }
 
-export type StressWorkerResponse = StressWorkerSuccess | StressWorkerFailure;
+/**
+ * Result a {@link runStressScenario} subprocess emits as a single JSON line on
+ * stdout. Each scenario runs in its own `bun` subprocess (one scenario per
+ * process), so there is no request multiplexing or `id` to correlate.
+ */
+export type StressScenarioResult = StressScenarioSuccess | StressScenarioFailure;
 
 export async function runStressScenario(scenario: Scenario, options?: { patchEnv?: boolean }): Promise<void> {
 	const run = async (): Promise<void> => {
@@ -3924,6 +3870,99 @@ export async function runStressScenario(scenario: Scenario, options?: { patchEnv
 	} else {
 		await withPatchedEnv(scenario.envMode, run);
 	}
+}
+
+function restoreOwnProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
+	if (descriptor === undefined) {
+		delete (target as Record<string, unknown>)[key];
+		return;
+	}
+	Object.defineProperty(target, key, descriptor);
+}
+
+export async function runNoReflowResizeNotificationRegression(): Promise<void> {
+	await withPatchedEnv("ghostty", async () => {
+		await withPatchedPlatform("darwin", async () => {
+			const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
+			const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
+			const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+			const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+			const stdoutColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+			const stdoutRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+			const stdinSetRawMode = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
+			const stdinSetEncoding = Object.getOwnPropertyDescriptor(process.stdin, "setEncoding");
+			const stdinResume = Object.getOwnPropertyDescriptor(process.stdin, "resume");
+			const stdinPause = Object.getOwnPropertyDescriptor(process.stdin, "pause");
+			const stdoutWrite = Object.getOwnPropertyDescriptor(process.stdout, "write");
+			const processKill = Object.getOwnPropertyDescriptor(process, "kill");
+			const writes: string[] = [];
+
+			terminalInfo.eagerEraseScrollbackRisk = true;
+			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+			Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+			Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+			Object.defineProperty(process.stdin, "setRawMode", { value: () => process.stdin, configurable: true });
+			Object.defineProperty(process.stdin, "setEncoding", { value: () => process.stdin, configurable: true });
+			Object.defineProperty(process.stdin, "resume", { value: () => process.stdin, configurable: true });
+			Object.defineProperty(process.stdin, "pause", { value: () => process.stdin, configurable: true });
+			Object.defineProperty(process.stdout, "write", {
+				value: (chunk: string | Uint8Array) => {
+					writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+					return true;
+				},
+				configurable: true,
+			});
+			Object.defineProperty(process, "kill", { value: () => true, configurable: true });
+
+			const term = new ProcessTerminal();
+			const scheduler = new StressRenderScheduler();
+			const tui = new TUI(term, true, { renderScheduler: scheduler });
+			const initialLines = Array.from({ length: 35 }, (_value, index) => `stream-row-${index}`);
+			const component = new MutableLinesComponent(initialLines);
+			const drainTarget = { flush: async () => {} } as VirtualTerminal;
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await scheduler.drain(drainTarget);
+
+				const reportOnlyWriteStart = writes.length;
+				process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
+				await scheduler.drain(drainTarget);
+				if (writes.length !== reportOnlyWriteStart) {
+					throw new Error("Unchanged DEC 2048 resize report scheduled a render without a geometry change");
+				}
+
+				const streamingWriteStart = writes.length;
+				component.setLines([...initialLines, "stream-row-35"]);
+				process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
+				tui.requestRender(false);
+				await scheduler.drain(drainTarget);
+
+				const emitted = writes.slice(streamingWriteStart).join("");
+				if (emitted.includes("\x1b[3J")) {
+					throw new Error(
+						"Unchanged DEC 2048 report coalesced with streaming content emitted destructive scrollback clear",
+					);
+				}
+			} finally {
+				tui.stop();
+				terminalInfo.eagerEraseScrollbackRisk = savedRisk;
+				restoreOwnProperty(process.stdin, "isTTY", stdinIsTty);
+				restoreOwnProperty(process.stdout, "isTTY", stdoutIsTty);
+				restoreOwnProperty(process.stdout, "columns", stdoutColumns);
+				restoreOwnProperty(process.stdout, "rows", stdoutRows);
+				restoreOwnProperty(process.stdin, "setRawMode", stdinSetRawMode);
+				restoreOwnProperty(process.stdin, "setEncoding", stdinSetEncoding);
+				restoreOwnProperty(process.stdin, "resume", stdinResume);
+				restoreOwnProperty(process.stdin, "pause", stdinPause);
+				restoreOwnProperty(process.stdout, "write", stdoutWrite);
+				restoreOwnProperty(process, "kill", processKill);
+			}
+		});
+	});
 }
 
 export async function runPreexistingScrollbackRegression(): Promise<void> {

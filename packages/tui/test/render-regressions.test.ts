@@ -3008,21 +3008,15 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
-	describe("width model disagreement (renderer vs terminal)", () => {
-		// The renderer measures ZWJ emoji sequences as one 2-cell grapheme
-		// (unicode-width / Intl.Segmenter — matching ghostty and WezTerm), but many
-		// real terminals lay them out as separate glyphs: kitty and alacritty
-		// advance the cursor 4 cells for a 3-person family, Windows Terminal 5
-		// (https://mitchellh.com/writing/grapheme-clusters-in-terminals). The
-		// xterm.js test model (Unicode 6 tables) renders the same family as 3
-		// cells, so it stands in for this terminal class. The renderer cannot know
-		// which model the terminal uses; its contract is *containment*: every
-		// content write is wrapped in DECAWM-off (\x1b[?7l), so a line the terminal
-		// considers wider than the renderer believes is CLIPPED at the right margin
-		// — never wrapped. Wrapping would silently add rows, desync
-		// #previousLines/#scrollbackHighWater from the terminal, and produce the
-		// classic duplicated/phantom-row scrollback corruption.
-		const ZWJ_FAMILY = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"; // renderer: 2 cells, xterm.js: 3 cells
+	describe("ZWJ grapheme row containment", () => {
+		// Ghostty agrees with the renderer for this family sequence, so these
+		// regressions no longer use xterm's legacy width tables as the terminal
+		// model. They still pin the row-accounting boundary that used to corrupt
+		// scrollback when a terminal measured a grapheme wider than the renderer:
+		// content writes are wrapped in DECAWM-off (\x1b[?7l), so any future
+		// terminal-side overrun must be contained to the row instead of wrapping
+		// into a phantom spill row.
+		const ZWJ_FAMILY = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
 
 		// MutableLinesComponent pre-slices by UTF-16 code units, which would cut the
 		// ZWJ sequence before the renderer ever measures it. Width decisions must be
@@ -3041,14 +3035,14 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}
 
-		it("confines under-measured ZWJ rows to intra-line clipping; row accounting stays exact", async () => {
+		it("keeps ZWJ boundary rows on one terminal row; row accounting stays exact", async () => {
 			const width = 20;
 			const height = 6;
 			const term = new VirtualTerminal(width, height);
 			const tui = new TUI(term);
-			// Renderer width 18 + 2 = 20 (exact fit). xterm.js lays out 18 + 3 = 21
-			// cells, so the last cell of the family is clipped by the DECAWM-off
-			// guard. The row must still occupy exactly one terminal row.
+			// Renderer and Ghostty both fit 18 ASCII + the ZWJ family into this
+			// row. If either side drifts wider, DECAWM-off containment must still
+			// prevent a wrap into the following logical row.
 			const zwjRow = `${"B".repeat(18)}${ZWJ_FAMILY}`;
 			const lines = ["header", zwjRow, "tail"];
 			const component = new RawLinesComponent(lines);
@@ -3058,17 +3052,16 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				// One terminal row per logical line — the over-wide row did not wrap.
+				// One terminal row per logical line — the boundary row did not wrap.
 				expect(term.getScrollBuffer().length).toBe(height);
 				const viewport = visible(term);
 				expect(viewport[0]).toBe("header");
 				expect(viewport[2]).toBe("tail");
-				// The ZWJ row is clipped (terminal kept what fit), not spilled onto row 3.
 				expect(viewport[1]?.startsWith("B".repeat(18))).toBe(true);
 				expect(viewport[3]).toBe("");
 
 				// Push content into scrollback: accounting must track logical rows
-				// exactly even with the clipped row in history.
+				// exactly with the ZWJ boundary row in history.
 				const appended = [...lines, ...rows("after-", 10)];
 				component.setLines(appended);
 				tui.requestRender();
@@ -3079,14 +3072,14 @@ describe("TUI terminal-state regressions", () => {
 				expect(buffer[0]).toBe("header");
 				expect(buffer[2]).toBe("tail");
 				expect(buffer[buffer.length - 1]).toBe("after-9");
-				// The clipped row exists exactly once — no duplicate, no spill row.
+				// The ZWJ row exists exactly once — no duplicate, no spill row.
 				expect(countMatches(buffer, /^B{18}/)).toBe(1);
 			} finally {
 				tui.stop();
 			}
 		});
 
-		it("keeps differential row targeting exact after rendering a clipped ZWJ row", async () => {
+		it("keeps differential row targeting exact after rendering a ZWJ boundary row", async () => {
 			const width = 20;
 			const height = 8;
 			const term = new VirtualTerminal(width, height);
@@ -3121,13 +3114,12 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
-	describe("modern width model (renderer-terminal agreement)", () => {
-		// Counterpart of the disagreement tests above: on terminals whose width
-		// model matches the renderer's native engine (ghostty/WezTerm/kitty/iTerm2/
-		// Windows Terminal 1.22+, modeled by VirtualTerminal's "modern" width
-		// model), rendering must be cell-exact — an exact-fit line fills the row
-		// with nothing clipped, and the renderer's truncation boundary lands the
-		// last glyph exactly at the right margin.
+	describe("Ghostty-backed renderer/terminal agreement", () => {
+		// Counterpart of the disagreement tests above: VirtualTerminal is backed by
+		// Ghostty's grapheme-aware engine, so its terminal cell widths must agree
+		// with the renderer for emoji presentation, VS16, and keycap sequences. An
+		// exact-fit line fills the row with nothing clipped, and the renderer's
+		// truncation boundary lands the last glyph exactly at the right margin.
 
 		// MutableLinesComponent pre-slices by UTF-16 code units; width decisions
 		// must come from the renderer's #fitLineToWidth.
@@ -3147,10 +3139,10 @@ describe("TUI terminal-state regressions", () => {
 
 		it("renders an exact-fit emoji-presentation line without truncation or wrap", async () => {
 			const width = 20;
-			const term = new VirtualTerminal(width, 6, undefined, "modern");
+			const term = new VirtualTerminal(width, 6);
 			const tui = new TUI(term);
-			// 14 ASCII + ⚠️(2) + 🙂(2) + keycap(2) = 20 cells in BOTH the renderer's
-			// model and the modern terminal model — an exact fit.
+			// 14 ASCII + ⚠️(2) + 🙂(2) + keycap(2) = 20 cells for both Ghostty's
+			// grapheme-aware terminal and the renderer — an exact fit.
 			const line = `${"a".repeat(14)}\u26A0\uFE0F\u{1F642}1\uFE0F\u20E3`;
 			const component = new RawLinesComponent(["head", line, "tail"]);
 			tui.addChild(component);
@@ -3171,32 +3163,50 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("exposes Ghostty legacy-width/xterm-width overrun instead of accepting hidden truncation", () => {
+			const width = 12;
+			const term = new VirtualTerminal(width, 4);
+			const prefix = "012345678";
+			const wide = "\u{1F642}";
+			const sentinel = "sentinel";
+
+			// A legacy/xterm-width oracle that counts 🙂 as 1 would accept this as
+			// a 12-cell exact fit: 9 ASCII + 🙂 + ZZ. Ghostty counts the emoji as
+			// 2 cells, so the second Z overruns the row. Renderer paints run with
+			// DECAWM off; mirror that containment contract directly through
+			// VirtualTerminal instead of reaching into TUI internals.
+			term.write(`\x1b[?7l${prefix}${wide}ZZ\r\n${sentinel}\x1b[?7h`);
+			const viewport = term.getViewport();
+			expect(viewport[0]).toBe(`${prefix}${wide}Z`);
+			expect(viewport[0]).not.toContain("ZZ");
+			expect(viewport[1]).toBe(sentinel);
+			expect(term.getScrollBuffer().length).toBe(4);
+		});
+
 		it("lands the renderer's truncation boundary exactly at the right margin", async () => {
 			const width = 12;
-			const term = new VirtualTerminal(width, 4, undefined, "modern");
+			const term = new VirtualTerminal(width, 4);
 			const tui = new TUI(term);
 			// Renderer width: 10 ASCII + 2 + 2 + 2 = 16 > 12 → #fitLineToWidth
-			// truncates. The truncated text must occupy exactly 12 cells on a modern
-			// terminal: 10 ASCII + ⚠️ = 12, with 🙂 dropped whole (never split).
+			// truncates. The truncated text must occupy exactly 12 Ghostty cells:
+			// 10 ASCII + ⚠️ = 12, with 🙂 dropped whole (never split).
 			const line = `${"x".repeat(10)}\u26A0\uFE0F\u{1F642}1\uFE0F\u20E3`;
-			const component = new RawLinesComponent([line]);
+			const nextLine = "after";
+			const component = new RawLinesComponent([line, nextLine]);
 			tui.addChild(component);
 
 			try {
 				tui.start();
 				await settle(term);
 
-				const rendered = term.getViewport()[0] ?? "";
+				const viewport = term.getViewport();
+				const rendered = viewport[0] ?? "";
 				// The kept prefix is exactly the renderer's 12-cell truncation.
 				expect(rendered).toBe(`${"x".repeat(10)}\u26A0\uFE0F`);
-				// And it fills the row to the last column on the modern terminal —
-				// writing one more cell would have wrapped/clipped.
-				term.write("\r");
-				await term.flush();
-				const homed = term.getCursor();
-				term.write(rendered);
-				await term.flush();
-				expect(term.getCursor().col - homed.col).toBe(width);
+				// The exact-width row occupies one Ghostty row: the dropped glyphs
+				// neither split nor wrap into the following logical row.
+				expect(viewport[1]?.trimEnd()).toBe(nextLine);
+				expect(term.getScrollBuffer().length).toBe(4);
 			} finally {
 				tui.stop();
 			}
@@ -3358,9 +3368,8 @@ describe("TUI terminal-state regressions", () => {
 		// trails / phantom rows in scrollback. The renderer disables autowrap
 		// (\x1b[?7l) around every paint and restores it (\x1b[?7h) only at PAINT_END,
 		// after emitting explicit CRLFs, so an exact-width row never latches
-		// pending-wrap. These tests pin that on both the legacy (CJK 2-cell) and
-		// modern (emoji 2-cell) width models, across the initial, diff, and append
-		// emit paths.
+		// pending-wrap. These tests pin that with Ghostty-backed ASCII and wide-glyph
+		// rows across the initial, diff, and append emit paths.
 		class RawLinesComponent implements Component {
 			#lines: string[];
 			constructor(lines: string[]) {
@@ -3375,57 +3384,55 @@ describe("TUI terminal-state regressions", () => {
 			}
 		}
 
-		for (const widthModel of ["legacy", "modern"] as const) {
-			it(`keeps exact-width rows on one terminal row without staircase (${widthModel})`, async () => {
-				const width = 10;
-				const height = 6;
-				const term = new VirtualTerminal(width, height, undefined, widthModel);
-				const tui = new TUI(term);
-				// Two exact-width (10-cell) rows: one ASCII, one ending on a 2-cell
-				// CJK glyph exactly at the right margin (the pending-wrap trigger).
-				const exactAscii = "0123456789";
-				const exactWide = "AAAA界界界"; // 4 + 2+2+2 = 10
-				const lines = ["top", exactAscii, exactWide, "bot"];
-				const component = new RawLinesComponent(lines);
-				tui.addChild(component);
+		it("keeps exact-width Ghostty-backed rows on one terminal row without staircase", async () => {
+			const width = 10;
+			const height = 6;
+			const term = new VirtualTerminal(width, height);
+			const tui = new TUI(term);
+			// Two exact-width (10-cell) rows: one ASCII, one ending on 2-cell wide
+			// glyphs exactly at the right margin (the pending-wrap trigger).
+			const exactAscii = "0123456789";
+			const exactWide = "AAAA界界界"; // 4 + 2+2+2 = 10
+			const lines = ["top", exactAscii, exactWide, "bot"];
+			const component = new RawLinesComponent(lines);
+			tui.addChild(component);
 
-				try {
-					tui.start();
-					await settle(term);
+			try {
+				tui.start();
+				await settle(term);
 
-					// Each logical row occupies exactly one terminal row — no wrap.
-					// Content (4 rows) fits the 6-row viewport, so the buffer is the
-					// viewport: 4 content rows + 2 trailing blanks, each on its own row.
-					const buffer = term.getScrollBuffer().map(line => line.trimEnd());
-					expect(buffer).toEqual(["top", exactAscii, exactWide, "bot", "", ""]);
+				// Each logical row occupies exactly one terminal row — no wrap.
+				// Content (4 rows) fits the 6-row viewport, so the buffer is the
+				// viewport: 4 content rows + 2 trailing blanks, each on its own row.
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(buffer).toEqual(["top", exactAscii, exactWide, "bot", "", ""]);
 
-					// Diff-edit the row below the exact-width wide row: if pending-wrap
-					// had latched, the relative cursor move would land a row off.
-					component.setLines(["top", exactAscii, exactWide, "EDIT"]);
-					tui.requestRender();
-					await settle(term);
-					expect(term.getViewport().map(line => line.trimEnd())).toEqual([
-						"top",
-						exactAscii,
-						exactWide,
-						"EDIT",
-						"",
-						"",
-					]);
+				// Diff-edit the row below the exact-width wide row: if pending-wrap
+				// had latched, the relative cursor move would land a row off.
+				component.setLines(["top", exactAscii, exactWide, "EDIT"]);
+				tui.requestRender();
+				await settle(term);
+				expect(term.getViewport().map(line => line.trimEnd())).toEqual([
+					"top",
+					exactAscii,
+					exactWide,
+					"EDIT",
+					"",
+					"",
+				]);
 
-					// Append past the viewport: exact-width rows must scroll into
-					// history one row each, contiguous, no phantom blank from a latched
-					// wrap.
-					component.setLines(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
-					tui.requestRender();
-					await settle(term);
-					const after = term.getScrollBuffer().map(line => line.trimEnd());
-					expect(after).toEqual(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
-				} finally {
-					tui.stop();
-				}
-			});
-		}
+				// Append past the viewport: exact-width rows must scroll into
+				// history one row each, contiguous, no phantom blank from a latched
+				// wrap.
+				component.setLines(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
+				tui.requestRender();
+				await settle(term);
+				const after = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(after).toEqual(["top", exactAscii, exactWide, "EDIT", ...rows("a-", 6)]);
+			} finally {
+				tui.stop();
+			}
+		});
 	});
 	describe("hardware cursor preference", () => {
 		const SHOW_CURSOR = "\x1b[?25h";

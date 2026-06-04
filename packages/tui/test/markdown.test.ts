@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
 import { Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
 import { setTerminalTextSizing, TERMINAL } from "../src/terminal-capabilities.js";
@@ -12,14 +11,8 @@ import { VirtualTerminal } from "./virtual-terminal.js";
 // Force full color in CI so ANSI assertions are deterministic
 const chalk = new Chalk({ level: 3 });
 
-function getCellItalic(terminal: VirtualTerminal, row: number, col: number): number {
-	const xterm = (terminal as unknown as { xterm: XtermTerminalType }).xterm;
-	const buffer = xterm.buffer.active;
-	const line = buffer.getLine(buffer.viewportY + row);
-	expect(line, `Missing buffer line at row ${row}`).toBeTruthy();
-	const cell = line!.getCell(col);
-	expect(cell, `Missing cell at row ${row} col ${col}`).toBeTruthy();
-	return cell!.isItalic();
+function getCellItalic(terminal: VirtualTerminal, row: number, col: number): boolean {
+	return terminal.getCellItalic(row, col);
 }
 
 describe("renderInlineMarkdown", () => {
@@ -611,7 +604,7 @@ describe("Markdown component", () => {
 
 			expect(component.markdownLineCount > 0).toBeTruthy();
 			const inputRow = component.markdownLineCount;
-			expect(getCellItalic(terminal, inputRow, 0)).toBe(0);
+			expect(getCellItalic(terminal, inputRow, 0)).toBe(false);
 			tui.stop();
 		});
 	});
