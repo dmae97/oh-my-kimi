@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { AssistantMessage, Context, Model, OpenAICompat, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai/types";
+import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
+import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai/types";
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -12,7 +13,7 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const compat: Required<OpenAICompat> = {
+const compat: ResolvedOpenAICompat = {
 	supportsStore: true,
 	supportsDeveloperRole: true,
 	supportsMultipleSystemMessages: true,

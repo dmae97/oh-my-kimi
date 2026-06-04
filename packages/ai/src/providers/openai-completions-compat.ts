@@ -4,11 +4,15 @@ type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 type ResolvedToolStrictMode = NonNullable<OpenAICompat["toolStrictMode"]> | "mixed";
 
 export type ResolvedOpenAICompat = Required<
-	Omit<OpenAICompat, "openRouterRouting" | "vercelGatewayRouting" | "extraBody" | "toolStrictMode">
+	Omit<
+		OpenAICompat,
+		"openRouterRouting" | "vercelGatewayRouting" | "extraBody" | "toolStrictMode" | "cacheControlFormat"
+	>
 > & {
 	openRouterRouting?: OpenAICompat["openRouterRouting"];
 	vercelGatewayRouting?: OpenAICompat["vercelGatewayRouting"];
 	extraBody?: OpenAICompat["extraBody"];
+	cacheControlFormat?: OpenAICompat["cacheControlFormat"];
 	toolStrictMode: ResolvedToolStrictMode;
 };
 
@@ -248,6 +252,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		// Kimi and OpenRouter accept them when actual reasoning is unavailable.
 		allowsSyntheticReasoningContentForToolCalls: (!isDeepseekFamily || !model.reasoning) && !isXiaomiMimo,
 		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
+		cacheControlFormat: isOpenRouter && model.id.startsWith("anthropic/") ? "anthropic" : undefined,
 		openRouterRouting: undefined,
 		vercelGatewayRouting: undefined,
 		supportsStrictMode: detectStrictModeSupport(provider, baseUrl),
@@ -296,6 +301,7 @@ export function resolveOpenAICompat(
 			detected.allowsSyntheticReasoningContentForToolCalls,
 		requiresAssistantContentForToolCalls:
 			model.compat.requiresAssistantContentForToolCalls ?? detected.requiresAssistantContentForToolCalls,
+		cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
 		disableReasoningOnForcedToolChoice:
 			model.compat.disableReasoningOnForcedToolChoice ?? detected.disableReasoningOnForcedToolChoice,
 		disableReasoningOnToolChoice: model.compat.disableReasoningOnToolChoice ?? detected.disableReasoningOnToolChoice,

@@ -18,6 +18,10 @@
 
 - Fixed Xiaomi Token Plan MiMo OpenAI-compatible tool-call continuations omitting required `reasoning_content` replay. ([#1846](https://github.com/can1357/oh-my-pi/issues/1846))
 
+### Fixed
+
+- Fixed Anthropic prompt caching for OpenAI-compatible Claude proxies by honoring `compat.cacheControlFormat: "anthropic"` outside OpenRouter. ([#1845](https://github.com/can1357/oh-my-pi/issues/1845))
+
 ## [15.9.0] - 2026-06-04
 
 ### Fixed
