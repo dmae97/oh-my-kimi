@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import type { Terminal, TerminalAppearance } from "@oh-my-pi/pi-tui/terminal";
 import { CellFlags, Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghostty-web";
 
@@ -18,12 +19,16 @@ import { CellFlags, Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghos
 // under the hundreds of create/free/write cycles the fuzz tests perform when all
 // terminals share one instance; per-terminal instances keep construction
 // synchronous while isolating allocator state.
-async function loadGhosttyModule(): Promise<WebAssembly.Module> {
+function loadGhosttyModule(): WebAssembly.Module {
 	const wasmPath = Bun.resolveSync("ghostty-web/ghostty-vt.wasm", import.meta.dir);
-	return WebAssembly.compile(await Bun.file(wasmPath).arrayBuffer());
+	// Synchronous compile (no top-level await): `bun test --parallel` leaves any
+	// binding declared after a module-level `await` in the temporal dead zone when
+	// a sibling test file instantiates `VirtualTerminal`, so module init must stay
+	// fully synchronous (see the `DEFAULT_SCROLLBACK_LINES`/`ghosttyModule` TDZ).
+	return new WebAssembly.Module(fs.readFileSync(wasmPath));
 }
 
-const ghosttyModule = await loadGhosttyModule();
+const ghosttyModule = loadGhosttyModule();
 
 function createGhosttyEngine(): Ghostty {
 	// libghostty-vt reports unimplemented control sequences (e.g. DECCARA `$r`,

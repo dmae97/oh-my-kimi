@@ -19,6 +19,10 @@ const SUBPROCESS_SPAWN_OVERHEAD_MS = 5_000;
 
 const SUBPROCESS_ENTRY = `${import.meta.dir}/render-stress-subprocess.ts`;
 
+// The randomized render stress sweep spawns many `bun` subprocesses (each
+// compiling Ghostty WASM) and is far too slow/heavy for CI. Run it locally only.
+const SKIP_IN_CI = Boolean(Bun.env.CI);
+
 type StressSubprocess = Subprocess<Blob, "pipe", "pipe">;
 
 function parsePositiveInt(name: string, fallback: number): number {
@@ -159,7 +163,7 @@ function scenarioFailureError(message: StressScenarioFailure): Error {
 	return new Error(`TUI stress scenario failed: ${message.scenario} seed=${message.seed}\n${message.error}${stack}`);
 }
 
-describe("TUI randomized render stress", () => {
+describe.skipIf(SKIP_IN_CI)("TUI randomized render stress", () => {
 	it("preserves preexisting shell scrollback during visible structural mutations", async () => {
 		await runPreexistingScrollbackRegression();
 	});
