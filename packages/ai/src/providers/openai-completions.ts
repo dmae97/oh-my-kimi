@@ -539,7 +539,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// so users don't see raw `<｜...｜>` tokens.
 			const stripDeepseekChatTemplateTokens =
 				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
-			type ToolCallStreamBlock = ToolCall & { partialArgs?: string; streamIndex?: number; lastParseLen?: number };
+			type ToolCallStreamBlock = ToolCall & {
+				partialArgs?: string | Record<string, unknown>;
+				streamIndex?: number;
+				lastParseLen?: number;
+			};
 			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
 			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
@@ -552,7 +556,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (block.partialArgs === undefined) return;
 				const contentIndex = blockIndex(block);
 				if (contentIndex < 0) return;
-				block.arguments = parseStreamingJson(block.partialArgs);
+				block.arguments =
+					typeof block.partialArgs === "string" ? parseStreamingJson(block.partialArgs) : block.partialArgs;
 				delete block.partialArgs;
 				delete block.lastParseLen;
 				if (block.streamIndex !== undefined) {
@@ -846,14 +851,27 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							if (toolCall.id) block.id = toolCall.id;
 							if (toolCall.function?.name) block.name = toolCall.function.name;
 							let delta = "";
-							if (toolCall.function?.arguments) {
-								delta = toolCall.function.arguments;
-								block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-								const throttled = parseStreamingJsonThrottled(block.partialArgs, block.lastParseLen ?? 0);
-								if (throttled) {
-									block.arguments = throttled.value;
-									block.lastParseLen = throttled.parsedLen;
+							const rawArgs: unknown = toolCall.function?.arguments;
+							if (typeof rawArgs === "string") {
+								if (rawArgs.length > 0) {
+									delta = rawArgs;
+									const prev = typeof block.partialArgs === "string" ? block.partialArgs : "";
+									block.partialArgs = prev + rawArgs;
+									const throttled = parseStreamingJsonThrottled(block.partialArgs, block.lastParseLen ?? 0);
+									if (throttled) {
+										block.arguments = throttled.value;
+										block.lastParseLen = throttled.parsedLen;
+									}
 								}
+							} else if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+								// MiniMax-compatible hosts stream `function.arguments` as a complete object in a
+								// single delta instead of the OpenAI JSON-string contract. Hold the object directly
+								// — no `[object Object]` round-trip through the string buffer — and serialize once for
+								// the wire delta that proxy servers forward verbatim as `input_json_delta`.
+								const objectArgs = rawArgs as Record<string, unknown>;
+								block.partialArgs = objectArgs;
+								block.arguments = objectArgs;
+								delta = JSON.stringify(objectArgs);
 							}
 							stream.push({
 								type: "toolcall_delta",
