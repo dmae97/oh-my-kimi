@@ -116,10 +116,12 @@ function buildResult(
 		provider,
 		providerName,
 	};
+	const contentText = result.isError ? `Error: ${text}` : text;
+	const toolResult: CustomToolResult<MCPToolDetails> = { content: [{ type: "text", text: contentText }], details };
 	if (result.isError) {
-		return { content: [{ type: "text", text: `Error: ${text}` }], details };
+		toolResult.isError = true;
 	}
-	return { content: [{ type: "text", text }], details };
+	return toolResult;
 }
 
 /** Build an error CustomToolResult from a caught exception. */
@@ -134,6 +136,7 @@ function buildErrorResult(
 	return {
 		content: [{ type: "text", text: `MCP error: ${message}` }],
 		details: { serverName, mcpToolName, isError: true, provider, providerName },
+		isError: true,
 	};
 }
 
@@ -217,6 +220,8 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly mcpToolName: string;
 	/** Server name */
 	readonly mcpServerName: string;
+	/** Render completed MCP calls with the result header replacing the pending call header. */
+	readonly mergeCallAndResult = true;
 
 	/** Create MCPTool instances for all tools from an MCP server connection */
 	static fromTools(connection: MCPServerConnection, tools: MCPToolDefinition[], reconnect?: MCPReconnect): MCPTool[] {
@@ -300,6 +305,9 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly mcpToolName: string;
 	/** Server name */
 	readonly mcpServerName: string;
+	/** Render completed MCP calls with the result header replacing the pending call header. */
+	readonly mergeCallAndResult = true;
+
 	readonly #fallbackProvider: string | undefined;
 	readonly #fallbackProviderName: string | undefined;
 
