@@ -610,6 +610,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession());
 		await this.#reconcileModeFromSession();
 
+		// Brand-new (non-resumed) sessions optionally start in plan mode when the
+		// user has made it the startup default. Resumed/continued/forked sessions
+		// keep whatever mode #reconcileModeFromSession just restored. Scoped to
+		// launch (not the switch reconciler above) so /new and the plan-approval
+		// → execution handoff clear never get dragged back into plan mode. Silent
+		// no-op when plan mode is globally disabled or another mode is active.
+		if (
+			!options.resuming &&
+			this.session.settings.get("plan.defaultOnStartup") &&
+			this.session.settings.get("plan.enabled") &&
+			!this.planModeEnabled &&
+			!this.planModePaused &&
+			!this.goalModeEnabled &&
+			!this.goalModePaused
+		) {
+			await this.#enterPlanMode();
+		}
+
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
 		// resume does not re-restore the same text.
