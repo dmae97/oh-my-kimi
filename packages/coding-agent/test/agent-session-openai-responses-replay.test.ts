@@ -189,7 +189,14 @@ function expectAssistantReplayMetadataSanitized(message: AssistantMessage): void
 
 async function createPersistedSession(
 	tempDir: string,
-	populate: (sessionManager: SessionManager) => { treeTargetId?: string } | undefined,
+	// Function-type union so callbacks that just mutate the SessionManager and
+	// fall off the end (TS infers `() => void`) typecheck under TypeScript 5.x
+	// alongside callbacks that explicitly return a tree target. TS 5.x does not
+	// coerce a `void`-returning function value into a `() => T | undefined` slot
+	// the way 6.x / tsgo does, so the two return shapes have to be siblings.
+	populate:
+		| ((sessionManager: SessionManager) => { treeTargetId?: string } | undefined)
+		| ((sessionManager: SessionManager) => void),
 ): Promise<{ sessionFile: string; treeTargetId?: string }> {
 	const sessionManager = SessionManager.create(tempDir, tempDir);
 	const result = populate(sessionManager);
