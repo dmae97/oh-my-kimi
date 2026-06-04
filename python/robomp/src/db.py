@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_state_received
   ON events(state, received_at);
 
+CREATE INDEX IF NOT EXISTS events_issue_state
+  ON events(issue_key, state);
+
 CREATE TABLE IF NOT EXISTS issues (
   key            TEXT PRIMARY KEY,
   repo           TEXT NOT NULL,
@@ -293,15 +296,25 @@ class Database:
             return cur.rowcount > 0
 
     def claim_next_event(self) -> EventRow | None:
-        """Atomically dequeue one queued event into running state."""
+        """Atomically dequeue one unblocked queued event into running state."""
         with self._txn() as conn:
             row = conn.execute(
                 """
-                SELECT delivery_id, event_type, repo, issue_key, payload_json, received_at,
-                       state, attempts, last_error
-                FROM events
-                WHERE state = 'queued'
-                ORDER BY received_at
+                SELECT queued.delivery_id, queued.event_type, queued.repo, queued.issue_key,
+                       queued.payload_json, queued.received_at, queued.state, queued.attempts,
+                       queued.last_error
+                FROM events AS queued
+                WHERE queued.state = 'queued'
+                  AND (
+                    queued.issue_key IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM events AS running
+                      WHERE running.state = 'running'
+                        AND running.issue_key = queued.issue_key
+                    )
+                  )
+                ORDER BY queued.received_at
                 LIMIT 1
                 """
             ).fetchone()
