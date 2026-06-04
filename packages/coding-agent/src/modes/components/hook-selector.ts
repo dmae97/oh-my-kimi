@@ -73,6 +73,17 @@ export interface HookSelectorOptions {
 	/** Indices into the original options that cannot be selected: they render
 	 *  dimmed, are skipped during navigation, and reject enter/timeout. */
 	disabledIndices?: readonly number[];
+	/** Render a leading radio/checkbox marker before each markable option,
+	 *  matching the ask transcript. "radio" fills the marker on the cursor row
+	 *  (single-choice); "checkbox" reflects {@link checkedIndices} per row
+	 *  (multi-select). Options at or beyond {@link markableCount} keep the plain
+	 *  cursor prefix — used for trailing control rows like "Other"/"Done". */
+	selectionMarker?: "radio" | "checkbox";
+	/** For `selectionMarker: "checkbox"`: original-indices currently checked. */
+	checkedIndices?: readonly number[];
+	/** Number of leading options (original order) that receive a selection
+	 *  marker. Defaults to every option when {@link selectionMarker} is set. */
+	markableCount?: number;
 }
 
 export interface HookSelectorOption {
@@ -142,6 +153,9 @@ export class HookSelectorComponent extends Container {
 	#searchQuery = "";
 	#selectedIndex: number;
 	#disabledIndices: Set<number>;
+	#selectionMarker: "radio" | "checkbox" | undefined;
+	#checkedIndices: Set<number>;
+	#markableCount: number;
 	#maxVisible: number;
 	#listContainer: Container | undefined;
 	#outlinedList: OutlinedList | undefined;
@@ -173,6 +187,13 @@ export class HookSelectorComponent extends Container {
 				index => Number.isInteger(index) && index >= 0 && index < this.#options.length,
 			),
 		);
+		this.#selectionMarker = opts?.selectionMarker;
+		this.#checkedIndices = new Set(
+			(opts?.checkedIndices ?? []).filter(
+				index => Number.isInteger(index) && index >= 0 && index < this.#options.length,
+			),
+		);
+		this.#markableCount = Math.max(0, Math.min(opts?.markableCount ?? this.#options.length, this.#options.length));
 		this.#selectedIndex = this.#coerceSelectedIndex(opts?.initialIndex ?? 0);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
 		this.#onSelectCallback = onSelect;
@@ -282,11 +303,13 @@ export class HookSelectorComponent extends Container {
 		mdTheme: MarkdownTheme,
 		descRows: number | "full",
 		renderWidth?: number,
+		index?: number,
 	): string[] {
 		const textColor = isDisabled ? "dim" : isSelected ? "accent" : "text";
 		const prefixColor = isDisabled ? "dim" : "accent";
 		const label = renderInlineMarkdown(option.label, mdTheme, t => theme.fg(textColor, t));
-		const prefix = isSelected ? theme.fg(prefixColor, `${theme.nav.cursor} `) : "  ";
+		const marker = index !== undefined ? this.#renderMarkerPrefix(index, isSelected, isDisabled) : undefined;
+		const prefix = marker ?? (isSelected ? theme.fg(prefixColor, `${theme.nav.cursor} `) : "  ");
 		const lines = [prefix + label];
 		if (option.description && descRows !== 0) {
 			const descriptionColor: ThemeColor = isDisabled ? "dim" : "muted";
@@ -300,6 +323,24 @@ export class HookSelectorComponent extends Container {
 			}
 		}
 		return lines;
+	}
+
+	/** Styled leading marker (`"<glyph> "`) for a markable option row, or
+	 *  `undefined` when no marker applies (control rows beyond `markableCount`,
+	 *  or when {@link selectionMarker} is unset) so the caller falls back to the
+	 *  classic cursor prefix. Radio fills on the cursor row; checkbox reflects
+	 *  the per-row checked state, with the cursor row drawn in accent. */
+	#renderMarkerPrefix(index: number, isSelected: boolean, isDisabled: boolean): string | undefined {
+		if (this.#selectionMarker === undefined || index >= this.#markableCount) return undefined;
+		if (this.#selectionMarker === "radio") {
+			const glyph = isSelected ? theme.radio.selected : theme.radio.unselected;
+			const color = isDisabled ? "dim" : isSelected ? "accent" : "dim";
+			return theme.fg(color, `${glyph} `);
+		}
+		const checked = this.#checkedIndices.has(index);
+		const glyph = checked ? theme.checkbox.checked : theme.checkbox.unchecked;
+		const color = isDisabled ? "dim" : isSelected ? "accent" : checked ? "success" : "dim";
+		return theme.fg(color, `${glyph} `);
 	}
 
 	/** Wrap an option description into indented rows, truncating to `maxRows`
@@ -469,6 +510,7 @@ export class HookSelectorComponent extends Container {
 					mdTheme,
 					descMode,
 					renderWidth,
+					filtered.index,
 				),
 			);
 		}

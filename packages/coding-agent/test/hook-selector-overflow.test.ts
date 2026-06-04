@@ -237,4 +237,65 @@ describe("HookSelectorComponent", () => {
 
 		expect(component.render(80).join("\n")).toContain(theme.fg("dim", "Disabled"));
 	});
+
+	it("renders radio markers instead of a cursor arrow for single-choice markable rows", () => {
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["Apple", "Banana", "Other (type your own)"],
+			() => {},
+			() => {},
+			{ selectionMarker: "radio", markableCount: 2, initialIndex: 0 },
+		);
+
+		const lines = Bun.stripANSI(component.render(80).join("\n")).split("\n");
+		const apple = lines.find(line => line.includes("Apple"));
+		const banana = lines.find(line => line.includes("Banana"));
+		expect(apple).toBeDefined();
+		expect(banana).toBeDefined();
+		// Cursor row shows the filled radio; the legacy cursor arrow is gone.
+		expect(apple).toContain(theme.radio.selected);
+		expect(apple).not.toContain(theme.nav.cursor);
+		// Non-cursor markable row shows the empty radio.
+		expect(banana).toContain(theme.radio.unselected);
+	});
+
+	it("keeps the cursor arrow on control rows beyond markableCount", () => {
+		const component = new HookSelectorComponent(
+			"Pick one",
+			["Apple", "Banana", "Other (type your own)"],
+			() => {},
+			() => {},
+			{ selectionMarker: "radio", markableCount: 2, initialIndex: 2 },
+		);
+
+		const lines = Bun.stripANSI(component.render(80).join("\n")).split("\n");
+		const other = lines.find(line => line.includes("Other"));
+		expect(other).toBeDefined();
+		// The trailing action keeps the classic cursor and gets no radio marker.
+		expect(other).toContain(theme.nav.cursor);
+		expect(other).not.toContain(theme.radio.selected);
+	});
+
+	it("renders checkbox markers reflecting checked state and exempts control rows", () => {
+		const component = new HookSelectorComponent(
+			"Pick many",
+			["Apple", "Banana", "Done selecting", "Other (type your own)"],
+			() => {},
+			() => {},
+			{ selectionMarker: "checkbox", markableCount: 2, checkedIndices: [0], initialIndex: 1 },
+		);
+
+		const lines = Bun.stripANSI(component.render(80).join("\n")).split("\n");
+		const apple = lines.find(line => line.includes("Apple"));
+		const banana = lines.find(line => line.includes("Banana"));
+		const done = lines.find(line => line.includes("Done selecting"));
+		expect(apple).toBeDefined();
+		expect(banana).toBeDefined();
+		expect(done).toBeDefined();
+		expect(apple).toContain(theme.checkbox.checked);
+		expect(banana).toContain(theme.checkbox.unchecked);
+		// Control rows beyond markableCount carry no checkbox marker.
+		expect(done).not.toContain(theme.checkbox.checked);
+		expect(done).not.toContain(theme.checkbox.unchecked);
+	});
 });

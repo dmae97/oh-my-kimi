@@ -31,6 +31,9 @@ function createContext(args: {
 			onTimeout?: () => void;
 			onLeft?: () => void;
 			onRight?: () => void;
+			selectionMarker?: "radio" | "checkbox";
+			checkedIndices?: readonly number[];
+			markableCount?: number;
 		},
 	) => Promise<string | undefined>;
 	editor?: (

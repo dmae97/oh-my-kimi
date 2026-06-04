@@ -172,6 +172,9 @@ interface UIContext {
 			onLeft?: () => void;
 			onRight?: () => void;
 			helpText?: string;
+			selectionMarker?: "radio" | "checkbox";
+			checkedIndices?: readonly number[];
+			markableCount?: number;
 		},
 	): Promise<string | undefined>;
 	editor(
@@ -199,6 +202,7 @@ async function askSingleQuestion(
 		prompt: string,
 		optionsToShow: ExtensionUISelectItem[],
 		initialIndex?: number,
+		marker?: { selectionMarker: "radio" | "checkbox"; checkedIndices?: readonly number[]; markableCount: number },
 	): Promise<{ choice: string | undefined; timedOut: boolean; navigation?: "back" | "forward" }> => {
 		let timeoutTriggered = false;
 		const onTimeout = () => {
@@ -215,6 +219,9 @@ async function askSingleQuestion(
 			outline: true,
 			onTimeout,
 			helpText,
+			selectionMarker: marker?.selectionMarker,
+			checkedIndices: marker?.checkedIndices,
+			markableCount: marker?.markableCount,
 			onLeft: navigation?.allowBack
 				? () => {
 						navigationAction = "back";
@@ -253,25 +260,27 @@ async function askSingleQuestion(
 			if (selectedIndex >= 0) cursorIndex = selectedIndex;
 		}
 		while (true) {
-			const opts: ExtensionUISelectItem[] = [];
-
-			for (const opt of questionOptions) {
-				const checkbox = selected.has(opt.label) ? theme.checkbox.checked : theme.checkbox.unchecked;
-				const displayLabel = `${checkbox} ${opt.label}`;
-				opts.push(toSelectOption(opt, displayLabel));
-			}
+			const opts: ExtensionUISelectItem[] = questionOptions.map(opt => toSelectOption(opt));
 
 			if (!navigation?.allowForward && selected.size > 0) {
 				opts.push(doneLabel);
 			}
 			opts.push(OTHER_OPTION);
 
+			const checkedIndices: number[] = [];
+			for (let i = 0; i < questionOptions.length; i++) {
+				if (selected.has(questionOptions[i]!.label)) checkedIndices.push(i);
+			}
 			const prefix = selected.size > 0 ? `(${selected.size} selected) ` : "";
 			const {
 				choice,
 				timedOut: selectTimedOut,
 				navigation: arrowNavigation,
-			} = await selectOption(`${prefix}${promptWithProgress}`, opts, cursorIndex);
+			} = await selectOption(`${prefix}${promptWithProgress}`, opts, cursorIndex, {
+				selectionMarker: "checkbox",
+				checkedIndices,
+				markableCount: questionOptions.length,
+			});
 
 			if (arrowNavigation) {
 				return { selectedOptions: Array.from(selected), customInput, timedOut, navigation: arrowNavigation };
@@ -303,20 +312,10 @@ async function askSingleQuestion(
 				cursorIndex = selectedIdx;
 			}
 
-			const checkedPrefix = `${theme.checkbox.checked} `;
-			const uncheckedPrefix = `${theme.checkbox.unchecked} `;
-			let opt: string | undefined;
-			if (choice.startsWith(checkedPrefix)) {
-				opt = choice.slice(checkedPrefix.length);
-			} else if (choice.startsWith(uncheckedPrefix)) {
-				opt = choice.slice(uncheckedPrefix.length);
-			}
-			if (opt) {
-				if (selected.has(opt)) {
-					selected.delete(opt);
-				} else {
-					selected.add(opt);
-				}
+			if (selected.has(choice)) {
+				selected.delete(choice);
+			} else {
+				selected.add(choice);
 			}
 
 			if (selectTimedOut) {
@@ -346,7 +345,10 @@ async function askSingleQuestion(
 			choice,
 			timedOut: selectTimedOut,
 			navigation: arrowNavigation,
-		} = await selectOption(promptWithProgress, optionsWithNavigation, initialIndex);
+		} = await selectOption(promptWithProgress, optionsWithNavigation, initialIndex, {
+			selectionMarker: "radio",
+			markableCount: displayOptions.length,
+		});
 		timedOut = selectTimedOut;
 
 		if (arrowNavigation) {
