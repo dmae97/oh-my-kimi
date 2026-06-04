@@ -132,7 +132,6 @@ const claudeCodeUtilityBetaDefaults = [
 const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
-	"context-1m-2025-08-07",
 	"interleaved-thinking-2025-05-14",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
