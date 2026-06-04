@@ -93,7 +93,18 @@ describe("normalizeGeneratedTitle", () => {
 
 describe("isLowSignalTitleInput", () => {
 	it("treats greetings and acknowledgements as low signal (defer)", () => {
-		for (const msg of ["hi", "Hi!", "hey there", "hello :)", "good morning", "thanks!", "ok cool", "yo", "test", "ping"]) {
+		for (const msg of [
+			"hi",
+			"Hi!",
+			"hey there",
+			"hello :)",
+			"good morning",
+			"thanks!",
+			"ok cool",
+			"yo",
+			"test",
+			"ping",
+		]) {
 			expect(isLowSignalTitleInput(msg)).toBe(true);
 		}
 	});

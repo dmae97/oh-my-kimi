@@ -27,6 +27,31 @@ function typeText(dashboard: AgentDashboard, text: string): void {
 	}
 }
 
+/**
+ * Pin the terminal geometry the dashboard reads via `process.stdout.rows/columns`
+ * so the height-fit assertions don't depend on whether the suite runs under a TTY.
+ */
+function stubStdoutGeometry(cols: number): { setRows(n: number): void; restore(): void } {
+	const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	const colsDesc = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+	let rows = 24;
+	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => rows });
+	Object.defineProperty(process.stdout, "columns", { configurable: true, get: () => cols });
+	const restoreOne = (key: "rows" | "columns", desc: PropertyDescriptor | undefined) => {
+		if (desc) Object.defineProperty(process.stdout, key, desc);
+		else Object.defineProperty(process.stdout, key, { configurable: true, value: undefined, writable: true });
+	};
+	return {
+		setRows(n: number) {
+			rows = n;
+		},
+		restore() {
+			restoreOne("rows", rowsDesc);
+			restoreOne("columns", colsDesc);
+		},
+	};
+}
+
 afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -63,5 +88,44 @@ describe("AgentDashboard create editor", () => {
 
 		expect(rendered).toContain("Model registry unavailable in current session.");
 		expect(rendered).not.toContain("Description is required.");
+	});
+});
+
+describe("AgentDashboard layout", () => {
+	test("fills the terminal height exactly and keeps the footer visible", async () => {
+		await initTheme(false);
+		const geo = stubStdoutGeometry(100);
+		try {
+			geo.setRows(30);
+			const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 30, {});
+			const lines = dashboard.render(100);
+			const plain = lines.map(line => line.replace(ANSI_PATTERN, "")).join("\n");
+
+			// Full-screen overlay must occupy exactly the viewport — never overflow
+			// past it (which is what pushed the controls into scrollback).
+			expect(lines.length).toBe(30);
+			expect(plain).toContain("Agent Control Center");
+			expect(plain).toContain("Esc: close");
+		} finally {
+			geo.restore();
+		}
+	});
+
+	test("re-fits the body when the terminal height shrinks", async () => {
+		await initTheme(false);
+		const geo = stubStdoutGeometry(100);
+		try {
+			geo.setRows(30);
+			const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 30, {});
+			expect(dashboard.render(100).length).toBe(30);
+
+			geo.setRows(18);
+			const shrunk = dashboard.render(100);
+			expect(shrunk.length).toBe(18);
+			// Footer survives the shrink instead of being clipped off the bottom.
+			expect(shrunk.map(line => line.replace(ANSI_PATTERN, "")).join("\n")).toContain("Esc: close");
+		} finally {
+			geo.restore();
+		}
 	});
 });

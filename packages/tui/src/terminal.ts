@@ -281,7 +281,11 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite("\x1b[?2031h");
 
 		// Start periodic OSC 11 re-query for terminals without Mode 2031
-		// (Warp, Alacritty, WezTerm, iTerm2). Self-disables once Mode 2031 fires.
+		// (Warp, Alacritty, older WezTerm). Stops once Mode 2031 support is
+		// confirmed via DECRQM (probed below) or a Mode 2031 change notification
+		// fires — push notifications supersede polling, and the poll's repeated
+		// OSC 11/DA1 writes clear the user's active text selection on some
+		// terminals (copy breaks every 2s).
 		// Windows Terminal under WSL has been observed to close the hosting tab
 		// after repeated OSC 11/DA1 probes. Keep the initial/event-driven probes,
 		// but avoid background polling there.
@@ -291,11 +295,14 @@ export class ProcessTerminal implements Terminal {
 
 		// Probe DEC private-mode support via DECRQM. 2026 (synchronized output)
 		// gates the renderer's begin/end markers; 2048 (in-band resize) is enabled
-		// only after the terminal confirms support. Each probe rides the shared DA1
+		// only after the terminal confirms support; 2031 (appearance change
+		// notifications) stops the OSC 11 poll once confirmed, since push
+		// notifications make polling redundant. Each probe rides the shared DA1
 		// sentinel FIFO, so a terminal that ignores DECRQM still resolves (as
 		// unsupported) when the DA1 reply arrives.
 		this.#queryPrivateMode(2026);
 		this.#queryPrivateMode(2048);
+		this.#queryPrivateMode(2031);
 	}
 
 	/**
@@ -785,7 +792,9 @@ export class ProcessTerminal implements Terminal {
 	/**
 	 * Record DECRQM support for a private mode (idempotent — first result wins)
 	 * and notify subscribers. Enables DEC 2048 in-band resize when 2048 resolves
-	 * supported.
+	 * supported, and stops the OSC 11 poll when 2031 resolves supported (Mode 2031
+	 * push notifications make periodic re-querying redundant — and the poll's
+	 * OSC 11/DA1 writes clobber active text selections on some terminals).
 	 */
 	#resolvePrivateMode(mode: number, supported: boolean): void {
 		if (this.#privateModeSupport.has(mode)) return;
@@ -798,6 +807,7 @@ export class ProcessTerminal implements Terminal {
 			}
 		}
 		if (mode === 2048 && supported) this.#enableInBandResize();
+		if (mode === 2031 && supported) this.#stopOsc11Poll();
 	}
 
 	/**

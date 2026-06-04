@@ -34,6 +34,9 @@ function renderPlain(sessions: SessionInfo[]): string {
 		() => {},
 		() => {},
 		() => {},
+		// Tall viewport so every asserted row is inside the visible window; these
+		// tests cover status formatting, not the viewport-fit window sizing.
+		{ getTerminalRows: () => 100 },
 	);
 	// Strip ANSI so assertions target the visible glyph/label, not theme colors.
 	return selector

@@ -98,6 +98,9 @@ const SOURCE_LABEL: Record<AgentSource, string> = {
 	bundled: "Bundled",
 };
 
+const LIST_FOOTER =
+	" ↑/↓: navigate  Space: toggle  Enter: model override  N: new agent  Tab: source  Ctrl+R: reload  Esc: close";
+
 const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+){1,5}$/;
 function joinPatterns(patterns: string[]): string {
 	if (patterns.length === 0) return "(session model)";
@@ -307,7 +310,7 @@ class TwoColumnBody implements Component {
 		const rightWidth = width - leftWidth - 3;
 		const leftLines = this.leftPane.render(leftWidth);
 		const rightLines = this.rightPane.render(rightWidth);
-		const lineCount = Math.min(this.maxHeight, Math.max(leftLines.length, rightLines.length));
+		const lineCount = this.maxHeight;
 		const out: string[] = [];
 		const separator = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
 
@@ -339,6 +342,8 @@ export class AgentDashboard extends Container {
 	#loading = true;
 	#loadError: string | null = null;
 	#notice: string | null = null;
+	#builtRows = -1;
+	#builtCols = -1;
 
 	#editInput: Input | null = null;
 	#editingAgentName: string | null = null;
@@ -466,8 +471,46 @@ export class AgentDashboard extends Container {
 		this.#clampSelection();
 	}
 
+	/** Live terminal height so the dashboard tracks resize while open. */
+	#terminalRows(): number {
+		return process.stdout.rows || this.terminalHeight || 24;
+	}
+
+	#noticeBlockLines(): number {
+		if (!this.#notice) return 0;
+		return wrapTextWithAnsi(theme.fg("success", replaceTabs(this.#notice)), this.#uiWidth()).length + 1;
+	}
+
+	#footerLines(): number {
+		return Math.max(1, wrapTextWithAnsi(theme.fg("dim", LIST_FOOTER), this.#uiWidth()).length);
+	}
+
+	/** Height budget for the two-column body, sized to the live terminal. */
+	#computeBodyHeight(): number {
+		// Chrome around the body: top border + title + tab bar + spacer (4),
+		// optional notice block, then spacer + footer + bottom border.
+		const chrome = 4 + this.#noticeBlockLines() + 1 + this.#footerLines() + 1;
+		return Math.max(5, this.#terminalRows() - chrome);
+	}
+
 	#getMaxVisibleItems(): number {
-		return Math.max(5, this.terminalHeight - 14);
+		// List pane chrome inside the body: search line, blank line, count line.
+		return Math.max(3, this.#computeBodyHeight() - 3);
+	}
+
+	override render(width: number): string[] {
+		// Rebuild when terminal geometry changes so the full-screen overlay
+		// re-fits on resize.
+		if (this.#terminalRows() !== this.#builtRows || this.#uiWidth() !== this.#builtCols) {
+			this.#buildLayout();
+		}
+		const lines = super.render(width);
+		// Pad to the full viewport so every state (list, edit, create) covers the
+		// screen as a true full-screen view instead of letting the transcript peek
+		// through below it.
+		const rows = this.#terminalRows();
+		while (lines.length < rows) lines.push("");
+		return lines;
 	}
 
 	#clampSelection(): void {
@@ -560,7 +603,7 @@ export class AgentDashboard extends Container {
 		const editor = new Editor(getEditorTheme());
 		editor.setBorderVisible(false);
 		editor.setPromptGutter("> ");
-		editor.setMaxHeight(Math.max(3, Math.min(8, this.terminalHeight - 12)));
+		editor.setMaxHeight(Math.max(3, Math.min(8, this.#terminalRows() - 12)));
 		editor.disableSubmit = true;
 		editor.onChange = value => {
 			this.#createDescription = value;
@@ -818,7 +861,7 @@ export class AgentDashboard extends Container {
 		this.addChild(new Text(theme.fg("muted", "Describe what the new agent should do:"), 0, 0));
 		this.addChild(new Spacer(1));
 		if (this.#createInput) {
-			this.#createInput.setMaxHeight(Math.max(3, Math.min(8, this.terminalHeight - 12)));
+			this.#createInput.setMaxHeight(Math.max(3, Math.min(8, this.#terminalRows() - 12)));
 			this.addChild(this.#createInput);
 		}
 		this.addChild(new Spacer(1));
@@ -828,7 +871,7 @@ export class AgentDashboard extends Container {
 			this.addChild(new Text(theme.fg("accent", "Generating agent specification..."), 0, 0));
 			if (this.#createStreamingText) {
 				this.addChild(new Spacer(1));
-				const maxPreview = Math.max(3, this.terminalHeight - 18);
+				const maxPreview = Math.max(3, this.#terminalRows() - 18);
 				const contentWidth = Math.max(20, this.#uiWidth() - 4);
 				const wrappedLines: string[] = [];
 				for (const raw of this.#createStreamingText.split("\n")) {
@@ -993,22 +1036,15 @@ export class AgentDashboard extends Container {
 				effectivePatterns,
 				effectiveResolution,
 			);
-			const bodyHeight = Math.max(5, this.terminalHeight - 8);
+			const bodyHeight = this.#computeBodyHeight();
 			this.addChild(new TwoColumnBody(listPane, inspector, bodyHeight));
 			this.addChild(new Spacer(1));
-			this.addChild(
-				new Text(
-					theme.fg(
-						"dim",
-						" ↑/↓: navigate  Space: toggle  Enter: model override  N: new agent  Tab: source  Ctrl+R: reload  Esc: close",
-					),
-					0,
-					0,
-				),
-			);
+			this.addChild(new Text(theme.fg("dim", LIST_FOOTER), 0, 0));
 		}
 
 		this.addChild(new DynamicBorder());
+		this.#builtRows = this.#terminalRows();
+		this.#builtCols = this.#uiWidth();
 	}
 
 	handleInput(data: string): void {
