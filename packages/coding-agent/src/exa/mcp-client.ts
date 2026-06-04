@@ -1,7 +1,7 @@
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { CustomTool, CustomToolResult } from "../extensibility/custom-tools/types";
-import { callMCP } from "../mcp/json-rpc";
+import { type CallMcpOptions, callMCP } from "../mcp/json-rpc";
 import type {
 	ExaRenderDetails,
 	ExaSearchResponse,
@@ -105,15 +105,21 @@ export async function callExaTool(
 	toolName: string,
 	args: Record<string, unknown>,
 	apiKey: string | null,
+	options?: CallMcpOptions,
 ): Promise<unknown> {
 	const params = new URLSearchParams();
 	if (apiKey) params.set("exaApiKey", apiKey);
 	params.set("tools", toolName);
 	const url = `https://mcp.exa.ai/mcp?${params.toString()}`;
-	const response = (await callMCP(url, "tools/call", {
-		name: toolName,
-		arguments: args,
-	})) as MCPCallResponse;
+	const response = (await callMCP(
+		url,
+		"tools/call",
+		{
+			name: toolName,
+			arguments: args,
+		},
+		options,
+	)) as MCPCallResponse;
 
 	if (response.error) {
 		logger.error("MCP tools/call error", { toolName, args, error: response.error });
