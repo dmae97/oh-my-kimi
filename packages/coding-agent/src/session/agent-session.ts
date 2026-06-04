@@ -5080,7 +5080,7 @@ export class AgentSession {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
-		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
+		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
 		this.sessionManager.appendServiceTierChange(this.serviceTier ?? null);
 		if (nextDiscoverySessionToolNames) {
 			await this.#applyActiveToolsByName(nextDiscoverySessionToolNames, { persistMCPSelection: false });
@@ -5457,16 +5457,20 @@ export class AgentSession {
 			return;
 		}
 
+		const wasAuto = this.#autoThinking;
 		this.#autoThinking = false;
 		this.#autoResolvedLevel = undefined;
 		const effectiveLevel = resolveThinkingLevelForModel(this.model, level);
-		const isChanging = effectiveLevel !== this.#thinkingLevel;
+		// Leaving auto must persist even when the resolved effort is unchanged (e.g.
+		// auto resolved to medium, then the user pins medium): otherwise the latest
+		// session entry keeps `configured: "auto"` and resume re-enables auto.
+		const isChanging = wasAuto || effectiveLevel !== this.#thinkingLevel;
 
 		this.#thinkingLevel = effectiveLevel;
 		this.agent.setThinkingLevel(toReasoningEffort(effectiveLevel));
 
 		if (isChanging) {
-			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
+			this.sessionManager.appendThinkingLevelChange(effectiveLevel, effectiveLevel);
 			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
 				this.settings.set("defaultThinkingLevel", effectiveLevel);
 			}
@@ -5555,7 +5559,7 @@ export class AgentSession {
 		this.#thinkingLevel = effort;
 		this.agent.setThinkingLevel(toReasoningEffort(effort));
 		if (shouldPersistResolution) {
-			this.sessionManager.appendThinkingLevelChange(effort);
+			this.sessionManager.appendThinkingLevelChange(effort, AUTO_THINKING);
 		}
 		this.#emit({
 			type: "thinking_level_changed",
@@ -8918,18 +8922,26 @@ export class AgentSession {
 				.some(entry => entry.type === "service_tier_change");
 			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
 			const configuredServiceTier = this.settings.get("serviceTier");
-			// Session log entries store only concrete levels. When `auto` has resolved
-			// for a turn, the persisted context may already carry that concrete level
-			// even if the branch scan races a just-flushed thinking entry under isolated
-			// parallel test workers. Prefer the concrete context value in that case;
-			// otherwise keep the configured `auto` selector so fresh sessions still
-			// classify their first turn.
+			// Restore the thinking selector. Each change persists the configured
+			// selector (`auto` or a concrete level), so prefer it: an `auto` session
+			// resumes in auto mode (reclassifying the next turn) instead of freezing at
+			// the last resolved level. Entries written before the `configured` field
+			// existed fall back to the concrete level (legacy pin-on-resume behavior).
+			// With no thinking entry, fall back to the global default so fresh sessions
+			// still classify their first turn.
+			const restoredConfigured = sessionContext.configuredThinkingLevel;
 			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
 				hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
-					? (sessionContext.thinkingLevel as ThinkingLevel | undefined)
+					? restoredConfigured === AUTO_THINKING
+						? AUTO_THINKING
+						: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
 					: defaultThinkingLevel;
 			if (restoredThinkingLevel === AUTO_THINKING) {
 				this.#autoThinking = true;
+				// Resume in auto (pending) like a fresh auto session: the next user
+				// turn reclassifies. We intentionally do not seed the last resolved
+				// effort, so the cold (--continue) and in-app switch paths display
+				// identically as `auto` until then.
 				this.#autoResolvedLevel = undefined;
 				this.#thinkingLevel = resolveProvisionalAutoLevel(this.model);
 			} else {

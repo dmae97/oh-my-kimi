@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed `auto` thinking mode being silently dropped when a session is resumed (`--continue`/`--resume`/in-app switch). The session log persisted only the resolved per-turn effort, not the `auto` selector, so resume froze the session at the last concrete level and never reclassified again. The log now records the configured selector (`auto` vs concrete) alongside the resolved effort, so resumed `auto` sessions stay in auto (shown as pending until the next turn reclassifies) and manual concrete pins still restore as concrete — including a pin whose level matches the effort `auto` had just resolved to.
 - Fixed transcript scrollback stability on terminals with eager erase risk so completed assistant messages remain stable while new streaming lines are rendering
 - Fixed Ctrl+R history search results to remain globally sorted by prompt recency after merging FTS prefix matches with substring fallback matches.
 - Fixed Exa web search with no stored or environment credential to use the public Exa MCP fallback again, preserving the auth storage → `EXA_API_KEY` → `mcp.exa.ai` resolution order ([#1860](https://github.com/can1357/oh-my-pi/issues/1860)).

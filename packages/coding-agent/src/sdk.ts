@@ -116,6 +116,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
+	parseConfiguredThinkingLevel,
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
@@ -1047,7 +1048,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
 		let level = options.thinkingLevel;
 		if (level === undefined && hasExistingSession && hasThinkingEntry) {
-			level = parseThinkingLevel(existingSession.thinkingLevel);
+			level =
+				parseConfiguredThinkingLevel(existingSession.configuredThinkingLevel) ??
+				parseThinkingLevel(existingSession.thinkingLevel);
 		}
 		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
 			level = defaultRoleSpec.thinkingLevel;

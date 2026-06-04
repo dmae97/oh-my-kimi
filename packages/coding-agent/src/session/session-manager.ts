@@ -89,6 +89,12 @@ export interface SessionMessageEntry extends SessionEntryBase {
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {
 	type: "thinking_level_change";
 	thinkingLevel?: string | null;
+	/**
+	 * The user-configured selector at the time of this change: `"auto"` when auto
+	 * mode was active, otherwise the concrete level. Absent on entries written
+	 * before auto-mode persistence existed; readers fall back to `thinkingLevel`.
+	 */
+	configured?: string | null;
 }
 
 export interface ModelChangeEntry extends SessionEntryBase {
@@ -239,6 +245,8 @@ export interface SessionTreeNode {
 export interface SessionContext {
 	messages: AgentMessage[];
 	thinkingLevel?: string;
+	/** Configured thinking selector (`"auto"` or a concrete level) from the latest change. */
+	configuredThinkingLevel?: string;
 	serviceTier?: ServiceTier;
 	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
 	models: Record<string, string>;
@@ -600,6 +608,7 @@ export function buildSessionContext(
 
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";
+	let configuredThinkingLevel: string | undefined;
 	let serviceTier: ServiceTier | undefined;
 	const models: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
@@ -620,6 +629,7 @@ export function buildSessionContext(
 	for (const entry of path) {
 		if (entry.type === "thinking_level_change") {
 			thinkingLevel = entry.thinkingLevel ?? "off";
+			configuredThinkingLevel = entry.configured ?? entry.thinkingLevel ?? undefined;
 		} else if (entry.type === "model_change") {
 			// New format: { model: "provider/id", role?: string }
 			if (entry.model) {
@@ -789,6 +799,7 @@ export function buildSessionContext(
 	return {
 		messages,
 		thinkingLevel,
+		configuredThinkingLevel,
 		serviceTier,
 		models,
 		injectedTtsrRules,
@@ -2850,13 +2861,14 @@ export class SessionManager {
 	}
 
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
-	appendThinkingLevelChange(thinkingLevel?: string): string {
+	appendThinkingLevelChange(thinkingLevel?: string, configured?: string): string {
 		const entry: ThinkingLevelChangeEntry = {
 			type: "thinking_level_change",
 			id: generateId(this.#byId),
 			parentId: this.#leafId,
 			timestamp: new Date().toISOString(),
 			thinkingLevel: thinkingLevel ?? null,
+			configured: configured ?? null,
 		};
 		this.#appendEntry(entry);
 		return entry.id;
