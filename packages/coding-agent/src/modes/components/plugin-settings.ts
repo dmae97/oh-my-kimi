@@ -31,6 +31,7 @@ import {
 } from "../../extensibility/plugins/marketplace";
 import type { InstalledPlugin, PluginSettingSchema } from "../../extensibility/plugins/types";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
+import { shortenPath } from "../../tools/render-utils";
 import { DynamicBorder } from "./dynamic-border";
 
 /**
@@ -443,7 +444,13 @@ export class MarketplacePluginDetailComponent extends Container {
 		// so we render the metadata as plain text rows beneath the toggle.
 		this.addChild(new Text(theme.fg("dim", `  version       ${entry?.version ?? "(unknown)"}`), 0, 0));
 		this.addChild(new Text(theme.fg("dim", `  scope         ${plugin.scope}`), 0, 0));
-		this.addChild(new Text(theme.fg("dim", `  install path  ${entry?.installPath ?? "(unknown)"}`), 0, 0));
+		this.addChild(
+			new Text(
+				theme.fg("dim", `  install path  ${entry?.installPath ? shortenPath(entry.installPath) : "(unknown)"}`),
+				0,
+				0,
+			),
+		);
 		this.addChild(new Text(theme.fg("dim", `  installed at  ${entry?.installedAt ?? "(unknown)"}`), 0, 0));
 		this.addChild(new Text(theme.fg("dim", `  last updated  ${entry?.lastUpdated ?? "(unknown)"}`), 0, 0));
 		if (entry?.gitCommitSha) {

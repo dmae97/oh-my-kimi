@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import * as os from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import type { InstalledPluginSummary } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { InstalledPlugin } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/types";
@@ -176,5 +177,22 @@ describe("MarketplacePluginDetailComponent", () => {
 		component.handleInput(" ");
 
 		expect(calls).toEqual([false]);
+	});
+
+	it("shortens home-relative install paths to ~ before rendering", () => {
+		const home = os.homedir();
+		const installPath = `${home}/.omp/cache/plugins/sample@mkt`;
+		const plugin = marketplace("sample@mkt", { entry: { installPath } });
+
+		const component = new MarketplacePluginDetailComponent(plugin, {
+			onEnabledChange: () => {},
+			onBack: () => {},
+		});
+
+		const text = stripVTControlCharacters(component.render(120).join("\n"));
+		// `shortenPath` keeps the rest of the path intact but replaces $HOME with `~`,
+		// so the user's home directory never leaks into the rendered TUI surface.
+		expect(text).toContain("~/.omp/cache/plugins/sample@mkt");
+		expect(text).not.toContain(home);
 	});
 });
