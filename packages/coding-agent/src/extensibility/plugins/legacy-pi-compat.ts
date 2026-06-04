@@ -258,11 +258,19 @@ async function pathExists(p: string): Promise<boolean> {
 	}
 }
 
+function hasSourceModuleExtension(p: string): boolean {
+	const ext = path.extname(p).toLowerCase();
+	return (SOURCE_MODULE_EXTENSIONS as readonly string[]).includes(ext);
+}
+
 async function resolveSourceModuleFile(basePath: string): Promise<string | null> {
 	try {
 		const stats = await fs.stat(basePath);
 		if (stats.isFile()) {
-			return realpathOrSelf(basePath);
+			// Non-source files (JSON, WASM, text assets, etc.) bypass the on-load
+			// rewrite hook so Bun's native loaders handle them; our hook would
+			// otherwise pass them through `getLoader()` which falls back to `js`.
+			return hasSourceModuleExtension(basePath) ? realpathOrSelf(basePath) : null;
 		}
 		if (stats.isDirectory()) {
 			for (const extension of SOURCE_MODULE_EXTENSIONS) {

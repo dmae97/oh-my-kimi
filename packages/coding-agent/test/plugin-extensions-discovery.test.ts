@@ -259,6 +259,55 @@ describe("plugin extension discovery", () => {
 		expect(extension?.commands.has("import-conditional-ext")).toBe(false);
 	});
 
+	it("leaves package import aliases that point at non-source files for Bun's native loaders", async () => {
+		const pluginsDir = getPluginsDir();
+		const pluginDir = path.join(pluginsDir, "node_modules", "json-import-plugin");
+		const extensionPath = path.join(pluginDir, "src", "index.ts");
+		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins",
+				private: true,
+				dependencies: {
+					"json-import-plugin": "1.0.0",
+				},
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({
+				name: "json-import-plugin",
+				version: "1.0.0",
+				imports: {
+					"#schema": "./src/schema.json",
+				},
+				pi: {
+					extensions: ["./src/index.ts"],
+				},
+			}),
+		);
+		fs.writeFileSync(path.join(pluginDir, "src", "schema.json"), JSON.stringify({ commandName: "json-schema-ext" }));
+		fs.writeFileSync(
+			extensionPath,
+			[
+				'import schema from "#schema" with { type: "json" };',
+				"",
+				"export default function(pi) {",
+				"\tpi.registerCommand(schema.commandName, { handler: async () => {} });",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await discoverAndLoadExtensions([], projectDir.path());
+		const extension = result.extensions.find(ext => ext.path === extensionPath);
+
+		expect(result.errors).toHaveLength(0);
+		expect(extension).toBeDefined();
+		expect(extension?.commands.has("json-schema-ext")).toBe(true);
+	});
+
 	it("rewrites side-effect imports of package-import aliases and legacy Pi scopes", async () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "side-effect-plugin");
