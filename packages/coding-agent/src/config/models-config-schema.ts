@@ -41,6 +41,7 @@ export const OpenAICompatSchema = z.object({
 	openRouterRouting: OpenRouterRoutingSchema.optional(),
 	vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
 	extraBody: z.record(z.string(), z.unknown()).optional(),
+	cacheControlFormat: z.enum(["anthropic"]).optional(),
 	supportsStrictMode: z.boolean().optional(),
 	toolStrictMode: z.enum(["all_strict", "none"]).optional(),
 });

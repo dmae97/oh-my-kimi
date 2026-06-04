@@ -1147,7 +1147,7 @@ function buildParams(
 	}
 	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
 	const messages = convertMessages(model, context, compat);
-	maybeAddOpenRouterAnthropicCacheControl(model, messages);
+	maybeAddAnthropicCacheControl(compat, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";
 
 	// Kimi (including via OpenRouter and Fireworks router-form IDs such as
@@ -1430,12 +1430,8 @@ function mapReasoningEffort(
 	return reasoningEffortMap[effort] ?? effort;
 }
 
-function maybeAddOpenRouterAnthropicCacheControl(
-	model: Model<"openai-completions">,
-	messages: ChatCompletionMessageParam[],
-): void {
-	if (model.provider !== "openrouter" || !model.id.startsWith("anthropic/")) return;
-
+function maybeAddAnthropicCacheControl(compat: ResolvedOpenAICompat, messages: ChatCompletionMessageParam[]): void {
+	if (compat.cacheControlFormat !== "anthropic") return;
 	// Anthropic-style caching requires cache_control on a text part. Add a breakpoint
 	// on the last user/assistant message (walking backwards until we find text content).
 	for (let i = messages.length - 1; i >= 0; i--) {

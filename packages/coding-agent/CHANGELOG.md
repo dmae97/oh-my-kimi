@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `models.yml` compatibility parsing to preserve `compat.cacheControlFormat: "anthropic"` for custom OpenAI-compatible Claude proxies. ([#1845](https://github.com/can1357/oh-my-pi/issues/1845))
+
 ## [15.9.0] - 2026-06-04
 
 ### Breaking Changes
