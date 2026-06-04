@@ -2424,6 +2424,82 @@ describe("TUI terminal-state regressions", () => {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
 		});
+		it("keeps scroll-off rows reachable when a streaming block re-lays-out past the viewport (ED3-risk, unknown viewport)", async () => {
+			// Regression: a stable-prefix scrollback experiment withheld a live block's
+			// overflow from native history whenever a frame rewrote a row in the
+			// scroll-off band [prevViewportTop, overflowRows) — exactly what a streaming
+			// markdown/plan block does as it re-wraps while growing. Those rows then
+			// scrolled above the bottom-anchored viewport without ever being committed,
+			// so they were neither in scrollback nor on screen: a large response showed
+			// "only half" until a resize forced a full rebuild. Rows that scroll off the
+			// viewport MUST reach native scrollback so the reader can scroll up to them,
+			// and the commit must stay non-destructive (no ED3 saved-lines erase).
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			try {
+				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+					await withTerminalRisk(true, async () => {
+						const height = 8;
+						const term = new UnknownViewportTerminal(50, height, 500);
+						const writes = captureWrites(term);
+						const tui = new TUI(term);
+						// Reader follows the live tail (bottom-anchored, never scrolled up).
+						const transcript = new MutableLinesComponent(["intro", ...rows("row-", 18)]);
+						const footer = new MutableLinesComponent(["status", "prompt>"]);
+						tui.addChild(transcript);
+						tui.addChild(footer);
+
+						try {
+							tui.start();
+							await settle(term);
+
+							// prevLen = 1 + 18 + 2 = 21, height = 8 -> prevViewportTop = 13.
+							// Append 6 rows (newLen = 27 -> overflowRows = 19) and, in the SAME
+							// frame, re-lay-out logical row 14 ("row-13"), which sits inside the
+							// scroll-off band [13, 19) and is about to leave the viewport.
+							const reflowed = rows("row-", 18).map((row, i) => (i === 13 ? `${row}-reflowed` : row));
+							const grown = ["intro", ...reflowed, ...rows("row-", 24).slice(18)];
+							transcript.setLines(grown);
+							tui.requestRender();
+							await settle(term);
+
+							// Bottom-anchored on the live tail.
+							expect(visible(term).map(line => line.trim())).toEqual([
+								"row-18",
+								"row-19",
+								"row-20",
+								"row-21",
+								"row-22",
+								"row-23",
+								"status",
+								"prompt>",
+							]);
+
+							// Every logical row is reachable through native scrollback ∪ viewport.
+							const baseY = term.getBufferPosition().baseY;
+							const history = term.getScrollBuffer().slice(0, baseY).map(line => line.trimEnd());
+							const reachable = new Set([...history, ...visible(term)].map(line => line.trim()));
+							for (const row of grown) {
+								expect(reachable.has(row), `${row} must stay reachable`).toBe(true);
+							}
+
+							// The scrolled-off rows — including the in-band re-laid-out one — landed
+							// in committed native history, not just the active grid.
+							expect(history).toContain("row-13-reflowed");
+							expect(history).toContain("row-12");
+							expect(history).toContain("row-17");
+
+							// Anti-yank guarantee preserved: no destructive saved-lines erase.
+							expect(writes.join("")).not.toContain("\x1b[3J");
+						} finally {
+							tui.stop();
+						}
+					});
+				});
+			} finally {
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+		});
 		it("rebuilds offscreen edits into clean scrollback while eager rebuild is enabled (active tool)", async () => {
 			// The streaming-text default defers offscreen edits on POSIX (no yank, but a
 			// growing/re-laying-out tool result leaves stale duplicated rows above the

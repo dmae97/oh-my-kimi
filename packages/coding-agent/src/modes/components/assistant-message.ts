@@ -17,7 +17,6 @@ export class AssistantMessageComponent extends Container {
 	#usageInfo?: Usage;
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
-	#complete = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -46,14 +45,6 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
-	}
-
-	setComplete(): void {
-		this.#complete = true;
-	}
-
-	getStableLineCount(width: number): number {
-		return this.#complete ? this.render(width).length : 0;
 	}
 
 	setToolResultImages(toolCallId: string, images: ImageContent[]): void {
