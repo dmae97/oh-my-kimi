@@ -127,6 +127,19 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.body?.x_provider_hint).toBe("xai");
 	});
 
+	it("sends an async onPayload replacement body", async () => {
+		const captured = await captureOpenAIResponseHeaders({
+			onPayload: async payload => ({
+				...(payload as Record<string, unknown>),
+				input: [{ role: "user", content: [{ type: "input_text", text: "replacement" }] }],
+				prompt_cache_key: "replacement-cache-key",
+			}),
+		});
+
+		expect(captured.body?.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "replacement" }] }]);
+		expect(captured.body?.prompt_cache_key).toBe("replacement-cache-key");
+	});
+
 	it("omits OpenAI session routing headers when cache retention is disabled", async () => {
 		const captured = await captureOpenAIResponseHeaders({ cacheRetention: "none", sessionId: "session-123" });
 
