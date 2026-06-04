@@ -152,9 +152,8 @@ describe("issue #1838 — kimi-k2.6 preserves historical reasoning across tool c
 
 	it("does NOT send thinking.keep on OpenRouter-hosted Kimi K2.6 (proxy uses its own thinking shape)", async () => {
 		// OpenRouter uses `reasoning: { effort }` rather than Moonshot's
-		// `thinking: { type, keep }`. The compat detector explicitly classifies
-		// this path as `thinkingFormat: "openrouter"`, so the new Moonshot-only
-		// branch must not fire here.
+		// `thinking: { type, keep }`. The compat detector classifies this path
+		// as `thinkingFormat: "openrouter"` and leaves `thinkingKeep` unset.
 		const payload = (await capturePayload(openRouterKimiModel("moonshotai/kimi-k2.6"), {
 			reasoning: "high",
 		})) as CompletionBody;
@@ -190,9 +189,7 @@ describe("issue #1838 — kimi-k2.6 preserves historical reasoning across tool c
 	it("survives kimi-k2.6 ids that include a routing suffix (Fireworks-style)", async () => {
 		// Fireworks publishes Kimi K2.6 under the `accounts/fireworks/routers/`
 		// namespace. The `keep` flag is Moonshot-specific, so a Fireworks-hosted
-		// K2.6 (which never speaks the Moonshot wire) must not see it. The
-		// regex anchors guarantee `accounts/fireworks/routers/kimi-k2.6-turbo`
-		// does not accidentally trigger.
+		// K2.6 (which never speaks the Moonshot wire) must not see it.
 		const fireworksModel: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
 			api: "openai-completions",

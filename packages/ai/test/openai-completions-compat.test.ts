@@ -601,10 +601,17 @@ describe("kimi model detection via detectCompat", () => {
 	// `compat.thinkingFormat` per catalog entry (e.g. kimi-code, wafer-serverless).
 	it("reserves zai for native Kimi hosts and defaults proxies to OpenAI reasoning_effort", () => {
 		// Native Moonshot surface → z.ai binary thinking.
-		expect(detectCompat(kimiMoonshotModel("kimi-k2.5")).thinkingFormat).toBe("zai");
+		const moonshotK25 = detectCompat(kimiMoonshotModel("kimi-k2.5"));
+		expect(moonshotK25.thinkingFormat).toBe("zai");
+		expect(moonshotK25.thinkingKeep).toBeUndefined();
+		const moonshotK26 = detectCompat(kimiMoonshotModel("kimi-k2.6"));
+		expect(moonshotK26.thinkingFormat).toBe("zai");
+		expect(moonshotK26.thinkingKeep).toBe("all");
 
 		// OpenAI-compatible proxies → reasoning_effort ("openai").
-		expect(detectCompat(kimiOpenCodeModel("kimi-k2.6")).thinkingFormat).toBe("openai");
+		const opencodeK26 = detectCompat(kimiOpenCodeModel("kimi-k2.6"));
+		expect(opencodeK26.thinkingFormat).toBe("openai");
+		expect(opencodeK26.thinkingKeep).toBeUndefined();
 		const kiloKimi: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
 			api: "openai-completions",

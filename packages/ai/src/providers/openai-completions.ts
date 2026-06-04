@@ -1252,29 +1252,8 @@ function buildParams(
 		// Must explicitly disable since z.ai defaults to thinking enabled.
 		const enabled = options?.reasoning && !options?.disableReasoning;
 		params.thinking = { type: enabled ? "enabled" : "disabled" };
-		// Moonshot's Kimi K2.6 extends `thinking` with a `keep` field that controls
-		// whether the server preserves `reasoning_content` from historical turns
-		// across multi-step tool calls. The default (`keep: null`) makes the server
-		// silently DISCARD every prior turn's `reasoning_content`, so K2.6 must
-		// re-derive its chain-of-thought from the user prompt on every iteration
-		// of an agent loop — manifesting on the client as long, silent pauses
-		// between tool calls ("hangs in between requests"). Moonshot's own docs
-		// mark `keep: "all"` as the recommended setting for multi-step tool use
-		// with thinking enabled, and only the K2.6 schema accepts the field —
-		// K2.5/earlier 400 when it appears. Gate strictly on K2.6 + the two
-		// hosts that speak the native Moonshot wire (Moonshot direct + Kimi Code,
-		// which terminates at the same backend).
-		// https://platform.moonshot.ai/docs/guide/use-kimi-k2-thinking-model#multi-step-tool-call
-		if (enabled && /(^|\/)kimi-k2\.6(?:[-:]|$)/i.test(model.id)) {
-			const lowerBaseUrl = (resolvedBaseUrl ?? model.baseUrl).toLowerCase();
-			const isMoonshotNativeHost =
-				model.provider === "moonshot" ||
-				model.provider === "kimi-code" ||
-				lowerBaseUrl.includes("api.moonshot.ai") ||
-				lowerBaseUrl.includes("api.kimi.com");
-			if (isMoonshotNativeHost) {
-				params.thinking.keep = "all";
-			}
+		if (enabled && compat.thinkingKeep) {
+			params.thinking.keep = compat.thinkingKeep;
 		}
 	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses top-level enable_thinking: boolean

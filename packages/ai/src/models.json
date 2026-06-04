@@ -2649,7 +2649,7 @@
 		},
 		"us.meta.llama4-scout-17b-instruct-v1:0": {
 			"id": "us.meta.llama4-scout-17b-instruct-v1:0",
-			"name": "Llama 4 Scout 17B Instruct",
+			"name": "Llama 4 Scout 17B Instruct (US)",
 			"api": "bedrock-converse-stream",
 			"provider": "amazon-bedrock",
 			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -10438,7 +10438,7 @@
 		},
 		"anthropic/claude-opus-4.8": {
 			"id": "anthropic/claude-opus-4.8",
-			"name": "Anthropic: Claude Opus 4.8 (new)",
+			"name": "Anthropic: Claude Opus 4.8",
 			"api": "openai-completions",
 			"provider": "kilo",
 			"baseUrl": "https://api.kilo.ai/api/gateway",
@@ -13187,7 +13187,7 @@
 		},
 		"minimax/minimax-m3": {
 			"id": "minimax/minimax-m3",
-			"name": "MiniMax: MiniMax M3 (new)",
+			"name": "MiniMax: MiniMax M3 (50% off through 2026-06-07)",
 			"api": "openai-completions",
 			"provider": "kilo",
 			"baseUrl": "https://api.kilo.ai/api/gateway",
@@ -17126,6 +17126,25 @@
 		"qwen/qwen3.7-plus": {
 			"id": "qwen/qwen3.7-plus",
 			"name": "Qwen: Qwen3.7 Plus",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
+		},
+		"qwen/qwen3.7-plus:free": {
+			"id": "qwen/qwen3.7-plus:free",
+			"name": "Qwen: Qwen3.7 Plus (free)",
 			"api": "openai-completions",
 			"provider": "kilo",
 			"baseUrl": "https://api.kilo.ai/api/gateway",
@@ -28051,6 +28070,25 @@
 			"contextWindow": 222222,
 			"maxTokens": 8888
 		},
+		"nex-agi/nex-n2-pro": {
+			"id": "nex-agi/nex-n2-pro",
+			"name": "nex-agi/nex-n2-pro",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
+		},
 		"nothingiisreal/L3.1-70B-Celeste-V0.1-BF16": {
 			"id": "nothingiisreal/L3.1-70B-Celeste-V0.1-BF16",
 			"name": "nothingiisreal/L3.1-70B-Celeste-V0.1-BF16",
@@ -31231,13 +31269,14 @@
 		},
 		"qwen3.7-plus": {
 			"id": "qwen3.7-plus",
-			"name": "qwen3.7-plus",
+			"name": "Qwen3.7 Plus",
 			"api": "openai-completions",
 			"provider": "nanogpt",
 			"baseUrl": "https://nano-gpt.com/api/v1",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
@@ -31245,8 +31284,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 222222,
-			"maxTokens": 8888,
+			"contextWindow": 262144,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
@@ -32563,6 +32602,25 @@
 		"TEE/qwen3.5-397b-a17b": {
 			"id": "TEE/qwen3.5-397b-a17b",
 			"name": "TEE/qwen3.5-397b-a17b",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
+		},
+		"TEE/qwen3.6-27b": {
+			"id": "TEE/qwen3.6-27b",
+			"name": "TEE/qwen3.6-27b",
 			"api": "openai-completions",
 			"provider": "nanogpt",
 			"baseUrl": "https://nano-gpt.com/api/v1",
@@ -38181,6 +38239,31 @@
 				"cacheWrite": 3.125
 			},
 			"contextWindow": 1000000,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"qwen3.7-plus": {
+			"id": "qwen3.7-plus",
+			"name": "Qwen3.7 Plus",
+			"api": "anthropic-messages",
+			"provider": "opencode-go",
+			"baseUrl": "https://opencode.ai/zen/go",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.4,
+				"output": 1.6,
+				"cacheRead": 0.04,
+				"cacheWrite": 0.5
+			},
+			"contextWindow": 262144,
 			"maxTokens": 65536,
 			"thinking": {
 				"mode": "budget",
@@ -45179,8 +45262,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.0428,
-				"output": 0.1716,
+				"input": 0.04815,
+				"output": 0.19305,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -49913,7 +49996,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 222222,
+			"contextWindow": 1000000,
 			"maxTokens": 8888,
 			"compat": {
 				"supportsUsageInStreaming": false

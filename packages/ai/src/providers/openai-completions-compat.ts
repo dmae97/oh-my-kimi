@@ -6,13 +6,19 @@ type ResolvedToolStrictMode = NonNullable<OpenAICompat["toolStrictMode"]> | "mix
 export type ResolvedOpenAICompat = Required<
 	Omit<
 		OpenAICompat,
-		"openRouterRouting" | "vercelGatewayRouting" | "extraBody" | "toolStrictMode" | "cacheControlFormat"
+		| "openRouterRouting"
+		| "vercelGatewayRouting"
+		| "extraBody"
+		| "toolStrictMode"
+		| "cacheControlFormat"
+		| "thinkingKeep"
 	>
 > & {
 	openRouterRouting?: OpenAICompat["openRouterRouting"];
 	vercelGatewayRouting?: OpenAICompat["vercelGatewayRouting"];
 	extraBody?: OpenAICompat["extraBody"];
 	cacheControlFormat?: OpenAICompat["cacheControlFormat"];
+	thinkingKeep?: OpenAICompat["thinkingKeep"];
 	toolStrictMode: ResolvedToolStrictMode;
 };
 
@@ -58,12 +64,10 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const isZhipu = provider === "zhipu-coding-plan" || baseUrl.includes("open.bigmodel.cn");
 	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
 	const isKimiModel = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
-	const isMoonshotKimi =
-		isKimiModel &&
-		(provider === "moonshot" ||
-			provider === "kimi-code" ||
-			baseUrl.includes("api.moonshot.ai") ||
-			baseUrl.includes("api.kimi.com"));
+	const isMoonshotNativeHost =
+		provider === "moonshot" || provider === "kimi-code" || /api\.moonshot\.ai|api\.kimi\.com/i.test(baseUrl);
+	const isMoonshotKimi = isKimiModel && isMoonshotNativeHost;
+	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && /(^|\/)kimi-k2\.6(?:[-:]|$)/i.test(model.id);
 	const isAnthropicModel =
 		provider === "anthropic" ||
 		baseUrl.includes("api.anthropic.com") ||
@@ -230,6 +234,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 					: isAlibaba || isQwen
 						? "qwen"
 						: "openai",
+		thinkingKeep: usesMoonshotKimiPreservedThinking ? "all" : undefined,
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
 		//   - Kimi: documented invariant on its native API.
@@ -293,6 +298,7 @@ export function resolveOpenAICompat(
 		requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
 		requiresMistralToolIds: model.compat.requiresMistralToolIds ?? detected.requiresMistralToolIds,
 		thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
+		thinkingKeep: model.compat.thinkingKeep ?? detected.thinkingKeep,
 		reasoningContentField: model.compat.reasoningContentField ?? detected.reasoningContentField,
 		requiresReasoningContentForToolCalls:
 			model.compat.requiresReasoningContentForToolCalls ?? detected.requiresReasoningContentForToolCalls,
