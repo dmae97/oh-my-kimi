@@ -925,6 +925,36 @@ const ZHIPU_VISION_PATTERN = /^glm-[45](?:\.\d+)?v(?:-|$)/;
 // 7.5 Fireworks
 // ---------------------------------------------------------------------------
 
+/**
+ * Fireworks-published cap for the Kimi K2 family. Fireworks' `/v1/models`
+ * envelope generically reports `max_completion_tokens: 65536` for every Kimi
+ * deployment, but Kimi K2 (instruct / thinking / turbo) on Fireworks is
+ * documented to ship long reasoning traces that should be bounded — capping
+ * at 32,768 prevents handing callers a budget the router cannot honor.
+ * See https://github.com/can1357/oh-my-pi/issues/1849.
+ */
+export const FIREWORKS_KIMI_MAX_TOKENS = 32_768;
+
+/**
+ * Returns true for any Kimi K2.x public model id served by Fireworks-backed
+ * providers (`fireworks` direct, `firepass` router). Matches both the public
+ * catalog id (`kimi-k2.5`, `kimi-k2.6`, `kimi-k2.6-turbo`) and the canonical
+ * Fireworks wire id (`accounts/fireworks/{models,routers}/kimi-k2…`).
+ */
+export function isFireworksKimiK2ModelId(modelId: string): boolean {
+	const trimmed = modelId.toLowerCase();
+	if (trimmed.startsWith("kimi-k2")) return true;
+	return /\/kimi-k2(?:p\d+)?(?:[._-]|$)/.test(trimmed);
+}
+
+/**
+ * Clamp the Kimi K2 family's `maxTokens` to {@link FIREWORKS_KIMI_MAX_TOKENS}
+ * on Fireworks-backed providers, leaving every other model untouched.
+ */
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number {
+	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
+}
+
 export interface FireworksModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -1004,7 +1034,10 @@ export function fireworksModelManagerOptions(
 							name: toFireworksModelName(entry, model.name),
 							input: toBoolean(entry.supports_image_input) === true ? ["text", "image"] : ["text"],
 							contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
-							maxTokens: toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
+							maxTokens: clampFireworksKimiMaxTokens(
+								publicModelId,
+								toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
+							),
 						};
 					},
 				});
