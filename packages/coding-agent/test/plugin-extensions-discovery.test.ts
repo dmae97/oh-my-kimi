@@ -197,6 +197,68 @@ describe("plugin extension discovery", () => {
 		expect(extension?.commands.has("package-import-ext")).toBe(true);
 	});
 
+	it("honors package import conditional object order", async () => {
+		const pluginsDir = getPluginsDir();
+		const pluginDir = path.join(pluginsDir, "node_modules", "conditional-import-plugin");
+		const extensionPath = path.join(pluginDir, "src", "index.ts");
+		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		fs.mkdirSync(path.join(pluginDir, "node"), { recursive: true });
+		fs.mkdirSync(path.join(pluginDir, "import"), { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins",
+				private: true,
+				dependencies: {
+					"conditional-import-plugin": "1.0.0",
+				},
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({
+				name: "conditional-import-plugin",
+				version: "1.0.0",
+				imports: {
+					"#src/*": {
+						node: "./node/*",
+						import: "./import/*",
+					},
+				},
+				pi: {
+					extensions: ["./src/index.ts"],
+				},
+			}),
+		);
+		fs.mkdirSync(path.dirname(extensionPath), { recursive: true });
+		fs.writeFileSync(
+			extensionPath,
+			[
+				'import { commandName } from "#src/command";',
+				"",
+				"export default function(pi) {",
+				"\tpi.registerCommand(commandName, { handler: async () => {} });",
+				"}",
+			].join("\n"),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "node", "command.ts"),
+			'export const commandName = "node-conditional-ext";',
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "import", "command.ts"),
+			'export const commandName = "import-conditional-ext";',
+		);
+
+		const result = await discoverAndLoadExtensions([], projectDir.path());
+		const extension = result.extensions.find(ext => ext.path === extensionPath);
+
+		expect(result.errors).toHaveLength(0);
+		expect(extension).toBeDefined();
+		expect(extension?.commands.has("node-conditional-ext")).toBe(true);
+		expect(extension?.commands.has("import-conditional-ext")).toBe(false);
+	});
+
 	it("rewrites side-effect imports of package-import aliases and legacy Pi scopes", async () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "side-effect-plugin");

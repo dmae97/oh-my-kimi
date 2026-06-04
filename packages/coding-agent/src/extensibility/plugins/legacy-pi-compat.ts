@@ -46,7 +46,7 @@ const LEGACY_PI_IMPORT_SPECIFIER_REGEX = new RegExp(
 );
 const resolvedSpecifierFallbacks = new Map<string, string>();
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
-const PACKAGE_IMPORT_CONDITIONS = ["bun", "import", "default", "types"] as const;
+const SUPPORTED_PACKAGE_IMPORT_CONDITIONS = new Set(["bun", "node", "import", "default"]);
 const packageRootCache = new Map<string, string | null>();
 const packageImportsCache = new Map<string, Record<string, unknown> | null>();
 
@@ -340,11 +340,10 @@ function selectPackageImportTarget(entry: unknown): string | null {
 	if (!isRecord(entry)) {
 		return null;
 	}
-	for (const condition of PACKAGE_IMPORT_CONDITIONS) {
-		const target = selectPackageImportTarget(entry[condition]);
-		if (target) return target;
-	}
-	for (const value of Object.values(entry)) {
+	for (const [condition, value] of Object.entries(entry)) {
+		if (!SUPPORTED_PACKAGE_IMPORT_CONDITIONS.has(condition)) {
+			continue;
+		}
 		const target = selectPackageImportTarget(value);
 		if (target) return target;
 	}
