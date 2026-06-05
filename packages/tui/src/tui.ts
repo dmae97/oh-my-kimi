@@ -547,12 +547,13 @@ export class TUI extends Container {
 	 * (`CSI 3 J`, erase saved lines) also defer the eager opt-in; checkpoint and
 	 * direct user-input rebuilds are unaffected.
 	 *
-	 * Disabling does not take effect until the next frame has been classified:
-	 * the event batch that ends a foreground stream both removes its UI rows
-	 * (loader/status teardown — a shrink) and clears this flag before the
-	 * throttled render timer fires. If the flag dropped immediately, that
-	 * teardown frame would hit the ED3-risk idle deferral and freeze on screen
-	 * (stale spinner) until the next keystroke.
+	 * Disabling stays active through one already-requested frame: the event batch
+	 * that ends a foreground stream both removes its UI rows (loader/status
+	 * teardown — a shrink) and clears this flag before the throttled render timer
+	 * fires. If the flag dropped immediately, that teardown frame would hit the
+	 * ED3-risk idle deferral and freeze on screen (stale spinner) until the next
+	 * keystroke. When no render is pending, disable immediately so a later
+	 * unrelated content mutation does not inherit foreground-stream privileges.
 	 */
 	setEagerNativeScrollbackRebuild(enabled: boolean): void {
 		if (enabled) {
@@ -561,7 +562,16 @@ export class TUI extends Container {
 			return;
 		}
 		if (!this.#eagerNativeScrollbackRebuild) return;
-		this.#eagerNativeScrollbackRebuildDisablePending = true;
+		if (this.#renderRequested || this.#renderTimer !== undefined) {
+			this.#eagerNativeScrollbackRebuildDisablePending = true;
+			return;
+		}
+		if (process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk) {
+			this.#streamingHighWater = 0;
+			this.#markNativeScrollbackDirty();
+		}
+		this.#eagerNativeScrollbackRebuild = false;
+		this.#eagerNativeScrollbackRebuildDisablePending = false;
 	}
 
 	setFocus(component: Component | null): void {
@@ -1726,17 +1736,12 @@ export class TUI extends Container {
 			// stale rows until the next input even though the frame has a fresh bottom
 			// viewport to show (issues #1682, foreground-stream fidelity on collapse).
 			// Native history stays dirty and reconciles at the next checkpoint. With no
-			// active eager turn the reader may be scrolled, so defer rather than
-			// repainting over their history.
+			// active eager turn the reader may be scrolled; even a padded shrink repaint
+			// can move ED3-risk unknown host scrollback (WSL/Ghostty-style), so defer
+			// completely rather than repainting over their history.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				if (this.#eagerNativeScrollbackRebuild) {
-					return { kind: "viewportRepaint" };
-				}
-				if (newLines.length <= paddedViewportTop) {
-					return { kind: "deferredMutation" };
-				}
-				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
+				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. If the shrink still
@@ -1808,6 +1813,8 @@ export class TUI extends Container {
 		this.#suppressNextSuffixScroll = false;
 		if (
 			suppressSuffixScroll &&
+			!widthChanged &&
+			!heightChanged &&
 			diff.appendedLines &&
 			diff.firstChanged < this.#previousLines.length &&
 			!isMultiplexerSession()
@@ -1902,7 +1909,10 @@ export class TUI extends Container {
 				return { kind: "viewportRepaint" };
 			}
 		}
-		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
+		// Geometry changes invalidate the terminal's cursor and viewport anchors;
+		// even if the same coalesced frame also edits offscreen content for a scrolled
+		// reader, the resize-specific branch below must repaint/clamp at the new size.
+		if (!pureAppend && structuralMutation && !heightChanged && !widthChanged && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
