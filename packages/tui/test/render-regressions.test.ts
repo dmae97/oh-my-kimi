@@ -3643,6 +3643,25 @@ describe("TUI terminal-state regressions", () => {
 		const DISABLE_AUTOWRAP = "\x1b[?7l";
 		const ENABLE_AUTOWRAP = "\x1b[?7h";
 
+		// Force DEC 2026 synchronized output on regardless of the host terminal so
+		// these wrapper-bracketing assertions stay deterministic. In CI an unknown
+		// TERM disables sync output by default, which would emit no BSU/ESU pairs.
+		const SYNC_ENV: Record<string, string | undefined> = {
+			PI_FORCE_SYNC_OUTPUT: "1",
+			PI_NO_SYNC_OUTPUT: undefined,
+			PI_TUI_SYNC_OUTPUT: undefined,
+		};
+		const savedSyncEnv: Record<string, string | undefined> = {};
+
+		beforeEach(() => {
+			for (const key in SYNC_ENV) {
+				savedSyncEnv[key] = Bun.env[key];
+				const value = SYNC_ENV[key];
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
+		});
+
 		function getWrites(term: VirtualTerminal): string[] {
 			const writes: string[] = [];
 			const spy = vi.spyOn(term, "write");
@@ -3653,6 +3672,11 @@ describe("TUI terminal-state regressions", () => {
 		}
 
 		afterEach(() => {
+			for (const key in savedSyncEnv) {
+				const value = savedSyncEnv[key];
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
 			vi.restoreAllMocks();
 		});
 
