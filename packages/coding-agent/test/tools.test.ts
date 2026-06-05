@@ -178,6 +178,44 @@ function createZipArchive(entries: ArchiveFixtureEntry[]): Buffer {
 	return Buffer.concat([...localParts, centralDirectory, endOfCentralDirectory]);
 }
 
+function createZipArchiveWithRawDeflateEntry(entry: {
+	path: string;
+	compressed: Buffer;
+	originalSize: number;
+}): Buffer {
+	const pathBuffer = Buffer.from(entry.path.replace(/\\/g, "/"), "utf-8");
+	const localHeader = Buffer.alloc(30, 0);
+	localHeader.writeUInt32LE(0x04034b50, 0);
+	localHeader.writeUInt16LE(20, 4);
+	localHeader.writeUInt16LE(0x0800, 6);
+	localHeader.writeUInt16LE(8, 8);
+	localHeader.writeUInt32LE(0, 14);
+	localHeader.writeUInt32LE(entry.compressed.length, 18);
+	localHeader.writeUInt32LE(entry.originalSize, 22);
+	localHeader.writeUInt16LE(pathBuffer.length, 26);
+
+	const centralHeader = Buffer.alloc(46, 0);
+	centralHeader.writeUInt32LE(0x02014b50, 0);
+	centralHeader.writeUInt16LE(20, 4);
+	centralHeader.writeUInt16LE(20, 6);
+	centralHeader.writeUInt16LE(0x0800, 8);
+	centralHeader.writeUInt16LE(8, 10);
+	centralHeader.writeUInt32LE(0, 16);
+	centralHeader.writeUInt32LE(entry.compressed.length, 20);
+	centralHeader.writeUInt32LE(entry.originalSize, 24);
+	centralHeader.writeUInt16LE(pathBuffer.length, 28);
+
+	const centralDirectory = Buffer.concat([centralHeader, pathBuffer]);
+	const endOfCentralDirectory = Buffer.alloc(22, 0);
+	endOfCentralDirectory.writeUInt32LE(0x06054b50, 0);
+	endOfCentralDirectory.writeUInt16LE(1, 8);
+	endOfCentralDirectory.writeUInt16LE(1, 10);
+	endOfCentralDirectory.writeUInt32LE(centralDirectory.length, 12);
+	endOfCentralDirectory.writeUInt32LE(localHeader.length + pathBuffer.length + entry.compressed.length, 16);
+
+	return Buffer.concat([localHeader, pathBuffer, entry.compressed, centralDirectory, endOfCentralDirectory]);
+}
+
 let artifactCounter = 0;
 function createTestToolSession(
 	cwd: string,
@@ -615,6 +653,24 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("index.ts");
 			expect(output).toContain("util.ts");
+			expect(result.details?.isDirectory).toBe(true);
+		});
+
+		it("should list zip archives without inflating member payloads", async () => {
+			const archivePath = path.join(testDir, "header-only.zip");
+			fs.writeFileSync(
+				archivePath,
+				createZipArchiveWithRawDeflateEntry({
+					path: "corrupt.bin",
+					compressed: Buffer.from([0xff, 0xff, 0xff, 0xff]),
+					originalSize: 1024,
+				}),
+			);
+
+			const result = await readTool.execute("test-call-zip-header-only", { path: archivePath });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("corrupt.bin");
 			expect(result.details?.isDirectory).toBe(true);
 		});
 
