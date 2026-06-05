@@ -3,7 +3,7 @@
 ## [Unreleased]
 ### Changed
 
-- Changed streaming frames to cap rendered content to viewport height and suppress `\r\n` scrolling, so intermediate tool output never enters terminal native scrollback. Rows are committed once via `historyRebuild` when the tool finishes (or via the stable-prefix commit path for already-stabilized content). ([#NNNN](https://github.com/can1357/oh-my-pi/pull/NNNN))
+- Changed foreground-stream rendering on ED3-risk terminals (Ghostty/kitty/Alacritty/VTE/iTerm2 on POSIX) to defer native-scrollback commits: while a turn streams, each frame caps rendered content to the viewport and suppresses `\r\n` scroll growth, so transient output (spinner ticks, partial lines, status rows) never pollutes terminal history. Native scrollback stays marked dirty and is reconciled in a single ED3 (`CSI 3 J`) + re-emit at the next checkpoint (prompt submit) or on an explicit user-input/IME opt-in; an erase is never emitted mid-stream under a possibly-scrolled reader. Non-ED3-risk terminals keep their eager live rebuild. ([#1895](https://github.com/can1357/oh-my-pi/pull/1895))
 
 ## [15.9.1] - 2026-06-04
 ### Fixed

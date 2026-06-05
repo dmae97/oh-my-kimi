@@ -36,8 +36,7 @@ function capture(term: VirtualTerminal): string[] {
 }
 
 function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void {
-	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom =
-		() => answer;
+	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
 }
 
 type MutableTerminalInfo = {
@@ -67,8 +66,9 @@ function rows(prefix: string, count: number): string[] {
 }
 
 describe("streaming scrollback defer", () => {
-	it("suppresses scrollback growth during eager streaming and commits on disable", async () => {
-		await withTerminalRisk(false, async () => {
+	it("defers scrollback growth during eager streaming on ED3-risk and reconciles at the checkpoint", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
 			const term = new VirtualTerminal(40, 10);
 			overrideProbe(term, undefined);
 			const tui = new TUI(term);
@@ -84,17 +84,22 @@ describe("streaming scrollback defer", () => {
 
 				tui.setEagerNativeScrollbackRebuild(true);
 
-				// Grow content past the viewport — should be capped, no
-				// rows enter native scrollback during streaming.
+				// Grow content past the viewport — capped, no rows enter native
+				// scrollback during streaming, and no ED3 erase fires.
 				component.setLines([...rows("stream-", 10), ...rows("more-", 30), "prompt"]);
 				tui.requestRender();
 				await settle(term);
 
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
-				expect(term.getViewport().map(line => line.trim()).at(-1)).toBe("prompt");
+				expect(
+					term
+						.getViewport()
+						.map(line => line.trim())
+						.at(-1),
+				).toBe("prompt");
 
-				// Grow even more
+				// Grow even more — still capped, still no ED3.
 				component.setLines([...rows("stream-", 10), ...rows("more-", 50), "prompt"]);
 				tui.requestRender();
 				await settle(term);
@@ -102,9 +107,10 @@ describe("streaming scrollback defer", () => {
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
 
-				// Disable eager mode — should fire single ED3 + re-emit
-				tui.setEagerNativeScrollbackRebuild(false);
-				tui.requestRender();
+				// The prompt-submit checkpoint reconciles the deferred transcript with
+				// a single ED3 + re-emit — even while eager is still active, because an
+				// explicit reconcile is never deferred.
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
 				await settle(term);
 
 				expect(eraseScrollbackCount(writes)).toBe(1);
@@ -148,7 +154,12 @@ describe("streaming scrollback defer", () => {
 				await settle(term);
 
 				expect(eraseScrollbackCount(writes)).toBe(0);
-				expect(term.getViewport().map(line => line.trim()).at(-1)).toBe("prompt");
+				expect(
+					term
+						.getViewport()
+						.map(line => line.trim())
+						.at(-1),
+				).toBe("prompt");
 			} finally {
 				tui.stop();
 			}

@@ -1393,7 +1393,8 @@ export class TUI extends Container {
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
 		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !eagerEraseScrollbackRisk;
-		const allowUnknownViewportMutation = this.#allowUnknownViewportMutationOnNextRender || eagerRebuildAllowed;
+		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender;
+		const allowUnknownViewportMutation = explicitViewportMutation || eagerRebuildAllowed;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
 		// 3. Classify intent.
@@ -1407,51 +1408,48 @@ export class TUI extends Container {
 			overlayVisibilityReduced,
 			allowUnknownViewportMutation,
 		);
-		// 3b. During foreground tool streaming, suppress any destructive scrollback
-		// commit. Intermediate frames repaint the viewport in place so transient
-		// streaming output never enters terminal native scrollback. Track the peak
-		// row count so the settled content can be pushed into scrollback later.
+		// 3b. Defer scrollback commits during foreground streaming, but only on
+		// ED3-risk terminals whose committed scrollback cannot be rewritten without
+		// yanking a scrolled reader. There the eager rebuild is gated off and the
+		// diff emitter would otherwise `\r\n`-scroll every transient frame (spinner
+		// ticks, partial output) into native history. Non-ED3-risk terminals keep
+		// their eager live rebuild, which already commits cleanly. Explicit
+		// reconciles — the prompt-submit checkpoint (`clearScrollbackOnNextRender`)
+		// and user-input/IME opt-ins (`explicitViewportMutation`) — are never
+		// deferred: ED3 is safe there because the keystroke pins the host to the
+		// bottom.
 		const streamingWasActive = this.#eagerNativeScrollbackRebuild;
 		if (streamingWasActive && !this.#previousStreamingActive) {
 			this.#streamingHighWater = 0;
 		}
 		this.#previousStreamingActive = streamingWasActive;
-		if (streamingWasActive) {
+		if (streamingWasActive && eagerEraseScrollbackRisk) {
 			const streamingActive =
 				this.#eagerNativeScrollbackRebuild && !this.#eagerNativeScrollbackRebuildDisablePending;
-			const streamingJustEnded = !streamingActive && streamingWasActive;
-			if (streamingJustEnded) {
-				// Streaming just ended. Commit the full content to scrollback.
-				// On safe terminals use ED 3 + re-emit; on ED3-risk terminals
-				// (VTE, Windows) use a non-destructive viewport repaint —
-				// the shrink-across-high-water paths handle cleanup later.
+			const explicitReconcile = explicitViewportMutation || this.#clearScrollbackOnNextRender;
+			if (!streamingActive) {
+				// Streaming just ended. Keep native scrollback dirty so the next
+				// checkpoint reconciles the settled transcript; never erase here.
 				this.#streamingHighWater = 0;
-				this.#clearScrollbackOnNextRender = false;
-				this.#clearNativeScrollbackDirty();
-				if (!eagerEraseScrollbackRisk) {
-					intent = { kind: "historyRebuild" };
-				}
-				// On ED3-risk the intent stays as planRender returned (e.g. noop
-				// if content unchanged) — the capped state persists until shrink.
-			} else if (streamingActive) {
-				if (
-					intent.kind === "sessionReplace" ||
+				this.#markNativeScrollbackDirty();
+			} else if (
+				!explicitReconcile &&
+				(intent.kind === "sessionReplace" ||
 					intent.kind === "historyRebuild" ||
 					intent.kind === "overlayRebuild" ||
-					(intent.kind === "diff" && intent.appendedLines)
-				) {
-					this.#clearScrollbackOnNextRender = false;
-					this.#clearNativeScrollbackDirty();
-					// Cap lines to viewport height during streaming so frames
-					// never grow #previousLines past the visible area.
-					this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
-					this.#scrollbackHighWater = 0;
-					lines = lines.slice(-height);
-					intent = { kind: "viewportRepaint" };
-				} else {
-					// Frame wasn't suppressed (e.g. noop), but still track peak.
-					this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
-				}
+					(intent.kind === "diff" && intent.appendedLines))
+			) {
+				// Cap the frame to the viewport and keep scrollback dirty: transient
+				// rows never enter history, and the checkpoint reconciles later.
+				this.#markNativeScrollbackDirty();
+				this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
+				this.#scrollbackHighWater = 0;
+				lines = lines.slice(-height);
+				intent = { kind: "viewportRepaint" };
+			} else {
+				// Explicit reconcile or a non-committing frame (noop): let the
+				// planned intent stand, but keep tracking the streaming peak.
+				this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
 			}
 		}
 		if (this.#eagerNativeScrollbackRebuildDisablePending) {
