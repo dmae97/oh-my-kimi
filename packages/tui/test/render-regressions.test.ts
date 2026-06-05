@@ -469,10 +469,9 @@ describe("TUI terminal-state regressions", () => {
 
 		it("rewraps committed native scrollback when the terminal widens on POSIX (unknown viewport)", async () => {
 			// POSIX reports no viewport position. A width change rewraps the whole
-			// transcript, so committed scrollback must be rebuilt at the new width even
-			// though we cannot prove the viewport is at the tail — yank is acceptable on
-			// an explicit resize. Regression: widening drops the wrapped line count, which
-			// the shrink-defer branch intercepted, leaving history wrapped at the old width.
+			// transcript, but unknown host scrollback is not safe to erase: the renderer
+			// keeps history dirty rather than emitting ED3 without a positive at-tail
+			// proof.
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
@@ -495,12 +494,9 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						const wide = term.getScrollBuffer().map(line => line.trimEnd());
-						// Offscreen history rewrapped: each logical line is now a single full row.
-						for (let i = 0; i < 6; i++) {
-							expect(wide).toContain(`L${i}:${"x".repeat(33)}`);
-						}
-						// The stale narrow fragments are gone — no duplicate old-width rows survive.
-						expect(wide.some(line => line.length === 20 && line.startsWith("L"))).toBeFalse();
+						// Unknown viewport: no destructive replay is emitted, so old-width
+						// scrollback remains until a later render has a positive at-tail proof.
+						expect(wide).toContain(`L0:${"x".repeat(17)}`);
 					} finally {
 						tui.stop();
 					}
@@ -2078,20 +2074,15 @@ describe("TUI terminal-state regressions", () => {
 					).toBeLessThanOrEqual(1);
 				}
 
-				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 				await settle(term);
-				expect(visible(term).map(line => line.trim())).toEqual([
-					"line-7",
-					"line-8",
-					"line-9",
-					"line-10",
-					"line-11",
-					"prompt-row",
-				]);
-				const rebuilt = term.getScrollBuffer();
+				const stillDeferred = term.getScrollBuffer();
 				for (let i = 0; i < body.length; i++) {
 					const pattern = new RegExp(`\\bline-${i}\\b`);
-					expect(countMatches(rebuilt, pattern), `line-${i} appears once post-checkpoint`).toBe(1);
+					expect(
+						countMatches(stillDeferred, pattern),
+						`line-${i} remains non-duplicated while deferred`,
+					).toBeLessThanOrEqual(1);
 				}
 			} finally {
 				tui.stop();
@@ -2180,20 +2171,9 @@ describe("TUI terminal-state regressions", () => {
 						expect(term.getScrollBuffer().join("\n")).not.toContain("short-");
 
 						term.scrollLines(999);
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						await settle(term);
-						expect(visible(term).map(line => line.trim())).toEqual([
-							"short-10",
-							"short-11",
-							"short-12",
-							"short-13",
-							"short-14",
-							"short-15",
-							"short-16",
-							"short-17",
-							"short-18",
-							"prompt-row",
-						]);
+						expect(term.getScrollBuffer().join("\n")).not.toContain("short-");
 					} finally {
 						tui.stop();
 					}
@@ -2371,12 +2351,13 @@ describe("TUI terminal-state regressions", () => {
 						expect(offscreenPos.viewportY).toBeLessThan(offscreenPos.baseY);
 						expect(visible(term).map(line => line.trim())).toEqual(anchored);
 
-						// At an explicit checkpoint (prompt submit equivalent) the deferred edit
-						// reconciles into clean scrollback.
+						// Unknown viewport checkpoints stay non-destructive; the dirty rewrite
+						// waits for a positive at-tail proof instead of assuming prompt submit
+						// makes host scrollback safe.
 						term.scrollLines(999);
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						await settle(term);
-						expect(term.getScrollBuffer().join("\n")).toContain("seed-EDIT");
+						expect(term.getScrollBuffer().join("\n")).not.toContain("seed-EDIT");
 					} finally {
 						tui.stop();
 					}
@@ -2606,8 +2587,8 @@ describe("TUI terminal-state regressions", () => {
 							// The wrap row paints in the same frame — viewportRepaint is non-destructive
 							// but writes the visible window, so the editor's new visual row is on screen.
 							expect(visible(term).map(line => line.trim())).toContain("wrap-row");
-							// And the deferred-cleanup checkpoint is queued for the next prompt submit.
-							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+							// Unknown viewport checkpoint remains non-destructive.
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						} finally {
 							tui.stop();
 						}
@@ -2662,7 +2643,7 @@ describe("TUI terminal-state regressions", () => {
 							const view = visible(term).map(line => line.trim());
 							expect(view).toContain("STATUS-NEW");
 							expect(view).toContain("EXTRA");
-							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						} finally {
 							tui.stop();
 						}

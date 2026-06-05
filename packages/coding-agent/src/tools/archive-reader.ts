@@ -1,10 +1,6 @@
-import { ToolError } from "./tool-errors";
+import { inflateSync, strFromU8 } from "fflate";
 
-let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
-async function loadFflate(): Promise<typeof import("fflate")> {
-	if (!fflateModulePromise) fflateModulePromise = import("fflate");
-	return fflateModulePromise;
-}
+import { ToolError } from "./tool-errors";
 
 export type ArchiveFormat = "zip" | "tar" | "tar.gz";
 
@@ -35,7 +31,11 @@ interface TarStorage {
 
 interface ZipStorage {
 	type: "zip";
-	bytes: Uint8Array;
+	archivePath: string;
+	compressedSize: number;
+	compression: number;
+	flags: number;
+	localHeaderOffset: number;
 }
 
 type EntryStorage = TarStorage | ZipStorage;
@@ -123,6 +123,321 @@ function getArchiveFormatFromPath(filePath: string): ArchiveFormat | undefined {
 	return undefined;
 }
 
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE = 0x02014b50;
+const ZIP64_EOCD_SIGNATURE = 0x06064b50;
+const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50;
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_EOCD_MIN_LENGTH = 22;
+const ZIP_EOCD_MAX_COMMENT_LENGTH = 0xffff;
+const ZIP64_EOCD_LOCATOR_LENGTH = 20;
+const ZIP_STORED_COMPRESSION = 0;
+const ZIP_DEFLATE_COMPRESSION = 8;
+const ZIP_UTF8_FLAG = 0x0800;
+const ZIP_ENCRYPTED_FLAG = 0x0001;
+const ZIP_UINT16_MAX = 0xffff;
+const ZIP_UINT32_MAX = 0xffffffff;
+const ZIP_UINT32_RANGE = 0x100000000;
+
+interface ZipCentralDirectoryInfo {
+	entries: number;
+	offset: number;
+	size: number;
+}
+
+interface Zip64EntryValues {
+	compressedSize: number;
+	uncompressedSize: number;
+	localHeaderOffset: number;
+	diskStart: number;
+}
+
+interface Zip64EntryPlaceholders {
+	compressedSize: boolean;
+	uncompressedSize: boolean;
+	localHeaderOffset: boolean;
+	diskStart: boolean;
+}
+
+function readUInt16LE(bytes: Uint8Array, offset: number): number {
+	return bytes[offset]! | (bytes[offset + 1]! << 8);
+}
+
+function readUInt32LE(bytes: Uint8Array, offset: number): number {
+	return (bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16) | (bytes[offset + 3]! << 24)) >>> 0;
+}
+
+function readUInt64LEAsNumber(bytes: Uint8Array, offset: number): number {
+	const value = readUInt32LE(bytes, offset) + readUInt32LE(bytes, offset + 4) * ZIP_UINT32_RANGE;
+	if (!Number.isSafeInteger(value)) {
+		throw new ToolError("ZIP archive uses offsets or sizes too large to read safely");
+	}
+	return value;
+}
+
+async function readZipRange(filePath: string, start: number, end: number): Promise<Uint8Array> {
+	if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) {
+		throw new ToolError("Invalid ZIP archive range");
+	}
+
+	const bytes = await Bun.file(filePath).slice(start, end).bytes();
+	if (bytes.byteLength !== end - start) {
+		throw new ToolError("Invalid ZIP archive: truncated data");
+	}
+	return bytes;
+}
+
+function findEndOfCentralDirectory(tail: Uint8Array): number {
+	for (let offset = tail.byteLength - ZIP_EOCD_MIN_LENGTH; offset >= 0; offset--) {
+		if (readUInt32LE(tail, offset) !== ZIP_EOCD_SIGNATURE) continue;
+		const commentLength = readUInt16LE(tail, offset + 20);
+		if (offset + ZIP_EOCD_MIN_LENGTH + commentLength === tail.byteLength) return offset;
+	}
+
+	throw new ToolError("Invalid ZIP archive: missing end of central directory");
+}
+
+async function readZip64CentralDirectoryInfo(
+	filePath: string,
+	tail: Uint8Array,
+	tailStart: number,
+	eocdOffset: number,
+): Promise<ZipCentralDirectoryInfo | undefined> {
+	const locatorOffset = eocdOffset - ZIP64_EOCD_LOCATOR_LENGTH;
+	if (locatorOffset < 0) return undefined;
+
+	const locator =
+		locatorOffset >= tailStart
+			? tail.subarray(locatorOffset - tailStart, locatorOffset - tailStart + ZIP64_EOCD_LOCATOR_LENGTH)
+			: await readZipRange(filePath, locatorOffset, eocdOffset);
+	if (readUInt32LE(locator, 0) !== ZIP64_EOCD_LOCATOR_SIGNATURE) return undefined;
+
+	const zip64EocdDisk = readUInt32LE(locator, 4);
+	const zip64EocdOffset = readUInt64LEAsNumber(locator, 8);
+	const totalDisks = readUInt32LE(locator, 16);
+	if (zip64EocdDisk !== 0 || totalDisks > 1) {
+		throw new ToolError("Multi-disk ZIP archives are not supported");
+	}
+
+	const record = await readZipRange(filePath, zip64EocdOffset, zip64EocdOffset + 56);
+	if (readUInt32LE(record, 0) !== ZIP64_EOCD_SIGNATURE) {
+		throw new ToolError("Invalid ZIP archive: missing ZIP64 end of central directory");
+	}
+	if (readUInt32LE(record, 16) !== 0 || readUInt32LE(record, 20) !== 0) {
+		throw new ToolError("Multi-disk ZIP archives are not supported");
+	}
+
+	return {
+		entries: readUInt64LEAsNumber(record, 32),
+		size: readUInt64LEAsNumber(record, 40),
+		offset: readUInt64LEAsNumber(record, 48),
+	};
+}
+
+async function readZipCentralDirectoryInfo(filePath: string, fileSize: number): Promise<ZipCentralDirectoryInfo> {
+	if (fileSize < ZIP_EOCD_MIN_LENGTH) {
+		throw new ToolError("Invalid ZIP archive: missing end of central directory");
+	}
+
+	const tailLength = Math.min(fileSize, ZIP_EOCD_MIN_LENGTH + ZIP_EOCD_MAX_COMMENT_LENGTH);
+	const tailStart = fileSize - tailLength;
+	const tail = await readZipRange(filePath, tailStart, fileSize);
+	const eocdIndex = findEndOfCentralDirectory(tail);
+	const eocdOffset = tailStart + eocdIndex;
+
+	if (readUInt16LE(tail, eocdIndex + 4) !== 0 || readUInt16LE(tail, eocdIndex + 6) !== 0) {
+		throw new ToolError("Multi-disk ZIP archives are not supported");
+	}
+
+	let entries = readUInt16LE(tail, eocdIndex + 10);
+	let size = readUInt32LE(tail, eocdIndex + 12);
+	let offset = readUInt32LE(tail, eocdIndex + 16);
+	const needsZip64 = entries === ZIP_UINT16_MAX || size === ZIP_UINT32_MAX || offset === ZIP_UINT32_MAX;
+	const zip64Info = await readZip64CentralDirectoryInfo(filePath, tail, tailStart, eocdOffset);
+	if (zip64Info) {
+		({ entries, size, offset } = zip64Info);
+	} else if (needsZip64) {
+		throw new ToolError("Invalid ZIP archive: missing ZIP64 central directory metadata");
+	}
+
+	if (offset + size > fileSize) {
+		throw new ToolError("Invalid ZIP archive: central directory exceeds file size");
+	}
+
+	return { entries, offset, size };
+}
+
+function readZip64EntryValues(
+	extra: Uint8Array,
+	placeholders: Zip64EntryPlaceholders,
+	current: Zip64EntryValues,
+): Zip64EntryValues {
+	if (
+		!placeholders.compressedSize &&
+		!placeholders.uncompressedSize &&
+		!placeholders.localHeaderOffset &&
+		!placeholders.diskStart
+	) {
+		return current;
+	}
+
+	let offset = 0;
+	while (offset + 4 <= extra.byteLength) {
+		const headerId = readUInt16LE(extra, offset);
+		const dataSize = readUInt16LE(extra, offset + 2);
+		const dataStart = offset + 4;
+		const dataEnd = dataStart + dataSize;
+		if (dataEnd > extra.byteLength) {
+			throw new ToolError("Invalid ZIP archive: malformed extra field");
+		}
+
+		if (headerId === 0x0001) {
+			let cursor = dataStart;
+			let uncompressedSize = current.uncompressedSize;
+			let compressedSize = current.compressedSize;
+			let localHeaderOffset = current.localHeaderOffset;
+			let diskStart = current.diskStart;
+
+			if (placeholders.uncompressedSize) {
+				if (cursor + 8 > dataEnd) throw new ToolError("Invalid ZIP archive: malformed ZIP64 extra field");
+				uncompressedSize = readUInt64LEAsNumber(extra, cursor);
+				cursor += 8;
+			}
+			if (placeholders.compressedSize) {
+				if (cursor + 8 > dataEnd) throw new ToolError("Invalid ZIP archive: malformed ZIP64 extra field");
+				compressedSize = readUInt64LEAsNumber(extra, cursor);
+				cursor += 8;
+			}
+			if (placeholders.localHeaderOffset) {
+				if (cursor + 8 > dataEnd) throw new ToolError("Invalid ZIP archive: malformed ZIP64 extra field");
+				localHeaderOffset = readUInt64LEAsNumber(extra, cursor);
+				cursor += 8;
+			}
+			if (placeholders.diskStart) {
+				if (cursor + 4 > dataEnd) throw new ToolError("Invalid ZIP archive: malformed ZIP64 extra field");
+				diskStart = readUInt32LE(extra, cursor);
+			}
+
+			return { compressedSize, uncompressedSize, localHeaderOffset, diskStart };
+		}
+
+		offset = dataEnd;
+	}
+
+	throw new ToolError("Invalid ZIP archive: missing ZIP64 extra field");
+}
+
+function parseZipCentralDirectory(
+	filePath: string,
+	centralDirectory: Uint8Array,
+	expectedEntries: number,
+): ArchiveIndexEntry[] {
+	const entries: ArchiveIndexEntry[] = [];
+	let offset = 0;
+
+	for (let index = 0; index < expectedEntries; index++) {
+		if (offset + 46 > centralDirectory.byteLength) {
+			throw new ToolError("Invalid ZIP archive: truncated central directory");
+		}
+		if (readUInt32LE(centralDirectory, offset) !== ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE) {
+			throw new ToolError("Invalid ZIP archive: malformed central directory");
+		}
+
+		const flags = readUInt16LE(centralDirectory, offset + 8);
+		const compression = readUInt16LE(centralDirectory, offset + 10);
+		const compressedSizeRaw = readUInt32LE(centralDirectory, offset + 20);
+		const uncompressedSizeRaw = readUInt32LE(centralDirectory, offset + 24);
+		const fileNameLength = readUInt16LE(centralDirectory, offset + 28);
+		const extraLength = readUInt16LE(centralDirectory, offset + 30);
+		const commentLength = readUInt16LE(centralDirectory, offset + 32);
+		const diskStartRaw = readUInt16LE(centralDirectory, offset + 34);
+		const localHeaderOffsetRaw = readUInt32LE(centralDirectory, offset + 42);
+		const nameStart = offset + 46;
+		const extraStart = nameStart + fileNameLength;
+		const entryEnd = extraStart + extraLength + commentLength;
+		if (entryEnd > centralDirectory.byteLength) {
+			throw new ToolError("Invalid ZIP archive: truncated central directory entry");
+		}
+
+		const rawPath = strFromU8(centralDirectory.subarray(nameStart, extraStart), (flags & ZIP_UTF8_FLAG) === 0);
+		const normalizedPath = normalizeArchiveEntryPath(rawPath);
+		if (normalizedPath) {
+			const values = readZip64EntryValues(
+				centralDirectory.subarray(extraStart, extraStart + extraLength),
+				{
+					compressedSize: compressedSizeRaw === ZIP_UINT32_MAX,
+					uncompressedSize: uncompressedSizeRaw === ZIP_UINT32_MAX,
+					localHeaderOffset: localHeaderOffsetRaw === ZIP_UINT32_MAX,
+					diskStart: diskStartRaw === ZIP_UINT16_MAX,
+				},
+				{
+					compressedSize: compressedSizeRaw,
+					uncompressedSize: uncompressedSizeRaw,
+					localHeaderOffset: localHeaderOffsetRaw,
+					diskStart: diskStartRaw,
+				},
+			);
+			if (values.diskStart !== 0) {
+				throw new ToolError("Multi-disk ZIP archives are not supported");
+			}
+
+			const isDirectory = isArchiveDirectoryName(rawPath);
+			entries.push({
+				path: normalizedPath,
+				isDirectory,
+				size: isDirectory ? 0 : values.uncompressedSize,
+				storage: isDirectory
+					? undefined
+					: {
+							type: "zip",
+							archivePath: filePath,
+							compressedSize: values.compressedSize,
+							compression,
+							flags,
+							localHeaderOffset: values.localHeaderOffset,
+						},
+			});
+		}
+
+		offset = entryEnd;
+	}
+
+	return entries;
+}
+
+async function readZipFileBytes(storage: ZipStorage, uncompressedSize: number): Promise<Uint8Array> {
+	if ((storage.flags & ZIP_ENCRYPTED_FLAG) !== 0) {
+		throw new ToolError("Encrypted ZIP entries are not supported");
+	}
+
+	const localHeader = await readZipRange(
+		storage.archivePath,
+		storage.localHeaderOffset,
+		storage.localHeaderOffset + 30,
+	);
+	if (readUInt32LE(localHeader, 0) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+		throw new ToolError("Invalid ZIP archive: malformed local file header");
+	}
+
+	const fileNameLength = readUInt16LE(localHeader, 26);
+	const extraLength = readUInt16LE(localHeader, 28);
+	const dataStart = storage.localHeaderOffset + 30 + fileNameLength + extraLength;
+	const compressedBytes = await readZipRange(storage.archivePath, dataStart, dataStart + storage.compressedSize);
+
+	if (storage.compression === ZIP_STORED_COMPRESSION) {
+		return compressedBytes;
+	}
+	if (storage.compression !== ZIP_DEFLATE_COMPRESSION) {
+		throw new ToolError(`Unsupported ZIP compression method: ${storage.compression}`);
+	}
+
+	try {
+		return inflateSync(compressedBytes, { out: new Uint8Array(uncompressedSize) });
+	} catch (error) {
+		throw new ToolError(error instanceof Error ? error.message : String(error));
+	}
+}
+
 async function readTarEntries(bytes: Uint8Array): Promise<ArchiveIndexEntry[]> {
 	let archive: Bun.Archive;
 	try {
@@ -155,29 +470,19 @@ async function readTarEntries(bytes: Uint8Array): Promise<ArchiveIndexEntry[]> {
 	return entries;
 }
 
-async function readZipEntries(bytes: Uint8Array): Promise<ArchiveIndexEntry[]> {
-	const { unzipSync } = await loadFflate();
-	let files: Record<string, Uint8Array>;
-	try {
-		files = unzipSync(bytes);
-	} catch (error) {
-		throw new ToolError(error instanceof Error ? error.message : String(error));
+async function readZipEntries(filePath: string): Promise<ArchiveIndexEntry[]> {
+	const fileSize = Bun.file(filePath).size;
+	if (!Number.isSafeInteger(fileSize)) {
+		throw new ToolError("ZIP archive is too large to read safely");
 	}
 
-	const entries: ArchiveIndexEntry[] = [];
-	for (const [rawPath, fileBytes] of Object.entries(files)) {
-		const normalizedPath = normalizeArchiveEntryPath(rawPath);
-		if (!normalizedPath) continue;
-		const isDirectory = isArchiveDirectoryName(rawPath);
-		entries.push({
-			path: normalizedPath,
-			isDirectory,
-			size: isDirectory ? 0 : fileBytes.byteLength,
-			storage: isDirectory ? undefined : { type: "zip", bytes: fileBytes },
-		});
-	}
-
-	return entries;
+	const directoryInfo = await readZipCentralDirectoryInfo(filePath, fileSize);
+	const centralDirectory = await readZipRange(
+		filePath,
+		directoryInfo.offset,
+		directoryInfo.offset + directoryInfo.size,
+	);
+	return parseZipCentralDirectory(filePath, centralDirectory, directoryInfo.entries);
 }
 
 export function parseArchivePathCandidates(filePath: string): ArchivePathCandidate[] {
@@ -297,7 +602,10 @@ export class ArchiveReader {
 			throw new ToolError(`Archive file '${normalizedPath}' has no readable storage`);
 		}
 
-		const bytes = entry.storage.type === "tar" ? await entry.storage.file.bytes() : entry.storage.bytes;
+		const bytes =
+			entry.storage.type === "tar"
+				? await entry.storage.file.bytes()
+				: await readZipFileBytes(entry.storage, entry.size);
 
 		return {
 			path: entry.path,
@@ -315,7 +623,7 @@ export async function openArchive(filePath: string): Promise<ArchiveReader> {
 		throw new ToolError(`Unsupported archive format: ${filePath}`);
 	}
 
-	const bytes = await Bun.file(filePath).bytes();
-	const entries = format === "zip" ? await readZipEntries(bytes) : await readTarEntries(bytes);
+	const entries =
+		format === "zip" ? await readZipEntries(filePath) : await readTarEntries(await Bun.file(filePath).bytes());
 	return new ArchiveReader(format, entries);
 }

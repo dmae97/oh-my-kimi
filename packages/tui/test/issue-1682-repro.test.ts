@@ -154,14 +154,14 @@ describe("issue #1682: detectTerminalEagerEraseScrollbackRisk", () => {
 		expect(detectTerminalEagerEraseScrollbackRisk({ ITERM_SESSION_ID: "w0t0p0" }, "win32")).toBe(false);
 	});
 
-	it("leaves unrecognized POSIX terminals on the eager path", () => {
-		expect(detectTerminalEagerEraseScrollbackRisk({}, "linux")).toBe(false);
-		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "vscode" }, "darwin")).toBe(false);
+	it("treats unrecognized POSIX terminals as ED3-risk by default", () => {
+		expect(detectTerminalEagerEraseScrollbackRisk({}, "linux")).toBe(true);
+		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "vscode" }, "darwin")).toBe(true);
 	});
 });
 
 describe("issue #1682: TUI eager scrollback rebuild", () => {
-	it("defers on ED3-risk terminal traits and rebuilds at the checkpoint", async () => {
+	it("defers on ED3-risk terminal traits and keeps checkpoint replay non-destructive while viewport is unknown", async () => {
 		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
 			await withTerminalRisk(true, async () => {
 				const term = new VirtualTerminal(100, 24);
@@ -181,9 +181,9 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 					await settle(term);
 
 					expect(eraseScrollbackCount(writes)).toBe(0);
-					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 					await settle(term);
-					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(eraseScrollbackCount(writes)).toBe(0);
 				} finally {
 					tui.stop();
 				}
@@ -219,9 +219,9 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 						"shrunk-18",
 						"shrunk-19",
 					]);
-					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 					await settle(term);
-					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(eraseScrollbackCount(writes)).toBe(0);
 				} finally {
 					tui.stop();
 				}
@@ -295,7 +295,7 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 		});
 	});
 
-	it("still honors explicit user-input opt-ins on ED3-risk terminal traits", async () => {
+	it("keeps explicit user-input opt-ins non-destructive on ED3-risk terminal traits", async () => {
 		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
 			await withTerminalRisk(true, async () => {
 				const term = new VirtualTerminal(100, 24);
@@ -314,7 +314,7 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 					tui.requestRender(false, { allowUnknownViewportMutation: true });
 					await settle(term);
 
-					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(eraseScrollbackCount(writes)).toBe(0);
 					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 				} finally {
 					tui.stop();

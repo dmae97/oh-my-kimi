@@ -130,12 +130,13 @@ describe("issue #1610: WSL Windows Terminal ED3-risk detection", () => {
 		expect(detectTerminalEagerEraseScrollbackRisk({ WT_SESSION: WSL_WT_ENV.WT_SESSION }, "linux")).toBe(true);
 	});
 
-	it("keeps native win32 and non-WT Linux hosts off the ED3-risk path", () => {
+	it("keeps native win32 off the ED3-risk path and treats unknown POSIX as risky", () => {
 		// Native Windows is guarded by dedicated process.platform checks in the
 		// renderer; classifying it as ED3-risk would re-freeze streaming (#1635 family).
 		expect(detectTerminalEagerEraseScrollbackRisk({ WT_SESSION: WSL_WT_ENV.WT_SESSION }, "win32")).toBe(false);
-		// WSL inside a non-WT host (e.g. VS Code terminal) has no WT scrollback to protect.
-		expect(detectTerminalEagerEraseScrollbackRisk({ WSL_DISTRO_NAME: "Ubuntu" }, "linux")).toBe(false);
+		// A WSL/non-WT shell still lacks a scroll-position oracle from the renderer,
+		// so default it to ED3-risk instead of assuming passive clears are safe.
+		expect(detectTerminalEagerEraseScrollbackRisk({ WSL_DISTRO_NAME: "Ubuntu" }, "linux")).toBe(true);
 	});
 });
 
@@ -182,11 +183,11 @@ describe("issue #1610: scrolled WSL Windows Terminal viewport", () => {
 						expect(eraseScrollbackCount(writes)).toBe(0);
 						expect(term.getBufferPosition().viewportY).toBe(scrolled.viewportY);
 
-						// The deferred rewrite reconciles at an explicit checkpoint
-						// (prompt submit passes allowUnknownViewport: true).
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						// Unknown viewport checkpoints no longer replay destructively; a
+						// submit key is not proof that WT's host viewport is at the tail.
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						await settle(term);
-						expect(eraseScrollbackCount(writes)).toBe(1);
+						expect(eraseScrollbackCount(writes)).toBe(0);
 					} finally {
 						tui.stop();
 					}

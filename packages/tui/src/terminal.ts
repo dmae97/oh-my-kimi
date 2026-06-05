@@ -35,7 +35,9 @@ export function emergencyTerminalRestore(): void {
 			// Blind restore only if we know a terminal was started but lost track of it
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
-				"\x1b[?2004l" + // Disable bracketed paste
+				"\x1b[?2026l" + // End synchronized output
+					"\x1b[?7h" + // Restore autowrap
+					"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
 					"\x1b[?2048l" + // Disable in-band resize notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
@@ -896,6 +898,10 @@ export class ProcessTerminal implements Terminal {
 		if (this.#clearProgressTimer()) {
 			this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
+
+		// Leave paint-time terminal modes even if the process exits between the
+		// begin/end halves of a frame. Safe no-ops on terminals that ignored them.
+		this.#safeWrite("\x1b[?2026l\x1b[?7h");
 
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");

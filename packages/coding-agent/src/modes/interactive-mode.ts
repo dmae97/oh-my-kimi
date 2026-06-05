@@ -924,11 +924,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#pendingSubmissionDispose = undefined;
 		}
 		this.editor.setText("");
-		// Reconciliation checkpoint: the rebuild below replays the whole transcript
-		// into native scrollback, so retire frozen block snapshots and let every
-		// block render its current state.
-		this.chatContainer.thaw();
-		this.ui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+		// Reconciliation checkpoint: only retire frozen block snapshots after TUI
+		// proves the native viewport is at the tail and replays scrollback safely.
+		// Unknown host viewports stay frozen; thawing them would expose live rows
+		// over stale native history and can yank or duplicate when ED3 is unsafe.
+		if (this.ui.refreshNativeScrollbackIfDirty()) {
+			this.chatContainer.thaw();
+		}
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 		return submission;

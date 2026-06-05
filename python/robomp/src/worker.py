@@ -512,9 +512,19 @@ def _run_rpc_blocking(
     )
     inputs.db.set_event_model(inputs.delivery_id, chosen_model)
     append_system_prompt = (
-        persona.system_append_pr_review(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+        persona.system_append_pr_review(
+            repo=inputs.repo,
+            issue=inputs.issue,
+            workspace=inputs.workspace,
+            bot_login=inputs.settings.bot_login,
+        )
         if task_kind == "review_pr"
-        else persona.system_append(repo=inputs.repo, issue=inputs.issue, workspace=inputs.workspace)
+        else persona.system_append(
+            repo=inputs.repo,
+            issue=inputs.issue,
+            workspace=inputs.workspace,
+            bot_login=inputs.settings.bot_login,
+        )
     )
 
     with RpcClient(

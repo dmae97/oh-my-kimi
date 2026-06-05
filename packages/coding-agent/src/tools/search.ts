@@ -38,6 +38,8 @@ import {
 	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
+	selectorLineRanges,
+	splitInternalUrlSel,
 	splitPathAndSel,
 } from "./path-utils";
 import {
@@ -109,6 +111,21 @@ interface SearchPathSpec {
 function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 	const specs: SearchPathSpec[] = [];
 	for (const entry of rawEntries) {
+		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
+		// which peels selector-shaped tails only for selector-capable schemes and
+		// leaves opaque ones (`mcp://`) intact. Unlike filesystem paths, their
+		// verbatim/index display modes (`raw`, `conflicts`) carry no meaning for
+		// content search, so we accept them — searching the whole resource — and
+		// still honor any embedded line range as a match filter.
+		const internalSplit = splitInternalUrlSel(entry);
+		if (internalSplit.sel !== undefined) {
+			specs.push({
+				original: entry,
+				clean: internalSplit.path,
+				ranges: selectorLineRanges(internalSplit.sel),
+			});
+			continue;
+		}
 		const split = splitPathAndSel(entry);
 		let clean = entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;

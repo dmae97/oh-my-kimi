@@ -463,6 +463,18 @@ describe("ImageBudget transmit tracking", () => {
 		expect([...budget.takeTransmits()]).toEqual([]);
 	});
 
+	it("purges all transmitted ids for terminal-session cleanup", () => {
+		const budget = new ImageBudget(3, () => {});
+		budget.enqueueTransmit(1, "TX1");
+		budget.enqueueTransmit(2, "TX2");
+		expect(budget.shouldTransmit(1)).toBe(false);
+
+		expect([...budget.takeAllTransmittedIds()]).toEqual([1, 2]);
+		expect([...budget.takeTransmits()]).toEqual([]);
+		expect(budget.shouldTransmit(1)).toBe(true);
+		expect([...budget.takeAllTransmittedIds()]).toEqual([]);
+	});
+
 	it("re-transmits an image after a purge frees its data", () => {
 		const budget = new ImageBudget(2, () => {});
 		budget.enqueueTransmit(1, "TX1");
