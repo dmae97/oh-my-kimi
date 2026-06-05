@@ -1,6 +1,6 @@
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { Input, matchesKey, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { Input, matchesKey, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { OAuthSelectorComponent } from "../../components/oauth-selector";
 import { theme } from "../../theme/theme";
@@ -14,6 +14,10 @@ const CALLBACK_SERVER_PROVIDERS: Partial<Record<OAuthProvider, true>> = {
 	"google-gemini-cli": true,
 	"google-antigravity": true,
 };
+
+function loginUrlLink(url: string): string {
+	return `\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`;
+}
 
 interface PromptState {
 	message: string;
@@ -79,7 +83,7 @@ export class SignInTab implements SetupTab {
 			lines.push(...this.#selector.render(width));
 		}
 		if (this.#statusLines.length > 0) {
-			lines.push("", ...this.#statusLines.map(line => truncateToWidth(line, width)));
+			lines.push("", ...this.#statusLines.flatMap(line => wrapTextWithAnsi(line, width)));
 		}
 		if (this.#prompt) {
 			lines.push("", theme.fg("warning", this.#prompt.message));
@@ -116,7 +120,9 @@ export class SignInTab implements SetupTab {
 			await this.#authStorage.login(providerId as OAuthProvider, {
 				signal: this.#loginAbort.signal,
 				onAuth: info => {
-					this.#statusLines.push(theme.fg("accent", `Open this URL: ${info.url}`));
+					this.#statusLines.push(theme.fg("accent", "Open this URL in your browser:"));
+					this.#statusLines.push(theme.fg("accent", info.url));
+					this.#statusLines.push(theme.fg("dim", loginUrlLink(info.url)));
 					if (info.instructions) {
 						this.#statusLines.push(theme.fg("warning", info.instructions));
 					}
@@ -174,6 +180,7 @@ export class SignInTab implements SetupTab {
 			this.#resolvePrompt(value);
 		};
 		input.onEscape = () => {
+			this.#loginAbort?.abort();
 			this.#resolvePrompt("");
 		};
 		this.host.setFocus(input);
