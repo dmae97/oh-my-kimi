@@ -429,8 +429,10 @@ function getDefaultAgentDir(): string {
 
 function resolveSnapshotTtlMs(): number {
 	const raw = process.env.OMP_AUTH_BROKER_SNAPSHOT_TTL_MS;
-	if (!raw) return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
-	const ttlMs = Number(raw);
+	if (raw === undefined) return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
+	const value = raw.trim();
+	if (value === "") return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
+	const ttlMs = Number(value);
 	if (Number.isFinite(ttlMs) && ttlMs >= 0) return ttlMs;
 	logger.warn("Invalid OMP_AUTH_BROKER_SNAPSHOT_TTL_MS; using default", { value: raw });
 	return DEFAULT_SNAPSHOT_CACHE_TTL_MS;

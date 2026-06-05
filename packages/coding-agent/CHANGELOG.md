@@ -29,6 +29,7 @@
 ### Fixed
 
 - Fixed a streamed assistant message freezing at a partial prefix (e.g. only "Nat" of "Natives built, now…") on ED3-risk terminals (Ghostty/kitty/iTerm2/Alacritty), with the final text appearing only after a resize. `TranscriptContainer` freezes each non-live block by replaying its last live render, but render coalescing can finalize a block's content and append the next block within the same throttled frame — so the block was sealed at its stale mid-stream snapshot and never repainted until the next `thaw`. The block that was live on the previous render is now recomputed once on the live→frozen transition, sealing it at its final content.
+- Fixed `TranscriptContainer` reporting the live block boundary to the TUI again, so ED3-risk foreground streaming can append newly sealed transcript blocks to native scrollback once while deferring only the active live block.
 
 - Fixed ACP/RPC stdio startup so protocol frames are no longer consumed as one-shot piped prompt input before the JSON-RPC transport starts.
 - Fixed `omp completions` to await the completion script write before exiting.
