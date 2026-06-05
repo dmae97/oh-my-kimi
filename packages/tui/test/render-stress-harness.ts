@@ -8,7 +8,6 @@ import {
 	type Component,
 	CURSOR_MARKER,
 	type Focusable,
-	type NativeScrollbackLiveRegion,
 	type OverlayAnchor,
 	type OverlayHandle,
 	type OverlayOptions,
@@ -981,23 +980,17 @@ function reflowToWidth(lines: readonly string[], width: number): string[] {
 	return out;
 }
 
-class StressComponent implements Component, Focusable, NativeScrollbackLiveRegion {
+class StressComponent implements Component, Focusable {
 	focused = false;
 	#model: StressModel;
 	#reflow: boolean;
-	#pinAsLiveRegion: boolean;
 
-	constructor(model: StressModel, reflow = false, pinAsLiveRegion = false) {
+	constructor(model: StressModel, reflow = false) {
 		this.#model = model;
 		this.#reflow = reflow;
-		this.#pinAsLiveRegion = pinAsLiveRegion;
 	}
 
 	invalidate(): void {}
-
-	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return this.#pinAsLiveRegion ? 0 : undefined;
-	}
 
 	render(width: number): string[] {
 		const lines = this.#model.renderedLines(width, this.focused);
@@ -1148,7 +1141,7 @@ class StressDriver {
 		this.#scheduler = new StressRenderScheduler();
 		const maxHeight = maxOf(scenario.heightChoices);
 		this.#model = new StressModel(this.#streams.content, maxHeight + 12, scenario.uniqueContent, "root-");
-		this.#component = new StressComponent(this.#model, scenario.reflow, this.#traits.foregroundStreaming);
+		this.#component = new StressComponent(this.#model, scenario.reflow);
 		this.#children = [0, 1].map(id => {
 			const model = new StressModel(
 				this.#streams.children,
@@ -1173,15 +1166,15 @@ class StressDriver {
 	async run(): Promise<void> {
 		// Foreground-tool streaming faithfully: pin the ED3-risk trait (independent
 		// of whatever real terminal hosts the worker) and keep the turn-long eager
-		// rebuild opt-in enabled before the initial paint. On an ED3-risk terminal
-		// that opt-in is gated off, so content frames flow through the live-region
-		// pin rather than a forced history rebuild — see `#renderContentFrame`.
+		// rebuild opt-in enabled. On an ED3-risk terminal that opt-in is gated off,
+		// so content frames flow through `viewportRepaint`/`diff` rather than a
+		// forced history rebuild — see `#renderContentFrame`.
 		const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
 		const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
 		if (this.#traits.foregroundStreaming) terminalInfo.eagerEraseScrollbackRisk = this.#traits.ed3ScrollbackEraseRisk;
 		try {
-			if (this.#traits.foregroundStreaming) this.#tui.setEagerNativeScrollbackRebuild(true);
 			this.#tui.start();
+			if (this.#traits.foregroundStreaming) this.#tui.setEagerNativeScrollbackRebuild(true);
 			await this.#settle();
 			this.#assertOracles(
 				{
@@ -2041,7 +2034,7 @@ class StressDriver {
 				forcedRender: true,
 				mutatesViewport: true,
 				checkpoint: true,
-				reconcilesNativeScrollback: !this.#traits.foregroundStreaming,
+				reconcilesNativeScrollback: true,
 			},
 			before,
 			after,
@@ -2567,13 +2560,6 @@ class StressDriver {
 	}
 
 	#assertNoStaleOverlaySentinels(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
-		if (this.#traits.foregroundStreaming && op.geometryChanged) {
-			this.#nativeScrollbackAuditBlocked = true;
-			return;
-		}
-		if (this.#traits.foregroundStreaming && this.#nativeScrollbackAuditBlocked && !op.reconcilesNativeScrollback) {
-			return;
-		}
 		if (this.#hiddenOverlaySentinels.size === 0) return;
 		const visibleSentinels = new Set(
 			this.#overlays
@@ -2594,6 +2580,7 @@ class StressDriver {
 			}
 		}
 	}
+
 	#assertUniqueContentNoUnexpectedDuplicates(
 		op: AppliedOperation,
 		before: Snapshot,
@@ -2601,14 +2588,6 @@ class StressDriver {
 		index: number,
 	): void {
 		if (!this.#scenario.uniqueContent) return;
-		if (this.#traits.foregroundStreaming && op.geometryChanged) {
-			this.#nativeScrollbackAuditBlocked = true;
-			return;
-		}
-		if (this.#traits.foregroundStreaming && this.#nativeScrollbackAuditBlocked) {
-			if (!op.reconcilesNativeScrollback) return;
-			this.#nativeScrollbackAuditBlocked = false;
-		}
 		// Accumulate even when the check below is skipped (scrolled/overlay): the
 		// frame's legitimate duplicates commit to scrollback regardless of where
 		// the viewport is parked.
@@ -3610,11 +3589,16 @@ function coreTemplates(): ScenarioTemplate[] {
 			// Foreground tool actively streaming on an ED3-risk terminal whose
 			// viewport position is unobservable (ghostty/kitty/alacritty/VTE/iTerm2;
 			// see `detectTerminalEagerEraseScrollbackRisk`). The agent requests an
-			// eager native-scrollback rebuild for the streaming turn, but on ED3-risk
-			// terminals the live-region seam pins all foreground-stream rows to the
-			// active viewport instead of letting them enter native history. The
-			// duplicate oracle is enabled here (`uniqueContent`) so any later shrink
-			// or reflow that re-exposes a committed live row fails loudly.
+			// eager native-scrollback rebuild for the streaming turn, but that opt-in
+			// is gated off on ED3-risk terminals, so `allowUnknownViewportMutation`
+			// stays false and content frames flow through `viewportRepaint`/`diff`
+			// instead of a forced history rebuild. An offscreen-edit growth then
+			// repaints in place — advancing the rendered line count without committing
+			// the overflow to native history — and the next shrink must still
+			// re-anchor the bottom of the viewport from that lagging high-water mark.
+			// The default content-frame path forces `allowUnknownViewportMutation` and
+			// never reaches this state (a notification chip rendering over the active
+			// tool render: the original report).
 			name: "darwin-unknown-ghostty-stream-small",
 			platform: "darwin",
 			terminalMode: "unknown",
@@ -3626,7 +3610,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			heightChoices: [3, 4, 6],
 			scrollbackRows: 10_000,
 			foregroundStream: true,
-			uniqueContent: true,
 		},
 		{
 			name: "linux-unknown-ghostty-stream-large",
@@ -3640,7 +3623,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			heightChoices: [8, 12, 24],
 			scrollbackRows: 10_000,
 			foregroundStream: true,
-			uniqueContent: true,
 		},
 		{
 			// Width-reflowing content (wrapped/markdown-style) uses the same grapheme
@@ -3675,7 +3657,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			scrollbackRows: 10_000,
 			reflow: true,
 			foregroundStream: true,
-			uniqueContent: true,
 		},
 	];
 }

@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Changed
-
-- Changed `TranscriptContainer` to report its live-region boundary to the renderer (`NativeScrollbackLiveRegion`): on ED3-risk terminals it now exposes the line offset where the bottom-most live block begins, so the TUI pins that block and the chrome below it out of native scrollback during streaming instead of committing its overflow and then leaving stale duplicates when the block re-lays-out or collapses.
-
 ## [15.9.1] - 2026-06-04
 
 ### Added

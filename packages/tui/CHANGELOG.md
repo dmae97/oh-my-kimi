@@ -1,16 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
 
-### Added
-
-- Added a `NativeScrollbackLiveRegion` component seam (`getNativeScrollbackLiveRegionStart()`): a component reports the local line index where its live/transient suffix begins, and `TUI` treats that suffix — plus every root child rendered below it — as not yet safe to commit to native scrollback on ED3-risk terminals whose viewport position is unobservable (Ghostty/kitty/Alacritty/VTE/iTerm2 on POSIX).
-
-### Fixed
-
-- Fixed persistent line duplication in native scrollback while a foreground turn streamed on ED3-risk terminals with an unobservable viewport. The bottom-most live block scrolled its overflow into native history during growth; when that same block later re-laid-out, shrank, or collapsed (a tool preview collapsing to its compact result, a Markdown list/table reflow, a reasoning re-wrap) the viewport repaint correctly showed the new tail, but the stale overflow rows stayed in committed history and re-appeared above the live region — and they cannot be removed without ED3 (`CSI 3 J`), which is forbidden mid-turn because it yanks a reader scrolled into history (#1682). The renderer now pins the reported live region: during eager streaming it repaints that suffix in place — incrementally, using relative cursor moves and per-line erases (`CSI 2 K`), never a full-screen erase (`CSI 2 J`) or absolute cursor home — without ever committing transient rows to native scrollback (only sealed rows below the live boundary are appended). Completed/sealed blocks stay scrollable mid-turn and the prompt-submit checkpoint still reconciles a clean, duplicate-free transcript.
-- Fixed a viewport yank on ED3-risk hosts when a pending forced scrollback wipe (`requestRender(true, { clearScrollback: true })`, an image-budget demotion, or a checkpoint) was requested while the live-region pin was active: the pin suppressed the wipe but never consumed the flag, so a later frame where the pin disengaged (e.g. content collapsing to empty) emitted the deferred `CSI 3 J` and snapped a scrolled-up reader to the tail. The pin now consumes the flag while keeping native scrollback dirty, so the wipe is deferred to the post-stream checkpoint instead.
-- Fixed a terminal resize not re-rendering (stale, overlapping rows) during a foreground stream on ED3-risk hosts. The live-region pin fired on width/height changes too, repainting with relative cursor moves computed from the pre-resize geometry — after the terminal reflowed its grid those landed on the wrong rows. Resizes now skip the pin and take the geometry reflow path, which repaints the viewport at the new dimensions.
+- Changed streaming frames to cap rendered content to viewport height and suppress `\r\n` scrolling, so intermediate tool output never enters terminal native scrollback. Rows are committed once via `historyRebuild` when the tool finishes (or via the stable-prefix commit path for already-stabilized content). ([#NNNN](https://github.com/can1357/oh-my-pi/pull/NNNN))
 
 ## [15.9.1] - 2026-06-04
 ### Fixed

@@ -118,21 +118,6 @@ export interface Component {
 }
 
 /**
- * Optional component seam for native-scrollback pinning. A component that
- * renders a stable prefix followed by a live/transient suffix reports the local
- * line index where that suffix begins after each render. TUI treats that suffix
- * — and every root child rendered below it — as not yet safe to commit to native
- * scrollback on ED3-risk terminals whose viewport position is unobservable.
- */
-export interface NativeScrollbackLiveRegion {
-	getNativeScrollbackLiveRegionStart(): number | undefined;
-}
-
-function getNativeScrollbackLiveRegionStart(component: Component): number | undefined {
-	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackLiveRegionStart?.();
-}
-
-/**
  * Interface for components that can receive focus and display a cursor.
  * When focused, the component should emit CURSOR_MARKER at the cursor position
  * in its render output. TUI will find this marker and position the hardware
@@ -332,9 +317,6 @@ export class Container implements Component {
  * - `historyRebuild`: a geometry change (terminal resize) left native history
  *   wrapped at the old size — clear viewport and scrollback so it rewraps at the
  *   new geometry. Also flushes deferred content-only rewrites.
- * - `liveRegionPinned`: ED3-risk/unknown foreground stream with a reported live
- *   suffix — optionally append newly sealed rows, then repaint the live tail
- *   without letting transient rows enter native history.
  * - `viewportRepaint`: rewrite the visible viewport in place. If `appendFrom`
  *   is set, emit those tail rows as scrollback growth first so streaming
  *   output reaches terminal history before the corrected viewport is drawn.
@@ -353,7 +335,6 @@ type RenderIntent =
 	| { kind: "historyRebuild" }
 	| { kind: "overlayRebuild" }
 	| { kind: "viewportRepaint"; appendFrom?: number }
-	| { kind: "liveRegionPinned"; appendFrom: number; appendTo: number }
 	| { kind: "deferredShrink"; paddedLength: number }
 	| { kind: "deferredMutation" }
 	| { kind: "shrink" }
@@ -402,8 +383,17 @@ export class TUI extends Container {
 	// Set after a clear+full replay so the next insert-above-suffix frame does
 	// not scroll replayed live chrome (status/editor) into fresh history.
 	#suppressNextSuffixScroll = false;
-	#nativeScrollbackLiveRegionStart: number | undefined;
 	#nativeScrollbackDirty = false;
+	// Highest `#maxLinesRendered` reached during a foreground tool turn while
+	// intermediate frames were prevented from committing to terminal scrollback.
+	// Used after the tool finishes to push the settled content into scrollback
+	// via a non-destructive full paint (no ED 3). Reset to 0 once rows are
+	// committed (via any `#emitFullPaint`, `#emitDiff`, or `#emitAppendTail`
+	// path).
+	#streamingHighWater = 0;
+	// Tracks whether the previous frame was inside a foreground tool streaming
+	// turn. Used to reset `#streamingHighWater` on fresh streaming starts.
+	#previousStreamingActive = false;
 	#fullRedrawCount = 0;
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
@@ -441,25 +431,6 @@ export class TUI extends Container {
 		this.terminal = terminal;
 		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
 		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
-	}
-
-	override render(width: number): string[] {
-		width = Math.max(1, width);
-		this.#nativeScrollbackLiveRegionStart = undefined;
-		const lines: string[] = [];
-		for (const child of this.children) {
-			const offset = lines.length;
-			const childLines = child.render(width);
-			const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
-			if (liveRegionStart !== undefined) {
-				const boundedStart = Number.isFinite(liveRegionStart)
-					? Math.max(0, Math.min(childLines.length, Math.trunc(liveRegionStart)))
-					: childLines.length;
-				this.#nativeScrollbackLiveRegionStart = offset + boundedStart;
-			}
-			lines.push(...childLines);
-		}
-		return lines;
 	}
 
 	#syncTerminalCursorMode(component: Component | null): void {
@@ -1426,7 +1397,7 @@ export class TUI extends Container {
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
 		// 3. Classify intent.
-		const intent = this.#planRender(
+		let intent = this.#planRender(
 			lines,
 			widthChanged,
 			heightChanged,
@@ -1435,8 +1406,54 @@ export class TUI extends Container {
 			visibleOverlayComponents.length > 0,
 			overlayVisibilityReduced,
 			allowUnknownViewportMutation,
-			this.#nativeScrollbackLiveRegionStart,
 		);
+		// 3b. During foreground tool streaming, suppress any destructive scrollback
+		// commit. Intermediate frames repaint the viewport in place so transient
+		// streaming output never enters terminal native scrollback. Track the peak
+		// row count so the settled content can be pushed into scrollback later.
+		const streamingWasActive = this.#eagerNativeScrollbackRebuild;
+		if (streamingWasActive && !this.#previousStreamingActive) {
+			this.#streamingHighWater = 0;
+		}
+		this.#previousStreamingActive = streamingWasActive;
+		if (streamingWasActive) {
+			const streamingActive =
+				this.#eagerNativeScrollbackRebuild && !this.#eagerNativeScrollbackRebuildDisablePending;
+			const streamingJustEnded = !streamingActive && streamingWasActive;
+			if (streamingJustEnded) {
+				// Streaming just ended. Commit the full content to scrollback.
+				// On safe terminals use ED 3 + re-emit; on ED3-risk terminals
+				// (VTE, Windows) use a non-destructive viewport repaint —
+				// the shrink-across-high-water paths handle cleanup later.
+				this.#streamingHighWater = 0;
+				this.#clearScrollbackOnNextRender = false;
+				this.#clearNativeScrollbackDirty();
+				if (!eagerEraseScrollbackRisk) {
+					intent = { kind: "historyRebuild" };
+				}
+				// On ED3-risk the intent stays as planRender returned (e.g. noop
+				// if content unchanged) — the capped state persists until shrink.
+			} else if (streamingActive) {
+				if (
+					intent.kind === "sessionReplace" ||
+					intent.kind === "historyRebuild" ||
+					intent.kind === "overlayRebuild" ||
+					(intent.kind === "diff" && intent.appendedLines)
+				) {
+					this.#clearScrollbackOnNextRender = false;
+					this.#clearNativeScrollbackDirty();
+					// Cap lines to viewport height during streaming so frames
+					// never grow #previousLines past the visible area.
+					this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
+					this.#scrollbackHighWater = 0;
+					lines = lines.slice(-height);
+					intent = { kind: "viewportRepaint" };
+				} else {
+					// Frame wasn't suppressed (e.g. noop), but still track peak.
+					this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
+				}
+			}
+		}
 		if (this.#eagerNativeScrollbackRebuildDisablePending) {
 			this.#eagerNativeScrollbackRebuildDisablePending = false;
 			this.#eagerNativeScrollbackRebuild = false;
@@ -1487,23 +1504,6 @@ export class TUI extends Container {
 					clearScrollback: !isMultiplexerSession(),
 				});
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
-				return;
-			case "liveRegionPinned":
-				// Consume any pending forced scrollback wipe: honoring it now would emit
-				// ED3 mid-stream and yank a reader scrolled into history. The pin keeps
-				// native scrollback dirty, so the post-stream checkpoint still rebuilds.
-				this.#clearScrollbackOnNextRender = false;
-				this.#emitLiveRegionPinnedRepaint(
-					lines,
-					width,
-					height,
-					cursorPos,
-					intent.appendFrom,
-					intent.appendTo,
-					prevViewportTop,
-					prevHardwareCursorRow,
-				);
-				this.#hasEverRendered = true;
 				return;
 			case "viewportRepaint":
 				if (intent.appendFrom !== undefined) {
@@ -1557,29 +1557,17 @@ export class TUI extends Container {
 		hasVisibleOverlay: boolean,
 		overlayVisibilityReduced: boolean,
 		allowUnknownViewportMutation: boolean,
-		liveRegionStart: number | undefined,
 	): RenderIntent {
-		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
-		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
-		const liveRegionPinnedIntent = this.#planLiveRegionPinnedRender(
-			newLines,
-			height,
-			liveRegionStart,
-			eagerEraseScrollbackRisk,
-			widthChanged || heightChanged,
-		);
-
-		// Caller opted into a scrollback wipe via requestRender(true, { clearScrollback: true }).
-		if (this.#clearScrollbackOnNextRender) return liveRegionPinnedIntent ?? { kind: "sessionReplace" };
-
 		// Initial paint after start(): scrollback must keep its prior shell
 		// content, but the viewport must be cleared so stale rows do not bleed
-		// into the new UI. If a foreground stream was already active before the
-		// first paint, honor its live-region pin and avoid committing transient
-		// rows to native history.
-		if (!this.#hasEverRendered) return liveRegionPinnedIntent ?? { kind: "initial" };
-		if (liveRegionPinnedIntent) return liveRegionPinnedIntent;
+		// into the new UI.
+		if (!this.#hasEverRendered) return { kind: "initial" };
 
+		// Caller opted into a scrollback wipe via requestRender(true, { clearScrollback: true }).
+		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
+
+		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
+		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
 		if (overlayVisibilityReduced && !isMultiplexerSession()) {
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
 		}
@@ -1599,6 +1587,19 @@ export class TUI extends Container {
 			}
 			this.#markNativeScrollbackDirty();
 			return { kind: "viewportRepaint" };
+		}
+
+		// After foreground tool streaming: when content finally shrinks from the
+		// streaming peak, rebuild with ED 3 to commit the settled state cleanly.
+		// The check uses `#streamingHighWater` (the real peak) rather than
+		// `#previousLines.length` because streaming capped lines to viewport
+		// height, so `#previousLines` never reflects the true transcript size.
+		if (this.#streamingHighWater > height && newLines.length < this.#streamingHighWater && newLines.length > height) {
+			this.#streamingHighWater = 0;
+			return { kind: "historyRebuild" };
+		}
+		if (this.#streamingHighWater > 0 && newLines.length <= height) {
+			this.#streamingHighWater = 0;
 		}
 
 		if (
@@ -2105,38 +2106,6 @@ export class TUI extends Container {
 		);
 	}
 
-	#planLiveRegionPinnedRender(
-		newLines: string[],
-		height: number,
-		liveRegionStart: number | undefined,
-		eagerEraseScrollbackRisk: boolean,
-		geometryChanged: boolean,
-	): RenderIntent | undefined {
-		// A width/height change reflows the whole terminal: the relative cursor
-		// positioning this emitter relies on is computed from the pre-resize
-		// geometry and would land on the wrong rows. Defer to the geometry branch
-		// (a full reflow rebuild), which is the established behavior for resizes.
-		if (
-			liveRegionStart === undefined ||
-			liveRegionStart >= newLines.length ||
-			!this.#eagerNativeScrollbackRebuild ||
-			!eagerEraseScrollbackRisk ||
-			geometryChanged ||
-			isMultiplexerSession()
-		) {
-			return undefined;
-		}
-		if (newLines.length <= height && this.#scrollbackHighWater === 0) return undefined;
-		if (this.#readNativeViewportAtBottom() !== undefined) return undefined;
-
-		this.#markNativeScrollbackDirty();
-		const viewportTop = Math.max(0, newLines.length - height);
-		const sealedEnd = Math.max(0, Math.min(liveRegionStart, newLines.length));
-		const appendTo = Math.min(sealedEnd, viewportTop);
-		const appendFrom = Math.min(this.#scrollbackHighWater, appendTo);
-		return { kind: "liveRegionPinned", appendFrom, appendTo };
-	}
-
 	#padDeferredShrinkLines(lines: string[], paddedLength: number): string[] {
 		if (lines.length >= paddedLength) return lines;
 		return [...lines, ...new Array<string>(paddedLength - lines.length).fill("")];
@@ -2306,74 +2275,6 @@ export class TUI extends Container {
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
-		this.#commit(lines, width, height, viewportTop, toRow);
-	}
-
-	/**
-	 * Foreground-stream live-region paint for ED3-risk terminals with an
-	 * unobservable viewport. Commits the newly-sealed chunk to native scrollback
-	 * (so finished blocks stay scrollable) and repaints the live tail in place,
-	 * leaving the transient live region out of saved lines.
-	 *
-	 * Uses only the no-scroll-snap vocabulary of {@link #emitDiff}: relative
-	 * cursor moves, per-line `\x1b[2K`, and `\r\n` to push the sealed chunk into
-	 * history. It deliberately avoids a full-screen erase (`\x1b[2J`) and absolute
-	 * cursor home (`\x1b[H`): on Ghostty those snap a reader scrolled into history
-	 * back to the bottom on every frame (the live tail repaints every token).
-	 */
-	#emitLiveRegionPinnedRepaint(
-		lines: string[],
-		width: number,
-		height: number,
-		cursorPos: { row: number; col: number } | null,
-		appendFrom: number,
-		appendTo: number,
-		prevViewportTop: number,
-		prevHardwareCursorRow: number,
-	): void {
-		this.#fullRedrawCount += 1;
-		const viewportTop = Math.max(0, lines.length - height);
-		const boundedAppendTo = Math.max(0, Math.min(appendTo, viewportTop, lines.length));
-		const boundedAppendFrom = Math.max(0, Math.min(appendFrom, boundedAppendTo));
-
-		// Position at the top visible row with a relative move. Terminals clamp the
-		// hardware cursor to the viewport on resize, so clamp our tracking to match
-		// before computing the delta (mirrors #emitDiff).
-		const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
-		const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
-		let buffer = this.#paintBeginSequence;
-		if (currentScreenRow > 0) buffer += `\x1b[${currentScreenRow}A`;
-		buffer += "\r";
-
-		// Write the sealed chunk followed by the full viewport from the top row.
-		// The first (boundedAppendTo - boundedAppendFrom) rows scroll into native
-		// history; the trailing `height` rows fill the viewport. Each row clears
-		// itself with `\x1b[2K` instead of relying on a screen-wide erase.
-		let wroteLine = false;
-		for (let i = boundedAppendFrom; i < boundedAppendTo; i++) {
-			if (wroteLine) buffer += "\r\n";
-			buffer += `\x1b[2K${this.#fitLineToWidth(lines[i] ?? "", width)}`;
-			wroteLine = true;
-		}
-		for (let screenRow = 0; screenRow < height; screenRow++) {
-			if (wroteLine) buffer += "\r\n";
-			buffer += `\x1b[2K${this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width)}`;
-			wroteLine = true;
-		}
-
-		const viewportBottomRow = viewportTop + height - 1;
-		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
-		const parkUp = viewportBottomRow - contentBottomRow;
-		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
-		buffer += this.#paintEndSequence;
-		this.terminal.write(buffer);
-
-		this.#maxLinesRendered = lines.length;
-		if (boundedAppendTo > this.#scrollbackHighWater) {
-			this.#scrollbackHighWater = boundedAppendTo;
-		}
 		this.#commit(lines, width, height, viewportTop, toRow);
 	}
 
@@ -2612,11 +2513,9 @@ export class TUI extends Container {
 		const detail =
 			intent.kind === "diff"
 				? `${intent.kind}(first=${intent.firstChanged}, last=${intent.lastChanged}, appended=${intent.appendedLines})`
-				: intent.kind === "liveRegionPinned"
-					? `${intent.kind}(append=${intent.appendFrom}..${intent.appendTo})`
-					: intent.kind === "viewportRepaint" && intent.appendFrom !== undefined
-						? `${intent.kind}(appendFrom=${intent.appendFrom})`
-						: intent.kind;
+				: intent.kind === "viewportRepaint" && intent.appendFrom !== undefined
+					? `${intent.kind}(appendFrom=${intent.appendFrom})`
+					: intent.kind;
 		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height})\n`;
 		fs.appendFileSync(getDebugLogPath(), msg);
 	}

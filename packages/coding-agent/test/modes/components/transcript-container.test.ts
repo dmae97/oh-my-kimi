@@ -53,16 +53,6 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["a2", "b2"]);
 	});
 
-	it("reports the live-region boundary at the bottom-most block on ED3-risk terminals", () => {
-		riskFlag.eagerEraseScrollbackRisk = true;
-		const container = new TranscriptContainer();
-		container.addChild(new MutableBlock(["a1", "a2"]));
-		container.addChild(new MutableBlock(["b1"]));
-
-		expect(container.render(40)).toEqual(["a1", "a2", "b1"]);
-		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
-	});
-
 	it("seals the prior block at its final content when finalize+append coalesce (ED3-risk)", () => {
 		riskFlag.eagerEraseScrollbackRisk = true;
 		const container = new TranscriptContainer();

@@ -1,4 +1,4 @@
-import { type Component, Container, type NativeScrollbackLiveRegion, TERMINAL } from "@oh-my-pi/pi-tui";
+import { type Component, Container, TERMINAL } from "@oh-my-pi/pi-tui";
 
 const kSnapshot = Symbol("transcript.frozenRender");
 
@@ -34,14 +34,10 @@ interface SnapshotCarrier {
  * and any drift reconciles safely. On terminals that can rebuild history this
  * freezing is unnecessary, so it renders every block live for full fidelity.
  */
-export class TranscriptContainer extends Container implements NativeScrollbackLiveRegion {
+export class TranscriptContainer extends Container {
 	// Bumped to invalidate every block's snapshot at once; a snapshot is only
 	// honored when its stored generation still matches.
 	#generation = 0;
-	// Local line index where the current bottom-most block begins in the most
-	// recent render. TUI extends the native-scrollback pinned region from this
-	// point through the live block and the root chrome rendered below it.
-	#nativeScrollbackLiveRegionStart: number | undefined;
 	// The block that was bottom-most (live) on the previous render. When the live
 	// position moves past it, its snapshot was last refreshed mid-stream and may
 	// predate content that finalized in the same coalesced frame that appended the
@@ -60,10 +56,6 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		super.clear();
 	}
 
-	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return this.#nativeScrollbackLiveRegionStart;
-	}
-
 	/**
 	 * Retire all frozen snapshots so the next render reflects each block's current
 	 * state. Call at reconciliation checkpoints (prompt submit) where the whole
@@ -76,7 +68,6 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 
 	override render(width: number): string[] {
 		width = Math.max(1, width);
-		this.#nativeScrollbackLiveRegionStart = undefined;
 		if (!TERMINAL.eagerEraseScrollbackRisk) return super.render(width);
 
 		const lines: string[] = [];
@@ -85,7 +76,6 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		const prevLiveChild = this.#prevLiveChild;
 		this.#prevLiveChild = liveChild;
 		for (let i = 0; i < this.children.length; i++) {
-			if (i === liveIndex) this.#nativeScrollbackLiveRegionStart = lines.length;
 			const child = this.children[i]! as Component & SnapshotCarrier;
 			if (child !== liveChild) {
 				const snapshot = child[kSnapshot];
