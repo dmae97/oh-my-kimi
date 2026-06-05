@@ -47,7 +47,7 @@ function asyncDetails(message: AgentMessage): AsyncDetails {
 	return (message as CustomMessage<AsyncDetails>).details ?? { jobs: [] };
 }
 
-function createToolSession(): ToolSession {
+function createToolSession(asyncJobManager?: AsyncJobManager): ToolSession {
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
@@ -57,6 +57,7 @@ function createToolSession(): ToolSession {
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
 		getAgentId: () => null,
+		asyncJobManager,
 	} as unknown as ToolSession;
 }
 
@@ -130,7 +131,7 @@ describe("async result yield queue delivery", () => {
 		await harness.manager.waitForAll();
 		await waitUntil(() => harness.queue.has("async-result"), "Timed out waiting for staged async result");
 
-		const tool = new JobTool(createToolSession());
+		const tool = new JobTool(createToolSession(harness.manager));
 		const result = await tool.execute("tool-call", { poll: [jobId] });
 		expect(result.details?.jobs.find(job => job.id === jobId)?.status).toBe("completed");
 

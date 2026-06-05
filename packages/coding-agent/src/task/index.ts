@@ -19,7 +19,6 @@ import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
-import { AsyncJobManager } from "../async";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
@@ -343,7 +342,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
-		const manager = AsyncJobManager.instance();
+		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			return {
 				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],

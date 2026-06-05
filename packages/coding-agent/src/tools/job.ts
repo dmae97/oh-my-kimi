@@ -90,7 +90,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<JobToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<JobToolDetails>> {
-		const manager = AsyncJobManager.instance();
+		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			return {
 				content: [{ type: "text", text: "Async execution is disabled; no background jobs are available." }],
@@ -254,7 +254,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	): JobSnapshot[] {
 		const now = Date.now();
 		return jobs.map(j => {
-			const current = AsyncJobManager.instance()?.getJob(j.id);
+			const current = this.session.asyncJobManager?.getJob(j.id);
 			const latest = current ?? j;
 			return {
 				id: latest.id,

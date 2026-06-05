@@ -17,7 +17,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		AsyncJobManager.resetForTests();
 	});
 
-	async function spawnTopLevelSession() {
+	async function spawnTopLevelSession(extraSettings?: Record<string, unknown>) {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-async-singleton-${Snowflake.next()}-`));
 		tempDirs.push(tempDir);
 		const cwd = path.join(tempDir, `project-${Snowflake.next()}`);
@@ -26,7 +26,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
-			settings: Settings.isolated({ "bash.autoBackground.enabled": true }),
+			settings: Settings.isolated({ "bash.autoBackground.enabled": true, ...(extraSettings ?? {}) }),
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],
@@ -98,6 +98,32 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 
 			release.resolve("done");
 			await primaryManager!.waitForAll();
+		} finally {
+			await primary.dispose();
+		}
+	});
+
+	it("refuses async bash from a secondary session instead of routing it to the primary's manager", async () => {
+		const primary = await spawnTopLevelSession({ "async.enabled": true });
+		try {
+			const primaryManager = AsyncJobManager.instance();
+			expect(primaryManager).toBeDefined();
+			const primaryJobCountBefore = primaryManager!.getAllJobs().length;
+
+			const secondary = await spawnTopLevelSession({ "async.enabled": true });
+			try {
+				const bashTool = secondary.getToolByName("bash");
+				expect(bashTool).toBeDefined();
+				await expect(bashTool!.execute("call-1", { command: "echo hi", async: true })).rejects.toThrow(
+					/Async job manager unavailable/,
+				);
+			} finally {
+				await secondary.dispose();
+			}
+
+			// The secondary's failed async attempt must not have leaked a job into
+			// the primary's manager.
+			expect(primaryManager!.getAllJobs().length).toBe(primaryJobCountBefore);
 		} finally {
 			await primary.dispose();
 		}

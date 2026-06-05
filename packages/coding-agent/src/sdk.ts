@@ -1297,6 +1297,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			authStorage,
 			modelRegistry,
 			getTelemetry: () => agent?.telemetry,
+			// Subagents inherit the singleton (the parent's manager) so their bash/task
+			// completions still flow into the spawning conversation's yieldQueue.
+			// Secondary in-process top-level sessions (no parentTaskPrefix, no
+			// constructed manager because the singleton was already installed) leave
+			// this undefined so tools refuse async work instead of silently routing it
+			// into the owning session (issue #1923).
+			asyncJobManager: asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined),
 		};
 
 		// Wire process-wide internal URL singletons owned by their real classes.
