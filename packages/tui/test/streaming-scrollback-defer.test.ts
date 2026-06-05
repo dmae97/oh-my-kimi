@@ -191,18 +191,14 @@ describe("streaming scrollback defer", () => {
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
 
-				// The prompt-submit checkpoint reconciles the deferred transcript with
-				// a single ED3 + re-emit — even while eager is still active, because an
-				// explicit reconcile is never deferred.
-				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+				// Unknown viewport checkpoints no longer replay destructively. The
+				// renderer keeps native history dirty rather than treating a prompt
+				// submit as proof that a real host viewport is at tail.
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 				await settle(term);
 
-				expect(eraseScrollbackCount(writes)).toBe(1);
-
-				const scrollbackAfter = term.getScrollBuffer();
-				expect(scrollbackAfter.length).toBeGreaterThan(scrollbackBefore);
-				expect(scrollbackAfter.join("\n")).toContain("stream-");
-				expect(scrollbackAfter.join("\n")).toContain("more-");
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
 			} finally {
 				tui.stop();
 			}

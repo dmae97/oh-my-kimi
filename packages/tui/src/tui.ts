@@ -14,6 +14,7 @@ import {
 	ImageProtocol,
 	setCellDimensions,
 	setTerminalImageProtocol,
+	shouldEnableSynchronizedOutputByDefault,
 	TERMINAL,
 } from "./terminal-capabilities";
 import {
@@ -168,9 +169,8 @@ export interface RenderRequestOptions {
 	allowUnknownViewportMutation?: boolean;
 }
 
-/** Options for deferred native scrollback rebuild checkpoints. */
+/** Options for deferred native scrollback rebuild checkpoints. Reserved for API stability. */
 export interface NativeScrollbackRefreshOptions {
-	/** Allow replay when the terminal cannot report viewport state. Use only for explicit user submit checkpoints. */
 	allowUnknownViewport?: boolean;
 }
 /** Type guard to check if a component implements Focusable */
@@ -387,7 +387,7 @@ export class TUI extends Container {
 	#sixelProbeUnsubscribe?: () => void;
 	#showHardwareCursor = $flag("PI_HARDWARE_CURSOR");
 	#clearOnShrink = $flag("PI_CLEAR_ON_SHRINK"); // Clear empty rows when content shrinks (default: off)
-	#synchronizedOutputEnabled = !$flag("PI_NO_SYNC_OUTPUT");
+	#synchronizedOutputEnabled = shouldEnableSynchronizedOutputByDefault();
 	#paintBeginSequence = this.#synchronizedOutputEnabled ? PAINT_BEGIN : PAINT_BEGIN_NO_SYNC;
 	#paintEndSequence = this.#synchronizedOutputEnabled ? PAINT_END : PAINT_END_NO_SYNC;
 	#cursorBeginSequence = this.#synchronizedOutputEnabled ? CURSOR_BEGIN : CURSOR_BEGIN_NO_SYNC;
@@ -525,8 +525,8 @@ export class TUI extends Container {
 
 	/**
 	 * Whether DEC 2026 synchronized-output wrappers are currently emitted around
-	 * paints. Starts from `PI_NO_SYNC_OUTPUT` and is force-disabled at runtime if
-	 * the terminal reports mode 2026 unsupported via DECRQM.
+	 * paints. Starts from conservative terminal/env detection and is force-disabled
+	 * at runtime if the terminal reports mode 2026 unsupported via DECRQM.
 	 */
 	get synchronizedOutput(): boolean {
 		return this.#synchronizedOutputEnabled;
@@ -874,6 +874,11 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
+			for (const id of this.#imageBudget.takeAllTransmittedIds()) {
+				this.terminal.write(encodeKittyDeleteImage(id));
+			}
+		}
 		this.#clearSixelProbeState();
 		this.#stopped = true;
 		if (this.#renderTimer) {
@@ -908,7 +913,7 @@ export class TUI extends Container {
 	 * Callers should only invoke this at checkpoints where the user is expected to be
 	 * at the terminal bottom, such as after submitting a new prompt.
 	 */
-	refreshNativeScrollbackIfDirty(options?: NativeScrollbackRefreshOptions): boolean {
+	refreshNativeScrollbackIfDirty(_options?: NativeScrollbackRefreshOptions): boolean {
 		if (!this.#nativeScrollbackDirty || this.#stopped) return false;
 		// Multiplexer panes preserve their own history and never receive a
 		// destructive clear, so a checkpoint "replay" cannot reconcile anything —
@@ -918,18 +923,11 @@ export class TUI extends Container {
 			this.#clearNativeScrollbackDirty();
 			return false;
 		}
-		let nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-		const allowUnknownViewport = options?.allowUnknownViewport === true;
-		if (nativeViewportAtBottom === false && allowUnknownViewport) {
-			const retriedViewportAtBottom = this.#readNativeViewportAtBottom();
-			if (this.#canReplayNativeScrollbackAtCheckpoint(retriedViewportAtBottom, allowUnknownViewport)) {
-				nativeViewportAtBottom = retriedViewportAtBottom;
-			}
-		}
-		if (!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom, allowUnknownViewport)) {
+		const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+		if (!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom)) {
 			return false;
 		}
-		this.#prepareForcedRender(true, allowUnknownViewport);
+		this.#prepareForcedRender(true, false);
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
 		this.#doRender();
@@ -957,7 +955,7 @@ export class TUI extends Container {
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 	}
 
-	#prepareForcedRender(clearScrollback: boolean, allowUnknownViewportMutation: boolean): void {
+	#prepareForcedRender(clearScrollback: boolean, _allowUnknownViewportMutation: boolean): void {
 		const geometryChanged =
 			(this.#previousWidth > 0 && this.#previousWidth !== this.terminal.columns) ||
 			(this.#previousHeight > 0 && this.#previousHeight !== this.terminal.rows);
@@ -967,7 +965,7 @@ export class TUI extends Container {
 		const replayGeometry =
 			geometryChanged &&
 			!isMultiplexerSession() &&
-			this.#canReplayNativeScrollbackAtCheckpoint(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation);
+			this.#canReplayNativeScrollbackAtCheckpoint(this.#readNativeViewportAtBottom());
 		this.#clearScrollbackOnNextRender ||= clearScrollback || replayGeometry;
 		this.#forceViewportRepaintOnNextRender = true;
 		if (this.#renderTimer) {
@@ -1713,13 +1711,10 @@ export class TUI extends Container {
 				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
 			// A width change rewraps the whole transcript, so committed scrollback is
-			// mis-wrapped at the old width. Yank is acceptable on an explicit resize, so
-			// rebuild even when the viewport position is unknown (POSIX); the
-			// known-scrolled case already deferred above.
-			if (
-				widthChanged ||
-				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
-			) {
+			// mis-wrapped at the old width. Rebuild only with a positive at-tail proof;
+			// unknown viewports stay dirty because the host scroll position is not
+			// observable and ED3 can yank readers.
+			if (this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, false)) {
 				return { kind: "historyRebuild" };
 			}
 			// POSIX terminals — and Windows Terminal/ConPTY — that cannot report the
@@ -1744,16 +1739,17 @@ export class TUI extends Container {
 				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
 			}
 
-			// Non-ED3-risk POSIX with an unobservable viewport. If the shrink still
-			// leaves enough rows to cover the previous viewport top, `deferredShrink`
-			// can repaint that stable slice without committing duplicate rows to
-			// native scrollback. When the shrink jumps above that padded viewport
-			// top, `deferredShrink` would draw only blank padding and hide the live
-			// prompt, so rebuild history instead (ED3 is safe on these terminals).
+			// Non-ED3-risk POSIX with an unobservable viewport. `deferredShrink` is
+			// safe only when changed rows are at or below the previous viewport top.
+			// Middle/offscreen deletes renumber rows above the viewport and padding
+			// the old length would repaint shifted rows or blank tail cells.
 			if (newLines.length <= paddedViewportTop) {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
+			if (diff.firstChanged < prevViewportTop) {
+				return { kind: "deferredMutation" };
+			}
 			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
 
@@ -2043,6 +2039,14 @@ export class TUI extends Container {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
+			if (
+				nativeViewportAtBottom === undefined &&
+				eagerEraseScrollbackRisk &&
+				!cleanTailAppend &&
+				!this.#eagerNativeScrollbackRebuild
+			) {
+				return { kind: "deferredMutation" };
+			}
 			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
 		}
 
@@ -2149,15 +2153,8 @@ export class TUI extends Container {
 	#nativeViewportIsKnownScrolled(nativeViewportAtBottom: boolean | undefined): boolean {
 		return nativeViewportAtBottom === false;
 	}
-
-	#canReplayNativeScrollbackAtCheckpoint(
-		nativeViewportAtBottom: boolean | undefined,
-		allowUnknownViewport: boolean,
-	): boolean {
-		return (
-			nativeViewportAtBottom === true ||
-			(nativeViewportAtBottom === undefined && (allowUnknownViewport || process.platform !== "win32"))
-		);
+	#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom: boolean | undefined): boolean {
+		return nativeViewportAtBottom === true;
 	}
 
 	/**
@@ -2167,10 +2164,9 @@ export class TUI extends Container {
 	 * the native viewport) is safe to emit *during ordinary rendering*. POSIX
 	 * terminals cannot report whether the user has scrolled up
 	 * (`isNativeViewportAtBottom()` is `undefined`), so an unknown position is
-	 * treated as unsafe: defer to a non-destructive viewport repaint, mark
-	 * scrollback dirty, and reconcile history at the next explicit checkpoint
-	 * ({@link refreshNativeScrollbackIfDirty} on prompt submit) where the
-	 * editor keystroke has already pinned the terminal to the bottom. Without
+	 * treated as unsafe: defer to a non-destructive viewport repaint and keep
+	 * scrollback dirty until a later render has a positive at-tail proof. A prompt
+	 * submit is no longer treated as proof for unobservable host scrollback.
 	 * this, every offscreen transcript edit while streaming wiped scrollback and
 	 * yanked a scrolled-up reader out of their current context.
 	 * `allowUnknownViewportMutation` (autocomplete/IME) opts directly

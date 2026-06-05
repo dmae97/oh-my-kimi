@@ -32,6 +32,11 @@ describe("StdinBuffer", () => {
 			processInput("hello \u4e16\u754c");
 			expect(emittedSequences).toEqual(["h", "e", "l", "l", "o", " ", "\u4e16", "\u754c"]);
 		});
+
+		it("emits surrogate-pair code points as one text sequence", () => {
+			processInput("🙂");
+			expect(emittedSequences).toEqual(["🙂"]);
+		});
 	});
 
 	describe("Partial Escape Sequences", () => {
