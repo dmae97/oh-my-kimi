@@ -397,6 +397,78 @@ describe("agent() through eval runtimes", () => {
 		expect(maxInFlight).toBeLessThanOrEqual(2);
 	});
 
+	it("interrupting a Python parallel() fan-out settles the kernel cleanly and preserves session state", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-py-interrupt-");
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.enableLsp": true,
+			"task.maxConcurrency": 6,
+		});
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-interrupt", settings);
+		mockAgents();
+		// Subagents that ignore the abort for far longer than the kernel's SIGINT
+		// escalation window. Each kernel worker thread blocks in a synchronous
+		// `urllib` bridge call, joined by `parallel()`'s ThreadPoolExecutor exit.
+		// The host must respond the instant the cell aborts so the kernel can
+		// unwind via KeyboardInterrupt instead of being hard-killed (which used to
+		// surface "[kernel] Python kernel shutdown" and lose all session state).
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(9000); // deliberately ignores options.signal
+			return singleResult(options, { output: options.assignment ?? "" });
+		});
+
+		// Seed persistent session state and confirm the kernel is reusable.
+		const seed = await executePython("PREP_MARKER = 4242", {
+			cwd: tempDir.path(),
+			sessionId,
+			sessionFile,
+			kernelMode: "session",
+			toolSession: session,
+		});
+		if (seed.exitCode === undefined && seed.cancelled) {
+			expect(seed.output).toBe("");
+			return; // kernel unavailable in this environment
+		}
+		expect(seed.exitCode).toBe(0);
+
+		const ac = new AbortController();
+		// Abort ~1s in, after the worker threads are blocked in their bridge calls.
+		setTimeout(() => ac.abort(new Error("external interrupt")), 1000);
+
+		const start = Date.now();
+		const result = await executePython(
+			"import json\nprint(json.dumps(parallel([lambda n=n: agent(str(n)) for n in range(12)])))",
+			{
+				cwd: tempDir.path(),
+				sessionId,
+				sessionFile,
+				kernelMode: "session",
+				toolSession: session,
+				idleTimeoutMs: 60_000,
+				signal: ac.signal,
+			},
+		);
+		const elapsed = Date.now() - start;
+
+		// Cancelled, but cleanly: no hard-kill, settled well within the kernel's 5s
+		// SIGINT escalation window rather than ~6s after it.
+		expect(result.cancelled).toBe(true);
+		expect(result.output).not.toContain("Python kernel shutdown");
+		expect(elapsed).toBeLessThan(4000);
+
+		// The persistent kernel survived the interrupt: prior state is intact.
+		const after = await executePython("print(PREP_MARKER)", {
+			cwd: tempDir.path(),
+			sessionId,
+			sessionFile,
+			kernelMode: "session",
+			toolSession: session,
+		});
+		expect(after.exitCode).toBe(0);
+		expect(after.output.trim()).toBe("4242");
+	}, 30_000);
+
 	it("streams enriched agent progress through onStatus before the cell finishes", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-progress-");
 		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-progress");

@@ -5,6 +5,7 @@
 
 - Fixed chat transcript updates after submitting input so frozen scrollback is only thawed when native scrollback replay succeeds, preventing misplaced or duplicated rows when the viewport is not at the tail
 - Fixed `read` of `.zip` archives to list the central directory without inflating every member, so large or corrupt zip payloads no longer freeze directory reads; member contents are inflated only when a specific entry is read.
+- Fixed the Python `eval` kernel being hard-killed (and its persistent session state lost) when a cell blocked in `parallel()` / `agent()` was interrupted. Each `agent()`/`tool.*` call blocks a kernel worker thread in a synchronous `urllib` request to the host bridge, and `parallel()`'s `ThreadPoolExecutor` exit joins those threads — so the kernel cannot unwind a `KeyboardInterrupt` until every in-flight bridge call returns. A wide subagent fan-out's teardown routinely outlasted the kernel's 5s SIGINT-escalation window, so the kernel was force-killed (surfacing `[kernel] Python kernel shutdown`) while the subagents were still winding down. The host bridge now resolves an in-flight call the instant the cell's signal aborts, so the kernel unwinds cleanly and keeps its state; the already-signaled subagent continues tearing down in the background.
 
 ## [15.9.3] - 2026-06-05
 
