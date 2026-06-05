@@ -20,7 +20,9 @@ describe("SignInTab", () => {
 			hasAuth: (_providerId: string) => false,
 			async login(_provider: OAuthProviderId, ctrl: OAuthLoginCallbacks): Promise<void> {
 				ctrl.onAuth({ url });
+				const prompt = ctrl.onManualCodeInput?.();
 				await loginGate.promise;
+				await prompt;
 			},
 		} as unknown as AuthStorage;
 
@@ -57,6 +59,10 @@ describe("SignInTab", () => {
 			expect(compact.slice(urlStart, urlStart + url.length + 8)).not.toContain("…");
 			expect(rendered.join("\n")).toContain(`\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`);
 			expect(openedUrls).toEqual([url]);
+
+			const clippedBody = rendered.slice(0, 7).map(line => Bun.stripANSI(line).trim());
+			expect(clippedBody).toContain("Paste the authorization code (or full redirect URL):");
+			expect(clippedBody.some(line => line.startsWith(">"))).toBe(true);
 		} finally {
 			tab.dispose();
 			loginGate.resolve();

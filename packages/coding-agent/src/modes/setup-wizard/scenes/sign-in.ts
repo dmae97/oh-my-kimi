@@ -82,15 +82,15 @@ export class SignInTab implements SetupTab {
 		} else {
 			lines.push(...this.#selector.render(width));
 		}
-		if (this.#statusLines.length > 0) {
-			lines.push("", ...this.#statusLines.flatMap(line => wrapTextWithAnsi(line, width)));
-		}
 		if (this.#prompt) {
 			lines.push("", theme.fg("warning", this.#prompt.message));
 			if (this.#prompt.placeholder) {
 				lines.push(theme.fg("dim", this.#prompt.placeholder));
 			}
 			lines.push(this.#prompt.input.render(width)[0] ?? "");
+		}
+		if (this.#statusLines.length > 0) {
+			lines.push("", ...this.#statusLines.flatMap(line => wrapTextWithAnsi(line, width)));
 		}
 		return lines;
 	}
