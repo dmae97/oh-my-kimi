@@ -49,4 +49,35 @@ describe("classifyInstallTarget", () => {
 		const result = classifyInstallTarget("some-pkg@my-marketplace", KNOWN);
 		expect(result).toEqual({ type: "marketplace", name: "some-pkg", marketplace: "my-marketplace" });
 	});
+
+	describe("local paths take precedence over npm classification", () => {
+		const cases: Array<[string, string]> = [
+			[".", "bare cwd"],
+			["..", "bare parent"],
+			["~", "bare home"],
+			["./pkg", "cwd-relative"],
+			["../pkg", "parent-relative"],
+			[".\\pkg", "cwd-relative (windows)"],
+			["..\\pkg", "parent-relative (windows)"],
+			["~/pkg", "tilde-prefixed (posix)"],
+			["~\\pkg", "tilde-prefixed (windows)"],
+			["/abs/path", "posix absolute"],
+			["C:\\abs\\path", "windows absolute (backslash)"],
+			["C:/abs/path", "windows absolute (forward slash)"],
+			["\\\\server\\share", "windows UNC"],
+		];
+		for (const [spec, label] of cases) {
+			it(`classifies ${label} (${JSON.stringify(spec)}) as local`, () => {
+				expect(classifyInstallTarget(spec, KNOWN)).toEqual({ type: "local", path: spec });
+			});
+		}
+
+		it("does not misclassify package names that merely contain dots", () => {
+			expect(classifyInstallTarget("my.plugin", KNOWN)).toEqual({ type: "npm", spec: "my.plugin" });
+		});
+
+		it("does not misclassify dist-tags or version specifiers as local", () => {
+			expect(classifyInstallTarget("pkg@1.2.3", KNOWN)).toEqual({ type: "npm", spec: "pkg@1.2.3" });
+		});
+	});
 });

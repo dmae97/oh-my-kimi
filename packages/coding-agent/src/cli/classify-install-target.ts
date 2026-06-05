@@ -1,7 +1,11 @@
 /**
- * Classify an install spec as a marketplace plugin reference or a plain npm package.
+ * Classify an install spec as a local path, marketplace plugin reference, or
+ * plain npm package.
  *
  * Rules (applied in order):
+ *  0. Looks like a filesystem path (`.`, `..`, `./…`, `..\…`, `/…`, `~/…`,
+ *     `C:\…`, `\\unc`) -> local. Routed through `PluginManager.link()` so the
+ *     `omp plugin install <path>` and `omp plugin link <path>` flows agree.
  *  1. Starts with `@` (scoped npm) -> always npm.
  *  2. Contains `@` after the first character -> split on the LAST `@`.
  *     If the right-hand side is a known marketplace name, it's a marketplace ref.
@@ -25,10 +29,32 @@ const NPM_DIST_TAGS = new Set([
 // Semver-like: starts with digit, or contains version range prefixes
 const LOOKS_LIKE_VERSION = /^[\d~^>=<]/;
 
-export function classifyInstallTarget(
-	spec: string,
-	knownMarketplaces: Set<string>,
-): { type: "marketplace"; name: string; marketplace: string } | { type: "npm"; spec: string } {
+/**
+ * Detect specs that name a filesystem path rather than a package: bare `.` /
+ * `..`, cwd-relative (`./`, `../`, `.\`, `..\`), absolute (`/`, `C:\`, `C:/`,
+ * UNC `\\`), and tilde-prefixed (`~`, `~/`, `~\`). Tilde paths still rely on
+ * the shell or the caller for expansion — we only classify them so they reach
+ * the link path instead of npm-name validation.
+ */
+function isLocalPathSpec(spec: string): boolean {
+	if (spec === "." || spec === ".." || spec === "~") return true;
+	if (spec.startsWith("./") || spec.startsWith("../")) return true;
+	if (spec.startsWith(".\\") || spec.startsWith("..\\")) return true;
+	if (spec.startsWith("~/") || spec.startsWith("~\\")) return true;
+	if (spec.startsWith("/")) return true;
+	if (spec.startsWith("\\\\")) return true;
+	if (/^[A-Za-z]:[\\/]/.test(spec)) return true;
+	return false;
+}
+
+export type ClassifiedInstallTarget =
+	| { type: "local"; path: string }
+	| { type: "marketplace"; name: string; marketplace: string }
+	| { type: "npm"; spec: string };
+
+export function classifyInstallTarget(spec: string, knownMarketplaces: Set<string>): ClassifiedInstallTarget {
+	// Rule 0: filesystem path — bypass npm/marketplace validation entirely.
+	if (isLocalPathSpec(spec)) return { type: "local", path: spec };
 	// Rule 1: scoped npm package — @ at position 0 is never a marketplace separator.
 	if (spec.startsWith("@")) return { type: "npm", spec };
 	// Rule 2: @ somewhere after the first character.
