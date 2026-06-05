@@ -261,6 +261,11 @@ export class TinyTitleClient {
 	#pending = new Map<string, PendingRequest>();
 	#progressListeners = new Set<(event: TinyTitleProgressEvent) => void>();
 	#nextRequestId = 0;
+	#spawnWorker: () => WorkerHandle;
+
+	constructor(spawnWorker: () => WorkerHandle = spawnTinyTitleWorker) {
+		this.#spawnWorker = spawnWorker;
+	}
 
 	onProgress(listener: (event: TinyTitleProgressEvent) => void): () => void {
 		this.#progressListeners.add(listener);
@@ -392,7 +397,7 @@ export class TinyTitleClient {
 
 	#ensureWorker(): WorkerHandle {
 		if (this.#worker) return this.#worker;
-		const worker = spawnTinyTitleWorker();
+		const worker = this.#spawnWorker();
 		this.#worker = worker;
 		this.#unsubscribeMessage = worker.onMessage(message => this.#handleMessage(message));
 		this.#unsubscribeError = worker.onError(error => this.#handleWorkerError(error));
@@ -429,6 +434,7 @@ export class TinyTitleClient {
 		this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
 		if (pending.kind === "generate" || pending.kind === "complete") pending.resolve(null);
 		else pending.resolve(false);
+		void this.terminate();
 	}
 
 	#emitProgress(event: TinyTitleProgressEvent): void {
