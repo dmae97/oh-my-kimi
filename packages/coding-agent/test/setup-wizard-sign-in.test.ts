@@ -10,7 +10,7 @@ beforeAll(async () => {
 });
 
 describe("SignInTab", () => {
-	it("wraps the full OAuth URL and keeps a full OSC8 link at narrow widths", async () => {
+	it("keeps the OSC8 login link and manual-code prompt above clipped wizard rows", async () => {
 		const url = `https://example.com/oauth/authorize?client_id=omp&redirect_uri=http%3A%2F%2Flocalhost%3A45454%2Fcallback&state=${"a".repeat(96)}`;
 		const loginGate = Promise.withResolvers<void>();
 		const openedUrls: string[] = [];
@@ -53,16 +53,20 @@ describe("SignInTab", () => {
 
 			const rendered = tab.render(36);
 			const compact = rendered.map(line => Bun.stripANSI(line).trim()).join("");
-			const urlStart = compact.indexOf(url.slice(0, 24));
-			expect(urlStart).toBeGreaterThanOrEqual(0);
-			expect(compact.slice(urlStart)).toContain(url);
-			expect(compact.slice(urlStart, urlStart + url.length + 8)).not.toContain("…");
+			expect(compact).toContain(url);
+			expect(compact).not.toContain("…");
 			expect(rendered.join("\n")).toContain(`\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`);
 			expect(openedUrls).toEqual([url]);
 
-			const clippedBody = rendered.slice(0, 7).map(line => Bun.stripANSI(line).trim());
+			// On a ~24-row terminal the wizard body ends up ~8 rows; both the
+			// OSC8 link row and the focused input must survive that clip.
+			const clippedBody = rendered.slice(0, 8).map(line => Bun.stripANSI(line).trim());
+			expect(clippedBody.some(line => line === "Browser login: Open login URL")).toBe(true);
 			expect(clippedBody).toContain("Paste the authorization code (or full redirect URL):");
 			expect(clippedBody.some(line => line.startsWith(">"))).toBe(true);
+			expect(clippedBody.indexOf("Browser login: Open login URL")).toBeLessThan(
+				clippedBody.findIndex(line => line.startsWith(">")),
+			);
 		} finally {
 			tab.dispose();
 			loginGate.resolve();
