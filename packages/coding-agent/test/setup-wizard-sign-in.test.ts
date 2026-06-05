@@ -58,15 +58,16 @@ describe("SignInTab", () => {
 			expect(rendered.join("\n")).toContain(`\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`);
 			expect(openedUrls).toEqual([url]);
 
-			// On a ~24-row terminal the wizard body ends up ~8 rows; both the
-			// OSC8 link row and the focused input must survive that clip.
+			// On a ~24-row terminal the wizard body ends up ~8 rows; the OSC8
+			// link, a plain URL row, and the focused input must survive that clip.
 			const clippedBody = rendered.slice(0, 8).map(line => Bun.stripANSI(line).trim());
+			const plainUrlIndex = clippedBody.findIndex(line => line.startsWith("https://example.com/oauth/authorize?"));
+			const inputIndex = clippedBody.findIndex(line => line.startsWith(">"));
 			expect(clippedBody.some(line => line === "Browser login: Open login URL")).toBe(true);
+			expect(plainUrlIndex).toBeGreaterThanOrEqual(0);
 			expect(clippedBody).toContain("Paste the authorization code (or full redirect URL):");
-			expect(clippedBody.some(line => line.startsWith(">"))).toBe(true);
-			expect(clippedBody.indexOf("Browser login: Open login URL")).toBeLessThan(
-				clippedBody.findIndex(line => line.startsWith(">")),
-			);
+			expect(inputIndex).toBeGreaterThanOrEqual(0);
+			expect(plainUrlIndex).toBeLessThan(inputIndex);
 		} finally {
 			tab.dispose();
 			loginGate.resolve();

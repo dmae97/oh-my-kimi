@@ -77,31 +77,30 @@ export class SignInTab implements SetupTab {
 	}
 
 	render(width: number): string[] {
-		const lines = [theme.fg("muted", "Pick a provider to sign in — you can connect more than one."), ""];
+		const lines: string[] = [];
 		if (this.#loggingInProvider) {
 			lines.push(theme.bold(`Signing in to ${this.#loggingInProvider}`));
 		} else {
+			lines.push(theme.fg("muted", "Pick a provider to sign in — you can connect more than one."), "");
 			lines.push(...this.#selector.render(width));
 		}
+
+		const urlLines = this.#authUrl ? wrapTextWithAnsi(theme.fg("dim", this.#authUrl), width) : [];
 		if (this.#authUrl) {
-			// Always-visible actionable row — wizard body clipping cannot push it
-			// off-screen even when the wrapped URL below would not fit.
-			lines.push("", theme.fg("accent", `Browser login: ${loginUrlLink(this.#authUrl)}`));
+			lines.push(theme.fg("accent", `Browser login: ${loginUrlLink(this.#authUrl)}`), ...urlLines.slice(0, 2));
 		}
 		if (this.#prompt) {
-			lines.push("", theme.fg("warning", this.#prompt.message));
+			lines.push(theme.fg("warning", this.#prompt.message));
 			if (this.#prompt.placeholder) {
 				lines.push(theme.fg("dim", this.#prompt.placeholder));
 			}
 			lines.push(this.#prompt.input.render(width)[0] ?? "");
 		}
-		if (this.#authUrl) {
-			// Plain-text URL for terminals without OSC 8 support. May clip on tiny
-			// terminals; the OSC 8 row above remains the always-visible fallback.
-			lines.push("", ...wrapTextWithAnsi(theme.fg("dim", this.#authUrl), width));
+		if (urlLines.length > 2) {
+			lines.push(...urlLines);
 		}
 		if (this.#statusLines.length > 0) {
-			lines.push("", ...this.#statusLines.flatMap(line => wrapTextWithAnsi(line, width)));
+			lines.push(...this.#statusLines.flatMap(line => wrapTextWithAnsi(line, width)));
 		}
 		return lines;
 	}
