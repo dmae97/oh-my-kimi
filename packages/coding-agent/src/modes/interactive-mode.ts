@@ -614,16 +614,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		// user has made it the startup default. Resumed/continued/forked sessions
 		// keep whatever mode #reconcileModeFromSession just restored. Scoped to
 		// launch (not the switch reconciler above) so /new and the plan-approval
-		// → execution handoff clear never get dragged back into plan mode. Silent
-		// no-op when plan mode is globally disabled or another mode is active.
+		// → execution handoff clear never get dragged back into plan mode.
+		// #enterPlanMode is idempotent and self-guards against an already-active
+		// plan/goal mode, so the only conditions worth checking here are the two
+		// settings (it does not check plan.enabled itself).
 		if (
 			!options.resuming &&
 			this.session.settings.get("plan.defaultOnStartup") &&
-			this.session.settings.get("plan.enabled") &&
-			!this.planModeEnabled &&
-			!this.planModePaused &&
-			!this.goalModeEnabled &&
-			!this.goalModePaused
+			this.session.settings.get("plan.enabled")
 		) {
 			await this.#enterPlanMode();
 		}
