@@ -303,7 +303,7 @@ function parseGithubPrUrl(text: string): ReviewPrRef | undefined {
 	if (url.protocol !== "https:" || url.hostname !== "github.com") return undefined;
 
 	const parts = url.pathname.split("/").filter(Boolean);
-	if (parts.length !== 4 || parts[2] !== "pull") return undefined;
+	if (parts.length < 4 || parts[2] !== "pull") return undefined;
 
 	const [owner, repo, , numberPart] = parts;
 	if (!isValidRepoSegment(owner) || !isValidRepoSegment(repo)) return undefined;
@@ -431,7 +431,7 @@ function getTextContentParts(content: unknown): string[] {
 function findRecentPrRefs(ctx: HookCommandContext, limit: number): ReviewPrRef[] {
 	const refs: ReviewPrRef[] = [];
 	const seen = new Set<string>();
-	const entries = ctx.sessionManager.getEntries();
+	const entries = ctx.sessionManager.getBranch();
 
 	for (let idx = entries.length - 1; idx >= 0 && refs.length < limit; idx--) {
 		const entry = entries[idx];
@@ -439,8 +439,12 @@ function findRecentPrRefs(ctx: HookCommandContext, limit: number): ReviewPrRef[]
 		const message = entry.message;
 		if (message.role !== "user" && message.role !== "assistant") continue;
 
-		for (const part of getTextContentParts(message.content)) {
-			for (const ref of extractReviewPrRefsFromText(part)) {
+		const parts = getTextContentParts(message.content);
+		for (let partIdx = parts.length - 1; partIdx >= 0; partIdx--) {
+			const part = parts[partIdx];
+			const partRefs = extractReviewPrRefsFromText(part);
+			for (let refIdx = partRefs.length - 1; refIdx >= 0; refIdx--) {
+				const ref = partRefs[refIdx];
 				const key = `${ref.repo.toLowerCase()}#${ref.number}`;
 				if (seen.has(key)) continue;
 				seen.add(key);

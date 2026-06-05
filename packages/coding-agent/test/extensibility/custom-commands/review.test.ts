@@ -88,6 +88,7 @@ describe("ReviewCommand", () => {
 		selectResults?: string[];
 		editorValue?: string | undefined;
 		sessionEntries?: SessionEntry[];
+		branchEntries?: SessionEntry[];
 		onEditorCall?: (call: EditorCall) => void;
 		onSelectCall?: (call: SelectCall) => void;
 		onNotify?: (call: NotifyCall) => void;
@@ -97,6 +98,7 @@ describe("ReviewCommand", () => {
 			hasUI: true,
 			sessionManager: {
 				getEntries: () => options?.sessionEntries ?? [],
+				getBranch: () => options?.branchEntries ?? options?.sessionEntries ?? [],
 			},
 			ui: {
 				select: (title: string, selectOptions: string[]) => {
@@ -241,6 +243,8 @@ describe("ReviewCommand", () => {
 			"https://github.com/owner/repo/pull/123/",
 			"https://github.com/owner/repo/pull/123?tab=files",
 			"https://github.com/owner/repo/pull/123#discussion_r123",
+			"https://github.com/owner/repo/pull/123/files",
+			"https://github.com/owner/repo/pull/123/commits",
 			"pr://owner/repo/123/diff/all",
 		];
 
@@ -371,6 +375,48 @@ describe("ReviewCommand", () => {
 		expect(diffSpy).toHaveBeenCalledWith({ cwd: dir, repo: "owner/example", number: 77 });
 	});
 
+	it("does not detect PR URLs from entries outside the current branch", async () => {
+		const dir = await createTempDir();
+		let reviewModeOptions: string[] = [];
+		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+		const ctx = createContext({
+			editorValue: "Review docs",
+			sessionEntries: [makeUserEntry("stale", "Stale https://github.com/owner/example/pull/77")],
+			branchEntries: [],
+			onSelectCall: call => {
+				if (call.title === "Review Mode") reviewModeOptions = call.options;
+			},
+		});
+
+		const result = await command.execute([], ctx);
+
+		expect(result).toBeDefined();
+		expect(reviewModeOptions).not.toContain("Review PR owner/example#77 from conversation");
+	});
+
+	it("detects only PR URLs from the active branch path", async () => {
+		const dir = await createTempDir();
+		let reviewModeOptions: string[] = [];
+		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+		const ctx = createContext({
+			editorValue: "Review docs",
+			sessionEntries: [
+				makeUserEntry("stale", "Stale https://github.com/owner/example/pull/77"),
+				makeUserEntry("active", "Active https://github.com/owner/example/pull/78"),
+			],
+			branchEntries: [makeUserEntry("active", "Active https://github.com/owner/example/pull/78")],
+			onSelectCall: call => {
+				if (call.title === "Review Mode") reviewModeOptions = call.options;
+			},
+		});
+
+		const result = await command.execute([], ctx);
+
+		expect(result).toBeDefined();
+		expect(reviewModeOptions).toContain("Review PR owner/example#78 from conversation");
+		expect(reviewModeOptions).not.toContain("Review PR owner/example#77 from conversation");
+	});
+
 	it("deduplicates detected PR menu entries", async () => {
 		const dir = await createTempDir();
 		let reviewModeOptions: string[] = [];
@@ -402,6 +448,32 @@ describe("ReviewCommand", () => {
 			sessionEntries: [
 				makeUserEntry("u1", "Older https://github.com/owner/example/pull/77"),
 				makeUserEntry("u2", "Newer https://github.com/owner/example/pull/78"),
+			],
+			onSelectCall: call => {
+				if (call.title === "Review Mode") reviewModeOptions = call.options;
+			},
+		});
+
+		const result = await command.execute([], ctx);
+
+		expect(result).toBeDefined();
+		expect(reviewModeOptions.slice(0, 2)).toEqual([
+			"Review PR owner/example#78 from conversation",
+			"Review PR owner/example#77 from conversation",
+		]);
+	});
+
+	it("orders detected PR menu entries by rightmost mention within one message", async () => {
+		const dir = await createTempDir();
+		let reviewModeOptions: string[] = [];
+		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+		const ctx = createContext({
+			editorValue: "Review docs",
+			sessionEntries: [
+				makeUserEntry(
+					"u1",
+					"Older https://github.com/owner/example/pull/77 newer https://github.com/owner/example/pull/78",
+				),
 			],
 			onSelectCall: call => {
 				if (call.title === "Review Mode") reviewModeOptions = call.options;
