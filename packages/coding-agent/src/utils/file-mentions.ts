@@ -10,8 +10,6 @@ import path from "node:path";
 import { formatHashlineHeader, formatNumberedLines, type SnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
-import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
 import { normalizeToLF } from "../edit/normalize";
 import type { FileMentionMessage } from "../session/messages";
@@ -30,27 +28,6 @@ const LEADING_PUNCTUATION_REGEX = /^[`"'([{<]+/;
 const TRAILING_PUNCTUATION_REGEX = /[)\]}>.,;:!?"'`]+$/;
 const MENTION_BOUNDARY_REGEX = /[\s([{<"'`]/;
 const DEFAULT_DIR_LIMIT = 500;
-const MIN_FUZZY_QUERY_LENGTH = 5;
-const MAX_RESOLUTION_CANDIDATES = 20_000;
-const PATH_SEPARATOR_REGEX = /[/._\-\s]+/g;
-
-type MentionDiscoveryProfile = {
-	hidden: boolean;
-	gitignore: boolean;
-	includeNodeModules: boolean;
-	maxResults: number;
-	cache: boolean;
-};
-
-function getMentionCandidateDiscoveryProfile(): MentionDiscoveryProfile {
-	return {
-		hidden: true,
-		gitignore: true,
-		cache: true,
-		includeNodeModules: true,
-		maxResults: MAX_RESOLUTION_CANDIDATES,
-	};
-}
 
 // Avoid OOM when users @mention very large files. Above these limits we skip
 // auto-reading and only include the path in the message.
@@ -70,17 +47,6 @@ function sanitizeMentionPath(rawPath: string): string | null {
 	return cleaned.length > 0 ? cleaned : null;
 }
 
-type MentionCandidate = {
-	path: string;
-	pathLower: string;
-	normalizedPath: string;
-	isDir: boolean;
-};
-
-function normalizeMentionQuery(query: string): string {
-	return query.toLowerCase().replace(PATH_SEPARATOR_REGEX, "");
-}
-
 async function pathExists(filePath: string): Promise<boolean> {
 	try {
 		await Bun.file(filePath).stat();
@@ -90,86 +56,13 @@ async function pathExists(filePath: string): Promise<boolean> {
 	}
 }
 
-async function listMentionCandidates(cwd: string): Promise<MentionCandidate[]> {
-	let entries: GlobMatch[];
-	try {
-		const discoveryProfile = getMentionCandidateDiscoveryProfile();
-		const result = await glob({
-			pattern: "**/*",
-			path: cwd,
-			...discoveryProfile,
-		});
-		entries = result.matches;
-	} catch {
-		return [];
-	}
-
-	entries.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()));
-	const candidates: MentionCandidate[] = [];
-	for (const entry of entries) {
-		const pathLower = entry.path.toLowerCase();
-		const normalizedPath = normalizeMentionQuery(entry.path);
-		if (normalizedPath.length === 0) {
-			continue;
-		}
-		candidates.push({ path: entry.path, pathLower, normalizedPath, isDir: entry.fileType === FileType.Dir });
-	}
-	return candidates;
-}
-
-async function resolveMentionPath(
-	filePath: string,
-	cwd: string,
-	getMentionCandidates: () => Promise<MentionCandidate[]>,
-): Promise<string | null> {
+async function resolveMentionPath(filePath: string, cwd: string): Promise<string | null> {
+	// Exact resolution only. The TUI @-selector inserts the real, complete path, so a
+	// mention that does not resolve to an existing file or directory is prose, not a file
+	// reference. Fuzzy/prefix guessing here previously dragged in unrelated same-named
+	// files; that disambiguation belongs to the selector's display, not post-send.
 	const absolutePath = resolveReadPath(filePath, cwd);
-	if (await pathExists(absolutePath)) {
-		return filePath;
-	}
-
-	// A trailing separator marks an explicit directory/scope reference (e.g. the npm
-	// scope "@stencil/"). Resolve it against directory candidates only, so a real or
-	// fuzzy-matched directory is listed instead of stripping the slash and dragging in
-	// an arbitrary same-named file.
-	const dirIntent = /[\\/]$/.test(filePath);
-	const query = dirIntent ? filePath.replace(/[\\/]+$/, "") : filePath;
-	if (dirIntent && query.length === 0) {
-		return null;
-	}
-
-	const queryLower = query.toLowerCase();
-	const allCandidates = await getMentionCandidates();
-	const candidates = dirIntent ? allCandidates.filter(candidate => candidate.isDir) : allCandidates;
-	const prefixMatches = candidates.filter(candidate => candidate.pathLower.startsWith(queryLower));
-	if (prefixMatches.length === 1) {
-		return prefixMatches[0]?.path ?? null;
-	}
-	if (prefixMatches.length > 1) {
-		return null;
-	}
-
-	const normalizedQuery = normalizeMentionQuery(query);
-	if (normalizedQuery.length < MIN_FUZZY_QUERY_LENGTH) {
-		return null;
-	}
-
-	const scored = candidates
-		.map(candidate => ({ candidate, match: fuzzyMatch(normalizedQuery, candidate.normalizedPath) }))
-		.filter(entry => entry.match.matches)
-		.sort((a, b) => {
-			if (a.match.score !== b.match.score) {
-				return a.match.score - b.match.score;
-			}
-			return a.candidate.path.localeCompare(b.candidate.path);
-		});
-
-	if (scored.length === 0) {
-		return null;
-	}
-
-	const best = scored[0];
-
-	return best?.candidate.path ?? null;
+	return (await pathExists(absolutePath)) ? filePath : null;
 }
 
 function buildTextOutput(textContent: string): { output: string; lineCount: number } {
@@ -297,14 +190,9 @@ export async function generateFileMentionMessages(
 	const autoResizeImages = options?.autoResizeImages ?? true;
 
 	const files: FileMentionMessage["files"] = [];
-	let mentionCandidatesPromise: Promise<MentionCandidate[]> | null = null;
-	const getMentionCandidates = (): Promise<MentionCandidate[]> => {
-		mentionCandidatesPromise ??= listMentionCandidates(cwd);
-		return mentionCandidatesPromise;
-	};
 
 	for (const filePath of filePaths) {
-		const resolvedPath = await resolveMentionPath(filePath, cwd, getMentionCandidates);
+		const resolvedPath = await resolveMentionPath(filePath, cwd);
 		if (!resolvedPath) {
 			continue;
 		}
