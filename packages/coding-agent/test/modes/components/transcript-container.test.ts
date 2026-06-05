@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { type Component, TERMINAL } from "@oh-my-pi/pi-tui";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { type Component, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { resetSettingsForTest, Settings } from "../../../src/config/settings";
+import { AssistantMessageComponent } from "../../../src/modes/components/assistant-message";
 import { TranscriptContainer } from "../../../src/modes/components/transcript-container";
+import { initTheme } from "../../../src/modes/theme/theme";
 
 // Models a transcript block that re-lays-out (tool preview collapsing, assistant
 // message finalizing, late async result) after it has scrolled past the live
@@ -48,9 +53,44 @@ class StreamingBlock implements Component {
 const riskFlag = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
 const original = riskFlag.eagerEraseScrollbackRisk;
 
+beforeAll(() => {
+	initTheme();
+});
+
+beforeEach(async () => {
+	resetSettingsForTest();
+	await Settings.init({ inMemory: true, cwd: process.cwd() });
+});
+
 afterEach(() => {
 	riskFlag.eagerEraseScrollbackRisk = original;
+	resetSettingsForTest();
 });
+
+function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text: "Continuing." }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		stopReason: "stop",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		timestamp: Date.now(),
+		...overrides,
+	};
+}
+
+function plain(lines: string[]): string {
+	return stripVTControlCharacters(lines.join("\n"));
+}
 
 describe("TranscriptContainer", () => {
 	it("freezes a block at its last live render once a newer block is appended (ED3-risk)", () => {
@@ -186,6 +226,41 @@ describe("TranscriptContainer", () => {
 		// Now finalized, it freezes: a later re-layout stays put until the next thaw.
 		tool.set(["collapsed"]);
 		expect(container.render(40)).toEqual(["✔ write: 4 lines", "rule card"]);
+	});
+
+	it("keeps a streaming assistant live so an abort label can land after status rows below it (ED3-risk)", () => {
+		riskFlag.eagerEraseScrollbackRisk = true;
+		const container = new TranscriptContainer();
+		const assistant = new AssistantMessageComponent();
+		assistant.updateContent(
+			makeAssistantMessage({
+				content: [{ type: "text", text: "The config file write went through." }],
+			}),
+		);
+		container.addChild(assistant);
+		expect(assistant.isTranscriptBlockFinalized()).toBe(false);
+		expect(plain(container.render(80))).toContain("The config file write went through.");
+
+		// Status/notice rows can arrive below the still-streaming assistant before
+		// message_end stamps the abort label. The assistant must stay repaintable.
+		container.addChild(new Text("Copied raw SSE stream", 0, 0));
+		expect(plain(container.render(80))).toContain("Copied raw SSE stream");
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(0);
+
+		assistant.updateContent(
+			makeAssistantMessage({
+				content: [{ type: "text", text: "The config file write went through despite the interruption." }],
+				stopReason: "aborted",
+				errorMessage: "Operation aborted",
+			}),
+		);
+		assistant.markTranscriptBlockFinalized();
+
+		const rendered = plain(container.render(80));
+		expect(rendered).toContain("The config file write went through despite the interruption.");
+		expect(rendered).toContain("Operation aborted");
+		expect(rendered).toContain("Copied raw SSE stream");
+		expect(container.getNativeScrollbackLiveRegionStart()).not.toBe(0);
 	});
 
 	it("seals the live region at the earliest of several unfinalized blocks (ED3-risk)", () => {

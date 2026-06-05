@@ -17,6 +17,7 @@ export class AssistantMessageComponent extends Container {
 	#usageInfo?: Usage;
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
+	#transcriptBlockFinalized: boolean;
 
 	constructor(
 		message?: AssistantMessage,
@@ -26,6 +27,7 @@ export class AssistantMessageComponent extends Container {
 		private readonly imageBudget?: ImageBudget,
 	) {
 		super();
+		this.#transcriptBlockFinalized = message !== undefined;
 
 		// Container for text/thinking content
 		this.#contentContainer = new Container();
@@ -45,6 +47,14 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
+	}
+
+	isTranscriptBlockFinalized(): boolean {
+		return this.#transcriptBlockFinalized;
+	}
+
+	markTranscriptBlockFinalized(): void {
+		this.#transcriptBlockFinalized = true;
 	}
 
 	setToolResultImages(toolCallId: string, images: ImageContent[]): void {

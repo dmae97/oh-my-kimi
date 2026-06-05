@@ -13,6 +13,8 @@
 - Fixed user-message rendering to materialize image links from embedded image blocks when rebuilding chat output, so image placeholders remain clickable after replayed or restored messages
 - Fixed tool execution cards to finalize promptly when a turn is abandoned or completed so stale streaming previews and frozen spinner frames no longer keep transcript rows in the live region
 - Fixed `read` and `search` TUI rendering to emit OSC 8 hyperlinks for HTTP URLs, `local://` resources backed by files, and filesystem search targets, including line-specific links for search match rows.
+- Fixed aborted streaming assistant messages staying frozen before their red "Operation aborted" label when status rows were appended underneath on ED3-risk terminals.
+- Fixed `omp` / `omp -c` stacking a fresh welcome screen and transcript on top of the previous run's leftover terminal scrollback. The cold-launch transcript render was the only session-load path that did not pass `clearTerminalHistory`, so the TUI's scrollback-preserving initial paint left the prior run's welcome + conversation above the new one; the cold launch now clears native scrollback before painting, matching every in-process session switch.
 
 ### Security
 

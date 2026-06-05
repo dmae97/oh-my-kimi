@@ -486,6 +486,7 @@ export class EventController {
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
+			this.#lastAssistantComponent.markTranscriptBlockFinalized();
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;
 			this.ctx.statusLine.invalidate();
