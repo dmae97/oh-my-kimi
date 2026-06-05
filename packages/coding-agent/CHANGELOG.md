@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `AsyncJobManager.instance()` being cleared while the owning top-level session was still live, which broke the `task` async path with "Async execution is enabled but no async job manager is available" until process restart. Any in-process secondary top-level `createAgentSession()` call (e.g. the Agent Control Center's create flow in `agent-dashboard.ts`) constructed a fresh `AsyncJobManager`, overwrote the singleton, and then cleared it on its own dispose. The secondary now shares the live singleton instead of clobbering it, and its `cancelOwnAsyncJobs` dispose-time cleanup is scoped so it can no longer cancel the primary session's running bash/task jobs ([#1923](https://github.com/can1357/oh-my-pi/issues/1923)).
+
 ## [15.9.1] - 2026-06-04
 
 ### Added

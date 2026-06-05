@@ -1398,11 +1398,22 @@ export class AgentSession {
 	 * Cancel async jobs registered by *this* agent only. Used by lifecycle
 	 * transitions (newSession, switchSession, handoff, dispose) so a subagent
 	 * cleans up its own background work without touching its parent's jobs.
-	 * No-op when no manager is installed or this session has no agent id.
+	 *
+	 * Cancellation runs against the manager THIS session owns. Subagents have
+	 * unique agent ids and may still reach the inherited singleton (which is
+	 * the parent's manager) to clean up their own scoped jobs. A secondary
+	 * in-process top-level session — which inherits the singleton without
+	 * owning it AND defaults to `MAIN_AGENT_ID` — must NOT cancel via the
+	 * inherited singleton, or it would tear down the owning primary session's
+	 * bash/task jobs at dispose time (issue #1923).
+	 *
+	 * No-op when no manager is reachable or this session has no agent id.
 	 */
 	#cancelOwnAsyncJobs(): void {
 		if (!this.#agentId) return;
-		AsyncJobManager.instance()?.cancelAll({ ownerId: this.#agentId });
+		const manager =
+			this.#ownedAsyncJobManager ?? (this.#agentId === MAIN_AGENT_ID ? undefined : AsyncJobManager.instance());
+		manager?.cancelAll({ ownerId: this.#agentId });
 	}
 
 	// =========================================================================
