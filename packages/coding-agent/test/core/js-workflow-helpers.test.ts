@@ -26,25 +26,11 @@ function baseSession(cwd: string, sessionFile: string, extra?: Partial<ToolSessi
 describe("executeJs workflow helpers", () => {
 	let tempDir: TempDir;
 	let sessionFile: string;
-	let sessionId: string;
 
-	beforeAll(async () => {
+	beforeAll(() => {
 		tempDir = TempDir.createSync("@js-workflow-helpers-");
 		sessionFile = path.join(tempDir.path(), "session.jsonl");
-		sessionId = `js-workflow-helpers:${tempDir.path()}`;
-		// Share one warm worker across all cases. The JS eval worker loads
-		// @babel/parser on spawn, so cold-start can exceed the 5s ready-timeout
-		// floor under parallel CI load; paying it once here (with explicit
-		// headroom) keeps the per-case bodies warm and immune to that race. The
-		// budget bridge reads the per-run ToolSession, so a shared worker still
-		// honors each case's distinct session config.
-		await executeJs("1;", {
-			sessionId,
-			session: baseSession(tempDir.path(), sessionFile),
-			sessionFile,
-			timeoutMs: 30_000,
-		});
-	}, 60_000);
+	});
 
 	afterAll(async () => {
 		await disposeAllVmContexts();
@@ -54,7 +40,7 @@ describe("executeJs workflow helpers", () => {
 	it("emits log and phase status events", async () => {
 		const session = baseSession(tempDir.path(), sessionFile);
 		const result = await executeJs('log("hello"); phase("Scan");', {
-			sessionId,
+			sessionId: `js-logphase:${tempDir.path()}`,
 			session,
 			sessionFile,
 		});
@@ -85,7 +71,7 @@ describe("executeJs workflow helpers", () => {
 		});
 		const result = await executeJs(
 			"return JSON.stringify([await budget.total(), await budget.spent(), await budget.remaining()]);",
-			{ sessionId, session, sessionFile },
+			{ sessionId: `js-budget-goal:${tempDir.path()}`, session, sessionFile },
 		);
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("[100000,4200,95800]");
@@ -104,7 +90,7 @@ describe("executeJs workflow helpers", () => {
 		});
 		const result = await executeJs(
 			"return JSON.stringify([await budget.total(), await budget.spent(), (await budget.remaining()) === Infinity]);",
-			{ sessionId, session, sessionFile },
+			{ sessionId: `js-budget-usage:${tempDir.path()}`, session, sessionFile },
 		);
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("[null,777,true]");
