@@ -106,4 +106,19 @@ describe("KeybindingsManager.create", () => {
 			await fs.rm(agentDir, { recursive: true, force: true });
 		}
 	});
+
+	it("defaults the follow-up shortcut to both Ctrl+Q and Ctrl+Enter (#1903)", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
+
+		try {
+			const manager = KeybindingsManager.create(agentDir);
+
+			// Both chords must be registered so Windows Terminal users (which swallow
+			// Ctrl+Enter at the terminal layer) get a working follow-up binding out
+			// of the box, without breaking users on Kitty/iTerm2/WezTerm/Ghostty.
+			expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q", "ctrl+enter"]);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+		}
+	});
 });

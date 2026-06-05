@@ -119,7 +119,10 @@ export const KEYBINDINGS = {
 		description: "Open external editor",
 	},
 	"app.message.followUp": {
-		defaultKeys: "ctrl+enter",
+		// Ctrl+Enter is preserved for terminals that deliver it (Kitty/iTerm2/WezTerm/Ghostty),
+		// but Windows Terminal does not emit a distinct event for Ctrl+Enter — Ctrl+Q is listed
+		// first so the default binding works there without remapping (#1903).
+		defaultKeys: ["ctrl+q", "ctrl+enter"],
 		description: "Send follow-up message",
 	},
 	"app.message.dequeue": {
