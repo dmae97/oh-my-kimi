@@ -3,11 +3,10 @@
  *
  * Uses brush-core via native bindings for shell execution.
  */
-import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
 import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
-import type { ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
+import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
@@ -118,6 +117,11 @@ function needsInteractiveShellArg(shell: string): boolean {
 	return basename.includes("zsh") || basename.includes("fish");
 }
 
+function supportsAutoUserShell(shell: string): boolean {
+	const basename = shellBasename(shell);
+	return basename.includes("bash") || basename.includes("zsh") || basename.includes("fish");
+}
+
 function hasInteractiveShellArg(args: string[]): boolean {
 	return args.some(arg => arg === "--interactive" || /^-[^-]*i/.test(arg));
 }
@@ -146,22 +150,13 @@ function buildUserShellCommand(shell: string, args: string[], command: string): 
 	return [shell, ...ensureInteractiveShellArgs(shell, args), command].map(quoteShellArg).join(" ");
 }
 
-async function isExecutableShell(shell: string): Promise<boolean> {
-	try {
-		await fs.access(shell, constants.X_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-async function resolveUserShellConfig(settings: Settings, baseConfig: ShellConfig): Promise<ShellConfig> {
+function resolveUserShellConfig(settings: Settings, baseConfig: ShellConfig): ShellConfig {
 	const customShellPath = settings.get("shellPath");
 	const envShell = Bun.env.SHELL;
 	if (customShellPath || process.platform === "win32" || !envShell || envShell === baseConfig.shell) {
 		return baseConfig;
 	}
-	if (!(await isExecutableShell(envShell))) {
+	if (!supportsAutoUserShell(envShell) || !isExecutable(envShell)) {
 		return baseConfig;
 	}
 
@@ -179,7 +174,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const settings = await Settings.init();
 	const baseShellConfig = settings.getShellConfig();
 	const shellConfig =
-		options?.useUserShell === true ? await resolveUserShellConfig(settings, baseShellConfig) : baseShellConfig;
+		options?.useUserShell === true ? resolveUserShellConfig(settings, baseShellConfig) : baseShellConfig;
 	const { shell, args, env: shellEnv, prefix } = shellConfig;
 	const bashShell = isBashShell(shell);
 	const snapshotPath = bashShell ? await getOrCreateSnapshot(shell, shellEnv) : null;

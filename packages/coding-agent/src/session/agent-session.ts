@@ -8615,7 +8615,7 @@ export class AgentSession {
 	 * @param command The bash command to execute
 	 * @param onChunk Optional streaming callback for output
 	 * @param options.excludeFromContext If true, command output won't be sent to LLM (!! prefix)
-	 * @param options.useUserShell If true, run via the configured user shell for interactive ! commands
+	 * @param options.useUserShell If true, allow caller to request configured user-shell routing
 	 */
 	async executeBash(
 		command: string,
