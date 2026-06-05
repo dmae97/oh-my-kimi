@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `task` tool returning a hard `Async execution is enabled but no async job manager is available.` error when `async.enabled` was true but `AsyncJobManager.instance()` returned `undefined`, leaving `task` non-functional for the rest of the session. The tool now falls back to the existing synchronous execution path (which still runs subagents concurrently via `mapWithConcurrencyLimit`), and logs a warning so the missing-manager state stays diagnosable ([#1922](https://github.com/can1357/oh-my-pi/issues/1922)).
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
