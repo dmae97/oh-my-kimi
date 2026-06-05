@@ -89,6 +89,7 @@ Current registered skill providers:
    - `agents`
    - `codex`
 5. `opencode` (priority 55)
+6. `github` (priority 30) — `.github/skills/<name>/SKILL.md` (GitHub Agent Skills layout, project-only)
 
 Dedup key is skill name. First item with a given name wins.
 
