@@ -138,6 +138,7 @@ import {
 	selectDiscoverableToolNamesByServer,
 	summarizeDiscoverableTools,
 } from "./tool-discovery/tool-index";
+import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "./tool-discovery/mode";
 import {
 	BashTool,
 	BUILTIN_TOOLS,
@@ -157,6 +158,7 @@ import {
 	ResolveTool,
 	renderSearchToolBm25Description,
 	SearchTool,
+	SearchToolBm25Tool,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 	type Tool,
@@ -1687,6 +1689,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		const effectiveDiscoveryMode = resolveEffectiveToolDiscoveryMode(
+			settings,
+			countToolsForAutoDiscovery(toolRegistry.keys()),
+		);
+		if (effectiveDiscoveryMode !== "off" && !toolRegistry.has("search_tool_bm25")) {
+			const searchTool = new SearchToolBm25Tool(toolSession);
+			toolRegistry.set(
+				searchTool.name,
+				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+			);
+		}
+		const mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
+
 		const reloadSshTool = async (): Promise<AgentTool | null> => {
 			if (!requestedToolNameSet.has("ssh")) return null;
 			const sshTool = (await loadSshTool({
@@ -1806,15 +1821,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 		const requestedToolNameSet = new Set(normalizedRequested);
-		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
-		const toolsDiscoveryModeSetting = settings.get("tools.discoveryMode");
-		const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
-			toolsDiscoveryModeSetting !== "off"
-				? (toolsDiscoveryModeSetting as "off" | "mcp-only" | "all")
-				: settings.get("mcp.discoveryMode")
-					? "mcp-only"
-					: "off";
-		const mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
+		// Effective discovery mode is resolved after the full registry exists so auto mode can count MCP/extension tools.
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
