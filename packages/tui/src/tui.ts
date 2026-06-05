@@ -1566,6 +1566,7 @@ export class TUI extends Container {
 			height,
 			liveRegionStart,
 			eagerEraseScrollbackRisk,
+			widthChanged || heightChanged,
 		);
 
 		// Caller opted into a scrollback wipe via requestRender(true, { clearScrollback: true }).
@@ -2109,12 +2110,18 @@ export class TUI extends Container {
 		height: number,
 		liveRegionStart: number | undefined,
 		eagerEraseScrollbackRisk: boolean,
+		geometryChanged: boolean,
 	): RenderIntent | undefined {
+		// A width/height change reflows the whole terminal: the relative cursor
+		// positioning this emitter relies on is computed from the pre-resize
+		// geometry and would land on the wrong rows. Defer to the geometry branch
+		// (a full reflow rebuild), which is the established behavior for resizes.
 		if (
 			liveRegionStart === undefined ||
 			liveRegionStart >= newLines.length ||
 			!this.#eagerNativeScrollbackRebuild ||
 			!eagerEraseScrollbackRisk ||
+			geometryChanged ||
 			isMultiplexerSession()
 		) {
 			return undefined;
