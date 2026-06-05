@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type NativeScrollbackLiveRegion, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class LineList implements Component {
@@ -17,6 +17,12 @@ class LineList implements Component {
 
 	setLines(lines: string[]): void {
 		this.#lines = [...lines];
+	}
+}
+
+class LiveLineList extends LineList implements NativeScrollbackLiveRegion {
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		return 0;
 	}
 }
 
@@ -66,6 +72,48 @@ function rows(prefix: string, count: number): string[] {
 }
 
 describe("streaming scrollback defer", () => {
+	it("keeps sealed prefix scrollable while deferring live-region rows on ED3-risk terminals", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(20, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const sealed = new LineList(rows("prior-", 12));
+			const live = new LiveLineList([]);
+
+			try {
+				tui.addChild(sealed);
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				live.setLines(rows("think-", 6));
+				tui.requestRender();
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([
+					...rows("prior-", 12),
+					...rows("think-", 6).slice(-4),
+				]);
+
+				live.setLines(rows("think-", 8));
+				tui.requestRender();
+				await settle(term);
+
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(buffer.filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
+				expect(buffer.slice(-4)).toEqual(rows("think-", 8).slice(-4));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	it("defers scrollback growth during eager streaming on ED3-risk and reconciles at the checkpoint", async () => {
 		if (process.platform === "win32") return;
 		await withTerminalRisk(true, async () => {

@@ -1,4 +1,4 @@
-import { type Component, Container, TERMINAL } from "@oh-my-pi/pi-tui";
+import { type Component, Container, type NativeScrollbackLiveRegion, TERMINAL } from "@oh-my-pi/pi-tui";
 
 const kSnapshot = Symbol("transcript.frozenRender");
 
@@ -34,7 +34,7 @@ interface SnapshotCarrier {
  * and any drift reconciles safely. On terminals that can rebuild history this
  * freezing is unnecessary, so it renders every block live for full fidelity.
  */
-export class TranscriptContainer extends Container {
+export class TranscriptContainer extends Container implements NativeScrollbackLiveRegion {
 	// Bumped to invalidate every block's snapshot at once; a snapshot is only
 	// honored when its stored generation still matches.
 	#generation = 0;
@@ -43,6 +43,10 @@ export class TranscriptContainer extends Container {
 	// predate content that finalized in the same coalesced frame that appended the
 	// block now below it — so it must recompute once on the live→frozen transition.
 	#prevLiveChild: Component | undefined;
+	// Local line index where the current bottom-most block begins in the most
+	// recent render. TUI extends the native-scrollback pinned region from this
+	// point through the live block and the root chrome rendered below it.
+	#nativeScrollbackLiveRegionStart: number | undefined;
 
 	override invalidate(): void {
 		// A theme/global invalidation forces a full recompute on the rebuild that
@@ -54,6 +58,10 @@ export class TranscriptContainer extends Container {
 	override clear(): void {
 		this.#generation++;
 		super.clear();
+	}
+
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		return this.#nativeScrollbackLiveRegionStart;
 	}
 
 	/**
@@ -68,6 +76,7 @@ export class TranscriptContainer extends Container {
 
 	override render(width: number): string[] {
 		width = Math.max(1, width);
+		this.#nativeScrollbackLiveRegionStart = undefined;
 		if (!TERMINAL.eagerEraseScrollbackRisk) return super.render(width);
 
 		const lines: string[] = [];
@@ -77,7 +86,9 @@ export class TranscriptContainer extends Container {
 		this.#prevLiveChild = liveChild;
 		for (let i = 0; i < this.children.length; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
-			if (child !== liveChild) {
+			if (child === liveChild) {
+				this.#nativeScrollbackLiveRegionStart = lines.length;
+			} else {
 				const snapshot = child[kSnapshot];
 				// Replay the block's last render from while it was live. A stale
 				// generation (post-thaw) or width mismatch (resize in flight, an
