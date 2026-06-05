@@ -116,11 +116,11 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.getPlanModeState()).toBeUndefined();
 	});
 
-	it("does not enter plan mode when the session has restored history", async () => {
-		// A genuinely resumed session has prior entries; gating on getEntries()
-		// (not the CLI resume flag) means a `--continue` that created a *fresh*,
-		// empty session still gets the startup default (the "enters" case above),
-		// while one with restored history is left in its reconciled mode.
+	it("does not enter plan mode when the session has restored conversation", async () => {
+		// A genuinely resumed session has prior conversation messages. Gating on
+		// message entries (not the CLI resume flag) means a `--continue` that
+		// created a *fresh* session still gets the startup default (above), while
+		// one with restored conversation is left in its reconciled mode.
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
 		created.sessionManager.appendMessage({ role: "user", content: "prior turn", timestamp: Date.now() });
 
@@ -128,6 +128,21 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+
+	it("enters plan mode for a fresh session that carries only startup metadata", async () => {
+		// createAgentSession appends model_change / thinking_level_change for a
+		// brand-new session before init(); those are not conversation history, so
+		// the startup default must still apply (regression: gating on entry count
+		// instead of message entries skipped plan mode for every real new session).
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendThinkingLevelChange("medium");
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
 	});
 
 	it("does not enter plan mode when plan mode is globally disabled", async () => {

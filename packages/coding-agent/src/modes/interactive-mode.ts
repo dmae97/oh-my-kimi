@@ -611,17 +611,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#reconcileModeFromSession();
 
 		// Brand-new sessions optionally start in plan mode when the user has made
-		// it the startup default. "Brand-new" is keyed off the session having no
-		// prior entries — not the CLI resume flags — so `omp --continue` (or
-		// auto-resume) that finds no recent session and creates a fresh one still
-		// honors the default, while a session with restored history keeps whatever
-		// mode #reconcileModeFromSession just reconciled. Scoped to launch (not the
-		// switch reconciler above) so /new and the plan-approval → execution handoff
-		// clear never get dragged back into plan mode. #enterPlanMode is idempotent
-		// and self-guards against an already-active plan/goal mode; it does not check
-		// plan.enabled itself.
+		// it the startup default. "Brand-new" means no prior *conversation*: a fresh
+		// session created via the SDK already carries startup metadata entries
+		// (model_change / thinking_level_change / service_tier_change appended before
+		// init), so key off message entries rather than entry count. This way `omp
+		// --continue` (or auto-resume) that finds no recent session and creates a
+		// fresh one still honors the default, while a session with restored
+		// conversation keeps whatever mode #reconcileModeFromSession just reconciled.
+		// Scoped to launch (not the switch reconciler above) so /new and the
+		// plan-approval → execution handoff clear never get dragged back into plan
+		// mode. #enterPlanMode is idempotent and self-guards against an already-active
+		// plan/goal mode; it does not check plan.enabled itself.
+		const hasPriorConversation = this.sessionManager.getEntries().some(entry => entry.type === "message");
 		if (
-			this.sessionManager.getEntries().length === 0 &&
+			!hasPriorConversation &&
 			this.session.settings.get("plan.defaultOnStartup") &&
 			this.session.settings.get("plan.enabled")
 		) {
