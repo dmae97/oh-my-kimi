@@ -224,6 +224,13 @@ export const STRING_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(STRIN
  * {@link STRING_VALUE_FLAGS}.
  */
 export const OPTIONAL_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(OPTIONAL_FLAGS));
+/**
+ * Internal marker inserted by the profile bootstrap when removing `--profile`
+ * or `--alias` would otherwise make the following value-like token become the
+ * value of a preceding optional/extension flag. `parseArgs` ignores it, but its
+ * flag-looking shape preserves argv boundaries during the second parse.
+ */
+export const PROFILE_BOOTSTRAP_BOUNDARY_ARG = "--omp-profile-boundary";
 
 /**
  * Long-form launch flags that take NO value (booleans). The bootstrap pre-parser

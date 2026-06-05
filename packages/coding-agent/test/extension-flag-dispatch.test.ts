@@ -30,13 +30,13 @@ describe("extension flag dispatch", () => {
 		expect(args?.messages).toEqual(["--foo", "bar"]);
 	});
 
-	it("still allows -- to be the value of a string extension flag", () => {
+	it("keeps -- as end-of-options after a string extension flag", () => {
 		const sink = new FakeExtensionFlagSink();
 
-		const args = applyExtensionFlags(sink, ["--bar", "--"]);
+		const args = applyExtensionFlags(sink, ["--bar", "--", "--foo", "bar"]);
 
-		expect(sink.values.get("bar")).toBe("--");
-		expect(sink.values.size).toBe(1);
-		expect(args?.messages).toEqual([]);
+		expect(sink.values.has("bar")).toBe(false);
+		expect(sink.values.size).toBe(0);
+		expect(args?.messages).toEqual(["--foo", "bar"]);
 	});
 });

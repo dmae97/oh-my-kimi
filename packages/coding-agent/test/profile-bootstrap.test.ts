@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { parseArgs } from "../src/cli/args";
+import { PROFILE_BOOTSTRAP_BOUNDARY_ARG } from "../src/cli/flag-tables";
 import { extractProfileFlags } from "../src/cli/profile-bootstrap";
 
 describe("extractProfileFlags", () => {
@@ -59,6 +61,32 @@ describe("extractProfileFlags", () => {
 		const filePrefixed = extractProfileFlags(["--list-models", "@models.txt", "--profile", "work"]);
 		expect(filePrefixed.argv).toEqual(["--list-models", "@models.txt"]);
 		expect(filePrefixed.profile).toBe("work");
+	});
+
+	it("preserves optional-flag boundaries when stripping a profile before prompt text", () => {
+		const extracted = extractProfileFlags(["--resume", "--profile", "work", "follow up"]);
+		expect(extracted).toEqual({
+			argv: ["--resume", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"],
+			profile: "work",
+			aliasName: undefined,
+		});
+
+		const parsed = parseArgs(extracted.argv);
+		expect(parsed.resume).toBe(true);
+		expect(parsed.messages).toEqual(["follow up"]);
+	});
+
+	it("preserves extension-flag boundaries when stripping a profile before prompt text", () => {
+		const extracted = extractProfileFlags(["--some-ext-flag", "--profile", "work", "follow up"]);
+		expect(extracted).toEqual({
+			argv: ["--some-ext-flag", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"],
+			profile: "work",
+			aliasName: undefined,
+		});
+
+		const parsed = parseArgs(extracted.argv, new Map([["some-ext-flag", { type: "string" }]]));
+		expect(parsed.unknownFlags.has("some-ext-flag")).toBe(false);
+		expect(parsed.messages).toEqual(["follow up"]);
 	});
 
 	it("does not consume empty-string resume values before a trailing profile", () => {
@@ -212,10 +240,9 @@ describe("extractProfileFlags", () => {
 	});
 
 	it("treats a `--` successor of an unknown flag as end-of-options, not a protected value", () => {
-		// `--` is ambiguous under the parser (a string extension flag consumes it,
-		// a boolean one does not), so the bootstrap keeps `--` a single consistent
-		// meaning: end-of-options. Everything after is forwarded verbatim and no
-		// profile is extracted, so a `--profile` fenced behind `--` never silently
+		// `--` is the parser's end-of-options marker even after a string extension
+		// flag. The bootstrap keeps that single meaning: everything after is
+		// forwarded verbatim, so a `--profile` fenced behind `--` never silently
 		// activates.
 		expect(extractProfileFlags(["--some-ext-flag", "--", "--profile", "work"])).toEqual({
 			argv: ["--some-ext-flag", "--", "--profile", "work"],

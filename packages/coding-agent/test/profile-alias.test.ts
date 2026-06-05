@@ -64,6 +64,26 @@ describe("profile alias installer", () => {
 		);
 	});
 
+	it("installs the zsh alias under ZDOTDIR when set", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/bin/zsh",
+			platform: "darwin",
+			homeDir: "/Users/me",
+			env: { ZDOTDIR: "/Users/me/.config/zsh" },
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.configPath).toBe("/Users/me/.config/zsh/.zshrc");
+		expect(files.get(result.configPath)).toContain("omp-work() {");
+	});
+
 	it("writes a fish function that forwards argv", async () => {
 		const files = new Map<string, string>();
 
@@ -260,6 +280,24 @@ describe("profile alias installer", () => {
 					homeDir: "/home/me",
 				}),
 			).rejects.toThrow("Refusing to shadow");
+		}
+	});
+
+	it("rejects shell reserved words before rendering alias functions", async () => {
+		for (const { aliasName, shellPath } of [
+			{ aliasName: "if", shellPath: "/bin/bash" },
+			{ aliasName: "end", shellPath: "/opt/homebrew/bin/fish" },
+			{ aliasName: "foreach", shellPath: "pwsh.exe" },
+		]) {
+			await expect(
+				installProfileAlias({
+					profile: "work",
+					aliasName,
+					shellPath,
+					platform: shellPath === "pwsh.exe" ? "win32" : "linux",
+					homeDir: "/home/me",
+				}),
+			).rejects.toThrow("reserved word");
 		}
 	});
 

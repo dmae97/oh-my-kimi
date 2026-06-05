@@ -10,6 +10,7 @@ import {
 	OPTIONAL_FLAGS,
 	OPTIONAL_VALUE_FLAGS,
 	type ParseDeps,
+	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
 	STRING_SETTERS,
 	STRING_VALUE_FLAGS,
 } from "./flag-tables";
@@ -104,6 +105,9 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			passThrough = true;
 			continue;
 		}
+		if (arg === PROFILE_BOOTSTRAP_BOUNDARY_ARG) {
+			continue;
+		}
 		const flagIndex = i;
 
 		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
@@ -131,11 +135,10 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			if (extFlag.type === "boolean") {
 				result.unknownFlags.set(flagName, true);
 			} else if (extFlag.type === "string" && i + 1 < args.length) {
-				// Consume the value in `--flag=value` form, when the next token is not
-				// flag-looking, or when the next token is the end-of-options marker itself
-				// (valid as a string flag value). Pass other flag-looking values as
-				// `--flag=value`.
-				if (equalsValueIndex !== -1 || args[i + 1] === "--" || !args[i + 1].startsWith("-")) {
+				// Consume the value in `--flag=value` form or when the next token is not
+				// flag-looking. A standalone `--` remains the end-of-options marker; use
+				// `--flag=--` when an extension needs a literal "--" string value.
+				if (equalsValueIndex !== -1 || !args[i + 1].startsWith("-")) {
 					result.unknownFlags.set(flagName, args[++i]);
 				}
 			}

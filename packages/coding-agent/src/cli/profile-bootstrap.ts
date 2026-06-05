@@ -33,10 +33,31 @@
  */
 
 import { isSubcommand } from "../cli-commands";
-import { OPTIONAL_FLAGS, OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS, VALUELESS_FLAGS } from "./flag-tables";
+import {
+	OPTIONAL_FLAGS,
+	OPTIONAL_VALUE_FLAGS,
+	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
+	STRING_VALUE_FLAGS,
+	VALUELESS_FLAGS,
+} from "./flag-tables";
 
 function isProfileBootstrapSubcommand(arg: string): boolean {
 	return arg === "launch" || arg === "acp";
+}
+
+function isUnknownLongValueCandidate(arg: string): boolean {
+	return (
+		arg.startsWith("--") &&
+		!arg.includes("=") &&
+		!STRING_VALUE_FLAGS.has(arg) &&
+		!OPTIONAL_VALUE_FLAGS.has(arg) &&
+		!VALUELESS_FLAGS.has(arg)
+	);
+}
+
+function needsBoundaryAfterGlobalStrip(stripped: readonly string[]): boolean {
+	const previous = stripped[stripped.length - 1];
+	return previous !== undefined && (OPTIONAL_VALUE_FLAGS.has(previous) || isUnknownLongValueCandidate(previous));
 }
 
 export interface ProfileBootstrapResult {
@@ -67,13 +88,20 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 	let passThrough = false;
 	let sawSubcommand = false;
 	let canDispatchSubcommand = true;
-
+	let insertBoundaryBeforeNextValue = false;
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 
 		if (passThrough || sawSubcommand) {
 			stripped.push(arg);
 			continue;
+		}
+
+		if (insertBoundaryBeforeNextValue) {
+			if (!arg.startsWith("-")) {
+				stripped.push(PROFILE_BOOTSTRAP_BOUNDARY_ARG);
+			}
+			insertBoundaryBeforeNextValue = false;
 		}
 
 		// `--` ends option processing. Anything that follows is forwarded verbatim
@@ -91,6 +119,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--profile requires a profile name");
 			}
 			profile = value;
+			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
 			index += 1;
 			continue;
 		}
@@ -100,6 +129,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--profile requires a profile name");
 			}
 			profile = value;
+			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
 			continue;
 		}
 		if (arg === "--alias") {
@@ -108,6 +138,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--alias requires a command name");
 			}
 			aliasName = value;
+			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
 			index += 1;
 			continue;
 		}
@@ -117,6 +148,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--alias requires a command name");
 			}
 			aliasName = value;
+			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
 			continue;
 		}
 
@@ -167,7 +199,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		// single, consistent meaning instead of being swallowed as a flag value.
 		// Known value-less launch flags are exempt so a trailing profile still
 		// activates (`omp --print --profile work`).
-		if (arg.startsWith("--") && !arg.includes("=") && !VALUELESS_FLAGS.has(arg)) {
+		if (isUnknownLongValueCandidate(arg)) {
 			canDispatchSubcommand = false;
 			stripped.push(arg);
 			const next = argv[index + 1];

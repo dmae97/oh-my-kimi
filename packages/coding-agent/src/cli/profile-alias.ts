@@ -48,6 +48,80 @@ export interface ProfileAliasInstallResult {
 }
 
 const ALIAS_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const POSIX_RESERVED_ALIAS_NAMES: ReadonlySet<string> = new Set([
+	"case",
+	"coproc",
+	"do",
+	"done",
+	"elif",
+	"else",
+	"esac",
+	"fi",
+	"for",
+	"function",
+	"if",
+	"in",
+	"select",
+	"then",
+	"time",
+	"until",
+	"while",
+]);
+const FISH_RESERVED_ALIAS_NAMES: ReadonlySet<string> = new Set([
+	"and",
+	"begin",
+	"break",
+	"builtin",
+	"case",
+	"command",
+	"continue",
+	"else",
+	"end",
+	"exec",
+	"for",
+	"function",
+	"if",
+	"not",
+	"or",
+	"return",
+	"switch",
+	"while",
+]);
+const POWERSHELL_RESERVED_ALIAS_NAMES: ReadonlySet<string> = new Set([
+	"begin",
+	"break",
+	"catch",
+	"class",
+	"continue",
+	"data",
+	"do",
+	"dynamicparam",
+	"else",
+	"elseif",
+	"end",
+	"enum",
+	"exit",
+	"filter",
+	"finally",
+	"for",
+	"foreach",
+	"from",
+	"function",
+	"if",
+	"in",
+	"param",
+	"process",
+	"return",
+	"switch",
+	"throw",
+	"trap",
+	"try",
+	"until",
+	"using",
+	"var",
+	"while",
+	"workflow",
+]);
 
 // Keep local: importing the pi-utils root here would eagerly load env before
 // cli.ts has applied --profile, regressing profile-specific .env loading.
@@ -55,13 +129,29 @@ function isEnoentError(error: unknown): boolean {
 	return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
 }
 
-function validateAliasName(aliasName: string): string {
+function getReservedAliasNames(shell: ProfileAliasShell): ReadonlySet<string> {
+	switch (shell) {
+		case "bash":
+		case "zsh":
+			return POSIX_RESERVED_ALIAS_NAMES;
+		case "fish":
+			return FISH_RESERVED_ALIAS_NAMES;
+		case "powershell":
+		case "pwsh":
+			return POWERSHELL_RESERVED_ALIAS_NAMES;
+	}
+}
+
+function validateAliasName(aliasName: string, shell: ProfileAliasShell): string {
 	const normalized = aliasName.trim();
 	if (!ALIAS_NAME_RE.test(normalized)) {
 		throw new Error(`Invalid alias "${aliasName}". Alias names must match ${ALIAS_NAME_RE.source}.`);
 	}
 	if (normalized.toLowerCase() === "omp") {
 		throw new Error('Invalid alias "omp". Refusing to shadow the base omp command.');
+	}
+	if (getReservedAliasNames(shell).has(normalized.toLowerCase())) {
+		throw new Error(`Invalid alias "${aliasName}". Refusing to create a ${shell} reserved word.`);
 	}
 	return normalized;
 }
@@ -125,7 +215,7 @@ function resolveShellConfigPath(
 ): string {
 	switch (shell) {
 		case "zsh":
-			return path.join(homeDir, ".zshrc");
+			return path.join(env.ZDOTDIR || homeDir, ".zshrc");
 		case "bash":
 			return platform === "darwin" ? path.join(homeDir, ".bash_profile") : path.join(homeDir, ".bashrc");
 		case "fish": {
@@ -215,11 +305,11 @@ export async function installProfileAlias(options: ProfileAliasInstallOptions): 
 	if (!profile) {
 		throw new Error("--alias requires a named --profile value.");
 	}
-	const aliasName = validateAliasName(options.aliasName);
 	const platform = options.platform ?? process.platform;
 	const homeDir = options.homeDir ?? os.homedir();
 	const env = options.env ?? process.env;
 	const shell = normalizeShellName(options.shellPath ?? env.SHELL, platform, env);
+	const aliasName = validateAliasName(options.aliasName, shell);
 	const configPath = resolveShellConfigPath(shell, homeDir, platform, env);
 	const { block, command } = renderAliasBlock(shell, aliasName, profile, options.command ?? DEFAULT_ALIAS_COMMAND);
 	const readFile = options.readFile ?? readProfileAliasConfigFile;
