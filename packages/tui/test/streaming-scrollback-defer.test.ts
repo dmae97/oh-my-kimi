@@ -249,4 +249,46 @@ describe("streaming scrollback defer", () => {
 			}
 		});
 	});
+
+	it("does not duplicate committed sealed rows when the live region collapses mid-stream", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(20, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			// Sealed prefix above a live block: growth commits the sealed rows to
+			// native scrollback; a later collapse must not repaint them back into the
+			// viewport (which would duplicate them in history with no ED3 to erase).
+			const sealed = new LineList(rows("prior-", 12));
+			const live = new LiveLineList([]);
+
+			try {
+				tui.addChild(sealed);
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				// Live block overflows the viewport — sealed prefix commits once.
+				live.setLines(rows("think-", 30));
+				tui.requestRender();
+				await settle(term);
+				expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
+
+				// Live block collapses to its compact result. The bottom-anchored
+				// viewport would re-expose committed sealed rows; the pin must clamp the
+				// repaint to the committed boundary instead of duplicating them.
+				live.setLines(["done"]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });

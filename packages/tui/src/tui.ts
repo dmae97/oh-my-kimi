@@ -333,8 +333,8 @@ export class Container implements Component {
  *   wrapped at the old size — clear viewport and scrollback so it rewraps at the
  *   new geometry. Also flushes deferred content-only rewrites.
  * - `liveRegionPinned`: ED3-risk/unknown foreground stream with a reported live
- *   suffix — optionally append newly sealed rows, then repaint the live tail
- *   without letting transient rows enter native history.
+ *   suffix — optionally append newly sealed rows, then repaint the live/mutable
+ *   tail without letting transient rows enter native history.
  * - `viewportRepaint`: rewrite the visible viewport in place. If `appendFrom`
  *   is set, emit those tail rows as scrollback growth first so streaming
  *   output reaches terminal history before the corrected viewport is drawn.
@@ -352,7 +352,7 @@ type RenderIntent =
 	| { kind: "sessionReplace" }
 	| { kind: "historyRebuild" }
 	| { kind: "overlayRebuild" }
-	| { kind: "liveRegionPinned"; appendFrom: number; appendTo: number }
+	| { kind: "liveRegionPinned"; appendFrom: number; appendTo: number; renderViewportTop: number }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "deferredShrink"; paddedLength: number }
 	| { kind: "deferredMutation" }
@@ -1551,6 +1551,7 @@ export class TUI extends Container {
 					cursorPos,
 					intent.appendFrom,
 					intent.appendTo,
+					intent.renderViewportTop,
 					prevViewportTop,
 					prevHardwareCursorRow,
 				);
@@ -2194,20 +2195,27 @@ export class TUI extends Container {
 		if (this.#readNativeViewportAtBottom() !== undefined) return undefined;
 
 		this.#markNativeScrollbackDirty();
-		const viewportTop = Math.max(0, newLines.length - height);
-		// Every row above the viewport top has physically scrolled out of the live
-		// viewport, so the terminal has already pushed it into native scrollback —
-		// there is nowhere else for an off-screen row to live. It must therefore be
-		// committed as real content, *including the head of the live block itself*
-		// when that block alone overflows the viewport (a tall tool result, a long
-		// streamed reply). Clamping the commit to `liveRegionStart` (the sealed-
-		// prefix boundary) stranded those rows: neither pushed to scrollback nor
-		// kept in the repainted viewport, so the head of the block was erased as it
-		// overflowed. Only the live tail that remains *within* the viewport stays
-		// transient (repainted in place, deferred to the checkpoint rebuild).
-		const appendTo = viewportTop;
+		const naturalViewportTop = Math.max(0, newLines.length - height);
+		// Rows before the live-region boundary are sealed. If a live-region
+		// collapse moves the bottom-anchored viewport back across rows already
+		// written to native scrollback, repainting those sealed rows duplicates
+		// them in history. Clamp only to the committed sealed boundary: mutable
+		// rows inside the live region must remain visible even when an earlier
+		// taller live frame pushed their old contents into native scrollback. The
+		// dirty checkpoint later reconciles those stale mutable saved lines.
+		const committedSealedEnd = Math.min(this.#scrollbackHighWater, liveRegionStart);
+		const renderViewportTop = Math.max(naturalViewportTop, committedSealedEnd);
+		// Every row above the natural viewport top has physically scrolled out of
+		// the live viewport, so the terminal has already pushed it into native
+		// scrollback — there is nowhere else for an off-screen row to live. It must
+		// therefore be committed as real content, *including the head of the live
+		// block itself* when that block alone overflows the viewport (a tall tool
+		// result, a long streamed reply). Only the live tail that remains *within*
+		// the natural viewport stays transient (repainted in place, deferred to the
+		// checkpoint rebuild).
+		const appendTo = naturalViewportTop;
 		const appendFrom = Math.min(this.#scrollbackHighWater, appendTo);
-		return { kind: "liveRegionPinned", appendFrom, appendTo };
+		return { kind: "liveRegionPinned", appendFrom, appendTo, renderViewportTop };
 	}
 
 	#padDeferredShrinkLines(lines: string[], paddedLength: number): string[] {
@@ -2401,12 +2409,14 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 		appendFrom: number,
 		appendTo: number,
+		renderViewportTop: number,
 		prevViewportTop: number,
 		prevHardwareCursorRow: number,
 	): void {
 		this.#fullRedrawCount += 1;
-		const viewportTop = Math.max(0, lines.length - height);
-		const boundedAppendTo = Math.max(0, Math.min(appendTo, viewportTop, lines.length));
+		const naturalViewportTop = Math.max(0, lines.length - height);
+		const viewportTop = Math.max(0, Math.min(renderViewportTop, lines.length));
+		const boundedAppendTo = Math.max(0, Math.min(appendTo, naturalViewportTop, lines.length));
 		const boundedAppendFrom = Math.max(0, Math.min(appendFrom, boundedAppendTo));
 
 		// Position at the top visible row with a relative move. Terminals clamp the
@@ -2443,7 +2453,7 @@ export class TUI extends Container {
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
-		this.#maxLinesRendered = lines.length;
+		this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
 		if (boundedAppendTo > this.#scrollbackHighWater) {
 			this.#scrollbackHighWater = boundedAppendTo;
 		}
@@ -2686,7 +2696,7 @@ export class TUI extends Container {
 			intent.kind === "diff"
 				? `${intent.kind}(first=${intent.firstChanged}, last=${intent.lastChanged}, appended=${intent.appendedLines})`
 				: intent.kind === "liveRegionPinned"
-					? `${intent.kind}(append=${intent.appendFrom}..${intent.appendTo})`
+					? `${intent.kind}(append=${intent.appendFrom}..${intent.appendTo}, viewportTop=${intent.renderViewportTop})`
 					: intent.kind === "viewportRepaint" && intent.appendFrom !== undefined
 						? `${intent.kind}(appendFrom=${intent.appendFrom})`
 						: intent.kind;
