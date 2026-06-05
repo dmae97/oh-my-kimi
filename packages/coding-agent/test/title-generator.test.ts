@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { type Api, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { generateSessionTitle } from "../src/utils/title-generator";
 
 function getModelOrThrow(id: string): Model<Api> {
@@ -114,6 +115,65 @@ describe("title generator", () => {
 
 		expect(title).toBeNull();
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("logs and returns null when title credentials are missing", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const title = await generateSessionTitle(
+			"Investigate the resolver",
+			{
+				getAvailable: () => [model],
+				getApiKey: async () => undefined,
+			} as never,
+			createSettings(model),
+			"session-1",
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalledWith(
+			"title-generator: no API key",
+			expect.objectContaining({
+				sessionId: "session-1",
+				provider: model.provider,
+				id: model.id,
+				reason: "missing-api-key",
+			}),
+		);
+	});
+
+	it("logs and returns null when title credential lookup throws", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const title = await generateSessionTitle(
+			"Investigate the resolver",
+			{
+				getAvailable: () => [model],
+				getApiKey: async () => {
+					throw new Error("credential lookup failed");
+				},
+			} as never,
+			createSettings(model),
+			"session-2",
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalledWith(
+			"title-generator: error",
+			expect.objectContaining({
+				sessionId: "session-2",
+				provider: model.provider,
+				id: model.id,
+				reason: "exception",
+				error: "credential lookup failed",
+			}),
+		);
 	});
 
 	it("uses a reasoning-safe output budget for reasoning models", async () => {
