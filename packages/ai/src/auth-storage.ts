@@ -573,9 +573,7 @@ export interface OAuthAccessFailure {
 	error: string;
 }
 
-export type OAuthAccessResolution =
-	| ({ ok: true } & OAuthAccess)
-	| ({ ok: false } & OAuthAccessFailure);
+export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
 	sessionId?: string;

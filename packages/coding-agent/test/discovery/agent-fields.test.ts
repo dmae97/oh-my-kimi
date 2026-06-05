@@ -114,9 +114,7 @@ describe("parseAgentFields", () => {
 		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: false })?.readSummarize).toBe(
 			false,
 		);
-		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: true })?.readSummarize).toBe(
-			true,
-		);
+		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: true })?.readSummarize).toBe(true);
 	});
 
 	test("parses readSummarize from string frontmatter", () => {
@@ -126,7 +124,9 @@ describe("parseAgentFields", () => {
 	});
 
 	test("ignores invalid readSummarize values", () => {
-		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: "nope" })?.readSummarize).toBeUndefined();
+		expect(
+			parseAgentFields({ name: "explore", description: "desc", readSummarize: "nope" })?.readSummarize,
+		).toBeUndefined();
 	});
 
 	test("returns undefined readSummarize when field absent", () => {

@@ -10,10 +10,11 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { ModelRegistry } from "../config/model-registry";
+import type { CanonicalModelVariant } from "../config/model-equivalence";
+import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
 	type ModelMatchPreferences,
@@ -22,8 +23,8 @@ import {
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
-import { discoverAuthStorage } from "../sdk";
 import dryBalanceBenchPrompt from "../prompts/dry-balance-bench.md" with { type: "text" };
+import { discoverAuthStorage } from "../sdk";
 
 const DEFAULT_SAMPLE_COUNT = 100;
 const DEFAULT_CONCURRENCY = 32;
@@ -65,8 +66,8 @@ export interface DryBalanceModelRegistry {
 	getAll(): Model<Api>[];
 	getAvailable(): Model<Api>[];
 	getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined>;
-	getCanonicalVariants(model: Model<Api>): Model<Api>[];
-	resolveCanonicalModel?(model: Model<Api>): Model<Api> | undefined;
+	getCanonicalVariants(canonicalId: string, options?: CanonicalModelQueryOptions): CanonicalModelVariant[];
+	resolveCanonicalModel?(canonicalId: string, options?: CanonicalModelQueryOptions): Model<Api> | undefined;
 	getCanonicalId?(model: Model<Api>): string | undefined;
 }
 
@@ -288,7 +289,12 @@ function renderBenchResultLine(index: number, total: number, result: DryBalanceB
 	)}`;
 }
 
-function renderBenchStatusLine(status: DryBalanceBenchProgressStatus, index: number, total: number, frame: number): string {
+function renderBenchStatusLine(
+	status: DryBalanceBenchProgressStatus,
+	index: number,
+	total: number,
+	frame: number,
+): string {
 	const prefix = formatBenchIndex(index, total);
 	switch (status.state) {
 		case "waiting":
@@ -407,7 +413,9 @@ async function runBenchRequest(
 			return { ok: false, account, error: message.errorMessage ?? "request failed" };
 		}
 		const durationMs = normalizeBenchMs(message.duration ?? now() - startedAt);
-		const ttftMs = normalizeBenchMs(message.ttft ?? (firstTokenAt === undefined ? durationMs : firstTokenAt - startedAt));
+		const ttftMs = normalizeBenchMs(
+			message.ttft ?? (firstTokenAt === undefined ? durationMs : firstTokenAt - startedAt),
+		);
 		const outputTokens = Number.isFinite(message.usage.output) && message.usage.output > 0 ? message.usage.output : 0;
 		const tokensPerSecond = durationMs > 0 ? (outputTokens * 1000) / durationMs : 0;
 		return {
@@ -432,10 +440,12 @@ async function resolveBenchTargets(
 				baseUrl: model.baseUrl,
 				modelId: model.id,
 			})
-		: await authStorage.getOAuthAccess(model.provider, undefined, {
-				baseUrl: model.baseUrl,
-				modelId: model.id,
-			}).then(access => (access ? [{ ok: true as const, ...access }] : []));
+		: await authStorage
+				.getOAuthAccess(model.provider, undefined, {
+					baseUrl: model.baseUrl,
+					modelId: model.id,
+				})
+				.then(access => (access ? [{ ok: true as const, ...access }] : []));
 	const targets: DryBalanceBenchTarget[] = [];
 	const seen = new Set<string>();
 	for (const entry of resolved) {
@@ -708,9 +718,7 @@ export function formatDryBalanceText(summary: DryBalanceSummary): string {
 	];
 	if (summary.bench) {
 		const avgTtft =
-			summary.bench.success.averageTtftMs === null
-				? "-"
-				: formatBenchDuration(summary.bench.success.averageTtftMs);
+			summary.bench.success.averageTtftMs === null ? "-" : formatBenchDuration(summary.bench.success.averageTtftMs);
 		const avgTps =
 			summary.bench.success.averageTokensPerSecond === null
 				? "-"
@@ -739,11 +747,11 @@ export async function runDryBalanceCommand(
 	command: DryBalanceCommandArgs,
 	deps: DryBalanceDependencies = {},
 ): Promise<DryBalanceSummary> {
-	const samples = normalizePositiveInteger("count", command.flags.count, DEFAULT_SAMPLE_COUNT);
-	const concurrency = Math.min(
-		samples,
-		normalizePositiveInteger("concurrency", command.flags.concurrency, DEFAULT_CONCURRENCY),
-	);
+	const isBench = command.flags.bench === true;
+	const samples = isBench ? 0 : normalizePositiveInteger("count", command.flags.count, DEFAULT_SAMPLE_COUNT);
+	const concurrency = isBench
+		? 0
+		: Math.min(samples, normalizePositiveInteger("concurrency", command.flags.concurrency, DEFAULT_CONCURRENCY));
 	const randomSessionId = deps.randomSessionId ?? (() => Bun.randomUUIDv7());
 	const writeStdout = deps.writeStdout ?? ((text: string) => process.stdout.write(text));
 	const writeStderr = deps.writeStderr ?? ((text: string) => process.stderr.write(text));
@@ -775,8 +783,9 @@ export async function runDryBalanceCommand(
 		let benchResults: DryBalanceBenchResult[] | undefined;
 		let summarySamples = samples;
 		let summaryConcurrency = concurrency;
-		if (command.flags.bench) {
+		if (isBench) {
 			const targets = await resolveBenchTargets(model, runtime.modelRegistry.authStorage);
+			if (targets.length === 0) throw new Error(`No OAuth accounts resolved for provider ${model.provider}`);
 			summarySamples = targets.length;
 			summaryConcurrency = targets.length;
 			const progressWrite = command.flags.json ? writeStderr : writeStdout;
