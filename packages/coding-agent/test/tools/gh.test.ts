@@ -1051,6 +1051,47 @@ describe("github tool", () => {
 		expect(result.details?.repo).toBe(targetRepo);
 	});
 
+	it("accepts case-only differences between explicit `repo` and a run URL repo (PR #1951)", async () => {
+		const targetRepo = "cagedbird043/cxf";
+		const runUrlRepo = "CagedBird043/CXF";
+		const runId = 123;
+		const jsonSpy = vi
+			.spyOn(git.github, "json")
+			.mockResolvedValueOnce({
+				id: runId,
+				name: "CI",
+				display_title: "case-only run URL repo match",
+				status: "completed",
+				conclusion: "success",
+				head_branch: "main",
+				created_at: "2026-06-05T10:00:00Z",
+				updated_at: "2026-06-05T10:05:00Z",
+				html_url: `https://github.com/${runUrlRepo}/actions/runs/${runId}`,
+			})
+			.mockResolvedValueOnce({ total_count: 0, jobs: [] });
+		const textSpy = vi
+			.spyOn(git.github, "text")
+			.mockRejectedValue(new Error("gh repo view must not be consulted when `repo` is explicit"));
+
+		const tool = new GithubTool(createSession("/tmp/run-watch-run-url-casing"));
+		const result = await tool.execute("run-watch", {
+			op: "run_watch",
+			repo: targetRepo,
+			run: `https://github.com/${runUrlRepo}/actions/runs/${runId}`,
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(textSpy).not.toHaveBeenCalled();
+		for (const call of jsonSpy.mock.calls) {
+			const argv = call[1];
+			const apiPath = argv.find(arg => arg.startsWith("/repos/"));
+			expect(apiPath).toContain(`/repos/${targetRepo}/`);
+		}
+		expect(text).toContain(`Repository: ${targetRepo}`);
+		expect(result.details?.repo).toBe(targetRepo);
+	});
+
+
 	it("fails fast when explicit `repo` differs from the cwd repo and no `branch`/`run` selector is given (issue #1949)", async () => {
 		// Without a selector, the legacy code grabbed the cwd's HEAD SHA and
 		// queried it against the explicit repo — yielding an unrelated commit

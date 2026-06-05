@@ -792,6 +792,19 @@ function repoFromRepositoryUrl(value: string | undefined): string | undefined {
 	return value.slice(REPO_API_URL_PREFIX.length);
 }
 
+function githubRepoSlugEquals(left: string | undefined, right: string): boolean {
+	if (left === undefined || left.length !== right.length) return false;
+	for (let idx = 0; idx < left.length; idx += 1) {
+		let leftCode = left.charCodeAt(idx);
+		let rightCode = right.charCodeAt(idx);
+		if (leftCode >= 65 && leftCode <= 90) leftCode += 32;
+		if (rightCode >= 65 && rightCode <= 90) rightCode += 32;
+		if (leftCode !== rightCode) return false;
+	}
+	return true;
+}
+
+
 function apiUserToGhUser(user: GhApiUser | null | undefined): GhUser | undefined {
 	if (!user) return undefined;
 	const login = user.login ?? undefined;
@@ -1646,7 +1659,7 @@ async function resolveGitHubRepo(
 	runRepo: string | undefined,
 	signal?: AbortSignal,
 ): Promise<string> {
-	if (repo && runRepo && repo !== runRepo) {
+	if (repo && runRepo && !githubRepoSlugEquals(repo, runRepo)) {
 		throw new ToolError("run URL repository does not match the provided repo");
 	}
 
@@ -3443,7 +3456,7 @@ async function executeRunWatch(
 		// while callers may pass any casing — so the equality check normalizes
 		// both sides before deciding the cwd is a different repo (PR #1951).
 		const cwdRepo = await tryResolveCurrentRepo(session.cwd, signal);
-		if (cwdRepo?.toLowerCase() !== repo.toLowerCase()) {
+		if (!githubRepoSlugEquals(cwdRepo, repo)) {
 			throw new ToolError(
 				`Cannot infer the watched commit for ${repo}: current checkout is ${cwdRepo ?? "not a GitHub repository"}. Pass \`branch\` or \`run\` to scope the watch.`,
 			);
