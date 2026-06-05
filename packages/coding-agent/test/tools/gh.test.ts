@@ -1091,7 +1091,6 @@ describe("github tool", () => {
 		expect(result.details?.repo).toBe(targetRepo);
 	});
 
-
 	it("fails fast when explicit `repo` differs from the cwd repo and no `branch`/`run` selector is given (issue #1949)", async () => {
 		// Without a selector, the legacy code grabbed the cwd's HEAD SHA and
 		// queried it against the explicit repo — yielding an unrelated commit

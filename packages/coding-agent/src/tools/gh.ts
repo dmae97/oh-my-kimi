@@ -804,7 +804,6 @@ function githubRepoSlugEquals(left: string | undefined, right: string): boolean 
 	return true;
 }
 
-
 function apiUserToGhUser(user: GhApiUser | null | undefined): GhUser | undefined {
 	if (!user) return undefined;
 	const login = user.login ?? undefined;
