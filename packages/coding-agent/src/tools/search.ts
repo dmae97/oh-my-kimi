@@ -259,7 +259,7 @@ interface IndexedContentLines {
 }
 
 const INTERNAL_URL_DISPLAY_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
-const OMP_ROOT_URL_RE = /^omp:\/\/\/?$/i;
+const OMP_ROOT_URL_RE = /^omp:\/\/(?:\/?|docs\/?)$/i;
 
 function normalizeSearchLine(line: string): string {
 	return line.endsWith("\r") ? line.slice(0, -1) : line;
