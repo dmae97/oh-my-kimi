@@ -204,6 +204,7 @@ export class EventController {
 		this.#readToolCallAssistantComponents.clear();
 		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
+		this.ctx.clearPinnedError();
 		if (this.ctx.retryEscapeHandler) {
 			this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
 			this.ctx.retryEscapeHandler = undefined;
@@ -490,6 +491,16 @@ export class EventController {
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;
+			// Pin a turn-ending provider error (e.g. Anthropic content-filter block)
+			// above the editor so it survives transcript scroll. Cleared at the next
+			// turn's agent_start.
+			if (
+				event.message.stopReason === "error" &&
+				event.message.errorMessage &&
+				!isSilentAbort(event.message.errorMessage)
+			) {
+				this.ctx.showPinnedError(event.message.errorMessage);
+			}
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
 		}

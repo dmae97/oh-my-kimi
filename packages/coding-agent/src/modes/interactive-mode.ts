@@ -96,6 +96,7 @@ import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
 import { DynamicBorder } from "./components/dynamic-border";
+import { ErrorBannerComponent } from "./components/error-banner";
 import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
@@ -264,6 +265,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
+	errorBannerContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -405,6 +407,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
+		this.errorBannerContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -566,6 +569,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
+		this.ui.addChild(this.errorBannerContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -2503,6 +2507,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.showError(message);
 	}
 
+	showPinnedError(message: string): void {
+		if (this.isBackgrounded) return;
+		this.errorBannerContainer.clear();
+		this.errorBannerContainer.addChild(new ErrorBannerComponent(message));
+		this.ui.requestRender();
+	}
+
+	clearPinnedError(): void {
+		if (this.errorBannerContainer.children.length === 0) return;
+		this.errorBannerContainer.clear();
+		this.ui.requestRender();
+	}
+
 	showWarning(message: string): void {
 		this.#uiHelpers.showWarning(message);
 	}
@@ -2723,6 +2740,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
+		this.clearPinnedError();
 		this.#planReviewContainer = undefined;
 	}
 

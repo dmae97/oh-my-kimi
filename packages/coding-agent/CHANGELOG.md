@@ -3,6 +3,8 @@
 ## [Unreleased]
 ### Added
 
+- Added a persistent error banner pinned above the editor when an assistant turn ends on a provider error (e.g. Anthropic's "Output blocked by content filtering policy"). The transcript `Error: …` line scrolls away as the conversation grows, so terminal turns that ended on a stream error could pass unnoticed; the banner stays in the fixed region above the input and is cleared when the next turn starts.
+
 - Added bold, underlined, clickable `[Image #N]` placeholders in the draft editor and sent user-message bubbles, backed by extension-bearing blob-store sidecar files so terminal `file://` links open in image viewers.
 - Added the active model identifier (`provider/id`) to the system prompt's `<workstation>` block so the agent knows which model it is running as. Gated by the new `includeModelInPrompt` setting (default on); the base prompt is rebuilt on a mid-session model switch so the surfaced identifier stays current.
 - Added `OLLAMA_HOST` support for implicit local Ollama discovery when `OLLAMA_BASE_URL` is unset, so OMP picks up the same host setting used by Ollama.

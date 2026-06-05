@@ -76,6 +76,7 @@ export interface InteractiveModeContext {
 	todoContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
+	errorBannerContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -159,6 +160,8 @@ export interface InteractiveModeContext {
 	// UI helpers
 	showStatus(message: string, options?: { dim?: boolean }): void;
 	showError(message: string): void;
+	showPinnedError(message: string): void;
+	clearPinnedError(): void;
 	showWarning(message: string): void;
 	showNewVersionNotification(newVersion: string): void;
 	clearEditor(): void;
