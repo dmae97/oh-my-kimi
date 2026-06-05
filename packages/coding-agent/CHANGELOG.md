@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `OLLAMA_HOST` support for implicit local Ollama discovery when `OLLAMA_BASE_URL` is unset, so OMP picks up the same host setting used by Ollama.
+- Added `OLLAMA_CONTEXT_LENGTH` as a positive-integer context-window override for implicit local Ollama discovery, so users can correct OMP context budgeting without writing per-model overrides.
+
 ## [15.9.4] - 2026-06-05
 ### Fixed
 
