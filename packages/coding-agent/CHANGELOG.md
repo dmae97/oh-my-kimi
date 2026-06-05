@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp://docs` and `omp://docs/...` internal documentation URLs in the distributed package to resolve through the embedded documentation index instead of failing with `Documentation file not found` ([#1898](https://github.com/can1357/oh-my-pi/issues/1898)).
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
@@ -18,8 +22,6 @@
 - Changed Perplexity API-key web search to return more comprehensive results: `web_search_options.search_context_size` is now `high` (was `medium`) for maximum retrieval grounding, the default `num_search_results` is `20` (was `10`) so twice as many sources are surfaced, and `return_related_questions` is enabled with the response's `related_questions` now parsed into `relatedQuestions` (previously dropped). On an identical query this lifted the result from 10 sources / ~410 output tokens to 20 sources / ~1900 output tokens with a structured, multi-section answer; latency tracks model output length, not context size, so the 60s hard timeout headroom is unchanged.
 
 ### Fixed
-
-- Fixed `omp://docs` and `omp://docs/...` internal documentation URLs in the distributed package to resolve through the embedded documentation index instead of failing with `Documentation file not found` ([#1898](https://github.com/can1357/oh-my-pi/issues/1898)).
 
 - Fixed a streamed assistant message freezing at a partial prefix (e.g. only "Nat" of "Natives built, now…") on ED3-risk terminals (Ghostty/kitty/iTerm2/Alacritty), with the final text appearing only after a resize. `TranscriptContainer` freezes each non-live block by replaying its last live render, but render coalescing can finalize a block's content and append the next block within the same throttled frame — so the block was sealed at its stale mid-stream snapshot and never repainted until the next `thaw`. The block that was live on the previous render is now recomputed once on the live→frozen transition, sealing it at its final content.
 
