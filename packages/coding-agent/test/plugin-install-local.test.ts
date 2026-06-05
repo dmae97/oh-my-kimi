@@ -12,7 +12,7 @@
  * avoids the theme (`runPluginCommand` does not initialize the theme on its
  * own — `commands/plugin.ts` does).
  */
-import { afterEach, beforeEach, describe, expect, type Mock, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,8 +33,6 @@ const FAKE_INSTALLED: InstalledPlugin = {
 
 describe("runPluginCommand({ action: 'install', args: [<local>] })", () => {
 	let tmpRoot: string;
-	let logSpy: Mock<typeof console.log>;
-	let errSpy: Mock<typeof console.error>;
 
 	beforeEach(async () => {
 		tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-plugin-install-local-"));
@@ -53,8 +51,8 @@ describe("runPluginCommand({ action: 'install', args: [<local>] })", () => {
 		spyOn(MarketplaceManager.prototype, "listMarketplaces").mockResolvedValue([]);
 
 		// Swallow CLI output so test logs stay clean.
-		logSpy = spyOn(console, "log").mockImplementation(() => undefined);
-		errSpy = spyOn(console, "error").mockImplementation(() => undefined);
+		spyOn(console, "log").mockImplementation(() => undefined);
+		spyOn(console, "error").mockImplementation(() => undefined);
 	});
 	afterEach(async () => {
 		// Restore every spy installed in beforeEach plus the per-test
