@@ -9,6 +9,7 @@ import {
 	GithubTool,
 	parsePrUnifiedDiff,
 	parseSearchDateBound,
+	resolveDefaultRepoMemoized,
 } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, hashPath, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -1112,6 +1113,30 @@ describe("github tool", () => {
 		// No API requests fired — we bailed before issuing any /repos/... call.
 		expect(jsonSpy).not.toHaveBeenCalled();
 	});
+
+	it("revalidates cwd repo without using the process-lifetime default repo cache before trusting HEAD (PR #1951)", async () => {
+		const targetRepo = "cagedbird043/cxf";
+		const replacedCwdRepo = "cagedbird043/cagedbird-ecosystem";
+		const cwd = `/tmp/run-watch-stale-cwd-repo-cache-${Date.now()}`;
+		const textSpy = vi
+			.spyOn(git.github, "text")
+			.mockResolvedValueOnce(targetRepo)
+			.mockResolvedValueOnce(replacedCwdRepo);
+		const jsonSpy = vi.spyOn(git.github, "json");
+
+		// Populate `resolveDefaultRepoMemoized` for this exact cwd, simulating a
+		// long-lived process that resolved the path before its checkout/remote
+		// was replaced.
+		await expect(resolveDefaultRepoMemoized(cwd)).resolves.toBe(targetRepo);
+
+		const tool = new GithubTool(createSession(cwd));
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
+			`Cannot infer the watched commit for ${targetRepo}: current checkout is ${replacedCwdRepo}. Pass \`branch\` or \`run\` to scope the watch.`,
+		);
+		expect(textSpy).toHaveBeenCalledTimes(2);
+		expect(jsonSpy).not.toHaveBeenCalled();
+	});
+
 
 	it("fails fast when explicit `repo` is given and cwd has no GitHub repository context (issue #1949)", async () => {
 		const targetRepo = "cagedbird043/cxf";

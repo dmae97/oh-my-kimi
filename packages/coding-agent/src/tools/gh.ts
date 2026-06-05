@@ -1725,9 +1725,10 @@ export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSign
 }
 
 /**
- * Best-effort cwd → `owner/repo` resolution that swallows any failure (not a
- * git checkout, no GitHub remote, `gh` unauthenticated, …) into `undefined`.
- * Use where the cwd repo is a fallback or a guard, not a requirement.
+ * Best-effort cached cwd → `owner/repo` resolution that swallows any failure
+ * (not a git checkout, no GitHub remote, `gh` unauthenticated, …) into
+ * `undefined`. Use where the cwd repo is a convenience fallback, not a safety
+ * check.
  */
 async function tryResolveCurrentRepo(cwd: string, signal: AbortSignal | undefined): Promise<string | undefined> {
 	try {
@@ -1736,6 +1737,20 @@ async function tryResolveCurrentRepo(cwd: string, signal: AbortSignal | undefine
 		return undefined;
 	}
 }
+
+/**
+ * Best-effort fresh cwd → `owner/repo` resolution for safety checks that must
+ * reflect the repository currently mounted at `cwd`, not the process-lifetime
+ * default-repo cache.
+ */
+async function tryResolveCurrentRepoFresh(cwd: string, signal: AbortSignal | undefined): Promise<string | undefined> {
+	try {
+		return await resolveGitHubRepo(cwd, undefined, undefined, signal);
+	} catch {
+		return undefined;
+	}
+}
+
 
 /**
  * Matches search-query qualifiers that already scope to a repository, org, or
@@ -3454,7 +3469,7 @@ async function executeRunWatch(
 		// are case-insensitive — `gh repo view` returns the canonical casing
 		// while callers may pass any casing — so the equality check normalizes
 		// both sides before deciding the cwd is a different repo (PR #1951).
-		const cwdRepo = await tryResolveCurrentRepo(session.cwd, signal);
+		const cwdRepo = await tryResolveCurrentRepoFresh(session.cwd, signal);
 		if (!githubRepoSlugEquals(cwdRepo, repo)) {
 			throw new ToolError(
 				`Cannot infer the watched commit for ${repo}: current checkout is ${cwdRepo ?? "not a GitHub repository"}. Pass \`branch\` or \`run\` to scope the watch.`,
