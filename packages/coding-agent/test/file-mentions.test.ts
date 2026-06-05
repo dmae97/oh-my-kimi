@@ -78,4 +78,42 @@ describe("generateFileMentionMessages path resolution", () => {
 		const shortQuery = await generateFileMentionMessages(["ab"], cwd);
 		expect(shortQuery).toHaveLength(0);
 	});
+
+	test("trailing-slash mention resolves to a directory, never a same-named file", async () => {
+		const cwd = await createTempDir();
+		// A file whose name carries the scope token, and a directory that matches it.
+		await fs.mkdir(path.join(cwd, "src"), { recursive: true });
+		await Bun.write(path.join(cwd, "src", "widget-input.txt"), "data");
+		await fs.mkdir(path.join(cwd, "widget-ui"), { recursive: true });
+		await Bun.write(path.join(cwd, "widget-ui", "index.ts"), "ok");
+
+		// "@widget/" is a directory/scope reference: it must list the directory, not the file.
+		const messages = await generateFileMentionMessages(["widget/"], cwd);
+		expect(messages).toHaveLength(1);
+		const message = messages[0];
+		if (message?.role !== "fileMention") {
+			throw new Error("expected file mention message");
+		}
+		expect(message.files[0]?.path).toBe("widget-ui");
+		expect(message.files[0]?.content).toContain("index.ts");
+	});
+
+	test("trailing-slash mention with no matching directory resolves to nothing", async () => {
+		const cwd = await createTempDir();
+		await fs.mkdir(path.join(cwd, "src"), { recursive: true });
+		await Bun.write(path.join(cwd, "src", "widgetinput.txt"), "data");
+
+		// Scope-style "@widget/" must not strip the slash and fuzzy-match the file.
+		const scope = await generateFileMentionMessages(["widget/"], cwd);
+		expect(scope).toHaveLength(0);
+
+		// The same token without a trailing slash still fuzzy-resolves to the file.
+		const bare = await generateFileMentionMessages(["widgetinput"], cwd);
+		expect(bare).toHaveLength(1);
+		const message = bare[0];
+		if (message?.role !== "fileMention") {
+			throw new Error("expected file mention message");
+		}
+		expect(message.files[0]?.path).toBe("src/widgetinput.txt");
+	});
 });

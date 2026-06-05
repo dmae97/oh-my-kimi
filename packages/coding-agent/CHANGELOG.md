@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `@`-mention auto-read pulling in an arbitrary same-named file for trailing-slash mentions such as npm scopes (`@scope/`). `resolveMentionPath` stripped the trailing separator during fuzzy normalization, collapsing the directory/scope reference into a bare token that fuzzy-matched a file. Mention resolution is now directory-aware: a mention ending in `/` (or `\`) resolves only against directory candidates, so it lists a matching directory (exact or fuzzy) and no longer drags in a file that merely shares the name. Non-slash mentions are unchanged.
+
 ## [15.9.2] - 2026-06-05
 
 ### Added

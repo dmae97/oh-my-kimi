@@ -10,7 +10,7 @@ import path from "node:path";
 import { formatHashlineHeader, formatNumberedLines, type SnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { glob } from "@oh-my-pi/pi-natives";
+import { FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
 import { normalizeToLF } from "../edit/normalize";
@@ -74,6 +74,7 @@ type MentionCandidate = {
 	path: string;
 	pathLower: string;
 	normalizedPath: string;
+	isDir: boolean;
 };
 
 function normalizeMentionQuery(query: string): string {
@@ -90,7 +91,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 async function listMentionCandidates(cwd: string): Promise<MentionCandidate[]> {
-	let entries: string[];
+	let entries: GlobMatch[];
 	try {
 		const discoveryProfile = getMentionCandidateDiscoveryProfile();
 		const result = await glob({
@@ -98,20 +99,20 @@ async function listMentionCandidates(cwd: string): Promise<MentionCandidate[]> {
 			path: cwd,
 			...discoveryProfile,
 		});
-		entries = result.matches.map(match => match.path);
+		entries = result.matches;
 	} catch {
 		return [];
 	}
 
-	entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+	entries.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()));
 	const candidates: MentionCandidate[] = [];
 	for (const entry of entries) {
-		const pathLower = entry.toLowerCase();
-		const normalizedPath = normalizeMentionQuery(entry);
+		const pathLower = entry.path.toLowerCase();
+		const normalizedPath = normalizeMentionQuery(entry.path);
 		if (normalizedPath.length === 0) {
 			continue;
 		}
-		candidates.push({ path: entry, pathLower, normalizedPath });
+		candidates.push({ path: entry.path, pathLower, normalizedPath, isDir: entry.fileType === FileType.Dir });
 	}
 	return candidates;
 }
@@ -126,8 +127,19 @@ async function resolveMentionPath(
 		return filePath;
 	}
 
-	const queryLower = filePath.toLowerCase();
-	const candidates = await getMentionCandidates();
+	// A trailing separator marks an explicit directory/scope reference (e.g. the npm
+	// scope "@stencil/"). Resolve it against directory candidates only, so a real or
+	// fuzzy-matched directory is listed instead of stripping the slash and dragging in
+	// an arbitrary same-named file.
+	const dirIntent = /[\\/]$/.test(filePath);
+	const query = dirIntent ? filePath.replace(/[\\/]+$/, "") : filePath;
+	if (dirIntent && query.length === 0) {
+		return null;
+	}
+
+	const queryLower = query.toLowerCase();
+	const allCandidates = await getMentionCandidates();
+	const candidates = dirIntent ? allCandidates.filter(candidate => candidate.isDir) : allCandidates;
 	const prefixMatches = candidates.filter(candidate => candidate.pathLower.startsWith(queryLower));
 	if (prefixMatches.length === 1) {
 		return prefixMatches[0]?.path ?? null;
@@ -136,7 +148,7 @@ async function resolveMentionPath(
 		return null;
 	}
 
-	const normalizedQuery = normalizeMentionQuery(filePath);
+	const normalizedQuery = normalizeMentionQuery(query);
 	if (normalizedQuery.length < MIN_FUZZY_QUERY_LENGTH) {
 		return null;
 	}
