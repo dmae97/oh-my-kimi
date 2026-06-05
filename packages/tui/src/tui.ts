@@ -1454,10 +1454,10 @@ export class TUI extends Container {
 		// diff emitter would otherwise `\r\n`-scroll every transient frame (spinner
 		// ticks, partial output) into native history. Non-ED3-risk terminals keep
 		// their eager live rebuild, which already commits cleanly. Explicit
-		// reconciles — the prompt-submit checkpoint (`clearScrollbackOnNextRender`)
-		// and user-input/IME opt-ins (`explicitViewportMutation`) — are never
-		// deferred: ED3 is safe there because the keystroke pins the host to the
-		// bottom.
+		// reconciles — the prompt-submit checkpoint (`clearScrollbackOnNextRender`),
+		// user-input/IME opt-ins (`explicitViewportMutation`), and overlay visibility
+		// reductions that must scrub transient overlay cells from native history —
+		// are never deferred: the triggering interaction pins the host to the bottom.
 		const streamingWasActive = this.#eagerNativeScrollbackRebuild;
 		if (streamingWasActive && !this.#previousStreamingActive) {
 			this.#streamingHighWater = 0;
@@ -1466,7 +1466,16 @@ export class TUI extends Container {
 		if (streamingWasActive && eagerEraseScrollbackRisk) {
 			const streamingActive =
 				this.#eagerNativeScrollbackRebuild && !this.#eagerNativeScrollbackRebuildDisablePending;
-			const explicitReconcile = explicitViewportMutation || this.#clearScrollbackOnNextRender;
+			const explicitReconcile =
+				explicitViewportMutation || this.#clearScrollbackOnNextRender || overlayVisibilityReduced;
+			// The defer below exists only to avoid `\r\n`-scrolling transient frames
+			// past a reader parked in native scrollback. When the terminal can report
+			// that the viewport is at the tail, there is no scrolled reader to yank,
+			// so the planned intent must stand and commit normally — otherwise a row
+			// that scrolls above the viewport top is dropped (neither pushed to
+			// history nor kept in the capped viewport). Production POSIX ED3-risk
+			// terminals cannot report this and stay `undefined`, so they still defer.
+			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (!streamingActive) {
 				// Streaming just ended. Keep native scrollback dirty so the next
 				// checkpoint reconciles the settled transcript; never erase here.
@@ -1474,6 +1483,7 @@ export class TUI extends Container {
 				this.#markNativeScrollbackDirty();
 			} else if (
 				!explicitReconcile &&
+				nativeViewportAtBottom !== true &&
 				(intent.kind === "sessionReplace" ||
 					intent.kind === "historyRebuild" ||
 					intent.kind === "overlayRebuild" ||
