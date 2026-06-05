@@ -49,6 +49,7 @@ const SOURCE_MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", 
 const SUPPORTED_PACKAGE_IMPORT_CONDITIONS = new Set(["bun", "node", "import", "default"]);
 const packageRootCache = new Map<string, string | null>();
 const packageImportsCache = new Map<string, Record<string, unknown> | null>();
+const PACKAGE_IMPORT_EXCLUDED = Symbol("packageImportExcluded");
 
 // Extensions that imported `@sinclair/typebox` directly used to resolve against a
 // real `@sinclair/typebox` install. The runtime dep was replaced with the Zod-backed
@@ -334,14 +335,20 @@ async function readPackageImports(packageRoot: string): Promise<Record<string, u
 	return imports;
 }
 
-function selectPackageImportTarget(entry: unknown): string | null {
+type PackageImportTargetSelection = string | typeof PACKAGE_IMPORT_EXCLUDED | null;
+type ResolvedPackageImportTargetSelection = string | typeof PACKAGE_IMPORT_EXCLUDED;
+
+function selectPackageImportTarget(entry: unknown): PackageImportTargetSelection {
+	if (entry === null) {
+		return PACKAGE_IMPORT_EXCLUDED;
+	}
 	if (typeof entry === "string") {
 		return entry;
 	}
 	if (Array.isArray(entry)) {
 		for (const item of entry) {
 			const target = selectPackageImportTarget(item);
-			if (target) return target;
+			if (target !== null) return target;
 		}
 		return null;
 	}
@@ -353,7 +360,7 @@ function selectPackageImportTarget(entry: unknown): string | null {
 			continue;
 		}
 		const target = selectPackageImportTarget(value);
-		if (target) return target;
+		if (target !== null) return target;
 	}
 	return null;
 }
@@ -386,11 +393,14 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 	}
 
 	const exactTarget = selectPackageImportTarget(imports[specifier]);
-	if (exactTarget) {
+	if (exactTarget === PACKAGE_IMPORT_EXCLUDED) {
+		return null;
+	}
+	if (exactTarget !== null) {
 		return resolvePackageImportTarget(packageRoot, exactTarget, null);
 	}
 
-	let bestMatch: { keyLength: number; target: string; wildcard: string } | null = null;
+	let bestMatch: { keyLength: number; target: ResolvedPackageImportTargetSelection; wildcard: string } | null = null;
 	for (const [key, entry] of Object.entries(imports)) {
 		const starIndex = key.indexOf("*");
 		if (starIndex === -1) continue;
@@ -402,7 +412,7 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 		}
 
 		const target = selectPackageImportTarget(entry);
-		if (!target) {
+		if (target === null) {
 			continue;
 		}
 
@@ -415,7 +425,7 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 		}
 	}
 
-	if (!bestMatch) {
+	if (!bestMatch || bestMatch.target === PACKAGE_IMPORT_EXCLUDED) {
 		return null;
 	}
 	return resolvePackageImportTarget(packageRoot, bestMatch.target, bestMatch.wildcard);

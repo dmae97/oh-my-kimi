@@ -308,6 +308,108 @@ describe("plugin extension discovery", () => {
 		expect(extension?.commands.has("json-schema-ext")).toBe(true);
 	});
 
+	it("preserves exact null package import exclusions ahead of wildcard fallbacks", async () => {
+		const pluginsDir = getPluginsDir();
+		const pluginDir = path.join(pluginsDir, "node_modules", "null-exact-import-plugin");
+		const extensionPath = path.join(pluginDir, "src", "index.ts");
+		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins",
+				private: true,
+				dependencies: {
+					"null-exact-import-plugin": "1.0.0",
+				},
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({
+				name: "null-exact-import-plugin",
+				version: "1.0.0",
+				imports: {
+					"#src/internal": null,
+					"#src/*": "./src/*",
+				},
+				pi: {
+					extensions: ["./src/index.ts"],
+				},
+			}),
+		);
+		fs.writeFileSync(path.join(pluginDir, "src", "internal.ts"), 'export const commandName = "null-exact-ext";');
+		fs.writeFileSync(
+			extensionPath,
+			[
+				'import { commandName } from "#src/internal";',
+				"",
+				"export default function(pi) {",
+				"\tpi.registerCommand(commandName, { handler: async () => {} });",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await discoverAndLoadExtensions([], projectDir.path());
+		const extension = result.extensions.find(ext => ext.path === extensionPath);
+		const pluginError = result.errors.find(err => err.path === extensionPath);
+
+		expect(pluginError?.error).toContain("#src/internal");
+		expect(extension).toBeUndefined();
+	});
+
+	it("preserves active null conditional package import exclusions", async () => {
+		const pluginsDir = getPluginsDir();
+		const pluginDir = path.join(pluginsDir, "node_modules", "null-conditional-import-plugin");
+		const extensionPath = path.join(pluginDir, "src", "index.ts");
+		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins",
+				private: true,
+				dependencies: {
+					"null-conditional-import-plugin": "1.0.0",
+				},
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pluginDir, "package.json"),
+			JSON.stringify({
+				name: "null-conditional-import-plugin",
+				version: "1.0.0",
+				imports: {
+					"#blocked": {
+						node: null,
+						default: "./src/blocked.ts",
+					},
+				},
+				pi: {
+					extensions: ["./src/index.ts"],
+				},
+			}),
+		);
+		fs.writeFileSync(path.join(pluginDir, "src", "blocked.ts"), 'export const commandName = "null-conditional-ext";');
+		fs.writeFileSync(
+			extensionPath,
+			[
+				'import { commandName } from "#blocked";',
+				"",
+				"export default function(pi) {",
+				"\tpi.registerCommand(commandName, { handler: async () => {} });",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await discoverAndLoadExtensions([], projectDir.path());
+		const extension = result.extensions.find(ext => ext.path === extensionPath);
+		const pluginError = result.errors.find(err => err.path === extensionPath);
+
+		expect(pluginError?.error).toContain("#blocked");
+		expect(extension).toBeUndefined();
+	});
+
 	it("rewrites side-effect imports of package-import aliases and legacy Pi scopes", async () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "side-effect-plugin");
