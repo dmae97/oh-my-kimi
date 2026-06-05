@@ -27,6 +27,19 @@ const SAMPLE_PR_DIFF = `diff --git a/src/pr.ts b/src/pr.ts
 +export const pr = true;
 `;
 
+function makeManyFileDiff(fileCount: number): string {
+	return Array.from(
+		{ length: fileCount },
+		(_, idx) => `diff --git a/src/pr-${idx}.ts b/src/pr-${idx}.ts
+--- a/src/pr-${idx}.ts
++++ b/src/pr-${idx}.ts
+@@ -1 +1 @@
+-export const pr${idx} = false;
++export const pr${idx} = true;
+`,
+	).join("\n");
+}
+
 interface SelectCall {
 	title: string;
 	options: string[];
@@ -256,6 +269,21 @@ describe("ReviewCommand", () => {
 			expect(result!).toContain("PR owner/repo#123");
 			expect(diffSpy).toHaveBeenCalledWith({ cwd: dir, repo: "owner/repo", number: 123 });
 		}
+	});
+
+	it("uses PR diff URLs for omitted large PR diff instructions", async () => {
+		const dir = await createTempDir();
+		spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(makeManyFileDiff(21)));
+		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+		const ctx = { hasUI: false } as unknown as HookCommandContext;
+
+		const result = await command.execute(["https://github.com/owner/repo/pull/123"], ctx);
+
+		expect(result).toBeDefined();
+		expect(result!).toContain("MUST read assigned PR file diffs from `pr://owner/repo/123/diff/all`");
+		expect(result!).toContain("per-file `pr://owner/repo/123/diff/<index>`");
+		expect(result!).toContain("NEVER use local `git diff`/`git show` for PR diff content");
+		expect(result!).not.toContain("MUST run `git diff`/`git show` for assigned files");
 	});
 
 	it("rejects unsupported PR-like URL formats as normal instructions", async () => {

@@ -330,6 +330,11 @@ function parseReviewPrRef(text: string): ReviewPrRef | undefined {
 	return parseGithubPrUrl(candidate) ?? parsePrSchemeRef(candidate);
 }
 
+function buildPrLargeDiffInstruction(ref: ReviewPrRef): string {
+	const prDiffUrl = `pr://${ref.repo}/${ref.number}/diff`;
+	return `MUST read assigned PR file diffs from \`${prDiffUrl}/all\` or per-file \`${prDiffUrl}/<index>\`; NEVER use local \`git diff\`/\`git show\` for PR diff content`;
+}
+
 function extractReviewPrRefFromArgs(args: string[]): ParsedReviewArgs {
 	let prRef: ReviewPrRef | undefined;
 	let prRefIndex = -1;
@@ -406,6 +411,7 @@ async function buildPrReviewPrompt(
 		diffText,
 		extraInstructions || undefined,
 		`PR ${ref.repo}#${ref.number} has no diff content available`,
+		{ diffInstruction: buildPrLargeDiffInstruction(ref) },
 	);
 	if (promptText !== undefined || ctx.hasUI) return promptText;
 	return `Unable to review PR ${ref.repo}#${ref.number}: no diff content available.`;
