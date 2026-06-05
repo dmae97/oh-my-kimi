@@ -3438,9 +3438,12 @@ async function executeRunWatch(
 		// No branch/run selector — derive the commit from the current checkout,
 		// but only when cwd actually points at `repo`. Otherwise we'd watch an
 		// unrelated commit SHA against the explicit repo and silently stream a
-		// confident wrong-repo status (issue #1949).
+		// confident wrong-repo status (issue #1949). GitHub `owner/repo` slugs
+		// are case-insensitive — `gh repo view` returns the canonical casing
+		// while callers may pass any casing — so the equality check normalizes
+		// both sides before deciding the cwd is a different repo (PR #1951).
 		const cwdRepo = await tryResolveCurrentRepo(session.cwd, signal);
-		if (cwdRepo !== repo) {
+		if (cwdRepo?.toLowerCase() !== repo.toLowerCase()) {
 			throw new ToolError(
 				`Cannot infer the watched commit for ${repo}: current checkout is ${cwdRepo ?? "not a GitHub repository"}. Pass \`branch\` or \`run\` to scope the watch.`,
 			);

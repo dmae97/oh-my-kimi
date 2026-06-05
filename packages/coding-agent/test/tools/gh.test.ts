@@ -1085,4 +1085,36 @@ describe("github tool", () => {
 		);
 		expect(jsonSpy).not.toHaveBeenCalled();
 	});
+
+	it("treats explicit `repo` and the cwd repo as matching when only casing differs (PR #1951)", async () => {
+		// `gh repo view --json nameWithOwner` returns the canonical GitHub casing.
+		// A caller who types `cagedbird043/cxf` while the canonical form is
+		// `CagedBird043/cxf` MUST be treated as the same repo — GitHub repository
+		// paths are case-insensitive — and run_watch must NOT force them to pass
+		// a redundant `branch`/`run` selector.
+		const canonicalRepo = "CagedBird043/CXF";
+		const userRepo = "cagedbird043/cxf";
+		const cwd = `/tmp/run-watch-explicit-repo-casing-${Date.now()}`;
+		vi.spyOn(git.github, "text").mockResolvedValue(canonicalRepo);
+		// Past the case-insensitive guard, run_watch keeps using the caller's
+		// `repo` (downstream `/repos/...` paths are case-insensitive on GitHub).
+		// Stub the cwd's git HEAD/branch lookups so the watch proceeds to its
+		// first poll, then trip an abort to terminate the loop deterministically.
+		vi.spyOn(git.branch, "current").mockResolvedValue("main");
+		vi.spyOn(git.head, "sha").mockResolvedValue("c215f3a91217c215f3a91217c215f3a91217c215");
+		const abort = new AbortController();
+		const jsonSpy = vi.spyOn(git.github, "json").mockImplementation((async () => {
+			abort.abort();
+			return { workflow_runs: [] };
+		}) as unknown as typeof git.github.json);
+
+		const tool = new GithubTool(createSession(cwd));
+		// We don't care about the outcome — just that the casing guard let us
+		// reach the polling loop instead of throwing the mismatch ToolError.
+		await tool.execute("run-watch", { op: "run_watch", repo: userRepo }, abort.signal).catch(() => {});
+
+		expect(jsonSpy).toHaveBeenCalled();
+		const firstCall = jsonSpy.mock.calls[0]?.[1] as string[];
+		expect(firstCall.some(arg => arg === `/repos/${userRepo}/actions/runs`)).toBe(true);
+	});
 });
