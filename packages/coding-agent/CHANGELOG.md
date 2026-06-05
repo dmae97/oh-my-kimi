@@ -27,6 +27,10 @@
 
 - Fixed `/tree` rendering a bare "No entries found" line on a fresh session where the only persisted entries are the `model_change` + `thinking_level_change` written by `sdk.ts` at startup — both are hidden by the tree-selector's default filter, so `#filteredNodes.length === 0` while `tree.length === 2` and the controller's `tree.length === 0` short-circuit never fired. The selector now splits the empty-state into three distinct shapes — truly empty tree, search query with no matches, and filter mode rejecting every entry — surfacing the cause and the recovery key (`Alt+A` to show all, `Backspace` to clear a stale search) so users on a fresh session can see immediately that the panel isn't broken ([#1909](https://github.com/can1357/oh-my-pi/issues/1909)).
 
+### Fixed
+
+- Fixed remote MCP OAuth refresh failures leaving stale credentials in `agent.db`: when the token endpoint returns a definitive failure (`invalid_grant`, `invalid_token`, `revoked`, plain 401/403 not classified as transient), `MCPManager#resolveAuthConfig` now drops the credential via `AuthStorage.remove(credentialId)` and skips re-attaching the dead `Authorization: Bearer …` header. Previously a revoked refresh token kept producing `401 invalid_token` on every MCP request and survived restarts, so users had to hand-clear the credential row to recover; the next connect now surfaces a clean auth error and `/mcp reauth <server>` (or `/mcp unauth`) recovers without restarting. Transient refresh failures (network/`fetch failed`/`ECONNREFUSED`) still fall back to the existing access token ([#1908](https://github.com/can1357/oh-my-pi/issues/1908)).
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
