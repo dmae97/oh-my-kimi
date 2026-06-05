@@ -6484,19 +6484,25 @@ export class AgentSession {
 	}
 
 	#isEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
-		const hasText = assistantMessage.content.some(
-			content => content.type === "text" && content.text.trim().length > 0,
-		);
-		const hasToolCall = assistantMessage.content.some(content => content.type === "toolCall");
-		if (assistantMessage.stopReason === "toolUse") {
-			return !hasText && !hasToolCall;
+		const { stopReason } = assistantMessage;
+		if (stopReason !== "stop" && stopReason !== "toolUse") return false;
+
+		// Single pass over content; the three flags cover every emptiness rule below.
+		let hasText = false;
+		let hasThinking = false;
+		let hasToolCall = false;
+		for (const content of assistantMessage.content) {
+			if (content.type === "text") hasText ||= content.text.trim().length > 0;
+			else if (content.type === "thinking") hasThinking ||= content.thinking.trim().length > 0;
+			else if (content.type === "toolCall") hasToolCall = true;
 		}
-		if (assistantMessage.stopReason !== "stop") return false;
-		return !assistantMessage.content.some(content => {
-			if (content.type === "text") return content.text.trim().length > 0;
-			if (content.type === "thinking") return content.thinking.trim().length > 0;
-			return content.type === "toolCall";
-		});
+
+		// An orphaned toolUse stop (no tool_use block) corrupts Anthropic history:
+		// a later tool_result has nothing to anchor to. Thinking alone cannot anchor
+		// a tool_result, so it does not rescue a toolUse stop here.
+		if (stopReason === "toolUse") return !hasText && !hasToolCall;
+		// A plain stop is empty only when it carries no usable content at all.
+		return !hasText && !hasThinking && !hasToolCall;
 	}
 
 	#emptyStopRetryReminder(): string {
