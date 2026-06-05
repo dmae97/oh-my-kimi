@@ -1625,11 +1625,11 @@ export class TUI extends Container {
 
 	/**
 	 * Map the current frame onto a single render intent. Order matters: forced
-	 * resets and session replacement short-circuit before any diff work. A real
-	 * resize (geometry change) that invalidates native scrollback rebuilds it now;
-	 * a pure content mutation that does the same marks scrollback dirty and
-	 * repaints only the viewport, deferring the destructive clear+replay to an
-	 * explicit checkpoint so users scrolled into history are not yanked.
+	 * resets and session replacement short-circuit first, then a terminal resize
+	 * (width or height change) always reduces to a clean reset + redraw at the new
+	 * geometry — `historyRebuild` normally, `viewportRepaint` inside a multiplexer
+	 * whose pane scrollback cannot be erased. Pure content mutations fall through
+	 * to the differential machinery below.
 	 */
 	#planRender(
 		newLines: string[],
@@ -1655,6 +1655,25 @@ export class TUI extends Container {
 		if (overlayVisibilityReduced && !isMultiplexerSession()) {
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
 		}
+
+		// A terminal resize (width or height change) reflows the terminal's own
+		// buffer, moving rows between the viewport and native scrollback and
+		// invalidating every cursor/viewport anchor the diff and append emitters
+		// rely on. Always reset cleanly at the new geometry and redraw. Inside a
+		// multiplexer the pane's saved lines cannot be erased (ED 3 is a no-op there
+		// and a full replay only duplicates the transcript), so repaint the visible
+		// window in place; a visible overlay rebuilds with its composite. This
+		// deliberately drops the no-overflow and confirmed-scrolled guards — a
+		// resize is an explicit user action, so a scrolled reader snaps to the
+		// bottom and preexisting shell scrollback above the UI is cleared. (During
+		// active ED3-risk foreground streaming the cap above may still downgrade the
+		// rebuild to a non-destructive viewport repaint and reconcile at the next
+		// checkpoint, so transient stream rows never enter native history.)
+		if (widthChanged || heightChanged) {
+			if (isMultiplexerSession()) return { kind: "viewportRepaint" };
+			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
+		}
+
 		if (hasVisibleOverlay) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			// Multiplexer panes never get a destructive scrollback clear
@@ -1679,7 +1698,6 @@ export class TUI extends Container {
 			liveRegionStart,
 			eagerEraseScrollbackRisk,
 			allowUnknownViewportMutation,
-			widthChanged || heightChanged,
 		);
 		if (liveRegionPinnedIntent) return liveRegionPinnedIntent;
 
@@ -1724,10 +1742,10 @@ export class TUI extends Container {
 				this.#markNativeScrollbackDirty();
 				return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
-			// A width change rewraps the whole transcript, so committed scrollback is
-			// mis-wrapped at the old width. Rebuild only with a positive at-tail proof;
-			// unknown viewports stay dirty because the host scroll position is not
-			// observable and ED3 can yank readers.
+			// A shrink that re-exposes rows already committed to native scrollback
+			// must rebuild so the stale committed copy is cleared. Rebuild only with a
+			// positive at-tail proof; unknown viewports stay dirty because the host
+			// scroll position is not observable and ED3 can yank readers.
 			if (this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, false)) {
 				return { kind: "historyRebuild" };
 			}
@@ -1823,8 +1841,6 @@ export class TUI extends Container {
 		this.#suppressNextSuffixScroll = false;
 		if (
 			suppressSuffixScroll &&
-			!widthChanged &&
-			!heightChanged &&
 			diff.appendedLines &&
 			diff.firstChanged < this.#previousLines.length &&
 			!isMultiplexerSession()
@@ -1853,49 +1869,11 @@ export class TUI extends Container {
 		}
 
 		if (diff.firstChanged === -1) {
-			// A geometry change reflows the terminal's own buffer, moving rows between
-			// the viewport and native scrollback. When content overflows and the
-			// viewport position is unobservable (POSIX/ED3-risk/Windows), an in-place
-			// repaint can leave native history out of sync with the transcript, and —
-			// unlike a content-bearing resize, which rebuilds via the geometry branch
-			// below — nothing flags it. Mark scrollback dirty so the next checkpoint
-			// (refreshNativeScrollbackIfDirty) reconciles it; a known-at-bottom reader
-			// rebuilds unconditionally at its checkpoint and needs no flag.
-			if (
-				(widthChanged || heightChanged) &&
-				!isMultiplexerSession() &&
-				newLines.length > height &&
-				this.#readNativeViewportAtBottom() !== true
-			) {
-				this.#markNativeScrollbackDirty();
-			}
-			// Content unchanged. A forced render still needs to refresh the visible
-			// viewport, but it must keep the existing diff basis so later coalesced
-			// content mutations can still update native scrollback correctly.
+			// Content unchanged. A forced render still refreshes the visible viewport
+			// but keeps the existing diff basis so later coalesced content mutations
+			// can still update native scrollback correctly.
 			if (forceViewportRepaint) return { kind: "viewportRepaint" };
-			// Width changes alter wrapping geometry; height changes expose or hide
-			// viewport rows. Repaint any non-multiplexer resize, including Termux
-			// software-keyboard toggles: leaving the new rows blank creates phantom
-			// viewport space that later appends can fill without growing scrollback.
-			if (widthChanged) return { kind: "viewportRepaint" };
-			if (heightChanged && !isMultiplexerSession()) return { kind: "viewportRepaint" };
 			return { kind: "noop" };
-		}
-
-		// Width changes rewrap native history. Any non-append content change must
-		// rebuild the committed transcript when the viewport is safe; a viewport
-		// repaint can leave old-width wrapped fragments above the live frame, and
-		// later appends then splice new rows onto stale history.
-		if (widthChanged) {
-			const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
-			if (!pureAppend) {
-				const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-				if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
-					this.#markNativeScrollbackDirty();
-					return { kind: "viewportRepaint" };
-				}
-				return isMultiplexerSession() ? { kind: "viewportRepaint" } : { kind: "historyRebuild" };
-			}
 		}
 
 		const contentGrew = newLines.length > this.#previousLines.length;
@@ -1919,10 +1897,11 @@ export class TUI extends Container {
 				return { kind: "viewportRepaint" };
 			}
 		}
-		// Geometry changes invalidate the terminal's cursor and viewport anchors;
-		// even if the same coalesced frame also edits offscreen content for a scrolled
-		// reader, the resize-specific branch below must repaint/clamp at the new size.
-		if (!pureAppend && structuralMutation && !heightChanged && !widthChanged && !isMultiplexerSession()) {
+		// A structural mutation (offscreen edit or inserted rows) while bottom-
+		// anchored: when the reader is scrolled, repaint/clamp without trusting the
+		// stale viewport anchors; otherwise rebuild native history when a safe
+		// checkpoint allows.
+		if (!pureAppend && structuralMutation && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
@@ -1963,67 +1942,6 @@ export class TUI extends Container {
 			) {
 				return { kind: "historyRebuild" };
 			}
-		}
-
-		// Height changes shift the visible window. Repaint when content didn't grow,
-		// but skip inside multiplexers (panes manage their own redraws — handled by
-		// the multiplexer geometry branch below). Termux is deliberately included:
-		// a resize with no content change still exposes or hides viewport rows, and
-		// leaving those rows blank lets later appends fill phantom space instead of
-		// growing native scrollback.
-		if (heightChanged && !contentGrew && !isMultiplexerSession()) {
-			return { kind: "viewportRepaint" };
-		}
-
-		// A height change that also grew the content into a frame that now fits
-		// entirely on screen cannot use the diff or append-tail emitters below:
-		// both position scrolled rows against the previous viewport top and
-		// hardware cursor row, which the reflow just invalidated, so the appended
-		// tail lands `height`-delta rows too low. With no overflow there is no
-		// native scrollback to preserve, so repaint the viewport at the new
-		// geometry. (Height changes with overflow keep the existing deferral.)
-		if (heightChanged && newLines.length <= height && !isMultiplexerSession()) {
-			return { kind: "viewportRepaint" };
-		}
-
-		// Any other geometry change (height shrink with content overflowing the
-		// viewport, or a width change carrying a pure append) must not reach the
-		// anchor-relative diff/append emitters below either. The terminal reflowed
-		// its own buffer on resize — a height shrink moves committed rows between
-		// scrollback and viewport — so the previous frame's viewport-top and
-		// hardware-cursor anchors no longer describe the screen, and scrolling
-		// relative to them splices phantom blank rows into native scrollback
-		// (stress repro: darwin-normal-large seed 0x5eed1234 op 1062, a
-		// resizeHeight coalesced with a streamed append). A resize is an explicit
-		// user action, so rebuilding history at the new geometry is the
-		// established tradeoff (see the width-change branch above); a reader
-		// confirmed scrolled into history is still never yanked. Termux is included
-		// (it is not a multiplexer and ED3 clears its own scrollback): a content-
-		// bearing resize must not reach the stale-anchor emitters below.
-		if ((heightChanged || widthChanged) && !isMultiplexerSession()) {
-			// No overflow → nothing of ours in native scrollback to reconcile; an
-			// in-place repaint also keeps preexisting shell scrollback intact.
-			if (newLines.length <= height) {
-				return { kind: "viewportRepaint" };
-			}
-			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-			if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
-				this.#markNativeScrollbackDirty();
-				return { kind: "viewportRepaint" };
-			}
-			return { kind: "historyRebuild" };
-		}
-
-		// The same geometry hazard inside a multiplexer: tmux reflows the pane
-		// grid (visible rows AND pane history) on resize, so the anchor-relative
-		// diff/append emitters below are equally invalid — but a destructive
-		// rebuild is impossible there (pane history cannot be cleared; a full
-		// replay only appends a duplicate transcript copy). Repaint the visible
-		// window in place at the new geometry. Applies even under Termux: a
-		// repaint per keyboard-toggle resize is cheaper than splicing phantom
-		// rows into the pane.
-		if ((heightChanged || widthChanged) && isMultiplexerSession()) {
-			return { kind: "viewportRepaint" };
 		}
 
 		// Configurable shrink-clear: opt-in path that repaints to wipe rows the
@@ -2204,19 +2122,13 @@ export class TUI extends Container {
 		liveRegionStart: number | undefined,
 		eagerEraseScrollbackRisk: boolean,
 		allowUnknownViewportMutation: boolean,
-		geometryChanged: boolean,
 	): RenderIntent | undefined {
-		// A width/height change reflows the whole terminal: the relative cursor
-		// positioning this emitter relies on is computed from the pre-resize
-		// geometry and would land on the wrong rows. Defer to the geometry branch
-		// (a full reflow rebuild), which is the established behavior for resizes.
 		if (
 			liveRegionStart === undefined ||
 			liveRegionStart >= newLines.length ||
 			!this.#eagerNativeScrollbackRebuild ||
 			!eagerEraseScrollbackRisk ||
 			allowUnknownViewportMutation ||
-			geometryChanged ||
 			isMultiplexerSession()
 		) {
 			return undefined;

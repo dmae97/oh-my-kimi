@@ -27,6 +27,10 @@ import { VirtualTerminal } from "./virtual-terminal";
 //                 host where the probe never had an answer to begin with).
 //  - `false`:     the host can see scrollback and reports the user scrolled
 //                 up. Both must avoid `\x1b[3J`.
+//
+// Geometry changes are exempt: a terminal resize is now an explicit clean reset
+// that always rebuilds via `\x1b[2J\x1b[H\x1b[3J` at the new size (covered by
+// render-regressions.test.ts), so this file guards content mutations only.
 class LineList implements Component {
 	#lines: string[];
 	constructor(lines: string[]) {
@@ -132,42 +136,6 @@ describe("issue #1635: TUI must not emit \\x1b[3J when probe is unreliable", () 
 			const writes = capture(term);
 			component.setLines(Array.from({ length: 20 }, (_, i) => `shrunk-${i}`));
 			tui.requestRender();
-			await settle(term);
-			expect(writes.join("").match(ERASE_SCROLLBACK)).toBeNull();
-		} finally {
-			tui.stop();
-		}
-	});
-
-	it("height change with unreportable viewport must not emit \\x1b[3J", async () => {
-		const term = new VirtualTerminal(100, 24);
-		overrideProbe(term, undefined);
-		const tui = new TUI(term);
-		const component = new LineList(Array.from({ length: 40 }, (_, i) => `init-${i}`));
-		tui.addChild(component);
-		try {
-			tui.start();
-			await settle(term);
-			const writes = capture(term);
-			term.resize(100, 25);
-			await settle(term);
-			expect(writes.join("").match(ERASE_SCROLLBACK)).toBeNull();
-		} finally {
-			tui.stop();
-		}
-	});
-
-	it("width change with unreportable viewport must not emit \\x1b[3J", async () => {
-		const term = new VirtualTerminal(100, 24);
-		overrideProbe(term, undefined);
-		const tui = new TUI(term);
-		const component = new LineList(Array.from({ length: 40 }, (_, i) => `init-${i}`));
-		tui.addChild(component);
-		try {
-			tui.start();
-			await settle(term);
-			const writes = capture(term);
-			term.resize(99, 24);
 			await settle(term);
 			expect(writes.join("").match(ERASE_SCROLLBACK)).toBeNull();
 		} finally {
