@@ -6443,9 +6443,13 @@ export class AgentSession {
 				this.#retryAttempt = 0;
 			}
 			this.#resolveRetry();
+			// Tool-use orphans corrupt Anthropic message history (tool_result without
+			// matching tool_use). Always remove them even when the retry cap is hit.
+			if (assistantMessage.stopReason === "toolUse") {
+				this.#removeEmptyStopFromActiveContext(assistantMessage);
+			}
 			return true;
 		}
-
 		this.#removeEmptyStopFromActiveContext(assistantMessage);
 		this.agent.appendMessage({
 			role: "developer",
@@ -6458,6 +6462,13 @@ export class AgentSession {
 	}
 
 	#isEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
+		const hasText = assistantMessage.content.some(
+			content => content.type === "text" && content.text.trim().length > 0,
+		);
+		const hasToolCall = assistantMessage.content.some(content => content.type === "toolCall");
+		if (assistantMessage.stopReason === "toolUse") {
+			return !hasText && !hasToolCall;
+		}
 		if (assistantMessage.stopReason !== "stop") return false;
 		return !assistantMessage.content.some(content => {
 			if (content.type === "text") return content.text.trim().length > 0;
