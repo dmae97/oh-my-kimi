@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.9.5] - 2026-06-05
 ### Added
 
 - Added a persistent error banner pinned above the editor when an assistant turn ends on a provider error (e.g. Anthropic's "Output blocked by content filtering policy"). The transcript `Error: …` line scrolls away as the conversation grows, so terminal turns that ended on a stream error could pass unnoticed; the banner stays in the fixed region above the input and is cleared when the next turn starts.
