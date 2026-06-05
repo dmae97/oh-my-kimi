@@ -27,6 +27,7 @@ import {
 	extractRetryHint,
 	getAgentDbPath,
 	getAgentDir,
+	getAuthBrokerSnapshotCachePath,
 	getProjectDir,
 	logger,
 	postmortem,
@@ -101,7 +102,15 @@ import {
 } from "./secrets";
 import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
-import { AuthBrokerClient, AuthStorage, RemoteAuthCredentialStore } from "./session/auth-storage";
+import {
+	AuthBrokerClient,
+	AuthStorage,
+	DEFAULT_SNAPSHOT_CACHE_TTL_MS,
+	readAuthBrokerSnapshotCache,
+	RemoteAuthCredentialStore,
+	type SnapshotResponse,
+	writeAuthBrokerSnapshotCache,
+} from "./session/auth-storage";
 import { type CustomMessage, convertToLlm, wrapSteeringForModel } from "./session/messages";
 import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
@@ -418,6 +427,15 @@ function getDefaultAgentDir(): string {
 	return getAgentDir();
 }
 
+function resolveSnapshotTtlMs(): number {
+	const raw = process.env.OMP_AUTH_BROKER_SNAPSHOT_TTL_MS;
+	if (!raw) return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
+	const ttlMs = Number(raw);
+	if (Number.isFinite(ttlMs) && ttlMs >= 0) return ttlMs;
+	logger.warn("Invalid OMP_AUTH_BROKER_SNAPSHOT_TTL_MS; using default", { value: raw });
+	return DEFAULT_SNAPSHOT_CACHE_TTL_MS;
+}
+
 // Discovery Functions
 
 /**
@@ -435,9 +453,42 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (brokerConfig) {
 		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
-		const initialResult = await client.fetchSnapshot();
-		if (initialResult.status !== 200) throw new Error("Auth broker returned no initial snapshot");
-		const store = new RemoteAuthCredentialStore({ client, initialSnapshot: initialResult.snapshot });
+		const ttlMs = resolveSnapshotTtlMs();
+		const cachePath = getAuthBrokerSnapshotCachePath();
+		const persist =
+			ttlMs > 0
+				? (snapshot: SnapshotResponse): void => {
+						void writeAuthBrokerSnapshotCache({
+							path: cachePath,
+							token: brokerConfig.token,
+							url: brokerConfig.url,
+							snapshot,
+						}).catch(error => {
+							logger.debug("auth-broker snapshot cache write failed", { error: String(error) });
+						});
+					}
+				: undefined;
+
+		let initialSnapshot: SnapshotResponse | undefined;
+		if (ttlMs > 0) {
+			initialSnapshot =
+				(await readAuthBrokerSnapshotCache({
+					path: cachePath,
+					token: brokerConfig.token,
+					url: brokerConfig.url,
+					ttlMs,
+				}).catch(error => {
+					logger.debug("auth-broker snapshot cache read failed", { error: String(error) });
+					return null;
+				})) ?? undefined;
+		}
+		if (!initialSnapshot) {
+			const initialResult = await client.fetchSnapshot();
+			if (initialResult.status !== 200) throw new Error("Auth broker returned no initial snapshot");
+			initialSnapshot = initialResult.snapshot;
+			persist?.(initialSnapshot);
+		}
+		const store = new RemoteAuthCredentialStore({ client, initialSnapshot, onSnapshot: persist });
 		// Refresh + usage hooks live on RemoteAuthCredentialStore; AuthStorage
 		// discovers them automatically when no explicit option overrides them.
 		const storage = new AuthStorage(store, {

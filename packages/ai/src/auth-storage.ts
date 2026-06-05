@@ -725,6 +725,25 @@ class AuthStorageUsageCache implements UsageCache {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type StoredCredential = { id: number; credential: AuthCredential };
+type OAuthSelection = { credential: OAuthCredential; index: number };
+
+type OAuthCandidate = {
+	selection: OAuthSelection;
+	usage: UsageReport | null;
+	usageChecked: boolean;
+};
+
+type RankedOAuthCandidate = OAuthCandidate & {
+	blocked: boolean;
+	blockedUntil?: number;
+	hasPriorityBoost: boolean;
+	planPriority: number;
+	secondaryUsed: number;
+	secondaryDrainRate: number;
+	primaryUsed: number;
+	primaryDrainRate: number;
+	orderPos: number;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Class
