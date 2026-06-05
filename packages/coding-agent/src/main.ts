@@ -268,7 +268,7 @@ async function runInteractiveMode(
 		force: forceSetupWizard,
 	});
 
-	await mode.init({ suppressWelcomeIntro: setupScenes.length > 0, resuming });
+	await mode.init({ suppressWelcomeIntro: setupScenes.length > 0 });
 
 	if (setupScenes.length > 0) {
 		await runSetupWizard(mode, setupScenes);

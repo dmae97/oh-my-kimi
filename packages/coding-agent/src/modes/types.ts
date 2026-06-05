@@ -62,10 +62,6 @@ export type TodoPhase = {
 
 export interface InteractiveModeInitOptions {
 	suppressWelcomeIntro?: boolean;
-	/** True when the session was continued/resumed/forked. Suppresses the
-	 *  `plan.defaultOnStartup` auto-entry so resumed sessions keep their own
-	 *  reconciled mode. */
-	resuming?: boolean;
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions & Pick<HookSelectorOptions, "disabledIndices">;

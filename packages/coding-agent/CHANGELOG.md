@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added a `plan.defaultOnStartup` setting (Tasks tab, default off) that automatically enters plan mode at the start of every new interactive session. It applies only to fresh sessions — resumed, continued, and forked sessions keep the mode restored from their history — and is a silent no-op when plan mode is globally disabled (`plan.enabled`). The setting is hidden from the settings UI unless plan mode is enabled.
+- Added a `plan.defaultOnStartup` setting (Tasks tab, default off) that automatically enters plan mode at the start of a new interactive session. It applies to any session that opens with no prior history — including a `--continue`/auto-resume that finds no recent session and starts fresh — while sessions with restored history keep the mode reconciled from that history. It is a silent no-op when plan mode is globally disabled (`plan.enabled`), and the setting is hidden from the settings UI unless plan mode is enabled.
 
 ## [15.9.1] - 2026-06-04
 

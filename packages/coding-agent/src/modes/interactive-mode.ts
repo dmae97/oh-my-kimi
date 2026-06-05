@@ -610,16 +610,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession());
 		await this.#reconcileModeFromSession();
 
-		// Brand-new (non-resumed) sessions optionally start in plan mode when the
-		// user has made it the startup default. Resumed/continued/forked sessions
-		// keep whatever mode #reconcileModeFromSession just restored. Scoped to
-		// launch (not the switch reconciler above) so /new and the plan-approval
-		// → execution handoff clear never get dragged back into plan mode.
-		// #enterPlanMode is idempotent and self-guards against an already-active
-		// plan/goal mode, so the only conditions worth checking here are the two
-		// settings (it does not check plan.enabled itself).
+		// Brand-new sessions optionally start in plan mode when the user has made
+		// it the startup default. "Brand-new" is keyed off the session having no
+		// prior entries — not the CLI resume flags — so `omp --continue` (or
+		// auto-resume) that finds no recent session and creates a fresh one still
+		// honors the default, while a session with restored history keeps whatever
+		// mode #reconcileModeFromSession just reconciled. Scoped to launch (not the
+		// switch reconciler above) so /new and the plan-approval → execution handoff
+		// clear never get dragged back into plan mode. #enterPlanMode is idempotent
+		// and self-guards against an already-active plan/goal mode; it does not check
+		// plan.enabled itself.
 		if (
-			!options.resuming &&
+			this.sessionManager.getEntries().length === 0 &&
 			this.session.settings.get("plan.defaultOnStartup") &&
 			this.session.settings.get("plan.enabled")
 		) {

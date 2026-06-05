@@ -116,10 +116,15 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.getPlanModeState()).toBeUndefined();
 	});
 
-	it("does not enter plan mode when the session is resumed", async () => {
+	it("does not enter plan mode when the session has restored history", async () => {
+		// A genuinely resumed session has prior entries; gating on getEntries()
+		// (not the CLI resume flag) means a `--continue` that created a *fresh*,
+		// empty session still gets the startup default (the "enters" case above),
+		// while one with restored history is left in its reconciled mode.
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendMessage({ role: "user", content: "prior turn", timestamp: Date.now() });
 
-		await created.init({ suppressWelcomeIntro: true, resuming: true });
+		await created.init({ suppressWelcomeIntro: true });
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
