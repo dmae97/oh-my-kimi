@@ -1751,7 +1751,6 @@ async function tryResolveCurrentRepoFresh(cwd: string, signal: AbortSignal | und
 	}
 }
 
-
 /**
  * Matches search-query qualifiers that already scope to a repository, org, or
  * user. When present, callers should avoid layering a default `repo:<current>`

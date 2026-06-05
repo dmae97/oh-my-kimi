@@ -1137,7 +1137,6 @@ describe("github tool", () => {
 		expect(jsonSpy).not.toHaveBeenCalled();
 	});
 
-
 	it("fails fast when explicit `repo` is given and cwd has no GitHub repository context (issue #1949)", async () => {
 		const targetRepo = "cagedbird043/cxf";
 		const cwd = `/tmp/run-watch-explicit-repo-no-git-${Date.now()}`;
