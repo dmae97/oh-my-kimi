@@ -13,7 +13,6 @@ import {
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
-import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
@@ -258,11 +257,13 @@ export class EventController {
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
 			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
 			if (!wasOptimistic) {
-				const imageLinks = await materializeImageReferenceLinks(
-					imageBlocks,
-					this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
-				);
-				this.ctx.addMessageToChat(event.message, { imageLinks });
+				// Append synchronously: #emit dispatches to this listener fire-and-forget
+				// (see AgentSession.#emit), so any await between the user message_start and
+				// addMessageToChat lets later events (assistant message_start, tool execution
+				// start/end) append their components first and scramble transcript order /
+				// live-region block boundaries. addMessageToChat materializes clickable image
+				// links via the synchronous putBlobSync fallback, so no await is needed here.
+				this.ctx.addMessageToChat(event.message);
 			}
 			if (wasOptimistic) {
 				this.ctx.optimisticUserMessageSignature = undefined;
