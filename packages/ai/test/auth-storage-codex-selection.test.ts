@@ -103,6 +103,33 @@ function createCredential(accountId: string, email: string): OAuthCredentials {
 	};
 }
 
+async function countApiKeySelections(
+	authStorage: AuthStorage,
+	provider: string,
+	sessionPrefix: string,
+	samples = 150,
+): Promise<Map<string, number>> {
+	const counts = new Map<string, number>();
+	for (let index = 0; index < samples; index += 1) {
+		const apiKey = await authStorage.getApiKey(provider, `${sessionPrefix}-${index}`);
+		if (!apiKey) continue;
+		counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
+	}
+	return counts;
+}
+
+function countFor(counts: Map<string, number>, apiKey: string): number {
+	return counts.get(apiKey) ?? 0;
+}
+
+function expectWeightedPreference(counts: Map<string, number>, preferred: string, fallback: string): void {
+	const preferredCount = countFor(counts, preferred);
+	const fallbackCount = countFor(counts, fallback);
+	expect(preferredCount).toBeGreaterThan(fallbackCount);
+	expect(preferredCount / fallbackCount).toBeGreaterThan(1.4);
+	expect(preferredCount / fallbackCount).toBeLessThan(2.4);
+}
+
 describe("AuthStorage codex oauth ranking", () => {
 	let tempDir = "";
 	let store: AuthCredentialStore | null = null;

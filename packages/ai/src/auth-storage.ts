@@ -2752,35 +2752,126 @@ export class AuthStorage {
 		return usedFraction / elapsedHours;
 	}
 
+	#compareRankedOAuthCandidatePriority(
+		left: RankedOAuthCandidate,
+		right: RankedOAuthCandidate,
+		provider: string,
+		modelId: string | undefined,
+	): number {
+		if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
+		if (left.blocked && right.blocked) {
+			const leftBlockedUntil = left.blockedUntil ?? Number.POSITIVE_INFINITY;
+			const rightBlockedUntil = right.blockedUntil ?? Number.POSITIVE_INFINITY;
+			if (leftBlockedUntil !== rightBlockedUntil) return leftBlockedUntil - rightBlockedUntil;
+			return 0;
+		}
+		if (requiresOpenAICodexProModel(provider, modelId) && left.planPriority !== right.planPriority) {
+			return left.planPriority - right.planPriority;
+		}
+		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
+		if (left.secondaryDrainRate !== right.secondaryDrainRate) {
+			return left.secondaryDrainRate - right.secondaryDrainRate;
+		}
+		if (left.secondaryUsed !== right.secondaryUsed) return left.secondaryUsed - right.secondaryUsed;
+		if (left.primaryDrainRate !== right.primaryDrainRate) return left.primaryDrainRate - right.primaryDrainRate;
+		if (left.primaryUsed !== right.primaryUsed) return left.primaryUsed - right.primaryUsed;
+		return 0;
+	}
+
+	#compareRankedOAuthCandidates(
+		left: RankedOAuthCandidate,
+		right: RankedOAuthCandidate,
+		provider: string,
+		modelId: string | undefined,
+	): number {
+		const priority = this.#compareRankedOAuthCandidatePriority(left, right, provider, modelId);
+		return priority !== 0 ? priority : left.orderPos - right.orderPos;
+	}
+
+	#orderRankedOAuthCandidates(
+		candidates: RankedOAuthCandidate[],
+		sessionId: string | undefined,
+		provider: string,
+		modelId: string | undefined,
+	): OAuthCandidate[] {
+		candidates.sort((left, right) => this.#compareRankedOAuthCandidates(left, right, provider, modelId));
+		if (!sessionId) {
+			return candidates.map(candidate => ({
+				selection: candidate.selection,
+				usage: candidate.usage,
+				usageChecked: candidate.usageChecked,
+			}));
+		}
+
+		const unblocked = candidates.filter(candidate => !candidate.blocked);
+		if (unblocked.length <= 1) {
+			return candidates.map(candidate => ({
+				selection: candidate.selection,
+				usage: candidate.usage,
+				usageChecked: candidate.usageChecked,
+			}));
+		}
+
+		const priorityByCandidate = new Map<RankedOAuthCandidate, number>();
+		let bucketIndex = 0;
+		let previous = unblocked[0];
+		const bucketByCandidate = new Map<RankedOAuthCandidate, number>();
+		for (const candidate of unblocked) {
+			if (
+				candidate !== previous &&
+				this.#compareRankedOAuthCandidatePriority(previous, candidate, provider, modelId) !== 0
+			) {
+				bucketIndex += 1;
+			}
+			bucketByCandidate.set(candidate, bucketIndex);
+			previous = candidate;
+		}
+		const maxBucket = bucketIndex;
+		for (const candidate of unblocked) {
+			const bucket = bucketByCandidate.get(candidate) ?? 0;
+			priorityByCandidate.set(candidate, maxBucket === 0 ? 0 : 1 - bucket / maxBucket);
+		}
+
+		let totalWeight = 0;
+		for (const candidate of unblocked) {
+			totalWeight += 1 + (priorityByCandidate.get(candidate) ?? 0);
+		}
+
+		const hit = ((Bun.hash.xxHash32(sessionId) >>> 0) / 2 ** 32) * totalWeight;
+		let cursor = 0;
+		let selected = unblocked[unblocked.length - 1];
+		for (const candidate of unblocked) {
+			cursor += 1 + (priorityByCandidate.get(candidate) ?? 0);
+			if (hit < cursor) {
+				selected = candidate;
+				break;
+			}
+		}
+
+		const ordered = [
+			selected,
+			...unblocked.filter(candidate => candidate !== selected),
+			...candidates.filter(candidate => candidate.blocked),
+		];
+		return ordered.map(candidate => ({
+			selection: candidate.selection,
+			usage: candidate.usage,
+			usageChecked: candidate.usageChecked,
+		}));
+	}
+
 	async #rankOAuthSelections(args: {
 		providerKey: string;
 		provider: string;
 		order: number[];
-		credentials: Array<{ credential: OAuthCredential; index: number }>;
+		credentials: OAuthSelection[];
 		options?: AuthApiKeyOptions;
+		sessionId?: string;
 		strategy: CredentialRankingStrategy;
-	}): Promise<
-		Array<{
-			selection: { credential: OAuthCredential; index: number };
-			usage: UsageReport | null;
-			usageChecked: boolean;
-		}>
-	> {
+	}): Promise<OAuthCandidate[]> {
 		const nowMs = Date.now();
 		const { strategy } = args;
-		const ranked: Array<{
-			selection: { credential: OAuthCredential; index: number };
-			usage: UsageReport | null;
-			usageChecked: boolean;
-			blocked: boolean;
-			blockedUntil?: number;
-			hasPriorityBoost: boolean;
-			secondaryUsed: number;
-			secondaryDrainRate: number;
-			primaryUsed: number;
-			primaryDrainRate: number;
-			orderPos: number;
-		}> = [];
+		const ranked: RankedOAuthCandidate[] = [];
 		// Pre-fetch usage reports in parallel for non-blocked credentials.
 		// Wrap with a timeout so slow/429'd fetches don't indefinitely block
 		// credential selection — better to pick a credential without usage data
@@ -2840,6 +2931,7 @@ export class AuthStorage {
 				blocked,
 				blockedUntil,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
+				planPriority: getOpenAICodexPlanPriority(usage),
 				secondaryUsed: this.#normalizeUsageFraction(secondaryTarget),
 				secondaryDrainRate: this.#computeWindowDrainRate(
 					secondaryTarget,
@@ -2851,32 +2943,7 @@ export class AuthStorage {
 				orderPos,
 			});
 		}
-		ranked.sort((left, right) => {
-			if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
-			if (left.blocked && right.blocked) {
-				const leftBlockedUntil = left.blockedUntil ?? Number.POSITIVE_INFINITY;
-				const rightBlockedUntil = right.blockedUntil ?? Number.POSITIVE_INFINITY;
-				if (leftBlockedUntil !== rightBlockedUntil) return leftBlockedUntil - rightBlockedUntil;
-				return left.orderPos - right.orderPos;
-			}
-			if (requiresOpenAICodexProModel(args.provider, args.options?.modelId)) {
-				const leftPlanPriority = getOpenAICodexPlanPriority(left.usage);
-				const rightPlanPriority = getOpenAICodexPlanPriority(right.usage);
-				if (leftPlanPriority !== rightPlanPriority) return leftPlanPriority - rightPlanPriority;
-			}
-			if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
-			if (left.secondaryDrainRate !== right.secondaryDrainRate)
-				return left.secondaryDrainRate - right.secondaryDrainRate;
-			if (left.secondaryUsed !== right.secondaryUsed) return left.secondaryUsed - right.secondaryUsed;
-			if (left.primaryDrainRate !== right.primaryDrainRate) return left.primaryDrainRate - right.primaryDrainRate;
-			if (left.primaryUsed !== right.primaryUsed) return left.primaryUsed - right.primaryUsed;
-			return left.orderPos - right.orderPos;
-		});
-		return ranked.map(candidate => ({
-			selection: candidate.selection,
-			usage: candidate.usage,
-			usageChecked: candidate.usageChecked,
-		}));
+		return this.#orderRankedOAuthCandidates(ranked, args.sessionId, args.provider, args.options?.modelId);
 	}
 
 	/**
@@ -2913,8 +2980,17 @@ export class AuthStorage {
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined && !this.#isCredentialBlocked(providerKey, sessionPreferredIndex);
 		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
+		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
 		const candidates = shouldRank
-			? await this.#rankOAuthSelections({ providerKey, provider, order, credentials, options, strategy: strategy! })
+			? await this.#rankOAuthSelections({
+					providerKey,
+					provider,
+					order: rankingOrder,
+					credentials,
+					options,
+					sessionId,
+					strategy: strategy!,
+				})
 			: order
 					.map(idx => credentials[idx])
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
