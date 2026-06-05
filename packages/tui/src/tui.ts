@@ -2195,8 +2195,17 @@ export class TUI extends Container {
 
 		this.#markNativeScrollbackDirty();
 		const viewportTop = Math.max(0, newLines.length - height);
-		const sealedEnd = Math.max(0, Math.min(liveRegionStart, newLines.length));
-		const appendTo = Math.min(sealedEnd, viewportTop);
+		// Every row above the viewport top has physically scrolled out of the live
+		// viewport, so the terminal has already pushed it into native scrollback —
+		// there is nowhere else for an off-screen row to live. It must therefore be
+		// committed as real content, *including the head of the live block itself*
+		// when that block alone overflows the viewport (a tall tool result, a long
+		// streamed reply). Clamping the commit to `liveRegionStart` (the sealed-
+		// prefix boundary) stranded those rows: neither pushed to scrollback nor
+		// kept in the repainted viewport, so the head of the block was erased as it
+		// overflowed. Only the live tail that remains *within* the viewport stays
+		// transient (repainted in place, deferred to the checkpoint rebuild).
+		const appendTo = viewportTop;
 		const appendFrom = Math.min(this.#scrollbackHighWater, appendTo);
 		return { kind: "liveRegionPinned", appendFrom, appendTo };
 	}

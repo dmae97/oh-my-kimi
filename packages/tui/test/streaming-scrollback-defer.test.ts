@@ -72,7 +72,7 @@ function rows(prefix: string, count: number): string[] {
 }
 
 describe("streaming scrollback defer", () => {
-	it("keeps sealed prefix scrollable while deferring live-region rows on ED3-risk terminals", async () => {
+	it("commits every row above the viewport (incl. the live-block head) without ED3 on ED3-risk terminals", async () => {
 		if (process.platform === "win32") return;
 		await withTerminalRisk(true, async () => {
 			const term = new VirtualTerminal(20, 4);
@@ -94,10 +94,14 @@ describe("streaming scrollback defer", () => {
 				tui.requestRender();
 				await settle(term);
 
+				// The live block (think-*) overflows the 4-row viewport. Every row that
+				// scrolled above the viewport top — including the live block's own head
+				// (think-0/think-1) — must enter native scrollback; only the visible tail
+				// stays transient. No ED3 erase fires during streaming.
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([
 					...rows("prior-", 12),
-					...rows("think-", 6).slice(-4),
+					...rows("think-", 6),
 				]);
 
 				live.setLines(rows("think-", 8));
@@ -106,8 +110,40 @@ describe("streaming scrollback defer", () => {
 
 				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
 				expect(eraseScrollbackCount(writes)).toBe(0);
-				expect(buffer.filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
-				expect(buffer.slice(-4)).toEqual(rows("think-", 8).slice(-4));
+				expect(buffer).toEqual([...rows("prior-", 12), ...rows("think-", 8)]);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("keeps the head of a tall live block that alone overflows the viewport (no sealed prefix)", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(20, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			// The only block is the live one (liveRegionStart === 0), so the entire
+			// scrollback commit originates inside the live region. A clamp to the
+			// sealed boundary would commit nothing and erase the block's head.
+			const live = new LiveLineList([]);
+
+			try {
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				live.setLines(rows("tool-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				// tool-0..tool-5 scrolled above the 4-row viewport and must be in
+				// scrollback; tool-6..tool-9 fill the viewport. None are erased.
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("tool-", 10));
 			} finally {
 				tui.stop();
 			}
