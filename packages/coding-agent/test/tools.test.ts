@@ -1160,7 +1160,6 @@ function b() {
 					deliveries.push(text);
 				},
 			});
-			AsyncJobManager.setInstance(asyncJobManager);
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
 				new BashTool(
 					createTestToolSession(
@@ -1194,7 +1193,6 @@ function b() {
 					deliveries.push({ jobId, text });
 				},
 			});
-			AsyncJobManager.setInstance(asyncJobManager);
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
 				new BashTool(
 					createTestToolSession(
@@ -1241,7 +1239,6 @@ function b() {
 					deliveries.push({ jobId, text });
 				},
 			});
-			AsyncJobManager.setInstance(asyncJobManager);
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
 				new BashTool(
 					createTestToolSession(
