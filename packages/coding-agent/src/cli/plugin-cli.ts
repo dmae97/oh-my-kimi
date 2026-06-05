@@ -354,6 +354,7 @@ async function handleInstall(
 		console.error(chalk.dim(`  ${APP_NAME} plugin install name@marketplace`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install github:user/repo`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install https://github.com/user/repo#v1.0`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install ./path/to/local/plugin`));
 		process.exit(1);
 	}
 
@@ -375,6 +376,49 @@ async function handleInstall(
 						`${theme.status.success} Installed ${target.name} from ${target.marketplace} (${entry.version})`,
 					),
 				);
+			} catch (err) {
+				console.error(chalk.red(`${theme.status.error} Failed to install ${spec}: ${err}`));
+				process.exit(1);
+			}
+			continue;
+		}
+
+		if (target.type === "local") {
+			// Local paths route to link(): symlink the directory into the plugins
+			// node_modules tree so source edits show up without a reinstall. Matches
+			// `omp plugin link <path>` so users can use either verb interchangeably.
+			if (flags.scope) {
+				console.error(
+					chalk.yellow(
+						`Warning: --scope is only supported for marketplace installs (name@marketplace). Ignoring for ${spec}.`,
+					),
+				);
+			}
+			if (flags.force) {
+				console.error(
+					chalk.yellow(
+						`Warning: --force has no effect for local path installs (link is already idempotent). Ignoring for ${spec}.`,
+					),
+				);
+			}
+			if (flags.dryRun) {
+				if (flags.json) {
+					console.log(JSON.stringify({ dryRun: true, action: "link", path: target.path }, null, 2));
+				} else {
+					console.log(chalk.dim(`[dry-run] Would link ${spec}`));
+				}
+				continue;
+			}
+			try {
+				const result = await manager.link(target.path);
+				if (flags.json) {
+					console.log(JSON.stringify(result, null, 2));
+				} else {
+					console.log(chalk.green(`${theme.status.success} Linked ${result.name} from ${spec}`));
+					if (result.manifest.description) {
+						console.log(chalk.dim(`  ${result.manifest.description}`));
+					}
+				}
 			} catch (err) {
 				console.error(chalk.red(`${theme.status.error} Failed to install ${spec}: ${err}`));
 				process.exit(1);
@@ -923,6 +967,7 @@ ${chalk.bold("Sources:")}
   github:user/repo[#ref]          GitHub shorthand (also gitlab:, bitbucket:, codeberg:, sourcehut:)
   https://github.com/user/repo    Full git URL (https, ssh, or git protocol)
   name@marketplace                Marketplace plugin (see marketplace command)
+  ./path, ../path, /abs, ~/path   Local plugin directory (symlinked, same as plugin link)
 
 ${chalk.bold("Config Subcommands:")}
   config list <pkg>              List all settings

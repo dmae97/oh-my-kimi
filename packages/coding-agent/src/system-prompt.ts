@@ -363,6 +363,8 @@ export interface BuildSystemPromptOptions {
 	workspaceTree?: WorkspaceTree | Promise<WorkspaceTree>;
 	/** Whether the local memory://root summary is active. */
 	memoryRootEnabled?: boolean;
+	/** Active model identifier (e.g. "anthropic/claude-opus-4") surfaced to the agent. */
+	model?: string;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -396,6 +398,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		secretsEnabled = false,
 		workspaceTree: providedWorkspaceTree,
 		memoryRootEnabled = false,
+		model,
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
@@ -566,6 +569,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		date,
 		dateTime,
 		cwd: promptCwd,
+		model: model ?? "",
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
 		mcpDiscoveryMode,

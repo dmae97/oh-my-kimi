@@ -97,7 +97,6 @@ export async function runSearchCommand(cmd: SearchCommandArgs): Promise<void> {
 	const result = await runSearchQuery(params);
 	const component = renderSearchResult(result, { expanded: cmd.expanded, isPartial: false }, theme, {
 		query: cmd.query,
-		allowLongAnswer: true,
 		maxAnswerLines: cmd.expanded ? undefined : 6,
 	});
 

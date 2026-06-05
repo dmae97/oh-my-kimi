@@ -635,7 +635,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			label: "Terminal Hyperlinks",
 			description:
-				"Wrap file paths in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
+				"Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
 		},
 	},
 	// Display rendering
@@ -719,6 +719,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "model",
 			label: "Repeat Tool Descriptions",
 			description: "Render full tool descriptions in the system prompt instead of a tool name list",
+		},
+	},
+
+	includeModelInPrompt: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			label: "Include Model In Prompt",
+			description: "Surface the active model identifier in the system prompt so the agent knows which model it is",
 		},
 	},
 

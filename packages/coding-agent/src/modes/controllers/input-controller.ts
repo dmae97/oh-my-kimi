@@ -6,6 +6,7 @@ import { isSettingsInitialized, settings } from "../../config/settings";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
+import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
@@ -253,6 +254,8 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
+					this.ctx.pendingImageLinks = [];
+					this.ctx.editor.imageLinks = undefined;
 					this.ctx.onInputCallback({ text: "", cancelled: false, started: true });
 				}
 				return;
@@ -260,12 +263,15 @@ export class InputController {
 
 			const runner = this.ctx.session.extensionRunner;
 			let inputImages = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
+			let inputImageLinks = this.ctx.pendingImageLinks.length > 0 ? [...this.ctx.pendingImageLinks] : undefined;
 
 			if (runner?.hasHandlers("input")) {
 				const result = await runner.emitInput(text, inputImages, "interactive");
 				if (result?.handled) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
+					this.ctx.pendingImageLinks = [];
+					this.ctx.editor.imageLinks = undefined;
 					return;
 				}
 				if (result?.text !== undefined) {
@@ -273,6 +279,10 @@ export class InputController {
 				}
 				if (result?.images !== undefined) {
 					inputImages = result.images;
+					inputImageLinks = await materializeImageReferenceLinks(
+						inputImages,
+						this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
+					);
 				}
 			}
 
@@ -356,8 +366,10 @@ export class InputController {
 			if (this.ctx.session.isStreaming) {
 				this.ctx.editor.addToHistory(text);
 				this.ctx.editor.setText("");
+				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
+				this.ctx.pendingImageLinks = [];
 				// Record the signature so the queued message's eventual delivery
 				// (a user-role `message_start` event) leaves any draft the user has
 				// typed since queuing intact. Same protection as #783, applied to
@@ -417,11 +429,17 @@ export class InputController {
 
 			if (this.ctx.onInputCallback) {
 				// Include any pending images from clipboard paste
+				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
+				this.ctx.pendingImageLinks = [];
 
 				// Render user message immediately, then let session events catch up
-				const submission = this.ctx.startPendingSubmission({ text, images });
+				const submission = this.ctx.startPendingSubmission({
+					text,
+					images,
+					imageLinks: inputImageLinks,
+				});
 
 				this.ctx.onInputCallback(submission);
 			}
@@ -685,11 +703,25 @@ export class InputController {
 					}
 				}
 
+				const imageLink = (
+					await materializeImageReferenceLinks(
+						[
+							{
+								type: "image",
+								data: imageData.data,
+								mimeType: imageData.mimeType,
+							},
+						],
+						this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
+					)
+				)?.[0];
 				this.ctx.pendingImages.push({
 					type: "image",
 					data: imageData.data,
 					mimeType: imageData.mimeType,
 				});
+				this.ctx.pendingImageLinks.push(imageLink);
+				this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
 				// Insert placeholder at cursor like Claude does
 				const imageNum = this.ctx.pendingImages.length;
 				const placeholder = `[Image #${imageNum}]`;

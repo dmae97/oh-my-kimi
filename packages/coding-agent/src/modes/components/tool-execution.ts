@@ -197,6 +197,11 @@ export class ToolExecutionComponent extends Container {
 	#todoStrikeInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
+	// Sealed once the tool reaches a terminal state (result delivered, or the
+	// turn abandoned it without one). Drives `isTranscriptBlockFinalized`: until
+	// sealed the block stays in the transcript's repaintable live region so a
+	// late result still repaints instead of stranding the streaming preview.
+	#sealed = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -448,6 +453,13 @@ export class ToolExecutionComponent extends Container {
 		} else if (!needsSpinner && this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
+			// Clear the last drawn frame so a non-live renderCall (e.g. a write whose
+			// args just completed) stops showing a frozen spinner glyph. Skip when a
+			// todo strike owns the frame — it sets its own value right after this.
+			if (!this.#todoStrikeInterval) {
+				this.#spinnerFrame = undefined;
+				this.#renderState.spinnerFrame = undefined;
+			}
 		}
 	}
 
@@ -489,6 +501,37 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
+	 * Whether this block has reached a terminal state for transcript freezing.
+	 * Reports `false` while it can still visually change so the
+	 * {@link TranscriptContainer} keeps it inside the repaintable live region:
+	 * a foreground tool awaiting its result, or one streaming partial output.
+	 * A final (non-partial) result, a background-async tool the agent has moved
+	 * past, or an explicit {@link seal} flips it to `true`.
+	 */
+	isTranscriptBlockFinalized(): boolean {
+		if (this.#sealed) return true;
+		if (this.#result === undefined) return false;
+		if (!this.#isPartial) return true;
+		// Partial result: a background async tool is accepted to freeze (the agent
+		// continues while it runs and would otherwise pin an unbounded live region);
+		// a foreground tool streaming partial output stays live until it finishes.
+		return (this.#result.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
+	}
+
+	/**
+	 * Mark the tool terminal even though no result arrived (the turn aborted or
+	 * abandoned it) and stop animating, so it can freeze and stops pinning the
+	 * transcript live region.
+	 */
+	seal(): void {
+		if (this.#sealed) return;
+		this.#sealed = true;
+		this.stopAnimation();
+		this.#updateDisplay();
+		this.#ui.requestRender();
+	}
+
+	/**
 	 * Stop spinner animation and cleanup resources.
 	 */
 	stopAnimation(): void {
@@ -496,6 +539,7 @@ export class ToolExecutionComponent extends Container {
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
+			this.#renderState.spinnerFrame = undefined;
 		}
 		this.#stopTodoStrikeAnimation();
 		this.#editDiffAbort?.abort();

@@ -30,6 +30,48 @@ interface BridgeServer {
 const registrations = new Map<string, PyToolBridgeEntry>();
 let serverPromise: Promise<BridgeServer> | null = null;
 
+/**
+ * Forward a bridge call to {@link callSessionTool}, but resolve the HTTP request
+ * the instant the cell's signal aborts instead of waiting for the tool/subagent
+ * to fully tear down.
+ *
+ * The kernel invokes this bridge with a *blocking* `urllib` request from a
+ * worker thread (each `agent()` / `tool.*` call). When the cell is interrupted,
+ * `parallel()`'s `ThreadPoolExecutor.__exit__` joins those worker threads
+ * (`shutdown(wait=True)`), so they cannot unwind until their `urllib` call
+ * returns — i.e. until this handler responds. A host-side `agent()` teardown
+ * (aborting nested LLM streams + tools across a wide fan-out) routinely exceeds
+ * the kernel's SIGINT escalation window, so the kernel was hard-killed and its
+ * persistent state lost while the subagents were still winding down. Responding
+ * immediately on abort lets the kernel raise through the blocked call and settle
+ * cleanly (preserving state); the already-signaled call keeps tearing down in
+ * the background, its eventual result/rejection swallowed.
+ */
+async function callSessionToolPromptOnAbort(name: string, args: unknown, entry: PyToolBridgeEntry): Promise<unknown> {
+	const call = callSessionTool(name, args, {
+		session: entry.toolSession,
+		signal: entry.signal,
+		emitStatus: entry.emitStatus,
+	});
+	const signal = entry.signal;
+	if (!signal) return await call;
+	if (signal.aborted) {
+		void call.catch(() => {});
+		throw new Error(`bridge call ${JSON.stringify(name)} aborted: eval cell was interrupted`);
+	}
+	const { promise: aborted, reject } = Promise.withResolvers<never>();
+	const onAbort = () => reject(new Error(`bridge call ${JSON.stringify(name)} aborted: eval cell was interrupted`));
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await Promise.race([call, aborted]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+		// `call` may still be settling (subagent teardown after its own abort);
+		// swallow its outcome so an abort-won race can't surface as unhandled.
+		void call.catch(() => {});
+	}
+}
+
 async function startServer(): Promise<BridgeServer> {
 	const token = crypto.randomUUID();
 	const server = Bun.serve({
@@ -66,11 +108,7 @@ async function startServer(): Promise<BridgeServer> {
 			}
 
 			try {
-				const value = await callSessionTool(name, body.args, {
-					session: entry.toolSession,
-					signal: entry.signal,
-					emitStatus: entry.emitStatus,
-				});
+				const value = await callSessionToolPromptOnAbort(name, body.args, entry);
 				return Response.json({ ok: true, value });
 			} catch (err) {
 				return Response.json({

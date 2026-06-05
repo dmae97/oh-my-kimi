@@ -26,6 +26,18 @@ const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = {
 	contextWindow: 400000,
 	maxTokens: 128000,
 };
+const ollamaChatModel: Model<"ollama-chat"> = {
+	id: "llama-local",
+	name: "llama-local",
+	api: "ollama-chat",
+	provider: "ollama",
+	baseUrl: "http://127.0.0.1:11434",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128000,
+	maxTokens: 8192,
+};
 
 function baseContext(): Context {
 	return {
@@ -228,6 +240,18 @@ function createOpenAICompletionsSuccessResponse(modelId: string): Response {
 	]);
 }
 
+function createOllamaChatSuccessResponse(): Response {
+	return new Response(
+		`${JSON.stringify({ message: { content: "Hello delayed" }, done: false })}\n${JSON.stringify({
+			done: true,
+			done_reason: "stop",
+			prompt_eval_count: 5,
+			eval_count: 2,
+		})}\n`,
+		{ status: 200 },
+	);
+}
+
 async function expectFirstEventTimeout(
 	run: (streamFirstEventTimeoutMs: number) => Promise<{ stopReason: string; errorMessage?: string }>,
 	expectedMessage: string,
@@ -344,6 +368,34 @@ describe("OpenAI-family first-event timeouts", () => {
 			expect(result.stopReason).toBe("stop");
 			expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
 			expect(timeoutHeaders).toContain("1");
+		} finally {
+			if (previousOpenAIIdleTimeout === undefined) {
+				delete Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = previousOpenAIIdleTimeout;
+			}
+			if (previousGenericFirstEventTimeout === undefined) {
+				delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousGenericFirstEventTimeout;
+			}
+		}
+	});
+
+	it("lets PI_OPENAI_STREAM_IDLE_TIMEOUT_MS widen native Ollama first-event request setup", async () => {
+		const previousOpenAIIdleTimeout = Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+		const previousGenericFirstEventTimeout = Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS = "1500";
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		global.fetch = createDelayedFetch(30, createOllamaChatSuccessResponse);
+
+		try {
+			const result = await streamSimple(ollamaChatModel, baseContext(), {
+				apiKey: "test-key",
+			}).result();
+
+			expect(result.stopReason).toBe("stop");
+			expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
 		} finally {
 			if (previousOpenAIIdleTimeout === undefined) {
 				delete Bun.env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS;

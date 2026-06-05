@@ -1,6 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+
+### Changed
+
+- Changed terminal resize handling so any width or height change always performs a clean reset + redraw: the renderer now unconditionally clears the viewport and native scrollback (`CSI 2 J` / `CSI 3 J`) and replays the full transcript at the new geometry, replacing the previous matrix of conditional viewport-repaint / history-rebuild / deferred-mutation branches. Multiplexer panes still repaint the visible window in place (pane scrollback cannot be erased), but a resize during active ED3-risk foreground streaming now performs the same clean rebuild rather than downgrading to a non-destructive viewport repaint: the terminal already re-wrapped its saved lines at the old width, so the rebuild must erase them (ED 3) instead of leaving the mis-wrapped history on screen. As a deliberate tradeoff this drops the prior no-overflow and confirmed-scrolled guards on resize: a reader scrolled into history snaps back to the bottom and preexisting shell scrollback above the UI is cleared.
+
+### Fixed
+
+- Fixed ED3-risk foreground streaming dropping the scrolled-off head of an append-only live block that alone overflows the viewport (a long streamed assistant reply). The live-region pin again committed native scrollback only up to the live-region start, so once the live block grew past the viewport its earlier rows scrolled above the viewport top but were committed nowhere and repainted nowhere — they vanished, leaving the reply looking like a ~viewport-tall circular buffer. The `NativeScrollbackLiveRegion` seam now also reports an optional append-only `getNativeScrollbackCommitSafeEnd`, and the pinned commit boundary is the deeper of the sealed start and that append-only end: rows in `[liveRegionStart, commitSafeEnd)` above the viewport top commit to scrollback, while volatile live blocks (tool previews that collapse) omit the boundary and keep their mutable rows deferred — preserving the pending-box-above-running-box fix.
+
+## [15.9.4] - 2026-06-05
 ### Added
 
 - Added `PI_TUI_SYNC_OUTPUT=0` and `PI_TUI_SYNC_OUTPUT=1` to explicitly disable or force-enable DEC 2026 synchronized-output mode, alongside `PI_FORCE_SYNC_OUTPUT=1` as a force-on alias
@@ -14,8 +24,10 @@
 ### Fixed
 
 - Fixed ED3-risk unknown-viewport renders repainting offscreen structural edits over stale native scrollback, which could duplicate or shift rows when async blocks collapsed or middle rows were deleted.
+- Fixed ED3-risk foreground streams committing mutable live-region rows into native scrollback, which could leave a stale `pending` tool box above the `running` box after the preview re-rendered.
 - Fixed TUI shutdown leaving paint-time terminal state and Kitty image data behind by restoring synchronized-output/autowrap modes and purging all transmitted Kitty image ids on stop.
 - Fixed stdin buffering splitting surrogate-pair text into UTF-16 halves and reduced timing sensitivity for incomplete escape sequences.
+- Fixed terminal content not reflowing after a resize on terminals using DEC 2048 in-band resize (kitty/Ghostty/iTerm2/WezTerm). `ProcessTerminal.columns`/`rows` returned the last cached in-band report even after the OS already knew the new size, so a SIGWINCH whose in-band report was dropped or malformed (split past the stdin flush window, `:`-subparameter fields) re-rendered the whole transcript at the stale width. OS resize events now reconcile cached in-band geometry against the live `process.stdout` dimensions, dropping a stale cached value so the next render uses the true size; a valid in-band report still re-seeds pixel sizing.
 
 ## [15.9.3] - 2026-06-05
 

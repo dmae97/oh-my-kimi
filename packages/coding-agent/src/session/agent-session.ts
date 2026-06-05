@@ -960,6 +960,13 @@ export class AgentSession {
 	 * the dominant cause of prompt-cache invalidation in long sessions.
 	 */
 	#lastAppliedToolSignature: string | undefined;
+	/**
+	 * Model identifier (`provider/id`) currently rendered into `#baseSystemPrompt`.
+	 * The prompt surfaces the active model to the agent, so a model switch must
+	 * trigger a rebuild. Compared against the live model after every model change
+	 * to decide whether the cached prompt is stale.
+	 */
+	#promptModelKey: string | undefined;
 	#mcpDiscoveryEnabled = false;
 	#discoverableMCPTools = new Map<string, DiscoverableTool>();
 	#selectedMCPToolNames = new Set<string>();
@@ -1173,6 +1180,7 @@ export class AgentSession {
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
 		this.#reloadSshTool = config.reloadSshTool;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
+		this.#promptModelKey = this.#currentPromptModelKey();
 		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
 		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
 		this.#selectedMCPToolNames = new Set(config.initialSelectedMCPToolNames ?? []);
@@ -3264,9 +3272,21 @@ export class AgentSession {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
-	async #syncEditToolModeAfterModelChange(previousEditMode: EditMode): Promise<void> {
+	/**
+	 * Model key (`provider/id`) currently surfaced in the system prompt, or
+	 * undefined when the model is unset or `includeModelInPrompt` is disabled.
+	 */
+	#currentPromptModelKey(): string | undefined {
+		if (!this.settings.get("includeModelInPrompt")) return undefined;
+		return this.model ? formatModelString(this.model) : undefined;
+	}
+
+	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
 		const currentEditMode = this.#resolveActiveEditMode();
-		if (previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit")) {
+		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
+		// The system prompt may surface the active model; a switch makes the cached prompt stale.
+		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
+		if (editModeChanged || modelChanged) {
 			await this.refreshBaseSystemPrompt();
 		}
 	}
@@ -3551,6 +3571,7 @@ export class AgentSession {
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.agent.setSystemPrompt(this.#baseSystemPrompt);
 				this.#lastAppliedToolSignature = signature;
+				this.#promptModelKey = this.#currentPromptModelKey();
 			}
 		}
 		if (options?.persistMCPSelection !== false) {
@@ -3633,6 +3654,7 @@ export class AgentSession {
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
+		this.#promptModelKey = this.#currentPromptModelKey();
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
 		// the same tool set does not re-rebuild on top of the explicit refresh we
 		// just performed (and conversely, a different set forces a fresh rebuild).
@@ -3692,7 +3714,7 @@ export class AgentSession {
 	 * closure-captured ones cannot change at runtime regardless of skip behavior.
 	 * For everything else, callers must explicitly call `refreshBaseSystemPrompt()`
 	 * after side-effecting changes; see e.g. the memory hooks and
-	 * `#syncEditToolModeAfterModelChange`.
+	 * `#syncAfterModelChange`.
 	 *
 	 * The current calendar date IS covered (appended as a segment) because
 	 * `buildSystemPrompt` injects it into the prompt body (`Today is '{{date}}'`).
@@ -5284,7 +5306,7 @@ export class AgentSession {
 		// Re-apply thinking for the newly selected model. Prefer the model's
 		// configured defaultLevel; otherwise preserve the current level (or auto).
 		this.#reapplyThinkingLevel(model.thinking?.defaultLevel);
-		await this.#syncEditToolModeAfterModelChange(previousEditMode);
+		await this.#syncAfterModelChange(previousEditMode);
 	}
 
 	/**
@@ -5318,7 +5340,7 @@ export class AgentSession {
 		} else {
 			this.#reapplyThinkingLevel(model.thinking?.defaultLevel);
 		}
-		await this.#syncEditToolModeAfterModelChange(previousEditMode);
+		await this.#syncAfterModelChange(previousEditMode);
 	}
 
 	/**
@@ -5462,7 +5484,7 @@ export class AgentSession {
 
 		// Apply the scoped model's configured thinking level, preserving auto.
 		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : next.thinkingLevel);
-		await this.#syncEditToolModeAfterModelChange(previousEditMode);
+		await this.#syncAfterModelChange(previousEditMode);
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
 	}
@@ -5491,7 +5513,7 @@ export class AgentSession {
 		this.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
 		// Re-apply the current thinking level (or auto) for the newly selected model
 		this.#reapplyThinkingLevel();
-		await this.#syncEditToolModeAfterModelChange(previousEditMode);
+		await this.#syncAfterModelChange(previousEditMode);
 
 		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
 	}
