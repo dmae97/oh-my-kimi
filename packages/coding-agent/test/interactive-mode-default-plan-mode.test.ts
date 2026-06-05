@@ -159,6 +159,20 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
 	});
 
+	it("does not enter plan mode for a compacted session with no trailing message", async () => {
+		// A compacted branch carries summary context (buildSessionContext emits the
+		// compaction summary as a message), so it is not fresh even without a literal
+		// `message` entry; the startup default must not override its restored mode.
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendCompaction("prior conversation summary", undefined, "first-kept", 1000);
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+
 	it("does not re-enter plan mode when a restored mode_change turned it off (no message yet)", async () => {
 		// User enabled plan, toggled it off (mode_change "none"), then quit before
 		// sending a turn. On --continue the reconciler restores that off state; the
