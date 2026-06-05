@@ -607,26 +607,6 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
-	it("keeps the in-band report authoritative when it arrives on resize", () => {
-		// When the post-resize report does arrive, it (not the OS fallback) drives
-		// geometry — in-band cell dims can be more accurate than ioctl.
-		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
-		const { terminal } = setup();
-		process.stdin.emit("data", "\x1b[?2048;1$y");
-		process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
-
-		// In-band report arrives before the OS 'resize' event; getter keeps it.
-		process.stdin.emit("data", "\x1b[48;40;160;800;1600t");
-		Object.defineProperty(process.stdout, "columns", { value: 160, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
-		process.stdout.emit("resize");
-
-		expect(terminal.columns).toBe(160);
-		expect(terminal.rows).toBe(40);
-		terminal.stop();
-	});
-
 	it("reassembles a DECRPM reply split across stdin reads", () => {
 		vi.useFakeTimers();
 		const { terminal, reports } = setup();

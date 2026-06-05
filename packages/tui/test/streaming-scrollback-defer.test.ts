@@ -151,6 +151,42 @@ describe("streaming scrollback defer", () => {
 		});
 	});
 
+	it("does not leave stale mutable live-region rows in native scrollback after a rerender", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(24, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const sealed = new LineList(rows("prior-", 12));
+			const live = new LiveLineList([]);
+
+			try {
+				tui.addChild(sealed);
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				live.setLines(rows("pending-stale-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				live.setLines(rows("running-fresh-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(buffer.some(line => line.startsWith("pending-stale-"))).toBe(false);
+				expect(buffer).toContain("running-fresh-9");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	it("defers scrollback growth during eager streaming on ED3-risk and reconciles at the checkpoint", async () => {
 		if (process.platform === "win32") return;
 		await withTerminalRisk(true, async () => {
