@@ -17,9 +17,8 @@ import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
-import { AsyncJobManager } from "../async";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { MCPManager } from "../mcp/manager";
 import type { Theme } from "../modes/theme/theme";
@@ -343,12 +342,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
-		const manager = AsyncJobManager.instance();
+		const manager = this.session.asyncJobManager;
 		if (!manager) {
-			return {
-				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
-			};
+			// Async was requested but no manager is registered (e.g. an
+			// orphaned session whose host never wired one up). Falling back
+			// to the sync path keeps the tool usable; only background/job-poll
+			// semantics are lost.
+			logger.warn("task: async.enabled but no AsyncJobManager registered; falling back to sync execution");
+			return this.#executeSync(_toolCallId, params, signal, onUpdate);
 		}
 
 		const taskItems = params.tasks ?? [];

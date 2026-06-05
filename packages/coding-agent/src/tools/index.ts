@@ -2,6 +2,7 @@ import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { AsyncJobManager } from "../async/job-manager";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -184,6 +185,21 @@ export interface ToolSession {
 	modelRegistry?: import("../config/model-registry").ModelRegistry;
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
+	/**
+	 * Async job manager scoped to this session.
+	 *
+	 * - Top-level session that constructed one: its own manager.
+	 * - Subagent (`parentTaskPrefix` set): the parent's manager, so background
+	 *   bash/task work and `onJobComplete` deliveries flow into the conversation
+	 *   that spawned it.
+	 * - Secondary in-process top-level session that found a singleton already
+	 *   installed (issue #1923): `undefined`. Tools refuse async work rather
+	 *   than silently route completions into the owning session's `yieldQueue`.
+	 *
+	 * Tools MUST use this instead of `AsyncJobManager.instance()` so a secondary
+	 * session never borrows the owning session's manager by accident.
+	 */
+	asyncJobManager?: AsyncJobManager;
 	/** MCP manager visible to subagents without relying on the process-global singleton. */
 	mcpManager?: MCPManager;
 	/** Local protocol root to propagate to nested subagents and eval-created agents. */

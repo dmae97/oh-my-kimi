@@ -9,10 +9,10 @@
 
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { Settings } from "../config/settings";
+import { onHindsightScopeChanged, type Settings } from "../config/settings";
 import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
-import { computeBankScope } from "./bank";
+import { type BankScope, computeBankScope } from "./bank";
 import { createHindsightClient } from "./client";
 import { isHindsightConfigured, loadHindsightConfig } from "./config";
 import type { HindsightMessage } from "./content";
@@ -60,12 +60,16 @@ export const hindsightBackend: MemoryBackend = {
 					recallTagsMatch: parent.recallTagsMatch,
 					config: parent.config,
 					session,
-					missionsSet: parent.missionsSet,
+					banksSet: parent.banksSet,
 					lastRetainedTurn: 0,
 					hasRecalledForFirstTurn: true,
 					aliasOf: parent,
 				}),
 			);
+			// Aliases don't run auto-recall/auto-retain, so any pending retain
+			// queue belongs to the previous alias and is safe to drop after a
+			// best-effort flush (`flushRetainQueue` is no-op when empty).
+			await previous?.flushRetainQueue();
 			previous?.dispose();
 			return;
 		}
@@ -76,38 +80,7 @@ export const hindsightBackend: MemoryBackend = {
 			return;
 		}
 
-		const client = createHindsightClient(config);
-		const scope = computeBankScope(config, session.sessionManager.getCwd());
-
-		const state = new HindsightSessionState({
-			sessionId,
-			client,
-			bankId: scope.bankId,
-			retainTags: scope.retainTags,
-			recallTags: scope.recallTags,
-			recallTagsMatch: scope.recallTagsMatch,
-			config,
-			session,
-			missionsSet: new Set(),
-			lastRetainedTurn: 0,
-			hasRecalledForFirstTurn: false,
-		});
-
-		// Cleanup any stale state for this session (defensive — prevents leaks
-		// when a session is reused without going through dispose).
-		const previous = session.setHindsightSessionState(state);
-		previous?.dispose();
-		state.attachSessionListeners();
-
-		// Kick off mental-model bootstrap. Resolves asynchronously; the first
-		// turn races and is covered in `beforeAgentStartPrompt` via
-		// `mentalModelsLoadPromise`. Subsequent turns see the populated cache
-		// because `runMentalModelLoad` calls `refreshBaseSystemPrompt`.
-		if (config.mentalModelsEnabled) {
-			state.mentalModelsLoadPromise = state.runMentalModelLoad(scope).catch(err => {
-				logger.debug("Hindsight: mental-model bootstrap failed", { bankId: state.bankId, error: String(err) });
-			});
-		}
+		await installPrimaryState(session, settings, new Set());
 	},
 
 	async buildDeveloperInstructions(_agentDir, settings, session): Promise<string | undefined> {
@@ -173,6 +146,182 @@ export const hindsightBackend: MemoryBackend = {
 		return await state.recallForCompaction(flat);
 	},
 };
+interface PrimaryRebuildTask {
+	pending: boolean;
+}
+
+const primaryRebuildTasks = new WeakMap<AgentSession, PrimaryRebuildTask>();
+
+/**
+ * Coalesce and serialize live scope rebuilds for one session. Cwd reloads fire
+ * all settings hooks synchronously; running every callback immediately would
+ * let multiple rebuilds capture the same old state and leak the fresh states
+ * installed by earlier continuations.
+ */
+function schedulePrimaryStateRebuild(session: AgentSession): void {
+	const task = primaryRebuildTasks.get(session);
+	if (task) {
+		task.pending = true;
+		return;
+	}
+
+	const nextTask: PrimaryRebuildTask = { pending: true };
+	primaryRebuildTasks.set(session, nextTask);
+	void Promise.resolve()
+		.then(async () => {
+			while (nextTask.pending) {
+				nextTask.pending = false;
+				try {
+					await rebuildPrimaryStateOnScopeChange(session);
+				} catch (err) {
+					logger.warn("Hindsight: scope rebuild failed", { error: String(err) });
+				}
+			}
+		})
+		.finally(() => {
+			if (primaryRebuildTasks.get(session) === nextTask) {
+				primaryRebuildTasks.delete(session);
+			}
+		});
+}
+
+/**
+ * Build (or rebuild) the primary `HindsightSessionState` for `session` from
+ * the current settings and install it. Disposes any previous primary state
+ * after flushing its retain queue so in-flight tool-initiated retains land in
+ * the bank that was selected when they were enqueued, not in the new bank.
+ *
+ * The created state takes ownership of the `onHindsightScopeChanged`
+ * subscription so subsequent `hindsight.bankId` / `bankIdPrefix` / `scoping`
+ * edits trigger another rebuild from the same wiring.
+ */
+async function installPrimaryState(
+	session: AgentSession,
+	settings: Settings,
+	banksSet: Set<string>,
+): Promise<HindsightSessionState | undefined> {
+	const sessionId = session.sessionId;
+	if (!sessionId) return undefined;
+
+	const config = loadHindsightConfig(settings);
+	if (!isHindsightConfigured(config)) return undefined;
+
+	const client = createHindsightClient(config);
+	const scope = computeBankScope(config, session.sessionManager.getCwd());
+
+	// Cleanup any stale state for this session (defensive — prevents leaks
+	// when a session is reused without going through dispose). Flush the
+	// previous state's retain queue BEFORE clearing it, otherwise
+	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
+	// !== state` and drops the batch. Re-read after the await so a concurrent
+	// owner cannot leave the actual current state undisposed.
+	let previous = session.getHindsightSessionState();
+	if (previous) {
+		await previous.flushRetainQueue();
+	}
+	const latest = session.getHindsightSessionState();
+	if (latest && latest !== previous) {
+		previous?.dispose();
+		previous = latest;
+		await previous.flushRetainQueue();
+	}
+
+	const state = new HindsightSessionState({
+		sessionId,
+		client,
+		bankId: scope.bankId,
+		retainTags: scope.retainTags,
+		recallTags: scope.recallTags,
+		recallTagsMatch: scope.recallTagsMatch,
+		config,
+		session,
+		banksSet,
+		lastRetainedTurn: 0,
+		hasRecalledForFirstTurn: false,
+	});
+
+	// Subscribe BEFORE installing: if the operator manages to flip another
+	// setting between install and subscribe, we'd miss the edge.
+	state.unsubscribeScope = onHindsightScopeChanged(() => {
+		schedulePrimaryStateRebuild(session);
+	});
+
+	const displaced = session.setHindsightSessionState(state);
+	if (displaced && displaced !== previous) {
+		await displaced.flushRetainQueue();
+		displaced.dispose();
+	}
+	previous?.dispose();
+	state.attachSessionListeners();
+
+	// Kick off mental-model bootstrap. Resolves asynchronously; the first
+	// turn races and is covered in `beforeAgentStartPrompt` via
+	// `mentalModelsLoadPromise`. Subsequent turns see the populated cache
+	// because `runMentalModelLoad` calls `refreshBaseSystemPrompt`.
+	if (config.mentalModelsEnabled) {
+		state.mentalModelsLoadPromise = state.runMentalModelLoad(scope).catch(err => {
+			logger.debug("Hindsight: mental-model bootstrap failed", { bankId: state.bankId, error: String(err) });
+		});
+	}
+
+	return state;
+}
+
+/**
+ * `onHindsightScopeChanged` handler: re-evaluate the bank scope from current
+ * settings and rebuild the primary state when it has actually drifted. No-op
+ * when the scope is unchanged or the session is no longer hosting a primary
+ * state (e.g. it was wiped to `undefined`, or this is a subagent alias).
+ */
+async function rebuildPrimaryStateOnScopeChange(session: AgentSession): Promise<void> {
+	const current = session.getHindsightSessionState();
+	if (!current || current.aliasOf) return;
+
+	const settings = session.settings;
+	const config = loadHindsightConfig(settings);
+	if (!isHindsightConfigured(config)) {
+		// Hindsight effectively unwired mid-session. Flush before clearing so
+		// queued retains don't get dropped by `HindsightRetainQueue.#doFlush`.
+		await current.flushRetainQueue();
+		const previous = session.setHindsightSessionState(undefined);
+		previous?.dispose();
+		return;
+	}
+
+	const next = computeBankScope(config, session.sessionManager.getCwd());
+	if (bankScopesEqual(next, current)) return;
+
+	// Preserve the banksSet so we don't re-PUT banks we've already confirmed.
+	await installPrimaryState(session, settings, current.banksSet);
+}
+
+/** Tag-array equality: order matters because we never reorder on the way in. */
+function stringArraysEqual(a: string[] | undefined, b: string[] | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b) return false;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+/**
+ * Structural compare of a freshly resolved `BankScope` against a live state's
+ * bank routing. Used by the scope-change handler to skip rebuilds that don't
+ * actually move the bank or its tag filters.
+ */
+function bankScopesEqual(
+	scope: BankScope,
+	state: Pick<HindsightSessionState, "bankId" | "retainTags" | "recallTags" | "recallTagsMatch">,
+): boolean {
+	return (
+		scope.bankId === state.bankId &&
+		stringArraysEqual(scope.retainTags, state.retainTags) &&
+		stringArraysEqual(scope.recallTags, state.recallTags) &&
+		scope.recallTagsMatch === state.recallTagsMatch
+	);
+}
 
 /** Reduce arbitrary AgentMessages into the Hindsight flat-text shape. */
 function flattenMessagesForRecall(messages: AgentMessage[]): HindsightMessage[] {

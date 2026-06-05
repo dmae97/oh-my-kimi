@@ -6,7 +6,7 @@
  */
 import * as path from "node:path";
 import * as url from "node:url";
-import type { TSchema } from "@oh-my-pi/pi-ai";
+import { isDefinitiveOAuthFailure, type TSchema } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../capability/types";
 import { resolveConfigValue } from "../config/resolve-config-value";
@@ -1184,29 +1184,48 @@ export class MCPManager {
 							await this.#authStorage.set(credentialId, refreshedCredential);
 							credential = refreshedCredential;
 						} catch (refreshError) {
-							logger.warn("MCP OAuth refresh failed, using existing token", {
-								credentialId,
-								error: refreshError,
-							});
+							const errorMsg = refreshError instanceof Error ? refreshError.message : String(refreshError);
+							if (isDefinitiveOAuthFailure(errorMsg)) {
+								// `invalid_grant` / `invalid_token` / 401 from the token endpoint means
+								// the server has retired this credential — keeping the stale access
+								// token would just re-fail with 401 on every MCP request and leave a
+								// poisoned row in agent.db that survives restarts. Drop it now so the
+								// next connect attempt surfaces a clean "needs reauth" failure and
+								// the user can recover with `/mcp reauth <server>` (or `/mcp unauth`
+								// to forget the server entirely).
+								logger.warn("MCP OAuth refresh failed definitively; cleared credential", {
+									credentialId,
+									error: errorMsg,
+								});
+								await this.#authStorage.remove(credentialId);
+								credential = undefined;
+							} else {
+								logger.warn("MCP OAuth refresh failed, using existing token", {
+									credentialId,
+									error: refreshError,
+								});
+							}
 						}
 					}
 
-					if (resolved.type === "http" || resolved.type === "sse") {
-						resolved = {
-							...resolved,
-							headers: {
-								...resolved.headers,
-								Authorization: `Bearer ${credential.access}`,
-							},
-						};
-					} else {
-						resolved = {
-							...resolved,
-							env: {
-								...resolved.env,
-								OAUTH_ACCESS_TOKEN: credential.access,
-							},
-						};
+					if (credential?.type === "oauth") {
+						if (resolved.type === "http" || resolved.type === "sse") {
+							resolved = {
+								...resolved,
+								headers: {
+									...resolved.headers,
+									Authorization: `Bearer ${credential.access}`,
+								},
+							};
+						} else {
+							resolved = {
+								...resolved,
+								env: {
+									...resolved.env,
+									OAUTH_ACCESS_TOKEN: credential.access,
+								},
+							};
+						}
 					}
 				}
 			} catch (error) {

@@ -905,6 +905,18 @@ export interface Model<TApi extends Api = any> {
 	premiumMultiplier?: number;
 	contextWindow: number;
 	maxTokens: number;
+	/**
+	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /
+	 * `max_tokens` / `max_completion_tokens` (Completions) from the outbound
+	 * request and let the upstream API decide the per-response cap. `maxTokens`
+	 * is still used locally for budgeting (compaction, context promotion); only
+	 * the wire field is suppressed.
+	 *
+	 * Use this for proxies (notably Ollama) that forward to a backend whose true
+	 * output limit OMP cannot discover — sending the wrong value triggers 400s
+	 * from the upstream provider.
+	 */
+	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
 	/**
 	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes

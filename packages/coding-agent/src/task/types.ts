@@ -174,6 +174,8 @@ export interface AgentDefinition {
 	output?: unknown;
 	blocking?: boolean;
 	autoloadSkills?: string[];
+	/** When `false`, the agent's `read` tool returns verbatim file content instead of structural summaries. */
+	readSummarize?: boolean;
 	source: AgentSource;
 	filePath?: string;
 }

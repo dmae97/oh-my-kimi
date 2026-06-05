@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import { visibleWidth } from "@oh-my-pi/pi-natives";
 import {
+	detectKittyUnicodePlaceholdersSupport,
 	encodeKittyPlaceholderGrid,
 	encodeKittyTempFileProbe,
 	encodeKittyTempFileTransmit,
@@ -154,5 +155,44 @@ describe("kitty graphics feature state", () => {
 		} finally {
 			restore();
 		}
+	});
+});
+
+describe("detectKittyUnicodePlaceholdersSupport", () => {
+	function env(extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
+		return extra as NodeJS.ProcessEnv;
+	}
+
+	it("enables for kitty and ghostty by default (the only terminals that render U=1 placement)", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", env())).toBe(true);
+		expect(detectKittyUnicodePlaceholdersSupport("ghostty", env())).toBe(true);
+	});
+
+	it("disables for wezterm and other Kitty-protocol paths that treat placeholders as literal PUA glyphs (#1877)", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("wezterm", env())).toBe(false);
+		// Tmux/screen fallback: base terminal id with Kitty protocol forced on by
+		// `getFallbackImageProtocol`. The outer terminal need not understand U=1.
+		expect(detectKittyUnicodePlaceholdersSupport("base", env())).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("iterm2", env())).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("alacritty", env())).toBe(false);
+	});
+
+	it("honors PI_NO_KITTY_PLACEHOLDERS=1 as a hard off override on supporting terminals", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", env({ PI_NO_KITTY_PLACEHOLDERS: "1" }))).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("ghostty", env({ PI_NO_KITTY_PLACEHOLDERS: "true" }))).toBe(false);
+	});
+
+	it("honors PI_KITTY_PLACEHOLDERS=1 as opt-in on otherwise-unsupported terminals", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("wezterm", env({ PI_KITTY_PLACEHOLDERS: "1" }))).toBe(true);
+	});
+
+	it("PI_NO_KITTY_PLACEHOLDERS beats PI_KITTY_PLACEHOLDERS when both are set", () => {
+		const both = env({ PI_NO_KITTY_PLACEHOLDERS: "1", PI_KITTY_PLACEHOLDERS: "1" });
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", both)).toBe(false);
+	});
+
+	it("PI_KITTY_PLACEHOLDERS=0 forces off on a default-on terminal", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", env({ PI_KITTY_PLACEHOLDERS: "0" }))).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("ghostty", env({ PI_KITTY_PLACEHOLDERS: "off" }))).toBe(false);
 	});
 });

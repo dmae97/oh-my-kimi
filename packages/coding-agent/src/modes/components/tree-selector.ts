@@ -441,8 +441,35 @@ class TreeList implements Component {
 		const lines: string[] = [];
 
 		if (this.#filteredNodes.length === 0) {
-			lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
-			lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.#getFilterLabel()}`), width));
+			// Three empty-state shapes:
+			//  - flatNodes empty               → no entries at all (truly fresh session).
+			//  - search query rejects everything → tell the user the search is the cause.
+			//  - filter mode rejects everything  → tell the user the filter is the cause and
+			//    how to widen it. Otherwise fresh sessions whose only persisted entries are
+			//    `model_change` + `thinking_level_change` (both hidden by the default filter)
+			//    read as "broken /tree" — see #1909.
+			if (this.#flatNodes.length === 0) {
+				lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
+				lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.#getFilterLabel()}`), width));
+			} else if (this.#searchQuery.length > 0) {
+				lines.push(truncateToWidth(theme.fg("muted", `  No entries match search "${this.#searchQuery}"`), width));
+				lines.push(truncateToWidth(theme.fg("muted", "  Press Backspace to clear the search"), width));
+				lines.push(
+					truncateToWidth(theme.fg("muted", `  (0/${this.#flatNodes.length})${this.#getFilterLabel()}`), width),
+				);
+			} else {
+				const filterLabel = this.#getFilterLabel().trim() || "[default]";
+				lines.push(
+					truncateToWidth(
+						theme.fg("muted", `  ${this.#flatNodes.length} entries hidden by the current filter ${filterLabel}`),
+						width,
+					),
+				);
+				lines.push(truncateToWidth(theme.fg("muted", "  Press Alt+A to show all, Alt+D for default"), width));
+				lines.push(
+					truncateToWidth(theme.fg("muted", `  (0/${this.#flatNodes.length})${this.#getFilterLabel()}`), width),
+				);
+			}
 			return lines;
 		}
 

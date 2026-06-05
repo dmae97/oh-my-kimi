@@ -531,7 +531,7 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	});
 }
 
-function createSubagentSettings(baseSettings: Settings): Settings {
+function createSubagentSettings(baseSettings: Settings, overrides?: Partial<Record<SettingPath, unknown>>): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
@@ -545,6 +545,7 @@ function createSubagentSettings(baseSettings: Settings): Settings {
 		// the parent task approval is the authorization boundary. Use yolo mode
 		// to preserve unattended subagent execution. User `tools.approval` policies still apply.
 		"tools.approvalMode": "yolo",
+		...overrides,
 	});
 }
 
@@ -619,7 +620,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const settings = options.settings ?? Settings.isolated();
-	const subagentSettings = createSubagentSettings(settings);
+	const subagentSettings = createSubagentSettings(
+		settings,
+		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
+	);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
 	const maxRuntimeMs = Math.max(0, Math.trunc(Number(settings.get("task.maxRuntimeMs") ?? 0) || 0));
 	const parentDepth = options.taskDepth ?? 0;

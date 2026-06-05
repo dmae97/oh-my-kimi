@@ -3,7 +3,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "../async";
+import { type AsyncJob, type AsyncJobManager, isBackgroundJobSupportEnabled } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import jobDescription from "../prompts/tools/job.md" with { type: "text" };
@@ -90,7 +90,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<JobToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<JobToolDetails>> {
-		const manager = AsyncJobManager.instance();
+		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			return {
 				content: [{ type: "text", text: "Async execution is disabled; no background jobs are available." }],
@@ -254,7 +254,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	): JobSnapshot[] {
 		const now = Date.now();
 		return jobs.map(j => {
-			const current = AsyncJobManager.instance()?.getJob(j.id);
+			const current = this.session.asyncJobManager?.getJob(j.id);
 			const latest = current ?? j;
 			return {
 				id: latest.id,

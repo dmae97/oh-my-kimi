@@ -1,12 +1,14 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import {
+	detectKittyUnicodePlaceholdersSupport,
 	encodeKittyTempFileTransmit,
 	getKittyGraphics,
 	isPngBase64,
 	KITTY_PLACEHOLDER,
 	kittyPlaceholdersFit,
 	renderKittyPlaceholderLines,
+	setKittyGraphics,
 } from "./kitty-graphics";
 
 export enum ImageProtocol {
@@ -320,6 +322,12 @@ export const TERMINAL = (() => {
 	}
 	return resolved;
 })();
+
+// Seed Kitty Unicode placeholder support from the resolved terminal id. Only
+// kitty/ghostty are known to honor `U=1` placement; other Kitty-protocol paths
+// (wezterm, tmux/screen fallback) treat the placeholder cells as literal PUA
+// glyphs, which is the "ASCII artifact + laggy scrolling" reported in #1877.
+setKittyGraphics({ unicodePlaceholders: detectKittyUnicodePlaceholdersSupport(TERMINAL.id, Bun.env) });
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;

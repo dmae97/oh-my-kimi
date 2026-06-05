@@ -548,6 +548,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			settings,
 			modelRegistry,
 			agentId: "acp-session-b",
+			asyncJobManager,
 		});
 		session = new AgentSession({
 			agent: agentA,
@@ -730,6 +731,70 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(continuationCompleted).toBe(true);
 		expect(streamCallCount).toBeGreaterThanOrEqual(2);
 		expect(session.isStreaming).toBe(false);
+	});
+
+	it("relativizes the rule file path in the TTSR interrupt injection (no absolute leak)", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		let streamCallCount = 0;
+
+		const sessionManager = SessionManager.inMemory();
+		const cwd = sessionManager.getCwd();
+		const ruleAbsPath = path.join(cwd, ".omp", "rules", "no-unwrap.md");
+		const expectedRel = path.relative(cwd, ruleAbsPath);
+		const rule: Rule = {
+			name: "no-unwrap",
+			path: ruleAbsPath,
+			content: "Do not use .unwrap()",
+			condition: ["\\.unwrap\\("],
+			_source: { provider: "test", providerName: "test", path: ruleAbsPath, level: "project" },
+		};
+
+		const ttsrManager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "always",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		ttsrManager.addRule(rule);
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: (_model, _context, options) => {
+				streamCallCount++;
+				const stream = new AssistantMessageEventStream();
+				if (streamCallCount === 1) {
+					pushAbortableTtsrStream(stream, options?.signal);
+				} else {
+					pushContinuationStream(stream, () => {});
+				}
+				return stream;
+			},
+		});
+
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-rel.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, ttsrManager });
+
+		await session.prompt("Write some Rust code");
+
+		const injection = sessionManager
+			.getEntries()
+			.find(e => e.type === "custom_message" && e.customType === "ttsr-injection");
+		expect(injection?.type).toBe("custom_message");
+		const content = injection?.type === "custom_message" ? injection.content : undefined;
+		expect(typeof content).toBe("string");
+		const text = content as string;
+		// The rendered interrupt the model receives references the rule by a
+		// project-relative path, never the absolute home path.
+		expect(text).toContain('reason="rule_violation"');
+		expect(text).toContain(`path="${expectedRel}"`);
+		expect(text).not.toContain(ruleAbsPath);
 	});
 
 	it("prompt() blocks until TTSR deferred continuation completes", async () => {
