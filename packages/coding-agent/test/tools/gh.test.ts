@@ -1018,9 +1018,7 @@ describe("github tool", () => {
 					},
 				],
 			});
-		const runSpy = vi
-			.spyOn(git.github, "run")
-			.mockResolvedValue({ exitCode: 0, stdout: "log line\n", stderr: "" });
+		const runSpy = vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 0, stdout: "log line\n", stderr: "" });
 		const textSpy = vi
 			.spyOn(git.github, "text")
 			.mockRejectedValue(new Error("gh repo view must not be consulted when `repo` is explicit"));
@@ -1067,9 +1065,7 @@ describe("github tool", () => {
 		const jsonSpy = vi.spyOn(git.github, "json");
 
 		const tool = new GithubTool(createSession(cwd));
-		await expect(
-			tool.execute("run-watch", { op: "run_watch", repo: targetRepo }),
-		).rejects.toThrow(
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
 			`Cannot infer the watched commit for ${targetRepo}: current checkout is ${cwdRepo}. Pass \`branch\` or \`run\` to scope the watch.`,
 		);
 		expect(textSpy).toHaveBeenCalled();
@@ -1084,9 +1080,7 @@ describe("github tool", () => {
 		const jsonSpy = vi.spyOn(git.github, "json");
 
 		const tool = new GithubTool(createSession(cwd));
-		await expect(
-			tool.execute("run-watch", { op: "run_watch", repo: targetRepo }),
-		).rejects.toThrow(
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
 			`Cannot infer the watched commit for ${targetRepo}: current checkout is not a GitHub repository. Pass \`branch\` or \`run\` to scope the watch.`,
 		);
 		expect(jsonSpy).not.toHaveBeenCalled();
