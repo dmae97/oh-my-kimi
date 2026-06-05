@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an AES-256-GCM auth-broker snapshot cache module and `RemoteAuthCredentialStoreOptions.onSnapshot` so broker clients can persist broker-sourced full snapshots without blocking startup on every run.
+
+### Changed
+
+- Changed usage-ranked OAuth credential selection to pick deterministic session-sticky weighted buckets instead of always choosing the top-ranked account, capping the best account at 2x the baseline session likelihood while keeping equal-priority accounts evenly balanced.
+
 ## [15.9.1] - 2026-06-04
 
 ### Added

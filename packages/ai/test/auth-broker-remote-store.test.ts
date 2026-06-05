@@ -126,7 +126,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		expect(callbacks).toHaveLength(0);
 
-		storage!.upsertCredential("anthropic", mintOAuthCredential("callback", Date.now() + 120_000));
 		const refreshed = await remote.refreshSnapshot();
 
 		expect(callbacks).toHaveLength(1);

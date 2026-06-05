@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	readAuthBrokerSnapshotCache,
-	type SnapshotResponse,
-	writeAuthBrokerSnapshotCache,
-} from "../src";
+import { readAuthBrokerSnapshotCache, type SnapshotResponse, writeAuthBrokerSnapshotCache } from "../src";
 
 const TOKEN = "broker-cache-token";
 const URL = "http://127.0.0.1:8765";

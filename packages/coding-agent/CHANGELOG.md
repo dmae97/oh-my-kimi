@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Added
 
+- Added an encrypted local auth-broker snapshot cache for `discoverAuthStorage`, with `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS` and `OMP_AUTH_BROKER_SNAPSHOT_CACHE`, so fresh cached broker credentials can boot without a blocking `/v1/snapshot` fetch and survive broker-down startup windows.
 - Added `dry-balance` CLI command to perform a dry-run OAuth account balancing check across configurable random session IDs, with sample and concurrency options, JSON output, and success/failure summary reporting
 - Added `--json` output mode and machine-readable result format to `omp dry-balance` for automated use
 

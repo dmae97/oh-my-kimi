@@ -4,10 +4,10 @@ import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
+	type ModelMatchPreferences,
 	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelRoleValue,
-	type ModelMatchPreferences,
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage } from "../sdk";
@@ -32,7 +32,11 @@ export interface DryBalanceAuthOptions {
 }
 
 export interface DryBalanceAuthStorage {
-	getOAuthAccess(provider: string, sessionId?: string, options?: DryBalanceAuthOptions): Promise<OAuthAccess | undefined>;
+	getOAuthAccess(
+		provider: string,
+		sessionId?: string,
+		options?: DryBalanceAuthOptions,
+	): Promise<OAuthAccess | undefined>;
 }
 
 export interface DryBalanceModelRegistry {
@@ -142,7 +146,9 @@ async function resolveDryBalanceModel(
 
 	const allowedModels = await resolveAllowedModels(modelRegistry, settings, preferences);
 	if (allowedModels.length === 0) {
-		throw new Error("No models available. Use --model to select a model or configure enabledModels/default model settings.");
+		throw new Error(
+			"No models available. Use --model to select a model or configure enabledModels/default model settings.",
+		);
 	}
 
 	const defaultRoleSpec = resolveModelRoleValue(settings?.getModelRole("default"), allowedModels, {
@@ -161,11 +167,10 @@ async function resolveDryBalanceModel(
 
 	return {
 		model: allowedModels[0],
-		warning: "No allowed model had usable credentials during default resolution; dry-balance will report OAuth failures for the first allowed model.",
+		warning:
+			"No allowed model had usable credentials during default resolution; dry-balance will report OAuth failures for the first allowed model.",
 	};
 }
-
-
 
 async function runOneAttempt(
 	model: Model<Api>,
@@ -181,7 +186,8 @@ async function runOneAttempt(
 			modelId: model.id,
 		});
 		if (!access) return { ok: false, reason: "no OAuth access resolved" };
-		const account = access.email ?? access.accountId ?? access.projectId ?? access.enterpriseUrl ?? "(unknown oauth account)";
+		const account =
+			access.email ?? access.accountId ?? access.projectId ?? access.enterpriseUrl ?? "(unknown oauth account)";
 		return { ok: true, account };
 	} catch (error) {
 		return { ok: false, reason: error instanceof Error ? error.message : String(error) };
@@ -205,8 +211,10 @@ async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T
 	return results;
 }
 
-
-function sortedStats(map: Map<string, number>, samples: number): Array<{ label: string; count: number; percent: number }> {
+function sortedStats(
+	map: Map<string, number>,
+	samples: number,
+): Array<{ label: string; count: number; percent: number }> {
 	return [...map.entries()]
 		.map(([label, count]) => ({ label, count, percent: (count / samples) * 100 }))
 		.sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
@@ -253,7 +261,6 @@ function summarizeResults(
 	};
 }
 
-
 function formatRows(rows: Array<{ count: number; percent: number; label: string }>): string[] {
 	if (rows.length === 0) return [`  ${chalk.dim("(none)")}`];
 	const maxCountWidth = Math.max(...rows.map(row => row.count.toString().length));
@@ -296,13 +303,18 @@ export async function runDryBalanceCommand(
 	deps: DryBalanceDependencies = {},
 ): Promise<DryBalanceSummary> {
 	const samples = normalizePositiveInteger("count", command.flags.count, DEFAULT_SAMPLE_COUNT);
-	const concurrency = Math.min(samples, normalizePositiveInteger("concurrency", command.flags.concurrency, DEFAULT_CONCURRENCY));
+	const concurrency = Math.min(
+		samples,
+		normalizePositiveInteger("concurrency", command.flags.concurrency, DEFAULT_CONCURRENCY),
+	);
 	const randomSessionId = deps.randomSessionId ?? (() => Bun.randomUUIDv7());
 	const writeStdout = deps.writeStdout ?? ((text: string) => process.stdout.write(text));
 	const writeStderr = deps.writeStderr ?? ((text: string) => process.stderr.write(text));
-	const setExitCode = deps.setExitCode ?? ((code: number) => {
-		process.exitCode = code;
-	});
+	const setExitCode =
+		deps.setExitCode ??
+		((code: number) => {
+			process.exitCode = code;
+		});
 	const runtime = await (deps.createRuntime ?? createDefaultRuntime)();
 	try {
 		const modelSelector = command.flags.model ?? command.model;
