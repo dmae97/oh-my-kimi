@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
+import * as jj from "../../src/utils/jj";
 import {
 	captureBaseline,
 	captureDeltaPatch,
 	ensureIsolation,
 	getGitNoIndexNullPath,
+	getRepoRoot,
 	mergeTaskBranches,
 	parseIsolationMode,
 } from "../../src/task/worktree";
@@ -50,6 +52,7 @@ async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	jj.repo.clearRootCache();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -155,5 +158,32 @@ describe("worktree isolation helpers", () => {
 		expect(delta.rootPatch).toContain("+task output");
 		expect(delta.rootPatch).not.toContain("baseline dirty change");
 		expect(delta.rootPatch).not.toContain("preexisting.txt");
+	});
+});
+
+describe("getRepoRoot", () => {
+	it("returns the git root for a plain git checkout", async () => {
+		const { repo } = await createGitRepo();
+		expect(await getRepoRoot(repo)).toBe(repo);
+	});
+
+	it("returns the git root for a colocated jj-git workspace", async () => {
+		const { repo } = await createGitRepo();
+		await fs.mkdir(path.join(repo, ".jj", "repo", "store"), { recursive: true });
+		expect(await getRepoRoot(repo)).toBe(repo);
+	});
+
+	it("rejects pure jj workspaces with an actionable Jujutsu message", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-purejj-"));
+		tempDirs.push(dir);
+		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
+		await expect(getRepoRoot(dir)).rejects.toThrow(/pure Jujutsu/);
+		await expect(getRepoRoot(dir)).rejects.toThrow(/jj git init --colocate/);
+	});
+
+	it("preserves the generic git-not-found error for directories without any repo", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-norepo-"));
+		tempDirs.push(dir);
+		await expect(getRepoRoot(dir)).rejects.toThrow("Git repository not found for isolated task execution.");
 	});
 });

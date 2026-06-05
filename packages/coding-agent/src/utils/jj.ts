@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $which } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "lru-cache/raw";
+import * as git from "./git";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types
@@ -246,3 +247,26 @@ export const repo = {
 		return (await repo.root(cwd)) !== null;
 	},
 };
+
+/**
+ * Detect a "pure" Jujutsu workspace — one whose root has no colocated Git
+ * checkout. Git-mutating automation MUST treat this case specially: invoking
+ * `git checkout -b`, `git worktree add`, or `git apply` against a pure jj
+ * workspace either fails outright (no `.git/` present) or mutates state that
+ * jj itself cannot reconcile.
+ *
+ * Returns `true` when `cwd` resolves to a jj workspace root that has no
+ * matching Git checkout. Returns `false` for plain Git checkouts, for
+ * colocated jj-git workspaces (created via `jj git init --colocate`), and
+ * for directories backed by neither tool.
+ */
+export async function isPureJjRepo(cwd: string): Promise<boolean> {
+	const jjRoot = await repo.root(cwd);
+	if (jjRoot === null) return false;
+	const gitRoot = await git.repo.root(cwd);
+	if (gitRoot === null) return true;
+	// Colocated only when the resolved roots match. A jj workspace nested
+	// inside an unrelated Git checkout is still "pure jj" at its own root —
+	// Git automation against the outer checkout would silently bypass jj.
+	return path.resolve(jjRoot) !== path.resolve(gitRoot);
+}

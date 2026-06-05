@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "../extensibility/extensions";
 import * as git from "../utils/git";
+import * as jj from "../utils/jj";
 import { normalizePathSpec } from "./helpers";
 
 const AUTORESEARCH_BRANCH_PREFIX = "autoresearch/";
@@ -39,6 +40,12 @@ export async function ensureAutoresearchBranch(
 ): Promise<EnsureAutoresearchBranchResult> {
 	const repoRoot = await git.repo.root(workDir);
 	if (!repoRoot) {
+		if (await jj.isPureJjRepo(workDir)) {
+			return {
+				ok: false,
+				error: "Autoresearch needs a Git checkout for branch isolation and baseline commits, but this workspace is pure Jujutsu (`.jj/` without a colocated `.git/`). Run `jj git init --colocate` to add a Git checkout before starting autoresearch.",
+			};
+		}
 		return {
 			ok: true,
 			branchName: null,
