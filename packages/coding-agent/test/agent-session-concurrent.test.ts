@@ -548,6 +548,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			settings,
 			modelRegistry,
 			agentId: "acp-session-b",
+			asyncJobManager,
 		});
 		session = new AgentSession({
 			agent: agentA,

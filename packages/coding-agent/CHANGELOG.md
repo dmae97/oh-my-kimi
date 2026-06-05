@@ -11,6 +11,10 @@
 
 - Fixed TTSR rule-violation injections leaking the absolute home directory to the model: the `ttsr-interrupt` / `ttsr-tool-reminder` blocks rendered the matched rule's `path` as its absolute on-disk path (e.g. `/Users/me/Projects/app/.omp/rules/no-any.md`). The path is now relativized to the session cwd when the rule lives in the project (`.omp/rules/no-any.md`), or `~`-relative when it lives under home, so no absolute path is fed into the agent's context outside the system prompt.
 
+### Fixed
+
+- Fixed `AsyncJobManager.instance()` being cleared while the owning top-level session was still live, which broke the `task` async path with "Async execution is enabled but no async job manager is available" until process restart. Any in-process secondary top-level `createAgentSession()` call (e.g. the Agent Control Center's create flow in `agent-dashboard.ts`) constructed a fresh `AsyncJobManager`, overwrote the singleton, and then cleared it on its own dispose. Secondary sessions now leave the live singleton untouched, and their dispose-time cleanup is scoped so it can no longer cancel the primary session's running bash/task jobs. `bash` / `task` / `job` tools and session job snapshots now resolve the manager through session-scoped async manager wiring rather than `AsyncJobManager.instance()`, so a secondary in-process top-level session cannot accidentally register background work on the owning session's manager or report the owning session's jobs; subagents still inherit the parent's manager via their scoped async manager. Startup failures after a top-level session installs its manager now clear and dispose that manager before the next session decides whether it can create its own ([#1923](https://github.com/can1357/oh-my-pi/issues/1923)).
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
