@@ -130,6 +130,7 @@ import {
 	resolveThinkingLevelForModel,
 	toReasoningEffort,
 } from "./thinking";
+import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "./tool-discovery/mode";
 import {
 	collectDiscoverableTools,
 	type DiscoverableTool,
@@ -138,7 +139,6 @@ import {
 	selectDiscoverableToolNamesByServer,
 	summarizeDiscoverableTools,
 } from "./tool-discovery/tool-index";
-import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "./tool-discovery/mode";
 import {
 	BashTool,
 	BUILTIN_TOOLS,
@@ -1694,7 +1694,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			countToolsForAutoDiscovery(toolRegistry.keys()),
 		);
 		if (effectiveDiscoveryMode !== "off" && !toolRegistry.has("search_tool_bm25")) {
-			const searchTool = new SearchToolBm25Tool(toolSession);
+			const searchTool: Tool = new SearchToolBm25Tool(toolSession);
 			toolRegistry.set(
 				searchTool.name,
 				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,

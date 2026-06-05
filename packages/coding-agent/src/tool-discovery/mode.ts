@@ -15,10 +15,7 @@ export function countToolsForAutoDiscovery(toolNames: Iterable<string>): number 
 	return count;
 }
 
-export function resolveEffectiveToolDiscoveryMode(
-	settings: Settings,
-	toolCount: number,
-): EffectiveToolDiscoveryMode {
+export function resolveEffectiveToolDiscoveryMode(settings: Settings, toolCount: number): EffectiveToolDiscoveryMode {
 	const configuredMode = settings.get("tools.discoveryMode");
 	if (configuredMode === "all" || configuredMode === "mcp-only") return configuredMode;
 	if (settings.get("mcp.discoveryMode")) return "mcp-only";

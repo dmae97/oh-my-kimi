@@ -22,7 +22,10 @@ async function getCurrentBranch(api: CustomCommandAPI): Promise<string> {
 
 async function getPushRemote(api: CustomCommandAPI, branch: string): Promise<string | undefined> {
 	try {
-		return (await git.config.getBranch(api.cwd, branch, "pushRemote")) ?? (await git.config.getBranch(api.cwd, branch, "remote"));
+		return (
+			(await git.config.getBranch(api.cwd, branch, "pushRemote")) ??
+			(await git.config.getBranch(api.cwd, branch, "remote"))
+		);
 	} catch {
 		return undefined;
 	}

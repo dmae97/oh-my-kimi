@@ -10,8 +10,8 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "../src/tool-discovery/mode";
 import * as z from "zod/v4";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "../src/tool-discovery/mode";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
