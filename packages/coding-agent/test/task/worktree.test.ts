@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
-import * as jj from "../../src/utils/jj";
 import {
 	captureBaseline,
 	captureDeltaPatch,
@@ -13,6 +12,7 @@ import {
 	mergeTaskBranches,
 	parseIsolationMode,
 } from "../../src/task/worktree";
+import * as jj from "../../src/utils/jj";
 
 const tempDirs: string[] = [];
 
