@@ -1171,6 +1171,7 @@ function b() {
 						}),
 						{
 							getSessionId: () => "test-session",
+							asyncJobManager,
 						},
 					),
 				),
@@ -1204,6 +1205,7 @@ function b() {
 						}),
 						{
 							getSessionId: () => "test-session",
+							asyncJobManager,
 						},
 					),
 				),
@@ -1250,6 +1252,7 @@ function b() {
 						}),
 						{
 							getSessionId: () => "test-session",
+							asyncJobManager,
 						},
 					),
 				),
@@ -1348,8 +1351,9 @@ function b() {
 			const manager = new AsyncJobManager({
 				onJobComplete: async () => {},
 			});
-			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {});
-			AsyncJobManager.setInstance(manager);
+			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
+				asyncJobManager: manager,
+			});
 			const jobTool = JobTool.createIf(session)!;
 
 			const jobId = manager.register("bash", "test job", async () => "success");
