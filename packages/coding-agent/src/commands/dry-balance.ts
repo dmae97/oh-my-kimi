@@ -16,12 +16,14 @@ export default class DryBalance extends Command {
 		count: Flags.integer({ description: "Number of random session ids to try", default: 100 }),
 		concurrency: Flags.integer({ description: "Maximum concurrent credential resolutions", default: 32 }),
 		json: Flags.boolean({ description: "Output JSON" }),
+		bench: Flags.boolean({ description: "Send one live benchmark request per sampled session id" }),
 	};
 
 	static examples = [
 		"# Dry-run the configured default model with 100 random session ids\n  omp dry-balance",
 		"# Dry-run a specific model\n  omp dry-balance anthropic/claude-sonnet-4-5",
 		"# Larger run with bounded concurrency\n  omp dry-balance --model openai-codex/gpt-5-codex --count 1000 --concurrency 64",
+		"# Benchmark resolved accounts with live request status\n  omp dry-balance --bench --count 8 --concurrency 4",
 		"# Machine-readable output\n  omp dry-balance --json",
 	];
 
@@ -34,6 +36,7 @@ export default class DryBalance extends Command {
 				count: flags.count,
 				concurrency: flags.concurrency,
 				json: flags.json,
+				bench: flags.bench,
 			},
 		});
 	}

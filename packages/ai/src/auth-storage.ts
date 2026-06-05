@@ -557,11 +557,25 @@ type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential };
  */
 export interface OAuthAccess {
 	accessToken: string;
+	credentialId?: number;
 	accountId?: string;
 	email?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
 }
+
+export interface OAuthAccessFailure {
+	credentialId?: number;
+	accountId?: string;
+	email?: string;
+	projectId?: string;
+	enterpriseUrl?: string;
+	error: string;
+}
+
+export type OAuthAccessResolution =
+	| ({ ok: true } & OAuthAccess)
+	| ({ ok: false } & OAuthAccessFailure);
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
 	sessionId?: string;
@@ -3492,6 +3506,75 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			enterpriseUrl: credential.enterpriseUrl,
 		};
+	}
+
+	/**
+	 * Resolve every stored OAuth credential for `provider` independently.
+	 *
+	 * Refreshes credentials through the same broker/local path as
+	 * {@link AuthStorage.getOAuthAccess}, but does not rank, round-robin, or
+	 * stop after the first usable account. Intended for diagnostics that must
+	 * exercise each stored account exactly once.
+	 */
+	async getOAuthAccesses(provider: string, options?: AuthApiKeyOptions): Promise<OAuthAccessResolution[]> {
+		if (this.#runtimeOverrides.has(provider) || this.#configOverrides.has(provider)) {
+			return [];
+		}
+		const providerKey = this.#getProviderTypeKey(provider, "oauth");
+		const selections = this.#getStoredCredentials(provider)
+			.map((entry, index) => ({ credentialId: entry.id, credential: entry.credential, index }))
+			.filter(
+				(entry): entry is { credentialId: number; credential: OAuthCredential; index: number } =>
+					entry.credential.type === "oauth",
+			);
+		return Promise.all(
+			selections.map(async (selection): Promise<OAuthAccessResolution> => {
+				try {
+					const resolved = await this.#tryOAuthCredential(
+						provider,
+						{ credential: selection.credential, index: selection.index },
+						providerKey,
+						undefined,
+						options,
+						{
+							checkUsage: false,
+							allowBlocked: true,
+						},
+					);
+					if (!resolved) {
+						return {
+							ok: false,
+							credentialId: selection.credentialId,
+							accountId: selection.credential.accountId,
+							email: selection.credential.email,
+							projectId: selection.credential.projectId,
+							enterpriseUrl: selection.credential.enterpriseUrl,
+							error: "OAuth access unavailable",
+						};
+					}
+					const { credential } = resolved;
+					return {
+						ok: true,
+						credentialId: selection.credentialId,
+						accessToken: credential.access,
+						accountId: credential.accountId,
+						email: credential.email,
+						projectId: credential.projectId,
+						enterpriseUrl: credential.enterpriseUrl,
+					};
+				} catch (error) {
+					return {
+						ok: false,
+						credentialId: selection.credentialId,
+						accountId: selection.credential.accountId,
+						email: selection.credential.email,
+						projectId: selection.credential.projectId,
+						enterpriseUrl: selection.credential.enterpriseUrl,
+						error: error instanceof Error ? error.message : String(error),
+					};
+				}
+			}),
+		);
 	}
 
 	#extractStructuredApiKeyToken(apiKey: string): string | undefined {

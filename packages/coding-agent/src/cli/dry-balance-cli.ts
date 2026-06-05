@@ -1,5 +1,17 @@
-import type { Api, Model, OAuthAccess } from "@oh-my-pi/pi-ai";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import type {
+	Api,
+	AssistantMessage,
+	AssistantMessageEvent,
+	AssistantMessageEventStream,
+	Context,
+	Model,
+	OAuthAccess,
+	OAuthAccessResolution,
+	SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai";
+import { streamSimple } from "@oh-my-pi/pi-ai";
+import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
+import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
 import {
@@ -11,9 +23,16 @@ import {
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage } from "../sdk";
+import dryBalanceBenchPrompt from "../prompts/dry-balance-bench.md" with { type: "text" };
 
 const DEFAULT_SAMPLE_COUNT = 100;
 const DEFAULT_CONCURRENCY = 32;
+const BENCH_MAX_TOKENS = 512;
+const BENCH_RENDER_INTERVAL_MS = 80;
+const BENCH_ACCOUNT_WIDTH = 60;
+const BENCH_ERROR_WIDTH = 110;
+const BENCH_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const DRY_BALANCE_BENCH_PROMPT = dryBalanceBenchPrompt.trim();
 
 export interface DryBalanceCommandArgs {
 	model?: string;
@@ -22,6 +41,7 @@ export interface DryBalanceCommandArgs {
 		count?: number;
 		concurrency?: number;
 		json?: boolean;
+		bench?: boolean;
 	};
 }
 
@@ -37,6 +57,7 @@ export interface DryBalanceAuthStorage {
 		sessionId?: string,
 		options?: DryBalanceAuthOptions,
 	): Promise<OAuthAccess | undefined>;
+	getOAuthAccesses?(provider: string, options?: DryBalanceAuthOptions): Promise<OAuthAccessResolution[]>;
 }
 
 export interface DryBalanceModelRegistry {
@@ -67,6 +88,37 @@ export interface DryBalanceFailureStat {
 	percent: number;
 }
 
+export interface DryBalanceBenchSuccessResult {
+	ok: true;
+	account: string;
+	ttftMs: number;
+	durationMs: number;
+	outputTokens: number;
+	tokensPerSecond: number;
+}
+
+export interface DryBalanceBenchFailureResult {
+	ok: false;
+	account?: string;
+	error: string;
+}
+
+export type DryBalanceBenchResult = DryBalanceBenchSuccessResult | DryBalanceBenchFailureResult;
+
+export interface DryBalanceBenchSummary {
+	total: number;
+	success: {
+		total: number;
+		averageTtftMs: number | null;
+		averageTokensPerSecond: number | null;
+	};
+	failure: {
+		total: number;
+		reasons: DryBalanceFailureStat[];
+	};
+	results: DryBalanceBenchResult[];
+}
+
 export interface DryBalanceSummary {
 	model: string;
 	provider: string;
@@ -80,14 +132,25 @@ export interface DryBalanceSummary {
 		total: number;
 		reasons: DryBalanceFailureStat[];
 	};
+	bench?: DryBalanceBenchSummary;
 }
 
-interface DryBalanceDependencies {
+type DryBalanceStreamSimple = (
+	model: Model<Api>,
+	context: Context,
+	options?: SimpleStreamOptions,
+) => AssistantMessageEventStream;
+
+export interface DryBalanceDependencies {
 	createRuntime?: () => Promise<DryBalanceRuntime>;
 	randomSessionId?: () => string;
 	writeStdout?: (text: string) => void;
 	writeStderr?: (text: string) => void;
 	setExitCode?: (code: number) => void;
+	streamSimple?: DryBalanceStreamSimple;
+	now?: () => number;
+	stdoutIsTTY?: boolean;
+	stderrIsTTY?: boolean;
 }
 
 type DryBalanceAttemptResult =
@@ -100,12 +163,327 @@ type DryBalanceAttemptResult =
 			reason: string;
 	  };
 
+type DryBalanceBenchProgressStatus =
+	| { state: "waiting" }
+	| { state: "running"; account: string }
+	| { state: "success"; result: DryBalanceBenchSuccessResult }
+	| { state: "failure"; result: DryBalanceBenchFailureResult };
+
+interface DryBalanceBenchProgressSink {
+	markRunning(index: number, account: string): void;
+	complete(index: number, result: DryBalanceBenchResult): void;
+	close(): void;
+}
+
+type DryBalanceBenchTarget =
+	| {
+			ok: true;
+			account: string;
+			accessToken: string;
+	  }
+	| {
+			ok: false;
+			account: string;
+			error: string;
+	  };
+
 function normalizePositiveInteger(name: string, value: number | undefined, fallback: number): number {
 	const resolved = value ?? fallback;
 	if (!Number.isInteger(resolved) || resolved <= 0) {
 		throw new Error(`--${name} must be a positive integer`);
 	}
 	return resolved;
+}
+
+function getErrorMessage(error: unknown): string {
+	if (error instanceof Error && error.message) return error.message;
+	const message = String(error);
+	return message ? message : "Unknown error";
+}
+
+function extractAccount(access: {
+	email?: string;
+	accountId?: string;
+	projectId?: string;
+	enterpriseUrl?: string;
+}): string {
+	return access.email ?? access.accountId ?? access.projectId ?? access.enterpriseUrl ?? "(unknown oauth account)";
+}
+
+function getBenchTargetKey(access: {
+	credentialId?: number;
+	email?: string;
+	accountId?: string;
+	projectId?: string;
+	enterpriseUrl?: string;
+	accessToken?: string;
+}): string {
+	return (
+		access.email ??
+		access.accountId ??
+		access.projectId ??
+		access.enterpriseUrl ??
+		(access.credentialId === undefined ? access.accessToken : `credential:${access.credentialId}`) ??
+		"(unknown oauth account)"
+	);
+}
+
+function sanitizeBenchText(text: string, width: number): string {
+	return truncateToWidth(replaceTabs(text).replace(/\r?\n/g, " "), width);
+}
+
+function formatBenchIndex(index: number, total: number): string {
+	return `#${String(index + 1).padStart(String(total).length, "0")}`;
+}
+
+function formatBenchAccount(account: string | undefined): string {
+	return account ? sanitizeBenchText(account, BENCH_ACCOUNT_WIDTH) : chalk.dim("(no account)");
+}
+
+function formatBenchDuration(ms: number): string {
+	return formatDuration(Math.max(0, Math.round(ms)));
+}
+
+function formatBenchTps(tokensPerSecond: number): string {
+	return `${tokensPerSecond.toFixed(1)}/s`;
+}
+
+function isBenchSuccess(result: DryBalanceBenchResult): result is DryBalanceBenchSuccessResult {
+	return result.ok;
+}
+
+function isBenchFirstTokenEvent(event: AssistantMessageEvent): boolean {
+	switch (event.type) {
+		case "text_delta":
+		case "thinking_delta":
+		case "toolcall_delta":
+			return event.delta.length > 0;
+		case "text_end":
+		case "thinking_end":
+			return event.content.length > 0;
+		default:
+			return false;
+	}
+}
+
+function resolveBenchMaxTokens(model: Model<Api>): number {
+	return Number.isFinite(model.maxTokens) && model.maxTokens > 0
+		? Math.min(BENCH_MAX_TOKENS, model.maxTokens)
+		: BENCH_MAX_TOKENS;
+}
+
+function normalizeBenchMs(value: number): number {
+	return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function renderBenchResultLine(index: number, total: number, result: DryBalanceBenchResult): string {
+	const prefix = formatBenchIndex(index, total);
+	if (result.ok) {
+		return `${chalk.green("✓")} ${prefix} ${formatBenchAccount(result.account)} ${chalk.dim("TTFT")} ${formatBenchDuration(
+			result.ttftMs,
+		)} ${chalk.dim("TPS")} ${formatBenchTps(result.tokensPerSecond)}`;
+	}
+	return `${chalk.red("✗")} ${prefix} ${formatBenchAccount(result.account)} ${chalk.red(
+		sanitizeBenchText(result.error, BENCH_ERROR_WIDTH),
+	)}`;
+}
+
+function renderBenchStatusLine(status: DryBalanceBenchProgressStatus, index: number, total: number, frame: number): string {
+	const prefix = formatBenchIndex(index, total);
+	switch (status.state) {
+		case "waiting":
+			return `${chalk.dim("○")} ${prefix} ${chalk.dim("waiting")}`;
+		case "running": {
+			const spinner = BENCH_SPINNER_FRAMES[frame % BENCH_SPINNER_FRAMES.length] ?? "*";
+			return `${chalk.yellow(spinner)} ${prefix} ${formatBenchAccount(status.account)} ${chalk.dim("sending request")}`;
+		}
+		case "success":
+			return renderBenchResultLine(index, total, status.result);
+		case "failure":
+			return renderBenchResultLine(index, total, status.result);
+	}
+}
+
+function createBenchProgressSink(
+	total: number,
+	write: (text: string) => void,
+	interactive: boolean,
+): DryBalanceBenchProgressSink {
+	const statuses: DryBalanceBenchProgressStatus[] = Array.from({ length: total }, () => ({ state: "waiting" }));
+	if (!interactive) {
+		return {
+			markRunning(index, account) {
+				statuses[index] = { state: "running", account };
+				write(`${renderBenchStatusLine(statuses[index], index, total, 0)}\n`);
+			},
+			complete(index, result) {
+				statuses[index] = result.ok ? { state: "success", result } : { state: "failure", result };
+				write(`${renderBenchResultLine(index, total, result)}\n`);
+			},
+			close() {},
+		};
+	}
+
+	let frame = 0;
+	let lineCount = 0;
+	let timer: NodeJS.Timeout | undefined;
+	const render = (): void => {
+		const lines = [
+			chalk.bold("bench requests"),
+			...statuses.map((status, index) => renderBenchStatusLine(status, index, total, frame)),
+		];
+		if (lineCount > 0) write(`\x1b[${lineCount}A`);
+		write(`${lines.map(line => `\x1b[2K${line}`).join("\n")}\n`);
+		lineCount = lines.length;
+	};
+	render();
+	timer = setInterval(() => {
+		frame += 1;
+		render();
+	}, BENCH_RENDER_INTERVAL_MS);
+	timer.unref?.();
+	return {
+		markRunning(index, account) {
+			statuses[index] = { state: "running", account };
+			render();
+		},
+		complete(index, result) {
+			statuses[index] = result.ok ? { state: "success", result } : { state: "failure", result };
+			render();
+		},
+		close() {
+			if (timer) {
+				clearInterval(timer);
+				timer = undefined;
+			}
+			render();
+		},
+	};
+}
+
+async function runBenchRequest(
+	model: Model<Api>,
+	sessionId: string,
+	account: string,
+	accessToken: string,
+	streamFn: DryBalanceStreamSimple,
+	now: () => number,
+): Promise<DryBalanceBenchResult> {
+	const startedAt = now();
+	let firstTokenAt: number | undefined;
+	try {
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: DRY_BALANCE_BENCH_PROMPT,
+					timestamp: Date.now(),
+					attribution: "user",
+				},
+			],
+		};
+		const stream = streamFn(model, context, {
+			apiKey: accessToken,
+			sessionId,
+			maxTokens: resolveBenchMaxTokens(model),
+			temperature: 0.2,
+			disableReasoning: true,
+			hideThinkingSummary: true,
+		});
+		let message: AssistantMessage | undefined;
+		for await (const event of stream) {
+			if (firstTokenAt === undefined && isBenchFirstTokenEvent(event)) {
+				firstTokenAt = now();
+			}
+			if (event.type === "error") {
+				return { ok: false, account, error: event.error.errorMessage ?? "request failed" };
+			}
+			if (event.type === "done") {
+				message = event.message;
+			}
+		}
+		message ??= await stream.result();
+		if (message.stopReason === "error" || message.errorMessage) {
+			return { ok: false, account, error: message.errorMessage ?? "request failed" };
+		}
+		const durationMs = normalizeBenchMs(message.duration ?? now() - startedAt);
+		const ttftMs = normalizeBenchMs(message.ttft ?? (firstTokenAt === undefined ? durationMs : firstTokenAt - startedAt));
+		const outputTokens = Number.isFinite(message.usage.output) && message.usage.output > 0 ? message.usage.output : 0;
+		const tokensPerSecond = durationMs > 0 ? (outputTokens * 1000) / durationMs : 0;
+		return {
+			ok: true,
+			account,
+			ttftMs,
+			durationMs,
+			outputTokens,
+			tokensPerSecond,
+		};
+	} catch (error) {
+		return { ok: false, account, error: getErrorMessage(error) };
+	}
+}
+
+async function resolveBenchTargets(
+	model: Model<Api>,
+	authStorage: DryBalanceAuthStorage,
+): Promise<DryBalanceBenchTarget[]> {
+	const resolved = authStorage.getOAuthAccesses
+		? await authStorage.getOAuthAccesses(model.provider, {
+				baseUrl: model.baseUrl,
+				modelId: model.id,
+			})
+		: await authStorage.getOAuthAccess(model.provider, undefined, {
+				baseUrl: model.baseUrl,
+				modelId: model.id,
+			}).then(access => (access ? [{ ok: true as const, ...access }] : []));
+	const targets: DryBalanceBenchTarget[] = [];
+	const seen = new Set<string>();
+	for (const entry of resolved) {
+		const key = getBenchTargetKey(entry);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const account = extractAccount(entry);
+		if (entry.ok) {
+			targets.push({ ok: true, account, accessToken: entry.accessToken });
+		} else {
+			targets.push({ ok: false, account, error: entry.error });
+		}
+	}
+	return targets;
+}
+
+async function runBenchTargets(
+	model: Model<Api>,
+	targets: DryBalanceBenchTarget[],
+	randomSessionId: () => string,
+	progress: DryBalanceBenchProgressSink | undefined,
+	streamFn: DryBalanceStreamSimple,
+	now: () => number,
+): Promise<DryBalanceBenchResult[]> {
+	return Promise.all(
+		targets.map(async (target, index) => {
+			if (!target.ok) {
+				const result: DryBalanceBenchFailureResult = {
+					ok: false,
+					account: target.account,
+					error: target.error,
+				};
+				progress?.complete(index, result);
+				return result;
+			}
+			progress?.markRunning(index, target.account);
+			const result = await runBenchRequest(
+				model,
+				randomSessionId(),
+				target.account,
+				target.accessToken,
+				streamFn,
+				now,
+			);
+			progress?.complete(index, result);
+			return result;
+		}),
+	);
 }
 
 async function createDefaultRuntime(): Promise<DryBalanceRuntime> {
@@ -186,15 +564,17 @@ async function runOneAttempt(
 			modelId: model.id,
 		});
 		if (!access) return { ok: false, reason: "no OAuth access resolved" };
-		const account =
-			access.email ?? access.accountId ?? access.projectId ?? access.enterpriseUrl ?? "(unknown oauth account)";
-		return { ok: true, account };
+		return { ok: true, account: extractAccount(access) };
 	} catch (error) {
-		return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		return { ok: false, reason: getErrorMessage(error) };
 	}
 }
 
-async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapConcurrent<T, R>(
+	items: T[],
+	concurrency: number,
+	fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
 	const results = new Array<R>(items.length);
 	let nextIndex = 0;
 	const workerCount = Math.min(concurrency, items.length);
@@ -204,7 +584,7 @@ async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T
 				const index = nextIndex;
 				nextIndex += 1;
 				if (index >= items.length) return;
-				results[index] = await fn(items[index]);
+				results[index] = await fn(items[index], index);
 			}
 		}),
 	);
@@ -218,6 +598,36 @@ function sortedStats(
 	return [...map.entries()]
 		.map(([label, count]) => ({ label, count, percent: (count / samples) * 100 }))
 		.sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+}
+
+function summarizeBenchResults(results: DryBalanceBenchResult[]): DryBalanceBenchSummary | undefined {
+	if (results.length === 0) return undefined;
+	const successes = results.filter(isBenchSuccess);
+	const failureReasons = new Map<string, number>();
+	for (const result of results) {
+		if (!result.ok) {
+			failureReasons.set(result.error, (failureReasons.get(result.error) ?? 0) + 1);
+		}
+	}
+	const average = (values: number[]): number | null =>
+		values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+	return {
+		total: results.length,
+		success: {
+			total: successes.length,
+			averageTtftMs: average(successes.map(result => result.ttftMs)),
+			averageTokensPerSecond: average(successes.map(result => result.tokensPerSecond)),
+		},
+		failure: {
+			total: results.length - successes.length,
+			reasons: sortedStats(failureReasons, results.length).map(stat => ({
+				reason: stat.label,
+				count: stat.count,
+				percent: stat.percent,
+			})),
+		},
+		results,
+	};
 }
 
 function summarizeResults(
@@ -245,7 +655,7 @@ function summarizeResults(
 		count: stat.count,
 		percent: stat.percent,
 	}));
-	return {
+	const summary: DryBalanceSummary = {
 		model: formatModelString(model),
 		provider: model.provider,
 		samples,
@@ -259,6 +669,7 @@ function summarizeResults(
 			reasons: failureStats,
 		},
 	};
+	return summary;
 }
 
 function formatRows(rows: Array<{ count: number; percent: number; label: string }>): string[] {
@@ -295,6 +706,32 @@ export function formatDryBalanceText(summary: DryBalanceSummary): string {
 		`${summary.failure.total > 0 ? chalk.red("failure") : chalk.dim("failure")} ${summary.failure.total}`,
 		...formatRows(failureRows),
 	];
+	if (summary.bench) {
+		const avgTtft =
+			summary.bench.success.averageTtftMs === null
+				? "-"
+				: formatBenchDuration(summary.bench.success.averageTtftMs);
+		const avgTps =
+			summary.bench.success.averageTokensPerSecond === null
+				? "-"
+				: formatBenchTps(summary.bench.success.averageTokensPerSecond);
+		const benchFailureRows = summary.bench.failure.reasons.map(row => ({
+			count: row.count,
+			percent: row.percent,
+			label: row.reason,
+		}));
+		lines.push(
+			"",
+			chalk.bold("bench"),
+			`requests: ${summary.bench.total}`,
+			`${chalk.green("success")} ${summary.bench.success.total}`,
+			`avg TTFT: ${avgTtft}`,
+			`avg TPS: ${avgTps}`,
+			"",
+			`${summary.bench.failure.total > 0 ? chalk.red("failure") : chalk.dim("failure")} ${summary.bench.failure.total}`,
+			...formatRows(benchFailureRows),
+		);
+	}
 	return `${lines.join("\n")}\n`;
 }
 
@@ -315,7 +752,16 @@ export async function runDryBalanceCommand(
 		((code: number) => {
 			process.exitCode = code;
 		});
+	const streamFn = deps.streamSimple ?? streamSimple;
+	const now = deps.now ?? (() => performance.now());
 	const runtime = await (deps.createRuntime ?? createDefaultRuntime)();
+	let progress: DryBalanceBenchProgressSink | undefined;
+	let progressClosed = false;
+	const closeProgress = (): void => {
+		if (progressClosed) return;
+		progressClosed = true;
+		progress?.close();
+	};
 	try {
 		const modelSelector = command.flags.model ?? command.model;
 		const { model, warning } = await resolveDryBalanceModel(
@@ -325,19 +771,44 @@ export async function runDryBalanceCommand(
 			randomSessionId,
 		);
 		if (warning) writeStderr(`${chalk.yellow(`Warning: ${warning}`)}\n`);
-		const sessionIds = Array.from({ length: samples }, () => randomSessionId());
-		const results = await mapConcurrent(sessionIds, concurrency, sessionId =>
-			runOneAttempt(model, runtime.modelRegistry, sessionId),
-		);
-		const summary = summarizeResults(model, samples, concurrency, results);
+		let results: DryBalanceAttemptResult[];
+		let benchResults: DryBalanceBenchResult[] | undefined;
+		let summarySamples = samples;
+		let summaryConcurrency = concurrency;
+		if (command.flags.bench) {
+			const targets = await resolveBenchTargets(model, runtime.modelRegistry.authStorage);
+			summarySamples = targets.length;
+			summaryConcurrency = targets.length;
+			const progressWrite = command.flags.json ? writeStderr : writeStdout;
+			const progressInteractive = command.flags.json
+				? (deps.stderrIsTTY ?? process.stderr.isTTY === true)
+				: (deps.stdoutIsTTY ?? process.stdout.isTTY === true);
+			progress = createBenchProgressSink(targets.length, progressWrite, progressInteractive);
+			benchResults = await runBenchTargets(model, targets, randomSessionId, progress, streamFn, now);
+			results = targets.map(target =>
+				target.ok ? { ok: true, account: target.account } : { ok: false, reason: target.error },
+			);
+		} else {
+			const sessionIds = Array.from({ length: samples }, () => randomSessionId());
+			results = await mapConcurrent(sessionIds, concurrency, sessionId =>
+				runOneAttempt(model, runtime.modelRegistry, sessionId),
+			);
+		}
+		closeProgress();
+		const summary = summarizeResults(model, summarySamples, summaryConcurrency, results);
+		if (benchResults) {
+			const benchSummary = summarizeBenchResults(benchResults);
+			if (benchSummary) summary.bench = benchSummary;
+		}
 		if (command.flags.json) {
 			writeStdout(`${JSON.stringify(summary, null, 2)}\n`);
 		} else {
 			writeStdout(formatDryBalanceText(summary));
 		}
-		if (summary.failure.total > 0) setExitCode(1);
+		if (summary.failure.total > 0 || (summary.bench?.failure.total ?? 0) > 0) setExitCode(1);
 		return summary;
 	} finally {
+		closeProgress();
 		runtime.close?.();
 	}
 }
