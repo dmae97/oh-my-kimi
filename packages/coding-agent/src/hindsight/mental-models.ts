@@ -112,7 +112,7 @@ function dedupe<T>(items: T[]): T[] {
  * Idempotently create any seed mental models that don't already exist on the
  * bank. Best-effort: a list/create failure does not throw — mental models are
  * an optimization, not a precondition for retain/recall, and we mirror the
- * swallow-on-failure pattern used by `ensureBankMission`.
+ * swallow-on-failure pattern used by `ensureBankExists`.
  *
  * Existing models are NEVER modified. See module docstring.
  */

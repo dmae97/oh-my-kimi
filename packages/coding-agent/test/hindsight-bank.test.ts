@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
-import { computeBankScope, deriveBankId, ensureBankMission } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
+import { computeBankScope, deriveBankId, ensureBankExists } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 
@@ -117,7 +117,7 @@ describe("deriveBankId (legacy wrapper)", () => {
 	});
 });
 
-describe("ensureBankMission", () => {
+describe("ensureBankExists", () => {
 	let client: HindsightApi;
 	let createSpy: Mock<HindsightApi["createBank"]> | undefined;
 
@@ -129,14 +129,14 @@ describe("ensureBankMission", () => {
 		createSpy?.mockRestore();
 	});
 
-	it("calls createBank exactly once per bank id", async () => {
+	it("calls createBank exactly once per bank id and forwards the mission body", async () => {
 		createSpy = vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 		const seen = new Set<string>();
 		const config = baseConfig({ bankMission: "remember everything", retainMission: "extract facts" });
 
-		await ensureBankMission(client, "bank-a", config, seen);
-		await ensureBankMission(client, "bank-a", config, seen);
-		await ensureBankMission(client, "bank-b", config, seen);
+		await ensureBankExists(client, "bank-a", config, seen);
+		await ensureBankExists(client, "bank-a", config, seen);
+		await ensureBankExists(client, "bank-b", config, seen);
 
 		expect(createSpy).toHaveBeenCalledTimes(2);
 		expect(createSpy).toHaveBeenCalledWith(
@@ -148,13 +148,22 @@ describe("ensureBankMission", () => {
 		expect(seen.has("bank-b")).toBe(true);
 	});
 
-	it("is a no-op when no mission is configured", async () => {
+	// Regression: mental-model auto-seed used to POST `createMentalModel` against
+	// a never-created bank when `bankMission` was blank, because the old
+	// `ensureBankMission` skipped creation entirely without a mission.
+	it("still PUTs the bank when no mission is configured (so the bank gets created)", async () => {
 		createSpy = vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
 		const seen = new Set<string>();
-		await ensureBankMission(client, "bank", baseConfig({ bankMission: "" }), seen);
-		await ensureBankMission(client, "bank", baseConfig({ bankMission: "   " }), seen);
-		expect(createSpy).not.toHaveBeenCalled();
-		expect(seen.size).toBe(0);
+
+		await ensureBankExists(client, "bank", baseConfig({ bankMission: "" }), seen);
+		await ensureBankExists(client, "bank", baseConfig({ bankMission: "   " }), seen);
+
+		expect(createSpy).toHaveBeenCalledTimes(1);
+		expect(createSpy).toHaveBeenCalledWith(
+			"bank",
+			expect.objectContaining({ reflectMission: undefined, retainMission: undefined }),
+		);
+		expect(seen.has("bank")).toBe(true);
 	});
 
 	it("swallows API failures and does not mark the bank as initialised", async () => {
@@ -162,7 +171,7 @@ describe("ensureBankMission", () => {
 		const seen = new Set<string>();
 		const config = baseConfig({ bankMission: "do the thing" });
 
-		await expect(ensureBankMission(client, "bank-x", config, seen)).resolves.toBeUndefined();
+		await expect(ensureBankExists(client, "bank-x", config, seen)).resolves.toBeUndefined();
 		expect(seen.has("bank-x")).toBe(false);
 	});
 });
