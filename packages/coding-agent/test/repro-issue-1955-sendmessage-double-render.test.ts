@@ -197,7 +197,7 @@ describe("issue #1955 — sendMessage(display:true) during session_start", () =>
 
 		// Drain the `.then(applyCustomMessageDisplay)` microtask chain queued by
 		// `actions.sendMessage` before the host's renderInitialMessages fires.
-		await new Promise<void>(resolve => setTimeout(resolve, 0));
+		await Bun.sleep(0);
 
 		// Mirror main.ts: after `mode.init()` returns, the host renders the
 		// initial transcript while preserving anything previously added to chat.
@@ -227,7 +227,7 @@ describe("issue #1955 — sendMessage(display:true) during session_start", () =>
 			},
 			{ deliverAs: "nextTurn" },
 		);
-		await new Promise<void>(resolve => setTimeout(resolve, 0));
+		await Bun.sleep(0);
 
 		const rendered = Bun.stripANSI(harness.ctx.chatContainer.render(120).join("\n"));
 		expect(countOccurrences(rendered, marker)).toBe(1);
