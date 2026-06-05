@@ -752,21 +752,26 @@ type CommonSamplingOptions = Pick<
 /**
  * Apply the common `StreamOptions` → Responses sampling-parameter mapping (max output tokens,
  * temperature, top-p/k, min-p, presence/repetition penalties, service tier). Mutates `params`.
+ *
+ * `max_output_tokens` is suppressed when {@link Model.omitMaxOutputTokens} is `true`, so
+ * proxies (notably Ollama) that forward to upstream APIs with an unknown output-token cap
+ * can let the upstream apply its own default instead of 400-ing on `maxTokens` values that
+ * reflect the model's context window rather than the upstream output limit.
  */
 export function applyCommonResponsesSamplingParams<P extends CommonResponsesParams>(
 	params: P,
 	options: CommonSamplingOptions | undefined,
-	provider: string,
+	model: Pick<Model, "provider" | "omitMaxOutputTokens">,
 ): void {
-	if (options?.maxTokens) params.max_output_tokens = options.maxTokens;
+	if (options?.maxTokens && !model.omitMaxOutputTokens) params.max_output_tokens = options.maxTokens;
 	if (options?.temperature !== undefined) params.temperature = options.temperature;
 	if (options?.topP !== undefined) params.top_p = options.topP;
 	if (options?.topK !== undefined) params.top_k = options.topK;
 	if (options?.minP !== undefined) params.min_p = options.minP;
 	if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
 	if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
-	if (shouldSendServiceTier(options?.serviceTier, provider)) {
-		const resolved = resolveServiceTier(options?.serviceTier, provider);
+	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
+		const resolved = resolveServiceTier(options?.serviceTier, model.provider);
 		if (resolved === "flex" || resolved === "scale" || resolved === "priority") {
 			params.service_tier = resolved;
 		}

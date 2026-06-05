@@ -1405,6 +1405,51 @@ describe("ModelRegistry", () => {
 			)?.name;
 			expect(restoredName).not.toBe("Custom Name");
 		});
+
+		test("modelOverrides can set omitMaxOutputTokens on a built-in model", () => {
+			writeRawModelsJson({
+				openai: {
+					modelOverrides: {
+						"gpt-5.4": {
+							omitMaxOutputTokens: true,
+						},
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("openai", "gpt-5.4");
+			expect(model?.omitMaxOutputTokens).toBe(true);
+			// maxTokens is still populated locally — only the wire emission is suppressed.
+			expect(model?.maxTokens).toBeGreaterThan(0);
+		});
+
+		test("custom model definitions accept omitMaxOutputTokens", () => {
+			writeRawModelsJson({
+				ollama: {
+					baseUrl: "http://localhost:11434/v1",
+					api: "openai-responses",
+					auth: "none",
+					models: [
+						{
+							id: "glm-5.1:cloud",
+							name: "GLM 5.1 Cloud (Ollama)",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 202752,
+							maxTokens: 202752,
+							omitMaxOutputTokens: true,
+						},
+					],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("ollama", "glm-5.1:cloud");
+			expect(model?.omitMaxOutputTokens).toBe(true);
+			expect(model?.maxTokens).toBe(202752);
+		});
 	});
 
 	describe("github-copilot oauth endpoint alignment", () => {

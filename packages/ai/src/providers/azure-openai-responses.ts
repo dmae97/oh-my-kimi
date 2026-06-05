@@ -296,7 +296,7 @@ function buildParams(
 		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
 	};
 
-	applyCommonResponsesSamplingParams(params, options, model.provider);
+	applyCommonResponsesSamplingParams(params, options, model);
 
 	if (context.tools) {
 		params.tools = convertTools(context.tools);
