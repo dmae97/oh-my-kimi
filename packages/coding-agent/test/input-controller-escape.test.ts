@@ -34,10 +34,12 @@ type FakeEditor = {
 function createSubmission(input: {
 	text: string;
 	images?: InteractiveModeContext["pendingImages"];
+	imageLinks?: InteractiveModeContext["pendingImageLinks"];
 }): SubmittedUserInput {
 	return {
 		text: input.text,
 		images: input.images,
+		imageLinks: input.imageLinks,
 		cancelled: false,
 		started: false,
 	};
@@ -80,7 +82,7 @@ function createContext(): {
 	const hasActiveBtw = vi.fn(() => false);
 	const handleOmfgEscape = vi.fn(() => true);
 	const hasActiveOmfg = vi.fn(() => false);
-	const startPendingSubmission = vi.fn((input: { text: string; images?: InteractiveModeContext["pendingImages"] }) => {
+	const startPendingSubmission = vi.fn((input: { text: string; images?: InteractiveModeContext["pendingImages"]; imageLinks?: InteractiveModeContext["pendingImageLinks"] }) => {
 		ensureLoadingAnimation();
 		return createSubmission(input);
 	});
@@ -132,6 +134,7 @@ function createContext(): {
 			getKeys: () => [],
 		} as unknown as InteractiveModeContext["keybindings"],
 		pendingImages: [],
+		pendingImageLinks: [],
 		isBashMode: false,
 		isPythonMode: false,
 		optimisticUserMessageSignature: undefined,
@@ -197,7 +200,7 @@ describe("InputController escape behavior", () => {
 		controller.setupEditorSubmitHandler();
 		await editor.onSubmit?.("hello");
 
-		expect(spies.startPendingSubmission).toHaveBeenCalledWith({ text: "hello", images: undefined });
+		expect(spies.startPendingSubmission).toHaveBeenCalledWith({ text: "hello", images: undefined, imageLinks: undefined });
 		expect(spies.onInputCallback).toHaveBeenCalledWith(submission);
 
 		editor.onEscape?.();
