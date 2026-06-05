@@ -1534,10 +1534,24 @@ export class TUI extends Container {
 				this.#previousWidth = width;
 				this.#previousHeight = height;
 				return;
-			case "initial":
-				this.#emitFullPaint(lines, width, height, cursorPos, { clearViewport: true, clearScrollback: false });
+			case "initial": {
+				const liveRegionStart = this.#nativeScrollbackLiveRegionStart;
+				if (
+					this.#eagerNativeScrollbackRebuild &&
+					eagerEraseScrollbackRisk &&
+					!allowUnknownViewportMutation &&
+					liveRegionStart !== undefined &&
+					liveRegionStart < lines.length &&
+					!isMultiplexerSession() &&
+					this.#readNativeViewportAtBottom() === undefined
+				) {
+					this.#emitInitialLiveRegionPinnedPaint(lines, width, height, cursorPos, liveRegionStart);
+				} else {
+					this.#emitFullPaint(lines, width, height, cursorPos, { clearViewport: true, clearScrollback: false });
+				}
 				this.#hasEverRendered = true;
 				return;
+			}
 			case "sessionReplace":
 				this.#clearScrollbackOnNextRender = false;
 				this.#clearNativeScrollbackDirty();
@@ -2212,25 +2226,22 @@ export class TUI extends Container {
 
 		this.#markNativeScrollbackDirty();
 		const naturalViewportTop = Math.max(0, newLines.length - height);
-		// Rows before the live-region boundary are sealed. If a live-region
-		// collapse moves the bottom-anchored viewport back across rows already
-		// written to native scrollback, repainting those sealed rows duplicates
-		// them in history. Clamp only to the committed sealed boundary: mutable
-		// rows inside the live region must remain visible even when an earlier
-		// taller live frame pushed their old contents into native scrollback. The
-		// dirty checkpoint later reconciles those stale mutable saved lines.
+		// Rows before the live-region boundary are sealed. Commit only the sealed
+		// portion that actually scrolled above the viewport; rows inside the live
+		// region are mutable by contract and must not enter native history yet.
+		// Otherwise a pending tool preview that later collapses to its running/final
+		// shape leaves the old top half in scrollback and repaints the new tail
+		// below it — visually splitting one box across the scrollback seam.
+		const sealedAppendTo = Math.min(naturalViewportTop, liveRegionStart);
+		const appendTo = Math.max(0, sealedAppendTo);
+		const appendFrom = Math.min(this.#scrollbackHighWater, appendTo);
+		// If the live-region collapse would re-expose sealed rows already written
+		// to native scrollback, clamp the repaint below that committed prefix so
+		// sealed rows are not duplicated. Mutable rows may remain hidden above the
+		// viewport until the next checkpoint rebuild; that is safer than committing
+		// transient rows that can later re-layout.
 		const committedSealedEnd = Math.min(this.#scrollbackHighWater, liveRegionStart);
 		const renderViewportTop = Math.max(naturalViewportTop, committedSealedEnd);
-		// Every row above the natural viewport top has physically scrolled out of
-		// the live viewport, so the terminal has already pushed it into native
-		// scrollback — there is nowhere else for an off-screen row to live. It must
-		// therefore be committed as real content, *including the head of the live
-		// block itself* when that block alone overflows the viewport (a tall tool
-		// result, a long streamed reply). Only the live tail that remains *within*
-		// the natural viewport stays transient (repainted in place, deferred to the
-		// checkpoint rebuild).
-		const appendTo = naturalViewportTop;
-		const appendFrom = Math.min(this.#scrollbackHighWater, appendTo);
 		return { kind: "liveRegionPinned", appendFrom, appendTo, renderViewportTop };
 	}
 
@@ -2351,6 +2362,54 @@ export class TUI extends Container {
 		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), toRow);
 	}
 
+	/**
+	 * Initial foreground-stream paint on ED3-risk hosts with unknown viewport
+	 * position. Clears only the visible screen, commits the stable prefix, and
+	 * paints the mutable live tail without first writing hidden live rows into
+	 * native scrollback.
+	 */
+	#emitInitialLiveRegionPinnedPaint(
+		lines: string[],
+		width: number,
+		height: number,
+		cursorPos: { row: number; col: number } | null,
+		liveRegionStart: number,
+	): void {
+		this.#fullRedrawCount += 1;
+		this.#markNativeScrollbackDirty();
+		const naturalViewportTop = Math.max(0, lines.length - height);
+		const appendTo = Math.max(0, Math.min(naturalViewportTop, liveRegionStart, lines.length));
+		const viewportTop = naturalViewportTop;
+
+		let buffer = this.#paintBeginSequence;
+		if (TERMINAL.supportsScreenToScrollback) buffer += "\x1b[22J";
+		buffer += "\x1b[2J\x1b[H";
+
+		let wroteLine = false;
+		for (let i = 0; i < appendTo; i++) {
+			if (wroteLine) buffer += "\r\n";
+			buffer += this.#fitLineToWidth(lines[i] ?? "", width);
+			wroteLine = true;
+		}
+		for (let screenRow = 0; screenRow < height; screenRow++) {
+			if (wroteLine) buffer += "\r\n";
+			buffer += this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
+			wroteLine = true;
+		}
+
+		const viewportBottomRow = viewportTop + height - 1;
+		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
+		const parkUp = viewportBottomRow - contentBottomRow;
+		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
+		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += seq;
+		buffer += this.#paintEndSequence;
+		this.terminal.write(buffer);
+
+		this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
+		this.#scrollbackHighWater = appendTo;
+		this.#commit(lines, width, height, viewportTop, toRow);
+	}
 	/**
 	 * Rewrite the visible viewport in place. Cursor home, clear each row,
 	 * emit the bottom-anchored slice of `lines`. No scrollback growth.
