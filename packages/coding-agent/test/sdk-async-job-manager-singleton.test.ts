@@ -89,9 +89,14 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 				},
 				{ ownerId: "Main" },
 			);
+			expect(primary.getAsyncJobSnapshot()?.running.some(job => job.id === jobId)).toBe(true);
 
 			const secondary = await spawnTopLevelSession();
-			await secondary.dispose();
+			try {
+				expect(secondary.getAsyncJobSnapshot()).toBeNull();
+			} finally {
+				await secondary.dispose();
+			}
 
 			const job = primaryManager!.getJob(jobId);
 			expect(job?.status).toBe("running");

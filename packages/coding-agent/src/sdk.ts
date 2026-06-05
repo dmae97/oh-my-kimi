@@ -1196,6 +1196,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				})
 			: undefined;
 
+	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
+
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
 	const resolvedAgentDisplayName =
@@ -1301,9 +1303,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// completions still flow into the spawning conversation's yieldQueue.
 			// Secondary in-process top-level sessions (no parentTaskPrefix, no
 			// constructed manager because the singleton was already installed) leave
-			// this undefined so tools refuse async work instead of silently routing it
-			// into the owning session (issue #1923).
-			asyncJobManager: asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined),
+			// this undefined so tools and session job snapshots refuse async work
+			// instead of silently routing into the owning session (issue #1923).
+			asyncJobManager: scopedAsyncJobManager,
 		};
 
 		// Wire process-wide internal URL singletons owned by their real classes.
@@ -2060,6 +2062,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// AsyncJobManager on teardown; subagents inherit the parent's and
 			// **MUST NOT** tear it down.
 			ownedAsyncJobManager: asyncJobManager,
+			asyncJobManager: scopedAsyncJobManager,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,

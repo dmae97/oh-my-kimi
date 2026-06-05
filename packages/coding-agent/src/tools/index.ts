@@ -2,6 +2,7 @@ import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { AsyncJobManager } from "../async/job-manager";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -197,7 +198,7 @@ export interface ToolSession {
 	 * Tools MUST use this instead of `AsyncJobManager.instance()` so a secondary
 	 * session never borrows the owning session's manager by accident.
 	 */
-	asyncJobManager?: import("../async/job-manager").AsyncJobManager;
+	asyncJobManager?: AsyncJobManager;
 	/** MCP manager visible to subagents without relying on the process-global singleton. */
 	mcpManager?: MCPManager;
 	/** Local protocol root to propagate to nested subagents and eval-created agents. */
