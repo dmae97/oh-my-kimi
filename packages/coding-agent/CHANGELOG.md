@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed retry recovery to allow automatic retries without switching models when `retry.modelFallback` is disabled.
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
