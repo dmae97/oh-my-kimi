@@ -71,6 +71,7 @@ function makeFakeSession(deps: FakeSessionDeps) {
 		emit(event: Parameters<AgentSessionEventListener>[0]) {
 			for (const l of [...listeners]) l(event);
 		},
+		listenerCount: () => listeners.size,
 	};
 	return session;
 }
@@ -641,6 +642,50 @@ describe("hindsightBackend live bank routing", () => {
 		await Bun.sleep(0);
 
 		expect(session.getHindsightSessionState()).toBe(initial);
+	});
+
+	it("coalesces synchronous routing hooks so rebuilt states do not leak agent listeners", async () => {
+		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+			"hindsight.retainEveryNTurns": 1,
+		});
+		settings.set("hindsight.bankId", "omp");
+		settings.set("hindsight.scoping", "global");
+		const entries = [
+			{ role: "user" as const, text: "remember this routing coalesce fact" },
+			{ role: "assistant" as const, text: "acknowledged routing coalesce fact" },
+		];
+		const session = makeFakeSession({ sessionId: "s-coalesce", cwd: "/work/proj", entries, settings });
+
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		expect(session.listenerCount()).toBe(1);
+
+		// Mirrors `Settings.#fireAllHooks()` during cwd reload: all three
+		// Hindsight routing hooks can fire synchronously before the first async
+		// queue flush continuation resumes. They must collapse into one rebuild.
+		settings.set("hindsight.bankIdPrefix", "live");
+		settings.set("hindsight.bankId", "Minigames");
+		settings.set("hindsight.scoping", "per-project");
+		await Bun.sleep(0);
+
+		const next = session.getHindsightSessionState();
+		expect(next?.bankId).toBe("live-Minigames-proj");
+		expect(session.listenerCount()).toBe(1);
+
+		session.emit({ type: "agent_end", messages: [] });
+		await Bun.sleep(0);
+
+		expect(retainSpy).toHaveBeenCalledTimes(1);
+		expect(retainSpy.mock.calls[0][0]).toBe("live-Minigames-proj");
 	});
 
 	// Regression for issue #1902 fix #2: mental-model auto-seed used to POST

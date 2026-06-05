@@ -146,6 +146,45 @@ export const hindsightBackend: MemoryBackend = {
 		return await state.recallForCompaction(flat);
 	},
 };
+interface PrimaryRebuildTask {
+	pending: boolean;
+}
+
+const primaryRebuildTasks = new WeakMap<AgentSession, PrimaryRebuildTask>();
+
+/**
+ * Coalesce and serialize live scope rebuilds for one session. Cwd reloads fire
+ * all settings hooks synchronously; running every callback immediately would
+ * let multiple rebuilds capture the same old state and leak the fresh states
+ * installed by earlier continuations.
+ */
+function schedulePrimaryStateRebuild(session: AgentSession): void {
+	const task = primaryRebuildTasks.get(session);
+	if (task) {
+		task.pending = true;
+		return;
+	}
+
+	const nextTask: PrimaryRebuildTask = { pending: true };
+	primaryRebuildTasks.set(session, nextTask);
+	void Promise.resolve()
+		.then(async () => {
+			while (nextTask.pending) {
+				nextTask.pending = false;
+				try {
+					await rebuildPrimaryStateOnScopeChange(session);
+				} catch (err) {
+					logger.warn("Hindsight: scope rebuild failed", { error: String(err) });
+				}
+			}
+		})
+		.finally(() => {
+			if (primaryRebuildTasks.get(session) === nextTask) {
+				primaryRebuildTasks.delete(session);
+			}
+		});
+}
+
 /**
  * Build (or rebuild) the primary `HindsightSessionState` for `session` from
  * the current settings and install it. Disposes any previous primary state
@@ -170,6 +209,23 @@ async function installPrimaryState(
 	const client = createHindsightClient(config);
 	const scope = computeBankScope(config, session.sessionManager.getCwd());
 
+	// Cleanup any stale state for this session (defensive — prevents leaks
+	// when a session is reused without going through dispose). Flush the
+	// previous state's retain queue BEFORE clearing it, otherwise
+	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
+	// !== state` and drops the batch. Re-read after the await so a concurrent
+	// owner cannot leave the actual current state undisposed.
+	let previous = session.getHindsightSessionState();
+	if (previous) {
+		await previous.flushRetainQueue();
+	}
+	const latest = session.getHindsightSessionState();
+	if (latest && latest !== previous) {
+		previous?.dispose();
+		previous = latest;
+		await previous.flushRetainQueue();
+	}
+
 	const state = new HindsightSessionState({
 		sessionId,
 		client,
@@ -187,19 +243,14 @@ async function installPrimaryState(
 	// Subscribe BEFORE installing: if the operator manages to flip another
 	// setting between install and subscribe, we'd miss the edge.
 	state.unsubscribeScope = onHindsightScopeChanged(() => {
-		void rebuildPrimaryStateOnScopeChange(session);
+		schedulePrimaryStateRebuild(session);
 	});
 
-	// Cleanup any stale state for this session (defensive — prevents leaks
-	// when a session is reused without going through dispose). Flush the
-	// previous state's retain queue BEFORE clearing it, otherwise
-	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
-	// !== state` and drops the batch.
-	const previous = session.getHindsightSessionState();
-	if (previous && previous !== state) {
-		await previous.flushRetainQueue();
+	const displaced = session.setHindsightSessionState(state);
+	if (displaced && displaced !== previous) {
+		await displaced.flushRetainQueue();
+		displaced.dispose();
 	}
-	session.setHindsightSessionState(state);
 	previous?.dispose();
 	state.attachSessionListeners();
 
