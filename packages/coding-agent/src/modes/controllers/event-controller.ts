@@ -13,6 +13,7 @@ import {
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
+import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
@@ -241,17 +242,27 @@ export class EventController {
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "user") {
 			const textContent = this.ctx.getUserMessageText(event.message);
-			const imageCount =
+			const imageBlocks =
 				typeof event.message.content === "string"
-					? 0
-					: event.message.content.filter(content => content.type === "image").length;
+					? []
+					: event.message.content.filter(
+							(content): content is ImageContent =>
+								content.type === "image" &&
+								typeof content.data === "string" &&
+								typeof content.mimeType === "string",
+						);
+			const imageCount = imageBlocks.length;
 			const signature = `${textContent}\u0000${imageCount}`;
 
 			this.#resetReadGroup();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
 			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
 			if (!wasOptimistic) {
-				this.ctx.addMessageToChat(event.message);
+				const imageLinks = await materializeImageReferenceLinks(
+					imageBlocks,
+					this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
+				);
+				this.ctx.addMessageToChat(event.message, { imageLinks });
 			}
 			if (wasOptimistic) {
 				this.ctx.optimisticUserMessageSignature = undefined;

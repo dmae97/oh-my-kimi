@@ -1,6 +1,8 @@
 import { Editor, type KeyId, matchesKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
+import { imageReferenceHyperlink, renderImageReferences } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
+import { theme } from "../theme/theme";
 
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
@@ -47,9 +49,19 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
  * Custom editor that handles configurable app-level shortcuts for coding-agent.
  */
 export class CustomEditor extends Editor {
+	imageLinks?: readonly (string | undefined)[];
+
 	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflow" keywords as the user types
-	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. */
-	decorateText = (text: string): string => highlightMagicKeywords(text);
+	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. Also make
+	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists. */
+	decorateText = (text: string): string =>
+		renderImageReferences(text, {
+			renderText: value => highlightMagicKeywords(value),
+			renderReference: (value, index) =>
+				imageReferenceHyperlink(value, index, this.imageLinks, label =>
+					theme.fg("accent", `\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m`),
+				),
+		});
 	onEscape?: () => void;
 	onClear?: () => void;
 	onExit?: () => void;

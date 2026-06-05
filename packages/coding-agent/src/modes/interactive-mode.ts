@@ -288,6 +288,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
+	pendingImageLinks: (string | undefined)[] = [];
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	pendingBashComponents: BashExecutionComponent[] = [];
@@ -896,12 +897,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	startPendingSubmission(input: {
 		text: string;
 		images?: ImageContent[];
+		imageLinks?: (string | undefined)[];
 		customType?: string;
 		display?: boolean;
 	}): SubmittedUserInput {
 		const submission: SubmittedUserInput = {
 			text: input.text,
 			images: input.images,
+			imageLinks: input.imageLinks,
 			customType: input.customType,
 			display: input.display,
 			cancelled: false,
@@ -913,17 +916,21 @@ export class InteractiveMode implements InteractiveModeContext {
 			const imageCount = submission.images?.length ?? 0;
 			this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
 			this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
-			this.addMessageToChat({
-				role: "user",
-				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-				attribution: "user",
-				timestamp: Date.now(),
-			});
+			this.addMessageToChat(
+				{
+					role: "user",
+					content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+					attribution: "user",
+					timestamp: Date.now(),
+				},
+				{ imageLinks: input.imageLinks },
+			);
 		} else {
 			this.optimisticUserMessageSignature = undefined;
 			this.#pendingSubmissionDispose = undefined;
 		}
 		this.editor.setText("");
+		this.editor.imageLinks = undefined;
 		// Reconciliation checkpoint: only retire frozen block snapshots after TUI
 		// proves the native viewport is at the tail and replays scrollback safely.
 		// Unknown host viewports stay frozen; thawing them would expose live rows
@@ -958,6 +965,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!submission.customType) {
 			this.pendingImages = submission.images ? [...submission.images] : [];
+			this.pendingImageLinks = submission.imageLinks ? [...submission.imageLinks] : [];
+			this.editor.imageLinks = this.pendingImageLinks;
 			this.rebuildChatFromMessages();
 			this.editor.setText(submission.text);
 		}
@@ -2624,7 +2633,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.isKnownSlashCommand(text);
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): Component[] {
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);
 	}
 

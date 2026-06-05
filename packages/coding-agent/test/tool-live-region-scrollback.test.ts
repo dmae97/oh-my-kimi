@@ -118,10 +118,7 @@ describe("tool live-region scrollback", () => {
 				expect(beforeResult).toContain("(streaming)");
 
 				// The write finishes after the card is already below it.
-				component.updateResult(
-					{ content: [{ type: "text", text: "" }], details: { path: args.file_path } },
-					false,
-				);
+				component.updateResult({ content: [{ type: "text", text: "" }], details: { path: args.file_path } }, false);
 				tui.requestRender();
 				await term.waitForRender();
 
