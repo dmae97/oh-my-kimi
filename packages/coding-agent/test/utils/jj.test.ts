@@ -140,4 +140,16 @@ describe("isPureJjRepo", () => {
 		// checkout would mutate state outside jj's model.
 		expect(await jj.isPureJjRepo(inner)).toBe(true);
 	});
+
+	it("treats a nested git checkout under an outer jj workspace as non-pure", async () => {
+		// `git.repo.root(inner)` returns the inner .git, so Git automation
+		// targets the nested checkout safely and never touches the surrounding
+		// jj tree — the inner git wins.
+		const outer = await createTempDir("omp-jj-nested-jj-outer-");
+		await fs.mkdir(path.join(outer, ".jj", "repo", "store"), { recursive: true });
+		const inner = path.join(outer, "vendor");
+		await fs.mkdir(inner, { recursive: true });
+		await initGit(inner);
+		expect(await jj.isPureJjRepo(inner)).toBe(false);
+	});
 });

@@ -198,4 +198,21 @@ describe("getRepoRoot", () => {
 		await expect(getRepoRoot(inner)).rejects.toThrow(/pure Jujutsu/);
 		await expect(getRepoRoot(inner)).rejects.toThrow(/jj git init --colocate/);
 	});
+
+	it("returns the nested git root when a git checkout lives under an outer jj workspace", async () => {
+		// Mirror image of the case above: `jj.repo.root(inner)` finds the outer
+		// .jj, but `git.repo.root(inner)` finds the inner .git, so Git
+		// automation targets the nested checkout safely. Isolation must keep
+		// working here exactly as it did before the pure-jj guard landed.
+		const outer = await fs.mkdtemp(path.join(os.tmpdir(), "omp-outerjj-"));
+		tempDirs.push(outer);
+		await fs.mkdir(path.join(outer, ".jj", "repo", "store"), { recursive: true });
+		const inner = path.join(outer, "vendor");
+		await fs.mkdir(inner, { recursive: true });
+		await runGit(inner, ["init", "-q", "-b", "main"]);
+		await runGit(inner, ["config", "user.email", "test@example.com"]);
+		await runGit(inner, ["config", "user.name", "Test"]);
+
+		expect(await getRepoRoot(inner)).toBe(inner);
+	});
 });
