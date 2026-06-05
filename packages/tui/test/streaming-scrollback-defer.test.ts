@@ -324,4 +324,49 @@ describe("streaming scrollback defer", () => {
 			}
 		});
 	});
+
+	it("erases mis-wrapped native scrollback on resize even mid-stream on ED3-risk terminals", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(40, 10);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const component = new LineList([...rows("init-", 5), "prompt"]);
+
+			try {
+				tui.addChild(component);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				const scrollbackBefore = term.getScrollBuffer().length;
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				// Stream past the viewport: the cap keeps transient rows out of native
+				// history and no ED3 fires.
+				component.setLines([...rows("stream-", 30), "prompt"]);
+				tui.requestRender();
+				await settle(term);
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
+
+				// Resize mid-stream. The terminal re-wrapped its saved lines at the old
+				// width, so the rebuild must erase them (ED 3) rather than capping to a
+				// viewport repaint that would leave the corrupt history on screen.
+				term.resize(30, 10);
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([...rows("stream-", 30), "prompt"]);
+				expect(
+					term
+						.getViewport()
+						.map(line => line.trim())
+						.at(-1),
+				).toBe("prompt");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });

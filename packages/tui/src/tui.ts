@@ -1474,8 +1474,18 @@ export class TUI extends Container {
 		if (streamingWasActive && eagerEraseScrollbackRisk) {
 			const streamingActive =
 				this.#eagerNativeScrollbackRebuild && !this.#eagerNativeScrollbackRebuildDisablePending;
+			// A terminal resize reflowed native scrollback at the OLD geometry, so the
+			// saved rows are already mis-wrapped garbage. The planned historyRebuild
+			// must stand and erase them (ED 3) — capping to a viewport repaint would
+			// leave the corrupt history on screen. Like the other reconciles, a resize
+			// is an explicit user action that snaps the host to the bottom, so there is
+			// no scrolled reader to yank.
+			const geometryChanged = widthChanged || heightChanged;
 			const explicitReconcile =
-				explicitViewportMutation || this.#clearScrollbackOnNextRender || overlayVisibilityReduced;
+				explicitViewportMutation ||
+				this.#clearScrollbackOnNextRender ||
+				overlayVisibilityReduced ||
+				geometryChanged;
 			// The defer below exists only to avoid `\r\n`-scrolling transient frames
 			// past a reader parked in native scrollback. When the terminal can report
 			// that the viewport is at the tail, there is no scrolled reader to yank,
