@@ -52,7 +52,13 @@ function renderSelector(selector: TreeSelectorComponent): string {
 
 describe("issue #1909: tree-selector empty-state messaging", () => {
 	it("explains that the filter — not missing data — is hiding entries on a fresh session", () => {
-		const selector = new TreeSelectorComponent(freshSessionTree(), "e2", 60, () => {}, () => {});
+		const selector = new TreeSelectorComponent(
+			freshSessionTree(),
+			"e2",
+			60,
+			() => {},
+			() => {},
+		);
 		const text = renderSelector(selector);
 
 		// Filter-hiding hint and recovery key must both be present so the user knows
@@ -66,7 +72,13 @@ describe("issue #1909: tree-selector empty-state messaging", () => {
 	});
 
 	it("explains a zero-result search as a search problem, not a filter problem", () => {
-		const selector = new TreeSelectorComponent(userMessageTree(), "e1", 60, () => {}, () => {});
+		const selector = new TreeSelectorComponent(
+			userMessageTree(),
+			"e1",
+			60,
+			() => {},
+			() => {},
+		);
 		// Type a character that won't match anything in the tree.
 		selector.handleInput("z");
 		const text = renderSelector(selector);
@@ -78,7 +90,13 @@ describe("issue #1909: tree-selector empty-state messaging", () => {
 	});
 
 	it("falls back to the bare 'No entries found' line when the tree is genuinely empty", () => {
-		const selector = new TreeSelectorComponent([], null, 60, () => {}, () => {});
+		const selector = new TreeSelectorComponent(
+			[],
+			null,
+			60,
+			() => {},
+			() => {},
+		);
 		const text = renderSelector(selector);
 
 		expect(text).toContain("No entries found");

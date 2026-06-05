@@ -452,9 +452,7 @@ class TreeList implements Component {
 				lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
 				lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.#getFilterLabel()}`), width));
 			} else if (this.#searchQuery.length > 0) {
-				lines.push(
-					truncateToWidth(theme.fg("muted", `  No entries match search "${this.#searchQuery}"`), width),
-				);
+				lines.push(truncateToWidth(theme.fg("muted", `  No entries match search "${this.#searchQuery}"`), width));
 				lines.push(truncateToWidth(theme.fg("muted", "  Press Backspace to clear the search"), width));
 				lines.push(
 					truncateToWidth(theme.fg("muted", `  (0/${this.#flatNodes.length})${this.#getFilterLabel()}`), width),
