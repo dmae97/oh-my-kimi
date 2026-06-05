@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the active model identifier (`provider/id`) to the system prompt's `<workstation>` block so the agent knows which model it is running as. Gated by the new `includeModelInPrompt` setting (default on); the base prompt is rebuilt on a mid-session model switch so the surfaced identifier stays current.
 - Added `OLLAMA_HOST` support for implicit local Ollama discovery when `OLLAMA_BASE_URL` is unset, so OMP picks up the same host setting used by Ollama.
 - Added `OLLAMA_CONTEXT_LENGTH` as a positive-integer context-window override for implicit local Ollama discovery, so users can correct OMP context budgeting without writing per-model overrides.
 

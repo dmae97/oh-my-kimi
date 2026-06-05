@@ -722,6 +722,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	includeModelInPrompt: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			label: "Include Model In Prompt",
+			description: "Surface the active model identifier in the system prompt so the agent knows which model it is",
+		},
+	},
+
 	// Sampling
 	temperature: {
 		type: "number",

@@ -1773,6 +1773,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
 				memoryRootEnabled: memoryBackend.id === "local",
+				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
 			});
 
 			if (options.systemPrompt === undefined) {
