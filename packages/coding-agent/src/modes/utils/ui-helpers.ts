@@ -472,6 +472,12 @@ export class UiHelpers {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
 		const preservedChatChildren = options.preserveExistingChat ? this.ctx.chatContainer.children : undefined;
+		// Mark the chat as rendered BEFORE clearing — gates extension-driven
+		// rebuilds (`ExtensionUiController.#applyCustomMessageDisplay`) so the
+		// next `sendMessage({display:true})` outside startup goes through its
+		// rebuild path. Must come before `chatContainer.clear()` so concurrent
+		// renders coming in mid-rebuild see a consistent post-render state.
+		this.ctx.initialChatRendered = true;
 		this.ctx.chatContainer.clear();
 		this.ctx.pendingMessagesContainer.clear();
 		this.ctx.pendingBashComponents = [];

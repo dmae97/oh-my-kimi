@@ -271,6 +271,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusLine: StatusLineComponent;
 
 	isInitialized = false;
+	initialChatRendered = false;
 	isBackgrounded = false;
 	isBashMode = false;
 	toolOutputExpanded = false;

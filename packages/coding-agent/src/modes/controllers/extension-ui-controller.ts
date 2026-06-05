@@ -890,11 +890,19 @@ export class ExtensionUiController {
 	};
 
 	#applyCustomMessageDisplay(wasStreaming: boolean, shouldDisplay: boolean | undefined): void {
-		// For non-streaming cases with display=true, update UI
-		// (streaming cases update via message_end event)
-		if (!this.ctx.isBackgrounded && !wasStreaming && shouldDisplay) {
-			this.ctx.rebuildChatFromMessages();
-		}
+		// For non-streaming cases with display=true, refresh the chat from session.
+		// (Streaming cases update via message_end event.)
+		if (this.ctx.isBackgrounded || wasStreaming || !shouldDisplay) return;
+		// Defer to the initial transcript render: when an extension's
+		// `session_start` handler fires `sendMessage({ display: true })`, this
+		// runs *before* `mode.renderInitialMessages(undefined, { preserveExistingChat: true })`.
+		// Rebuilding now plants a session-derived component into the chat that
+		// `renderInitialMessages` then both re-renders from session entries AND
+		// re-appends via `preserveExistingChat`, duplicating the message (#1955).
+		// After the initial render, the rebuild is the only thing surfacing the
+		// new entry, so it MUST run.
+		if (!this.ctx.initialChatRendered) return;
+		this.ctx.rebuildChatFromMessages();
 	}
 
 	#createHookDialogState(
