@@ -644,6 +644,88 @@ describe("hindsightBackend live bank routing", () => {
 		expect(session.getHindsightSessionState()).toBe(initial);
 	});
 
+	// Same regression flipped: resetting `hindsight.bankId` back to blank /
+	// default after a non-empty value MUST also rebuild and route subsequent
+	// retains to the default bank. The Codex-flagged follow-up was that the
+	// fix had to be bidirectional — set→value AND value→reset. We defend the
+	// reset direction end-to-end by enqueuing a retain after the reset and
+	// asserting the batch call hits the recomputed bank, not the previous one.
+	it("rebuilds when hindsight.bankId is reset to blank after a non-empty value", async () => {
+		const retainBatchSpy = vi.spyOn(HindsightApi.prototype, "retainBatch").mockResolvedValue({} as never);
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+		});
+		settings.set("hindsight.scoping", "per-project");
+		settings.set("hindsight.bankId", "Minigames");
+		const session = makeFakeSession({ sessionId: "s-reset", cwd: "/work/_NEW_XenGameKit", settings });
+
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		const initial = session.getHindsightSessionState();
+		expect(initial?.bankId).toBe("Minigames-_NEW_XenGameKit");
+
+		// Operator clears the bankId via the TUI — `settings.set(path, "")` is
+		// the same call shape `#setSettingValue` uses for an empty text input.
+		settings.set("hindsight.bankId", "");
+		await Bun.sleep(0);
+
+		const next = session.getHindsightSessionState();
+		expect(next).toBeDefined();
+		expect(next).not.toBe(initial);
+		// With scoping=per-project the base falls back to the default ("omp"),
+		// so the reset bank id picks up the project suffix from cwd.
+		expect(next?.bankId).toBe("omp-_NEW_XenGameKit");
+
+		next!.enqueueRetain("post-reset fact", "reset routing");
+		await next!.flushRetainQueue();
+
+		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
+		expect(retainBatchSpy.mock.calls[0][0]).toBe("omp-_NEW_XenGameKit");
+	});
+
+	// Companion case: when `hindsight.scoping` is `global`, clearing the
+	// non-empty bankId should restore the bare `omp` default — the operator's
+	// stated expectation in the live repro from #1902.
+	it("routes future retains to the bare omp bank when bankId is cleared in global scoping", async () => {
+		const retainBatchSpy = vi.spyOn(HindsightApi.prototype, "retainBatch").mockResolvedValue({} as never);
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
+		const settings = Settings.isolated({
+			"memory.backend": "hindsight",
+			"hindsight.apiUrl": "http://localhost:8888",
+		});
+		settings.set("hindsight.scoping", "global");
+		settings.set("hindsight.bankId", "Minigames-_NEW_XenGameKit");
+		const session = makeFakeSession({ sessionId: "s-reset-global", settings });
+
+		await hindsightBackend.start({
+			session: session as never,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: "/tmp",
+			taskDepth: 0,
+		});
+		expect(session.getHindsightSessionState()?.bankId).toBe("Minigames-_NEW_XenGameKit");
+
+		settings.set("hindsight.bankId", "");
+		await Bun.sleep(0);
+
+		const next = session.getHindsightSessionState();
+		expect(next?.bankId).toBe("omp");
+
+		next!.enqueueRetain("post-reset global fact");
+		await next!.flushRetainQueue();
+
+		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
+		expect(retainBatchSpy.mock.calls[0][0]).toBe("omp");
+	});
+
 	it("coalesces synchronous routing hooks so rebuilt states do not leak agent listeners", async () => {
 		const retainSpy = vi.spyOn(HindsightApi.prototype, "retain").mockResolvedValue({} as never);
 		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
