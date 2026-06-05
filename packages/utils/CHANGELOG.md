@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.2] - 2026-06-05
+
 ### Added
 
 - Added `getAuthBrokerSnapshotCachePath()` with `OMP_AUTH_BROKER_SNAPSHOT_CACHE` override support for isolating the encrypted broker snapshot cache.
