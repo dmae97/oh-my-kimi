@@ -3643,6 +3643,19 @@ describe("TUI terminal-state regressions", () => {
 		const DISABLE_AUTOWRAP = "\x1b[?7l";
 		const ENABLE_AUTOWRAP = "\x1b[?7h";
 
+		let originalNoSyncOutput: string | undefined;
+		let originalForceSyncOutput: string | undefined;
+		let originalTuiSyncOutput: string | undefined;
+
+		beforeEach(() => {
+			originalNoSyncOutput = Bun.env.PI_NO_SYNC_OUTPUT;
+			originalForceSyncOutput = Bun.env.PI_FORCE_SYNC_OUTPUT;
+			originalTuiSyncOutput = Bun.env.PI_TUI_SYNC_OUTPUT;
+			delete Bun.env.PI_NO_SYNC_OUTPUT;
+			delete Bun.env.PI_FORCE_SYNC_OUTPUT;
+			Bun.env.PI_TUI_SYNC_OUTPUT = "1";
+		});
+
 		function getWrites(term: VirtualTerminal): string[] {
 			const writes: string[] = [];
 			const spy = vi.spyOn(term, "write");
@@ -3653,6 +3666,12 @@ describe("TUI terminal-state regressions", () => {
 		}
 
 		afterEach(() => {
+			if (originalNoSyncOutput === undefined) delete Bun.env.PI_NO_SYNC_OUTPUT;
+			else Bun.env.PI_NO_SYNC_OUTPUT = originalNoSyncOutput;
+			if (originalForceSyncOutput === undefined) delete Bun.env.PI_FORCE_SYNC_OUTPUT;
+			else Bun.env.PI_FORCE_SYNC_OUTPUT = originalForceSyncOutput;
+			if (originalTuiSyncOutput === undefined) delete Bun.env.PI_TUI_SYNC_OUTPUT;
+			else Bun.env.PI_TUI_SYNC_OUTPUT = originalTuiSyncOutput;
 			vi.restoreAllMocks();
 		});
 

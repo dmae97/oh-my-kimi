@@ -35,7 +35,7 @@ describe("issue #1606 — tiny model lives in an isolated subprocess", () => {
 		// `argv` and there is no fallback path that "re-routes" the worker
 		// on misnamed flags. Pin the spelling on both ends.
 		const cliSource = await Bun.file(new URL("../src/cli.ts", import.meta.url)).text();
-		expect(cliSource).toContain(`argv[0] === "${TINY_WORKER_ARG}"`);
+		expect(cliSource).toContain(`resolvedArgv[0] === "${TINY_WORKER_ARG}"`);
 		expect(cliSource).toContain("runTinyWorker");
 	});
 
