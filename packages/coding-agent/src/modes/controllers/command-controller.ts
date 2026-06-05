@@ -934,7 +934,7 @@ export class CommandController {
 						this.ctx.bashComponent.appendOutput(chunk);
 					}
 				},
-				{ excludeFromContext },
+				{ excludeFromContext, useUserShell: true },
 			);
 
 			if (this.ctx.bashComponent) {

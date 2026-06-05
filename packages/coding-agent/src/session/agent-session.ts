@@ -8615,11 +8615,12 @@ export class AgentSession {
 	 * @param command The bash command to execute
 	 * @param onChunk Optional streaming callback for output
 	 * @param options.excludeFromContext If true, command output won't be sent to LLM (!! prefix)
+	 * @param options.useUserShell If true, run via the configured user shell for interactive ! commands
 	 */
 	async executeBash(
 		command: string,
 		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean },
+		options?: { excludeFromContext?: boolean; useUserShell?: boolean },
 	): Promise<BashResult> {
 		const excludeFromContext = options?.excludeFromContext === true;
 		const cwd = this.sessionManager.getCwd();
@@ -8647,6 +8648,7 @@ export class AgentSession {
 				sessionKey: this.sessionId,
 				timeout: clampTimeout("bash") * 1000,
 				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
+				useUserShell: options?.useUserShell,
 			});
 
 			this.recordBashResult(command, result, options);
