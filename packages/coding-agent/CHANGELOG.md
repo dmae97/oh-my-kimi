@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.9.4] - 2026-06-05
 ### Fixed
 
 - Fixed chat transcript updates after submitting input so frozen scrollback is only thawed when native scrollback replay succeeds, preventing misplaced or duplicated rows when the viewport is not at the tail

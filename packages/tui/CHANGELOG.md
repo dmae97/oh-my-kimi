@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.9.4] - 2026-06-05
 ### Added
 
 - Added `PI_TUI_SYNC_OUTPUT=0` and `PI_TUI_SYNC_OUTPUT=1` to explicitly disable or force-enable DEC 2026 synchronized-output mode, alongside `PI_FORCE_SYNC_OUTPUT=1` as a force-on alias
