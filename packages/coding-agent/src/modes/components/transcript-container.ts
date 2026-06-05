@@ -17,14 +17,26 @@ interface SnapshotCarrier {
  * result, an assistant message mid-stream) reports `false` so the container
  * keeps it inside the live (repaintable) region instead of freezing it. Blocks
  * without the method are treated as finalized — the default, stable behavior.
+ *
+ * `isTranscriptBlockAppendOnly` marks a still-live block whose rendered rows
+ * only grow at the bottom and never re-layout (a streaming assistant reply).
+ * Such a block's scrolled-off head is safe to commit to native scrollback even
+ * while live; blocks that omit it (tool previews that collapse to a compact
+ * result) keep their mutable rows deferred. Default is `false`.
  */
 interface FinalizableBlock {
 	isTranscriptBlockFinalized?(): boolean;
+	isTranscriptBlockAppendOnly?(): boolean;
 }
 
 function isBlockFinalized(child: Component): boolean {
 	const fn = (child as Component & FinalizableBlock).isTranscriptBlockFinalized;
 	return fn ? fn.call(child) : true;
+}
+
+function isBlockAppendOnly(child: Component): boolean {
+	const fn = (child as Component & FinalizableBlock).isTranscriptBlockAppendOnly;
+	return fn ? fn.call(child) : false;
 }
 
 /**
@@ -65,6 +77,12 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	// render. TUI extends the native-scrollback pinned region from this point
 	// through the live blocks and the root chrome rendered below them.
 	#nativeScrollbackLiveRegionStart: number | undefined;
+	// Local line index up to which the leading run of live blocks is append-only
+	// (a streaming assistant reply): everything in [liveRegionStart,
+	// commitSafeEnd) only grows at the bottom and never re-layouts, so its
+	// scrolled-off head is safe to commit to native scrollback. `undefined` when
+	// the first live block is volatile (a tool preview).
+	#nativeScrollbackCommitSafeEnd: number | undefined;
 
 	override invalidate(): void {
 		// A theme/global invalidation forces a full recompute on the rebuild that
@@ -82,6 +100,10 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		return this.#nativeScrollbackLiveRegionStart;
 	}
 
+	getNativeScrollbackCommitSafeEnd(): number | undefined {
+		return this.#nativeScrollbackCommitSafeEnd;
+	}
+
 	/**
 	 * Retire all frozen snapshots so the next render reflects each block's current
 	 * state. Call at reconciliation checkpoints (prompt submit) where the whole
@@ -95,6 +117,7 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	override render(width: number): string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
+		this.#nativeScrollbackCommitSafeEnd = undefined;
 		if (!TERMINAL.eagerEraseScrollbackRisk) return super.render(width);
 
 		const count = this.children.length;
@@ -117,6 +140,10 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		this.#prevLiveStartIndex = liveStartIndex;
 
 		const lines: string[] = [];
+		// Tracks whether we are still inside the leading run of append-only live
+		// blocks. The first non-append-only live block (or a finalized block below
+		// the live region's start, which cannot happen for a leading run) closes it.
+		let commitSafeOpen = true;
 		for (let i = 0; i < count; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
 			if (i >= liveStartIndex) {
@@ -132,6 +159,17 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 				}
 			}
 			const rendered = child.render(width);
+			// Extend the commit-safe boundary through each leading append-only live
+			// block. `lines.length` here is this block's start offset; the boundary
+			// runs to the end of its rendered rows. The first volatile live block
+			// closes the run so its mutable rows stay deferred.
+			if (i >= liveStartIndex && commitSafeOpen) {
+				if (isBlockAppendOnly(child)) {
+					this.#nativeScrollbackCommitSafeEnd = lines.length + rendered.length;
+				} else {
+					commitSafeOpen = false;
+				}
+			}
 			// Cache every block's latest render. While a block is in the live region
 			// this keeps its snapshot current; on the frame it crosses out, the
 			// recompute above refreshes it to the final state before it freezes.

@@ -1,6 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { TERMINAL, Text, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
+import { Settings } from "../src/config/settings";
+import { AssistantMessageComponent } from "../src/modes/components/assistant-message";
 import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
 import { TranscriptContainer } from "../src/modes/components/transcript-container";
 import { initTheme } from "../src/modes/theme/theme";
@@ -131,6 +134,82 @@ describe("tool live-region scrollback", () => {
 				expect(afterResult).toContain("· 5 lines");
 			} finally {
 				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+});
+
+function makeAssistantMessage(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "anthropic",
+		provider: "anthropic",
+		model: "test-model",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+describe("assistant live-region scrollback", () => {
+	beforeAll(async () => {
+		await initTheme();
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
+	});
+
+	it("commits a streamed reply's scrolled-off head to scrollback instead of dropping it", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			// A streaming assistant reply, mid-stream (no message in the ctor → live).
+			// A markdown list yields one stable row per item, so growth is append-only.
+			const component = new AssistantMessageComponent(undefined, false);
+			const markers = Array.from({ length: 40 }, (_unused, i) => `- MARK-${i}`);
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				// First a short reply that fits, then the full reply that overflows the
+				// 12-row viewport — the frame that scrolls the head above the top.
+				component.updateContent(makeAssistantMessage(markers.slice(0, 4).join("\n")));
+				tui.requestRender();
+				await term.waitForRender();
+
+				component.updateContent(makeAssistantMessage(markers.join("\n")));
+				tui.requestRender();
+				await term.waitForRender();
+
+				const strip = (rows: string[]) => rows.map(row => Bun.stripANSI(row).trimEnd()).join("\n");
+				const scrollText = strip(term.getScrollBuffer());
+				const viewportText = strip(term.getViewport());
+
+				// MARK-0 scrolled above the viewport: with the fix it lives in native
+				// scrollback (committed), not nowhere. The regression dropped it.
+				expect(viewportText).not.toContain("MARK-0");
+				expect(scrollText).toContain("MARK-0");
+				// The tail is still on screen, and nothing went missing in between.
+				expect(viewportText).toContain("MARK-39");
+				expect(scrollText).toContain("MARK-20");
+			} finally {
 				tui.stop();
 				await term.flush();
 			}

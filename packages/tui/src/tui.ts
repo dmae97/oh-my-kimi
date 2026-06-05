@@ -124,13 +124,29 @@ export interface Component {
  * line index where that suffix begins after each render. TUI treats that suffix
  * — and every root child rendered below it — as not yet safe to commit to native
  * scrollback on ED3-risk terminals whose viewport position is unobservable.
+ *
+ * `getNativeScrollbackCommitSafeEnd` optionally reports a *deeper* boundary
+ * inside that live suffix: the line index up to which the live region is
+ * append-only (its earlier rows never re-layout, only new rows append at the
+ * bottom — a streaming assistant message). Rows in `[liveRegionStart,
+ * commitSafeEnd)` that scroll above the viewport are safe to commit to native
+ * scrollback even though they are technically live, because they will never
+ * change. Without this, a single live block that alone overflows the viewport
+ * loses its scrolled-off head (committed nowhere, repainted nowhere). Volatile
+ * live blocks (tool previews that collapse) omit it, so their mutable rows stay
+ * deferred. Defaults to `liveRegionStart` when absent.
  */
 export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined;
+	getNativeScrollbackCommitSafeEnd?(): number | undefined;
 }
 
 function getNativeScrollbackLiveRegionStart(component: Component): number | undefined {
 	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackLiveRegionStart?.();
+}
+
+function getNativeScrollbackCommitSafeEnd(component: Component): number | undefined {
+	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackCommitSafeEnd?.();
 }
 
 /**
@@ -403,6 +419,7 @@ export class TUI extends Container {
 	// not scroll replayed live chrome (status/editor) into fresh history.
 	#suppressNextSuffixScroll = false;
 	#nativeScrollbackLiveRegionStart: number | undefined;
+	#nativeScrollbackCommitSafeEnd: number | undefined;
 	#nativeScrollbackDirty = false;
 	// Highest `#maxLinesRendered` reached during a foreground tool turn while
 	// intermediate frames were prevented from committing to terminal scrollback.
@@ -456,6 +473,7 @@ export class TUI extends Container {
 	override render(width: number): string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
+		this.#nativeScrollbackCommitSafeEnd = undefined;
 		const lines: string[] = [];
 		for (const child of this.children) {
 			const offset = lines.length;
@@ -466,6 +484,13 @@ export class TUI extends Container {
 					? Math.max(0, Math.min(childLines.length, Math.trunc(liveRegionStart)))
 					: childLines.length;
 				this.#nativeScrollbackLiveRegionStart = offset + boundedStart;
+				const commitSafeEnd = getNativeScrollbackCommitSafeEnd(child);
+				if (commitSafeEnd !== undefined) {
+					const boundedEnd = Number.isFinite(commitSafeEnd)
+						? Math.max(boundedStart, Math.min(childLines.length, Math.trunc(commitSafeEnd)))
+						: childLines.length;
+					this.#nativeScrollbackCommitSafeEnd = offset + boundedEnd;
+				}
 			}
 			lines.push(...childLines);
 		}
@@ -1455,6 +1480,7 @@ export class TUI extends Container {
 			overlayVisibilityReduced,
 			allowUnknownViewportMutation,
 			this.#nativeScrollbackLiveRegionStart,
+			this.#nativeScrollbackCommitSafeEnd,
 		);
 		// 3b. Defer scrollback commits during foreground streaming, but only on
 		// ED3-risk terminals whose committed scrollback cannot be rewritten without
@@ -1555,7 +1581,14 @@ export class TUI extends Container {
 					!isMultiplexerSession() &&
 					this.#readNativeViewportAtBottom() === undefined
 				) {
-					this.#emitInitialLiveRegionPinnedPaint(lines, width, height, cursorPos, liveRegionStart);
+					this.#emitInitialLiveRegionPinnedPaint(
+						lines,
+						width,
+						height,
+						cursorPos,
+						liveRegionStart,
+						this.#nativeScrollbackCommitSafeEnd,
+					);
 				} else {
 					this.#emitFullPaint(lines, width, height, cursorPos, { clearViewport: true, clearScrollback: false });
 				}
@@ -1651,6 +1684,7 @@ export class TUI extends Container {
 		overlayVisibilityReduced: boolean,
 		allowUnknownViewportMutation: boolean,
 		liveRegionStart: number | undefined,
+		commitSafeEnd: number | undefined,
 	): RenderIntent {
 		// Initial paint after start(): scrollback must keep its prior shell
 		// content, but the viewport must be cleared so stale rows do not bleed
@@ -1675,10 +1709,10 @@ export class TUI extends Container {
 		// window in place; a visible overlay rebuilds with its composite. This
 		// deliberately drops the no-overflow and confirmed-scrolled guards — a
 		// resize is an explicit user action, so a scrolled reader snaps to the
-		// bottom and preexisting shell scrollback above the UI is cleared. (During
-		// active ED3-risk foreground streaming the cap above may still downgrade the
-		// rebuild to a non-destructive viewport repaint and reconcile at the next
-		// checkpoint, so transient stream rows never enter native history.)
+		// bottom and preexisting shell scrollback above the UI is cleared. The
+		// streaming cap above explicitly exempts geometry changes, so even during
+		// active ED3-risk foreground streaming this rebuild stands and erases the
+		// scrollback the terminal just re-wrapped at the old size.
 		if (widthChanged || heightChanged) {
 			if (isMultiplexerSession()) return { kind: "viewportRepaint" };
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
@@ -1706,6 +1740,7 @@ export class TUI extends Container {
 			newLines,
 			height,
 			liveRegionStart,
+			commitSafeEnd,
 			eagerEraseScrollbackRisk,
 			allowUnknownViewportMutation,
 		);
@@ -2130,6 +2165,7 @@ export class TUI extends Container {
 		newLines: string[],
 		height: number,
 		liveRegionStart: number | undefined,
+		commitSafeEnd: number | undefined,
 		eagerEraseScrollbackRisk: boolean,
 		allowUnknownViewportMutation: boolean,
 	): RenderIntent | undefined {
@@ -2148,21 +2184,27 @@ export class TUI extends Container {
 
 		this.#markNativeScrollbackDirty();
 		const naturalViewportTop = Math.max(0, newLines.length - height);
-		// Rows before the live-region boundary are sealed. Commit only the sealed
-		// portion that actually scrolled above the viewport; rows inside the live
-		// region are mutable by contract and must not enter native history yet.
-		// Otherwise a pending tool preview that later collapses to its running/final
-		// shape leaves the old top half in scrollback and repaints the new tail
-		// below it — visually splitting one box across the scrollback seam.
-		const sealedAppendTo = Math.min(naturalViewportTop, liveRegionStart);
+		// Rows before the live-region boundary are sealed. The commit boundary is
+		// the deeper of the sealed start and the append-only `commitSafeEnd`: a
+		// streaming assistant block reports a `commitSafeEnd` spanning its whole
+		// body, so its head rows that scroll above the viewport commit to native
+		// scrollback instead of vanishing (committed nowhere, repainted nowhere).
+		// A volatile live block (a tool preview that later collapses) omits
+		// `commitSafeEnd`, so the boundary falls back to `liveRegionStart` and its
+		// mutable rows stay deferred — otherwise a pending box that later collapses
+		// to its running/final shape leaves the old top half in scrollback and
+		// repaints the new tail below it, visually splitting one box across the
+		// scrollback seam.
+		const commitBoundary = commitSafeEnd ?? liveRegionStart;
+		const sealedAppendTo = Math.min(naturalViewportTop, commitBoundary);
 		const appendTo = Math.max(0, sealedAppendTo);
 		const appendFrom = Math.min(this.#scrollbackHighWater, appendTo);
-		// If the live-region collapse would re-expose sealed rows already written
+		// If the live-region collapse would re-expose committed rows already written
 		// to native scrollback, clamp the repaint below that committed prefix so
-		// sealed rows are not duplicated. Mutable rows may remain hidden above the
-		// viewport until the next checkpoint rebuild; that is safer than committing
-		// transient rows that can later re-layout.
-		const committedSealedEnd = Math.min(this.#scrollbackHighWater, liveRegionStart);
+		// committed rows are not duplicated. Mutable rows beyond the commit boundary
+		// may remain hidden above the viewport until the next checkpoint rebuild;
+		// that is safer than committing transient rows that can later re-layout.
+		const committedSealedEnd = Math.min(this.#scrollbackHighWater, commitBoundary);
 		const renderViewportTop = Math.max(naturalViewportTop, committedSealedEnd);
 		return { kind: "liveRegionPinned", appendFrom, appendTo, renderViewportTop };
 	}
@@ -2296,11 +2338,13 @@ export class TUI extends Container {
 		height: number,
 		cursorPos: { row: number; col: number } | null,
 		liveRegionStart: number,
+		commitSafeEnd: number | undefined,
 	): void {
 		this.#fullRedrawCount += 1;
 		this.#markNativeScrollbackDirty();
 		const naturalViewportTop = Math.max(0, lines.length - height);
-		const appendTo = Math.max(0, Math.min(naturalViewportTop, liveRegionStart, lines.length));
+		const commitBoundary = commitSafeEnd ?? liveRegionStart;
+		const appendTo = Math.max(0, Math.min(naturalViewportTop, commitBoundary, lines.length));
 		const viewportTop = naturalViewportTop;
 
 		let buffer = this.#paintBeginSequence;
