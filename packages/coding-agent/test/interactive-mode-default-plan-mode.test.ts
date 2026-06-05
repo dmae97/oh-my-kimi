@@ -145,6 +145,20 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
 	});
 
+	it("enters plan mode for a fresh session that carries an extension custom entry", async () => {
+		// An extension can persist a custom entry during session_start; that is not
+		// conversation or a mode change, so the startup default must still apply
+		// (regression: an allowlist of SDK metadata types skipped plan mode here).
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendCustomEntry("my-extension-state", { foo: "bar" });
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
+	});
+
 	it("does not re-enter plan mode when a restored mode_change turned it off (no message yet)", async () => {
 		// User enabled plan, toggled it off (mode_change "none"), then quit before
 		// sending a turn. On --continue the reconciler restores that off state; the

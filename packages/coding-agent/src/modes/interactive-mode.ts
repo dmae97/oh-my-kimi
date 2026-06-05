@@ -250,20 +250,14 @@ export interface InteractiveModeOptions {
 }
 
 /**
- * Session entry types the SDK/AgentSession persist for a *fresh* session at
- * creation (model / thinking-level / service-tier defaults plus the initial MCP
- * tool selection). A session whose entries are all of these has had no
- * conversation and no explicit mode change, so `plan.defaultOnStartup` may
- * auto-enter plan mode. Any other entry — a message, or a user `mode_change`
- * that #reconcileModeFromSession just restored — means the session is not fresh
- * and its reconciled mode must stand.
+ * Session entry types that make a session NOT brand-new for `plan.defaultOnStartup`:
+ * a conversation `message`, or a `mode_change` the user made (which
+ * #reconcileModeFromSession just restored). Everything else — SDK startup metadata
+ * (model / thinking-level / service-tier / MCP defaults) and entries an extension
+ * persists during `session_start` — is not user conversation/mode, so it does not
+ * block the startup default.
  */
-const SDK_STARTUP_ENTRY_TYPES: ReadonlySet<string> = new Set([
-	"model_change",
-	"thinking_level_change",
-	"service_tier_change",
-	"mcp_tool_selection",
-]);
+const NON_FRESH_SESSION_ENTRY_TYPES: ReadonlySet<string> = new Set(["message", "mode_change"]);
 
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
@@ -627,18 +621,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#reconcileModeFromSession();
 
 		// Brand-new sessions optionally start in plan mode when the user has made it
-		// the startup default. A fresh SDK session already carries startup metadata
-		// entries (see SDK_STARTUP_ENTRY_TYPES), so it is "brand-new" only when every
-		// entry is one of those — no conversation message and no user `mode_change`
-		// that #reconcileModeFromSession just restored. This way `omp --continue` (or
-		// auto-resume) that finds no recent session and creates a fresh one still
-		// honors the default, while a session with restored conversation or an
-		// explicit mode keeps its reconciled mode. Scoped to launch (not the switch
-		// reconciler above) so /new and the plan-approval → execution handoff clear
-		// never get dragged back into plan mode. #enterPlanMode is idempotent and
-		// self-guards against an already-active plan/goal mode; it does not check
-		// plan.enabled itself.
-		const isFreshSession = this.sessionManager.getEntries().every(entry => SDK_STARTUP_ENTRY_TYPES.has(entry.type));
+		// the startup default. "Brand-new" means no conversation message and no user
+		// `mode_change` (which #reconcileModeFromSession just restored); SDK startup
+		// metadata and entries an extension persisted during session_start are
+		// ignored. This way `omp --continue` (or auto-resume) that finds no recent
+		// session and creates a fresh one still honors the default, while a session
+		// with restored conversation or an explicit mode keeps its reconciled mode.
+		// Scoped to launch (not the switch reconciler above) so /new and the
+		// plan-approval → execution handoff clear never get dragged back into plan
+		// mode. #enterPlanMode is idempotent and self-guards against an already-active
+		// plan/goal mode; it does not check plan.enabled itself.
+		const isFreshSession = !this.sessionManager
+			.getEntries()
+			.some(entry => NON_FRESH_SESSION_ENTRY_TYPES.has(entry.type));
 		if (
 			isFreshSession &&
 			this.session.settings.get("plan.defaultOnStartup") &&
