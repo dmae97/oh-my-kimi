@@ -41,6 +41,6 @@ app.stt.toggle: []
 | `app.clipboard.pasteImage`  | `Ctrl+V` (`Alt+V` fallback on Windows) | Paste an image from the clipboard             |
 | `app.stt.toggle`            | `Alt+H`                                | Toggle speech-to-text recording               |
 
-On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing. Windows Terminal also swallows `Ctrl+Enter`, so the follow-up shortcut also binds `Ctrl+Q` — the same chord GitHub Copilot CLI uses.
+On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing. Windows Terminal also swallows `Ctrl+Enter`, so the follow-up shortcut also binds `Ctrl+Q` — the same chord GitHub Copilot CLI uses. If your existing `keybindings.yml` already assigns `Ctrl+Q` to another action, that user remap wins and follow-up keeps `Ctrl+Enter` unless you explicitly bind `app.message.followUp`.
 
 Older unqualified action names are migrated when `keybindings.yml` is loaded, but new docs and new configs should use the namespaced action IDs above. Existing `keybindings.json` files are still accepted and migrated to `keybindings.yml`; `keybindings.yaml` is also accepted.

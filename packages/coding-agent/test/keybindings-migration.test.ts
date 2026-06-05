@@ -121,4 +121,23 @@ describe("KeybindingsManager.create", () => {
 			await fs.rm(agentDir, { recursive: true, force: true });
 		}
 	});
+
+	it("removes the Ctrl+Q follow-up default when a user remap already claims it (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.plan.toggle": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.plan.toggle")).toEqual(["ctrl+q"]);
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+enter"]);
+		expect(manager.getDisplayString("app.message.followUp")).toBe("Ctrl+Enter");
+		expect(manager.getEffectiveConfig()["app.message.followUp"]).toBe("ctrl+enter");
+	});
+
+	it("keeps Ctrl+Q when the user explicitly assigns it to follow-up (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.message.followUp": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q"]);
+	});
 });

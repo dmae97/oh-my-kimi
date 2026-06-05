@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Changed the default `app.message.followUp` binding from `Ctrl+Enter` alone to `[Ctrl+Q, Ctrl+Enter]` so the follow-up shortcut works in Windows Terminal, which does not deliver a distinct `Ctrl+Enter` event to console apps. `Ctrl+Q` mirrors the GitHub Copilot CLI default for the same action; existing remaps in `~/.omp/agent/keybindings.yml` are untouched. `Ctrl+Q` is also reserved by `ExtensionRunner` so an extension cannot register that chord and be silently overwritten by the built-in follow-up handler ([#1903](https://github.com/can1357/oh-my-pi/issues/1903)).
+- Changed the default `app.message.followUp` binding from `Ctrl+Enter` alone to `[Ctrl+Q, Ctrl+Enter]` so the follow-up shortcut works in Windows Terminal, which does not deliver a distinct `Ctrl+Enter` event to console apps. `Ctrl+Q` mirrors the GitHub Copilot CLI default for the same action; existing remaps in `~/.omp/agent/keybindings.yml` are untouched, and if another user-remapped action already claims `Ctrl+Q`, that user binding wins while follow-up keeps `Ctrl+Enter`. `Ctrl+Q` is also reserved by `ExtensionRunner` so an extension cannot register that chord and be silently overwritten by the built-in follow-up handler ([#1903](https://github.com/can1357/oh-my-pi/issues/1903)).
 
 ## [15.9.1] - 2026-06-04
 
