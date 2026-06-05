@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed TTSR rule-violation injections leaking the absolute home directory to the model: the `ttsr-interrupt` / `ttsr-tool-reminder` blocks rendered the matched rule's `path` as its absolute on-disk path (e.g. `/Users/me/Projects/app/.omp/rules/no-any.md`). The path is now relativized to the session cwd when the rule lives in the project (`.omp/rules/no-any.md`), or `~`-relative when it lives under home, so no absolute path is fed into the agent's context outside the system prompt.
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
