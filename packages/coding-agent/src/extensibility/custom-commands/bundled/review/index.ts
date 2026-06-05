@@ -275,7 +275,7 @@ function buildHeadlessReviewPrompt(focus?: string): string {
 
 const REVIEW_CONTEXT_PR_LIMIT = 3;
 const REPO_SEGMENT_PATTERN = /^[A-Za-z0-9_.-]+$/;
-const PR_SCHEME_PATTERN = /^pr:\/\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/([1-9]\d*)(?:\/diff(?:\/all)?)?$/;
+const PR_SCHEME_PATTERN = /^pr:\/\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/([1-9]\d*)(?:\/diff(?:\/(?:all|[1-9]\d*))?)?$/;
 const PR_REF_TEXT_PATTERN = /https:\/\/github\.com\/[^\s<>"']+|pr:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/[^\s<>"']+/g;
 
 function stripTrailingPrRefPunctuation(text: string): string {

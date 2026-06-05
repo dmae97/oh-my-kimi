@@ -246,6 +246,7 @@ describe("ReviewCommand", () => {
 			"https://github.com/owner/repo/pull/123/files",
 			"https://github.com/owner/repo/pull/123/commits",
 			"pr://owner/repo/123/diff/all",
+			"pr://owner/repo/123/diff/1",
 		];
 
 		for (const url of cases) {
@@ -424,7 +425,7 @@ describe("ReviewCommand", () => {
 		const ctx = createContext({
 			editorValue: "Review docs",
 			sessionEntries: [
-				makeUserEntry("u1", "Review https://github.com/owner/example/pull/77 and pr://owner/example/77/diff/all"),
+				makeUserEntry("u1", "Review https://github.com/owner/example/pull/77 and pr://owner/example/77/diff/1"),
 			],
 			onSelectCall: call => {
 				if (call.title === "Review Mode") reviewModeOptions = call.options;
