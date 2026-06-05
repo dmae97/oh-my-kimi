@@ -23,6 +23,10 @@
 
 - Fixed Hindsight retain/recall/reflect calls staying pinned to the bank that was selected when the session started after the operator edited `hindsight.bankId`, `hindsight.bankIdPrefix`, or `hindsight.scoping` mid-session. The backend now subscribes to those settings via `onHindsightScopeChanged` and rebuilds the active `HindsightSessionState` against the recomputed scope, disposing the old state after flushing its queue so in-flight tool-initiated retains still land in the bank they were enqueued for. Also renamed `ensureBankMission` to `ensureBankExists` so a blank `bankMission` no longer skips bank creation entirely, and called it before mental-model bootstrap so `createMentalModel` is never the first POST against a missing bank. `AgentSession.dispose` now flushes the retain queue before clearing `#hindsightSessionState`, since the queue's identity guard would otherwise drop the spliced batch ([#1902](https://github.com/can1357/oh-my-pi/issues/1902)).
 
+### Fixed
+
+- Fixed `/tree` rendering a bare "No entries found" line on a fresh session where the only persisted entries are the `model_change` + `thinking_level_change` written by `sdk.ts` at startup — both are hidden by the tree-selector's default filter, so `#filteredNodes.length === 0` while `tree.length === 2` and the controller's `tree.length === 0` short-circuit never fired. The selector now splits the empty-state into three distinct shapes — truly empty tree, search query with no matches, and filter mode rejecting every entry — surfacing the cause and the recovery key (`Alt+A` to show all, `Backspace` to clear a stale search) so users on a fresh session can see immediately that the panel isn't broken ([#1909](https://github.com/can1357/oh-my-pi/issues/1909)).
+
 ## [15.9.1] - 2026-06-04
 
 ### Added
