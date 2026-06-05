@@ -66,11 +66,13 @@ describe("MCPManager OAuth refresh failure", () => {
 	});
 
 	test("clears the credential and skips Bearer injection on invalid_grant", async () => {
-		const refreshSpy = vi.spyOn(oauthFlow, "refreshMCPOAuthToken").mockRejectedValue(
-			new Error(
-				'MCP OAuth refresh failed: 400 {"error":"invalid_grant","error_description":"Refresh token has been revoked"}',
-			),
-		);
+		const refreshSpy = vi
+			.spyOn(oauthFlow, "refreshMCPOAuthToken")
+			.mockRejectedValue(
+				new Error(
+					'MCP OAuth refresh failed: 400 {"error":"invalid_grant","error_description":"Refresh token has been revoked"}',
+				),
+			);
 
 		const prepared = await manager.prepareConfig(serverConfig);
 
