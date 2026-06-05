@@ -2276,6 +2276,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				await session.dispose();
 			} else {
 				if (hasRegistered) agentRegistry.unregister(resolvedAgentId);
+				if (asyncJobManager) {
+					if (AsyncJobManager.instance() === asyncJobManager) {
+						AsyncJobManager.setInstance(undefined);
+					}
+					await asyncJobManager.dispose({ timeoutMs: 3_000 });
+				}
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {

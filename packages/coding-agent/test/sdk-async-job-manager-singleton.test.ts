@@ -133,4 +133,40 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 			await primary.dispose();
 		}
 	});
+
+	it("clears a manager installed before a top-level session startup failure takes ownership", async () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-async-startup-failure-${Snowflake.next()}-`));
+		tempDirs.push(tempDir);
+		const cwd = path.join(tempDir, `project-${Snowflake.next()}`);
+		const agentDir = path.join(tempDir, "agent");
+		fs.mkdirSync(cwd, { recursive: true });
+
+		await expect(
+			createAgentSession({
+				cwd,
+				agentDir,
+				settings: Settings.isolated({ "bash.autoBackground.enabled": true }),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				systemPrompt: () => {
+					throw new Error("forced startup failure");
+				},
+			}),
+		).rejects.toThrow("forced startup failure");
+
+		expect(AsyncJobManager.instance()).toBeUndefined();
+
+		const replacement = await spawnTopLevelSession();
+		try {
+			expect(AsyncJobManager.instance()).toBeDefined();
+			expect(replacement.getAsyncJobSnapshot()).not.toBeNull();
+		} finally {
+			await replacement.dispose();
+		}
+	});
 });
