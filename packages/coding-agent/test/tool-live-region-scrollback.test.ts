@@ -78,4 +78,65 @@ describe("tool live-region scrollback", () => {
 			}
 		});
 	});
+
+	it("repaints a finalized write whose result lands after a card was appended below it", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 20);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const content = Array.from({ length: 5 }, (_unused, i) => `const line${i} = ${i};`).join("\n");
+			const args = { file_path: "packages/coding-agent/test/probe.ts", content };
+			const component = new ToolExecutionComponent("write", args, {}, undefined, tui, process.cwd());
+
+			try {
+				chat.addChild(new Text("prior filler", 0, 0));
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				// The write streams its preview while it is the live block.
+				chat.addChild(component);
+				tui.requestRender();
+				await term.waitForRender();
+
+				// An out-of-band card (e.g. a TTSR rule notification) is appended below
+				// the still-in-flight write. Previously this froze the write on its
+				// streaming preview, so the eventual result never repainted.
+				chat.addChild(new Text("⚠ Injecting rule: ts-set-map", 0, 0));
+				tui.requestRender();
+				await term.waitForRender();
+
+				const beforeResult = term
+					.getScrollBuffer()
+					.map(row => Bun.stripANSI(row).trimEnd())
+					.join("\n");
+				expect(beforeResult).toContain("(streaming)");
+
+				// The write finishes after the card is already below it.
+				component.updateResult(
+					{ content: [{ type: "text", text: "" }], details: { path: args.file_path } },
+					false,
+				);
+				tui.requestRender();
+				await term.waitForRender();
+
+				const afterResult = term
+					.getScrollBuffer()
+					.map(row => Bun.stripANSI(row).trimEnd())
+					.join("\n");
+				// The streaming preview is gone and the finalized header repainted in place.
+				expect(afterResult).not.toContain("(streaming)");
+				expect(afterResult).toContain("· 5 lines");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
 });

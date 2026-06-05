@@ -462,6 +462,16 @@ export class EventController {
 				for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
 					component.setArgsComplete(toolCallId);
 				}
+			} else {
+				// The turn ended without running these calls (abort/error/TTSR rewind),
+				// so they will never produce a result. Seal them so they stop animating
+				// and freeze instead of pinning the transcript live region while a retry
+				// streams fresh blocks below them. Background tools keep updating.
+				for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
+					if (!this.#backgroundToolCallIds.has(toolCallId) && component instanceof ToolExecutionComponent) {
+						component.seal();
+					}
+				}
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
@@ -626,6 +636,11 @@ export class EventController {
 		await this.ctx.flushPendingModelSwitch();
 		for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
 			if (!this.#backgroundToolCallIds.has(toolCallId)) {
+				// A foreground tool still pending at turn end never delivered a result;
+				// seal it so it freezes (and stops animating) rather than lingering in
+				// the transcript live region as a streaming preview until the next thaw.
+				const component = this.ctx.pendingTools.get(toolCallId);
+				if (component instanceof ToolExecutionComponent) component.seal();
 				this.ctx.pendingTools.delete(toolCallId);
 			}
 		}

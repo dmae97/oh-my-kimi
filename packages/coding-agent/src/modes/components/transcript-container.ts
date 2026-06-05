@@ -13,6 +13,21 @@ interface SnapshotCarrier {
 }
 
 /**
+ * A transcript block that is still mutating (a foreground tool awaiting its
+ * result, an assistant message mid-stream) reports `false` so the container
+ * keeps it inside the live (repaintable) region instead of freezing it. Blocks
+ * without the method are treated as finalized — the default, stable behavior.
+ */
+interface FinalizableBlock {
+	isTranscriptBlockFinalized?(): boolean;
+}
+
+function isBlockFinalized(child: Component): boolean {
+	const fn = (child as Component & FinalizableBlock).isTranscriptBlockFinalized;
+	return fn ? fn.call(child) : true;
+}
+
+/**
  * Transcript container that freezes the rendered output of every block except
  * the bottom-most (live) one on terminals where committed native scrollback is
  * immutable.
@@ -38,14 +53,17 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	// Bumped to invalidate every block's snapshot at once; a snapshot is only
 	// honored when its stored generation still matches.
 	#generation = 0;
-	// The block that was bottom-most (live) on the previous render. When the live
-	// position moves past it, its snapshot was last refreshed mid-stream and may
-	// predate content that finalized in the same coalesced frame that appended the
-	// block now below it — so it must recompute once on the live→frozen transition.
-	#prevLiveChild: Component | undefined;
-	// Local line index where the current bottom-most block begins in the most
-	// recent render. TUI extends the native-scrollback pinned region from this
-	// point through the live block and the root chrome rendered below it.
+	// Line index where the live (repaintable) region began on the previous
+	// render — the start of the earliest still-mutating block, or the bottom
+	// block when everything is finalized. A block leaves the live region only
+	// once it has finalized AND a finalized block sits below it; the frame it
+	// crosses out is recomputed so it freezes at its true final content, not the
+	// mid-stream snapshot it last rendered while live (TUI render coalescing can
+	// advance a block's content in the very frame it stops being live).
+	#prevLiveStartIndex = 0;
+	// Local line index where the current live region begins in the most recent
+	// render. TUI extends the native-scrollback pinned region from this point
+	// through the live blocks and the root chrome rendered below them.
 	#nativeScrollbackLiveRegionStart: number | undefined;
 
 	override invalidate(): void {
@@ -79,39 +97,44 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		if (!TERMINAL.eagerEraseScrollbackRisk) return super.render(width);
 
+		const count = this.children.length;
+		// The live region spans from the earliest still-mutating block through the
+		// bottom. A block that has not finalized must stay repaintable: out-of-band
+		// inserts (TTSR/todo cards) can append a finalized block *below* a tool that
+		// is still awaiting its result, and freezing the tool there would strand its
+		// committed rows on the mid-stream preview the late result never reaches.
+		let liveStartIndex = count - 1;
+		for (let i = 0; i < count; i++) {
+			if (!isBlockFinalized(this.children[i]!)) {
+				liveStartIndex = i;
+				break;
+			}
+		}
+		// Blocks at [prevLiveStart, liveStart) just crossed out of the live region;
+		// recompute them so they freeze at their final content. Everything below
+		// the lower of the two cutoffs was already frozen last frame and replays.
+		const replayCutoff = Math.min(liveStartIndex, this.#prevLiveStartIndex);
+		this.#prevLiveStartIndex = liveStartIndex;
+
 		const lines: string[] = [];
-		const liveIndex = this.children.length - 1;
-		const liveChild = this.children[liveIndex];
-		const prevLiveChild = this.#prevLiveChild;
-		this.#prevLiveChild = liveChild;
-		for (let i = 0; i < this.children.length; i++) {
+		for (let i = 0; i < count; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
-			if (child === liveChild) {
-				this.#nativeScrollbackLiveRegionStart = lines.length;
+			if (i >= liveStartIndex) {
+				if (i === liveStartIndex) this.#nativeScrollbackLiveRegionStart = lines.length;
 			} else {
 				const snapshot = child[kSnapshot];
-				// Replay the block's last render from while it was live. A stale
-				// generation (post-thaw) or width mismatch (resize in flight, an
-				// explicit rebuild that reconciles history anyway) recomputes instead.
-				// The block that was live on the previous render is also recomputed
-				// here: TUI render coalescing can advance its content (final streamed
-				// tokens) in the very frame that appends the block now below it, so its
-				// cached snapshot predates that final content. Recomputing on the
-				// transition seals the block at its true final state, not a mid-stream one.
-				if (
-					child !== prevLiveChild &&
-					snapshot &&
-					snapshot.generation === this.#generation &&
-					snapshot.width === width
-				) {
+				// Replay a frozen block's last live render. A stale generation
+				// (post-thaw) or width mismatch (resize, explicit rebuild) recomputes
+				// instead, as does a block that was still live last frame (i >= cutoff).
+				if (i < replayCutoff && snapshot && snapshot.generation === this.#generation && snapshot.width === width) {
 					lines.push(...snapshot.lines);
 					continue;
 				}
 			}
 			const rendered = child.render(width);
-			// Cache every block's latest render. While a block is live this keeps its
-			// snapshot current; on the frame it stops being live the recompute above
-			// refreshes it to the final state before it freezes.
+			// Cache every block's latest render. While a block is in the live region
+			// this keeps its snapshot current; on the frame it crosses out, the
+			// recompute above refreshes it to the final state before it freezes.
 			child[kSnapshot] = { width, lines: rendered, generation: this.#generation };
 			lines.push(...rendered);
 		}
