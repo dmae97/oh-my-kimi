@@ -186,4 +186,16 @@ describe("getRepoRoot", () => {
 		tempDirs.push(dir);
 		await expect(getRepoRoot(dir)).rejects.toThrow("Git repository not found for isolated task execution.");
 	});
+
+	it("rejects a pure jj workspace nested inside an unrelated outer git checkout", async () => {
+		// `git.repo.root(inner)` walks up and finds the outer .git — without
+		// the pure-jj check running first, isolation would silently target the
+		// surrounding git tree behind jj's back.
+		const { repo: outer } = await createGitRepo();
+		const inner = path.join(outer, "nested-jj");
+		await fs.mkdir(path.join(inner, ".jj", "repo", "store"), { recursive: true });
+
+		await expect(getRepoRoot(inner)).rejects.toThrow(/pure Jujutsu/);
+		await expect(getRepoRoot(inner)).rejects.toThrow(/jj git init --colocate/);
+	});
 });

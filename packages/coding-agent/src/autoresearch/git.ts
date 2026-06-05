@@ -38,14 +38,19 @@ export async function ensureAutoresearchBranch(
 	workDir: string,
 	goal: string | null,
 ): Promise<EnsureAutoresearchBranchResult> {
+	// Pure-jj check runs first so a jj workspace nested under an unrelated
+	// outer Git checkout is rejected at its own root rather than silently
+	// creating `autoresearch/*` branches and commits in the surrounding Git
+	// tree behind jj's back.
+	if (await jj.isPureJjRepo(workDir)) {
+		return {
+			ok: false,
+			error: "Autoresearch needs a Git checkout for branch isolation and baseline commits, but this workspace is pure Jujutsu (`.jj/` without a colocated `.git/`). Run `jj git init --colocate` to add a Git checkout before starting autoresearch.",
+		};
+	}
+
 	const repoRoot = await git.repo.root(workDir);
 	if (!repoRoot) {
-		if (await jj.isPureJjRepo(workDir)) {
-			return {
-				ok: false,
-				error: "Autoresearch needs a Git checkout for branch isolation and baseline commits, but this workspace is pure Jujutsu (`.jj/` without a colocated `.git/`). Run `jj git init --colocate` to add a Git checkout before starting autoresearch.",
-			};
-		}
 		return {
 			ok: true,
 			branchName: null,

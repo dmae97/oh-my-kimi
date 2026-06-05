@@ -92,4 +92,22 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 		expect(result.branchName).toBeNull();
 		expect(result.warning).toMatch(/Not in a git repository/);
 	});
+
+	it("rejects a pure jj workspace nested inside an unrelated outer git checkout", async () => {
+		// `git.repo.root(inner)` walks up and finds the outer .git — without
+		// the pure-jj check running first, autoresearch would create
+		// `autoresearch/*` branches and commits in the surrounding git tree
+		// behind jj's back.
+		const outer = await mkTempDir("omp-ar-nested-outer-");
+		await initGitWithCommit(outer);
+		const inner = path.join(outer, "nested-jj");
+		await fs.mkdir(path.join(inner, ".jj", "repo", "store"), { recursive: true });
+
+		const result = await ensureAutoresearchBranch(stubApi, inner, "demo");
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toMatch(/pure Jujutsu/);
+		expect(result.error).toMatch(/jj git init --colocate/);
+	});
 });
