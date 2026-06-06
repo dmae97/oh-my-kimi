@@ -2428,18 +2428,30 @@ function isZaiAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 
 /**
  * Returns true for providers whose Anthropic-compatible endpoints do NOT
- * implement signature-based thinking-chain integrity (DeepSeek, Z.AI, etc.).
- * For these providers, unsigned thinking blocks must be preserved as
- * `type: "thinking"` instead of being degraded to text.
+ * implement signature-based thinking-chain integrity (DeepSeek, Z.AI,
+ * Xiaomi MiMo Token Plan, …). For these providers, unsigned `thinking`
+ * blocks emitted on prior assistant turns must be replayed as
+ * `type: "thinking"` instead of being degraded to `type: "text"` — the
+ * model relies on seeing its own reasoning chain back in the conversation
+ * to keep tool-call argument serialization stable (#2005).
  */
 function isNonSigningAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 	// Known non-signing providers
 	if (model.provider === "zai" || model.provider === "deepseek") return true;
+	// Xiaomi MiMo (catalog `xiaomi` + every Token Plan region) exposes an
+	// Anthropic-compat endpoint that does not sign its `thinking` blocks.
+	// Match the provider-id pattern used in `openai-completions-compat.ts`.
+	if (model.provider === "xiaomi" || model.provider.startsWith("xiaomi-token-plan-")) return true;
 	const baseUrl = model.baseUrl;
 	if (!baseUrl) return false;
 	try {
 		const hostname = new URL(baseUrl).hostname.toLowerCase();
-		return hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com");
+		if (hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com")) return true;
+		// Cover user-defined providers pointed at any Xiaomi Token Plan host
+		// (e.g. `token-plan-sgp.xiaomimimo.com/anthropic`), matching the
+		// existing `xiaomimimo.com` detection in `append-only-context-mode.ts`.
+		if (hostname === "xiaomimimo.com" || hostname.endsWith(".xiaomimimo.com")) return true;
+		return false;
 	} catch {
 		return false;
 	}

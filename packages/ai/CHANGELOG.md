@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Xiaomi MiMo Anthropic-compat endpoints (`*.xiaomimimo.com/anthropic`, including every Token Plan region and `api.xiaomimimo.com`) losing prior-turn reasoning on continuation requests. `convertAnthropicMessages` treated all unknown endpoints as signing-capable and demoted MiMo's unsigned `thinking` blocks to `type: "text"`, which destabilized tool-call argument serialization on the next turn — the upstream symptom behind the `args?.ops?.map is not a function` crash reported against the `todo` tool ([#2005](https://github.com/can1357/oh-my-pi/issues/2005)). `isNonSigningAnthropicEndpoint` now recognizes the Xiaomi family (provider id `xiaomi` / `xiaomi-token-plan-*` and the `xiaomimimo.com` host suffix) so unsigned thinking blocks replay as `type: "thinking"`.
+
 ## [15.9.67] - 2026-06-06
 
 ### Fixed
