@@ -167,13 +167,24 @@ function buildExclusionSet(exclusions: readonly string[] | undefined): Set<strin
 	return result;
 }
 
+const compiledEquivalenceCache = new WeakMap<ModelEquivalenceConfig, CompiledEquivalenceConfig>();
 function compileEquivalenceConfig(config: ModelEquivalenceConfig | undefined): CompiledEquivalenceConfig {
+	if (config) {
+		const cached = compiledEquivalenceCache.get(config);
+		if (cached) {
+			return cached;
+		}
+	}
 	const overrides = buildOverrideMap(config?.overrides);
 	const exclude = buildExclusionSet(config?.exclude);
 	if (overrides.size === 0 && exclude.size === 0) {
 		return EMPTY_COMPILED_EQUIVALENCE;
 	}
-	return { overrides, exclude };
+	const compiled: CompiledEquivalenceConfig = { overrides, exclude };
+	if (config) {
+		compiledEquivalenceCache.set(config, compiled);
+	}
+	return compiled;
 }
 
 function addCanonicalCandidate(candidates: Set<string>, candidate: string): void {
@@ -285,7 +296,7 @@ function expandCompactSeriesMinorVersions(candidate: string): string[] {
 // safely return the same instance. Cap keeps memory bounded under adversarial
 // model-id churn.
 const QUALIFIED_NAMESPACE_SUFFIX_CACHE = new Map<string, string[]>();
-const QUALIFIED_NAMESPACE_SUFFIX_CACHE_CAP = 256;
+const QUALIFIED_NAMESPACE_SUFFIX_CACHE_CAP = 4096;
 function getQualifiedNamespaceSuffixes(candidate: string): string[] {
 	const cached = QUALIFIED_NAMESPACE_SUFFIX_CACHE.get(candidate);
 	if (cached !== undefined) {
@@ -678,7 +689,7 @@ function expandHeavyCanonicalCandidates(normalized: string, queue: string[]): vo
 // is unused — kept for signature stability). The returned array is consumed via
 // `.filter` at every callsite, so sharing the cached instance is safe.
 const HEURISTIC_CANDIDATES_CACHE = new Map<string, string[]>();
-const HEURISTIC_CANDIDATES_CACHE_CAP = 256;
+const HEURISTIC_CANDIDATES_CACHE_CAP = 4096;
 function getHeuristicCanonicalCandidates(modelId: string, _officialIds?: ReadonlySet<string>): string[] {
 	const cached = HEURISTIC_CANDIDATES_CACHE.get(modelId);
 	if (cached !== undefined) {
@@ -765,8 +776,11 @@ function resolveCanonicalIdForModel(
 	}
 
 	const heuristicCandidates = getHeuristicCanonicalCandidates(model.id, referenceData.officialIds);
-	const officialMatches = new Set(heuristicCandidates.filter(candidate => referenceData.officialIds.has(candidate)));
+	const officialMatches = new Set<string>();
 	for (const candidate of heuristicCandidates) {
+		if (referenceData.officialIds.has(candidate)) {
+			officialMatches.add(candidate);
+		}
 		const aliased = referenceData.suffixAliases.get(getCanonicalSuffixAliasKey(candidate));
 		if (aliased) {
 			officialMatches.add(aliased);
