@@ -85,7 +85,7 @@
   },
   "overrides": {},
   "scripts": {
-    "install:dev": "bun install && bun --cwd=packages/coding-agent link && bun --cwd=packages/ai link",
+    "install:dev": "bun install && bun --cwd=packages/coding-agent link && ln -sfn \"$(pwd)/packages/coding-agent/scripts/dev-launch\" \"$(bun pm -g bin)/omp\"",
     "dev": "bun --cwd=packages/coding-agent src/cli.ts",
     "stats": "bun --cwd=packages/coding-agent src/cli.ts stats",
     "claude:trace": "bun scripts/claude-trace.ts",
