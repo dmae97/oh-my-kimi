@@ -18,6 +18,7 @@ import { type KernelDisplayOutput, renderKernelDisplay } from "./display";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
 import { enumeratePythonRuntimes, filterEnv, type PythonRuntime, resolvePythonRuntime } from "./runtime";
+import { hostHasInheritableConsole, shouldHideKernelWindow } from "./spawn-options";
 
 export type { KernelDisplayOutput, PythonStatusEvent } from "./display";
 export { renderKernelDisplay } from "./display";
@@ -253,7 +254,16 @@ export class PythonKernel {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
-			windowsHide: true,
+			// Detached from any inherited console only when the host itself
+			// has no console — kernel32!GetConsoleWindow() is authoritative
+			// (works even when every stdio stream is redirected), with a
+			// TTY-OR fallback when the FFI probe is unavailable. See #1960
+			// for the numpy/pandas LoadLibraryExW hang + SIGINT-recovery
+			// failure that motivates the predicate.
+			windowsHide: shouldHideKernelWindow({
+				platform: process.platform,
+				hostHasInheritableConsole: hostHasInheritableConsole(),
+			}),
 		});
 		kernel.#proc = proc;
 		kernel.#stdin = proc.stdin;

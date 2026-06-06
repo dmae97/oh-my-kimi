@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Python eval kernel hanging on Windows during `import pandas` / `import numpy`, with SIGINT unable to recover the cell. `PythonKernel.start()` spawned the runner with `windowsHide: true`, which in Bun maps to the Win32 `CREATE_NO_WINDOW` flag and detaches the long-lived child from any inherited console — so native extensions like `numpy/_core/_multiarray_umath.pyd` (and its bundled OpenBLAS/SLEEF thread-pool init) could deadlock inside `LoadLibraryExW`, and `GenerateConsoleCtrlEvent`-based SIGINT delivery silently became a no-op. The kernel now hides its window only when the host itself has no console to share (service / piped launch); an interactive TUI launch lets the kernel inherit the parent's console, matching the behavior of `python.exe` invoked from `cmd.exe` ([#1960](https://github.com/can1357/oh-my-pi/issues/1960)).
+
 ## [15.9.5] - 2026-06-05
 ### Added
 
