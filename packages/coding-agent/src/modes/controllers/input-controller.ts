@@ -846,7 +846,15 @@ export class InputController {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+		// Toggling expansion mutates every block, but on ED3-risk terminals the
+		// transcript freezes a snapshot of each block once it scrolls past the live
+		// region (committed native scrollback is immutable there). A plain repaint
+		// replays those stale snapshots, so the toggle appears to do nothing above
+		// the live block. resetDisplay() invalidates the snapshots and forces a
+		// full clear + replay — the keyboard-accessible resize-reset equivalent —
+		// which is the only path that re-emits the whole transcript at its new
+		// heights.
+		this.ctx.ui.resetDisplay();
 	}
 
 	toggleThinkingBlockVisibility(): void {

@@ -438,6 +438,7 @@ export const WARMUP_TIMEOUT_MS = 5000;
 const RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS = 5_000;
 const RUST_ANALYZER_WORKSPACE_READY_POLL_MS = 100;
 const RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS = 2_000;
+const RUST_ANALYZER_STATUS_REQUEST_TIMEOUT_MS = 1_000;
 const rustAnalyzerReadyClients = new WeakSet<LspClient>();
 
 function commandBasename(command: string): string {
@@ -462,29 +463,34 @@ async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSig
 	if (rustAnalyzerReadyClients.has(client)) {
 		return;
 	}
+	const timings = client.config.workspaceReadyTimings;
+	const timeoutMs = timings?.timeoutMs ?? RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS;
+	const pollMs = timings?.pollMs ?? RUST_ANALYZER_WORKSPACE_READY_POLL_MS;
+	const settleMs = timings?.settleMs ?? RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS;
+	const statusRequestTimeoutMs = timings?.statusRequestTimeoutMs ?? RUST_ANALYZER_STATUS_REQUEST_TIMEOUT_MS;
 	const started = Date.now();
-	const deadline = started + RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS;
+	const deadline = started + timeoutMs;
 	while (true) {
 		throwIfAborted(signal);
 		let status: unknown;
 		try {
-			status = await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, 1_000);
+			status = await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, statusRequestTimeoutMs);
 		} catch (err) {
 			if (!isRustAnalyzerStatusTimeout(err) || Date.now() >= deadline) {
 				return;
 			}
-			await Bun.sleep(RUST_ANALYZER_WORKSPACE_READY_POLL_MS);
+			await Bun.sleep(pollMs);
 			continue;
 		}
 		const ready = typeof status === "string" && !status.startsWith("No workspaces");
-		if (ready && Date.now() - started >= RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS) {
+		if (ready && Date.now() - started >= settleMs) {
 			rustAnalyzerReadyClients.add(client);
 			return;
 		}
 		if (Date.now() >= deadline) {
 			return;
 		}
-		await Bun.sleep(RUST_ANALYZER_WORKSPACE_READY_POLL_MS);
+		await Bun.sleep(pollMs);
 	}
 }
 

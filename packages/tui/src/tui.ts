@@ -984,9 +984,18 @@ export class TUI extends Container {
 	 * scrollback. This is the keyboard-accessible equivalent of the resize reset:
 	 * no queued diff frame or terminal scrollback probe can downgrade it to a
 	 * viewport-only repaint.
+	 *
+	 * Invalidates every component first so the replay reflects current state. A
+	 * geometry-driven reset thaws frozen scrollback snapshots implicitly (the new
+	 * width misses every cached snapshot), but a same-width reset would otherwise
+	 * replay stale snapshots — leaving host-frozen blocks (e.g. a transcript whose
+	 * committed rows are immutable on ED3-risk terminals) showing pre-mutation
+	 * content. Invalidation is the generic signal those containers use to retire
+	 * their snapshots, which is exactly what a user-driven display reset wants.
 	 */
 	resetDisplay(): void {
 		if (this.#stopped) return;
+		this.invalidate();
 		this.#prepareForcedRender(!isMultiplexerSession(), true);
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;

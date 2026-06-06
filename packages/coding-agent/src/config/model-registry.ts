@@ -2609,6 +2609,14 @@ export class ModelRegistry {
 		}
 		return true;
 	}
+
+	/**
+	 * Clear all cooldown suppressions recorded via {@link suppressSelector}.
+	 * Used to reset retry-fallback cooldown state without a full {@link refresh}.
+	 */
+	clearSuppressedSelectors(): void {
+		this.#suppressedSelectors.clear();
+	}
 }
 
 /**
