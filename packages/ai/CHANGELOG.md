@@ -17,6 +17,7 @@
 ### Fixed
 
 - Fixed Anthropic-compatible reasoning endpoints losing prior-turn reasoning on continuation requests when they emit unsigned `thinking` blocks. `convertAnthropicMessages` treated unknown endpoints as signature-enforcing and demoted unsigned reasoning to `type: "text"`, which destabilized tool-call argument serialization on the next turn — the upstream symptom behind the `args?.ops?.map is not a function` crash reported against the `todo` tool. Official `api.anthropic.com` keeps the conservative text fallback; non-official `anthropic-messages` reasoning models now replay unsigned reasoning as native `type: "thinking"` ([#2005](https://github.com/can1357/oh-my-pi/issues/2005)).
+- Fixed parallel `function_call` items losing arguments against llama.cpp's OpenAI Responses endpoint (`/v1/responses`), where every call but the last finalized with `{}` and the agent rejected them with `path: Invalid input: expected string, received undefined`. llama.cpp's `to_json_oaicompat_resp` emits `output_item.added` with only `item.call_id` (no `item.id`, no `output_index`) while the matching `function_call_arguments.delta` carries `item_id: "fc_<call_id>"`. `processResponsesStream` now registers function-call and custom-tool-call items under `item.call_id` as a secondary lookup key (alongside `item.id`/`output_index`) so identifier-deviant hosts route deltas and done events to the right block. ([#2015](https://github.com/can1357/oh-my-pi/issues/2015))
 
 ## [15.9.67] - 2026-06-06
 
