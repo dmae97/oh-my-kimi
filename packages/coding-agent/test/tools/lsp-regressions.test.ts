@@ -145,6 +145,182 @@ process.abort();
 		}
 	});
 
+	it("advertises workspace folder support during LSP initialization", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-workspace-folders-");
+		try {
+			const initPath = path.join(tempDir.path(), "initialize.json");
+			const serverPath = path.join(tempDir.path(), "server.ts");
+			await Bun.write(
+				serverPath,
+				`
+const initPath = process.argv[2];
+const decoder = new TextDecoder();
+let buffer = "";
+
+function send(message) {
+	const content = JSON.stringify(message);
+	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
+}
+
+for await (const chunk of Bun.stdin.stream()) {
+	buffer += decoder.decode(chunk, { stream: true });
+	while (true) {
+		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+		if (headerEnd === -1) break;
+
+		const header = buffer.slice(0, headerEnd);
+		const match = /Content-Length: (\\d+)/i.exec(header);
+		if (!match) process.exit(2);
+
+		const contentLength = Number(match[1]);
+		const contentStart = headerEnd + 4;
+		const contentEnd = contentStart + contentLength;
+		if (buffer.length < contentEnd) break;
+
+		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
+		buffer = buffer.slice(contentEnd);
+
+		if (message.method === "initialize") {
+			await Bun.write(initPath, JSON.stringify(message.params));
+			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+		} else if (message.method === "shutdown") {
+			send({ jsonrpc: "2.0", id: message.id, result: null });
+		} else if (message.method === "exit") {
+			process.exit(0);
+		}
+	}
+}
+`,
+			);
+
+			const server: ServerConfig = {
+				command: process.execPath,
+				args: [serverPath, initPath],
+				fileTypes: ["rs"],
+				rootMarkers: [],
+			};
+
+			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
+			const params = (await Bun.file(initPath).json()) as {
+				capabilities?: { workspace?: { workspaceFolders?: unknown } };
+				workspaceFolders?: unknown;
+			};
+
+			expect(params.capabilities?.workspace?.workspaceFolders).toBe(true);
+			expect(params.workspaceFolders).toEqual([
+				{ uri: fileToUri(tempDir.path()), name: path.basename(tempDir.path()) },
+			]);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
+	it("waits for rust-analyzer workspaces before opening project-indexed files", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
+		try {
+			const sourcePath = path.join(tempDir.path(), "src", "main.rs");
+			const serverPath = path.join(tempDir.path(), "server.ts");
+			const openStatusPath = path.join(tempDir.path(), "open-status.txt");
+			const statusCountPath = path.join(tempDir.path(), "status-count.txt");
+			await Bun.write(sourcePath, "fn greet() {}\nfn main() { greet(); }\n");
+			await Bun.write(
+				serverPath,
+				`
+const openStatusPath = process.argv[2];
+const statusCountPath = process.argv[3];
+const definitionUri = process.argv[4];
+const decoder = new TextDecoder();
+let buffer = "";
+let statusRequests = 0;
+
+function send(message) {
+	const content = JSON.stringify(message);
+	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
+}
+
+for await (const chunk of Bun.stdin.stream()) {
+	buffer += decoder.decode(chunk, { stream: true });
+	while (true) {
+		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+		if (headerEnd === -1) break;
+
+		const header = buffer.slice(0, headerEnd);
+		const match = /Content-Length: (\\d+)/i.exec(header);
+		if (!match) process.exit(2);
+
+		const contentLength = Number(match[1]);
+		const contentStart = headerEnd + 4;
+		const contentEnd = contentStart + contentLength;
+		if (buffer.length < contentEnd) break;
+
+		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
+		buffer = buffer.slice(contentEnd);
+
+		if (message.method === "initialize") {
+			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { definitionProvider: true } } });
+			send({ jsonrpc: "2.0", method: "$/progress", params: { token: "workspace", value: { kind: "begin" } } });
+			send({ jsonrpc: "2.0", method: "$/progress", params: { token: "workspace", value: { kind: "end" } } });
+		} else if (message.method === "rust-analyzer/analyzerStatus") {
+			statusRequests++;
+			await Bun.write(statusCountPath, String(statusRequests));
+			const result = statusRequests < 3 ? "No workspaces" : "Workspaces:\\nLoaded 1 package across 1 workspace.";
+			send({ jsonrpc: "2.0", id: message.id, result });
+		} else if (message.method === "textDocument/didOpen") {
+			await Bun.write(openStatusPath, String(statusRequests));
+		} else if (message.method === "textDocument/definition") {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				result: [{ uri: definitionUri, range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } } }],
+			});
+		} else if (message.method === "shutdown") {
+			send({ jsonrpc: "2.0", id: message.id, result: null });
+		} else if (message.method === "exit") {
+			process.exit(0);
+		}
+	}
+}
+`,
+			);
+
+			const server: ServerConfig = {
+				command: "rust-analyzer",
+				resolvedCommand: process.execPath,
+				args: [serverPath, openStatusPath, statusCountPath, fileToUri(sourcePath)],
+				fileTypes: ["rs"],
+				rootMarkers: [],
+			};
+
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "rust-analyzer": server },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["rust-analyzer", server]]);
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("rust-wait-test", {
+				action: "definition",
+				file: sourcePath,
+				line: 2,
+				symbol: "greet",
+				timeout: 10,
+			});
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+
+			expect(output).toContain("Found 1 definition(s)");
+			expect(Number(await Bun.file(openStatusPath).text())).toBeGreaterThanOrEqual(3);
+			expect(Number(await Bun.file(statusCountPath).text())).toBeGreaterThanOrEqual(3);
+		} finally {
+			vi.restoreAllMocks();
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("limits glob collection to avoid large diagnostic stalls", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-glob-");
 		try {

@@ -147,6 +147,7 @@ const CLIENT_CAPABILITIES = {
 			failureHandling: "textOnlyTransactional",
 		},
 		configuration: true,
+		workspaceFolders: true,
 		symbol: {
 			dynamicRegistration: false,
 			symbolKind: {
@@ -412,7 +413,52 @@ async function sendResponse(
 /** Timeout for warmup initialize requests (5 seconds) */
 export const WARMUP_TIMEOUT_MS = 5000;
 
-/** Max time to wait for the server to report project loading completion via $/progress */
+/** Max time to poll rust-analyzer after progress ends but before Cargo workspaces are ready. */
+const RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS = 5_000;
+const RUST_ANALYZER_WORKSPACE_READY_POLL_MS = 100;
+const RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS = 2_000;
+const rustAnalyzerReadyClients = new WeakSet<LspClient>();
+
+function commandBasename(command: string): string {
+	const slash = command.lastIndexOf("/");
+	const backslash = command.lastIndexOf("\\");
+	const separator = Math.max(slash, backslash);
+	return separator === -1 ? command : command.slice(separator + 1);
+}
+
+function isRustAnalyzerClient(client: LspClient): boolean {
+	return (
+		commandBasename(client.config.command) === "rust-analyzer" ||
+		(client.config.resolvedCommand ? commandBasename(client.config.resolvedCommand) === "rust-analyzer" : false)
+	);
+}
+
+async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSignal): Promise<void> {
+	if (rustAnalyzerReadyClients.has(client)) {
+		return;
+	}
+	const started = Date.now();
+	const deadline = started + RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS;
+	while (true) {
+		throwIfAborted(signal);
+		let status: unknown;
+		try {
+			status = await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, 1_000);
+		} catch {
+			return;
+		}
+		const ready = typeof status === "string" && !status.startsWith("No workspaces");
+		if (ready && Date.now() - started >= RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS) {
+			rustAnalyzerReadyClients.add(client);
+			return;
+		}
+		if (Date.now() >= deadline) {
+			return;
+		}
+		await Bun.sleep(RUST_ANALYZER_WORKSPACE_READY_POLL_MS);
+	}
+}
+
 const PROJECT_LOAD_TIMEOUT_MS = 15_000;
 
 /** Max time to wait for graceful LSP shutdown and process exit. */
@@ -635,6 +681,9 @@ export async function waitForProjectLoaded(client: LspClient, signal?: AbortSign
 			? [new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))]
 			: []),
 	]);
+	if (isRustAnalyzerClient(client)) {
+		await waitForRustAnalyzerWorkspace(client, signal);
+	}
 }
 
 /**

@@ -304,6 +304,14 @@ const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
 const MAX_GLOB_DIAGNOSTIC_TARGETS = 20;
 const WORKSPACE_SYMBOL_LIMIT = 200;
+const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
+	"definition",
+	"type_definition",
+	"implementation",
+	"references",
+	"rename",
+	"hover",
+]);
 
 function limitDiagnosticMessages(messages: string[]): string[] {
 	if (messages.length <= DIAGNOSTIC_MESSAGE_LIMIT) {
@@ -1940,6 +1948,15 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		try {
 			const client = await getOrCreateClient(serverConfig, this.session.cwd);
 			const targetFile = resolvedFile;
+			const isRustAnalyzerServer =
+				serverName === "rust-analyzer" ||
+				path.basename(serverConfig.command) === "rust-analyzer" ||
+				(serverConfig.resolvedCommand ? path.basename(serverConfig.resolvedCommand) === "rust-analyzer" : false);
+			const needsProjectIndex =
+				targetFile !== null && PROJECT_INDEXED_ACTIONS.has(action) && isProjectAwareLspServer(serverConfig);
+			if (needsProjectIndex && isRustAnalyzerServer) {
+				await waitForProjectLoaded(client, signal);
+			}
 
 			if (targetFile) {
 				await ensureFileOpen(client, targetFile, signal);
@@ -1968,10 +1985,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 			let output: string;
 
-			// Wait for project loading to complete before cross-file operations
-			// to ensure the server has indexed all project files.
-			const crossFileActions = new Set(["definition", "type_definition", "implementation", "references", "rename"]);
-			if (crossFileActions.has(action)) {
+			if (needsProjectIndex && !isRustAnalyzerServer) {
 				await waitForProjectLoaded(client, signal);
 			}
 
