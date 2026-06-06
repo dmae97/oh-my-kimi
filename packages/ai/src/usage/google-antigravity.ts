@@ -167,7 +167,9 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 				earliestReset = earliestReset ? Math.min(earliestReset, window.resetsAt) : window.resetsAt;
 			}
 			const tier = (quotaInfo.tier ?? "default").toLowerCase();
-			const windowId = window?.id ?? "default";
+			// Use quotaInfo.windowId even when parseWindow returns undefined
+			// (no resetTime) — separate windows must not collapse to "default".
+			const windowId = quotaInfo.windowId ?? window?.id ?? "default";
 			const key = `${tier}|${windowId}`;
 			const existing = deduped.get(key);
 			if (!existing) {

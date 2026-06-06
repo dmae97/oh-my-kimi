@@ -2307,8 +2307,10 @@ export class AuthStorage {
 		}
 		const projectId =
 			this.#getUsageReportMetadataValue(report, "projectId") ?? this.#getUsageReportScopeProjectId(report);
+		// Only add project as a fallback when no email is available — two users
+		// with different emails on the same GCP project must not merge.
+		if (projectId && !email) identifiers.push(`project:${projectId}`);
 		const accountId = this.#getUsageReportMetadataValue(report, "accountId");
-		if (projectId) identifiers.push(`project:${projectId}`);
 		if (accountId) identifiers.push(`account:${accountId}`);
 		const account = this.#getUsageReportMetadataValue(report, "account");
 		if (account) identifiers.push(`account:${account}`);
