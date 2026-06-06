@@ -4,7 +4,7 @@
 
 ### Changed
 
-- `logger.printTimings()` (the `PI_TIMING` startup tree) now surfaces two previously-invisible regions: a `(before instrumentation)` line for the runtime init + static module-graph load that elapses before the first marker (the dominant real-world startup cost, ~350ms — `startTiming()` only begins inside `runRootCommand`), and an `(unattributed self)` line for the root span's own untimed work so the gap between the visible top-level spans and `Total` is no longer silently swallowed. `Total` is now labelled `(since first marker)` to make the window explicit.
+- `logger.printTimings()` (the `PI_TIMING` startup tree) now surfaces two previously-invisible regions: a `(before instrumentation)` line for runtime init / uncaptured pre-marker work, and an `(unattributed self)` line for the root span's own untimed work so the gap between visible top-level spans and `Total` is no longer swallowed. `Total` is now labelled `(since first marker)` to make the window explicit. The restored `module-timer.ts` preload can feed module spans into the report: each module records `onLoad` → final top-level marker as `total`, a prepended body marker → final marker as `body/TLA`, and resolved static imports as a bounded dependency tree so the report separates graph wait from actual top-level module work.
 
 ## [15.9.2] - 2026-06-05
 
