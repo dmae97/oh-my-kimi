@@ -76,6 +76,83 @@ function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
 		});
 }
 
+const CODEX_ORPHAN_OUTPUT_LIMIT = 16_000;
+/** Placeholder output for a tool call whose result never landed in the input. */
+const CODEX_INTERRUPTED_TOOL_OUTPUT =
+	"[No tool output recorded: the tool call was interrupted before it produced a result.]";
+
+function orphanFunctionOutputToMessage(item: InputItem, callId: string): InputItem {
+	const itemRecord = item as unknown as Record<string, unknown>;
+	const toolName = typeof itemRecord.name === "string" ? itemRecord.name : "tool";
+	let text = "";
+	try {
+		const output = itemRecord.output;
+		text = typeof output === "string" ? output : JSON.stringify(output);
+	} catch {
+		text = String(itemRecord.output ?? "");
+	}
+	if (text.length > CODEX_ORPHAN_OUTPUT_LIMIT) {
+		text = `${text.slice(0, CODEX_ORPHAN_OUTPUT_LIMIT)}\n...[truncated]`;
+	}
+	return {
+		type: "message",
+		role: "assistant",
+		content: `[Previous ${toolName} result; call_id=${callId}]: ${text}`,
+	} as InputItem;
+}
+
+/**
+ * Repair both halves of unpaired tool exchanges so the Responses input grammar
+ * stays valid — the API rejects either orphan with a 400:
+ *
+ * - `function_call_output` with no matching `function_call` → folded into an
+ *   assistant message (`400 No tool call found for function call output …`).
+ *   Regression of #472 / #1351.
+ * - `function_call` / `custom_tool_call` with no matching `*_output` → a
+ *   placeholder output is synthesized immediately after the call
+ *   (`400 No tool output found for function call …`). Hit when the user
+ *   branches/navigates the session tree to a node that ends on a tool call (the
+ *   tool-result child is dropped from the reconstructed history) or when a turn
+ *   is aborted/crashes after the call streamed but before its result persisted.
+ */
+function repairToolCallPairs(input: InputItem[]): InputItem[] {
+	const callIds = new Set<string>();
+	const outputCallIds = new Set<string>();
+	for (const item of input) {
+		const callId = typeof item.call_id === "string" ? item.call_id : undefined;
+		if (callId === undefined) continue;
+		if (item.type === "function_call" || item.type === "custom_tool_call") callIds.add(callId);
+		else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+			outputCallIds.add(callId);
+		}
+	}
+
+	const repaired: InputItem[] = [];
+	for (const item of input) {
+		const callId = typeof item.call_id === "string" ? item.call_id : undefined;
+
+		if (item.type === "function_call_output" && callId !== undefined && !callIds.has(callId)) {
+			repaired.push(orphanFunctionOutputToMessage(item, callId));
+			continue;
+		}
+
+		repaired.push(item);
+
+		if (
+			(item.type === "function_call" || item.type === "custom_tool_call") &&
+			callId !== undefined &&
+			!outputCallIds.has(callId)
+		) {
+			repaired.push({
+				type: item.type === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output",
+				call_id: callId,
+				output: CODEX_INTERRUPTED_TOOL_OUTPUT,
+			} as InputItem);
+		}
+	}
+	return repaired;
+}
+
 export async function transformRequestBody(
 	body: RequestBody,
 	model: Model<Api>,
@@ -87,39 +164,8 @@ export async function transformRequestBody(
 
 	if (body.input && Array.isArray(body.input)) {
 		body.input = filterInput(body.input);
-
 		if (body.input) {
-			const functionCallIds = new Set(
-				body.input
-					.filter(item => item.type === "function_call" && typeof item.call_id === "string")
-					.map(item => item.call_id as string),
-			);
-
-			body.input = body.input.map(item => {
-				if (item.type === "function_call_output" && typeof item.call_id === "string") {
-					const callId = item.call_id as string;
-					if (!functionCallIds.has(callId)) {
-						const itemRecord = item as unknown as Record<string, unknown>;
-						const toolName = typeof itemRecord.name === "string" ? itemRecord.name : "tool";
-						let text = "";
-						try {
-							const output = itemRecord.output;
-							text = typeof output === "string" ? output : JSON.stringify(output);
-						} catch {
-							text = String(itemRecord.output ?? "");
-						}
-						if (text.length > 16000) {
-							text = `${text.slice(0, 16000)}\n...[truncated]`;
-						}
-						return {
-							type: "message",
-							role: "assistant",
-							content: `[Previous ${toolName} result; call_id=${callId}]: ${text}`,
-						} as InputItem;
-					}
-				}
-				return item;
-			});
+			body.input = repairToolCallPairs(body.input);
 		}
 	}
 
