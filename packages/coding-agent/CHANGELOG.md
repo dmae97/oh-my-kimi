@@ -6,6 +6,7 @@
 - Added `gallery` CLI command to render built-in tool renderer output across streaming, in-progress, success, and failure states
 - Added `omp gallery` filtering and rendering options (`--tool`, `--state`, `--width`, `--expanded`, and `--plain`) for focused renderer previews and plain-text output
 - Added `omp gallery` fidelity for tools whose renderers are attached on the tool instance (`lsp`, `task`): the gallery now drives them through the same custom-tool render branch production uses, so regressions in that path surface in the gallery rather than only in a live session.
+- Added `omp gallery --screenshot`, which renders the gallery through a real virtual terminal (VHS) and writes PNG screenshot(s) instead of ANSI, so agents (and anything that can only read raw bytes) can actually see the rendered output. The capture forces truecolor and matches the active theme/symbol preset; tall galleries split across multiple images (whole renderers are never cut). Tune with `--out`, `--font`, and `--font-size`; requires `vhs` on `PATH` and fails with install guidance when absent.
 - Added `app.display.reset`, bound to `Ctrl+L` by default, to force an immediate terminal display reset/redraw without resizing the window.
 
 ### Changed

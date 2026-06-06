@@ -15,6 +15,7 @@ import { ToolExecutionComponent } from "../modes/components/tool-execution";
 import { initTheme, theme } from "../modes/theme/theme";
 import { toolRenderers } from "../tools/renderers";
 import { type GalleryFixture, type GalleryResult, galleryFixtures } from "./gallery-fixtures";
+import { captureGalleryScreenshots } from "./gallery-screenshot";
 
 /** Lifecycle states the gallery renders, in display order. */
 export const GALLERY_STATES = ["streaming", "progress", "success", "error"] as const;
@@ -38,6 +39,20 @@ export interface GalleryCommandArgs {
 	expanded?: boolean;
 	/** Strip ANSI styling from the output (useful when redirecting to a file). */
 	plain?: boolean;
+	/** Capture the rendered gallery as PNG screenshot(s) via VHS instead of printing ANSI. */
+	screenshot?: boolean;
+	/** Screenshot output path (single image) or base path (suffixed when split across images). */
+	out?: string;
+	/** Font family for screenshots (must be installed; Nerd Font recommended for icon glyphs). */
+	font?: string;
+	/** Font size in points for screenshots. */
+	fontSize?: number;
+}
+
+/** One tool's rendered lifecycle, as ANSI lines: a leading blank, the section rule, then each state. */
+export interface GallerySection {
+	heading: string;
+	lines: string[];
 }
 
 const GENERIC_ERROR: GalleryResult = {
@@ -130,11 +145,45 @@ function sectionRule(label: string, width: number): string {
 }
 
 /**
- * Render the gallery to stdout. Iterates the renderer registry (or a single
- * tool), printing each requested lifecycle state under a labeled section.
+ * Render each requested tool's lifecycle into ANSI section blocks. The block
+ * layout (leading blank, section rule, then a blank + dim label + body per
+ * state) is shared by the stdout and screenshot paths so both stay identical.
+ */
+async function renderGallerySections(
+	names: string[],
+	states: GalleryState[],
+	width: number,
+	expanded: boolean,
+): Promise<GallerySection[]> {
+	const sections: GallerySection[] = [];
+	for (const name of names) {
+		const fixture = resolveFixture(name);
+		const heading = fixture.label && fixture.label !== name ? `${name} — ${fixture.label}` : name;
+		const lines: string[] = ["", sectionRule(heading, width)];
+		for (const state of states) {
+			lines.push("", theme.fg("dim", `  · ${STATE_LABELS[state]}`));
+			try {
+				for (const line of await renderGalleryState(name, fixture, state, width, expanded)) lines.push(line);
+			} catch (err) {
+				lines.push(theme.fg("error", `  render failed: ${String(err)}`));
+			}
+		}
+		sections.push({ heading, lines });
+	}
+	return sections;
+}
+
+/**
+ * Render the gallery. Iterates the renderer registry (or a single tool),
+ * printing each requested lifecycle state under a labeled section — or, with
+ * `screenshot`, capturing the rendered output as PNG(s) via VHS.
  */
 export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void> {
 	const settingsInstance = await Settings.init();
+	// Screenshots must carry exact theme RGB regardless of how the invoking
+	// terminal advertises its color support, so force truecolor before the theme
+	// (and therefore every SGR escape it emits) is built.
+	if (args.screenshot) process.env.COLORTERM = "truecolor";
 	await initTheme(
 		false,
 		settingsInstance.get("symbolPreset"),
@@ -154,28 +203,21 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 		return;
 	}
 
-	const out: string[] = [];
-	const push = (line: string) => out.push(args.plain ? Bun.stripANSI(line) : line);
+	const sections = await renderGallerySections(names, states, width, expanded);
 
-	for (const name of names) {
-		const fixture = resolveFixture(name);
-		const heading = fixture.label && fixture.label !== name ? `${name} — ${fixture.label}` : name;
-		push("");
-		push(sectionRule(heading, width));
-
-		for (const state of states) {
-			push("");
-			push(theme.fg("dim", `  · ${STATE_LABELS[state]}`));
-			let lines: string[];
-			try {
-				lines = await renderGalleryState(name, fixture, state, width, expanded);
-			} catch (err) {
-				lines = [theme.fg("error", `  render failed: ${String(err)}`)];
-			}
-			for (const line of lines) push(line);
-		}
+	if (args.screenshot) {
+		const paths = await captureGalleryScreenshots(sections, {
+			width,
+			font: args.font,
+			fontSize: args.fontSize,
+			out: args.out,
+		});
+		process.stdout.write(`${paths.join("\n")}\n`);
+		return;
 	}
-	push("");
 
-	process.stdout.write(`${out.join("\n")}\n`);
+	const lines = sections.flatMap(section => section.lines);
+	lines.push("");
+	const text = lines.map(line => (args.plain ? Bun.stripANSI(line) : line)).join("\n");
+	process.stdout.write(`${text}\n`);
 }
