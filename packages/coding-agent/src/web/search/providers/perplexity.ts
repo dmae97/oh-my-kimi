@@ -160,7 +160,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
 	return value as Record<string, unknown>;
 }
-}
 
 function parseJson(text: string): unknown | null {
 	try {
@@ -246,9 +245,10 @@ function sourcesFromTextPayload(text: string | undefined): SearchSource[] {
 	const sources: SearchSource[] = [];
 	for (const value of webResults) {
 		const result = asRecord(value);
-		const url = result?.url;
+		if (!result) continue;
+		const url = result.url;
 		if (typeof url !== "string" || url.length === 0) continue;
-		const name = result.name;
+		const name = result.name ?? result.title;
 		const snippet = result.snippet;
 		const timestamp = result.timestamp;
 		sources.push({
@@ -445,11 +445,8 @@ function buildOAuthAnswer(event: PerplexityOAuthStreamEvent): string {
 	return "";
 }
 
-async function callPerplexityOAuth(
-	auth:
-		| { type: "oauth"; token: string }
-		| { type: "cookies"; cookies: string }
-		| { type: "anonymous" },
+async function callPerplexityAsk(
+	auth: { type: "oauth"; token: string } | { type: "cookies"; cookies: string } | { type: "anonymous" },
 	params: PerplexitySearchParams,
 ): Promise<{ answer: string; sources: SearchSource[]; model?: string; requestId?: string }> {
 	const requestId = crypto.randomUUID();
@@ -470,7 +467,13 @@ async function callPerplexityOAuth(
 		"X-Request-ID": requestId,
 	};
 	if (auth.type === "oauth") {
-		headers.Authorization = `Bearer ${auth.token}`;
+		// The ask endpoint authenticates via the next-auth session cookie, NOT a
+		// bearer header — a bearer (even a garbage one) is ignored and the request
+		// silently falls back to the anonymous free `turbo` model regardless of
+		// `model_preference`. The stored OAuth token IS the Perplexity session JWT
+		// (the native app injects the same value as this cookie), so sending it as
+		// the cookie is what unlocks the account's Pro model selection.
+		headers.Cookie = `__Secure-next-auth.session-token=${auth.token}`;
 	} else if (auth.type === "cookies") {
 		headers.Cookie = auth.cookies;
 	}
@@ -641,7 +644,7 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 	const auth = await findPerplexityAuth(params.authStorage, params.sessionId, params.signal);
 
 	if (auth.type !== "api_key") {
-		const askResult = await callPerplexityOAuth(auth, params);
+		const askResult = await callPerplexityAsk(auth, params);
 		return applySourceLimit(
 			{
 				provider: "perplexity",
