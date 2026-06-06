@@ -18,7 +18,7 @@ import { type KernelDisplayOutput, renderKernelDisplay } from "./display";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
 import { enumeratePythonRuntimes, filterEnv, type PythonRuntime, resolvePythonRuntime } from "./runtime";
-import { shouldHideKernelWindow } from "./spawn-options";
+import { hostHasInheritableConsole, shouldHideKernelWindow } from "./spawn-options";
 
 export type { KernelDisplayOutput, PythonStatusEvent } from "./display";
 export { renderKernelDisplay } from "./display";
@@ -254,15 +254,15 @@ export class PythonKernel {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
-			// We pipe all three stdio streams for IPC, but the host process keeps
-			// its own console as long as ANY of stdin/stdout/stderr is still a
-			// TTY — the parent only loses its console when fully detached
-			// (service / daemon). `omp -p "..." > out.txt` redirects stdout but
-			// stdin and stderr stay on the terminal, so the kernel can still
-			// inherit and avoid the #1960 numpy/pandas LoadLibraryExW hang.
+			// Detached from any inherited console only when the host itself
+			// has no console — kernel32!GetConsoleWindow() is authoritative
+			// (works even when every stdio stream is redirected), with a
+			// TTY-OR fallback when the FFI probe is unavailable. See #1960
+			// for the numpy/pandas LoadLibraryExW hang + SIGINT-recovery
+			// failure that motivates the predicate.
 			windowsHide: shouldHideKernelWindow({
 				platform: process.platform,
-				hostHasInheritableConsole: !!process.stdin.isTTY || !!process.stdout.isTTY || !!process.stderr.isTTY,
+				hostHasInheritableConsole: hostHasInheritableConsole(),
 			}),
 		});
 		kernel.#proc = proc;
