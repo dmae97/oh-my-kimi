@@ -119,6 +119,17 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		expect((blocks[0] as WireTextBlock).text).toBe("internal scratch");
 	});
 
+	it("treats a missing baseUrl as official Anthropic (resolveAnthropicBaseUrl default)", () => {
+		// `isAnthropicApiBaseUrl(undefined) === true` because the actual HTTP
+		// dispatch falls back to https://api.anthropic.com. Same-id custom
+		// overrides that only tweak model metadata (no baseUrl override) must
+		// not regress to native-thinking replay against the first-party API.
+		const model = { ...makeModel(), provider: "anthropic", baseUrl: "" };
+		const blocks = assistantWireBlocks([makeUser(), makeAssistantThinking("internal scratch")], model);
+		expect(blocks[0]?.type).toBe("text");
+		expect((blocks[0] as WireTextBlock).text).toBe("internal scratch");
+	});
+
 	it("still degrades unsigned thinking to text for non-reasoning unknown endpoints", () => {
 		const model = makeModel({ reasoning: false, baseUrl: "https://plain.example.com/anthropic" });
 		const blocks = assistantWireBlocks([makeUser(), makeAssistantThinking("scratch")], model);

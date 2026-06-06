@@ -2426,27 +2426,19 @@ function isZaiAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 	}
 }
 
-function isOfficialAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
-	const baseUrl = model.baseUrl;
-	if (!baseUrl) return false;
-	try {
-		const hostname = new URL(baseUrl).hostname.toLowerCase();
-		return hostname === "api.anthropic.com";
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Returns true when unsigned `thinking` blocks from prior assistant turns should
  * be replayed as Anthropic-native thinking instead of demoted to text.
  *
- * Official Anthropic enforces signature-based thinking-chain integrity, so
- * unsigned blocks must remain text there. Anthropic-compatible reasoning
- * endpoints commonly emit unsigned thinking blocks while still expecting those
- * blocks back as `type: "thinking"` on continuation; demoting them loses the
- * model's reasoning chain and can destabilize the next tool-call arguments
- * (#2005). Known non-signing hosts are also preserved for compatibility.
+ * Official Anthropic (matched via `isAnthropicApiBaseUrl`, which intentionally
+ * treats a missing baseUrl as official since `resolveAnthropicBaseUrl` routes
+ * it to `https://api.anthropic.com`) enforces signature-based thinking-chain
+ * integrity, so unsigned blocks must remain text there. Anthropic-compatible
+ * reasoning endpoints commonly emit unsigned thinking blocks while still
+ * expecting them back as `type: "thinking"` on continuation; demoting them
+ * loses the model's reasoning chain and can destabilize the next tool-call
+ * arguments (#2005). Known non-signing hosts are also preserved for
+ * compatibility.
  */
 function shouldReplayUnsignedThinking(model: Model<"anthropic-messages">): boolean {
 	if (model.provider === "zai" || model.provider === "deepseek") return true;
@@ -2459,7 +2451,7 @@ function shouldReplayUnsignedThinking(model: Model<"anthropic-messages">): boole
 			// Fall through to the protocol-level reasoning rule below.
 		}
 	}
-	return model.reasoning && !isOfficialAnthropicEndpoint(model);
+	return model.reasoning && !isAnthropicApiBaseUrl(baseUrl);
 }
 
 function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
