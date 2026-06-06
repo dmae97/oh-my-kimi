@@ -14,7 +14,9 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 	});
 
 	it("falls back to native renderer when jina hangs until aborted", async () => {
-		const settings = Settings.isolated({ "providers.parallelFetch": false });
+		// Force jina first so the stall path is actually exercised before the
+		// native fallback runs.
+		const settings = Settings.isolated({ "providers.fetch": "jina" });
 		// Substantive HTML so the native converter produces >100 chars and
 		// `isLowQualityOutput` does not reject it.
 		const paragraphs = Array.from(
@@ -66,7 +68,7 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 	});
 
 	it("re-throws when the user signal is aborted, not when Jina sub-budget expires", async () => {
-		const settings = Settings.isolated({ "providers.parallelFetch": false });
+		const settings = Settings.isolated({ "providers.fetch": "jina" });
 		const html = "<html><body><p>short</p></body></html>";
 
 		using _hook = hookFetch((_input, init, _next) => {
