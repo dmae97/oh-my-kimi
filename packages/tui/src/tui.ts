@@ -1528,6 +1528,7 @@ export class TUI extends Container {
 			} else if (
 				!explicitReconcile &&
 				nativeViewportAtBottom !== true &&
+				!isMultiplexerSession() &&
 				(intent.kind === "sessionReplace" ||
 					intent.kind === "historyRebuild" ||
 					intent.kind === "overlayRebuild" ||
@@ -1535,6 +1536,13 @@ export class TUI extends Container {
 			) {
 				// Cap the frame to the viewport and keep scrollback dirty: transient
 				// rows never enter history, and the checkpoint reconciles later.
+				// Multiplexers (tmux/screen/zellij) are excluded: their checkpoint
+				// reconcile is a no-op (pane history cannot be erased), so any rows
+				// dropped here are dropped forever. Pane history is append-only
+				// anyway, so a normal diff/append `\r\n` commit is exactly what the
+				// multiplexer needs — and the `liveRegionPinned` planner above
+				// keeps the actively-mutating live tail out of pane history while
+				// committing only the sealed prefix (issue #1974).
 				this.#markNativeScrollbackDirty();
 				this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
 				this.#scrollbackHighWater = 0;
@@ -2192,11 +2200,18 @@ export class TUI extends Container {
 			liveRegionStart >= newLines.length ||
 			!this.#eagerNativeScrollbackRebuild ||
 			!eagerEraseScrollbackRisk ||
-			allowUnknownViewportMutation ||
-			isMultiplexerSession()
+			allowUnknownViewportMutation
 		) {
 			return undefined;
 		}
+		// Multiplexers (tmux/screen/zellij) cannot erase pane history with `\x1b[3J`
+		// and cannot answer a viewport-position probe, so the destructive checkpoint
+		// rebuild path is forever unavailable. The pinned emitter is built from the
+		// opposite primitives — relative cursor moves, per-line `\x1b[2K`, and
+		// `\r\n` to scroll sealed rows past the viewport bottom — which are exactly
+		// what tmux pane history accepts. Without this commit-as-you-go path, the
+		// streaming cap below clipped every frame to the visible tail and the
+		// scrolled-off head was committed nowhere (issue #1974).
 		if (newLines.length <= height && this.#scrollbackHighWater === 0) return undefined;
 		if (this.#readNativeViewportAtBottom() !== undefined) return undefined;
 
