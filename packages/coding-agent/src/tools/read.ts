@@ -29,7 +29,7 @@ import {
 	truncateLine,
 } from "../session/streaming-output";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, tryResolveInternalUrlSync } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
@@ -2413,11 +2413,11 @@ export const readToolRenderer = {
 			const header = renderStatusLine({ icon: "error", title }, uiTheme);
 			const errorLines = errorText.split("\n").map(line => uiTheme.fg("error", replaceTabs(line)));
 			const outputBlock = new CachedOutputBlock();
-			return {
+			return markFramedBlockComponent({
 				render: (width: number) =>
 					outputBlock.render({ header, state: "error", sections: [{ lines: errorLines }], width }, uiTheme),
 				invalidate: () => outputBlock.invalidate(),
-			};
+			});
 		}
 		const details = result.details;
 		const rawText = result.content?.find(c => c.type === "text")?.text ?? "";
@@ -2465,7 +2465,7 @@ export const readToolRenderer = {
 			const detailLines = contentText ? contentText.split("\n").map(line => uiTheme.fg("toolOutput", line)) : [];
 			const lines = [...detailLines, ...warningLines];
 			const outputBlock = new CachedOutputBlock();
-			return {
+			return markFramedBlockComponent({
 				render: (width: number) =>
 					outputBlock.render(
 						{
@@ -2482,7 +2482,7 @@ export const readToolRenderer = {
 						uiTheme,
 					),
 				invalidate: () => outputBlock.invalidate(),
-			};
+			});
 		}
 
 		const suffix = details?.suffixResolution;
@@ -2514,7 +2514,7 @@ export const readToolRenderer = {
 		let cachedWidth: number | undefined;
 		let cachedExpanded: boolean | undefined;
 		let cachedLines: string[] | undefined;
-		return {
+		return markFramedBlockComponent({
 			render: (width: number) => {
 				const expanded = options.expanded;
 				if (cachedLines && cachedWidth === width && cachedExpanded === expanded) return cachedLines;
@@ -2551,7 +2551,7 @@ export const readToolRenderer = {
 				cachedExpanded = undefined;
 				cachedLines = undefined;
 			},
-		};
+		});
 	},
 	mergeCallAndResult: true,
 };

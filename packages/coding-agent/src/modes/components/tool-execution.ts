@@ -33,7 +33,7 @@ import {
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
-import { renderStatusLine } from "../../tui";
+import { isFramedBlockComponent, renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
@@ -43,6 +43,12 @@ function ensureInvalidate(component: unknown): Component {
 		c.invalidate = () => {};
 	}
 	return c as Component;
+}
+
+function addBoxChild(box: Box, component: unknown): boolean {
+	const child = ensureInvalidate(component);
+	box.addChild(child);
+	return isFramedBlockComponent(child);
 }
 
 /**
@@ -582,6 +588,7 @@ export class ToolExecutionComponent extends Container {
 			const inline = Boolean((tool as { inline?: boolean }).inline);
 			this.#contentBox.setBgFn(inline ? undefined : bgFn);
 			this.#contentBox.clear();
+			let contentBoxHasFramedBlock = false;
 			// Mirror the built-in renderer branch so custom renderers (notably the
 			// task tool, whose live instance routes through here) receive the same
 			// render context — e.g. the `hasResult` flag that suppresses the task
@@ -594,16 +601,16 @@ export class ToolExecutionComponent extends Container {
 				try {
 					const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
 					if (callComponent) {
-						this.#contentBox.addChild(ensureInvalidate(callComponent));
+						contentBoxHasFramedBlock = addBoxChild(this.#contentBox, callComponent) || contentBoxHasFramedBlock;
 					}
 				} catch (err) {
 					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 					// Fall back to default on error
-					this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+					addBoxChild(this.#contentBox, new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 				}
 			} else {
 				// No custom renderCall, show tool name
-				this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+				addBoxChild(this.#contentBox, new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 			}
 
 			// Render result component if we have a result
@@ -626,23 +633,24 @@ export class ToolExecutionComponent extends Container {
 						this.#args,
 					);
 					if (resultComponent) {
-						this.#contentBox.addChild(ensureInvalidate(resultComponent));
+						contentBoxHasFramedBlock = addBoxChild(this.#contentBox, resultComponent) || contentBoxHasFramedBlock;
 					}
 				} catch (err) {
 					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 					// Fall back to showing raw output on error
 					const output = this.#getTextOutput();
 					if (output) {
-						this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+						addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 					}
 				}
 			} else if (this.#result) {
 				// Has result but no custom renderResult
 				const output = this.#getTextOutput();
 				if (output) {
-					this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+					addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 				}
 			}
+			this.#contentBox.setPaddingX(contentBoxHasFramedBlock ? 0 : 1);
 		} else if (this.#toolName in toolRenderers) {
 			// Built-in tools with renderers
 			const renderer = toolRenderers[this.#toolName];
@@ -661,6 +669,7 @@ export class ToolExecutionComponent extends Container {
 				// Multi-file: render each file as its own Box (identical to separate tool calls)
 				this.#contentBox.setBgFn(undefined);
 				this.#contentBox.clear();
+				this.#contentBox.setPaddingX(1);
 
 				const renderContext = this.#buildRenderContext();
 				this.#renderState.renderContext = renderContext;
@@ -683,7 +692,8 @@ export class ToolExecutionComponent extends Container {
 							theme,
 						);
 						if (resultComponent) {
-							fileBox.addChild(ensureInvalidate(resultComponent));
+							const fileBoxHasFramedBlock = addBoxChild(fileBox, resultComponent);
+							fileBox.setPaddingX(fileBoxHasFramedBlock ? 0 : 1);
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
@@ -719,6 +729,7 @@ export class ToolExecutionComponent extends Container {
 				// Inline renderers skip background styling
 				this.#contentBox.setBgFn(renderer.inline ? undefined : bgFn);
 				this.#contentBox.clear();
+				let contentBoxHasFramedBlock = false;
 
 				const renderContext = this.#buildRenderContext();
 				this.#renderState.renderContext = renderContext;
@@ -729,12 +740,13 @@ export class ToolExecutionComponent extends Container {
 					try {
 						const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
 						if (callComponent) {
-							this.#contentBox.addChild(ensureInvalidate(callComponent));
+							contentBoxHasFramedBlock =
+								addBoxChild(this.#contentBox, callComponent) || contentBoxHasFramedBlock;
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to default on error
-						this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+						addBoxChild(this.#contentBox, new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 					}
 				}
 
@@ -752,17 +764,19 @@ export class ToolExecutionComponent extends Container {
 							this.#getCallArgsForRender(),
 						);
 						if (resultComponent) {
-							this.#contentBox.addChild(ensureInvalidate(resultComponent));
+							contentBoxHasFramedBlock =
+								addBoxChild(this.#contentBox, resultComponent) || contentBoxHasFramedBlock;
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to showing raw output on error
 						const output = this.#getTextOutput();
 						if (output) {
-							this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+							addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 						}
 					}
 				}
+				this.#contentBox.setPaddingX(contentBoxHasFramedBlock ? 0 : 1);
 			}
 		} else {
 			// Other built-in tools: use Text directly with caching

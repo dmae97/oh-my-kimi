@@ -18,7 +18,7 @@ import { formatContextUsage } from "../modes/components/status-line/context-thre
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import { borderShimmerTick, renderCodeCell } from "../tui";
+import { borderShimmerTick, markFramedBlockComponent, renderCodeCell } from "../tui";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
@@ -39,8 +39,15 @@ import {
 	truncateToWidth,
 	wrapBrackets,
 } from "./render-utils";
-
 export const EVAL_DEFAULT_PREVIEW_LINES = 10;
+/**
+ * Rows of source kept in the *pending* eval preview. The window follows the
+ * streaming edge (newest lines pinned to the bottom) so you can watch the code
+ * being written, while staying bounded — a volatile tool block taller than the
+ * viewport would otherwise strand its scrolled-off head out of native scrollback
+ * on ED3-risk terminals. Matches the streaming windows used by edit/write.
+ */
+export const EVAL_STREAMING_PREVIEW_LINES = 12;
 
 function languageForHighlighter(language: EvalLanguage | undefined): "python" | "javascript" {
 	return language === "js" ? "javascript" : "python";
@@ -490,10 +497,10 @@ export const evalToolRenderer = {
 
 		let cached: { key: string; width: number; result: string[] } | undefined;
 
-		return {
+		return markFramedBlockComponent({
 			render: (width: number): string[] => {
 				const animate = options.isPartial && shimmerEnabled();
-				const key = `${animate ? borderShimmerTick() : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+				const key = `${animate ? borderShimmerTick() : 0}|${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -510,15 +517,16 @@ export const evalToolRenderer = {
 							title: cell.title,
 							status: "pending",
 							width,
-							codeMaxLines: EVAL_DEFAULT_PREVIEW_LINES,
-							// Cap the streaming call preview to `codeMaxLines` (do NOT expand):
-							// a >100-line `code` arg would otherwise render every line, overflow
-							// the viewport, and — because a tool block is volatile (it collapses
-							// to a capped result) — strand its scrolled-off head out of native
-							// scrollback, cutting the box top until the result lands. The result
-							// renderer already caps to the same preview, so this keeps the
-							// streaming and resolved shapes consistent.
-							expanded: false,
+							codeMaxLines: EVAL_STREAMING_PREVIEW_LINES,
+							// Follow the streaming edge with a bounded tail window so the
+							// newest source stays visible as it is written, instead of
+							// rendering every line of a >100-line `code` — which would
+							// overflow the viewport and, because a tool block is volatile
+							// (it collapses to a capped result), strand its scrolled-off head
+							// out of native scrollback, cutting the box top. `Ctrl+O` lifts
+							// the window via `expanded` for a deliberate full view.
+							codeTail: true,
+							expanded: options.expanded,
 							animate,
 						},
 						uiTheme,
@@ -534,7 +542,7 @@ export const evalToolRenderer = {
 			invalidate: () => {
 				cached = undefined;
 			},
-		};
+		});
 	},
 
 	renderResult(
@@ -578,7 +586,7 @@ export const evalToolRenderer = {
 		if (cellResults && cellResults.length > 0) {
 			let cached: { key: string; width: number; result: string[] } | undefined;
 
-			return {
+			return markFramedBlockComponent({
 				render: (width: number): string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
@@ -656,7 +664,7 @@ export const evalToolRenderer = {
 				invalidate: () => {
 					cached = undefined;
 				},
-			};
+			});
 		}
 
 		const displayOutput = output;

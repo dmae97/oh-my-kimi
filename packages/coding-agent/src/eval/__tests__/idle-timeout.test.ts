@@ -32,7 +32,6 @@ describe("IdleTimeout", () => {
 		expect((idle.signal.reason as DOMException).name).toBe("TimeoutError");
 	});
 
-
 	it("ignores elapsed time while paused and resumes with a fresh window", async () => {
 		using idle = new IdleTimeout(80);
 		idle.pause();

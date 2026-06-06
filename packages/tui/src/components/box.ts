@@ -42,6 +42,12 @@ export class Box implements Component {
 		this.#invalidateCache();
 	}
 
+	setPaddingX(paddingX: number): void {
+		if (this.#paddingX === paddingX) return;
+		this.#paddingX = paddingX;
+		this.#invalidateCache();
+	}
+
 	setBgFn(bgFn?: (text: string) => string): void {
 		this.#bgFn = bgFn;
 		// Don't invalidate here - we'll detect bgFn changes by sampling output

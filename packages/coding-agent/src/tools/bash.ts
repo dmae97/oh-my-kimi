@@ -20,7 +20,7 @@ import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
@@ -31,7 +31,7 @@ import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
-import { formatToolWorkingDirectory, replaceTabs } from "./render-utils";
+import { capPreviewLines, formatToolWorkingDirectory, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
@@ -1083,16 +1083,22 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const cmdLines = formatBashCommandLines(renderArgs, uiTheme);
 			const header = renderStatusLine({ icon: "pending", title }, uiTheme);
 			const outputBlock = new CachedOutputBlock();
-			return {
+			return markFramedBlockComponent({
 				render: (width: number): string[] =>
 					outputBlock.render(
-						{ header, state: "pending", sections: [{ lines: cmdLines }], width, animate: true },
+						{
+							header,
+							state: "pending",
+							sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
+							width,
+							animate: true,
+						},
 						uiTheme,
 					),
 				invalidate: () => {
 					outputBlock.invalidate();
 				},
-			};
+			});
 		},
 
 		renderResult(
@@ -1114,7 +1120,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const details = result.details;
 			const outputBlock = new CachedOutputBlock();
 
-			return {
+			return markFramedBlockComponent({
 				render: (width: number): string[] => {
 					// REACTIVE: read mutable options at render time
 					const { renderContext } = options;
@@ -1201,7 +1207,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							header,
 							state: options.isPartial ? "pending" : isError ? "error" : "success",
 							sections: [
-								{ lines: cmdLines ?? [] },
+								{
+									lines: options.isPartial
+										? capPreviewLines(cmdLines ?? [], uiTheme, { expanded })
+										: (cmdLines ?? []),
+								},
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
@@ -1213,7 +1223,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 				invalidate: () => {
 					outputBlock.invalidate();
 				},
-			};
+			});
 		},
 		mergeCallAndResult: true,
 		inline: true,
