@@ -39,6 +39,16 @@ describe("hashline section headers", () => {
 			/Input header must be/,
 		);
 	});
+
+	it("rejects malformed snapshot tags", () => {
+		expect(() => Patch.parse("¶src/a.ts#1A2\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+		expect(() => Patch.parse("¶src/a.ts#1A2G\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+		expect(() => Patch.parse("¶src/a.ts#1A2B5\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+	});
+
+	it("rejects malformed snapshot tags even with apply_patch noise", () => {
+		expect(() => Patch.parse("¶Update File: src/a.ts#1A2G\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+	});
 });
 
 describe("hashline core — verb header forms", () => {

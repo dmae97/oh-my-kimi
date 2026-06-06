@@ -334,25 +334,15 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 		}
 	}
 
-	// Reject stale-tag copy-paste such as `¶src/a.ts#1A2B copied from read`
-	// and line-suffixed tags such as `¶src/a.ts#1A2B:42`: a `#XXXX`
-	// token followed by tag-tail junk in the path body is a malformed header,
-	// not a path-with-embedded-hash. Surface the focused diagnostic instead
-	// of silently mis-routing the edit.
-	for (let i = FILE_PREFIX_LENGTH; i + HL_FILE_HASH_LENGTH < pathEnd; i++) {
-		if (line.charCodeAt(i) !== CHAR_HASH) continue;
-		let allHex = true;
-		for (let k = 1; k <= HL_FILE_HASH_LENGTH; k++) {
-			if (!isHexDigitCode(line.charCodeAt(i + k))) {
-				allHex = false;
-				break;
-			}
-		}
-		if (!allHex) continue;
-		const after = i + HL_FILE_HASH_LENGTH + 1;
-		if (after < pathEnd && (isWhitespaceCode(line.charCodeAt(after)) || line.charCodeAt(after) === CHAR_COLON)) {
-			return null;
-		}
+	// The hashline header grammar uses `#` as the path/tag separator and
+	// does not allow `#` inside filenames. Anything `#` left in the path
+	// body — short tags (`#1A2`), non-hex tags (`#1A2G`), over-long tags
+	// (`#1A2B5`), stale-tag copy-paste (`#1A2B copied from read`), or
+	// line-suffixed tags (`#1A2B:42`) — means the header is malformed.
+	// Surface the focused diagnostic instead of silently mis-routing the
+	// edit or reporting a missing tag downstream.
+	for (let i = FILE_PREFIX_LENGTH; i < pathEnd; i++) {
+		if (line.charCodeAt(i) === CHAR_HASH) return null;
 	}
 
 	if (pathEnd === FILE_PREFIX_LENGTH) return null;
