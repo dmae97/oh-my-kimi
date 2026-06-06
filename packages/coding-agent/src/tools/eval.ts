@@ -130,11 +130,12 @@ function timeoutSecondsFromMs(timeoutMs: number): number {
 }
 
 async function resolveBackend(session: ToolSession, language: EvalLanguage): Promise<ResolvedBackend> {
-	const allowPy = (session.settings.get("eval.py") as boolean | undefined) ?? true;
-	const allowJs = (session.settings.get("eval.js") as boolean | undefined) ?? true;
+	const backends = resolveEvalBackends(session);
+	const allowPy = backends.python;
+	const allowJs = backends.js;
 
 	if (language === "python") {
-		if (!allowPy) throw new ToolError("Python backend is disabled (eval.py = false).");
+		if (!allowPy) throw new ToolError("Python backend is disabled (PI_PY=0 or eval.py = false).");
 		if (!(await pythonBackend.isAvailable(session))) {
 			throw new ToolError(
 				'Python backend is unavailable in this session. Pass language: "js" or install the python kernel.',
@@ -142,7 +143,7 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 		}
 		return { backend: pythonBackend };
 	}
-	if (!allowJs) throw new ToolError("JavaScript backend is disabled (eval.js = false).");
+	if (!allowJs) throw new ToolError("JavaScript backend is disabled (PI_JS=0 or eval.js = false).");
 	return { backend: jsBackend };
 }
 
