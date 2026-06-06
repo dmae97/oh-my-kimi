@@ -134,18 +134,25 @@ describe("buildCopyTargets", () => {
 		expect(byId(fresh, "handoff")?.copyMessage).toBe("Copied handoff context to clipboard");
 	});
 
-	it("appends the most recent command as a top-level leaf", () => {
+	it("interleaves runnable commands after the assistant message that issued them", () => {
 		const targets = buildCopyTargets(
 			source({
 				messages: [
-					assistantText("answer"),
-					assistantCalls([{ name: "bash", arguments: { command: "ls -la" } }]),
+					assistantText("older answer"),
+					assistantCalls([{ name: "bash", arguments: { command: "echo old" } }]),
+					assistantText("newer answer"),
+					assistantCalls([{ name: "bash", arguments: { command: "bun check" } }]),
 				] as unknown as AgentMessage[],
 			}),
 		);
-		const cmd = byId(targets, "cmd");
-		expect(cmd?.label).toBe("Last bash command");
-		expect(cmd?.content).toBe("ls -la");
+
+		expect(targets.map(t => t.id)).toEqual(["msg:1", "cmd:1", "msg:2", "cmd:2"]);
+
+		const cmd = byId(targets, "cmd:1");
+		expect(cmd?.label).toBe("bun check");
+		expect(cmd?.hint).toBe("bash · 1 line");
+		expect(cmd?.content).toBe("bun check");
 		expect(cmd?.language).toBe("bash");
+		expect(byId(targets, "cmd:2")?.content).toBe("echo old");
 	});
 });

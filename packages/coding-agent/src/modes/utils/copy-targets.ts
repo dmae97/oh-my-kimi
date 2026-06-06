@@ -9,7 +9,7 @@ export interface CodeBlock {
 	code: string;
 }
 
-/** The most recent runnable command found in the transcript. */
+/** A runnable command found in the transcript. */
 export interface LastCommand {
 	kind: "bash" | "eval";
 	code: string;
@@ -23,7 +23,7 @@ export interface LastCommand {
  * `children` to drill into.
  */
 export interface CopyTarget {
-	/** Stable identifier (e.g. "msg:1", "msg:1:code:0", "msg:1:all", "cmd"). */
+	/** Stable identifier (e.g. "msg:1", "msg:1:code:0", "msg:1:all", "cmd:1"). */
 	id: string;
 	label: string;
 	/** Dim annotation: line/block counts, language, or tool name. */
@@ -82,6 +82,17 @@ function extractEvalCode(args: unknown): { code: string; language: string } | un
 	return codeBlocks.length > 0 ? { code: codeBlocks.join("\n\n"), language } : undefined;
 }
 
+function commandFromToolCall(tc: ToolCall): LastCommand | undefined {
+	if (tc.name === "bash" && typeof tc.arguments.command === "string") {
+		return { kind: "bash", code: tc.arguments.command, language: "bash" };
+	}
+	if (tc.name === "eval") {
+		const evalResult = extractEvalCode(tc.arguments);
+		if (evalResult) return { kind: "eval", code: evalResult.code, language: evalResult.language };
+	}
+	return undefined;
+}
+
 /** Walk the transcript backwards for the most recent bash command or eval code. */
 export function extractLastCommand(messages: readonly AgentMessage[]): LastCommand | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -89,14 +100,8 @@ export function extractLastCommand(messages: readonly AgentMessage[]): LastComma
 		if (msg.role !== "assistant") continue;
 		const toolCalls = msg.content.filter((c): c is ToolCall => c.type === "toolCall");
 		for (let j = toolCalls.length - 1; j >= 0; j--) {
-			const tc = toolCalls[j];
-			if (tc.name === "bash" && typeof tc.arguments.command === "string") {
-				return { kind: "bash", code: tc.arguments.command, language: "bash" };
-			}
-			if (tc.name === "eval") {
-				const evalResult = extractEvalCode(tc.arguments);
-				if (evalResult) return { kind: "eval", code: evalResult.code, language: evalResult.language };
-			}
+			const command = commandFromToolCall(toolCalls[j]!);
+			if (command) return command;
 		}
 	}
 	return undefined;
@@ -170,26 +175,70 @@ function messageTarget(text: string, rank: number): CopyTarget {
 	return { id, label, hint, preview: text, content: text, copyMessage: messageCopy, children };
 }
 
+function commandTitle(command: LastCommand): string {
+	return command.kind === "bash" ? "Bash command" : "Eval code";
+}
+
+function commandTarget(command: LastCommand, rank: number): CopyTarget {
+	const title = commandTitle(command);
+	return {
+		id: `cmd:${rank}`,
+		label: firstLine(command.code) || title,
+		hint: `${command.kind} · ${pluralLines(command.code)}`,
+		preview: command.code,
+		language: command.language,
+		content: command.code,
+		copyMessage: `Copied ${command.kind === "bash" ? "bash command" : "eval code"} to clipboard`,
+	};
+}
+
 /**
- * Assemble the unified `/copy` target tree: the recent assistant messages
- * (most recent first, each drillable into its code blocks), a fresh-handoff
- * fallback when no assistant message exists yet, and the most recent command.
+ * Assemble the unified `/copy` target tree: recent assistant messages
+ * (most recent first, each drillable into its code blocks), runnable command
+ * targets interleaved after the assistant message that issued them, and a
+ * fresh-handoff fallback when no assistant message exists yet.
  */
 export function buildCopyTargets(source: CopySource): CopyTarget[] {
 	const targets: CopyTarget[] = [];
+	const pendingCommands: LastCommand[] = [];
+	let messageRank = 0;
+	let commandRank = 0;
 
-	let rank = 0;
-	for (let i = source.messages.length - 1; i >= 0 && rank < MAX_MESSAGES; i--) {
-		const text = assistantText(source.messages[i]);
-		if (!text) continue;
-		rank += 1;
-		targets.push(messageTarget(text, rank));
+	const appendCommands = (commands: readonly LastCommand[]) => {
+		for (const command of commands) {
+			commandRank += 1;
+			targets.push(commandTarget(command, commandRank));
+		}
+	};
+
+	for (let i = source.messages.length - 1; i >= 0 && messageRank < MAX_MESSAGES; i--) {
+		const msg = source.messages[i];
+		if (msg.role !== "assistant") continue;
+
+		const toolCalls = msg.content.filter((c): c is ToolCall => c.type === "toolCall");
+		const commands: LastCommand[] = [];
+		for (let j = toolCalls.length - 1; j >= 0; j--) {
+			const command = commandFromToolCall(toolCalls[j]!);
+			if (command) commands.push(command);
+		}
+
+		const text = assistantText(msg);
+		if (!text) {
+			pendingCommands.push(...commands);
+			continue;
+		}
+
+		messageRank += 1;
+		targets.push(messageTarget(text, messageRank));
+		appendCommands(pendingCommands);
+		appendCommands(commands);
+		pendingCommands.length = 0;
 	}
 
-	if (targets.length === 0) {
+	if (messageRank === 0) {
 		const handoff = source.getLastVisibleHandoffText();
 		if (handoff) {
-			targets.push({
+			targets.unshift({
 				id: "handoff",
 				label: "Handoff context",
 				hint: pluralLines(handoff),
@@ -198,20 +247,7 @@ export function buildCopyTargets(source: CopySource): CopyTarget[] {
 				copyMessage: "Copied handoff context to clipboard",
 			});
 		}
-	}
-
-	const command = extractLastCommand(source.messages);
-	if (command) {
-		targets.push({
-			id: "cmd",
-			label: command.kind === "bash" ? "Last bash command" : "Last eval code",
-			hint: command.kind,
-			preview: command.code,
-			language: command.language,
-			content: command.code,
-			copyMessage:
-				command.kind === "bash" ? "Copied last bash command to clipboard" : "Copied last eval code to clipboard",
-		});
+		appendCommands(pendingCommands);
 	}
 
 	return targets;

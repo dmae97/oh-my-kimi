@@ -4,7 +4,7 @@
 ### Added
 
 - Added `timeout-pause` and `timeout-resume` eval bridge status events emitted around `agent()`/`llm()` operations
-- Added a `/copy` picker: `/copy` now opens a fullscreen, outlined tree of recent assistant messages with their code blocks nested beneath (like `/tree`). Navigate freely with ↑↓, and Enter copies the highlighted node — a whole message, an individual code block, "All N blocks", or the most recent bash/eval command. A live preview pane shows the selected target, wrapping prose and syntax-highlighting code/commands.
+- Added a `/copy` picker: `/copy` now opens a fullscreen, outlined tree of recent assistant messages with their code blocks nested beneath (like `/tree`). Navigate with ↑↓, and Enter copies the highlighted node — a whole message, an individual code block, "All N blocks", or a bash/eval command interleaved with the assistant turn that issued it. A live preview pane shows the selected target, wrapping prose and syntax-highlighting code/commands.
 
 ### Changed
 
@@ -13,6 +13,7 @@
 - Changed the default `app.message.followUp` binding from `Ctrl+Enter` alone to `[Ctrl+Q, Ctrl+Enter]` so the follow-up shortcut works in Windows Terminal, which does not deliver a distinct `Ctrl+Enter` event to console apps. `Ctrl+Q` mirrors the GitHub Copilot CLI default for the same action; existing remaps in `~/.omp/agent/keybindings.yml` are untouched, and if another user-remapped action already claims `Ctrl+Q`, that user binding wins while follow-up keeps `Ctrl+Enter`. `Ctrl+Q` is also reserved by `ExtensionRunner` so an extension cannot register that chord and be silently overwritten by the built-in follow-up handler ([#1903](https://github.com/can1357/oh-my-pi/issues/1903)).
 - Changed all scrollable TUI pickers and viewports to render through the shared `ScrollView` right-edge scrollbar for a uniform look, replacing their ad-hoc `(N/M)` / `[a-b/total]` text indicators (search hints and the tree filter-mode label are preserved). Covers the session/resume picker, model selector, OAuth provider selector, history search, session tree selector, agent dashboard list, extension list, user-message selector, the raw SSE debug viewer, the autoresearch dashboard overlay, and the session observer overlay.
 - Changed the `/model` and `/switch` selectors to dim and skip models whose context windows are smaller than the current chat context.
+- Changed `/copy` command targets to appear inline with recent assistant messages instead of as a separate "Last bash command" row at the end of the picker.
 
 ### Fixed
 
