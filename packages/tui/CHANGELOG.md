@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.69] - 2026-06-06
+
 ### Added
 
 - Added `TUI.resetDisplay()` to force an immediate full-frame replay, including native scrollback when the host can safely clear it.

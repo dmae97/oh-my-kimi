@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.69] - 2026-06-06
+
 ### Added
 
 - Added anonymous fallback for Perplexity web search, allowing `web_search` and explicit Perplexity provider usage when no Perplexity credentials are configured
