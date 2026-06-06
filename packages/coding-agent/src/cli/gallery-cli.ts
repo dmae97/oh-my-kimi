@@ -45,10 +45,26 @@ const GENERIC_ERROR: GalleryResult = {
 	isError: true,
 };
 
-/** Build the fake `AgentTool` the component needs for its label and edit mode. */
+/**
+ * Build the fake `AgentTool` the component needs for its label, edit mode, and —
+ * for `customRendered` fixtures — the renderer functions that route it through
+ * the same custom-tool branch production uses (see {@link GalleryFixture}).
+ */
 function fakeToolFor(name: string, fixture: GalleryFixture | undefined): AgentTool | undefined {
-	if (!fixture?.label && !fixture?.editMode) return undefined;
-	return { name, label: fixture.label ?? name, mode: fixture.editMode } as unknown as AgentTool;
+	if (!fixture?.label && !fixture?.editMode && !fixture?.customRendered) return undefined;
+	const tool: Record<string, unknown> = { name, label: fixture.label ?? name, mode: fixture.editMode };
+	if (fixture.customRendered) {
+		const renderer = toolRenderers[name] as
+			| { renderCall?: unknown; renderResult?: unknown; mergeCallAndResult?: unknown; inline?: unknown }
+			| undefined;
+		if (renderer) {
+			tool.renderCall = renderer.renderCall;
+			tool.renderResult = renderer.renderResult;
+			tool.mergeCallAndResult = renderer.mergeCallAndResult;
+			tool.inline = renderer.inline;
+		}
+	}
+	return tool as unknown as AgentTool;
 }
 
 /** The curated fixture for a tool, or a generic one for registry tools lacking sample data. */

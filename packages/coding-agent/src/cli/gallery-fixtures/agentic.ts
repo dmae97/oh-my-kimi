@@ -4,6 +4,7 @@ import type { GalleryFixture } from "./types";
 export const agenticFixtures: Record<string, GalleryFixture> = {
 	task: {
 		label: "Task",
+		customRendered: true,
 		// Streaming: agent chosen, first task fully arrived, second still landing.
 		streamingArgs: {
 			agent: "task",

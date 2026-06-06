@@ -4,6 +4,7 @@ import type { GalleryFixture } from "./types";
 export const codeintelFixtures: Record<string, GalleryFixture> = {
 	lsp: {
 		label: "LSP",
+		customRendered: true,
 		streamingArgs: {
 			action: "references",
 			file: "src/server/auth.ts",

@@ -17,6 +17,15 @@ export interface GalleryFixture {
 	/** Edit mode for edit-like tools so the streaming preview dispatches correctly. */
 	editMode?: EditMode;
 	/**
+	 * Set for tools whose real `AgentTool` attaches `renderCall`/`renderResult`
+	 * directly on the instance (e.g. `lsp`, `task`). The harness then attaches
+	 * the registry renderer onto the fake tool so the component routes through
+	 * the custom-tool branch — the same path production takes — instead of the
+	 * built-in registry branch. The two branches can diverge, so exercising the
+	 * real one keeps the gallery honest for these tools.
+	 */
+	customRendered?: boolean;
+	/**
 	 * Arguments shown during the streaming state — a partial view of {@link args}
 	 * as if the tool-call JSON were still arriving. May include `__partialJson`
 	 * for renderers (bash, edit) that surface fields before the object closes.

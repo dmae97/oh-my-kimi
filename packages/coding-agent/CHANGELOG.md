@@ -5,6 +5,7 @@
 
 - Added `gallery` CLI command to render built-in tool renderer output across streaming, in-progress, success, and failure states
 - Added `omp gallery` filtering and rendering options (`--tool`, `--state`, `--width`, `--expanded`, and `--plain`) for focused renderer previews and plain-text output
+- Added `omp gallery` fidelity for tools whose renderers are attached on the tool instance (`lsp`, `task`): the gallery now drives them through the same custom-tool render branch production uses, so regressions in that path surface in the gallery rather than only in a live session.
 - Added `app.display.reset`, bound to `Ctrl+L` by default, to force an immediate terminal display reset/redraw without resizing the window.
 
 ### Changed
@@ -17,6 +18,7 @@
 - Fixed framed read results rendering with an extra blank row above and below the output block.
 - Fixed collapsed search result previews that could show only "… N more matches" when the first grouped section exceeded the preview budget. Collapsed search output now compacts to match rows, fills the budget with visible hits before the summary, and keeps truncation details out of the bottom user-visible notice.
 - Fixed boolean environment flag overrides that were ORed with settings, so `PI_INTENT_TRACING=0`, `PI_AUTO_QA=0`, and per-backend eval flags now take precedence when present while falling back to config when unset.
+- Fixed custom-rendered tools that set `mergeCallAndResult` (e.g. `lsp`) rendering a redundant tool-name line above the framed result once a result arrived. `ToolExecutionComponent`'s custom-tool branch now emits the fallback label only when the tool has no `renderCall` and the call is not suppressed by an existing result, matching the built-in renderer branch.
 
 ## [15.9.67] - 2026-06-06
 ### Added
