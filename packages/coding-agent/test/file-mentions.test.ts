@@ -19,63 +19,64 @@ async function createTempDir(): Promise<string> {
 }
 
 describe("generateFileMentionMessages path resolution", () => {
-	test("prefers exact path over fuzzy candidates", async () => {
+	test("auto-reads an exact file path", async () => {
 		const cwd = await createTempDir();
-		await Bun.write(path.join(cwd, "httpserap"), "exact file");
-		await fs.mkdir(path.join(cwd, "http_server_api_tests"), { recursive: true });
-		await Bun.write(path.join(cwd, "http_server_api_tests", "spec.txt"), "spec");
+		await fs.mkdir(path.join(cwd, "src"), { recursive: true });
+		await Bun.write(path.join(cwd, "src", "config.ts"), "export const x = 1;");
 
-		const messages = await generateFileMentionMessages(["httpserap"], cwd);
+		const messages = await generateFileMentionMessages(["src/config.ts"], cwd);
 		expect(messages).toHaveLength(1);
 		const message = messages[0];
 		if (message?.role !== "fileMention") {
 			throw new Error("expected file mention message");
 		}
 		expect(message.files).toHaveLength(1);
-		expect(message.files[0]?.path).toBe("httpserap");
-		expect(message.files[0]?.content).toContain("exact file");
+		expect(message.files[0]?.path).toBe("src/config.ts");
+		expect(message.files[0]?.content).toContain("export const x = 1;");
 	});
 
-	test("resolves unique prefix match", async () => {
+	test("lists an exact directory path", async () => {
+		const cwd = await createTempDir();
+		await fs.mkdir(path.join(cwd, "src"), { recursive: true });
+		await Bun.write(path.join(cwd, "src", "index.ts"), "ok");
+
+		const messages = await generateFileMentionMessages(["src"], cwd);
+		expect(messages).toHaveLength(1);
+		const message = messages[0];
+		if (message?.role !== "fileMention") {
+			throw new Error("expected file mention message");
+		}
+		expect(message.files[0]?.path).toBe("src");
+		expect(message.files[0]?.content).toContain("index.ts");
+	});
+
+	test("does not fuzzy- or prefix-resolve mentions that are not real paths", async () => {
 		const cwd = await createTempDir();
 		await fs.mkdir(path.join(cwd, "docs"), { recursive: true });
 		await Bun.write(path.join(cwd, "docs", "readme.md"), "hello");
+		await fs.mkdir(path.join(cwd, "assets"), { recursive: true });
+		await Bun.write(path.join(cwd, "assets", "widget-input.svg"), "<svg/>");
 
-		const messages = await generateFileMentionMessages(["docs/rea"], cwd);
+		// Partial path (old prefix match), scope-style token and bare substring (old fuzzy
+		// match) must all resolve to nothing: the @-selector turns these into real paths
+		// before send, so an unresolved mention is prose, not a file reference.
+		expect(await generateFileMentionMessages(["docs/rea"], cwd)).toHaveLength(0);
+		expect(await generateFileMentionMessages(["widget/"], cwd)).toHaveLength(0);
+		expect(await generateFileMentionMessages(["widget"], cwd)).toHaveLength(0);
+	});
+
+	test("reads only the mentions that resolve to real paths", async () => {
+		const cwd = await createTempDir();
+		await Bun.write(path.join(cwd, "real.txt"), "present");
+
+		const messages = await generateFileMentionMessages(["real.txt", "does-not-exist.txt"], cwd);
 		expect(messages).toHaveLength(1);
 		const message = messages[0];
 		if (message?.role !== "fileMention") {
 			throw new Error("expected file mention message");
 		}
-		expect(message.files[0]?.path).toBe("docs/readme.md");
-		expect(message.files[0]?.content).toContain("hello");
-	});
-
-	test("resolves fuzzy match for segmented names", async () => {
-		const cwd = await createTempDir();
-		await fs.mkdir(path.join(cwd, "http_server_api_tests"), { recursive: true });
-		await Bun.write(path.join(cwd, "http_server_api_tests", "case.ts"), "ok");
-
-		const messages = await generateFileMentionMessages(["httpserap"], cwd);
-		expect(messages).toHaveLength(1);
-		const message = messages[0];
-		if (message?.role !== "fileMention") {
-			throw new Error("expected file mention message");
-		}
-		expect(message.files[0]?.path).toBe("http_server_api_tests");
-		expect(message.files[0]?.content).toContain("case.ts");
-	});
-
-	test("returns no message for ambiguous or short fuzzy queries", async () => {
-		const cwd = await createTempDir();
-		await Bun.write(path.join(cwd, "spec-alpha.txt"), "a");
-		await Bun.write(path.join(cwd, "spec-beta.txt"), "b");
-		await Bun.write(path.join(cwd, "alphabet.txt"), "c");
-
-		const ambiguous = await generateFileMentionMessages(["spec"], cwd);
-		expect(ambiguous).toHaveLength(0);
-
-		const shortQuery = await generateFileMentionMessages(["ab"], cwd);
-		expect(shortQuery).toHaveLength(0);
+		expect(message.files).toHaveLength(1);
+		expect(message.files[0]?.path).toBe("real.txt");
+		expect(message.files[0]?.content).toContain("present");
 	});
 });

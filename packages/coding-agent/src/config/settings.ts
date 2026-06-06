@@ -907,6 +907,9 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			for (const cb of appendOnlyModeCallbacks) cb(value);
 		}
 	},
+	"hindsight.bankId": () => fireHindsightScopeChanged(),
+	"hindsight.bankIdPrefix": () => fireHindsightScopeChanged(),
+	"hindsight.scoping": () => fireHindsightScopeChanged(),
 };
 /** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
 const appendOnlyModeCallbacks = new Set<(value: string) => void>();
@@ -920,6 +923,41 @@ export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void
 	appendOnlyModeCallbacks.add(cb);
 	return () => {
 		appendOnlyModeCallbacks.delete(cb);
+	};
+}
+
+/** Callbacks fired when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
+const hindsightScopeCallbacks = new Set<() => void>();
+
+function fireHindsightScopeChanged(): void {
+	// Snapshot the callback set before invoking — a callback's body is allowed
+	// to subscribe a NEW callback (the Hindsight backend re-registers the
+	// fresh state's listener on every rebuild). Iterating the live Set would
+	// re-invoke those just-added callbacks within the same fire, which spins
+	// in place: subscribe → invoke → subscribe → invoke → …
+	for (const cb of [...hindsightScopeCallbacks]) {
+		try {
+			cb();
+		} catch (err) {
+			logger.warn("Settings: hindsight scope hook failed", { error: String(err) });
+		}
+	}
+}
+
+/**
+ * Subscribe to changes in the Hindsight bank-scoping settings. Lets the
+ * Hindsight backend rebuild the active `HindsightSessionState` when the
+ * operator switches `hindsight.bankId`, `hindsight.bankIdPrefix`, or
+ * `hindsight.scoping` mid-session so subsequent retain/recall calls land in
+ * the new bank instead of the one selected at session start.
+ *
+ * Returns an unsubscribe function. The callback receives no arguments — the
+ * caller is expected to re-read the relevant settings via `Settings.get`.
+ */
+export function onHindsightScopeChanged(cb: () => void): () => void {
+	hindsightScopeCallbacks.add(cb);
+	return () => {
+		hindsightScopeCallbacks.delete(cb);
 	};
 }
 

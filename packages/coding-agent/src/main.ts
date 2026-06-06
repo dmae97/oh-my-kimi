@@ -268,7 +268,7 @@ async function runInteractiveMode(
 		force: forceSetupWizard,
 	});
 
-	await mode.init({ suppressWelcomeIntro: setupScenes.length > 0 });
+	await mode.init({ suppressWelcomeIntro: resuming || setupScenes.length > 0 });
 
 	if (setupScenes.length > 0) {
 		await runSetupWizard(mode, setupScenes);
@@ -285,7 +285,13 @@ async function runInteractiveMode(
 		})
 		.catch(() => {});
 
-	mode.renderInitialMessages(undefined, { preserveExistingChat: true });
+	// Cold-launch cleanup: wipe the terminal scrollback before painting the
+	// resumed/new transcript. The TUI's initial paint deliberately preserves
+	// native scrollback (prior shell content), but on `omp`/`omp -c` that leaves
+	// the previous run's welcome + transcript stacked above the fresh one. Every
+	// in-process session load already clears via `clearTerminalHistory`; the cold
+	// launch is the lone path that did not.
+	mode.renderInitialMessages(undefined, { preserveExistingChat: true, clearTerminalHistory: true });
 
 	for (const notify of notifs) {
 		if (!notify) {

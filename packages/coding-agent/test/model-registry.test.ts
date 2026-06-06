@@ -13,9 +13,18 @@ describe("ModelRegistry", () => {
 	let modelsJsonPath: string;
 	let cacheDbPath: string;
 	let authStorage: AuthStorage;
+	let originalOllamaBaseUrl: string | undefined;
+	let originalOllamaHost: string | undefined;
+	let originalOllamaContextLength: string | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
+		originalOllamaBaseUrl = Bun.env.OLLAMA_BASE_URL;
+		originalOllamaHost = Bun.env.OLLAMA_HOST;
+		originalOllamaContextLength = Bun.env.OLLAMA_CONTEXT_LENGTH;
+		delete Bun.env.OLLAMA_BASE_URL;
+		delete Bun.env.OLLAMA_HOST;
+		delete Bun.env.OLLAMA_CONTEXT_LENGTH;
 		tempDir = path.join(os.tmpdir(), `pi-test-model-registry-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = path.join(tempDir, "models.json");
@@ -25,6 +34,21 @@ describe("ModelRegistry", () => {
 
 	afterEach(() => {
 		resetSettingsForTest();
+		if (originalOllamaBaseUrl === undefined) {
+			delete Bun.env.OLLAMA_BASE_URL;
+		} else {
+			Bun.env.OLLAMA_BASE_URL = originalOllamaBaseUrl;
+		}
+		if (originalOllamaHost === undefined) {
+			delete Bun.env.OLLAMA_HOST;
+		} else {
+			Bun.env.OLLAMA_HOST = originalOllamaHost;
+		}
+		if (originalOllamaContextLength === undefined) {
+			delete Bun.env.OLLAMA_CONTEXT_LENGTH;
+		} else {
+			Bun.env.OLLAMA_CONTEXT_LENGTH = originalOllamaContextLength;
+		}
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true });
@@ -95,6 +119,24 @@ describe("ModelRegistry", () => {
 		return model?.compat as OpenAICompat | undefined;
 	}
 
+	function withEnv(name: "OLLAMA_BASE_URL" | "OLLAMA_CONTEXT_LENGTH" | "OLLAMA_HOST", value: string | undefined) {
+		const original = Bun.env[name];
+		if (value === undefined) {
+			delete Bun.env[name];
+		} else {
+			Bun.env[name] = value;
+		}
+		return {
+			[Symbol.dispose]() {
+				if (original === undefined) {
+					delete Bun.env[name];
+				} else {
+					Bun.env[name] = original;
+				}
+			},
+		};
+	}
+
 	/** Create a baseUrl-only override (no custom models) */
 	function overrideConfig(baseUrl: string, headers?: Record<string, string>) {
 		return { baseUrl, ...(headers && { headers }) };
@@ -122,17 +164,21 @@ describe("ModelRegistry", () => {
 		});
 	}
 
-	function mockOllamaDiscovery(modelNames: string[]) {
+	function mockOllamaDiscovery(
+		modelNames: string[],
+		endpoint = "http://127.0.0.1:11434",
+		showPayload: Record<string, unknown> = { capabilities: ["completion"] },
+	) {
 		return hookFetch(input => {
 			const url = String(input);
-			if (url === "http://127.0.0.1:11434/api/tags") {
+			if (url === `${endpoint}/api/tags`) {
 				return new Response(JSON.stringify({ models: modelNames.map(name => ({ name })) }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				});
 			}
-			if (url === "http://127.0.0.1:11434/api/show") {
-				return new Response(JSON.stringify({ capabilities: ["completion"] }), {
+			if (url === `${endpoint}/api/show`) {
+				return new Response(JSON.stringify(showPayload), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				});
@@ -1405,6 +1451,51 @@ describe("ModelRegistry", () => {
 			)?.name;
 			expect(restoredName).not.toBe("Custom Name");
 		});
+
+		test("modelOverrides can set omitMaxOutputTokens on a built-in model", () => {
+			writeRawModelsJson({
+				openai: {
+					modelOverrides: {
+						"gpt-5.4": {
+							omitMaxOutputTokens: true,
+						},
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("openai", "gpt-5.4");
+			expect(model?.omitMaxOutputTokens).toBe(true);
+			// maxTokens is still populated locally — only the wire emission is suppressed.
+			expect(model?.maxTokens).toBeGreaterThan(0);
+		});
+
+		test("custom model definitions accept omitMaxOutputTokens", () => {
+			writeRawModelsJson({
+				ollama: {
+					baseUrl: "http://localhost:11434/v1",
+					api: "openai-responses",
+					auth: "none",
+					models: [
+						{
+							id: "glm-5.1:cloud",
+							name: "GLM 5.1 Cloud (Ollama)",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 202752,
+							maxTokens: 202752,
+							omitMaxOutputTokens: true,
+						},
+					],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("ollama", "glm-5.1:cloud");
+			expect(model?.omitMaxOutputTokens).toBe(true);
+			expect(model?.maxTokens).toBe(202752);
+		});
 	});
 
 	describe("github-copilot oauth endpoint alignment", () => {
@@ -1550,6 +1641,59 @@ describe("ModelRegistry", () => {
 			expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
 			expect(registry.getAvailable().some(m => m.provider === "ollama" && m.id === "phi4-mini")).toBe(true);
 			expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
+		});
+
+		test("uses OLLAMA_HOST for implicit ollama discovery", async () => {
+			using _baseUrl = withEnv("OLLAMA_BASE_URL", undefined);
+			using _host = withEnv("OLLAMA_HOST", "ollama.lan:12345");
+			using _hook = mockOllamaDiscovery(["phi4-mini"], "http://ollama.lan:12345");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+
+			const model = registry.find("ollama", "phi4-mini");
+			expect(model?.baseUrl).toBe("http://ollama.lan:12345/v1");
+		});
+
+		test("keeps OLLAMA_BASE_URL precedence over OLLAMA_HOST", async () => {
+			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://omp-ollama.example:2222");
+			using _host = withEnv("OLLAMA_HOST", "ollama-host.example:3333");
+			using _hook = mockOllamaDiscovery(["phi4-mini"], "http://omp-ollama.example:2222");
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+
+			const model = registry.find("ollama", "phi4-mini");
+			expect(model?.baseUrl).toBe("http://omp-ollama.example:2222/v1");
+		});
+
+		test("uses OLLAMA_CONTEXT_LENGTH for implicit ollama context accounting", async () => {
+			using _contextLength = withEnv("OLLAMA_CONTEXT_LENGTH", "16384");
+			using _hook = mockOllamaDiscovery(["phi4-mini"]);
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+
+			const model = registry.find("ollama", "phi4-mini");
+			expect(model?.contextWindow).toBe(16384);
+			expect(model?.maxTokens).toBe(16384);
+		});
+
+		test("lets OLLAMA_CONTEXT_LENGTH override ollama show metadata", async () => {
+			using _contextLength = withEnv("OLLAMA_CONTEXT_LENGTH", "32768");
+			using _hook = mockOllamaDiscovery(["phi4-mini"], "http://127.0.0.1:11434", {
+				model_info: {
+					"phi4.context_length": 4096,
+				},
+				capabilities: ["completion"],
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			await registry.refresh();
+
+			const model = registry.find("ollama", "phi4-mini");
+			expect(model?.contextWindow).toBe(32768);
+			expect(model?.maxTokens).toBe(32768);
 		});
 
 		test("discovers ollama-cloud through built-in descriptor flow without regressing local implicit ollama", async () => {

@@ -10,7 +10,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { AsyncJobManager } from "../async";
 import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -489,7 +488,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>;
 		startBackgrounded: boolean;
 	}): ManagedBashJobHandle {
-		const manager = AsyncJobManager.instance();
+		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			throw new ToolError("Background job manager unavailable for this session.");
 		}
@@ -716,7 +715,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
 
 		if (asyncRequested) {
-			if (!AsyncJobManager.instance()) {
+			if (!this.session.asyncJobManager) {
 				throw new ToolError("Async job manager unavailable for this session.");
 			}
 			const job = this.#startManagedBashJob({
@@ -737,7 +736,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 		}
 
-		const autoBgManager = AsyncJobManager.instance();
+		const autoBgManager = this.session.asyncJobManager;
 		if (this.#autoBackgroundEnabled && !pty && autoBgManager) {
 			const autoBackgroundWaitMs = this.#resolveAutoBackgroundWaitMs(timeoutMs);
 			const startBackgrounded = autoBackgroundWaitMs === 0;

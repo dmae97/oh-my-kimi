@@ -50,18 +50,38 @@ function stripApplyPatchPathNoise(pathText: string): string {
  * Best-effort recovery for `¶`-prefixed lines the strict tokenizer
  * rejects. Strips apply_patch keyword noise (`Update File:`, `Update:`,
  * etc.) and an extra leading `***` (some models emit a hybrid `¶***foo.ts`
- * shape), then expects `PATH(#HASH)?` with no embedded whitespace.
+ * shape), then expects `PATH(#HASH)?`.
  * Returns `null` when no clean path can be salvaged.
  */
 function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const body = stripApplyPatchPathNoise(line.slice(HL_FILE_PREFIX.length).trim());
 	if (body.length === 0) return null;
-	const match = new RegExp(`^(\\S+?)(?:#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}))?\\s*$`).exec(body);
-	if (match === null) return null;
-	const path = normalizeHashlinePath(match[1], cwd);
+
+	// Trailing `#XXXX` is the tag; everything before it is the path. The
+	// path may contain whitespace (Windows OneDrive folders, Program Files,
+	// etc.), so we anchor the tag at end-of-body rather than scanning
+	// forward and stopping at the first space.
+	const trailing = new RegExp(`#([0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}})\\s*$`).exec(body);
+	let pathText: string;
+	let fileHash: string | undefined;
+	if (trailing !== null) {
+		pathText = body.slice(0, trailing.index);
+		fileHash = trailing[1].toUpperCase();
+	} else {
+		pathText = body.replace(/\s+$/, "");
+	}
+
+	// Same rule as the strict tokenizer: the hashline header grammar uses
+	// `#` as the path/tag separator and does not allow `#` inside
+	// filenames. Anything `#` left in the path body — short tags, non-hex
+	// tags, over-long tags, stale-tag copy-paste, line-suffixed tags —
+	// means the header is malformed, not a path with an embedded hash.
+	if (pathText.includes("#")) return null;
+
+	const path = normalizeHashlinePath(pathText, cwd);
 	if (path.length === 0) return null;
-	return match[2] !== undefined ? { path, fileHash: match[2].toUpperCase(), diff: "" } : { path, diff: "" };
+	return fileHash !== undefined ? { path, fileHash, diff: "" } : { path, diff: "" };
 }
 
 function normalizeHashlinePath(rawPath: string, cwd?: string): string {

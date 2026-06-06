@@ -107,6 +107,31 @@ describe("UiHelpers.renderInitialMessages — isolated", () => {
 	});
 });
 
+// ─── Cold-launch terminal cleanup ────────────────────────────────────────────
+//
+// `omp` / `omp -c` leave the previous run's transcript in native scrollback
+// because the TUI's initial paint preserves it. The cold-launch render must
+// therefore request a scrollback-clearing repaint (`clearTerminalHistory`) so
+// the resumed transcript replaces the stale one instead of stacking on it.
+// Every in-process session load already does this; this guards the cold path.
+
+describe("UiHelpers.renderInitialMessages — clearTerminalHistory", () => {
+	it("requests a scrollback-clearing repaint when clearTerminalHistory is set", () => {
+		const { ctx } = makeCtx();
+		new UiHelpers(ctx).renderInitialMessages(undefined, { clearTerminalHistory: true });
+		expect(ctx.ui.requestRender).toHaveBeenCalledWith(true, { clearScrollback: true });
+	});
+
+	it("never clears scrollback when clearTerminalHistory is unset", () => {
+		const { ctx } = makeCtx();
+		new UiHelpers(ctx).renderInitialMessages();
+		const clearedCall = (ctx.ui.requestRender as Mock<(...a: unknown[]) => void>).mock.calls.find(
+			([force, opts]) => force === true && (opts as { clearScrollback?: boolean } | undefined)?.clearScrollback,
+		);
+		expect(clearedCall).toBeUndefined();
+	});
+});
+
 // ─── Part 2: End-to-end callcount with a real SessionManager ─────────────────
 //
 // Simulates the selector-controller handoff: buildSessionContext is called once

@@ -5,19 +5,90 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 const BLOB_PREFIX = "blob:sha256:";
 
+export interface BlobPutOptions {
+	/** Optional file extension for a sidecar hardlink/copy that OS openers can type-detect. */
+	extension?: string;
+}
+
 export interface BlobPutResult {
 	hash: string;
+	/** Canonical content-addressed path, always `<dir>/<sha256-hex>`. */
 	path: string;
+	/** Path with the requested extension when supplied, otherwise the canonical path. */
+	displayPath: string;
 	get ref(): string;
 }
 
 /**
  * Content-addressed blob store for externalizing large binary data (images) from session JSONL files.
  *
- * Files are stored at `<dir>/<sha256-hex>` with no extension. The SHA-256 hash is computed
- * over the raw binary data (not base64). Content-addressing makes writes idempotent and
- * provides automatic deduplication across sessions.
+ * Files are stored canonically at `<dir>/<sha256-hex>`. Callers may also request
+ * a typed sidecar path (`<dir>/<sha256-hex>.<ext>`) for `file://` links and OS
+ * image viewers; blob refs and reads still address the extensionless hash path.
+ * The SHA-256 hash is computed over the raw binary data (not base64).
+ * Content-addressing makes writes idempotent and provides automatic deduplication
+ * across sessions.
  */
+
+const IMAGE_EXTENSION_BY_MIME: Record<string, string> = {
+	"image/png": "png",
+	"image/jpeg": "jpg",
+	"image/jpg": "jpg",
+	"image/gif": "gif",
+	"image/webp": "webp",
+	"image/svg+xml": "svg",
+};
+
+function normalizeBlobExtension(extension: string | undefined): string | undefined {
+	if (!extension) return undefined;
+	const normalized = extension.startsWith(".") ? extension.slice(1) : extension;
+	if (normalized.length === 0 || normalized.length > 32) return undefined;
+	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(normalized)) return undefined;
+	return normalized.toLowerCase();
+}
+
+async function ensureDisplayPath(blobPath: string, displayPath: string, data: Buffer): Promise<void> {
+	if (displayPath === blobPath) return;
+	try {
+		await fsp.link(blobPath, displayPath);
+		return;
+	} catch (err) {
+		if (typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST") return;
+		logger.debug("Blob display hardlink failed; falling back to copy", {
+			blobPath,
+			displayPath,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+	await Bun.write(displayPath, data);
+}
+
+function ensureDisplayPathSync(blobPath: string, displayPath: string, data: Buffer): void {
+	if (displayPath === blobPath) return;
+	try {
+		fs.linkSync(blobPath, displayPath);
+		return;
+	} catch (err) {
+		if (typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST") return;
+		logger.debug("Blob display hardlink failed; falling back to copy", {
+			blobPath,
+			displayPath,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+	fs.writeFileSync(displayPath, data);
+}
+
+export function blobExtensionForImageMimeType(mimeType: string | undefined): string | undefined {
+	if (!mimeType) return undefined;
+	const lower = mimeType.toLowerCase();
+	const known = IMAGE_EXTENSION_BY_MIME[lower];
+	if (known) return known;
+	if (!lower.startsWith("image/")) return undefined;
+	const subtype = lower.slice("image/".length).split(";")[0]?.split("+")[0];
+	return normalizeBlobExtension(subtype);
+}
+
 export class BlobStore {
 	constructor(readonly dir: string) {}
 
@@ -25,18 +96,22 @@ export class BlobStore {
 	 * Write binary data to the blob store.
 	 * @returns SHA-256 hex hash of the data
 	 */
-	async put(data: Buffer): Promise<BlobPutResult> {
+	async put(data: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
 		const hash = new Bun.SHA256().update(data).digest("hex");
 		const blobPath = path.join(this.dir, hash);
+		const extension = normalizeBlobExtension(options?.extension);
+		const displayPath = extension ? `${blobPath}.${extension}` : blobPath;
 		const result = {
 			hash,
 			path: blobPath,
+			displayPath,
 			get ref() {
 				return `${BLOB_PREFIX}${hash}`;
 			},
 		};
 
 		await Bun.write(blobPath, data);
+		await ensureDisplayPath(blobPath, displayPath, data);
 		return result;
 	}
 
@@ -45,18 +120,22 @@ export class BlobStore {
 	 * cannot afford the microtask hops of the async version (e.g. OOM-safe session writes).
 	 * Returns once the bytes are in the kernel page cache.
 	 */
-	putSync(data: Buffer): BlobPutResult {
+	putSync(data: Buffer, options?: BlobPutOptions): BlobPutResult {
 		const hash = new Bun.SHA256().update(data).digest("hex");
 		const blobPath = path.join(this.dir, hash);
+		const extension = normalizeBlobExtension(options?.extension);
+		const displayPath = extension ? `${blobPath}.${extension}` : blobPath;
 		const result = {
 			hash,
 			path: blobPath,
+			displayPath,
 			get ref() {
 				return `${BLOB_PREFIX}${hash}`;
 			},
 		};
 		fs.mkdirSync(this.dir, { recursive: true });
 		fs.writeFileSync(blobPath, data);
+		ensureDisplayPathSync(blobPath, displayPath, data);
 		return result;
 	}
 
@@ -120,17 +199,25 @@ export function externalizeImageDataUrlSync(blobStore: BlobStore, dataUrl: strin
  * Externalize an image's base64 data to the blob store, returning a blob reference.
  * If the data is already a blob reference, returns it unchanged.
  */
-export async function externalizeImageData(blobStore: BlobStore, base64Data: string): Promise<string> {
+export async function externalizeImageData(
+	blobStore: BlobStore,
+	base64Data: string,
+	mimeType?: string,
+): Promise<string> {
 	if (isBlobRef(base64Data)) return base64Data;
 	const buffer = Buffer.from(base64Data, "base64");
-	const { ref } = await blobStore.put(buffer);
+	const { ref } = await blobStore.put(buffer, {
+		extension: blobExtensionForImageMimeType(mimeType),
+	});
 	return ref;
 }
 
 /** Synchronous variant of {@link externalizeImageData}. */
-export function externalizeImageDataSync(blobStore: BlobStore, base64Data: string): string {
+export function externalizeImageDataSync(blobStore: BlobStore, base64Data: string, mimeType?: string): string {
 	if (isBlobRef(base64Data)) return base64Data;
-	return blobStore.putSync(Buffer.from(base64Data, "base64")).ref;
+	return blobStore.putSync(Buffer.from(base64Data, "base64"), {
+		extension: blobExtensionForImageMimeType(mimeType),
+	}).ref;
 }
 
 /**

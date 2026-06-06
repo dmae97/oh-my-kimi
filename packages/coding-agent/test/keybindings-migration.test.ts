@@ -106,4 +106,46 @@ describe("KeybindingsManager.create", () => {
 			await fs.rm(agentDir, { recursive: true, force: true });
 		}
 	});
+
+	it("defaults the follow-up shortcut to both Ctrl+Q and Ctrl+Enter (#1903)", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
+
+		try {
+			const manager = KeybindingsManager.create(agentDir);
+
+			// Both chords must be registered so Windows Terminal users (which swallow
+			// Ctrl+Enter at the terminal layer) get a working follow-up binding out
+			// of the box, without breaking users on Kitty/iTerm2/WezTerm/Ghostty.
+			expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q", "ctrl+enter"]);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("removes the Ctrl+Q follow-up default when a user remap already claims it (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.plan.toggle": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.plan.toggle")).toEqual(["ctrl+q"]);
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+enter"]);
+		expect(manager.getDisplayString("app.message.followUp")).toBe("Ctrl+Enter");
+		expect(manager.getEffectiveConfig()["app.message.followUp"]).toBe("ctrl+enter");
+	});
+
+	it("keeps the Ctrl+Q follow-up default when only an unknown config key claims it (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"unknown.action": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q", "ctrl+enter"]);
+	});
+
+	it("keeps Ctrl+Q when the user explicitly assigns it to follow-up (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.message.followUp": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q"]);
+	});
 });

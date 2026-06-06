@@ -312,28 +312,41 @@ function tryParseHunkHeader(line: string): ParsedHunkHeader | null {
 function tryParseHeader(line: string): { path: string; fileHash?: string } | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const end = trimEndIndex(line);
-	let index = FILE_PREFIX_LENGTH;
-	if (index >= end) return null;
-	const pathStart = index;
-	while (index < end) {
-		const code = line.charCodeAt(index);
-		if (code === CHAR_HASH || code === CHAR_SPACE || code === CHAR_TAB) break;
-		index++;
-	}
-	if (index === pathStart) return null;
-	const path = line.slice(pathStart, index);
+	if (FILE_PREFIX_LENGTH >= end) return null;
+
+	// The snapshot tag, when present, is the trailing `#XXXX` block. We
+	// detect it from the suffix so the path may legitimately contain
+	// whitespace (e.g. `OneDrive - Company/file.ts`).
+	let pathEnd = end;
 	let fileHash: string | undefined;
-	if (index < end && line.charCodeAt(index) === CHAR_HASH) {
-		const hashStart = index + 1;
-		const hashEnd = hashStart + HL_FILE_HASH_LENGTH;
-		if (hashEnd > end) return null;
-		for (let probe = hashStart; probe < hashEnd; probe++) {
-			if (!isHexDigitCode(line.charCodeAt(probe))) return null;
+	const trailingHashStart = end - HL_FILE_HASH_LENGTH - 1;
+	if (trailingHashStart >= FILE_PREFIX_LENGTH && line.charCodeAt(trailingHashStart) === CHAR_HASH) {
+		let allHex = true;
+		for (let probe = trailingHashStart + 1; probe < end; probe++) {
+			if (!isHexDigitCode(line.charCodeAt(probe))) {
+				allHex = false;
+				break;
+			}
 		}
-		fileHash = line.slice(hashStart, hashEnd).toUpperCase();
-		index = hashEnd;
+		if (allHex) {
+			pathEnd = trailingHashStart;
+			fileHash = line.slice(trailingHashStart + 1, end).toUpperCase();
+		}
 	}
-	if (skipWhitespace(line, index, end) !== end) return null;
+
+	// The hashline header grammar uses `#` as the path/tag separator and
+	// does not allow `#` inside filenames. Anything `#` left in the path
+	// body — short tags (`#1A2`), non-hex tags (`#1A2G`), over-long tags
+	// (`#1A2B5`), stale-tag copy-paste (`#1A2B copied from read`), or
+	// line-suffixed tags (`#1A2B:42`) — means the header is malformed.
+	// Surface the focused diagnostic instead of silently mis-routing the
+	// edit or reporting a missing tag downstream.
+	for (let i = FILE_PREFIX_LENGTH; i < pathEnd; i++) {
+		if (line.charCodeAt(i) === CHAR_HASH) return null;
+	}
+
+	if (pathEnd === FILE_PREFIX_LENGTH) return null;
+	const path = line.slice(FILE_PREFIX_LENGTH, pathEnd);
 	return fileHash !== undefined ? { path, fileHash } : { path };
 }
 

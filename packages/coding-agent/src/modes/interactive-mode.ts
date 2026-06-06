@@ -96,6 +96,7 @@ import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
 import { DynamicBorder } from "./components/dynamic-border";
+import { ErrorBannerComponent } from "./components/error-banner";
 import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
@@ -264,6 +265,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
+	errorBannerContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -288,6 +290,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
+	pendingImageLinks: (string | undefined)[] = [];
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	pendingBashComponents: BashExecutionComponent[] = [];
@@ -404,6 +407,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
+		this.errorBannerContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -565,6 +569,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
+		this.ui.addChild(this.errorBannerContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -896,12 +901,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	startPendingSubmission(input: {
 		text: string;
 		images?: ImageContent[];
+		imageLinks?: (string | undefined)[];
 		customType?: string;
 		display?: boolean;
 	}): SubmittedUserInput {
 		const submission: SubmittedUserInput = {
 			text: input.text,
 			images: input.images,
+			imageLinks: input.imageLinks,
 			customType: input.customType,
 			display: input.display,
 			cancelled: false,
@@ -913,22 +920,28 @@ export class InteractiveMode implements InteractiveModeContext {
 			const imageCount = submission.images?.length ?? 0;
 			this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
 			this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
-			this.addMessageToChat({
-				role: "user",
-				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-				attribution: "user",
-				timestamp: Date.now(),
-			});
+			this.addMessageToChat(
+				{
+					role: "user",
+					content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+					attribution: "user",
+					timestamp: Date.now(),
+				},
+				{ imageLinks: input.imageLinks },
+			);
 		} else {
 			this.optimisticUserMessageSignature = undefined;
 			this.#pendingSubmissionDispose = undefined;
 		}
 		this.editor.setText("");
-		// Reconciliation checkpoint: the rebuild below replays the whole transcript
-		// into native scrollback, so retire frozen block snapshots and let every
-		// block render its current state.
-		this.chatContainer.thaw();
-		this.ui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+		this.editor.imageLinks = undefined;
+		// Reconciliation checkpoint: only retire frozen block snapshots after TUI
+		// proves the native viewport is at the tail and replays scrollback safely.
+		// Unknown host viewports stay frozen; thawing them would expose live rows
+		// over stale native history and can yank or duplicate when ED3 is unsafe.
+		if (this.ui.refreshNativeScrollbackIfDirty()) {
+			this.chatContainer.thaw();
+		}
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 		return submission;
@@ -956,6 +969,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!submission.customType) {
 			this.pendingImages = submission.images ? [...submission.images] : [];
+			this.pendingImageLinks = submission.imageLinks ? [...submission.imageLinks] : [];
+			this.editor.imageLinks = this.pendingImageLinks;
 			this.rebuildChatFromMessages();
 			this.editor.setText(submission.text);
 		}
@@ -2492,6 +2507,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.showError(message);
 	}
 
+	showPinnedError(message: string): void {
+		if (this.isBackgrounded) return;
+		this.errorBannerContainer.clear();
+		this.errorBannerContainer.addChild(new ErrorBannerComponent(message));
+		this.ui.requestRender();
+	}
+
+	clearPinnedError(): void {
+		if (this.errorBannerContainer.children.length === 0) return;
+		this.errorBannerContainer.clear();
+		this.ui.requestRender();
+	}
+
 	showWarning(message: string): void {
 		this.#uiHelpers.showWarning(message);
 	}
@@ -2622,7 +2650,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.isKnownSlashCommand(text);
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): Component[] {
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);
 	}
 
@@ -2633,7 +2664,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 
-	renderInitialMessages(prebuiltContext?: SessionContext, options?: { preserveExistingChat?: boolean }): void {
+	renderInitialMessages(
+		prebuiltContext?: SessionContext,
+		options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean },
+	): void {
 		this.#uiHelpers.renderInitialMessages(prebuiltContext, options);
 	}
 
@@ -2706,6 +2740,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
+		this.clearPinnedError();
 		this.#planReviewContainer = undefined;
 	}
 

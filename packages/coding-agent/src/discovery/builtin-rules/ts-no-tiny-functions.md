@@ -46,5 +46,6 @@ const doubled = value * 2;
 - Callback identity matters.
 - Type guard preserves narrowing.
 - Public API, test seam, or DI boundary needs indirection.
+- Names a non-obvious formula or magic-constant computation that the inlined expression would not explain on its own.
 
 If none apply, inline it.

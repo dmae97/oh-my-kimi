@@ -233,9 +233,10 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 				return { sequences, remainder: remaining };
 			}
 		} else {
-			// Not an escape sequence - take a single character
-			sequences.push(remaining[0]!);
-			pos++;
+			// Not an escape sequence - take one Unicode scalar, not a UTF-16 code unit.
+			const char = Array.from(remaining)[0] ?? "";
+			sequences.push(char);
+			pos += char.length;
 		}
 	}
 
@@ -244,8 +245,8 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 
 export type StdinBufferOptions = {
 	/**
-	 * Maximum time to wait for sequence completion (default: 10ms)
-	 * After this time, the buffer is flushed even if incomplete
+	 * Maximum time to wait for sequence completion (default: 75ms).
+	 * After this time, a genuinely incomplete escape is flushed.
 	 */
 	timeout?: number;
 };
@@ -269,7 +270,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
-		this.#timeoutMs = options.timeout ?? 10;
+		this.#timeoutMs = options.timeout ?? 75;
 	}
 
 	process(data: string | Buffer): void {

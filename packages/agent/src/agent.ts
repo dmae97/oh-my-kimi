@@ -44,6 +44,12 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }
 
+const ANTHROPIC_OUTPUT_BLOCKED_PREFIX = "Output blocked by conten";
+
+function isAnthropicOutputBlockedError(message: string): boolean {
+	return message.includes(ANTHROPIC_OUTPUT_BLOCKED_PREFIX);
+}
+
 function refreshToolChoiceForActiveTools(
 	toolChoice: ToolChoice | undefined,
 	tools: AgentContext["tools"] = [],
@@ -1046,29 +1052,50 @@ export class Agent {
 					}
 				}
 			}
-		} catch (err: any) {
-			const errorMsg: AgentMessage = {
-				role: "assistant",
-				content: [{ type: "text", text: "" }],
-				api: model.api,
-				provider: model.provider,
-				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				stopReason: this.#abortController?.signal.aborted ? "aborted" : "error",
-				errorMessage: err?.message || String(err),
-				timestamp: Date.now(),
-			} as AgentMessage;
+		} catch (err) {
+			const errorMessage = err instanceof Error ? err.message : String(err);
+			const stoppedForAbort = this.#abortController?.signal.aborted === true;
+			const shouldEmitVisibleOutputBlockedError = !stoppedForAbort && isAnthropicOutputBlockedError(errorMessage);
+			const assistantPartial = partial?.role === "assistant" ? partial : undefined;
+			const hadAssistantStart = assistantPartial !== undefined;
+			const errorMsg: AssistantMessage =
+				shouldEmitVisibleOutputBlockedError && assistantPartial
+					? { ...assistantPartial, stopReason: "error", errorMessage }
+					: {
+							role: "assistant",
+							content: [{ type: "text", text: "" }],
+							api: model.api,
+							provider: model.provider,
+							model: model.id,
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+							},
+							stopReason: stoppedForAbort ? "aborted" : "error",
+							errorMessage,
+							timestamp: Date.now(),
+						};
 
-			this.appendMessage(errorMsg);
-			this.#state.error = err?.message || String(err);
-			this.#emit({ type: "agent_end", messages: [errorMsg] });
+			if (shouldEmitVisibleOutputBlockedError) {
+				if (!hadAssistantStart) {
+					this.#state.streamMessage = errorMsg;
+					this.#emit({ type: "message_start", message: errorMsg });
+				}
+				this.#state.streamMessage = null;
+				this.appendMessage(errorMsg);
+				this.#state.error = errorMessage;
+				this.#emit({ type: "message_end", message: errorMsg });
+				this.#emit({ type: "turn_end", message: errorMsg, toolResults: [] });
+				this.#emit({ type: "agent_end", messages: [errorMsg] });
+			} else {
+				this.appendMessage(errorMsg);
+				this.#state.error = errorMessage;
+				this.#emit({ type: "agent_end", messages: [errorMsg] });
+			}
 		} finally {
 			this.#state.isStreaming = false;
 			this.#state.streamMessage = null;

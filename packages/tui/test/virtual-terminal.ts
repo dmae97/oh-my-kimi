@@ -468,7 +468,7 @@ export class VirtualTerminal implements Terminal {
 				text += " ";
 			} else {
 				text +=
-					cell.grapheme_len > 0 ? this.#term.getGraphemeString(row, col) : String.fromCodePoint(cell.codepoint);
+					cell.grapheme_len > 0 ? this.#term.getGraphemeString(row, col) : this.#safeCodepointText(cell.codepoint);
 			}
 		}
 		return text.replace(/\s+$/u, "");
@@ -490,12 +490,24 @@ export class VirtualTerminal implements Terminal {
 				text +=
 					cell.grapheme_len > 0
 						? this.#term.getScrollbackGraphemeString(offset, col)
-						: String.fromCodePoint(cell.codepoint);
+						: this.#safeCodepointText(cell.codepoint);
 			}
 		}
 		text = text.replace(/\s+$/u, "");
 		this.#historyTextCache[offset] = text;
 		return text;
+	}
+
+	#safeCodepointText(codepoint: number): string {
+		if (
+			!Number.isInteger(codepoint) ||
+			codepoint <= 0 ||
+			codepoint > 0x10ffff ||
+			(codepoint >= 0xd800 && codepoint <= 0xdfff)
+		) {
+			return "";
+		}
+		return String.fromCodePoint(codepoint);
 	}
 
 	#isDefaultBg(cell: GhosttyCell): boolean {

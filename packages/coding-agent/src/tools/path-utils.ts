@@ -217,6 +217,27 @@ export function parseLineRanges(sel: string): [LineRange, ...LineRange[]] | null
 	return merged as [LineRange, ...LineRange[]];
 }
 
+/**
+ * Extract the line-range component from a read-tool selector that may also
+ * carry a verbatim/index display mode (`raw`, `conflicts`) — alone or compounded
+ * with a range (`raw:50-100`, `50-100:raw`). Returns the parsed ranges when the
+ * selector names any, otherwise `undefined` (pure `raw`/`conflicts`/none).
+ *
+ * Used by content search, which honors line ranges as a match filter but has no
+ * use for verbatim/conflict display modes — so those selectors are accepted and
+ * treated as an unfiltered, whole-resource search rather than rejected.
+ */
+export function selectorLineRanges(sel: string | undefined): [LineRange, ...LineRange[]] | undefined {
+	if (!sel) return undefined;
+	for (const chunk of sel.split(":")) {
+		const lower = chunk.toLowerCase();
+		if (lower === "raw" || lower === "conflicts") continue;
+		const ranges = parseLineRanges(chunk);
+		if (ranges) return ranges;
+	}
+	return undefined;
+}
+
 /** Return `true` when `lineNumber` (1-indexed) falls in any of the supplied ranges. */
 export function isLineInRanges(lineNumber: number, ranges: readonly LineRange[]): boolean {
 	for (const range of ranges) {

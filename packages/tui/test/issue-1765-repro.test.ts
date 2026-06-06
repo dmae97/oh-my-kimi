@@ -147,12 +147,33 @@ describe("issue #1765: synchronized-output opt-out", () => {
 		});
 	});
 
-	it("keeps synchronized output enabled by default", async () => {
-		await withEnvPatch({ PI_NO_SYNC_OUTPUT: undefined }, async () => {
+	it("honors the PI_TUI_SYNC_OUTPUT=0 disable alias", async () => {
+		await withEnvPatch(
+			{ PI_NO_SYNC_OUTPUT: undefined, PI_FORCE_SYNC_OUTPUT: undefined, PI_TUI_SYNC_OUTPUT: "0" },
+			async () => {
+				const term = new VirtualTerminal(32, 4, 100);
+				const writes = captureWrites(term);
+				const tui = new TUI(term);
+				tui.addChild(new MutableLines(["disabled sync"]));
+
+				try {
+					tui.start();
+					await term.waitForRender();
+
+					expectNoSyncOutput(writes);
+				} finally {
+					tui.stop();
+				}
+			},
+		);
+	});
+
+	it("keeps synchronized output available behind an explicit force flag", async () => {
+		await withEnvPatch({ PI_NO_SYNC_OUTPUT: undefined, PI_FORCE_SYNC_OUTPUT: "1" }, async () => {
 			const term = new VirtualTerminal(32, 4, 100);
 			const writes = captureWrites(term);
 			const tui = new TUI(term);
-			tui.addChild(new MutableLines(["default sync"]));
+			tui.addChild(new MutableLines(["forced sync"]));
 
 			try {
 				tui.start();

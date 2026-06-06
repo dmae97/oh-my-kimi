@@ -128,12 +128,18 @@ def classify_next_step(primary: str) -> str:
     )
 
 
-def system_append(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
-    return render(_load("system_append.md"), {"repo": repo, "issue": issue, "workspace": workspace})
+def system_append(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace, bot_login: str) -> str:
+    return render(
+        _load("system_append.md"),
+        {"repo": repo, "issue": issue, "workspace": workspace, "bot_login": bot_login},
+    )
 
 
-def system_append_pr_review(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
-    return render(_load("system_append_pr_review.md"), {"repo": repo, "issue": issue, "workspace": workspace})
+def system_append_pr_review(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace, bot_login: str) -> str:
+    return render(
+        _load("system_append_pr_review.md"),
+        {"repo": repo, "issue": issue, "workspace": workspace, "bot_login": bot_login},
+    )
 
 
 def kickoff(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:

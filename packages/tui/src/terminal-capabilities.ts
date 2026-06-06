@@ -1,12 +1,14 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import {
+	detectKittyUnicodePlaceholdersSupport,
 	encodeKittyTempFileTransmit,
 	getKittyGraphics,
 	isPngBase64,
 	KITTY_PLACEHOLDER,
 	kittyPlaceholdersFit,
 	renderKittyPlaceholderLines,
+	setKittyGraphics,
 } from "./kitty-graphics";
 
 export enum ImageProtocol {
@@ -116,33 +118,44 @@ export function isWindowsTerminalPreviewSixelSupported(
 }
 
 /**
- * Whether eager live-frame native scrollback rebuilds are unsafe when the
- * terminal viewport position is unobservable.
+ * Whether live-frame native scrollback rebuilds are unsafe when the terminal
+ * viewport position is unobservable.
  *
- * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). On the
- * terminals below, ED3 can disturb a reader parked in native scrollback during
- * streaming: kitty/ghostty/alacritty/VTE clamp the scroll offset back to the
- * active tail when saved lines are erased. WezTerm, macOS Terminal.app, and
- * iTerm2 expose scrollback-only clears via ED3/terminfo E3; that still
- * invalidates a reader's scrollback position during live streaming.
+ * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). Many
+ * terminals either clamp a scrolled reader back to the active tail or erase host
+ * scrollback when ED3 lands. The important property is not the brand name — it
+ * is that an unknown viewport position cannot be proven safe. Environment
+ * markers are therefore only used to prove *risk* or a strongly-known profile;
+ * unknown POSIX/remote/multiplexer shapes default to risky for passive renders.
  *
- * Windows Terminal erases its host scrollback on ED3 and repositions the
- * viewport against the shortened buffer, so a scrolled-up reader is yanked.
- * Native win32 is excluded here because the renderer guards it with dedicated
- * platform checks (the viewport position is never observable on Windows — see
- * `Terminal.isNativeViewportAtBottom`); a `WT_SESSION` sighting on any other
- * platform means the outer host is Windows Terminal fronting a WSL distro (WT
- * propagates the variable into the Linux environment), where the same ED3
- * yank applies. See #1610.
- *
- * Pure helper for tests and `TERMINAL` trait construction. See #1682 and #1719.
+ * Native win32 is excluded here because the renderer has dedicated ConPTY
+ * deferral paths; a `WT_SESSION` sighting on POSIX means Windows Terminal is the
+ * outer host fronting WSL, where the same ED3 yank applies. See #1610/#1682/#1799.
  */
 export function detectTerminalEagerEraseScrollbackRisk(
 	env: NodeJS.ProcessEnv = Bun.env,
 	platform: NodeJS.Platform = process.platform,
 ): boolean {
 	if (platform === "win32") return false;
+
+	const term = env.TERM?.toLowerCase() ?? "";
+	const termProgram = env.TERM_PROGRAM?.toLowerCase() ?? "";
+	const colorTerm = env.COLORTERM?.toLowerCase() ?? "";
+
+	if (env.PI_TUI_ED3_SAFE === "1") return false;
 	if (env.WT_SESSION) return true;
+	if (
+		env.SSH_CONNECTION ||
+		env.SSH_CLIENT ||
+		env.SSH_TTY ||
+		env.TMUX ||
+		env.STY ||
+		env.ZELLIJ ||
+		term.startsWith("tmux") ||
+		term.startsWith("screen")
+	) {
+		return true;
+	}
 	if (
 		env.WEZTERM_PANE ||
 		env.KITTY_WINDOW_ID ||
@@ -153,17 +166,62 @@ export function detectTerminalEagerEraseScrollbackRisk(
 	) {
 		return true;
 	}
-	switch (env.TERM_PROGRAM?.toLowerCase()) {
+	switch (termProgram) {
 		case "alacritty":
 		case "apple_terminal":
 		case "ghostty":
+		case "gnome-terminal":
 		case "iterm.app":
+		case "kgx":
 		case "kitty":
+		case "ptyxis":
 		case "wezterm":
+		case "xfce4-terminal":
 			return true;
 		default:
-			return false;
+			break;
 	}
+	if (platform === "linux" && (colorTerm === "truecolor" || colorTerm === "24bit")) return true;
+	// Unknown POSIX terminals have no scroll-position oracle. Treat them as risky
+	// for passive ED3 until a positive terminal-specific integration proves safe.
+	return true;
+}
+
+/** Whether DEC 2026 synchronized-output wrappers should be enabled by default. */
+export function shouldEnableSynchronizedOutputByDefault(
+	env: NodeJS.ProcessEnv = Bun.env,
+	platform: NodeJS.Platform = process.platform,
+	terminalId: TerminalId = TERMINAL_ID,
+): boolean {
+	if (env.PI_NO_SYNC_OUTPUT || env.PI_TUI_SYNC_OUTPUT === "0") return false;
+	if (env.PI_FORCE_SYNC_OUTPUT === "1" || env.PI_TUI_SYNC_OUTPUT === "1") return true;
+	if (platform === "win32") return false;
+
+	const term = env.TERM?.toLowerCase() ?? "";
+	const termProgram = env.TERM_PROGRAM?.toLowerCase() ?? "";
+	if (
+		env.SSH_CONNECTION ||
+		env.SSH_CLIENT ||
+		env.SSH_TTY ||
+		env.TMUX ||
+		env.STY ||
+		env.ZELLIJ ||
+		term.startsWith("tmux") ||
+		term.startsWith("screen")
+	) {
+		return false;
+	}
+	if (env.VTE_VERSION) return false;
+	switch (termProgram) {
+		case "gnome-terminal":
+		case "kgx":
+		case "ptyxis":
+		case "xfce4-terminal":
+			return false;
+		default:
+			break;
+	}
+	return terminalId === "kitty" || terminalId === "ghostty" || terminalId === "wezterm" || terminalId === "iterm2";
 }
 
 /**
@@ -320,6 +378,12 @@ export const TERMINAL = (() => {
 	}
 	return resolved;
 })();
+
+// Seed Kitty Unicode placeholder support from the resolved terminal id. Only
+// kitty/ghostty are known to honor `U=1` placement; other Kitty-protocol paths
+// (wezterm, tmux/screen fallback) treat the placeholder cells as literal PUA
+// glyphs, which is the "ASCII artifact + laggy scrolling" reported in #1877.
+setKittyGraphics({ unicodePlaceholders: detectKittyUnicodePlaceholdersSupport(TERMINAL.id, Bun.env) });
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;

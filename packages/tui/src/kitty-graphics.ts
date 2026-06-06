@@ -17,7 +17,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, $flag, logger } from "@oh-my-pi/pi-utils";
+import { $env, logger } from "@oh-my-pi/pi-utils";
 
 /** Kitty Unicode placeholder base character (U+10EEEE, Plane 16 PUA). */
 export const KITTY_PLACEHOLDER = "\u{10eeee}";
@@ -76,8 +76,36 @@ function transmissionOverride(): KittyTransmissionMedium | "auto" {
 	return "auto";
 }
 
+/**
+ * Whether the detected terminal renders Kitty Unicode placeholders (`U=1` +
+ * U+10EEEE with row/column diacritics).
+ *
+ * Only `kitty` (the protocol's origin) and `ghostty` ship a working
+ * implementation; WezTerm advertises Kitty graphics but treats placeholder
+ * cells as literal PUA glyphs (see wezterm/wezterm#986, "placeholder support"
+ * still unchecked), and the tmux/screen fallback can land on any outer
+ * terminal. Enabling placeholders on those paths emits a `columns × rows`
+ * grid of U+10EEEE per image per frame; the cells render as boxed fallback
+ * glyphs and re-emit on every repaint, which is exactly the
+ * "stuck/laggy scrolling + ASCII artifact" symptom reported in #1877.
+ *
+ * `PI_NO_KITTY_PLACEHOLDERS=1` forces off (e.g. for tmux passthrough to a
+ * non-supporting outer terminal); `PI_KITTY_PLACEHOLDERS=1` forces on (e.g.
+ * for a wezterm nightly that has merged placeholder support).
+ */
+export function detectKittyUnicodePlaceholdersSupport(terminalId: string, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	const offRaw = env.PI_NO_KITTY_PLACEHOLDERS?.trim().toLowerCase();
+	if (offRaw === "1" || offRaw === "true" || offRaw === "on" || offRaw === "yes" || offRaw === "y") return false;
+	const force = env.PI_KITTY_PLACEHOLDERS?.trim().toLowerCase();
+	if (force === "1" || force === "true" || force === "on" || force === "yes" || force === "y") return true;
+	if (force === "0" || force === "false" || force === "off" || force === "no" || force === "n") return false;
+	return terminalId === "kitty" || terminalId === "ghostty";
+}
+
 let features: KittyGraphicsFeatures = {
-	unicodePlaceholders: !$flag("PI_NO_KITTY_PLACEHOLDERS"),
+	// Off until `terminal-capabilities` seeds it from the detected terminal id —
+	// the default-on path corrupts wezterm and tmux-passthrough sessions.
+	unicodePlaceholders: false,
 	// Start direct; a successful probe (or explicit `temp-file` override) promotes.
 	transmissionMedium: transmissionOverride() === "temp-file" ? "temp-file" : "direct",
 };

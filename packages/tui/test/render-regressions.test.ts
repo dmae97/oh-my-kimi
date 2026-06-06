@@ -398,7 +398,10 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("resize + viewport behavior", () => {
-		it("preserves preexisting shell scrollback on startup and resize redraw", async () => {
+		it("clears preexisting shell scrollback on a resize redraw (clean reset)", async () => {
+			// A resize is a clean reset: the renderer clears the viewport and
+			// scrollback (ED2+ED3) and redraws the transcript at the new geometry, so
+			// preexisting shell scrollback above the UI does not survive.
 			const term = new VirtualTerminal(50, 5);
 			term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 			await settle(term);
@@ -415,7 +418,8 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				const buffer = term.getScrollBuffer().join("\n");
-				expect(buffer.includes("shell-")).toBeTruthy();
+				expect(buffer.includes("shell-")).toBeFalsy();
+				expect(visible(term).at(-1)?.trim()).toBe("ui-7");
 			} finally {
 				tui.stop();
 			}
@@ -468,11 +472,10 @@ describe("TUI terminal-state regressions", () => {
 		});
 
 		it("rewraps committed native scrollback when the terminal widens on POSIX (unknown viewport)", async () => {
-			// POSIX reports no viewport position. A width change rewraps the whole
-			// transcript, so committed scrollback must be rebuilt at the new width even
-			// though we cannot prove the viewport is at the tail — yank is acceptable on
-			// an explicit resize. Regression: widening drops the wrapped line count, which
-			// the shrink-defer branch intercepted, leaving history wrapped at the old width.
+			// POSIX reports no viewport position. A resize is now an unconditional
+			// clean reset: the renderer clears scrollback (ED3) and redraws the
+			// transcript at the new width, so committed history rewraps even when the
+			// host scroll position is unobservable.
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
@@ -495,12 +498,9 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						const wide = term.getScrollBuffer().map(line => line.trimEnd());
-						// Offscreen history rewrapped: each logical line is now a single full row.
-						for (let i = 0; i < 6; i++) {
-							expect(wide).toContain(`L${i}:${"x".repeat(33)}`);
-						}
-						// The stale narrow fragments are gone — no duplicate old-width rows survive.
-						expect(wide.some(line => line.length === 20 && line.startsWith("L"))).toBeFalse();
+						// The resize rewraps history at the new width; the narrow fragment is gone.
+						expect(wide).toContain(`L0:${"x".repeat(33)}`);
+						expect(wide).not.toContain(`L0:${"x".repeat(17)}`);
 					} finally {
 						tui.stop();
 					}
@@ -1541,7 +1541,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("defers resize rebuild while native scrollback is scrolled", async () => {
+		it("rebuilds in place even when the reader is scrolled (clean reset on resize)", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(rows("line-", 12));
@@ -1551,16 +1551,20 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 				term.scrollLines(-2);
-				const before = term.getBufferPosition();
-				expect(before.viewportY).toBeGreaterThan(0);
+				expect(term.getBufferPosition().viewportY).toBeGreaterThan(0);
 
 				component.setLines(rows("line-", 8));
 				term.resize(28, 5);
 				await settle(term);
 
-				const after = term.getBufferPosition();
-				expect(after.viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				// A resize is a clean reset: history is rebuilt in place at the new
+				// geometry instead of deferring to keep the reader scrolled. Each line
+				// appears exactly once and nothing is left deferred.
+				const buffer = term.getScrollBuffer().map(line => line.trim());
+				for (let i = 0; i < 8; i++) {
+					expect(buffer.filter(line => line === `line-${i}`).length).toBe(1);
+				}
+				expect(buffer.filter(line => line.startsWith("line-")).length).toBe(8);
 				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
 			} finally {
 				tui.stop();
@@ -2078,20 +2082,15 @@ describe("TUI terminal-state regressions", () => {
 					).toBeLessThanOrEqual(1);
 				}
 
-				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+				expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 				await settle(term);
-				expect(visible(term).map(line => line.trim())).toEqual([
-					"line-7",
-					"line-8",
-					"line-9",
-					"line-10",
-					"line-11",
-					"prompt-row",
-				]);
-				const rebuilt = term.getScrollBuffer();
+				const stillDeferred = term.getScrollBuffer();
 				for (let i = 0; i < body.length; i++) {
 					const pattern = new RegExp(`\\bline-${i}\\b`);
-					expect(countMatches(rebuilt, pattern), `line-${i} appears once post-checkpoint`).toBe(1);
+					expect(
+						countMatches(stillDeferred, pattern),
+						`line-${i} remains non-duplicated while deferred`,
+					).toBeLessThanOrEqual(1);
 				}
 			} finally {
 				tui.stop();
@@ -2180,20 +2179,9 @@ describe("TUI terminal-state regressions", () => {
 						expect(term.getScrollBuffer().join("\n")).not.toContain("short-");
 
 						term.scrollLines(999);
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						await settle(term);
-						expect(visible(term).map(line => line.trim())).toEqual([
-							"short-10",
-							"short-11",
-							"short-12",
-							"short-13",
-							"short-14",
-							"short-15",
-							"short-16",
-							"short-17",
-							"short-18",
-							"prompt-row",
-						]);
+						expect(term.getScrollBuffer().join("\n")).not.toContain("short-");
 					} finally {
 						tui.stop();
 					}
@@ -2371,12 +2359,13 @@ describe("TUI terminal-state regressions", () => {
 						expect(offscreenPos.viewportY).toBeLessThan(offscreenPos.baseY);
 						expect(visible(term).map(line => line.trim())).toEqual(anchored);
 
-						// At an explicit checkpoint (prompt submit equivalent) the deferred edit
-						// reconciles into clean scrollback.
+						// Unknown viewport checkpoints stay non-destructive; the dirty rewrite
+						// waits for a positive at-tail proof instead of assuming prompt submit
+						// makes host scrollback safe.
 						term.scrollLines(999);
-						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+						expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						await settle(term);
-						expect(term.getScrollBuffer().join("\n")).toContain("seed-EDIT");
+						expect(term.getScrollBuffer().join("\n")).not.toContain("seed-EDIT");
 					} finally {
 						tui.stop();
 					}
@@ -2606,8 +2595,8 @@ describe("TUI terminal-state regressions", () => {
 							// The wrap row paints in the same frame — viewportRepaint is non-destructive
 							// but writes the visible window, so the editor's new visual row is on screen.
 							expect(visible(term).map(line => line.trim())).toContain("wrap-row");
-							// And the deferred-cleanup checkpoint is queued for the next prompt submit.
-							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+							// Unknown viewport checkpoint remains non-destructive.
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						} finally {
 							tui.stop();
 						}
@@ -2662,7 +2651,7 @@ describe("TUI terminal-state regressions", () => {
 							const view = visible(term).map(line => line.trim());
 							expect(view).toContain("STATUS-NEW");
 							expect(view).toContain("EXTRA");
-							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						} finally {
 							tui.stop();
 						}
@@ -3662,6 +3651,25 @@ describe("TUI terminal-state regressions", () => {
 		const DISABLE_AUTOWRAP = "\x1b[?7l";
 		const ENABLE_AUTOWRAP = "\x1b[?7h";
 
+		// Force DEC 2026 synchronized output on regardless of the host terminal so
+		// these wrapper-bracketing assertions stay deterministic. In CI an unknown
+		// TERM disables sync output by default, which would emit no BSU/ESU pairs.
+		const SYNC_ENV: Record<string, string | undefined> = {
+			PI_FORCE_SYNC_OUTPUT: "1",
+			PI_NO_SYNC_OUTPUT: undefined,
+			PI_TUI_SYNC_OUTPUT: undefined,
+		};
+		const savedSyncEnv: Record<string, string | undefined> = {};
+
+		beforeEach(() => {
+			for (const key in SYNC_ENV) {
+				savedSyncEnv[key] = Bun.env[key];
+				const value = SYNC_ENV[key];
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
+		});
+
 		function getWrites(term: VirtualTerminal): string[] {
 			const writes: string[] = [];
 			const spy = vi.spyOn(term, "write");
@@ -3672,6 +3680,11 @@ describe("TUI terminal-state regressions", () => {
 		}
 
 		afterEach(() => {
+			for (const key in savedSyncEnv) {
+				const value = savedSyncEnv[key];
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
 			vi.restoreAllMocks();
 		});
 
@@ -3957,6 +3970,23 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				tui.stop();
 			}
 		});
+	});
+
+	it("honors a clear-scrollback replay queued before the initial paint", async () => {
+		const term = new VirtualTerminal(40, 6);
+		const writes = captureWrites(term);
+		const tui = new TUI(term);
+		tui.addChild(new MutableLinesComponent(["resumed-message", "prompt>"]));
+
+		try {
+			tui.start();
+			tui.requestRender(true, { clearScrollback: true });
+			await settle(term);
+
+			expect(writes.join("")).toContain("\x1b[3J");
+		} finally {
+			tui.stop();
+		}
 	});
 
 	// Repro of the drag-resize line-duplication: dragging the terminal smaller

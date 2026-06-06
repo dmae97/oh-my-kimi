@@ -12,6 +12,35 @@ async function getHeadTag(api: CustomCommandAPI): Promise<string | undefined> {
 	}
 }
 
+async function getCurrentBranch(api: CustomCommandAPI): Promise<string> {
+	try {
+		return (await git.branch.current(api.cwd)) ?? "HEAD";
+	} catch {
+		return "HEAD";
+	}
+}
+
+async function getPushRemote(api: CustomCommandAPI, branch: string): Promise<string | undefined> {
+	try {
+		return (
+			(await git.config.getBranch(api.cwd, branch, "pushRemote")) ??
+			(await git.config.getBranch(api.cwd, branch, "remote"))
+		);
+	} catch {
+		return undefined;
+	}
+}
+
+async function getHeadTagContext(api: CustomCommandAPI): Promise<{ branch: string; headTag?: string; remote: string }> {
+	const branch = await getCurrentBranch(api);
+	const [headTag, pushRemote] = await Promise.all([getHeadTag(api), getPushRemote(api, branch)]);
+	return {
+		headTag,
+		branch,
+		remote: pushRemote ?? "origin",
+	};
+}
+
 export class GreenCommand implements CustomCommand {
 	name = "green";
 	description = "Generate a prompt to iterate on CI failures until the branch is green";
@@ -19,7 +48,7 @@ export class GreenCommand implements CustomCommand {
 	constructor(private api: CustomCommandAPI) {}
 
 	async execute(_args: string[], _ctx: HookCommandContext): Promise<string> {
-		const headTag = await getHeadTag(this.api);
-		return prompt.render(ciGreenRequestTemplate, { headTag });
+		const { headTag, branch, remote } = await getHeadTagContext(this.api);
+		return prompt.render(ciGreenRequestTemplate, { headTag, branch, remote });
 	}
 }

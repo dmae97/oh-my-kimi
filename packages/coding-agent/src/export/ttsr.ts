@@ -294,6 +294,9 @@ export class TtsrManager {
 
 	/** Add a TTSR rule to be monitored. */
 	addRule(rule: Rule): boolean {
+		if (!this.#settings.enabled) {
+			return false;
+		}
 		if (this.#rules.has(rule.name)) {
 			return false;
 		}
@@ -357,6 +360,9 @@ export class TtsrManager {
 	}
 
 	#matchBuffer(buffer: string, context: TtsrMatchContext): Rule[] {
+		if (!this.#settings.enabled) {
+			return [];
+		}
 		const matches: Rule[] = [];
 		for (const [name, entry] of this.#rules) {
 			if (!this.#canTrigger(name)) {
@@ -433,6 +439,9 @@ export class TtsrManager {
 
 	/** Check if any TTSR rules are registered. */
 	hasRules(): boolean {
+		if (!this.#settings.enabled) {
+			return false;
+		}
 		return this.#rules.size > 0;
 	}
 

@@ -2316,6 +2316,49 @@ interface ReadRenderArgs {
 	raw?: boolean;
 }
 
+const INTERNAL_URL_LIKE_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function splitReadRenderPath(rawPath: string): { path: string; sel?: string } {
+	if (INTERNAL_URL_LIKE_RE.test(rawPath)) {
+		const internal = splitInternalUrlSel(rawPath);
+		if (internal.sel) return internal;
+	}
+	return splitPathAndSel(rawPath);
+}
+
+function firstReadSelectorLine(sel: string | undefined): number | undefined {
+	if (!sel) return undefined;
+	try {
+		const parsed = parseSel(sel);
+		if (parsed.kind !== "lines") return undefined;
+		return parsed.ranges[0].startLine;
+	} catch {
+		return undefined;
+	}
+}
+
+function formatReadPathLink(
+	rawPath: string,
+	options: {
+		resolvedPath?: string;
+		suffixResolution?: { from: string; to: string };
+		offset?: number;
+		fallbackLabel?: string;
+	},
+): string {
+	const split = splitReadRenderPath(rawPath);
+	const basePath = split.path || rawPath;
+	const selectorSuffix = split.sel ? `:${split.sel}` : "";
+	const plainDisplayPath = options.suffixResolution
+		? shortenPath(options.suffixResolution.to)
+		: shortenPath(basePath || options.resolvedPath || options.fallbackLabel || rawPath);
+	const target = options.resolvedPath ?? tryResolveInternalUrlSync(basePath);
+	const line = firstReadSelectorLine(split.sel) ?? options.offset;
+	const linkOptions = line !== undefined ? { line } : undefined;
+	const displayPath = target ? fileHyperlink(target, plainDisplayPath, linkOptions) : plainDisplayPath;
+	return `${displayPath}${selectorSuffix}`;
+}
+
 export const readToolRenderer = {
 	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		if (isReadableUrlPath(args.file_path || args.path || "")) {
@@ -2323,13 +2366,10 @@ export const readToolRenderer = {
 		}
 
 		const rawPath = args.file_path || args.path || "";
-		const shortPath = shortenPath(rawPath);
-		const linkTarget = tryResolveInternalUrlSync(rawPath);
-		const filePath = linkTarget ? fileHyperlink(linkTarget, shortPath) : shortPath;
 		const offset = args.offset;
 		const limit = args.limit;
 
-		let pathDisplay = filePath || "…";
+		let pathDisplay = formatReadPathLink(rawPath, { offset, fallbackLabel: "…" }) || "…";
 		if (offset !== undefined || limit !== undefined) {
 			const startLine = offset ?? 1;
 			const endLine = limit !== undefined ? startLine + limit - 1 : "";
@@ -2363,7 +2403,7 @@ export const readToolRenderer = {
 			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
 			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
 			const rawPath = args?.file_path || args?.path || "";
-			const filePath = shortenPath(rawPath);
+			const filePath = formatReadPathLink(rawPath, { offset: args?.offset }) || shortenPath(rawPath);
 			let title = filePath ? `Read ${filePath}` : "Read";
 			if (args?.offset !== undefined || args?.limit !== undefined) {
 				const startLine = args.offset ?? 1;
@@ -2388,8 +2428,8 @@ export const readToolRenderer = {
 		const contentText = details?.displayContent?.text ?? stripOutputNotice(rawText, details?.meta);
 		const imageContent = result.content?.find(c => c.type === "image");
 		const rawPath = args?.file_path || args?.path || "";
-		const filePath = shortenPath(rawPath);
-		const lang = getLanguageFromPath(splitPathAndSel(rawPath).path);
+		const renderPath = splitReadRenderPath(rawPath);
+		const lang = getLanguageFromPath(renderPath.path);
 
 		const warningLines: string[] = [];
 		const truncation = details?.meta?.truncation;
@@ -2412,7 +2452,11 @@ export const readToolRenderer = {
 
 		if (imageContent) {
 			const suffix = details?.suffixResolution;
-			const displayPath = suffix ? shortenPath(suffix.to) : filePath || rawPath || "image";
+			const displayPath = formatReadPathLink(rawPath, {
+				resolvedPath: details?.resolvedPath,
+				suffixResolution: suffix,
+				fallbackLabel: "image",
+			});
 			const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
 			const header = renderStatusLine(
 				{ icon: suffix ? "warning" : "success", title: "Read", description: `${displayPath}${correction}` },
@@ -2442,13 +2486,15 @@ export const readToolRenderer = {
 		}
 
 		const suffix = details?.suffixResolution;
-		const plainDisplayPath = suffix ? shortenPath(suffix.to) : filePath;
 		// resolvedPath is the absolute fs path for fs-backed reads (regular files plus
 		// local:// / memory:// / skill:// / artifact:// resources). Fall back to a sync
 		// resolver for fs-backed internal URLs so the title is clickable even before the
 		// result lands or if the handler didn't populate resolvedPath.
-		const absForLink = details?.resolvedPath ?? tryResolveInternalUrlSync(rawPath);
-		const displayPath = absForLink ? fileHyperlink(absForLink, plainDisplayPath) : plainDisplayPath;
+		const displayPath = formatReadPathLink(rawPath, {
+			resolvedPath: details?.resolvedPath,
+			suffixResolution: suffix,
+			offset: args?.offset,
+		});
 		const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
 		let title = displayPath ? `Read ${displayPath}${correction}` : "Read";
 		if (args?.offset !== undefined || args?.limit !== undefined) {
@@ -2463,7 +2509,7 @@ export const readToolRenderer = {
 			const n = details.conflictCount;
 			title += ` ${uiTheme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
 		}
-		const rawRequested = args?.raw === true || isRawSelector(parseSel(splitPathAndSel(rawPath).sel));
+		const rawRequested = args?.raw === true || isRawSelector(parseSel(renderPath.sel));
 		const isMarkdown = details?.contentType === "text/markdown" && !rawRequested;
 		let cachedWidth: number | undefined;
 		let cachedExpanded: boolean | undefined;

@@ -382,7 +382,7 @@ Provide `renderCall` / `renderResult` on `registerTool` definitions for custom t
 - Runtime actions are unavailable during extension load.
 - `tool_call` errors block execution (fail-closed).
 - Command name conflicts with built-ins are skipped with diagnostics.
-- Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`).
+- Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`).
 - Treat `ctx.reload()` as terminal for the current command handler frame.
 
 ## Extensions vs hooks vs custom-tools

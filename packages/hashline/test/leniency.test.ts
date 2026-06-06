@@ -1,11 +1,55 @@
 import { describe, expect, it } from "bun:test";
-import { applyEdits, parsePatch } from "@oh-my-pi/hashline";
+import { applyEdits, Patch, parsePatch } from "@oh-my-pi/hashline";
 
 function applyPatch(text: string, diff: string): string {
 	return applyEdits(text, parsePatch(diff).edits).text;
 }
 
 const FILE = "a\nb\nc\nd\ne";
+
+describe("hashline section headers", () => {
+	it("accepts paths with spaces in anchored section headers", () => {
+		const section = Patch.parseSingle("¶dir with spaces/file.ts#1a2b\nreplace 1..1:\n+after");
+
+		expect(section.path).toBe("dir with spaces/file.ts");
+		expect(section.fileHash).toBe("1A2B");
+		expect(section.applyTo("before").text).toBe("after");
+	});
+
+	it("recovers apply_patch-contaminated headers whose paths contain spaces", () => {
+		const section = Patch.parseSingle("¶*** Update File: dir with spaces/file.ts#1A2B\nreplace 1..1:\n+after");
+
+		expect(section.path).toBe("dir with spaces/file.ts");
+		expect(section.fileHash).toBe("1A2B");
+		expect(section.applyTo("before").text).toBe("after");
+	});
+
+	it("rejects trailing junk after a snapshot tag", () => {
+		expect(() => Patch.parse("¶src/a.ts#1A2B copied from read\nreplace 1..1:\n+after")).toThrow(
+			/Input header must be/,
+		);
+		expect(() => Patch.parse("¶src/a.ts#1A2B:812\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+	});
+
+	it("rejects trailing junk after a snapshot tag even with apply_patch noise", () => {
+		expect(() => Patch.parse("¶Update File: src/a.ts#1A2B copied from read\nreplace 1..1:\n+after")).toThrow(
+			/Input header must be/,
+		);
+		expect(() => Patch.parse("¶Update File: src/a.ts#1A2B:812\nreplace 1..1:\n+after")).toThrow(
+			/Input header must be/,
+		);
+	});
+
+	it("rejects malformed snapshot tags", () => {
+		expect(() => Patch.parse("¶src/a.ts#1A2\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+		expect(() => Patch.parse("¶src/a.ts#1A2G\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+		expect(() => Patch.parse("¶src/a.ts#1A2B5\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+	});
+
+	it("rejects malformed snapshot tags even with apply_patch noise", () => {
+		expect(() => Patch.parse("¶Update File: src/a.ts#1A2G\nreplace 1..1:\n+after")).toThrow(/Input header must be/);
+	});
+});
 
 describe("hashline core — verb header forms", () => {
 	it("rejects a bare single-number hunk header with verb guidance", () => {

@@ -131,26 +131,6 @@ describe("TUI overlays", () => {
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
 	});
 
-	it("preserves preexisting terminal scrollback on startup resize redraw", async () => {
-		const term = new VirtualTerminal(40, 4);
-		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
-		await flushRender(term);
-
-		const tui = new TUI(term);
-		const component = new MutableContentComponent(["ui-0", "ui-1", "ui-2", "ui-3", "ui-4", "ui-5"]);
-		tui.addChild(component);
-
-		tui.start();
-		await flushRender(term);
-
-		term.resize(39, 4);
-		await flushRender(term);
-
-		const scrollback = term.getScrollBuffer().join("\n");
-		expect(scrollback.includes("shell-0")).toBeTruthy();
-
-		tui.stop();
-	});
 	it("clears stale viewport content on launch without clearing shell scrollback", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
@@ -327,7 +307,7 @@ describe("TUI overlays", () => {
 			tui.stop();
 		}
 	});
-	it("renders viewport-only on resize when content size is stable", async () => {
+	it("keeps scrollback bounded on resize when content size is stable", async () => {
 		const term = new VirtualTerminal(60, 8);
 		const tui = new TUI(term);
 		const component = new MutableContentComponent(Array.from({ length: 140 }, (_v, i) => `row-${i}`));
@@ -387,25 +367,7 @@ describe("TUI overlays", () => {
 		}
 	});
 
-	it("keeps scrollback on viewport-only resize redraw", async () => {
-		const term = new VirtualTerminal(40, 4);
-		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\n");
-		await flushRender(term);
-		const tui = new TUI(term);
-		tui.addChild(new MutableContentComponent(["ui-0", "ui-1", "ui-2", "ui-3", "ui-4"]));
-		try {
-			tui.start();
-			await flushRender(term);
-			term.resize(39, 4);
-			await flushRender(term);
-			const scrollback = term.getScrollBuffer().join("\n");
-			expect(scrollback.includes("shell-0")).toBeTruthy();
-		} finally {
-			tui.stop();
-		}
-	});
-
-	it("pushes overflow growth into scrollback during viewport repaint", async () => {
+	it("pushes overflow growth into scrollback on resize", async () => {
 		const term = new VirtualTerminal(40, 4);
 		const tui = new TUI(term);
 		const component = new MutableContentComponent(buildRows(4));

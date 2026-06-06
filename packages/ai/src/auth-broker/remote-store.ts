@@ -73,11 +73,17 @@ export interface RemoteAuthCredentialStoreOptions {
 	 * to long-poll permanently when the broker returns 404. Default `true`.
 	 */
 	streamSnapshots?: boolean;
+	/**
+	 * Called after broker-sourced full snapshots are applied. The constructor's
+	 * initial snapshot intentionally does not trigger this hook.
+	 */
+	onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
 }
 
 export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	readonly #client: AuthBrokerClient;
 	readonly #streamSnapshots: boolean;
+	readonly #onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
 	#snapshot: SnapshotResponse = emptySnapshot();
 	#snapshotReceivedAt = Date.now();
 	#generation = 0;
@@ -100,6 +106,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#client = opts.client;
 		this.#streamSnapshots = opts.streamSnapshots ?? true;
 		this.#applySnapshot(opts.initialSnapshot ?? emptySnapshot(), opts.initialSnapshot?.generation ?? 0);
+		this.#onSnapshot = opts.onSnapshot;
 		void this.#runBackground();
 	}
 
@@ -115,6 +122,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#snapshot = snapshot;
 		this.#generation = generation;
 		this.#snapshotReceivedAt = Date.now();
+		const onSnapshot = this.#onSnapshot;
+		if (!onSnapshot) return;
+		try {
+			onSnapshot(snapshot, generation);
+		} catch (error) {
+			logger.debug("auth-broker snapshot callback failed", { error: String(error) });
+		}
 	}
 
 	async #runBackground(): Promise<void> {

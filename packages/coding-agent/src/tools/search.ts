@@ -16,7 +16,15 @@ import type { InternalResource, ResolveContext } from "../internal-urls/types";
 import type { Theme } from "../modes/theme/theme";
 import searchDescription from "../prompts/tools/search.md" with { type: "text" };
 import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead, truncateLine } from "../session/streaming-output";
-import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import {
+	Ellipsis,
+	fileHyperlink,
+	renderStatusLine,
+	renderTreeList,
+	truncateToWidth,
+	tryResolveInternalUrlSync,
+	uriHyperlink,
+} from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import {
@@ -38,6 +46,8 @@ import {
 	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
+	selectorLineRanges,
+	splitInternalUrlSel,
 	splitPathAndSel,
 } from "./path-utils";
 import {
@@ -109,6 +119,21 @@ interface SearchPathSpec {
 function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 	const specs: SearchPathSpec[] = [];
 	for (const entry of rawEntries) {
+		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
+		// which peels selector-shaped tails only for selector-capable schemes and
+		// leaves opaque ones (`mcp://`) intact. Unlike filesystem paths, their
+		// verbatim/index display modes (`raw`, `conflicts`) carry no meaning for
+		// content search, so we accept them — searching the whole resource — and
+		// still honor any embedded line range as a match filter.
+		const internalSplit = splitInternalUrlSel(entry);
+		if (internalSplit.sel !== undefined) {
+			specs.push({
+				original: entry,
+				clean: internalSplit.path,
+				ranges: selectorLineRanges(internalSplit.sel),
+			});
+			continue;
+		}
 		const split = splitPathAndSel(entry);
 		let clean = entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
@@ -259,7 +284,7 @@ interface IndexedContentLines {
 }
 
 const INTERNAL_URL_DISPLAY_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
-const OMP_ROOT_URL_RE = /^omp:\/\/\/?$/i;
+const OMP_ROOT_URL_RE = /^omp:\/\/(?:\/?|docs\/?)$/i;
 
 function normalizeSearchLine(line: string): string {
 	return line.endsWith("\r") ? line.slice(0, -1) : line;
@@ -1145,6 +1170,26 @@ interface SearchRenderArgs {
 
 const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 
+const SEARCH_CODE_FRAME_LINE_RE = /^\s*\*?(\d+)│/;
+
+function searchScopeMeta(details: SearchToolDetails | undefined): string | undefined {
+	if (!details?.scopePath) return undefined;
+	const label = details.searchPath ? fileHyperlink(details.searchPath, details.scopePath) : details.scopePath;
+	return `in ${label}`;
+}
+
+function linkUrlLikeSearchHeader(raw: string, styled: string): { line: string; absPath?: string } {
+	const resolvedPath = tryResolveInternalUrlSync(raw);
+	if (resolvedPath) return { line: fileHyperlink(resolvedPath, styled), absPath: resolvedPath };
+	return { line: uriHyperlink(raw, styled) };
+}
+
+function parseSearchDisplayLineNumber(line: string): number | undefined {
+	const match = SEARCH_CODE_FRAME_LINE_RE.exec(line);
+	if (!match) return undefined;
+	return Number.parseInt(match[1]!, 10);
+}
+
 export const searchToolRenderer = {
 	inline: true,
 	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -1220,8 +1265,11 @@ export const searchToolRenderer = {
 				: undefined;
 
 		if (matchCount === 0) {
+			const meta = ["0 matches"];
+			const scopeMeta = searchScopeMeta(details);
+			if (scopeMeta) meta.push(scopeMeta);
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Search", description: args?.pattern, meta: ["0 matches"] },
+				{ icon: "warning", title: "Search", description: args?.pattern, meta },
 				uiTheme,
 			);
 			const lines = [header, formatEmptyMessage("No matches found", uiTheme)];
@@ -1231,7 +1279,8 @@ export const searchToolRenderer = {
 
 		const summaryParts = [formatCount("match", matchCount), formatCount("file", fileCount)];
 		const meta = [...summaryParts];
-		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
+		const scopeMeta = searchScopeMeta(details);
+		if (scopeMeta) meta.push(scopeMeta);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const description = args?.pattern ?? undefined;
 		const header = renderStatusLine(
@@ -1270,10 +1319,11 @@ export const searchToolRenderer = {
 						maxCollapsedLines: collapsedMatchLineBudget,
 						itemType: "match",
 						renderItem: group => {
-							// Track directory context within a group for ## file headers.
-							// `# foo/` is a directory header; `# foo.ts` is a root-level file
-							// from formatGroupedFiles (single-# when directory is `.`).
+							// Track directory/file context within a group so headers and code-frame
+							// lines link to the backing file, with line-specific links for matches.
 							let contextDir = searchBase ?? "";
+							const hasFileHeader = group.some(line => line.startsWith("# "));
+							let currentFilePath: string | undefined = hasFileHeader ? undefined : searchBase;
 							return group.map(line => {
 								if (line.startsWith("## ")) {
 									// Strip optional ` (suffix)` and `#hash` before resolving.
@@ -1283,6 +1333,7 @@ export const searchToolRenderer = {
 										.replace(/\s+\([^)]*\)\s*$/, "")
 										.replace(/#[0-9a-f]+$/, "");
 									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+									currentFilePath = absPath;
 									const styled = uiTheme.fg("dim", line);
 									return absPath ? fileHyperlink(absPath, styled) : styled;
 								}
@@ -1293,22 +1344,37 @@ export const searchToolRenderer = {
 										.replace(/\s+\([^)]*\)\s*$/, "");
 									if (INTERNAL_URL_DISPLAY_RE.test(raw)) {
 										contextDir = "";
-										return uiTheme.fg("accent", line);
+										const styled = uiTheme.fg("accent", line);
+										const linked = linkUrlLikeSearchHeader(raw, styled);
+										currentFilePath = linked.absPath;
+										return linked.line;
 									}
 									const isDirectory = raw.endsWith("/");
 									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
 									if (isDirectory) {
-										if (searchBase) {
-											contextDir = name === "." ? searchBase : path.join(searchBase, name);
+										const absPath = searchBase
+											? name === "."
+												? searchBase
+												: path.join(searchBase, name)
+											: undefined;
+										if (absPath) {
+											contextDir = absPath;
 										}
-										return uiTheme.fg("accent", line);
+										currentFilePath = undefined;
+										const styled = uiTheme.fg("accent", line);
+										return absPath ? fileHyperlink(absPath, styled) : styled;
 									}
 									// Root-level file emitted by formatGroupedFiles when the directory is `.`.
 									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+									currentFilePath = absPath;
 									const styled = uiTheme.fg("accent", line);
 									return absPath ? fileHyperlink(absPath, styled) : styled;
 								}
-								return uiTheme.fg("toolOutput", line);
+								const styled = uiTheme.fg("toolOutput", line);
+								const lineNumber = parseSearchDisplayLineNumber(line);
+								return currentFilePath && lineNumber !== undefined
+									? fileHyperlink(currentFilePath, styled, { line: lineNumber })
+									: styled;
 							});
 						},
 					},

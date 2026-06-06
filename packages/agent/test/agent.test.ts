@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { SimpleStreamOptions } from "@oh-my-pi/pi-ai";
-import { z } from "@oh-my-pi/pi-ai";
+import { Agent, type AgentEvent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { type SimpleStreamOptions, z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { createAssistantMessage } from "./helpers";
 
 describe("Agent", () => {
@@ -78,6 +78,117 @@ describe("Agent", () => {
 		const recentMessages = agent.state.messages.slice(-4);
 		expect(recentMessages.map(m => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
 		expect(mock.calls.length).toBe(2);
+	});
+
+	it("prompt() emits assistant error lifecycle for Anthropic output-blocked stream errors before assistant start", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "Output blocked by content filtering policy";
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => stream.fail(new Error(errorText)));
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		const unsubscribe = agent.subscribe(event => events.push(event));
+
+		await agent.prompt("trigger");
+		unsubscribe();
+
+		const assistantStartIndex = events.findIndex(
+			event => event.type === "message_start" && event.message.role === "assistant",
+		);
+		const assistantEndIndex = events.findIndex(
+			event => event.type === "message_end" && event.message.role === "assistant",
+		);
+		const turnEndIndex = events.findIndex(event => event.type === "turn_end");
+		const agentEndIndex = events.findIndex(event => event.type === "agent_end");
+		expect(assistantStartIndex).toBeGreaterThan(-1);
+		expect(assistantEndIndex).toBeGreaterThan(assistantStartIndex);
+		expect(turnEndIndex).toBeGreaterThan(assistantEndIndex);
+		expect(agentEndIndex).toBeGreaterThan(turnEndIndex);
+
+		const assistantEnd = events[assistantEndIndex];
+		if (assistantEnd?.type !== "message_end" || assistantEnd.message.role !== "assistant") {
+			throw new Error("assistant message_end not emitted");
+		}
+		expect(assistantEnd.message.stopReason).toBe("error");
+		expect(assistantEnd.message.errorMessage).toBe(errorText);
+
+		const lastMessage = agent.state.messages.at(-1);
+		if (lastMessage?.role !== "assistant") {
+			throw new Error("assistant error was not appended");
+		}
+		expect(lastMessage.stopReason).toBe("error");
+		expect(lastMessage.errorMessage).toBe(errorText);
+	});
+
+	it("prompt() keeps unrelated provider stream failures out of the assistant lifecycle", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "connection reset";
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => stream.fail(new Error(errorText)));
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		const unsubscribe = agent.subscribe(event => events.push(event));
+
+		await agent.prompt("trigger");
+		unsubscribe();
+
+		expect(events.some(event => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
+		expect(events.some(event => event.type === "message_end" && event.message.role === "assistant")).toBe(false);
+		const agentEnd = events.find(event => event.type === "agent_end");
+		if (agentEnd?.type !== "agent_end") {
+			throw new Error("agent_end not emitted");
+		}
+		const errorMessage = agentEnd.messages.find(message => message.role === "assistant");
+		if (errorMessage?.role !== "assistant") {
+			throw new Error("assistant error was not included in agent_end");
+		}
+		expect(errorMessage.errorMessage).toBe(errorText);
+	});
+
+	it("prompt() finalizes an existing assistant stream for Anthropic output-blocked stream errors", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "Output blocked by content filtering policy";
+		const started = createAssistantMessage([{ type: "text", text: "partial" }]);
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: started });
+					stream.fail(new Error(errorText));
+				});
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		const unsubscribe = agent.subscribe(event => events.push(event));
+
+		await agent.prompt("trigger");
+		unsubscribe();
+
+		const assistantStarts = events.filter(
+			event => event.type === "message_start" && event.message.role === "assistant",
+		);
+		const assistantEnds = events.filter(event => event.type === "message_end" && event.message.role === "assistant");
+		expect(assistantStarts).toHaveLength(1);
+		expect(assistantEnds).toHaveLength(1);
+
+		const assistantEnd = assistantEnds[0];
+		if (assistantEnd?.type !== "message_end" || assistantEnd.message.role !== "assistant") {
+			throw new Error("assistant message_end not emitted");
+		}
+		expect(assistantEnd.message.stopReason).toBe("error");
+		expect(assistantEnd.message.errorMessage).toBe(errorText);
 	});
 
 	it("prompt() refreshes tools and system prompt between same-turn model calls", async () => {
