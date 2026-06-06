@@ -1,5 +1,14 @@
 /**
- * Minimal TUI implementation with differential rendering
+ * Minimal TUI implementation with differential rendering.
+ *
+ * Before changing the render planner, native-scrollback bookkeeping, capability
+ * detection, or width math, read `docs/tui-core-renderer.md`: it documents the
+ * failure modes (yank / corruption / flash / width crashes) and the invariants
+ * this engine must not violate. The short version: the renderer cannot observe
+ * the terminal's scroll position on most hosts, so ED3 (`CSI 3 J`) is confined
+ * to the destructive `clearScrollback` path, an unobservable viewport probe is
+ * never trusted for passive streaming, and the hot path clamps over-wide lines
+ * instead of throwing.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
