@@ -511,7 +511,14 @@ export const evalToolRenderer = {
 							status: "pending",
 							width,
 							codeMaxLines: EVAL_DEFAULT_PREVIEW_LINES,
-							expanded: true,
+							// Cap the streaming call preview to `codeMaxLines` (do NOT expand):
+							// a >100-line `code` arg would otherwise render every line, overflow
+							// the viewport, and — because a tool block is volatile (it collapses
+							// to a capped result) — strand its scrolled-off head out of native
+							// scrollback, cutting the box top until the result lands. The result
+							// renderer already caps to the same preview, so this keeps the
+							// streaming and resolved shapes consistent.
+							expanded: false,
 							animate,
 						},
 						uiTheme,
