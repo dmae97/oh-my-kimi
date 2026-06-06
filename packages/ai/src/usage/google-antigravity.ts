@@ -161,24 +161,43 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	for (const [_modelId, modelInfo] of Object.entries(data.models ?? {})) {
 		const quotaInfos = normalizeQuotaInfos(modelInfo);
 		for (const quotaInfo of quotaInfos) {
-			if (quotaInfo.remainingFraction === undefined) continue;
 			const amount = buildAmount(quotaInfo);
 			const window = parseWindow(quotaInfo);
 			if (window?.resetsAt) {
 				earliestReset = earliestReset ? Math.min(earliestReset, window.resetsAt) : window.resetsAt;
 			}
-			const tier = quotaInfo.tier ?? "default";
+			const tier = (quotaInfo.tier ?? "default").toLowerCase();
 			const windowId = window?.id ?? "default";
 			const key = `${tier}|${windowId}`;
 			const existing = deduped.get(key);
-			if (
-				!existing ||
-				(existing.amount.remainingFraction !== undefined &&
-					amount.remainingFraction !== undefined &&
-					amount.remainingFraction < existing.amount.remainingFraction)
-			) {
+			if (!existing) {
 				deduped.set(key, { amount, window, tier: quotaInfo.tier });
+				continue;
 			}
+			// Merge: keep the entry with fraction data for the bar, but
+			// also keep any window with a reset time so "resets in…" survives.
+			const eFrac = existing.amount.remainingFraction;
+			const cFrac = amount.remainingFraction;
+			const eHasFrac = eFrac !== undefined;
+			const cHasFrac = cFrac !== undefined;
+
+			let bestAmount = existing.amount;
+			let bestWindow = existing.window?.resetsAt ? existing.window : (window ?? existing.window);
+			let bestTier = existing.tier ?? quotaInfo.tier;
+
+			if (!eHasFrac && cHasFrac) {
+				bestAmount = amount;
+				bestTier = quotaInfo.tier ?? existing.tier;
+			} else if (eHasFrac && cHasFrac && cFrac! < eFrac!) {
+				bestAmount = amount;
+				bestTier = quotaInfo.tier ?? existing.tier;
+			}
+			// Always merge in window with reset time if the current
+			// best doesn't have one.
+			if (!bestWindow?.resetsAt && window?.resetsAt) {
+				bestWindow = window;
+			}
+			deduped.set(key, { amount: bestAmount, window: bestWindow, tier: bestTier });
 		}
 	}
 

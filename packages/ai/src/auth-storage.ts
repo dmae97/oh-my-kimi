@@ -3933,6 +3933,8 @@ function resolveProviderCredentialIdentityKey(provider: string, identifiers: str
 	if ((provider === "openai-codex" || provider === "anthropic") && emailIdentifier) return emailIdentifier;
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
+	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
+	if (projectIdentifier) return projectIdentifier;
 	if (emailIdentifier) return emailIdentifier;
 	return null;
 }
@@ -3969,6 +3971,8 @@ function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[
 	if (accountId) identifiers.add(`account:${accountId}`);
 	const email = normalizeStoredEmail(credential.email);
 	if (email) identifiers.add(`email:${email}`);
+	const projectId = normalizeStoredAccountId(credential.projectId);
+	if (projectId) identifiers.add(`project:${projectId}`);
 	const accessIdentifiers = extractOAuthTokenIdentifiers(credential.access) ?? [];
 	for (const identifier of accessIdentifiers) {
 		identifiers.add(identifier);
