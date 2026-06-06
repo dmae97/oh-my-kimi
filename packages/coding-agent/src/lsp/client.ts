@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { isEnoent, logger, ptree, untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { applyWorkspaceEdit } from "./edits";
@@ -320,6 +321,22 @@ async function startMessageReader(client: LspClient): Promise<void> {
 }
 
 /**
+ * Build the workspace folder list advertised to the server. Identical shape
+ * for `initialize` params and `workspace/workspaceFolders` server requests.
+ */
+function currentWorkspaceFolders(client: LspClient): Array<{ uri: string; name: string }> {
+	return [{ uri: fileToUri(client.cwd), name: path.basename(client.cwd) || "workspace" }];
+}
+
+/**
+ * Handle workspace/workspaceFolders requests from the server.
+ */
+async function handleWorkspaceFoldersRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
+	if (typeof message.id !== "number") return;
+	await sendResponse(client, message.id, currentWorkspaceFolders(client), "workspace/workspaceFolders");
+}
+
+/**
  * Handle workspace/configuration requests from the server.
  */
 async function handleConfigurationRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
@@ -363,6 +380,10 @@ async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequ
 async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
 	if (message.method === "workspace/configuration") {
 		await handleConfigurationRequest(client, message);
+		return;
+	}
+	if (message.method === "workspace/workspaceFolders") {
+		await handleWorkspaceFoldersRequest(client, message);
 		return;
 	}
 	if (message.method === "workspace/applyEdit") {
@@ -584,7 +605,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 					rootPath: cwd,
 					capabilities: CLIENT_CAPABILITIES,
 					initializationOptions: config.initOptions ?? {},
-					workspaceFolders: [{ uri: fileToUri(cwd), name: cwd.split("/").pop() ?? "workspace" }],
+					workspaceFolders: currentWorkspaceFolders(client),
 				},
 				undefined, // signal
 				initTimeoutMs,

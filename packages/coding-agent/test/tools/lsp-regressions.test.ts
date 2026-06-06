@@ -216,6 +216,81 @@ for await (const chunk of Bun.stdin.stream()) {
 		}
 	});
 
+	it("answers workspace/workspaceFolders requests with the current folder set", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-workspace-folders-request-");
+		try {
+			const responsePath = path.join(tempDir.path(), "folders-response.json");
+			const serverPath = path.join(tempDir.path(), "server.ts");
+			await Bun.write(
+				serverPath,
+				`
+const responsePath = process.argv[2];
+const decoder = new TextDecoder();
+let buffer = "";
+
+function send(message) {
+	const content = JSON.stringify(message);
+	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
+}
+
+for await (const chunk of Bun.stdin.stream()) {
+	buffer += decoder.decode(chunk, { stream: true });
+	while (true) {
+		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+		if (headerEnd === -1) break;
+
+		const header = buffer.slice(0, headerEnd);
+		const match = /Content-Length: (\\d+)/i.exec(header);
+		if (!match) process.exit(2);
+
+		const contentLength = Number(match[1]);
+		const contentStart = headerEnd + 4;
+		const contentEnd = contentStart + contentLength;
+		if (buffer.length < contentEnd) break;
+
+		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
+		buffer = buffer.slice(contentEnd);
+
+		if (message.method === "initialize") {
+			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+			send({ jsonrpc: "2.0", id: 9001, method: "workspace/workspaceFolders" });
+		} else if (message.id === 9001) {
+			await Bun.write(responsePath, JSON.stringify(message));
+		} else if (message.method === "shutdown") {
+			send({ jsonrpc: "2.0", id: message.id, result: null });
+		} else if (message.method === "exit") {
+			process.exit(0);
+		}
+	}
+}
+`,
+			);
+
+			const server: ServerConfig = {
+				command: process.execPath,
+				args: [serverPath, responsePath],
+				fileTypes: ["rs"],
+				rootMarkers: [],
+			};
+
+			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
+			const deadline = Date.now() + 1_000;
+			while (!fs.existsSync(responsePath) && Date.now() < deadline) {
+				await Bun.sleep(20);
+			}
+			const response = (await Bun.file(responsePath).json()) as {
+				error?: { code: number };
+				result?: unknown;
+			};
+
+			expect(response.error).toBeUndefined();
+			expect(response.result).toEqual([{ uri: fileToUri(tempDir.path()), name: path.basename(tempDir.path()) }]);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("opens rust-analyzer Cargo workspace files before polling workspace readiness", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
 		try {
