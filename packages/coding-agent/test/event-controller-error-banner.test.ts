@@ -7,8 +7,10 @@
  * `agent_start` via `ctx.clearPinnedError`. Aborts and normal stops must NOT
  * pin a banner.
  */
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ErrorBannerComponent } from "@oh-my-pi/pi-coding-agent/modes/components/error-banner";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -40,12 +42,22 @@ beforeAll(async () => {
 	await initTheme(false);
 });
 
+beforeEach(async () => {
+	resetSettingsForTest();
+	await Settings.init({ inMemory: true });
+});
+
+afterEach(() => {
+	resetSettingsForTest();
+});
+
 function createFixture(streamingMessage?: AssistantMessage) {
 	const streamingComponent = {
 		updateContent: vi.fn(),
 		setUsageInfo: vi.fn(),
 		setComplete: vi.fn(),
 		markTranscriptBlockFinalized: vi.fn(),
+		setErrorPinned: vi.fn(),
 	};
 	const showPinnedError = vi.fn();
 	const clearPinnedError = vi.fn();
@@ -67,14 +79,14 @@ function createFixture(streamingMessage?: AssistantMessage) {
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);
-	return { controller, ctx, showPinnedError, clearPinnedError };
+	return { controller, ctx, showPinnedError, clearPinnedError, streamingComponent };
 }
 
 describe("EventController error banner", () => {
 	it("pins the provider error above the editor when an assistant turn ends on stopReason error", async () => {
 		const errorMessage = "Output blocked by content filtering policy";
 		const message = makeAssistantMessage({ stopReason: "error", errorMessage });
-		const { controller, showPinnedError } = createFixture(message);
+		const { controller, showPinnedError, streamingComponent } = createFixture(message);
 
 		await controller.handleEvent({ type: "message_end", message } as Extract<
 			AgentSessionEvent,
@@ -83,6 +95,26 @@ describe("EventController error banner", () => {
 
 		expect(showPinnedError).toHaveBeenCalledTimes(1);
 		expect(showPinnedError).toHaveBeenCalledWith(errorMessage);
+		// The same error is mirrored in the banner, so the transcript's inline
+		// `Error: …` line is suppressed to avoid a duplicate render.
+		expect(streamingComponent.setErrorPinned).toHaveBeenCalledWith(true);
+	});
+
+	it("restores the transcript inline error when the next turn starts", async () => {
+		const errorMessage = "Output blocked by content filtering policy";
+		const message = makeAssistantMessage({ stopReason: "error", errorMessage });
+		const { controller, clearPinnedError, streamingComponent } = createFixture(message);
+
+		await controller.handleEvent({ type: "message_end", message } as Extract<
+			AgentSessionEvent,
+			{ type: "message_end" }
+		>);
+		streamingComponent.setErrorPinned.mockClear();
+
+		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
+
+		expect(clearPinnedError).toHaveBeenCalledTimes(1);
+		expect(streamingComponent.setErrorPinned).toHaveBeenCalledWith(false);
 	});
 
 	it("does not pin a banner for a normal assistant stop", async () => {
@@ -133,5 +165,24 @@ describe("ErrorBannerComponent", () => {
 		const detailLines = lines.filter(line => line.includes("error detail line"));
 		expect(detailLines.length).toBeLessThanOrEqual(3);
 		expect(detailLines.length).toBeGreaterThan(0);
+	});
+});
+
+describe("AssistantMessageComponent error pinning", () => {
+	it("hides the inline error while pinned and restores it afterwards", () => {
+		const message = makeAssistantMessage({
+			content: [],
+			stopReason: "error",
+			errorMessage: "400 invalid reasoning value",
+		});
+		const component = new AssistantMessageComponent(message);
+
+		expect(Bun.stripANSI(component.render(120).join("\n"))).toContain("Error: 400 invalid reasoning value");
+
+		component.setErrorPinned(true);
+		expect(Bun.stripANSI(component.render(120).join("\n"))).not.toContain("Error: 400 invalid reasoning value");
+
+		component.setErrorPinned(false);
+		expect(Bun.stripANSI(component.render(120).join("\n"))).toContain("Error: 400 invalid reasoning value");
 	});
 });

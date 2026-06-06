@@ -49,9 +49,15 @@ export class EventController {
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
 	#assistantMessageStreaming = false;
+	#agentTurnActive = false;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
+	// Assistant component whose turn-ending error is currently mirrored in the
+	// pinned banner. Its inline `Error: …` line is suppressed while pinned and
+	// restored when the banner clears at the next `agent_start` (see
+	// #handleMessageEnd / #handleAgentStart).
+	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
 	#handlers: AgentSessionEventHandlers;
@@ -172,21 +178,21 @@ export class EventController {
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
-		// While assistant text or a foreground tool is streaming, rows above the
-		// viewport can re-layout after they have already entered native scrollback
-		// (Markdown fences, wrapping, previews). Let the TUI rebuild history on
-		// those offscreen edits instead of deferring, which otherwise leaves stale
-		// tail rows duplicated above the live viewport.
-		// Background-running tools are excluded so late async updates outside the
-		// active foreground stream keep the no-yank deferral; agent_start resets
-		// the mode at every turn boundary.
+		// While an assistant turn is active, visible status chrome and foreground
+		// transcript blocks can re-render after rows have entered native scrollback
+		// (idle Working loader, Markdown fences, wrapping, tool previews). Let the
+		// TUI use its foreground live-region path instead of idle deferral, which
+		// can otherwise leave the loader/status frame frozen until the next input.
+		// Background-running tools after the turn ends are excluded so late async
+		// updates keep the no-yank deferral; agent_start/agent_end bracket the
+		// foreground turn.
 		if (STREAM_RENDER_MODE_EVENTS[event.type]) {
 			this.#refreshToolRenderMode();
 		}
 	}
 
 	#refreshToolRenderMode(): void {
-		let foregroundToolActive = this.#assistantMessageStreaming;
+		let foregroundToolActive = this.#agentTurnActive || this.#assistantMessageStreaming;
 		if (!foregroundToolActive) {
 			for (const toolCallId of this.ctx.pendingTools.keys()) {
 				if (!this.#backgroundToolCallIds.has(toolCallId)) {
@@ -199,11 +205,16 @@ export class EventController {
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
+		this.#agentTurnActive = true;
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
+		// Restore the previous turn's inline error in the transcript before dropping
+		// the banner, so the error stays in history once the banner is gone.
+		this.#pinnedErrorComponent?.setErrorPinned(false);
+		this.#pinnedErrorComponent = undefined;
 		this.ctx.clearPinnedError();
 		if (this.ctx.retryEscapeHandler) {
 			this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
@@ -215,6 +226,7 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		this.#cancelIdleCompaction();
+		this.#refreshToolRenderMode();
 		this.ctx.ensureLoadingAnimation();
 		this.ctx.ui.requestRender();
 	}
@@ -493,12 +505,15 @@ export class EventController {
 			this.ctx.streamingMessage = undefined;
 			// Pin a turn-ending provider error (e.g. Anthropic content-filter block)
 			// above the editor so it survives transcript scroll. Cleared at the next
-			// turn's agent_start.
+			// turn's agent_start. Suppress the transcript's inline `Error: …` line for
+			// the same message while pinned so the error isn't rendered twice.
 			if (
 				event.message.stopReason === "error" &&
 				event.message.errorMessage &&
 				!isSilentAbort(event.message.errorMessage)
 			) {
+				this.#lastAssistantComponent?.setErrorPinned(true);
+				this.#pinnedErrorComponent = this.#lastAssistantComponent;
 				this.ctx.showPinnedError(event.message.errorMessage);
 			}
 			this.ctx.statusLine.invalidate();
@@ -646,6 +661,7 @@ export class EventController {
 		}
 	}
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		this.#agentTurnActive = false;
 		this.#assistantMessageStreaming = false;
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();

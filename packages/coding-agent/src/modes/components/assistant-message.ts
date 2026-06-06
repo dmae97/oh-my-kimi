@@ -18,6 +18,15 @@ export class AssistantMessageComponent extends Container {
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
 	#transcriptBlockFinalized: boolean;
+	/**
+	 * When true, the turn-ending `Error: …` line for `stopReason === "error"` is
+	 * suppressed because the same error is currently shown in the pinned banner
+	 * above the editor (see `EventController` + `ErrorBannerComponent`). Avoids
+	 * rendering the identical error twice (inline + banner) at the error moment.
+	 * Restored to `false` when the banner is cleared at the next turn so the
+	 * transcript keeps the error in history.
+	 */
+	#errorPinned = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -47,6 +56,18 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
+	}
+
+	/**
+	 * Toggle suppression of the inline `Error: …` line while the same error is
+	 * pinned in the banner above the editor. Re-renders so the change is visible.
+	 */
+	setErrorPinned(pinned: boolean): void {
+		if (this.#errorPinned === pinned) return;
+		this.#errorPinned = pinned;
+		if (this.#lastMessage) {
+			this.updateContent(this.#lastMessage);
+		}
 	}
 
 	isTranscriptBlockFinalized(): boolean {
@@ -246,7 +267,7 @@ export class AssistantMessageComponent extends Container {
 					this.#contentContainer.addChild(new Spacer(1));
 				}
 				this.#contentContainer.addChild(new Text(theme.fg("error", abortMessage), 1, 0));
-			} else if (message.stopReason === "error") {
+			} else if (message.stopReason === "error" && !this.#errorPinned) {
 				const errorMsg = message.errorMessage || "Unknown error";
 				this.#contentContainer.addChild(new Spacer(1));
 				this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), 1, 0));

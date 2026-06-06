@@ -55,9 +55,7 @@ function stripApplyPatchPathNoise(pathText: string): string {
  */
 function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	if (!line.startsWith(HL_FILE_PREFIX) || !line.endsWith(HL_FILE_SUFFIX)) return null;
-	const body = stripApplyPatchPathNoise(
-		line.slice(HL_FILE_PREFIX.length, line.length - HL_FILE_SUFFIX.length).trim(),
-	);
+	const body = stripApplyPatchPathNoise(line.slice(HL_FILE_PREFIX.length, line.length - HL_FILE_SUFFIX.length).trim());
 	if (body.length === 0) return null;
 
 	// Trailing `#XXXX` is the tag; everything before it is the path. The

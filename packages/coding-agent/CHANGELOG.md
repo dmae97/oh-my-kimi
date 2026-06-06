@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Fixed the idle `Working...` loader freezing on ED3-risk terminals with unobservable native scrollback by keeping foreground live-region rendering enabled from `agent_start` until `agent_end`, before the first assistant or tool event arrives.
 - Fixed framed tool output blocks rendering one column inset inside tool boxes; modern bordered blocks now span the same width as legacy background-filled tool boxes.
 - Fixed potential `TimeoutError` aborts for short `timeout` eval cells during long bridged `agent()`/`llm()` work where no progress events are emitted until completion
 - Fixed retry recovery to allow automatic retries without switching models when `retry.modelFallback` is disabled.
@@ -25,6 +26,7 @@
 - Fixed `sdk-async-job-manager-singleton` tests flaking under the full parallel suite. The four `createAgentSession`-based cases ran on the default 5000ms per-test timeout, which two real session startups can exceed when `test:ts` saturates the machine across packages; on timeout the still-running test body and `afterEach` reset raced, surfacing a spurious "Unhandled error between tests" on the `AsyncJobManager.instance()` assertion. They now carry an explicit 60000ms timeout, matching the convention used by the other session-creating tests in this suite.
 - Fixed streaming `eval`, `bash`, `ssh`, and `task` call previews overflowing the live transcript viewport and cutting off their top while pending. A volatile tool block taller than the viewport could strand its scrolled-off head out of native scrollback on ED3-risk terminals (committed nowhere, repainted nowhere) until the result landed. The pending `eval` source preview now follows the streaming edge in a bounded 12-line tail window (newest lines pinned to the bottom, "… N earlier lines" on top) so you can watch the code being written without the box overflowing; `bash`/`ssh` commands and `task` context use a bounded head+tail window. `Ctrl+O` still lifts the cap for a full view.
 - Fixed the streaming `write` call preview ignoring `Ctrl+O` so the expand toggle was a no-op while a file was being written. Unlike the `eval`/`bash`/`ssh`/`task` streaming previews, `formatStreamingContent` never received the `expanded` flag, leaving the preview pinned to a bounded 12-line tail window even after pressing `Ctrl+O` — so on a large write you could not widen past the streaming edge until the tool result landed. The preview now lifts the cap to the full file (head through tail) when expanded, matching the documented streaming-preview behavior of the other tools.
+- Fixed turn-ending provider errors rendering twice — once as the transcript's inline `Error: …` line and again in the pinned banner above the editor (added in 15.9.5). The inline line is now suppressed while the same error is mirrored in the banner and restored to the transcript when the banner clears at the next turn, so the error stays in history without the duplicate render at the error moment.
 
 ### Removed
 
