@@ -280,7 +280,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 
 	if (result.exitCode !== 0 || result.error) {
 		const failureMessage =
-			result.error ?? result.stderr ?? result.abortReason ?? `agent() subagent '${agentName}' failed.`;
+			result.error || result.stderr || result.abortReason || `agent() subagent '${agentName}' failed.`;
 		throw new ToolError(failureMessage);
 	}
 

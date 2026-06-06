@@ -231,6 +231,27 @@ describe("runEvalAgent", () => {
 		});
 		await expect(runEvalAgent({ prompt: "fail" }, { session: makeSession() })).rejects.toThrow("boom");
 	});
+
+	it("surfaces the abort reason when an aborted subagent has empty stderr", async () => {
+		// An aborted subagent returns exitCode 1 with stderr "" and error
+		// undefined; the real reason lives in abortReason. The bridge must not
+		// collapse the failure message to "" (which the Python prelude renders as
+		// the info-free "bridge call '__agent__' failed").
+		mockAgents();
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				aborted: true,
+				abortReason: "Subagent runtime limit exceeded (task.maxRuntimeMs=1000)",
+			}),
+		);
+
+		await expect(runEvalAgent({ prompt: "hello" }, { session: makeSession() })).rejects.toThrow(
+			"Subagent runtime limit exceeded (task.maxRuntimeMs=1000)",
+		);
+	});
 });
 
 describe("agent() through eval runtimes", () => {
