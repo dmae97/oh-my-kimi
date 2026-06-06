@@ -166,11 +166,7 @@ export class DapClient {
 			detached: true,
 		});
 
-		await waitForCondition(
-			() => isUnixSocketReady(socketPath),
-			10_000,
-			proc,
-		);
+		await waitForCondition(() => isUnixSocketReady(socketPath), 10_000, proc);
 
 		const { readable, writeSink, socket } = await connectSocket({ unix: socketPath });
 		const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
