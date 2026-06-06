@@ -728,6 +728,18 @@ describe("stripResidualCombiners", () => {
 		expect(normalized.anyOf).toBeUndefined();
 		expect(normalized.oneOf).toBeUndefined();
 	});
+
+	it("drops array-only keys when mixed-type collapse picks string from anyOf fixpoint", () => {
+		const stripped = stripResidualCombiners({
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "pr number, url, or branch",
+		}) as Record<string, unknown>;
+
+		expect(stripped.type).toBe("string");
+		expect(stripped.items).toBeUndefined();
+		expect(stripped.anyOf).toBeUndefined();
+		expect(stripped.description).toBe("pr number, url, or branch");
+	});
 });
 
 // ---------------------------------------------------------------------------
