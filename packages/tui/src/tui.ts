@@ -571,6 +571,11 @@ export class TUI extends Container {
 	get synchronizedOutput(): boolean {
 		return this.#synchronizedOutputEnabled;
 	}
+	#deccaraFillsEnabled(): boolean {
+		// DECCARA fill rectangles arrive after shortened row text; synchronized
+		// output hides that intermediate default-background state from users.
+		return TERMINAL.deccara && this.#synchronizedOutputEnabled;
+	}
 
 	/**
 	 * When enabled, live render frames rebuild native scrollback on offscreen and
@@ -2404,7 +2409,7 @@ export class TUI extends Container {
 		const visibleStart = Math.max(0, lines.length - height);
 		let fillSequence = "";
 		let visibleTexts: string[] | null = null;
-		if (TERMINAL.deccara && visibleStart < lines.length) {
+		if (this.#deccaraFillsEnabled() && visibleStart < lines.length) {
 			const visible: string[] = new Array(lines.length - visibleStart);
 			for (let k = 0; k < visible.length; k++) {
 				visible[k] = this.#fitLineToWidth(lines[visibleStart + k], width);
@@ -2504,7 +2509,7 @@ export class TUI extends Container {
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			visible[screenRow] = this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
 		}
-		const { texts, sequence } = TERMINAL.deccara
+		const { texts, sequence } = this.#deccaraFillsEnabled()
 			? planDeccaraFills(visible, width)
 			: { texts: visible, sequence: "" };
 		let buffer = `${this.#paintBeginSequence}\x1b[H`;
@@ -2814,7 +2819,12 @@ export class TUI extends Container {
 		const fillStart = Math.max(firstChanged, fillViewportTop);
 		let fillSequence = "";
 		let fillTexts: string[] | null = null;
-		if (TERMINAL.deccara && !appendStart && moveTargetRow <= prevViewportBottom && renderEnd >= fillStart) {
+		if (
+			this.#deccaraFillsEnabled() &&
+			!appendStart &&
+			moveTargetRow <= prevViewportBottom &&
+			renderEnd >= fillStart
+		) {
 			const slice: string[] = new Array(renderEnd - fillStart + 1);
 			for (let i = fillStart; i <= renderEnd; i++) {
 				slice[i - fillStart] = this.#fitLineToWidth(lines[i], width);

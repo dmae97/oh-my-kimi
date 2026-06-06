@@ -74,6 +74,41 @@ function countOccurrences(haystack: string, needle: string): number {
 	}
 }
 
+async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
+	const bunSnapshot: Record<string, string | undefined> = {};
+	const processSnapshot: Record<string, string | undefined> = {};
+	for (const key in patch) {
+		bunSnapshot[key] = Bun.env[key];
+		processSnapshot[key] = process.env[key];
+		const value = patch[key];
+		if (value === undefined) {
+			delete Bun.env[key];
+			delete process.env[key];
+		} else {
+			Bun.env[key] = value;
+			process.env[key] = value;
+		}
+	}
+	try {
+		return await run();
+	} finally {
+		for (const key in patch) {
+			const bunValue = bunSnapshot[key];
+			if (bunValue === undefined) {
+				delete Bun.env[key];
+			} else {
+				Bun.env[key] = bunValue;
+			}
+			const processValue = processSnapshot[key];
+			if (processValue === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = processValue;
+			}
+		}
+	}
+}
+
 describe("detectRectangularSgrSupport", () => {
 	it("enables only kitty, which implements the SGR-background extension", () => {
 		expect(detectRectangularSgrSupport("kitty", {})).toBe(true);
@@ -240,8 +275,17 @@ describe("planDeccaraFills", () => {
 
 describe("TUI DECCARA integration", () => {
 	const savedDeccara = TERMINAL.deccara;
+	const savedForceSyncOutput = Bun.env.PI_FORCE_SYNC_OUTPUT;
+	const savedNoSyncOutput = Bun.env.PI_NO_SYNC_OUTPUT;
+	const savedTuiSyncOutput = Bun.env.PI_TUI_SYNC_OUTPUT;
 
 	beforeEach(() => {
+		Bun.env.PI_FORCE_SYNC_OUTPUT = "1";
+		process.env.PI_FORCE_SYNC_OUTPUT = "1";
+		delete Bun.env.PI_NO_SYNC_OUTPUT;
+		delete process.env.PI_NO_SYNC_OUTPUT;
+		delete Bun.env.PI_TUI_SYNC_OUTPUT;
+		delete process.env.PI_TUI_SYNC_OUTPUT;
 		let monotonic = 0;
 		vi.spyOn(performance, "now").mockImplementation(() => {
 			monotonic += 20;
@@ -250,6 +294,27 @@ describe("TUI DECCARA integration", () => {
 	});
 
 	afterEach(() => {
+		if (savedForceSyncOutput === undefined) {
+			delete Bun.env.PI_FORCE_SYNC_OUTPUT;
+			delete process.env.PI_FORCE_SYNC_OUTPUT;
+		} else {
+			Bun.env.PI_FORCE_SYNC_OUTPUT = savedForceSyncOutput;
+			process.env.PI_FORCE_SYNC_OUTPUT = savedForceSyncOutput;
+		}
+		if (savedNoSyncOutput === undefined) {
+			delete Bun.env.PI_NO_SYNC_OUTPUT;
+			delete process.env.PI_NO_SYNC_OUTPUT;
+		} else {
+			Bun.env.PI_NO_SYNC_OUTPUT = savedNoSyncOutput;
+			process.env.PI_NO_SYNC_OUTPUT = savedNoSyncOutput;
+		}
+		if (savedTuiSyncOutput === undefined) {
+			delete Bun.env.PI_TUI_SYNC_OUTPUT;
+			delete process.env.PI_TUI_SYNC_OUTPUT;
+		} else {
+			Bun.env.PI_TUI_SYNC_OUTPUT = savedTuiSyncOutput;
+			process.env.PI_TUI_SYNC_OUTPUT = savedTuiSyncOutput;
+		}
 		setTerminalDeccara(savedDeccara);
 		vi.restoreAllMocks();
 	});
@@ -297,6 +362,32 @@ describe("TUI DECCARA integration", () => {
 		} finally {
 			tui.stop();
 		}
+	});
+
+	it("keeps padded fallback bytes when synchronized output is disabled", async () => {
+		await withEnvPatch(
+			{ PI_NO_SYNC_OUTPUT: "1", PI_FORCE_SYNC_OUTPUT: undefined, PI_TUI_SYNC_OUTPUT: undefined },
+			async () => {
+				setTerminalDeccara(true);
+				const term = new VirtualTerminal(40, 8);
+				const tui = new TUI(term);
+				tui.addChild(new BgPanelComponent(["", "", "", ""]));
+				const writes = captureWrites(term);
+
+				try {
+					tui.start();
+					await settle(term);
+					const out = writes.join("");
+
+					expect(out).not.toContain("$r");
+					expect(out).not.toContain(DECSACE_RECT);
+					expect(out).toContain(`${BG_OPEN}${" ".repeat(40)}`);
+					expect(term.getViewportRowBackgroundColumns(0)).toHaveLength(40);
+				} finally {
+					tui.stop();
+				}
+			},
+		);
 	});
 
 	it("preserves viewport text identically whether DECCARA is on or off", async () => {

@@ -7,6 +7,10 @@
 - Added `TUI.resetDisplay()` to force an immediate full-frame replay, including native scrollback when the host can safely clear it.
 - Added `setPaddingY` to `Box` so vertical padding can be updated programmatically after creation.
 
+### Fixed
+
+- Fixed DECCARA background-fill optimization running when synchronized output is disabled, which could expose default-background gaps during rapidly updating tool-use panels ([#2000](https://github.com/can1357/oh-my-pi/issues/2000)).
+
 ## [15.9.67] - 2026-06-06
 ### Added
 
