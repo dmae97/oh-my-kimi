@@ -242,6 +242,22 @@ async function fetchOllamaNativeModels(
 const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
+/**
+ * Ollama's OpenAI-compatible `reasoning.effort` only accepts
+ * `high|medium|low|max|none`; passing OMP's `minimal`/`xhigh` levels verbatim
+ * makes the server reject the turn with HTTP 400 `invalid reasoning value`.
+ * Map the two unsupported levels onto the closest accepted ones (`low`/`max`).
+ */
+const OLLAMA_REASONING_EFFORT_MAP = { minimal: "low", xhigh: "max" } as const;
+
+/** Stamp the Ollama reasoning-effort map onto a reasoning-capable model. */
+function applyOllamaReasoningCompat(model: Model<"openai-responses">): void {
+	if (!model.reasoning) return;
+	model.compat = {
+		...model.compat,
+		reasoningEffortMap: { ...OLLAMA_REASONING_EFFORT_MAP, ...model.compat?.reasoningEffortMap },
+	};
+}
 
 interface OllamaResolvedMetadata {
 	contextWindow: number;
@@ -1357,12 +1373,14 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						if (metadata.input) {
 							model.input = metadata.input;
 						}
+						applyOllamaReasoningCompat(model);
 					}),
 				);
 				return openAiCompatible;
 			}
 			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveMetadata);
 			if (nativeFallback && nativeFallback.length > 0) {
+				for (const model of nativeFallback) applyOllamaReasoningCompat(model);
 				return nativeFallback;
 			}
 			return openAiCompatible;
