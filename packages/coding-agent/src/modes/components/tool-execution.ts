@@ -31,7 +31,7 @@ import {
 	renderJsonTreeLines,
 } from "../../tools/json-tree";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
-import { toolRenderers } from "../../tools/renderers";
+import { type ToolRenderer, toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
 import { isFramedBlockComponent, renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
@@ -528,6 +528,32 @@ export class ToolExecutionComponent extends Container {
 		// continues while it runs and would otherwise pin an unbounded live region);
 		// a foreground tool streaming partial output stays live until it finishes.
 		return (this.#result.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
+	}
+
+	/**
+	 * While streaming its call preview, a tool block whose preview is append-only
+	 * (rows only grow at the bottom, never re-layout) lets the renderer commit the
+	 * scrolled-off head of an over-tall preview to native scrollback instead of
+	 * dropping it — the same anti-yank path a streaming assistant reply uses (see
+	 * {@link TranscriptContainer} + `NativeScrollbackLiveRegion`). Gated on the
+	 * call-preview phase (no result yet) so the boundary closes the instant the
+	 * preview swaps to a result that may collapse; the renderer decides whether
+	 * its current preview shape qualifies via `isStreamingPreviewAppendOnly`.
+	 */
+	isTranscriptBlockAppendOnly(): boolean {
+		// A result preview can collapse/re-layout; only the live call preview is a
+		// candidate. Sealed/aborted blocks are finalized, not streaming.
+		if (this.#sealed || this.#result !== undefined) return false;
+		const predicate =
+			(this.#tool as { isStreamingPreviewAppendOnly?: ToolRenderer["isStreamingPreviewAppendOnly"] } | undefined)
+				?.isStreamingPreviewAppendOnly ?? toolRenderers[this.#toolName]?.isStreamingPreviewAppendOnly;
+		if (!predicate) return false;
+		try {
+			return predicate(this.#getCallArgsForRender(), this.#renderState);
+		} catch (err) {
+			logger.warn("Tool append-only predicate failed", { tool: this.#toolName, error: String(err) });
+			return false;
+		}
 	}
 
 	/**

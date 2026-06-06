@@ -18,8 +18,8 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { StatusLineComponent } from "../src/modes/components/status-line";
-import { computeNonMessageTokens, estimateToolSchemaTokens } from "../src/modes/utils/context-usage";
 import { initTheme } from "../src/modes/theme/theme";
+import { computeNonMessageTokens, estimateToolSchemaTokens } from "../src/modes/utils/context-usage";
 import type { AgentSession } from "../src/session/agent-session";
 
 beforeAll(async () => {

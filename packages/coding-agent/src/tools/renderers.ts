@@ -31,7 +31,7 @@ import { sshToolRenderer } from "./ssh";
 import { todoToolRenderer } from "./todo";
 import { writeToolRenderer } from "./write";
 
-type ToolRenderer = {
+export type ToolRenderer = {
 	renderCall: (args: unknown, options: RenderResultOptions, theme: Theme) => Component;
 	renderResult: (
 		result: { content: Array<{ type: string; text?: string }>; details?: unknown; isError?: boolean },
@@ -40,6 +40,17 @@ type ToolRenderer = {
 		args?: unknown,
 	) => Component;
 	mergeCallAndResult?: boolean;
+	/**
+	 * While the call preview is streaming, report whether the currently-rendered
+	 * preview is append-only: its rows only grow at the bottom and never
+	 * re-layout (a full, top-anchored content preview). The transcript reports
+	 * this up to the TUI so a streaming preview taller than the viewport commits
+	 * its scrolled-off head to native scrollback instead of dropping it (see
+	 * `ToolExecutionComponent.isTranscriptBlockAppendOnly`). Omit (or return
+	 * `false`) for previews that slide a tail window or later collapse to a
+	 * compact result — committing their head would strand stale rows.
+	 */
+	isStreamingPreviewAppendOnly?: (args: unknown, options: RenderResultOptions) => boolean;
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
 };

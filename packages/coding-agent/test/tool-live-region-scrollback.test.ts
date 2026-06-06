@@ -139,6 +139,88 @@ describe("tool live-region scrollback", () => {
 			}
 		});
 	});
+
+	it("commits the scrolled-off head of an over-tall expanded streaming write to scrollback", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const body = (n: number) => Array.from({ length: n }, (_unused, i) => `MARK-${i}`).join("\n");
+			const filePath = "packages/coding-agent/test/probe.txt";
+			// Expanded (Ctrl+O) lifts the tail-window cap, so the preview renders the
+			// whole content top-anchored — append-only growth as chunks stream in.
+			const component = new ToolExecutionComponent(
+				"write",
+				{ file_path: filePath, content: body(4) },
+				{},
+				undefined,
+				tui,
+				process.cwd(),
+			);
+			component.setExpanded(true);
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				// A short preview that fits, then the full preview that alone overflows
+				// the 12-row viewport — the frame that scrolls the head above the top.
+				component.updateArgs({ file_path: filePath, content: body(4) });
+				tui.requestRender();
+				await term.waitForRender();
+
+				component.updateArgs({ file_path: filePath, content: body(40) });
+				tui.requestRender();
+				await term.waitForRender();
+
+				const strip = (rows: string[]) => rows.map(row => Bun.stripANSI(row).trimEnd()).join("\n");
+				const scrollText = strip(term.getScrollBuffer());
+				const viewportText = strip(term.getViewport());
+
+				// MARK-0 scrolled above the viewport: it must live in native scrollback
+				// (committed), not nowhere. Before the fix the tool block was not
+				// append-only, so its scrolled-off head was dropped — a yanked stream.
+				expect(viewportText).not.toContain("MARK-0");
+				expect(scrollText).toContain("MARK-0");
+				// The streaming tail stays on screen, and nothing went missing between.
+				expect(viewportText).toContain("MARK-39");
+				expect(viewportText).toContain("(streaming)");
+				expect(scrollText).toContain("MARK-20");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("treats a tool block as append-only only while its expanded preview streams", async () => {
+		const filePath = "packages/coding-agent/test/probe.txt";
+		const tui = new TUI(new VirtualTerminal(80, 24));
+		const args = { file_path: filePath, content: "MARK-0\nMARK-1\nMARK-2" };
+		const component = new ToolExecutionComponent("write", args, {}, undefined, tui, process.cwd());
+		type AppendOnly = { isTranscriptBlockAppendOnly(): boolean };
+		const probe = component as unknown as AppendOnly;
+		try {
+			// Collapsed: the preview slides a bounded tail window — not append-only.
+			expect(probe.isTranscriptBlockAppendOnly()).toBe(false);
+			// Expanded + streaming: append-only, eligible for head commit.
+			component.setExpanded(true);
+			expect(probe.isTranscriptBlockAppendOnly()).toBe(true);
+			// Once a final result lands the preview may collapse — boundary closes.
+			component.updateResult({ content: [{ type: "text", text: "" }], details: { path: filePath } }, false);
+			expect(probe.isTranscriptBlockAppendOnly()).toBe(false);
+		} finally {
+			component.stopAnimation();
+		}
+	});
 });
 
 function makeAssistantMessage(text: string): AssistantMessage {
