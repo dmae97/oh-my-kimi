@@ -979,6 +979,21 @@ describe("normalizeSchemaForCCA", () => {
 			description: "pr number, url, or branch",
 		});
 	});
+
+	it("strips sibling type-specific keys copied from parent when mixed-type collapse picks opposing type", () => {
+		// Edge case: parent has a sibling `items` outside the anyOf,
+		// and the chosen type is string. The sibling must be stripped.
+		const normalized = normalizeSchemaForCCA({
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "number" } }],
+			items: { type: "string" },
+			description: "pr number, url, or branch",
+		});
+
+		expect(normalized).toEqual({
+			type: "string",
+			description: "pr number, url, or branch",
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------
