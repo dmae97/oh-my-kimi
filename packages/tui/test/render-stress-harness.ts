@@ -327,12 +327,14 @@ interface AppliedOperation {
 	// them. Defaults to the net frame growth when absent.
 	transientFrameGrowth?: number;
 	// The periodic prompt-submit checkpoint pins the viewport to the bottom and
-	// runs the real reconciliation (`refreshNativeScrollbackIfDirty` outside
-	// `normal`, a `/clear`-style forced rebuild for `normal`), so native
-	// scrollback must equal the transcript afterward. Plain `scrollToBottom` /
-	// forced-render ops also set `checkpoint`, but on Windows hosts a forced
-	// render cannot rebuild ConPTY-hidden history (it defers to the next submit),
-	// so the clean-buffer oracle keys on this flag for non-`normal` scenarios.
+	// attempts the real reconciliation (`refreshNativeScrollbackIfDirty` outside
+	// `normal`, a `/clear`-style forced rebuild for `normal`). Native scrollback
+	// must equal the transcript only when that reconciliation actually ran:
+	// ConPTY/Windows and other unobservable host-scrollback paths deliberately
+	// keep dirty history deferred until the renderer gets a positive at-tail probe.
+	// Plain `scrollToBottom` / forced-render ops also set `checkpoint`, but on
+	// Windows hosts a forced render cannot rebuild ConPTY-hidden history, so the
+	// clean-buffer oracle keys on this flag for non-`normal` scenarios.
 	reconcilesNativeScrollback?: boolean;
 }
 
@@ -2004,8 +2006,10 @@ class StressDriver {
 	async #checkpoint(index: number, kind: "periodicCheckpoint"): Promise<void> {
 		const before = this.#snapshot();
 		// Model a prompt submit: the editor keystroke pins the terminal to the
-		// bottom, then the app reconciles any deferred native-scrollback rewrite.
+		// bottom, then the app reconciles any deferred native-scrollback rewrite
+		// only if the renderer can prove the native host viewport is at the tail.
 		this.#term.scrollLines(LARGE_SCROLL);
+		let reconcilesNativeScrollback = false;
 		if (this.#traits.strictNativeScrollback || this.#traits.preservesPaneHistory) {
 			// Normal POSIX uses a /clear-style forced rebuild; tmux keeps its forced
 			// repaint (its pane history cannot be destructively reconciled).
@@ -2013,13 +2017,13 @@ class StressDriver {
 				allowUnknownViewportMutation: true,
 				clearScrollback: this.#traits.strictNativeScrollback,
 			});
+			reconcilesNativeScrollback = this.#traits.strictNativeScrollback;
 		} else {
 			// Unknown-viewport / ED3-risk / Windows hosts take the real prompt-submit
-			// path: refreshNativeScrollbackIfDirty rebuilds the deferred history now
-			// that the keystroke has pinned the viewport to the bottom. This is where
-			// the streaming turn's dirty/lagged scrollback must reconcile to an exact
-			// copy of the transcript.
-			this.#tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+			// path. `refreshNativeScrollbackIfDirty` returns false for permanently
+			// unobservable hosts such as ConPTY, where a submit key is not proof that
+			// hidden host scrollback is at the tail and ED3 would still yank readers.
+			reconcilesNativeScrollback = this.#tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
 		}
 		await this.#settle();
 		const after = this.#snapshot();
@@ -2034,7 +2038,7 @@ class StressDriver {
 				forcedRender: true,
 				mutatesViewport: true,
 				checkpoint: true,
-				reconcilesNativeScrollback: true,
+				reconcilesNativeScrollback,
 			},
 			before,
 			after,
@@ -2082,10 +2086,12 @@ class StressDriver {
 		this.#assertUniqueContentNoUnexpectedDuplicates(op, before, after, index);
 		this.#assertNoBackgroundBleed(op, before, after, index);
 		// Native scrollback must reconcile to an exact bottom-anchored copy of the
-		// transcript at every checkpoint — including the unknown-viewport / ED3-risk
-		// / Windows hosts whose live oracles are relaxed (they defer history rewrites
-		// mid-stream and only reconcile here). tmux is excluded: its pane history is
-		// preserved, not rebuilt, so the buffer snapshot is the view, not history.
+		// transcript at checkpoints where the renderer actually performed a
+		// destructive/native-history rebuild. Unknown ConPTY host scrollback and
+		// ED3-risk terminals with no positive at-tail probe intentionally keep dirty
+		// history deferred; asserting a clean buffer there would contradict the
+		// anti-yank contract. tmux is excluded: its pane history is preserved, not
+		// rebuilt, so the buffer snapshot is the view, not history.
 		if (
 			op.checkpoint &&
 			!this.#traits.preservesPaneHistory &&

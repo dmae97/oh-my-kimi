@@ -583,6 +583,30 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
+	it("tracks OS geometry on resize when the post-resize in-band report is missed", () => {
+		// Real terminals always fire SIGWINCH (process.stdout dims refresh first),
+		// but the matching DEC 2048 report can be dropped or arrive malformed. The
+		// getters must not stay pinned to the stale cached report, or the renderer
+		// reflows at the old width and content never resizes.
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+		process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
+		expect(terminal.columns).toBe(100);
+		expect(terminal.rows).toBe(30);
+
+		// OS resize: stdout dims update + 'resize' fires, no new in-band report.
+		Object.defineProperty(process.stdout, "columns", { value: 160, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		process.stdout.emit("resize");
+
+		expect(resizeCount()).toBe(1);
+		expect(terminal.columns).toBe(160);
+		expect(terminal.rows).toBe(40);
+		terminal.stop();
+	});
+
 	it("reassembles a DECRPM reply split across stdin reads", () => {
 		vi.useFakeTimers();
 		const { terminal, reports } = setup();

@@ -9,6 +9,7 @@ import {
 	GithubTool,
 	parsePrUnifiedDiff,
 	parseSearchDateBound,
+	resolveDefaultRepoMemoized,
 } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, hashPath, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -978,5 +979,206 @@ describe("github tool", () => {
 		} finally {
 			await fs.rm(artifactsDir, { recursive: true, force: true });
 		}
+	});
+
+	it("honors the explicit `repo` argument and does not fall back to the cwd repo (issue #1949)", async () => {
+		// Reporter's scenario: cwd lives in repo A (`cagedbird043/cagedbird-ecosystem`),
+		// caller passes `repo: cagedbird043/cxf`. Before the fix, executeRunWatch
+		// passed `undefined` for the explicit repo and `resolveGitHubRepo` fell back
+		// to `gh repo view` in cwd, silently watching repo A. The fix routes
+		// `params.repo` through, so all `/repos/...` API calls must target cxf.
+		const targetRepo = "cagedbird043/cxf";
+		const runId = 42;
+
+		const jsonSpy = vi
+			.spyOn(git.github, "json")
+			.mockResolvedValueOnce({
+				// `fetchRunSnapshot` → run details
+				id: runId,
+				name: "CI",
+				display_title: "explicit-repo run",
+				status: "completed",
+				conclusion: "failure",
+				head_branch: "main",
+				created_at: "2026-06-05T10:00:00Z",
+				updated_at: "2026-06-05T10:05:00Z",
+				html_url: `https://github.com/${targetRepo}/actions/runs/${runId}`,
+			})
+			.mockResolvedValueOnce({
+				// `fetchRunJobs` page 1
+				total_count: 1,
+				jobs: [
+					{
+						id: 7,
+						name: "test",
+						status: "completed",
+						conclusion: "failure",
+						started_at: "2026-06-05T10:00:00Z",
+						completed_at: "2026-06-05T10:05:00Z",
+						html_url: `https://github.com/${targetRepo}/actions/runs/${runId}/job/7`,
+					},
+				],
+			});
+		const runSpy = vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 0, stdout: "log line\n", stderr: "" });
+		const textSpy = vi
+			.spyOn(git.github, "text")
+			.mockRejectedValue(new Error("gh repo view must not be consulted when `repo` is explicit"));
+
+		const tool = new GithubTool(createSession("/tmp/run-watch-explicit-repo-cwd"));
+		const result = await tool.execute("run-watch", {
+			op: "run_watch",
+			repo: targetRepo,
+			run: String(runId),
+			tail: 1,
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		// Repo precedence — every API surface stayed scoped to `cagedbird043/cxf`.
+		expect(textSpy).not.toHaveBeenCalled();
+		for (const call of jsonSpy.mock.calls) {
+			const argv = call[1] as string[];
+			const apiPath = argv.find(arg => arg.startsWith("/repos/"));
+			expect(apiPath, `every json call must target ${targetRepo}, got ${argv.join(" ")}`).toContain(
+				`/repos/${targetRepo}/`,
+			);
+		}
+		const logsCall = runSpy.mock.calls.find(call =>
+			(call[1] as string[]).some(arg => typeof arg === "string" && arg.includes("/actions/jobs/")),
+		);
+		expect(logsCall?.[1] as string[]).toContain(`/repos/${targetRepo}/actions/jobs/7/logs`);
+
+		expect(text).toContain(`Repository: ${targetRepo}`);
+		expect(text).not.toContain("cagedbird043/cagedbird-ecosystem");
+		expect(result.details?.repo).toBe(targetRepo);
+	});
+
+	it("accepts case-only differences between explicit `repo` and a run URL repo (PR #1951)", async () => {
+		const targetRepo = "cagedbird043/cxf";
+		const runUrlRepo = "CagedBird043/CXF";
+		const runId = 123;
+		const jsonSpy = vi
+			.spyOn(git.github, "json")
+			.mockResolvedValueOnce({
+				id: runId,
+				name: "CI",
+				display_title: "case-only run URL repo match",
+				status: "completed",
+				conclusion: "success",
+				head_branch: "main",
+				created_at: "2026-06-05T10:00:00Z",
+				updated_at: "2026-06-05T10:05:00Z",
+				html_url: `https://github.com/${runUrlRepo}/actions/runs/${runId}`,
+			})
+			.mockResolvedValueOnce({ total_count: 0, jobs: [] });
+		const textSpy = vi
+			.spyOn(git.github, "text")
+			.mockRejectedValue(new Error("gh repo view must not be consulted when `repo` is explicit"));
+
+		const tool = new GithubTool(createSession("/tmp/run-watch-run-url-casing"));
+		const result = await tool.execute("run-watch", {
+			op: "run_watch",
+			repo: targetRepo,
+			run: `https://github.com/${runUrlRepo}/actions/runs/${runId}`,
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(textSpy).not.toHaveBeenCalled();
+		for (const call of jsonSpy.mock.calls) {
+			const argv = call[1];
+			const apiPath = argv.find(arg => arg.startsWith("/repos/"));
+			expect(apiPath).toContain(`/repos/${targetRepo}/`);
+		}
+		expect(text).toContain(`Repository: ${targetRepo}`);
+		expect(result.details?.repo).toBe(targetRepo);
+	});
+
+	it("fails fast when explicit `repo` differs from the cwd repo and no `branch`/`run` selector is given (issue #1949)", async () => {
+		// Without a selector, the legacy code grabbed the cwd's HEAD SHA and
+		// queried it against the explicit repo — yielding an unrelated commit
+		// that surfaced as `Waiting for workflow runs for this commit`. The fix
+		// refuses to silently rebind: callers must scope explicitly.
+		const targetRepo = "cagedbird043/cxf";
+		const cwdRepo = "cagedbird043/cagedbird-ecosystem";
+		// Unique cwd per test — `resolveDefaultRepoMemoized` caches by absolute
+		// path for the lifetime of the process.
+		const cwd = `/tmp/run-watch-explicit-repo-mismatch-${Date.now()}`;
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue(cwdRepo);
+		const jsonSpy = vi.spyOn(git.github, "json");
+
+		const tool = new GithubTool(createSession(cwd));
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
+			`Cannot infer the watched commit for ${targetRepo}: current checkout is ${cwdRepo}. Pass \`branch\` or \`run\` to scope the watch.`,
+		);
+		expect(textSpy).toHaveBeenCalled();
+		// No API requests fired — we bailed before issuing any /repos/... call.
+		expect(jsonSpy).not.toHaveBeenCalled();
+	});
+
+	it("revalidates cwd repo without using the process-lifetime default repo cache before trusting HEAD (PR #1951)", async () => {
+		const targetRepo = "cagedbird043/cxf";
+		const replacedCwdRepo = "cagedbird043/cagedbird-ecosystem";
+		const cwd = `/tmp/run-watch-stale-cwd-repo-cache-${Date.now()}`;
+		const textSpy = vi
+			.spyOn(git.github, "text")
+			.mockResolvedValueOnce(targetRepo)
+			.mockResolvedValueOnce(replacedCwdRepo);
+		const jsonSpy = vi.spyOn(git.github, "json");
+
+		// Populate `resolveDefaultRepoMemoized` for this exact cwd, simulating a
+		// long-lived process that resolved the path before its checkout/remote
+		// was replaced.
+		await expect(resolveDefaultRepoMemoized(cwd)).resolves.toBe(targetRepo);
+
+		const tool = new GithubTool(createSession(cwd));
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
+			`Cannot infer the watched commit for ${targetRepo}: current checkout is ${replacedCwdRepo}. Pass \`branch\` or \`run\` to scope the watch.`,
+		);
+		expect(textSpy).toHaveBeenCalledTimes(2);
+		expect(jsonSpy).not.toHaveBeenCalled();
+	});
+
+	it("fails fast when explicit `repo` is given and cwd has no GitHub repository context (issue #1949)", async () => {
+		const targetRepo = "cagedbird043/cxf";
+		const cwd = `/tmp/run-watch-explicit-repo-no-git-${Date.now()}`;
+		vi.spyOn(git.github, "text").mockRejectedValue(new Error("not a git repository"));
+		const jsonSpy = vi.spyOn(git.github, "json");
+
+		const tool = new GithubTool(createSession(cwd));
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
+			`Cannot infer the watched commit for ${targetRepo}: current checkout is not a GitHub repository. Pass \`branch\` or \`run\` to scope the watch.`,
+		);
+		expect(jsonSpy).not.toHaveBeenCalled();
+	});
+
+	it("treats explicit `repo` and the cwd repo as matching when only casing differs (PR #1951)", async () => {
+		// `gh repo view --json nameWithOwner` returns the canonical GitHub casing.
+		// A caller who types `cagedbird043/cxf` while the canonical form is
+		// `CagedBird043/cxf` MUST be treated as the same repo — GitHub repository
+		// paths are case-insensitive — and run_watch must NOT force them to pass
+		// a redundant `branch`/`run` selector.
+		const canonicalRepo = "CagedBird043/CXF";
+		const userRepo = "cagedbird043/cxf";
+		const cwd = `/tmp/run-watch-explicit-repo-casing-${Date.now()}`;
+		vi.spyOn(git.github, "text").mockResolvedValue(canonicalRepo);
+		// Past the case-insensitive guard, run_watch keeps using the caller's
+		// `repo` (downstream `/repos/...` paths are case-insensitive on GitHub).
+		// Stub the cwd's git HEAD/branch lookups so the watch proceeds to its
+		// first poll, then trip an abort to terminate the loop deterministically.
+		vi.spyOn(git.branch, "current").mockResolvedValue("main");
+		vi.spyOn(git.head, "sha").mockResolvedValue("c215f3a91217c215f3a91217c215f3a91217c215");
+		const abort = new AbortController();
+		const jsonSpy = vi.spyOn(git.github, "json").mockImplementation((async () => {
+			abort.abort();
+			return { workflow_runs: [] };
+		}) as unknown as typeof git.github.json);
+
+		const tool = new GithubTool(createSession(cwd));
+		// We don't care about the outcome — just that the casing guard let us
+		// reach the polling loop instead of throwing the mismatch ToolError.
+		await tool.execute("run-watch", { op: "run_watch", repo: userRepo }, abort.signal).catch(() => {});
+
+		expect(jsonSpy).toHaveBeenCalled();
+		const firstCall = jsonSpy.mock.calls[0]?.[1] as string[];
+		expect(firstCall.some(arg => arg === `/repos/${userRepo}/actions/runs`)).toBe(true);
 	});
 });

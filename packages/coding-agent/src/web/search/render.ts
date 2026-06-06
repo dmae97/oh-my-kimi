@@ -5,9 +5,9 @@
  */
 
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { Markdown, Text } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
-import type { Theme } from "../../modes/theme/theme";
+import { getMarkdownTheme, type Theme } from "../../modes/theme/theme";
 import {
 	formatAge,
 	formatCount,
@@ -26,8 +26,6 @@ import { getSearchProviderLabel } from "./provider";
 import type { SearchResponse } from "./types";
 
 const MAX_COLLAPSED_ANSWER_LINES = PREVIEW_LIMITS.COLLAPSED_LINES;
-const MAX_EXPANDED_ANSWER_LINES = PREVIEW_LIMITS.EXPANDED_LINES;
-const MAX_ANSWER_LINE_LEN = TRUNCATE_LENGTHS.LINE;
 const MAX_SNIPPET_LINES = 2;
 const MAX_SNIPPET_LINE_LEN = TRUNCATE_LENGTHS.LINE;
 const MAX_COLLAPSED_ITEMS = PREVIEW_LIMITS.COLLAPSED_ITEMS;
@@ -75,7 +73,6 @@ export function renderSearchResult(
 	theme: Theme,
 	args?: {
 		query?: string;
-		allowLongAnswer?: boolean;
 		maxAnswerLines?: number;
 	},
 ): Component {
@@ -104,13 +101,6 @@ export function renderSearchResult(
 	// Get answer text
 	const answerText = typeof response.answer === "string" ? response.answer.trim() : "";
 	const contentText = answerText || rawText;
-	const answerLines = contentText
-		? contentText
-				.split("\n")
-				.filter(l => l.trim())
-				.map(l => l.trim())
-		: [];
-	const totalAnswerLines = answerLines.length;
 
 	const providerLabel = provider !== "none" ? getSearchProviderLabel(provider) : "None";
 	const queryPreview = args?.query
@@ -159,6 +149,7 @@ export function renderSearchResult(
 		metaLines.push(`${theme.fg("muted", "Queries:")} ${theme.fg("text", queryList.join("; "))}${suffix}`);
 	}
 
+	const answerMarkdown = contentText ? new Markdown(contentText, 0, 0, getMarkdownTheme()) : undefined;
 	const outputBlock = new CachedOutputBlock();
 
 	return {
@@ -166,14 +157,22 @@ export function renderSearchResult(
 			// Read mutable state at render time
 			const { expanded } = options;
 
-			// Expanded-dependent computations
-			const answerLimit = expanded ? MAX_EXPANDED_ANSWER_LINES : MAX_COLLAPSED_ANSWER_LINES;
-			const answerPreview = contentText
-				? args?.allowLongAnswer
-					? answerLines.slice(0, args.maxAnswerLines ?? answerLines.length)
-					: getPreviewLines(contentText, answerLimit, MAX_ANSWER_LINE_LEN)
-				: [];
-			const remainingAnswer = totalAnswerLines - answerPreview.length;
+			// Answer lines: full markdown when expanded, capped markdown preview when collapsed.
+			const answerWidth = Math.max(20, width - 3);
+			const renderedAnswer = answerMarkdown ? answerMarkdown.render(answerWidth) : [];
+			let answerLines: string[];
+			if (renderedAnswer.length === 0) {
+				answerLines = [theme.fg("muted", "No answer text returned")];
+			} else if (expanded) {
+				answerLines = renderedAnswer;
+			} else {
+				const collapsedCap = args?.maxAnswerLines ?? MAX_COLLAPSED_ANSWER_LINES;
+				answerLines = renderedAnswer.slice(0, collapsedCap);
+				const remaining = renderedAnswer.length - answerLines.length;
+				if (remaining > 0) {
+					answerLines.push(theme.fg("muted", formatMoreItems(remaining, "line")));
+				}
+			}
 
 			const sourceTree = renderTreeList(
 				{
@@ -217,37 +216,6 @@ export function renderSearchResult(
 				theme,
 			);
 
-			// Build answer section
-			const answerState = sourceCount > 0 ? "success" : "warning";
-			const borderColor: "warning" | "dim" = answerState === "warning" ? "warning" : "dim";
-			const border = (t: string) => theme.fg(borderColor, t);
-			const contentPrefix = border(`${theme.boxSharp.vertical} `);
-			const contentSuffix = border(theme.boxSharp.vertical);
-			const contentWidth = Math.max(0, width - visibleWidth(contentPrefix) - visibleWidth(contentSuffix));
-			const answerTreeLines = answerPreview.length > 0 ? answerPreview : ["No answer text returned"];
-			const answerTree = renderTreeList(
-				{
-					items: answerTreeLines,
-					expanded: true,
-					maxCollapsed: answerTreeLines.length,
-					itemType: "line",
-					renderItem: (line, context) => {
-						const coloredLine =
-							line === "No answer text returned" ? theme.fg("muted", line) : theme.fg("dim", line);
-						if (!args?.allowLongAnswer) {
-							return coloredLine;
-						}
-						const prefixWidth = visibleWidth(context.continuePrefix);
-						const wrapWidth = Math.max(10, contentWidth - prefixWidth);
-						return wrapTextWithAnsi(coloredLine, wrapWidth);
-					},
-				},
-				theme,
-			);
-			if (remainingAnswer > 0) {
-				answerTree.push(theme.fg("muted", formatMoreItems(remainingAnswer, "line")));
-			}
-
 			return outputBlock.render(
 				{
 					header,
@@ -262,7 +230,7 @@ export function renderSearchResult(
 							: []),
 						{
 							label: theme.fg("toolTitle", "Answer"),
-							lines: answerTree,
+							lines: answerLines,
 						},
 						{
 							label: theme.fg("toolTitle", "Sources"),

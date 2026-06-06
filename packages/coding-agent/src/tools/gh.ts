@@ -792,6 +792,18 @@ function repoFromRepositoryUrl(value: string | undefined): string | undefined {
 	return value.slice(REPO_API_URL_PREFIX.length);
 }
 
+function githubRepoSlugEquals(left: string | undefined, right: string): boolean {
+	if (left === undefined || left.length !== right.length) return false;
+	for (let idx = 0; idx < left.length; idx += 1) {
+		let leftCode = left.charCodeAt(idx);
+		let rightCode = right.charCodeAt(idx);
+		if (leftCode >= 65 && leftCode <= 90) leftCode += 32;
+		if (rightCode >= 65 && rightCode <= 90) rightCode += 32;
+		if (leftCode !== rightCode) return false;
+	}
+	return true;
+}
+
 function apiUserToGhUser(user: GhApiUser | null | undefined): GhUser | undefined {
 	if (!user) return undefined;
 	const login = user.login ?? undefined;
@@ -1646,7 +1658,7 @@ async function resolveGitHubRepo(
 	runRepo: string | undefined,
 	signal?: AbortSignal,
 ): Promise<string> {
-	if (repo && runRepo && repo !== runRepo) {
+	if (repo && runRepo && !githubRepoSlugEquals(repo, runRepo)) {
 		throw new ToolError("run URL repository does not match the provided repo");
 	}
 
@@ -1713,6 +1725,33 @@ export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSign
 }
 
 /**
+ * Best-effort cached cwd → `owner/repo` resolution that swallows any failure
+ * (not a git checkout, no GitHub remote, `gh` unauthenticated, …) into
+ * `undefined`. Use where the cwd repo is a convenience fallback, not a safety
+ * check.
+ */
+async function tryResolveCurrentRepo(cwd: string, signal: AbortSignal | undefined): Promise<string | undefined> {
+	try {
+		return await resolveDefaultRepoMemoized(cwd, signal);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Best-effort fresh cwd → `owner/repo` resolution for safety checks that must
+ * reflect the repository currently mounted at `cwd`, not the process-lifetime
+ * default-repo cache.
+ */
+async function tryResolveCurrentRepoFresh(cwd: string, signal: AbortSignal | undefined): Promise<string | undefined> {
+	try {
+		return await resolveGitHubRepo(cwd, undefined, undefined, signal);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Matches search-query qualifiers that already scope to a repository, org, or
  * user. When present, callers should avoid layering a default `repo:<current>`
  * on top — the user has already expressed an explicit scope.
@@ -1738,11 +1777,7 @@ async function resolveSearchRepoScope(
 ): Promise<string | undefined> {
 	if (repo) return repo;
 	if (query && REPO_SCOPE_QUALIFIER_PATTERN.test(query)) return undefined;
-	try {
-		return await resolveDefaultRepoMemoized(cwd, signal);
-	} catch {
-		return undefined;
-	}
+	return tryResolveCurrentRepo(cwd, signal);
 }
 
 async function resolveGitHubBranchHead(
@@ -3338,8 +3373,9 @@ async function executeRunWatch(
 	onUpdate: AgentToolUpdateCallback<GhToolDetails> | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
 	const branchInput = normalizeOptionalString(params.branch);
+	const explicitRepo = normalizeOptionalString(params.repo);
 	const runReference = parseRunReference(params.run);
-	const repo = await resolveGitHubRepo(session.cwd, undefined, runReference.repo, signal);
+	const repo = await resolveGitHubRepo(session.cwd, explicitRepo, runReference.repo, signal);
 	const intervalSeconds = RUN_WATCH_INTERVAL_DEFAULT;
 	const graceSeconds = RUN_WATCH_GRACE_DEFAULT;
 	const tail = resolveTailLimit(params.tail);
@@ -3419,10 +3455,28 @@ async function executeRunWatch(
 		}
 	}
 
-	const branch = branchInput ?? (await requireCurrentGitBranch(session.cwd, signal));
-	const headSha = branchInput
-		? await resolveGitHubBranchHead(session.cwd, repo, branch, signal)
-		: await requireCurrentGitHead(session.cwd, signal);
+	let branch: string;
+	let headSha: string;
+	if (branchInput) {
+		branch = branchInput;
+		headSha = await resolveGitHubBranchHead(session.cwd, repo, branch, signal);
+	} else {
+		// No branch/run selector — derive the commit from the current checkout,
+		// but only when cwd actually points at `repo`. Otherwise we'd watch an
+		// unrelated commit SHA against the explicit repo and silently stream a
+		// confident wrong-repo status (issue #1949). GitHub `owner/repo` slugs
+		// are case-insensitive — `gh repo view` returns the canonical casing
+		// while callers may pass any casing — so the equality check normalizes
+		// both sides before deciding the cwd is a different repo (PR #1951).
+		const cwdRepo = await tryResolveCurrentRepoFresh(session.cwd, signal);
+		if (!githubRepoSlugEquals(cwdRepo, repo)) {
+			throw new ToolError(
+				`Cannot infer the watched commit for ${repo}: current checkout is ${cwdRepo ?? "not a GitHub repository"}. Pass \`branch\` or \`run\` to scope the watch.`,
+			);
+		}
+		branch = await requireCurrentGitBranch(session.cwd, signal);
+		headSha = await requireCurrentGitHead(session.cwd, signal);
+	}
 	let pollCount = 0;
 	let settledSuccessSignature: string | undefined;
 

@@ -175,6 +175,7 @@ export class ProcessTerminal implements Terminal {
 	#wasRaw = false;
 	#inputHandler?: (data: string) => void;
 	#resizeHandler?: () => void;
+	#stdoutResizeListener?: () => void;
 	#kittyProtocolActive = false;
 	#modifyOtherKeysActive = false;
 	#modifyOtherKeysTimeout?: Timer;
@@ -241,8 +242,14 @@ export class ProcessTerminal implements Terminal {
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
 
-		// Set up resize handler immediately
-		process.stdout.on("resize", this.#resizeHandler);
+		// Set up resize handler immediately. The OS refreshes process.stdout
+		// dimensions before firing `resize`, so it is authoritative for geometry:
+		// reconcile any stale cached DEC 2048 report before notifying the renderer.
+		this.#stdoutResizeListener = () => {
+			this.#reconcileInBandGeometryOnResize();
+			this.#resizeHandler?.();
+		};
+		process.stdout.on("resize", this.#stdoutResizeListener);
 
 		// Refresh terminal dimensions - they may be stale after suspend/resume
 		// (SIGWINCH is lost while process is stopped). Unix only.
@@ -847,6 +854,31 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
+	/**
+	 * Reconcile cached in-band geometry with the OS on an OS-level resize.
+	 *
+	 * SIGWINCH (POSIX) and ConPTY (Windows) refresh `process.stdout.columns`/
+	 * `rows` before the `resize` event fires, so they are authoritative for the
+	 * new cell geometry. A cached DEC 2048 report can be stale: the matching
+	 * post-resize report may be dropped (split across stdin reads past the flush
+	 * window) or carry `:`-subparameters the parser skips, leaving the getters
+	 * pinned to the old size — which freezes the rendered width because the
+	 * renderer reflows against {@link columns}/{@link rows}, not the live OS
+	 * value. Drop a cached dimension that disagrees with the live OS value; the
+	 * terminal's next valid in-band report re-seeds pixel sizing.
+	 */
+	#reconcileInBandGeometryOnResize(): void {
+		if (!this.#inBandResizeActive) return;
+		const osColumns = process.stdout.columns;
+		const osRows = process.stdout.rows;
+		if (this.#reportedColumns !== undefined && osColumns > 0 && this.#reportedColumns !== osColumns) {
+			this.#reportedColumns = undefined;
+		}
+		if (this.#reportedRows !== undefined && osRows > 0 && this.#reportedRows !== osRows) {
+			this.#reportedRows = undefined;
+		}
+	}
+
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
 		if (this.#kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
@@ -964,10 +996,11 @@ export class ProcessTerminal implements Terminal {
 		}
 		this.#inputHandler = undefined;
 		this.#appearance = undefined;
-		if (this.#resizeHandler) {
-			process.stdout.removeListener("resize", this.#resizeHandler);
-			this.#resizeHandler = undefined;
+		if (this.#stdoutResizeListener) {
+			process.stdout.removeListener("resize", this.#stdoutResizeListener);
+			this.#stdoutResizeListener = undefined;
 		}
+		this.#resizeHandler = undefined;
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition

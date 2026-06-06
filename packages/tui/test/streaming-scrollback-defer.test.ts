@@ -26,6 +26,18 @@ class LiveLineList extends LineList implements NativeScrollbackLiveRegion {
 	}
 }
 
+/**
+ * A live block whose rendered rows only grow at the bottom and never re-layout
+ * (a streaming assistant reply). Its entire body is append-only, so scrolled-off
+ * head rows are safe to commit to native scrollback. `Infinity` is clamped to
+ * the rendered length by TUI's aggregation.
+ */
+class AppendOnlyLiveLineList extends LiveLineList {
+	getNativeScrollbackCommitSafeEnd(): number | undefined {
+		return Number.POSITIVE_INFINITY;
+	}
+}
+
 async function settle(term: VirtualTerminal): Promise<void> {
 	await Bun.sleep(20);
 	await term.flush();
@@ -72,7 +84,7 @@ function rows(prefix: string, count: number): string[] {
 }
 
 describe("streaming scrollback defer", () => {
-	it("commits every row above the viewport (incl. the live-block head) without ED3 on ED3-risk terminals", async () => {
+	it("keeps mutable live-region head rows out of native scrollback on ED3-risk terminals", async () => {
 		if (process.platform === "win32") return;
 		await withTerminalRisk(true, async () => {
 			const term = new VirtualTerminal(20, 4);
@@ -94,14 +106,14 @@ describe("streaming scrollback defer", () => {
 				tui.requestRender();
 				await settle(term);
 
-				// The live block (think-*) overflows the 4-row viewport. Every row that
-				// scrolled above the viewport top — including the live block's own head
-				// (think-0/think-1) — must enter native scrollback; only the visible tail
-				// stays transient. No ED3 erase fires during streaming.
+				// The sealed prefix is stable and may enter native scrollback. The
+				// live block's head (think-0/think-1) has physically left the viewport,
+				// but it is still mutable; committing it would leave stale rows in
+				// history when the live block re-renders or collapses.
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([
 					...rows("prior-", 12),
-					...rows("think-", 6),
+					...rows("think-", 6).slice(-4),
 				]);
 
 				live.setLines(rows("think-", 8));
@@ -110,22 +122,22 @@ describe("streaming scrollback defer", () => {
 
 				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
 				expect(eraseScrollbackCount(writes)).toBe(0);
-				expect(buffer).toEqual([...rows("prior-", 12), ...rows("think-", 8)]);
+				expect(buffer).toEqual([...rows("prior-", 12), ...rows("think-", 8).slice(-4)]);
 			} finally {
 				tui.stop();
 			}
 		});
 	});
 
-	it("keeps the head of a tall live block that alone overflows the viewport (no sealed prefix)", async () => {
+	it("keeps a tall all-live block transient when no sealed prefix exists", async () => {
 		if (process.platform === "win32") return;
 		await withTerminalRisk(true, async () => {
 			const term = new VirtualTerminal(20, 4);
 			overrideProbe(term, undefined);
 			const tui = new TUI(term);
-			// The only block is the live one (liveRegionStart === 0), so the entire
-			// scrollback commit originates inside the live region. A clamp to the
-			// sealed boundary would commit nothing and erase the block's head.
+			// The only block is the live one (liveRegionStart === 0). Rows above
+			// the viewport are mutable, so they must stay out of native scrollback
+			// instead of being committed as stale history.
 			const live = new LiveLineList([]);
 
 			try {
@@ -140,10 +152,82 @@ describe("streaming scrollback defer", () => {
 				tui.requestRender();
 				await settle(term);
 
-				// tool-0..tool-5 scrolled above the 4-row viewport and must be in
-				// scrollback; tool-6..tool-9 fill the viewport. None are erased.
+				// tool-0..tool-5 scrolled above the 4-row viewport, but the whole
+				// block is mutable; only tool-6..tool-9 should remain in the native
+				// buffer until a later checkpoint reconciles the full transcript.
 				expect(eraseScrollbackCount(writes)).toBe(0);
-				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("tool-", 10));
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("tool-", 10).slice(-4));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("commits the scrolled-off head of an append-only live block to native scrollback", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(20, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			// The only block is the live one (liveRegionStart === 0), but unlike a
+			// volatile tool preview it is append-only (a streaming assistant reply).
+			// Rows that scroll above the viewport must reach native scrollback rather
+			// than vanishing — committed nowhere, repainted nowhere.
+			const live = new AppendOnlyLiveLineList([]);
+
+			try {
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				live.setLines(rows("text-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				// text-0..text-5 scrolled above the 4-row viewport; because the block
+				// is append-only they enter native scrollback (via `\r\n`, no ED3
+				// erase) instead of being dropped like the volatile case above.
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("text-", 10));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("does not leave stale mutable live-region rows in native scrollback after a rerender", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(24, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const sealed = new LineList(rows("prior-", 12));
+			const live = new LiveLineList([]);
+
+			try {
+				tui.addChild(sealed);
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				live.setLines(rows("pending-stale-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				live.setLines(rows("running-fresh-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(buffer.some(line => line.startsWith("pending-stale-"))).toBe(false);
+				expect(buffer).toContain("running-fresh-9");
 			} finally {
 				tui.stop();
 			}
@@ -282,6 +366,51 @@ describe("streaming scrollback defer", () => {
 
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("erases mis-wrapped native scrollback on resize even mid-stream on ED3-risk terminals", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(40, 10);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const component = new LineList([...rows("init-", 5), "prompt"]);
+
+			try {
+				tui.addChild(component);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				const scrollbackBefore = term.getScrollBuffer().length;
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				// Stream past the viewport: the cap keeps transient rows out of native
+				// history and no ED3 fires.
+				component.setLines([...rows("stream-", 30), "prompt"]);
+				tui.requestRender();
+				await settle(term);
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
+
+				// Resize mid-stream. The terminal re-wrapped its saved lines at the old
+				// width, so the rebuild must erase them (ED 3) rather than capping to a
+				// viewport repaint that would leave the corrupt history on screen.
+				term.resize(30, 10);
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([...rows("stream-", 30), "prompt"]);
+				expect(
+					term
+						.getViewport()
+						.map(line => line.trim())
+						.at(-1),
+				).toBe("prompt");
 			} finally {
 				tui.stop();
 			}

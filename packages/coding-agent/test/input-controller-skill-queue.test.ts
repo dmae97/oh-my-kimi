@@ -94,6 +94,7 @@ function createStubInputControllerContext(opts: { skillCommands: Map<string, str
 		isBashMode: false,
 		isPythonMode: false,
 		pendingImages: [],
+		pendingImageLinks: [],
 		isBackgrounded: false,
 		loopModeEnabled: false,
 		compactionQueuedMessages: [],
