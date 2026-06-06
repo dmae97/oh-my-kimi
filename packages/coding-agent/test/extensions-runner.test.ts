@@ -148,7 +148,6 @@ describe("ExtensionRunner", () => {
 			warnSpy.mockRestore();
 		});
 
-
 		it("warns when two extensions register same shortcut", async () => {
 			// Use a non-reserved shortcut
 			const extCode1 = `
