@@ -19,6 +19,8 @@ import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead, truncateLine }
 import {
 	Ellipsis,
 	fileHyperlink,
+	getTreeBranch,
+	getTreeContinuePrefix,
 	renderStatusLine,
 	renderTreeList,
 	truncateToWidth,
@@ -36,7 +38,7 @@ import {
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
-import { formatFullOutputReference, type OutputMeta } from "./output-meta";
+import type { OutputMeta } from "./output-meta";
 import {
 	expandDelimitedPathEntries,
 	hasGlobPathChars,
@@ -56,7 +58,9 @@ import {
 	formatCount,
 	formatEmptyMessage,
 	formatErrorMessage,
+	formatMoreItems,
 	PREVIEW_LIMITS,
+	replaceTabs,
 	splitGroupsByBlankLine,
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
@@ -1190,6 +1194,156 @@ function parseSearchDisplayLineNumber(line: string): number | undefined {
 	return Number.parseInt(match[1]!, 10);
 }
 
+const SEARCH_MATCH_LINE_RE = /^\s*\*\d+(?:│|[:|])/;
+
+interface RenderedSearchLine {
+	raw: string;
+	styled: string;
+}
+
+function isSearchMatchLine(line: string): boolean {
+	return SEARCH_MATCH_LINE_RE.test(line);
+}
+
+function isSearchHeaderLine(line: string): boolean {
+	return line.startsWith("# ") || line.startsWith("## ");
+}
+
+function renderSearchDisplayGroup(
+	group: string[],
+	searchBase: string | undefined,
+	uiTheme: Theme,
+): RenderedSearchLine[] {
+	// Track directory/file context within a group so headers and code-frame
+	// lines link to the backing file, with line-specific links for matches.
+	let contextDir = searchBase ?? "";
+	const hasFileHeader = group.some(line => line.startsWith("# "));
+	let currentFilePath: string | undefined = hasFileHeader ? undefined : searchBase;
+	return group.map(line => {
+		if (line.startsWith("## ")) {
+			// Strip optional ` (suffix)` and `#hash` before resolving.
+			const fileName = line
+				.slice(3)
+				.trimEnd()
+				.replace(/\s+\([^)]*\)\s*$/, "")
+				.replace(/#[0-9a-f]+$/, "");
+			const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
+			currentFilePath = absPath;
+			const styled = uiTheme.fg("dim", line);
+			return { raw: line, styled: absPath ? fileHyperlink(absPath, styled) : styled };
+		}
+		if (line.startsWith("# ")) {
+			const raw = line
+				.slice(2)
+				.trimEnd()
+				.replace(/\s+\([^)]*\)\s*$/, "");
+			if (INTERNAL_URL_DISPLAY_RE.test(raw)) {
+				contextDir = "";
+				const styled = uiTheme.fg("accent", line);
+				const linked = linkUrlLikeSearchHeader(raw, styled);
+				currentFilePath = linked.absPath;
+				return { raw: line, styled: linked.line };
+			}
+			const isDirectory = raw.endsWith("/");
+			const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
+			if (isDirectory) {
+				const absPath = searchBase ? (name === "." ? searchBase : path.join(searchBase, name)) : undefined;
+				if (absPath) {
+					contextDir = absPath;
+				}
+				currentFilePath = undefined;
+				const styled = uiTheme.fg("accent", line);
+				return { raw: line, styled: absPath ? fileHyperlink(absPath, styled) : styled };
+			}
+			// Root-level file emitted by formatGroupedFiles when the directory is `.`.
+			const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
+			currentFilePath = absPath;
+			const styled = uiTheme.fg("accent", line);
+			return { raw: line, styled: absPath ? fileHyperlink(absPath, styled) : styled };
+		}
+		const styled = uiTheme.fg("toolOutput", line);
+		const lineNumber = parseSearchDisplayLineNumber(line);
+		return {
+			raw: line,
+			styled:
+				currentFilePath && lineNumber !== undefined
+					? fileHyperlink(currentFilePath, styled, { line: lineNumber })
+					: styled,
+		};
+	});
+}
+
+function compactSearchPreviewGroup(group: RenderedSearchLine[]): RenderedSearchLine[] {
+	const compact = group.filter(line => isSearchHeaderLine(line.raw) || isSearchMatchLine(line.raw));
+	return compact.length > 0 ? compact : group;
+}
+
+function countPreviewMatches(lines: readonly RenderedSearchLine[], hasMarkedMatches: boolean): number {
+	if (hasMarkedMatches) return lines.reduce((count, line) => count + (isSearchMatchLine(line.raw) ? 1 : 0), 0);
+	return lines.reduce((count, line) => count + (!isSearchHeaderLine(line.raw) && line.raw.length > 0 ? 1 : 0), 0);
+}
+
+function renderCollapsedSearchGroups(
+	groups: string[][],
+	maxLines: number,
+	matchCount: number,
+	searchBase: string | undefined,
+	uiTheme: Theme,
+): string[] {
+	if (maxLines <= 0) return [];
+	const renderedGroups = groups
+		.map(group => compactSearchPreviewGroup(renderSearchDisplayGroup(group, searchBase, uiTheme)))
+		.filter(group => group.length > 0);
+	if (renderedGroups.length === 0) return [];
+
+	let totalLines = 0;
+	let totalMarkedMatches = 0;
+	let totalFallbackMatches = 0;
+	for (const group of renderedGroups) {
+		totalLines += group.length;
+		totalMarkedMatches += countPreviewMatches(group, true);
+		totalFallbackMatches += countPreviewMatches(group, false);
+	}
+	const hasMarkedMatches = totalMarkedMatches > 0;
+	const needsSummary = totalLines > maxLines;
+	const contentBudget = needsSummary ? Math.max(maxLines - 1, 0) : maxLines;
+	const visibleGroups: RenderedSearchLine[][] = [];
+	let visibleLineCount = 0;
+	let visibleMatches = 0;
+	for (const group of renderedGroups) {
+		if (visibleLineCount >= contentBudget) break;
+		const available = contentBudget - visibleLineCount;
+		const take = Math.min(group.length, available);
+		if (take <= 0) break;
+		const visibleGroup = group.slice(0, take);
+		visibleGroups.push(visibleGroup);
+		visibleLineCount += visibleGroup.length;
+		visibleMatches += countPreviewMatches(visibleGroup, hasMarkedMatches);
+	}
+
+	const totalMatches = hasMarkedMatches ? totalMarkedMatches : Math.max(matchCount, totalFallbackMatches);
+	const hiddenMatches = Math.max(totalMatches - visibleMatches, 0);
+	const hiddenLines = Math.max(totalLines - visibleLineCount, 0);
+	const hasSummary = needsSummary && (hiddenMatches > 0 || hiddenLines > 0);
+	const lines: string[] = [];
+	for (let i = 0; i < visibleGroups.length; i++) {
+		const group = visibleGroups[i]!;
+		const isLast = !hasSummary && i === visibleGroups.length - 1;
+		const prefix = `${uiTheme.fg("dim", getTreeBranch(isLast, uiTheme))} `;
+		const continuePrefix = uiTheme.fg("dim", getTreeContinuePrefix(isLast, uiTheme));
+		lines.push(`${prefix}${replaceTabs(group[0]!.styled)}`);
+		for (let j = 1; j < group.length; j++) {
+			lines.push(`${continuePrefix}${replaceTabs(group[j]!.styled)}`);
+		}
+	}
+	if (hasSummary) {
+		const hiddenLabel =
+			hiddenMatches > 0 ? formatMoreItems(hiddenMatches, "match") : formatMoreItems(hiddenLines, "line");
+		lines.push(`${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg("muted", hiddenLabel)}`);
+	}
+	return lines;
+}
+
 export const searchToolRenderer = {
 	inline: true,
 	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -1291,19 +1445,7 @@ export const searchToolRenderer = {
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const matchGroups = splitGroupsByBlankLine(textContent.split("\n"));
 
-		const renderedFileLimit = details?.fileLimitReached;
-		const renderedPerFileLimit = details?.perFileLimitReached;
-		const truncationReasons: string[] = [];
-		if (renderedFileLimit) truncationReasons.push(`first ${renderedFileLimit} files (skip to paginate)`);
-		if (renderedPerFileLimit) truncationReasons.push(`first ${renderedPerFileLimit} matches per file`);
-		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
-		if (limits?.columnTruncated) truncationReasons.push(`line length ${limits.columnTruncated.maxColumn}`);
-		if (truncation?.artifactId) truncationReasons.push(formatFullOutputReference(truncation.artifactId));
-
 		const extraLines: string[] = [];
-		if (truncationReasons.length > 0) {
-			extraLines.push(uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`));
-		}
 		if (missingNote) extraLines.push(missingNote);
 
 		return createCachedComponent(
@@ -1311,75 +1453,20 @@ export const searchToolRenderer = {
 			width => {
 				const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
 				const searchBase = details?.searchPath;
-				const matchLines = renderTreeList(
-					{
-						items: matchGroups,
-						expanded: options.expanded,
-						maxCollapsed: matchGroups.length,
-						maxCollapsedLines: collapsedMatchLineBudget,
-						itemType: "match",
-						renderItem: group => {
-							// Track directory/file context within a group so headers and code-frame
-							// lines link to the backing file, with line-specific links for matches.
-							let contextDir = searchBase ?? "";
-							const hasFileHeader = group.some(line => line.startsWith("# "));
-							let currentFilePath: string | undefined = hasFileHeader ? undefined : searchBase;
-							return group.map(line => {
-								if (line.startsWith("## ")) {
-									// Strip optional ` (suffix)` and `#hash` before resolving.
-									const fileName = line
-										.slice(3)
-										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "")
-										.replace(/#[0-9a-f]+$/, "");
-									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-									currentFilePath = absPath;
-									const styled = uiTheme.fg("dim", line);
-									return absPath ? fileHyperlink(absPath, styled) : styled;
-								}
-								if (line.startsWith("# ")) {
-									const raw = line
-										.slice(2)
-										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "");
-									if (INTERNAL_URL_DISPLAY_RE.test(raw)) {
-										contextDir = "";
-										const styled = uiTheme.fg("accent", line);
-										const linked = linkUrlLikeSearchHeader(raw, styled);
-										currentFilePath = linked.absPath;
-										return linked.line;
-									}
-									const isDirectory = raw.endsWith("/");
-									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
-									if (isDirectory) {
-										const absPath = searchBase
-											? name === "."
-												? searchBase
-												: path.join(searchBase, name)
-											: undefined;
-										if (absPath) {
-											contextDir = absPath;
-										}
-										currentFilePath = undefined;
-										const styled = uiTheme.fg("accent", line);
-										return absPath ? fileHyperlink(absPath, styled) : styled;
-									}
-									// Root-level file emitted by formatGroupedFiles when the directory is `.`.
-									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-									currentFilePath = absPath;
-									const styled = uiTheme.fg("accent", line);
-									return absPath ? fileHyperlink(absPath, styled) : styled;
-								}
-								const styled = uiTheme.fg("toolOutput", line);
-								const lineNumber = parseSearchDisplayLineNumber(line);
-								return currentFilePath && lineNumber !== undefined
-									? fileHyperlink(currentFilePath, styled, { line: lineNumber })
-									: styled;
-							});
-						},
-					},
-					uiTheme,
-				);
+				const matchLines = options.expanded
+					? renderTreeList(
+							{
+								items: matchGroups,
+								expanded: true,
+								maxCollapsed: matchGroups.length,
+								maxCollapsedLines: collapsedMatchLineBudget,
+								itemType: "match",
+								renderItem: group =>
+									renderSearchDisplayGroup(group, searchBase, uiTheme).map(line => line.styled),
+							},
+							uiTheme,
+						)
+					: renderCollapsedSearchGroups(matchGroups, collapsedMatchLineBudget, matchCount, searchBase, uiTheme);
 				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
 		);
