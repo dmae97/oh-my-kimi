@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `ttsr.enabled: false` being ignored at runtime. TTSR rules were still being registered with `TtsrManager.addRule` and matched against stream deltas even when the global toggle was off, so disabling TTSR did not suppress rule injection or stream abort. The manager now gates `addRule`, `hasRules`, and `#matchBuffer` on the enabled flag, so disabling fully short-circuits the TTSR path. Condition rules fall through to the rulebook bucket instead of being silently swallowed. ([#1767](https://github.com/can1357/oh-my-pi/issues/1767))
 ### Changed
 
 - Changed the default `app.message.followUp` binding from `Ctrl+Enter` alone to `[Ctrl+Q, Ctrl+Enter]` so the follow-up shortcut works in Windows Terminal, which does not deliver a distinct `Ctrl+Enter` event to console apps. `Ctrl+Q` mirrors the GitHub Copilot CLI default for the same action; existing remaps in `~/.omp/agent/keybindings.yml` are untouched, and if another user-remapped action already claims `Ctrl+Q`, that user binding wins while follow-up keeps `Ctrl+Enter`. `Ctrl+Q` is also reserved by `ExtensionRunner` so an extension cannot register that chord and be silently overwritten by the built-in follow-up handler ([#1903](https://github.com/can1357/oh-my-pi/issues/1903)).
