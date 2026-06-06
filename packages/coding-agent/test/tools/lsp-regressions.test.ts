@@ -373,6 +373,10 @@ for await (const chunk of Bun.stdin.stream()) {
 				args: [serverPath, eventLogPath, statusCountPath, fileToUri(sourcePath)],
 				fileTypes: ["rs"],
 				rootMarkers: [],
+				// Shrink the workspace-ready polling window so the test exercises the
+				// timeout→retry→ready sequence without waiting out the 2s production settle.
+				// The status-request timeout stays generous to avoid racing the subprocess.
+				workspaceReadyTimings: { timeoutMs: 5_000, pollMs: 10, settleMs: 20, statusRequestTimeoutMs: 150 },
 			};
 
 			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({

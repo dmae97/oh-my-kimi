@@ -187,6 +187,13 @@ export function printTimings(): void {
 	const lines: string[] = [];
 	lines.push("");
 	lines.push("--- Startup timings (hierarchical) ---");
+	// performance.now() shares the process-start origin, so the root span's start
+	// is the wall time spent before the first marker — runtime init plus the
+	// static module-graph evaluation (~the dominant cost). It is otherwise
+	// invisible because Total only spans startTiming()→printTimings().
+	if (gRootSpan.start > LOGGED_TIMING_THRESHOLD_MS) {
+		lines.push(`(before instrumentation): ${fmtMs(gRootSpan.start)} [runtime init + module load]`);
+	}
 	const work: Span[] = [];
 	const loads: Span[] = [];
 	for (const child of gRootSpan.children) {
@@ -199,8 +206,14 @@ export function printTimings(): void {
 	if (loads.length > 0) {
 		printModuleLoadSummary(loads, 0, lines);
 	}
+	// Surface the root's own unattributed time so the gap between the visible
+	// top-level spans and Total isn't silently swallowed.
+	const rootSelf = selfTimeOf(gRootSpan);
+	if (gRootSpan.children.length > 0 && rootSelf > LOGGED_TIMING_THRESHOLD_MS) {
+		lines.push(`(unattributed self): ${fmtMs(rootSelf)}`);
+	}
 	const totalMs = (gRootSpan.end - gRootSpan.start).toFixed(1);
-	lines.push(`Total: ${totalMs}ms`);
+	lines.push(`Total: ${totalMs}ms (since first marker)`);
 	lines.push("--------------------------------------");
 	lines.push("");
 	console.error(lines.join("\n"));

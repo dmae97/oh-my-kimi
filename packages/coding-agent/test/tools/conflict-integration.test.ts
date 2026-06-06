@@ -26,7 +26,11 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 }
 
 async function getTool(session: ToolSession, name: "read" | "write") {
-	const tools = await createTools(session);
+	// Request only the tool under test: createTools(session) with no toolNames
+	// builds every builtin factory (LSP, MCP discovery, browser, eval preflight,
+	// …) on each call, which is pure overhead here. The conflict contract lives
+	// entirely in the read/write tools + session.conflictHistory.
+	const tools = await createTools(session, [name]);
 	const tool = tools.find(entry => entry.name === name);
 	if (!tool) throw new Error(`Missing ${name} tool`);
 	return tool;

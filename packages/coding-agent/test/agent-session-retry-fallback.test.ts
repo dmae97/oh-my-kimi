@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
@@ -66,16 +66,34 @@ function createFallbackAgent(primaryModel: Model, requestedModels: string[]): Ag
 describe("AgentSession retry fallback", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
+	let sharedRegistry: ModelRegistry;
 	let modelRegistry: ModelRegistry;
 	let session: AgentSession | undefined;
 
-	beforeEach(async () => {
+	// The model registry is an immutable fixture whose construction builds a
+	// canonical index over ~2.7k bundled models (~100ms). Build it (and the
+	// auth DB) once for the whole file instead of per-test; reset only the
+	// mutable retry-fallback cooldown state between tests.
+	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-retry-fallback-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 		authStorage.setRuntimeApiKey("google", "google-test-key");
-		modelRegistry = new ModelRegistry(authStorage);
+		sharedRegistry = new ModelRegistry(authStorage);
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		tempDir.removeSync();
+	});
+
+	beforeEach(() => {
+		// Reset to the shared registry (a few tests reassign it to a scoped
+		// instance) and clear cooldown suppressions left by fallback-path tests
+		// (default 5-minute suppression) so state never leaks between tests.
+		modelRegistry = sharedRegistry;
+		modelRegistry.clearSuppressedSelectors();
 	});
 
 	afterEach(async () => {
@@ -83,8 +101,6 @@ describe("AgentSession retry fallback", () => {
 			await session.dispose();
 			session = undefined;
 		}
-		authStorage.close();
-		tempDir.removeSync();
 		vi.restoreAllMocks();
 	});
 

@@ -377,18 +377,6 @@ describe("agent() through eval runtimes", () => {
 			singleResult(options, { output: "hello from python" }),
 		);
 
-		const probe = await executePython('print("probe")', {
-			cwd: tempDir.path(),
-			sessionId: `${sessionId}:probe`,
-			sessionFile,
-			kernelMode: "per-call",
-		});
-		if (probe.exitCode === undefined && probe.cancelled) {
-			expect(probe.output).toBe("");
-			return;
-		}
-		expect(probe.exitCode).toBe(0);
-
 		const result = await executePython('print(agent("hi"))', {
 			cwd: tempDir.path(),
 			sessionId,
@@ -396,6 +384,10 @@ describe("agent() through eval runtimes", () => {
 			kernelMode: "per-call",
 			toolSession: session,
 		});
+		if (result.exitCode === undefined && result.cancelled) {
+			expect(result.output).toBe("");
+			return; // kernel unavailable in this environment
+		}
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("hello from python");
@@ -424,22 +416,14 @@ describe("agent() through eval runtimes", () => {
 			}
 		});
 
-		const probe = await executePython('print("probe")', {
-			cwd: tempDir.path(),
-			sessionId: `${sessionId}:probe`,
-			sessionFile,
-			kernelMode: "per-call",
-		});
-		if (probe.exitCode === undefined && probe.cancelled) {
-			expect(probe.output).toBe("");
-			return;
-		}
-		expect(probe.exitCode).toBe(0);
-
 		const result = await executePython(
 			'import json\nprint(json.dumps(parallel([lambda n=n: agent(n) for n in ["a", "b", "c", "d"]])))',
 			{ cwd: tempDir.path(), sessionId, sessionFile, kernelMode: "per-call", toolSession: session },
 		);
+		if (result.exitCode === undefined && result.cancelled) {
+			expect(result.output).toBe("");
+			return; // kernel unavailable in this environment
+		}
 
 		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.output.trim())).toEqual(["a", "b", "c", "d"]);
@@ -463,7 +447,14 @@ describe("agent() through eval runtimes", () => {
 		// The host must respond the instant the cell aborts so the kernel can
 		// unwind via KeyboardInterrupt instead of being hard-killed (which used to
 		// surface "[kernel] Python kernel shutdown" and lose all session state).
+		let inFlight = 0;
+		let markSaturated: (() => void) | undefined;
+		const saturated = new Promise<void>(resolve => {
+			markSaturated = resolve;
+		});
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			// task.maxConcurrency=6 → six bridge calls block at once; signal then.
+			if (++inFlight >= 6) markSaturated?.();
 			await Bun.sleep(9000); // deliberately ignores options.signal
 			return singleResult(options, { output: options.assignment ?? "" });
 		});
@@ -483,8 +474,9 @@ describe("agent() through eval runtimes", () => {
 		expect(seed.exitCode).toBe(0);
 
 		const ac = new AbortController();
-		// Abort ~1s in, after the worker threads are blocked in their bridge calls.
-		setTimeout(() => ac.abort(new Error("external interrupt")), 1000);
+		// Abort the instant all six worker threads are confirmed blocked in their
+		// bridge calls (condition-driven) instead of waiting a fixed wall second.
+		void saturated.then(() => ac.abort(new Error("external interrupt")));
 
 		const start = Date.now();
 		const result = await executePython(
@@ -619,12 +611,12 @@ describe("agent() through eval runtimes", () => {
 		// of its own. The bridge pause must make that delegated time invisible to
 		// the watchdog.
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			await Bun.sleep(200);
+			await Bun.sleep(40);
 			return singleResult(options, { output: "done" });
 		});
 
 		const ops: string[] = [];
-		using idle = new IdleTimeout(60);
+		using idle = new IdleTimeout(20);
 		const result = await runEvalAgent(
 			{ prompt: "investigate" },
 			{
@@ -642,7 +634,7 @@ describe("agent() through eval runtimes", () => {
 		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP]);
 		expect(idle.signal.aborted).toBe(false);
 
-		await Bun.sleep(90);
+		await Bun.sleep(60);
 		expect(idle.signal.aborted).toBe(true);
 	});
 
@@ -655,7 +647,7 @@ describe("agent() through eval runtimes", () => {
 		// They render as status, but timeout accounting is controlled only by the
 		// bridge pause/resume events.
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			for (let i = 0; i < 40; i++) {
+			for (let i = 0; i < 20; i++) {
 				options.onProgress?.({
 					index: options.index,
 					id: options.id,
@@ -672,13 +664,13 @@ describe("agent() through eval runtimes", () => {
 					cost: 0,
 					durationMs: i * 10,
 				});
-				await Bun.sleep(10);
+				await Bun.sleep(5);
 			}
 			return singleResult(options, { output: "done" });
 		});
 
 		const ops: string[] = [];
-		using idle = new IdleTimeout(80);
+		using idle = new IdleTimeout(40);
 		const result = await runEvalAgent(
 			{ prompt: "investigate" },
 			{

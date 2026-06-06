@@ -68,16 +68,16 @@ function createPiHarness(initialTools: string[] = []): PiHarness {
 	return { api, activeTools, appendEntries, setActiveToolsCalls };
 }
 
-async function initGitRepo(dir: string): Promise<{ baselineCommit: string; mainBranch: string }> {
-	await $`git init --initial-branch=main`.cwd(dir).quiet();
-	await $`git config user.email tester@example.com`.cwd(dir).quiet();
-	await $`git config user.name Tester`.cwd(dir).quiet();
+async function initGitRepo(dir: string): Promise<{ baselineCommit: string }> {
 	await Bun.write(path.join(dir, "README.md"), "# baseline\n");
-	await $`git add -A`.cwd(dir).quiet();
-	await $`git commit -m baseline`.cwd(dir).quiet();
+	// One shell invocation instead of five: the git processes are unavoidable
+	// (config identity is read by the production tool's own commits), but
+	// chaining collapses the per-call Node↔shell spawn overhead.
+	await $`git init --initial-branch=main && git config user.email tester@example.com && git config user.name Tester && git add -A && git commit -m baseline`
+		.cwd(dir)
+		.quiet();
 	const sha = (await $`git rev-parse HEAD`.cwd(dir).text()).trim();
-	const branch = (await $`git rev-parse --abbrev-ref HEAD`.cwd(dir).text()).trim();
-	return { baselineCommit: sha, mainBranch: branch };
+	return { baselineCommit: sha };
 }
 
 async function checkoutBranch(dir: string, name: string): Promise<void> {
@@ -585,8 +585,7 @@ describe("log_experiment", () => {
 		// Commit `src/edit-me.ts` to baseline so it is tracked, not in pre-run dirty paths.
 		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
 		await Bun.write(path.join(dir, "src", "edit-me.ts"), "export const v = 1;\n");
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m seed`.cwd(dir).quiet();
+		await $`git add -A && git commit -m seed`.cwd(dir).quiet();
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();
 		const init = createInitExperimentTool({
@@ -638,8 +637,7 @@ describe("log_experiment", () => {
 		await initGitRepo(dir);
 		// Commit the harness on main so it is part of the autoresearch branch's baseline.
 		await writeHarnessStub(dir);
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m harness`.cwd(dir).quiet();
+		await $`git add -A && git commit -m harness`.cwd(dir).quiet();
 		await checkoutBranch(dir, "autoresearch/test-20260501");
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();
@@ -651,8 +649,7 @@ describe("log_experiment", () => {
 		await init.execute("i", { name: "x", primary_metric: "m" }, undefined, undefined, createCtx(dir));
 		// Simulate a previously kept iteration by committing it directly on the branch.
 		await Bun.write(path.join(dir, "src", "kept.ts"), "export const v = 1;\n");
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m "kept iteration"`.cwd(dir).quiet();
+		await $`git add -A && git commit -m "kept iteration"`.cwd(dir).quiet();
 		const headBeforeDiscard = (await $`git rev-parse HEAD`.cwd(dir).text()).trim();
 
 		const run = createRunExperimentTool({
@@ -691,13 +688,11 @@ describe("log_experiment", () => {
 		const dir = makeTempDir();
 		await initGitRepo(dir);
 		await writeHarnessStub(dir);
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m harness`.cwd(dir).quiet();
+		await $`git add -A && git commit -m harness`.cwd(dir).quiet();
 		// Seed a tracked file that the agent will edit during the iteration.
 		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
 		await Bun.write(path.join(dir, "src", "store.ts"), "export const v = 1;\n");
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m seed`.cwd(dir).quiet();
+		await $`git add -A && git commit -m seed`.cwd(dir).quiet();
 		await checkoutBranch(dir, "autoresearch/keep-test");
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();
@@ -747,8 +742,7 @@ describe("log_experiment", () => {
 		const dir = makeTempDir();
 		await initGitRepo(dir);
 		await writeHarnessStub(dir);
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m harness`.cwd(dir).quiet();
+		await $`git add -A && git commit -m harness`.cwd(dir).quiet();
 		await checkoutBranch(dir, "autoresearch/scope-test");
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();

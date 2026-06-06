@@ -27,6 +27,34 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+// Models a component that caches its rendered output and only refreshes it when
+// `invalidate()` fires — like a transcript block that freezes a snapshot. A
+// state change behind the cache is invisible until something invalidates it,
+// which is exactly what `resetDisplay()` must do to surface a Ctrl+O expansion.
+class CachedComponent implements Component {
+	#current: string[];
+	#cache: string[] | undefined;
+
+	constructor(lines: string[]) {
+		this.#current = [...lines];
+	}
+
+	setLines(lines: string[]): void {
+		this.#current = [...lines];
+	}
+
+	invalidate(): void {
+		this.#cache = undefined;
+	}
+
+	render(width: number): string[] {
+		if (this.#cache === undefined) {
+			this.#cache = this.#current.map(line => line.slice(0, width));
+		}
+		return this.#cache;
+	}
+}
+
 class WrappingLinesComponent implements Component {
 	#lines: string[];
 
@@ -361,6 +389,32 @@ describe("TUI terminal-state regressions", () => {
 				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
 				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("resetDisplay surfaces a state change hidden behind a component's render cache", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new CachedComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+
+				// The component's content changes, but its render stays cached (a
+				// frozen transcript snapshot). resetDisplay() must invalidate it so the
+				// forced replay reflects the new content rather than the stale cache —
+				// the Ctrl+O expansion path depends on this.
+				component.setLines(rows("M", 8));
+				tui.resetDisplay();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("M", 8));
+				expect(visible(term)).toEqual(["M5", "M6", "M7"]);
 			} finally {
 				tui.stop();
 			}

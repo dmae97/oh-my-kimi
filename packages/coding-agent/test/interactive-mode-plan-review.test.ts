@@ -68,7 +68,6 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	beforeEach(async () => {
-		Bun.gc(true);
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-plan-review-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -111,7 +110,6 @@ describe("InteractiveMode plan review rendering", () => {
 		currentAuthStorage?.close();
 		currentTempDir?.removeSync();
 		resetSettingsForTest();
-		Bun.gc(true);
 	});
 
 	it("appends each submitted plan review preview to preserve scrollback", async () => {

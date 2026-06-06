@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AssistantMessage, getBundledModel } from "@oh-my-pi/pi-ai";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getSessionsDir, Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -55,6 +57,23 @@ function getAssistantText(message: AssistantMessage | undefined): string {
 
 describe("createAgentSession session storage isolation", () => {
 	const tempDirs: string[] = [];
+	// One shared, fully-populated (bundled models load synchronously in the
+	// constructor) registry for every case. Passing it via options skips the
+	// per-call discoverAuthStorage() SQLite open and the refreshInBackground()
+	// network model probe inside createAgentSession — the two real wall-clock
+	// sinks here. None of these cases assert on model discovery, so an
+	// ambient-credential-free in-memory auth store keeps them deterministic.
+	let sharedAuthStorage: AuthStorage;
+	let sharedModelRegistry: ModelRegistry;
+
+	beforeAll(async () => {
+		sharedAuthStorage = await AuthStorage.create(":memory:");
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage);
+	});
+
+	afterAll(() => {
+		sharedAuthStorage.close();
+	});
 
 	afterEach(async () => {
 		for (const tempDir of tempDirs.splice(0)) {
@@ -72,6 +91,7 @@ describe("createAgentSession session storage isolation", () => {
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
+			modelRegistry: sharedModelRegistry,
 			settings: Settings.isolated(),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -105,6 +125,7 @@ describe("createAgentSession session storage isolation", () => {
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
+			modelRegistry: sharedModelRegistry,
 			settings: Settings.isolated(),
 			rules: [rule],
 			disableExtensionDiscovery: true,
@@ -137,6 +158,7 @@ describe("createAgentSession session storage isolation", () => {
 			const commonOptions = {
 				cwd,
 				agentDir,
+				modelRegistry: sharedModelRegistry,
 				settings: Settings.isolated({ "secrets.enabled": true }),
 				disableExtensionDiscovery: true,
 				skills: [],
@@ -206,6 +228,7 @@ describe("createAgentSession session storage isolation", () => {
 			const { session } = await createAgentSession({
 				cwd,
 				agentDir,
+				modelRegistry: sharedModelRegistry,
 				sessionManager: resumedManager,
 				model,
 				settings: Settings.isolated({ "secrets.enabled": true }),
