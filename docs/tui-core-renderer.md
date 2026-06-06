@@ -78,7 +78,7 @@ the bytes written and the state update. All state flows through a single
 | `sessionReplace` | clear viewport **+ ED3** (outside multiplexers) | caller forced `{ clearScrollback: true }` (switch/branch/reload/resume) |
 | `historyRebuild` | clear viewport **+ ED3** (outside multiplexers) | geometry change rewrapped history, or a proven-at-tail rebuild |
 | `overlayRebuild` | rebuild viewport with overlay composite | overlay visibility changed |
-| `liveRegionPinned` | relative moves + per-line `\x1b[2K` + `\r\n` | foreground streaming on an ED3-risk host, commit-as-you-go |
+| `liveRegionPinned` | relative moves + per-row rewrite/suffix-clear + `\r\n` | foreground streaming on an ED3-risk host, commit-as-you-go |
 | `viewportRepaint` | rewrite the visible viewport in place (optional `appendFrom` tail first) | safe non-destructive repaint |
 | `deferredShrink` | padded viewport repaint, history left dirty | bottom-anchored shrink, viewport unobservable |
 | `deferredMutation` | **zero bytes**, history left dirty | row-reindexing edit while possibly scrolled |
