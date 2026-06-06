@@ -98,10 +98,7 @@ describe("Xiaomi MiMo Anthropic-compat thinking replay (#2005)", () => {
 			"https://api.xiaomimimo.com/anthropic",
 		]) {
 			const model = makeXiaomiModel({ baseUrl, provider: "user-custom" });
-			const blocks = assistantWireBlocks(
-				[makeUser(), makeAssistantThinking("hidden reasoning")],
-				model,
-			);
+			const blocks = assistantWireBlocks([makeUser(), makeAssistantThinking("hidden reasoning")], model);
 			expect(blocks[0]?.type).toBe("thinking");
 			expect((blocks[0] as WireThinkingBlock).thinking).toBe("hidden reasoning");
 		}
@@ -115,10 +112,7 @@ describe("Xiaomi MiMo Anthropic-compat thinking replay (#2005)", () => {
 			baseUrl: "https://api.anthropic.com",
 			id: "claude-sonnet-4-6",
 		};
-		const blocks = assistantWireBlocks(
-			[makeUser(), makeAssistantThinking("internal scratch")],
-			anthropicModel,
-		);
+		const blocks = assistantWireBlocks([makeUser(), makeAssistantThinking("internal scratch")], anthropicModel);
 		expect(blocks[0]?.type).toBe("text");
 		expect((blocks[0] as WireTextBlock).text).toBe("internal scratch");
 	});
@@ -148,6 +142,6 @@ describe("Xiaomi MiMo Anthropic-compat thinking replay (#2005)", () => {
 		const assistantBlocks = params[1].content as WireBlock[];
 		expect(assistantBlocks[0]?.type).toBe("thinking");
 		expect(assistantBlocks[1]?.type).toBe("tool_use");
-		expect((assistantBlocks[1] as { id: string }).id).toBe("toolu_xiaomi_1");
+		expect((assistantBlocks[1] as unknown as { id: string }).id).toBe("toolu_xiaomi_1");
 	});
 });
