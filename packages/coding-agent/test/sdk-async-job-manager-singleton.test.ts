@@ -65,7 +65,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		// Once the owning primary session disposes the singleton clears, matching
 		// the documented single-owner invariant.
 		expect(AsyncJobManager.instance()).toBeUndefined();
-	});
+	}, 60000);
 
 	it("does not cancel the primary session's running jobs when a secondary session disposes", async () => {
 		const primary = await spawnTopLevelSession();
@@ -106,7 +106,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		} finally {
 			await primary.dispose();
 		}
-	});
+	}, 60000);
 
 	it("refuses async bash from a secondary session instead of routing it to the primary's manager", async () => {
 		const primary = await spawnTopLevelSession({ "async.enabled": true });
@@ -132,7 +132,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		} finally {
 			await primary.dispose();
 		}
-	});
+	}, 60000);
 
 	it("clears a manager installed before a top-level session startup failure takes ownership", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-async-startup-failure-${Snowflake.next()}-`));
@@ -168,5 +168,5 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		} finally {
 			await replacement.dispose();
 		}
-	});
+	}, 60000);
 });

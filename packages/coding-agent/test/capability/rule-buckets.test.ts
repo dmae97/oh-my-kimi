@@ -96,4 +96,23 @@ describe("bucketRules", () => {
 
 		expect(mgr.checkDelta("contains FORBIDDEN token", { source: "text" }).map(r => r.name)).toEqual(["builtin-foo"]);
 	});
+
+	it("falls condition rules through to the rulebook when ttsr is disabled on the manager", () => {
+		const mgr = new TtsrManager({
+			enabled: false,
+			contextMode: "discard",
+			interruptMode: "always",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		const ttsr = makeRule({ name: "no-foo", condition: ["FORBIDDEN"], description: "blocks foo" });
+
+		const { rulebookRules, alwaysApplyRules } = bucketRules([ttsr], mgr);
+
+		// Manager refused to register; condition rule degrades to its rulebook shape.
+		expect(mgr.hasRules()).toBe(false);
+		expect(mgr.checkDelta("contains FORBIDDEN token", { source: "text" })).toEqual([]);
+		expect(alwaysApplyRules.map(r => r.name)).toEqual([]);
+		expect(rulebookRules.map(r => r.name)).toEqual(["no-foo"]);
+	});
 });

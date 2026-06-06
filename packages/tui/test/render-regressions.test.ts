@@ -3972,6 +3972,23 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 		});
 	});
 
+	it("honors a clear-scrollback replay queued before the initial paint", async () => {
+		const term = new VirtualTerminal(40, 6);
+		const writes = captureWrites(term);
+		const tui = new TUI(term);
+		tui.addChild(new MutableLinesComponent(["resumed-message", "prompt>"]));
+
+		try {
+			tui.start();
+			tui.requestRender(true, { clearScrollback: true });
+			await settle(term);
+
+			expect(writes.join("")).toContain("\x1b[3J");
+		} finally {
+			tui.stop();
+		}
+	});
+
 	// Repro of the drag-resize line-duplication: dragging the terminal smaller
 	// fires a stream of height shrinks. While the transcript FITS the viewport,
 	// each shrink used to scroll live rows into native scrollback — the in-place
