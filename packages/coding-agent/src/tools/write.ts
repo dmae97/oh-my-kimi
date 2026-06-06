@@ -935,11 +935,20 @@ function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
-function formatStreamingContent(content: string, language: string | undefined, uiTheme: Theme): string {
+function formatStreamingContent(
+	content: string,
+	expanded: boolean,
+	language: string | undefined,
+	uiTheme: Theme,
+): string {
 	if (!content) return "";
 	const lines = normalizeDisplayText(content).split("\n");
 	const totalLines = lines.length;
-	const startIndex = Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
+	// Collapsed: follow the streaming edge with a bounded tail window so the box
+	// stays short enough not to strand its scrolled-off head above the viewport
+	// while the block is volatile. `Ctrl+O` (expanded) lifts the cap for a
+	// deliberate full view — matching the eval streaming preview.
+	const startIndex = expanded ? 0 : Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
 	const visibleLines = lines.slice(startIndex);
 	const hidden = startIndex;
 	const highlighted = highlightCode(visibleLines.join("\n"), language);
@@ -1005,8 +1014,8 @@ export const writeToolRenderer = {
 			return new Text(text, 0, 0);
 		}
 
-		// Show streaming preview of content (tail)
-		text += formatStreamingContent(args.content, lang, uiTheme);
+		// Show streaming preview of content — bounded tail while collapsed, full on Ctrl+O.
+		text += formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme);
 
 		return new Text(text, 0, 0);
 	},

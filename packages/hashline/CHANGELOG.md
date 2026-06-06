@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed hashline file section headers from `¶PATH#TAG` to `[PATH#TAG]` so model-authored edits use ASCII delimiters instead of a pilcrow sigil.
+
+### Fixed
+
+- Fixed missing-header diagnostics and copied-content prefix stripping to consistently teach and recognize 4-hex snapshot tags.
+
 ## [15.8.2] - 2026-06-03
 
 ### Fixed
