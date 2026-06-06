@@ -117,6 +117,26 @@ function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
 	return findings;
 }
 
+/**
+ * Normalize the `yield` slot of `extractedToolData` into an array of
+ * yield-detail records. The subprocess executor always populates this slot as
+ * `unknown[]` (see `executor.ts` `extractData` handler), but the renderer
+ * MUST also tolerate a stray single object — optional chaining short-circuits
+ * on `null`/`undefined` only, so calling `.map` on a plain object would throw
+ * `TypeError: completeData?.map is not a function` and crash the TUI.
+ * A single object is wrapped as a 1-element array so the review verdict still
+ * renders; non-object primitives drop out.
+ */
+function normalizeYieldData(value: unknown): Array<{ data: unknown }> {
+	if (Array.isArray(value)) {
+		return value.filter((item): item is { data: unknown } => item !== null && typeof item === "object");
+	}
+	if (value !== null && typeof value === "object") {
+		return [value as { data: unknown }];
+	}
+	return [];
+}
+
 function formatJsonScalar(value: unknown, _theme: Theme): string {
 	if (value === null) return "null";
 	if (typeof value === "string") {
@@ -671,12 +691,12 @@ function renderAgentProgress(
 	if (progress.extractedToolData) {
 		// For completed tasks, check for review verdict from yield tool
 		if (progress.status === "completed") {
-			const completeData = progress.extractedToolData.yield as Array<{ data: unknown }> | undefined;
+			const completeData = normalizeYieldData(progress.extractedToolData.yield);
 			const reportFindingData = normalizeReportFindings(progress.extractedToolData.report_finding);
 			const reviewData = completeData
-				?.map(c => c.data as SubmitReviewDetails)
+				.map(c => c.data as SubmitReviewDetails)
 				.filter(d => d && typeof d === "object" && "overall_correctness" in d);
-			if (reviewData && reviewData.length > 0) {
+			if (reviewData.length > 0) {
 				const summary = reviewData[reviewData.length - 1];
 				const findings = reportFindingData;
 				lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
@@ -912,16 +932,21 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		);
 	}
 	// Check for review result (yield with review schema + report_finding)
-	const completeData = result.extractedToolData?.yield as Array<{ data: unknown }> | undefined;
+	// Check for review result (yield with review schema + report_finding).
+	// `normalizeYieldData` guards against a stray non-array `yield` slot —
+	// optional chaining on `.map` only short-circuits on null/undefined and
+	// would otherwise crash the renderer with `TypeError: completeData?.map
+	// is not a function` when the slot is a plain object (see issue #1987).
+	const completeData = normalizeYieldData(result.extractedToolData?.yield);
 	const reportFindingData = normalizeReportFindings(result.extractedToolData?.report_finding);
 
 	// Extract review verdict from yield tool's data field if it matches SubmitReviewDetails
 	const reviewData = completeData
-		?.map(c => c.data as SubmitReviewDetails)
+		.map(c => c.data as SubmitReviewDetails)
 		.filter(d => d && typeof d === "object" && "overall_correctness" in d);
-	const submitReviewData = reviewData && reviewData.length > 0 ? reviewData : undefined;
+	const submitReviewData = reviewData.length > 0 ? reviewData : undefined;
 
-	if (submitReviewData && submitReviewData.length > 0) {
+	if (submitReviewData) {
 		// Use combined review renderer
 		const summary = submitReviewData[submitReviewData.length - 1];
 		const findings = reportFindingData;
@@ -929,7 +954,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 		return lines;
 	}
 	if (reportFindingData.length > 0) {
-		const hasCompleteData = completeData && completeData.length > 0;
+		const hasCompleteData = completeData.length > 0;
 		const message = hasCompleteData
 			? "Review verdict missing expected fields"
 			: "Review incomplete (yield not called)";

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `task` renderer crashing the TUI with `TypeError: completeData?.map is not a function` when a subagent's `extractedToolData.yield` slot held a non-array value. `renderAgentResult` (and the live-progress sibling) cast the slot to `Array<{ data }>` and called `?.map`, but optional chaining short-circuits only on `null`/`undefined`, so a plain object made `.map` `undefined` and threw — taking down every `review` task render. Both sites now go through `normalizeYieldData`, which wraps a single object as a 1-element array and drops primitives ([#1987](https://github.com/can1357/oh-my-pi/issues/1987))
+
 ## [15.9.5] - 2026-06-05
 ### Added
 
