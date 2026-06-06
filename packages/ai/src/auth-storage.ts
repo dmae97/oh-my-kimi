@@ -2288,6 +2288,16 @@ export class AuthStorage {
 		return undefined;
 	}
 
+	#getUsageReportScopeProjectId(report: UsageReport): string | undefined {
+		const ids = new Set<string>();
+		for (const limit of report.limits) {
+			const projectId = limit.scope.projectId?.trim();
+			if (projectId) ids.add(projectId);
+		}
+		if (ids.size === 1) return [...ids][0];
+		return undefined;
+	}
+
 	#getUsageReportIdentifiers(report: UsageReport): string[] {
 		const identifiers: string[] = [];
 		const email = this.#getUsageReportMetadataValue(report, "email");
@@ -2295,6 +2305,11 @@ export class AuthStorage {
 		if (report.provider === "openai-codex" || report.provider === "anthropic") {
 			return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 		}
+		const projectId =
+			this.#getUsageReportMetadataValue(report, "projectId") ?? this.#getUsageReportScopeProjectId(report);
+		// Only add project as a fallback when no email is available — two users
+		// with different emails on the same GCP project must not merge.
+		if (projectId && !email) identifiers.push(`project:${projectId}`);
 		const accountId = this.#getUsageReportMetadataValue(report, "accountId");
 		if (accountId) identifiers.push(`account:${accountId}`);
 		const account = this.#getUsageReportMetadataValue(report, "account");
@@ -3932,6 +3947,8 @@ function resolveProviderCredentialIdentityKey(provider: string, identifiers: str
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
+	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
+	if (projectIdentifier) return projectIdentifier;
 	return null;
 }
 
@@ -3967,6 +3984,8 @@ function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[
 	if (accountId) identifiers.add(`account:${accountId}`);
 	const email = normalizeStoredEmail(credential.email);
 	if (email) identifiers.add(`email:${email}`);
+	const projectId = normalizeStoredAccountId(credential.projectId);
+	if (projectId) identifiers.add(`project:${projectId}`);
 	const accessIdentifiers = extractOAuthTokenIdentifiers(credential.access) ?? [];
 	for (const identifier of accessIdentifiers) {
 		identifiers.add(identifier);

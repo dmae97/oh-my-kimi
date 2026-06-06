@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Fixed Antigravity usage provider emitting one bar per model instead of deduplicating by tier — a single account's 15+ model entries now collapse to one bar per tier, matching the shared-quota reality of the upstream API.
+- Fixed Antigravity usage reports missing `email` and `accountId` in metadata, so the `/usage` display and the deduplicator can associate reports with their credentials.
+- Fixed usage-report dedup ignoring `projectId` for Google Cloud providers, preventing duplicate credential entries from being recognized as the same account.
+
 - Fixed Cloud Code Assist (Antigravity / Gemini CLI) rejecting the `github` tool with HTTP 400 when the `pr` parameter schema contained `anyOf: [string, array]`. The CCA mixed-type combiner collapse picked the first non-null type (`string`) but indiscriminately copied type-specific keys from variant branches — `items` from the array variant leaked onto the string-typed result, producing `{type: "string", items: {...}}` which Google's API rejects as invalid. The collapse now filters merged variant fields against the winning type's allowed key set. ([#2002](https://github.com/can1357/oh-my-pi/pull/2002))
 ## [15.9.67] - 2026-06-06
 

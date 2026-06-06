@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ## [15.9.69] - 2026-06-06
+### Fixed
+
+- Fixed `/usage` aggregate amount fallback using raw `limits.length` as account count — now counts unique `accountId` values from limit scopes, so N limits from a single account no longer display as "N accts".
+- Fixed `/usage` account labeling falling back to "account N" for providers that use `projectId` as their primary identity (e.g. Google Antigravity, Gemini CLI) — `projectId` from report metadata is now considered before the generic fallback.
 
 ### Added
 
