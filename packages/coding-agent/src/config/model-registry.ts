@@ -1,27 +1,19 @@
 import * as path from "node:path";
+import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { readModelCache } from "@oh-my-pi/pi-ai/model-cache";
+import { createModelManager, type ModelManagerOptions, type ModelRefreshStrategy } from "@oh-my-pi/pi-ai/model-manager";
+import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
+import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-ai/models";
 import {
-	type Api,
-	type AssistantMessageEventStream,
-	type Context,
-	createModelManager,
-	enrichModelThinking,
-	getBundledModels,
-	getBundledProviders,
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
-	type Model,
-	type ModelManagerOptions,
-	type ModelRefreshStrategy,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-	readModelCache,
-	registerCustomApi,
-	type SimpleStreamOptions,
-	type ThinkingConfig,
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
-	unregisterCustomApis,
-} from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-ai/provider-models";
+import type { Api, Context, Model, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
