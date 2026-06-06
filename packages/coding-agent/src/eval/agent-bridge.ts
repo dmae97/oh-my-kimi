@@ -225,7 +225,6 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		getSessionId: options.session.getSessionId ?? (() => null),
 	};
 	const parentArtifactManager = options.session.getArtifactManager?.() ?? undefined;
-	const parentEvalSessionId = options.session.getEvalSessionId?.() ?? undefined;
 	const mcpManager = options.session.mcpManager ?? MCPManager.instance();
 	const { sessionFile, artifactsDir, contextFile } = await getArtifacts(options.session);
 	const outputManager = getOutputManager(options.session);
@@ -271,7 +270,11 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			parentHindsightSessionState: options.session.getHindsightSessionState?.(),
 			parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
 			parentTelemetry: options.session.getTelemetry?.(),
-			parentEvalSessionId,
+			// Deliberately omit parentEvalSessionId: the parent's Python kernel is
+			// blocked on this bridge call, so sharing the eval session would deadlock
+			// (subagent queues behind the parent's in-flight execution, parent waits
+			// for subagent → circular). Each bridge-spawned subagent gets its own
+			// eval session with an independent kernel.
 		}),
 	);
 
