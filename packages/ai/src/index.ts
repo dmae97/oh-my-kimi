@@ -4,6 +4,7 @@ export * from "./auth-broker";
 export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } from "./auth-gateway/server";
 export * from "./auth-gateway/types";
 export * from "./auth-storage";
+export * from "./effort";
 export * from "./model-cache";
 export * from "./model-manager";
 export * from "./model-thinking";

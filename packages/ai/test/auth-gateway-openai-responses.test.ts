@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "../src/model-thinking";
+import { Effort } from "../src/effort";
 import { encodeResponse, encodeStream, parseRequest } from "../src/providers/openai-responses-server";
 import type { AssistantMessage } from "../src/types";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";

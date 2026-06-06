@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "../src/model-thinking";
+import { Effort } from "../src/effort";
 import { getBundledModel } from "../src/models";
 import { streamAnthropic } from "../src/providers/anthropic";
 import { streamOpenAIResponses } from "../src/providers/openai-responses";

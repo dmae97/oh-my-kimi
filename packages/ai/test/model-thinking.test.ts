@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import { Effort } from "@oh-my-pi/pi-ai/effort";
 import {
 	applyGeneratedModelPolicies,
 	clampThinkingLevelForModel,
-	Effort,
 	enrichModelThinking,
 	linkOpenAIPromotionTargets,
 	mapEffortToAnthropicAdaptiveEffort,

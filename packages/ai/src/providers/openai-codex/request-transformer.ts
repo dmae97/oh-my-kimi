@@ -1,4 +1,4 @@
-import type { Effort } from "../../model-thinking";
+import type { Effort } from "../../effort";
 import { requireSupportedEffort } from "../../model-thinking";
 import type { Api, Model } from "../../types";
 
