@@ -5,7 +5,7 @@
  * them.
  */
 
-import { HL_FILE_HASH_SEP, HL_FILE_PREFIX } from "./format";
+import { HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "./format";
 
 /** Lines of context shown either side of a hash mismatch. */
 export const MISMATCH_CONTEXT = 2;
@@ -124,5 +124,5 @@ export const HEADTAIL_DRIFT_WARNING =
  * this single builder to stay in lockstep.
  */
 export function missingSnapshotTagMessage(sectionPath: string): string {
-	return `Missing hashline snapshot tag for edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag\` from your latest read/search output. To create a new file, use the write tool.`;
+	return `Missing hashline snapshot tag for edit to ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag${HL_FILE_SUFFIX}\` from your latest read/search output. To create a new file, use the write tool.`;
 }

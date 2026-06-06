@@ -1,7 +1,7 @@
 Your patch language names lines to replace, delete, or insert at, then lists the new content. Rule of thumb: a header ending in `:` is followed by `+` body rows; `delete` has no body.
 
 <headers>
-Every file section starts with `¶PATH#TAG`. `TAG` is the 4-hex snapshot tag from your latest `read`/`search`, and is REQUIRED on every section — there is no hashless form. To create a new file, use the `write` tool; hashline only edits files that already exist.
+Every file section starts with `[PATH#TAG]`. `TAG` is the 4-hex snapshot tag from your latest `read`/`search`, and is REQUIRED on every section — there is no hashless form. To create a new file, use the `write` tool; hashline only edits files that already exist.
 </headers>
 
 <ops>
@@ -23,9 +23,9 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 </body-rows>
 
 <rules>
-- Line numbers come from `read`/`search` (`LINE:TEXT`). Copy the `¶PATH#TAG` header; use the bare LINE numbers.
+- Line numbers come from `read`/`search` (`LINE:TEXT`). Copy the `[PATH#TAG]` header; use the bare LINE numbers.
 - Numbers refer to the ORIGINAL file and stay valid for the whole patch — they do not shift as hunks apply.
-- Across calls they do NOT survive: each applied edit mints a fresh `#TAG` and renumbers the file, so the tag and line numbers you just used are dead. Anchor the next edit on the `¶PATH#TAG` and lines from the edit response (or re-`read`), never on pre-edit numbers.
+- Across calls they do NOT survive: each applied edit mints a fresh `#TAG` and renumbers the file, so the tag and line numbers you just used are dead. Anchor the next edit on the `[PATH#TAG]` and lines from the edit response (or re-`read`), never on pre-edit numbers.
 - A line number is an offset, not a structural boundary: never `insert after N` into a construct you have not read, and never start or end a `replace`/`delete` range mid-expression or mid-block. If unsure what is on those lines, `read` them first.
 - On a stale-tag rejection — or any result you cannot fully account for — STOP and re-`read`. Never stack more line-numbered edits onto output you have not re-grounded; that compounds corruption.
 - One hunk per range; the body is the final content, never an old/new pair.
@@ -37,7 +37,7 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 <example>
 Original (the exact shape `read` returns):
 ```
-¶greet.py#A1B2
+[greet.py#A1B2]
 1:def greet(name):
 2:    msg = "Hello, " + name
 3:    print(msg)
@@ -46,14 +46,14 @@ Original (the exact shape `read` returns):
 
 Insert a guard after line 1:
 ```
-¶greet.py#A1B2
+[greet.py#A1B2]
 insert after 1:
 +    if not name: name = "stranger"
 ```
 
 Replace line 2 with two lines:
 ```
-¶greet.py#A1B2
+[greet.py#A1B2]
 replace 2..2:
 +    greeting = "Hi"
 +    msg = f"{greeting}, {name}"
@@ -61,13 +61,13 @@ replace 2..2:
 
 Delete line 3:
 ```
-¶greet.py#A1B2
+[greet.py#A1B2]
 delete 3
 ```
 
 Add a header and trailer:
 ```
-¶greet.py#A1B2
+[greet.py#A1B2]
 insert head:
 +# generated header
 insert tail:
@@ -76,7 +76,7 @@ insert tail:
 
 Replace the whole `greet` function block — `replace block 1:` resolves lines 1–3 (the `def` header through `print(msg)`); line 4 is a separate statement and stays:
 ```
-¶greet.py#A1B2
+[greet.py#A1B2]
 replace block 1:
 +def greet(name):
 +    print(f"Hello, {name}")

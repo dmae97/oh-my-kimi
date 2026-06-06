@@ -64,9 +64,9 @@ export interface PatchSectionResult {
 	persisted: string;
 	/** Final text that the {@link Filesystem} actually wrote (may differ if the FS transformed it). */
 	written: string;
-	/** 3-hex opaque snapshot tag for `after`. Use to anchor follow-up edits. */
+	/** 4-hex content-hash tag for `after`. Use to anchor follow-up edits. */
 	fileHash: string;
-	/** Hashline section header (`¶path#tag`) of the post-edit content. */
+	/** Hashline section header (`[path#tag]`) of the post-edit content. */
 	header: string;
 	/** 1-indexed first changed line in `after`, or `undefined` for noops. */
 	firstChangedLine?: number;

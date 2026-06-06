@@ -349,7 +349,7 @@ describe("TtsrManager snapshot matching", () => {
 			streamKey: "toolcall:tc-1",
 		};
 		const patch = [
-			"¶src/repo.ts#AB12",
+			"[src/repo.ts#AB12]",
 			"replace block 1:",
 			"+export async function isRepository(cwd: string): Promise<boolean> {",
 			"+\treturn repo.isRepository(cwd);",

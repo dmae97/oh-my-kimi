@@ -2,7 +2,7 @@
  * Edit tool renderer and LSP batching helpers.
  */
 
-import { HL_FILE_PREFIX } from "@oh-my-pi/hashline";
+import { HL_FILE_PREFIX, HL_FILE_SUFFIX } from "@oh-my-pi/hashline";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
@@ -328,12 +328,12 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 }
 
 function parseHashlineInputPreviewHeader(line: string): string | null {
-	if (!line.startsWith(HL_FILE_PREFIX)) return null;
-	// Mirror hashline/input.ts: strip every leading file marker so canonical
-	// `¶ PATH` headers and stray `¶¶ PATH` / `¶¶¶PATH` runs render clean paths.
-	let prefixEnd = 0;
-	while (prefixEnd < line.length && line[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
-	const body = line.slice(prefixEnd).trim();
+	const trimmed = line.trimEnd();
+	if (!trimmed.startsWith(HL_FILE_PREFIX)) return null;
+	// Keep streaming previews tolerant while the closing bracket is still
+	// being generated; the parser enforces the final `[path#TAG]` shape.
+	const bodyEnd = trimmed.endsWith(HL_FILE_SUFFIX) ? trimmed.length - HL_FILE_SUFFIX.length : trimmed.length;
+	const body = trimmed.slice(HL_FILE_PREFIX.length, bodyEnd).trim();
 	const previewPath = normalizeHashlineInputPreviewPath(body);
 	return previewPath.length > 0 ? previewPath : null;
 }

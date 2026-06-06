@@ -276,7 +276,7 @@ describe("computeHashlineDiff", () => {
 		// preview/diff path MUST emit the SAME rejection so a successful preview
 		// never precedes a failing apply.
 		const result = await computeHashlineDiff(
-			{ input: `¶${relativePath}\ninsert tail:\n+second` },
+			{ input: `[${relativePath}]\ninsert tail:\n+second` },
 			tempDir,
 			new InMemorySnapshotStore(),
 		);
@@ -287,7 +287,7 @@ describe("computeHashlineDiff", () => {
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
 		const result = await computeHashlineDiff(
-			{ input: "¶local://PLAN.md\ninsert tail:\n+x" },
+			{ input: "[local://PLAN.md]\ninsert tail:\n+x" },
 			tempDir,
 			new InMemorySnapshotStore(),
 		);

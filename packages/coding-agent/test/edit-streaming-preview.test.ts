@@ -136,7 +136,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 	});
 
 	test("does not surface stale hash errors while streaming", async () => {
-		const input = "¶a.ts#FFFF\nreplace 2..2:\n+const b = 22";
+		const input = "[a.ts#FFFF]\nreplace 2..2:\n+const b = 22";
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toBeUndefined();
@@ -170,7 +170,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 	});
 
 	test("surfaces stale hash errors once streaming is complete", async () => {
-		const input = "¶a.ts#FFFF\nreplace 2..2:\n+const b = 22\n";
+		const input = "[a.ts#FFFF]\nreplace 2..2:\n+const b = 22\n";
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toContain("not from this session");
@@ -245,12 +245,12 @@ describe("apply_patch streaming preview (trailing partial line)", () => {
 
 describe("matcherDigest", () => {
 	test("hashline: digests stripped `+` body rows only, never headers or op lines", () => {
-		const input = ["¶a.ts#AB12", "replace 1..2:", "+const x = 1;", "+const y = 2;", "delete 5", ""].join("\n");
+		const input = ["[a.ts#AB12]", "replace 1..2:", "+const x = 1;", "+const y = 2;", "delete 5", ""].join("\n");
 		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input })).toBe("const x = 1;\nconst y = 2;");
 	});
 
 	test("hashline: grammar-only payload digests to empty, missing input to undefined", () => {
-		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input: "¶a.ts#AB12\ndelete 3\n" })).toBe("");
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input: "[a.ts#AB12]\ndelete 3\n" })).toBe("");
 		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({})).toBeUndefined();
 	});
 

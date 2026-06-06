@@ -57,7 +57,7 @@ describe("editToolRenderer", () => {
 		const uiTheme = await getUiTheme();
 		const component = editToolRenderer.renderCall(
 			{
-				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF:\n|// preview",
+				input: "[packages/coding-agent/src/edit/renderer.ts]\ninsert tail:\n+// preview",
 			},
 			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -75,9 +75,12 @@ describe("editToolRenderer", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			{
-				input: ["*** Begin Patch", "¶crates/pi-natives/src/shell.rs", "EOF:", "|pub fn streaming_preview() {"].join(
-					"\n",
-				),
+				input: [
+					"*** Begin Patch",
+					"[crates/pi-natives/src/shell.rs]",
+					"insert tail:",
+					"+pub fn streaming_preview() {",
+				].join("\n"),
 			},
 			{},
 			hashlineTool,
@@ -86,8 +89,8 @@ describe("editToolRenderer", () => {
 
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("crates/pi-natives/src/shell.rs");
-		expect(rendered).not.toContain("EOF:");
-		expect(rendered).not.toContain("|pub fn streaming_preview() {");
+		expect(rendered).not.toContain("insert tail:");
+		expect(rendered).not.toContain("+pub fn streaming_preview() {");
 		expect(rendered).not.toContain("*** Begin Patch");
 	});
 
@@ -95,7 +98,7 @@ describe("editToolRenderer", () => {
 		const uiTheme = await getUiTheme();
 		const compactComponent = editToolRenderer.renderCall(
 			{
-				input: "¶foo bar.ts\nBOF:\n|// preview",
+				input: "[foo bar.ts]\ninsert head:\n+// preview",
 			},
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -103,7 +106,7 @@ describe("editToolRenderer", () => {
 
 		const quotedComponent = editToolRenderer.renderCall(
 			{
-				input: "¶'baz qux.ts'\nBOF:\n|// preview",
+				input: "['baz qux.ts']\ninsert head:\n+// preview",
 			},
 			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -115,33 +118,33 @@ describe("editToolRenderer", () => {
 		expect(quotedRendered).toContain("baz qux.ts");
 	});
 
-	it("strips canonical `¶` and longer `¶` runs from hashline input headers", async () => {
+	it("strips bracket delimiters from hashline input headers", async () => {
 		const uiTheme = await getUiTheme();
 
-		// Canonical `¶PATH` form — the parser strips the marker and the
+		// Canonical `[PATH]` form — the parser strips the delimiters and the
 		// renderer keeps the title clean.
 		const canonical = editToolRenderer.renderCall(
 			{
-				input: "¶packages/coding-agent/src/slash-commands/builtin-registry.ts\nBOF:\n|// preview",
+				input: "[packages/coding-agent/src/slash-commands/builtin-registry.ts]\ninsert head:\n+// preview",
 			},
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
 		);
 
-		// Even longer runs should still produce the clean path.
-		const triple = editToolRenderer.renderCall(
-			{ input: "¶¶¶a/b/c.ts\nBOF:\n|// preview" },
+		// While streaming, the closing bracket may not have arrived yet.
+		const partial = editToolRenderer.renderCall(
+			{ input: "[a/b/c.ts\ninsert head:\n+// preview" },
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
 		);
 
 		const canonicalRendered = Bun.stripANSI(canonical.render(160).join("\n"));
-		const tripleRendered = Bun.stripANSI(triple.render(160).join("\n"));
+		const partialRendered = Bun.stripANSI(partial.render(160).join("\n"));
 
 		expect(canonicalRendered).toContain("packages/coding-agent/src/slash-commands/builtin-registry.ts");
-		expect(canonicalRendered).not.toMatch(/¶packages\/coding-agent/);
-		expect(tripleRendered).toContain("a/b/c.ts");
-		expect(tripleRendered).not.toMatch(/¶+a\/b\/c\.ts/);
+		expect(canonicalRendered).not.toMatch(/\[packages\/coding-agent/);
+		expect(partialRendered).toContain("a/b/c.ts");
+		expect(partialRendered).not.toMatch(/\[a\/b\/c\.ts/);
 	});
 
 	it("uses hashline input headers for completed single-file result path", async () => {
@@ -157,7 +160,7 @@ describe("editToolRenderer", () => {
 			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
 			uiTheme,
 			{
-				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF:\n|// preview",
+				input: "[packages/coding-agent/src/edit/renderer.ts]\ninsert tail:\n+// preview",
 			},
 		);
 
@@ -182,7 +185,7 @@ describe("editToolRenderer", () => {
 			// The trailing payload line carries no newline — the common shape for a
 			// single-line edit. The streaming pass trims that in-flight line, so the
 			// preview only becomes computable once args are marked complete.
-			const input = `¶memory.ts#${tag}\nreplace 2..2:\n+export const b = 22;`;
+			const input = `[memory.ts#${tag}]\nreplace 2..2:\n+export const b = 22;`;
 			const component = new ToolExecutionComponent("edit", { input }, { snapshots }, hashlineTool, uiStub, tmpDir);
 
 			component.setArgsComplete();
@@ -208,7 +211,7 @@ describe("editToolRenderer", () => {
 
 			const snapshots = new InMemorySnapshotStore();
 			const tag = snapshots.record(filePath, content);
-			const input = `¶memory.ts#${tag}\nreplace 2..2:\n+export const b = 22;\n`;
+			const input = `[memory.ts#${tag}]\nreplace 2..2:\n+export const b = 22;\n`;
 			const component = new ToolExecutionComponent(
 				"edit",
 				{ __partialJson: input },

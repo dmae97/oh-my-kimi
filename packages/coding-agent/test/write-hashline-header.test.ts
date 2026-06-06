@@ -30,7 +30,7 @@ function resultText(result: { content: { type: string; text?: string }[] }): str
 		.join("\n");
 }
 
-const HASHLINE_HEADER_LINE = /^¶(\S+)#([0-9A-F]{4})$/;
+const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/;
 
 describe("write tool hashline header", () => {
 	let tmpDir: string;
@@ -47,7 +47,7 @@ describe("write tool hashline header", () => {
 		await fs.rm(tmpDir, { recursive: true, force: true });
 	});
 
-	it("insert heads a fresh ¶path#TAG header that maps to the written content", async () => {
+	it("inserts a fresh [path#TAG] header that maps to the written content", async () => {
 		const filePath = path.join(tmpDir, "module.ts");
 		const session = createSession(tmpDir);
 		const tool = new WriteTool(session);
@@ -111,7 +111,7 @@ describe("write tool hashline header", () => {
 
 		const result = await tool.execute("call-1", { path: filePath, content });
 		const text = resultText(result);
-		expect(text.startsWith("¶")).toBe(false);
+		expect(text.startsWith("[")).toBe(false);
 		expect(text).toBe(`Successfully wrote ${content.length} bytes to ${path.relative(tmpDir, filePath)}`);
 	});
 });
