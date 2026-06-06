@@ -1846,17 +1846,19 @@ export class TUI extends Container {
 			// committed to native history. If an offscreen edit shifted rows above the
 			// viewport, padding would repaint the wrong seam, so use a viewport repaint
 			// for liveness and keep history dirty. Active eager streaming also uses a
-			// viewport repaint so the live tail keeps moving. With neither direct input
-			// nor active eager streaming, the reader may be scrolled, so defer
-			// completely rather than repainting over their history.
+			// viewport repaint so the live tail keeps moving. An unobservable
+			// viewport is treated as at-bottom here: emitting zero bytes froze the
+			// live region (spinner/footer) and poisoned the diff basis until the
+			// next keystroke. Repaint for liveness and keep history dirty; a
+			// *known*-scrolled reader was already deferred above.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				if (allowUnknownViewportMutation) {
-					return diff.firstChanged < prevViewportTop
-						? { kind: "viewportRepaint" }
-						: { kind: "deferredShrink", paddedLength: this.#previousLines.length };
+				if (this.#eagerNativeScrollbackRebuild) {
+					return { kind: "viewportRepaint" };
 				}
-				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
+				return diff.firstChanged < prevViewportTop
+					? { kind: "viewportRepaint" }
+					: { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. `deferredShrink` is
@@ -1868,7 +1870,7 @@ export class TUI extends Container {
 			}
 			this.#markNativeScrollbackDirty();
 			if (diff.firstChanged < prevViewportTop) {
-				return { kind: "deferredMutation" };
+				return { kind: "viewportRepaint" };
 			}
 			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
@@ -2068,14 +2070,6 @@ export class TUI extends Container {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
-			if (
-				nativeViewportAtBottom === undefined &&
-				eagerEraseScrollbackRisk &&
-				!cleanTailAppend &&
-				!this.#eagerNativeScrollbackRebuild
-			) {
-				return { kind: "deferredMutation" };
-			}
 			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
 		}
 
