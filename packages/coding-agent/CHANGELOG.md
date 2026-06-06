@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.0] - 2026-06-06
+
 ### Breaking Changes
 
 - Replaced the `providers.parallelFetch` boolean setting with the `providers.fetch` enum (`auto` / `native` / `trafilatura` / `lynx` / `parallel` / `jina`) that selects the URL reader-backend priority for the `read`/`fetch` tool, mirroring `providers.image`/`providers.webSearch`. Existing configs are migrated automatically: the legacy key is dropped and the new `auto` default applies.

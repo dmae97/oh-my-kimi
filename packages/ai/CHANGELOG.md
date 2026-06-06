@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.0] - 2026-06-06
+
 ### Added
 
 - Added a dependency-free `@oh-my-pi/pi-ai/effort` module exporting the `Effort` enum and `THINKING_EFFORTS`, split out of `model-thinking` so hot-path consumers can import the thinking levels without pulling in `model-thinking` and its provider-compat dependency graph. The package barrel still re-exports both names, so existing imports are unaffected.
