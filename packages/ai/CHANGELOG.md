@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.67] - 2026-06-06
+
 ### Fixed
 
 - Fixed llama.cpp/OpenAI Responses parallel tool calls losing arguments when `function_call_arguments.done` events omit `output_index` and `item_id`, by routing those identifierless final-argument events through the open function calls in item order. ([#1970](https://github.com/can1357/oh-my-pi/issues/1970))

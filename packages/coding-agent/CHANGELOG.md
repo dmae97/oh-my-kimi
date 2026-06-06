@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.9.67] - 2026-06-06
 ### Added
 
 - Added `timeout-pause` and `timeout-resume` eval bridge status events emitted around `agent()`/`llm()` operations

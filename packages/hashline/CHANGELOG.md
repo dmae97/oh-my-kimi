@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.9.67] - 2026-06-06
+
 ### Breaking Changes
 
 - Changed hashline file section headers from `¶PATH#TAG` to `[PATH#TAG]` so model-authored edits use ASCII delimiters instead of a pilcrow sigil.

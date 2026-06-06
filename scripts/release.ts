@@ -358,6 +358,7 @@ async function cmdRelease(version: string): Promise<void> {
 			`refs/tags/${tagRef}:refs/tags/${tagRef}`,
 		])
 			.env({ ...Bun.env, GIT_LFS_SKIP_PUSH: "1" })
+			.quiet()
 			.nothrow();
 		if (result.exitCode === 0) break;
 		const stderr = result.stderr.toString();

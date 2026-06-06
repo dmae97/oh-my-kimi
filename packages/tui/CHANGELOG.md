@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.9.67] - 2026-06-06
 ### Added
 
 - Added `setPaddingX` to `Box` so horizontal padding can be updated programmatically after creation
