@@ -10,9 +10,9 @@
  * - Extra: directories listed in COPILOT_CUSTOM_INSTRUCTIONS_DIRS
  *
  * Capabilities:
- * - context-files: copilot-instructions.md in .github/, ~/.copilot/, and custom dirs
- * - instructions: *.instructions.md in .github/instructions/ and custom dirs (applyTo frontmatter)
- * - prompts: *.prompt.md in .github/prompts/ and ~/.copilot/prompts/
+ * - context-files: copilot-instructions.md in .github/ and ~/.copilot/; AGENTS.md in each COPILOT_CUSTOM_INSTRUCTIONS_DIRS
+ * - instructions: *.instructions.md under .github/instructions/ (project) and <dir>/.github/instructions/ for each custom dir (applyTo frontmatter)
+ * - prompts: *.prompt.md in .github/prompts/ (VS Code Copilot prompt files)
  * - skills: <name>/SKILL.md in .github/skills/ (GitHub Agent Skills layout)
  */
 import * as path from "node:path";
@@ -76,16 +76,18 @@ async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFil
 		});
 	}
 
-	// Extra dirs from COPILOT_CUSTOM_INSTRUCTIONS_DIRS each contribute a copilot-instructions.md.
+	// Each COPILOT_CUSTOM_INSTRUCTIONS_DIRS entry contributes an AGENTS.md (Copilot CLI
+	// searches these dirs for AGENTS.md + .github/instructions/**; the latter is handled
+	// by loadInstructions). copilot-instructions.md is NOT part of the custom-dir spec.
 	for (const dir of copilotCustomInstructionDirs()) {
-		const customPath = path.join(dir, "copilot-instructions.md");
-		const customContent = await readFile(customPath);
-		if (customContent) {
+		const agentsMdPath = path.join(dir, "AGENTS.md");
+		const agentsMdContent = await readFile(agentsMdPath);
+		if (agentsMdContent) {
 			items.push({
-				path: customPath,
-				content: customContent,
+				path: agentsMdPath,
+				content: agentsMdContent,
 				level: "user",
-				_source: createSourceMeta(PROVIDER_ID, customPath, "user"),
+				_source: createSourceMeta(PROVIDER_ID, agentsMdPath, "user"),
 			});
 		}
 	}
@@ -102,19 +104,23 @@ async function loadInstructions(ctx: LoadContext): Promise<LoadResult<Instructio
 
 	const instructionsDir = getProjectPath(ctx, "github", "instructions");
 	if (instructionsDir) {
+		// Path-specific instructions live "within or below" .github/instructions/ → recurse.
 		const result = await loadFilesFromDir<Instruction>(ctx, instructionsDir, PROVIDER_ID, "project", {
 			extensions: ["md"],
 			transform: transformInstruction,
+			recursive: true,
 		});
 		items.push(...result.items);
 		if (result.warnings) warnings.push(...result.warnings);
 	}
 
-	// Extra dirs from COPILOT_CUSTOM_INSTRUCTIONS_DIRS each contribute *.instructions.md.
+	// Each COPILOT_CUSTOM_INSTRUCTIONS_DIRS entry contributes <dir>/.github/instructions/**/*.instructions.md.
 	for (const dir of copilotCustomInstructionDirs()) {
-		const result = await loadFilesFromDir<Instruction>(ctx, dir, PROVIDER_ID, "user", {
+		const customInstructionsDir = path.join(dir, ".github", "instructions");
+		const result = await loadFilesFromDir<Instruction>(ctx, customInstructionsDir, PROVIDER_ID, "user", {
 			extensions: ["md"],
 			transform: transformInstruction,
+			recursive: true,
 		});
 		items.push(...result.items);
 		if (result.warnings) warnings.push(...result.warnings);
@@ -151,27 +157,19 @@ function transformInstruction(name: string, content: string, filePath: string, s
 // =============================================================================
 
 async function loadPrompts(ctx: LoadContext): Promise<LoadResult<Prompt>> {
-	const projectPromptsDir = getProjectPath(ctx, "github", "prompts");
-	const userPromptsDir = path.join(resolveCopilotHome(ctx.home), "prompts");
+	// `.github/prompts/*.prompt.md` is the VS Code Copilot prompt-file convention (the
+	// Copilot CLI has no prompt-file feature of its own); surface them as slash commands.
+	const promptsDir = getProjectPath(ctx, "github", "prompts");
+	if (!promptsDir) return { items: [], warnings: [] };
 
-	const dirs: Array<{ dir: string; level: "user" | "project" }> = [];
-	if (projectPromptsDir) dirs.push({ dir: projectPromptsDir, level: "project" });
-	dirs.push({ dir: userPromptsDir, level: "user" });
-
-	const results = await Promise.all(
-		dirs.map(({ dir, level }) =>
-			loadFilesFromDir<Prompt>(ctx, dir, PROVIDER_ID, level, {
-				extensions: ["md"],
-				transform: transformPrompt,
-			}),
-		),
-	);
-
-	return { items: results.flatMap(r => r.items), warnings: results.flatMap(r => r.warnings ?? []) };
+	return loadFilesFromDir<Prompt>(ctx, promptsDir, PROVIDER_ID, "project", {
+		extensions: ["md"],
+		transform: transformPrompt,
+	});
 }
 
 function transformPrompt(name: string, content: string, filePath: string, source: SourceMeta): Prompt | null {
-	// Copilot prompt files are `*.prompt.md`; ignore other markdown that may share the dir.
+	// Prompt files are `*.prompt.md`; ignore other markdown that may share the dir.
 	if (!name.endsWith(".prompt.md")) return null;
 
 	const { frontmatter, body } = parseFrontmatter(content, { source: filePath });
@@ -220,7 +218,8 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 registerProvider(contextFileCapability.id, {
 	id: PROVIDER_ID,
 	displayName: DISPLAY_NAME,
-	description: "Load copilot-instructions.md from .github/, ~/.copilot/, and COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
+	description:
+		"Load copilot-instructions.md from .github/ and ~/.copilot/; AGENTS.md from COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
 	priority: PRIORITY,
 	load: loadContextFiles,
 });
@@ -244,7 +243,7 @@ registerProvider<Skill>(skillCapability.id, {
 registerProvider<Prompt>(promptCapability.id, {
 	id: PROVIDER_ID,
 	displayName: DISPLAY_NAME,
-	description: "Load *.prompt.md from .github/prompts/ and ~/.copilot/prompts/",
+	description: "Load *.prompt.md from .github/prompts/ (VS Code Copilot prompt files)",
 	priority: PRIORITY,
 	load: loadPrompts,
 });

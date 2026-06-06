@@ -3,7 +3,7 @@
 ## [Unreleased]
 ### Added
 
-- Added GitHub Copilot user-global discovery to the `github` provider: it now loads user-global instructions from `~/.copilot/copilot-instructions.md`, honors the `COPILOT_HOME` relocation override, reads additional instruction directories listed in `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` (both `copilot-instructions.md` and `*.instructions.md`), and discovers Copilot prompt files (`*.prompt.md`) from `.github/prompts/` and `~/.copilot/prompts/`. Previously only the project `.github/` tree was scanned, so Copilot CLI users' cross-repo config was silently ignored. Closes #1913, #1915, #1916.
+- Added GitHub Copilot user-global discovery to the `github` provider: it now loads user-global instructions from `~/.copilot/copilot-instructions.md`, honors the `COPILOT_HOME` relocation override, reads each directory listed in `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` for an `AGENTS.md` and `.github/instructions/**/*.instructions.md` (matching Copilot CLI), scans the project `.github/instructions/` tree recursively, and surfaces VS Code Copilot prompt files (`*.prompt.md`) from `.github/prompts/` as slash commands. Previously only the project `.github/` tree was scanned, so Copilot CLI users' cross-repo config was silently ignored. Closes #1913, #1915, #1916.
 
 ## [15.12.2] - 2026-06-12
 

@@ -79,23 +79,32 @@ describe("github discovery — Copilot user-global surface", () => {
 		expect(user?.content).toBe("user guidance");
 	});
 
-	test("loads copilot-instructions.md from COPILOT_CUSTOM_INSTRUCTIONS_DIRS (#1915)", async () => {
+	test("loads AGENTS.md from COPILOT_CUSTOM_INSTRUCTIONS_DIRS (#1915)", async () => {
 		const extraA = path.join(tempDir, "extra-a");
 		const extraB = path.join(tempDir, "extra-b");
-		write(path.join(extraA, "copilot-instructions.md"), "extra A");
-		write(path.join(extraB, "copilot-instructions.md"), "extra B");
+		write(path.join(extraA, "AGENTS.md"), "extra A agents");
+		write(path.join(extraB, "AGENTS.md"), "extra B agents");
+		// copilot-instructions.md in a custom dir is NOT part of the spec and must be ignored.
+		write(path.join(extraA, "copilot-instructions.md"), "should be ignored");
 		process.env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = `${extraA}, ${extraB}`;
 
 		const result = await loadCapability<ContextFile>("context-files", { cwd, providers: ["github"] });
 
 		const contents = result.all.filter(f => f.level === "user").map(f => f.content);
-		expect(contents).toContain("extra A");
-		expect(contents).toContain("extra B");
+		expect(contents).toContain("extra A agents");
+		expect(contents).toContain("extra B agents");
+		expect(contents).not.toContain("should be ignored");
 	});
 
-	test("loads *.instructions.md from COPILOT_CUSTOM_INSTRUCTIONS_DIRS (#1915)", async () => {
+	test("loads <dir>/.github/instructions/**/*.instructions.md from custom dirs (#1915)", async () => {
 		const extra = path.join(tempDir, "extra");
-		write(path.join(extra, "style.instructions.md"), "---\napplyTo: '**/*.ts'\n---\nStyle rules");
+		// Recursive, under <dir>/.github/instructions — not top-level <dir>/*.instructions.md.
+		write(
+			path.join(extra, ".github", "instructions", "nested", "style.instructions.md"),
+			"---\napplyTo: '**/*.ts'\n---\nStyle rules",
+		);
+		// A top-level instructions file in the custom dir must NOT be picked up.
+		write(path.join(extra, "toplevel.instructions.md"), "---\napplyTo: '**'\n---\nIgnored");
 		process.env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS = extra;
 
 		const result = await loadCapability<Instruction>("instructions", { cwd, providers: ["github"] });
@@ -105,26 +114,23 @@ describe("github discovery — Copilot user-global surface", () => {
 		expect(found?.applyTo).toBe("**/*.ts");
 		expect(found?.content.trim()).toBe("Style rules");
 		expect(found?._source.level).toBe("user");
+		expect(result.all.find(i => i.name === "toplevel")).toBeUndefined();
 	});
 
-	test("discovers *.prompt.md from .github/prompts/ and ~/.copilot/prompts/ (#1916)", async () => {
+	test("discovers *.prompt.md from .github/prompts/ (#1916)", async () => {
 		write(
 			path.join(cwd, ".github", "prompts", "review.prompt.md"),
 			"---\ndescription: Review helper\n---\nReview the diff.",
 		);
-		write(path.join(copilotHome, "prompts", "summarize.prompt.md"), "Summarize the changes.");
-		// Plain markdown that is not a Copilot prompt file must be ignored.
+		// Plain markdown that is not a prompt file must be ignored.
 		write(path.join(cwd, ".github", "prompts", "notes.md"), "not a prompt");
 
 		const result = await loadCapability<Prompt>("prompts", { cwd, providers: ["github"] });
 
 		const review = result.all.find(p => p.name === "review");
-		const summarize = result.all.find(p => p.name === "summarize");
 		expect(review).toBeDefined();
 		expect(review?.content.trim()).toBe("Review the diff.");
 		expect(review?._source.level).toBe("project");
-		expect(summarize).toBeDefined();
-		expect(summarize?._source.level).toBe("user");
 		expect(result.all.find(p => p.name === "notes")).toBeUndefined();
 	});
 });
