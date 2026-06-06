@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `app.display.reset`, bound to `Ctrl+L` by default, to force an immediate terminal display reset/redraw without resizing the window.
+
+### Changed
+
+- Changed the default persistent model selector shortcut from `Ctrl+L` to `Alt+M`, leaving `Ctrl+L` for display reset. Existing user remaps in `keybindings.yml` are preserved.
+
 ### Fixed
 
 - Fixed framed read results rendering with an extra blank row above and below the output block.

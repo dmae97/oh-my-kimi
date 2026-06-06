@@ -48,6 +48,39 @@ describe("CustomEditor temporary model selector keybinding", () => {
 	});
 });
 
+describe("CustomEditor model selector and display reset keybindings", () => {
+	it("uses Alt+M for the model selector and Ctrl+L for display reset by default", () => {
+		const editor = createEditor();
+		const onSelectModel = vi.fn();
+		const onDisplayReset = vi.fn();
+		editor.onSelectModel = onSelectModel;
+		editor.onDisplayReset = onDisplayReset;
+
+		editor.handleInput("\x1bm");
+		expect(onSelectModel).toHaveBeenCalledTimes(1);
+		expect(onDisplayReset).not.toHaveBeenCalled();
+
+		editor.handleInput(ctrl("l"));
+		expect(onSelectModel).toHaveBeenCalledTimes(1);
+		expect(onDisplayReset).toHaveBeenCalledTimes(1);
+	});
+
+	it("lets display reset win when an old model remap also uses Ctrl+L", () => {
+		const editor = createEditor();
+		const onSelectModel = vi.fn();
+		const onDisplayReset = vi.fn();
+		editor.onSelectModel = onSelectModel;
+		editor.onDisplayReset = onDisplayReset;
+		editor.setActionKeys("app.model.select", ["ctrl+l"]);
+		editor.setActionKeys("app.display.reset", ["ctrl+l"]);
+
+		editor.handleInput(ctrl("l"));
+
+		expect(onDisplayReset).toHaveBeenCalledTimes(1);
+		expect(onSelectModel).not.toHaveBeenCalled();
+	});
+});
+
 describe("CustomEditor escape key dispatch", () => {
 	function installAutocompleteProvider(editor: CustomEditor) {
 		editor.setAutocompleteProvider({

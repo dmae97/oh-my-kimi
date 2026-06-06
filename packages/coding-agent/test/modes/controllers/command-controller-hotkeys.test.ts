@@ -6,8 +6,9 @@ describe("buildHotkeysMarkdown", () => {
 		const displayStrings: Record<string, string> = {
 			"app.clipboard.copyLine": "Alt+Shift+L",
 			"app.clipboard.copyPrompt": "Ctrl+Shift+P",
-			"app.plan.toggle": "Alt+M",
+			"app.plan.toggle": "Alt+Shift+P",
 			"app.tools.expand": "Ctrl+O",
+			"app.display.reset": "Ctrl+L",
 			"app.interrupt": "Esc",
 			"app.clear": "Ctrl+C",
 			"app.exit": "Ctrl+D",
@@ -16,7 +17,7 @@ describe("buildHotkeysMarkdown", () => {
 			"app.model.cycleForward": "Ctrl+P",
 			"app.model.cycleBackward": "Shift+Ctrl+P",
 			"app.model.selectTemporary": "Ctrl+Shift+L",
-			"app.model.select": "Ctrl+L",
+			"app.model.select": "Alt+M",
 			"app.history.search": "Ctrl+R",
 			"app.thinking.toggle": "Ctrl+T",
 			"app.editor.external": "Ctrl+G",
@@ -35,8 +36,9 @@ describe("buildHotkeysMarkdown", () => {
 		expect(lines[0]).toBe("**Navigation**");
 		expect(markdown).toContain("| `Ctrl+Shift+P` | Copy whole prompt |");
 		expect(markdown).toContain("| `Ctrl+Shift+L` | Select model (temporary) |");
-		expect(markdown).toContain("| `Ctrl+L` | Select model (set roles) |");
-		expect(markdown).toContain("| `Alt+M` | Toggle plan mode |");
+		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
+		expect(markdown).toContain("| `Ctrl+L` | Reset terminal display |");
+		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
 		expect(markdown).toContain("| `#` | Open prompt actions |");
 		for (const line of lines) {
 			if (line.length === 0) continue;
@@ -53,6 +55,9 @@ describe("buildHotkeysMarkdown", () => {
 						return "";
 					}
 					if (action === "app.model.select") {
+						return "Alt+M";
+					}
+					if (action === "app.display.reset") {
 						return "Ctrl+L";
 					}
 					return "Ctrl+K";
@@ -61,6 +66,6 @@ describe("buildHotkeysMarkdown", () => {
 		});
 
 		expect(markdown).toContain("| `Disabled` | Select model (temporary) |");
-		expect(markdown).toContain("| `Ctrl+L` | Select model (set roles) |");
+		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
 	});
 });

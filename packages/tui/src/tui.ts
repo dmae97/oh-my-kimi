@@ -974,6 +974,21 @@ export class TUI extends Container {
 		return true;
 	}
 
+	/**
+	 * Force an immediate full replay of the current frame, including native
+	 * scrollback. This is the keyboard-accessible equivalent of the resize reset:
+	 * no queued diff frame or terminal scrollback probe can downgrade it to a
+	 * viewport-only repaint.
+	 */
+	resetDisplay(): void {
+		if (this.#stopped) return;
+		this.#prepareForcedRender(!isMultiplexerSession(), true);
+		this.#resizeEventPending = true;
+		this.#renderRequested = false;
+		this.#lastRenderAt = this.#renderScheduler.now();
+		this.#doRender();
+	}
+
 	requestRender(force = false, options?: RenderRequestOptions): void {
 		const allowUnknownViewportMutation = options?.allowUnknownViewportMutation === true;
 		this.#allowUnknownViewportMutationOnNextRender ||= allowUnknownViewportMutation;

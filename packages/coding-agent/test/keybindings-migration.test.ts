@@ -107,6 +107,31 @@ describe("KeybindingsManager.create", () => {
 		}
 	});
 
+	it("defaults model selection to Alt+M and display reset to Ctrl+L", () => {
+		const manager = KeybindingsManager.inMemory();
+
+		expect(manager.getKeys("app.model.select")).toEqual(["alt+m"]);
+		expect(manager.getKeys("app.display.reset")).toEqual(["ctrl+l"]);
+	});
+
+	it("keeps the Ctrl+L display reset default when an old model remap still claims Ctrl+L", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.model.select": "ctrl+l",
+		});
+
+		expect(manager.getKeys("app.model.select")).toEqual(["ctrl+l"]);
+		expect(manager.getKeys("app.display.reset")).toEqual(["ctrl+l"]);
+		expect(manager.getEffectiveConfig()["app.display.reset"]).toBe("ctrl+l");
+	});
+
+	it("keeps Ctrl+L when the user explicitly assigns it to display reset", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.display.reset": "ctrl+l",
+		});
+
+		expect(manager.getKeys("app.display.reset")).toEqual(["ctrl+l"]);
+	});
+
 	it("defaults the follow-up shortcut to both Ctrl+Q and Ctrl+Enter (#1903)", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
 

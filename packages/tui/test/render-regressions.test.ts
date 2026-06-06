@@ -344,6 +344,28 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("resetDisplay performs a clean redraw without a geometry change", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const writes = captureWrites(term);
+
+				tui.resetDisplay();
+				await settle(term);
+
+				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
+				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("keeps appended rows in scrollback when a forced render coalesces with content growth", async () => {
 			const term = new VirtualTerminal(20, 3);
 			const tui = new TUI(term);

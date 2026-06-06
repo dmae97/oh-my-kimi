@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `TUI.resetDisplay()` to force an immediate full-frame replay, including native scrollback when the host can safely clear it.
 - Added `setPaddingY` to `Box` so vertical padding can be updated programmatically after creation.
 
 ## [15.9.67] - 2026-06-06

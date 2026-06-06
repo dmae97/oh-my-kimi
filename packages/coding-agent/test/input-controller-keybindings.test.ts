@@ -6,6 +6,7 @@ type FakeEditor = {
 	onEscape?: () => void;
 	onClear?: () => void;
 	onExit?: () => void;
+	onDisplayReset?: () => void;
 	onSuspend?: () => void;
 	onCycleThinkingLevel?: () => void;
 	onCycleModelForward?: () => void;
@@ -31,10 +32,19 @@ type FakeEditor = {
 async function createContext() {
 	let editorText = "";
 	const keyMap: Record<string, string[]> = {
+		"app.display.reset": ["ctrl+l"],
 		"app.model.selectTemporary": ["ctrl+y"],
-		"app.model.select": ["ctrl+l"],
+		"app.model.select": ["alt+m"],
 	};
+	const customHandlers = new Map<string, () => void>();
 	const setActionKeys = vi.fn();
+	const setCustomKeyHandler = vi.fn((key: string, handler: () => void) => {
+		customHandlers.set(key, handler);
+	});
+	const clearCustomKeyHandlers = vi.fn(() => {
+		customHandlers.clear();
+	});
+	const resetDisplay = vi.fn();
 	const showModelSelector = vi.fn();
 	const prompt = vi.fn(async () => {});
 	const updatePendingMessagesDisplay = vi.fn();
@@ -47,12 +57,12 @@ async function createContext() {
 		},
 		addToHistory: vi.fn(),
 		setActionKeys,
-		setCustomKeyHandler: vi.fn(),
-		clearCustomKeyHandlers: vi.fn(),
+		setCustomKeyHandler,
+		clearCustomKeyHandlers,
 	};
 	const ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender: vi.fn() } as unknown as InteractiveModeContext["ui"],
+		ui: { requestRender: vi.fn(), resetDisplay } as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -122,33 +132,39 @@ async function createContext() {
 		InputController,
 		ctx,
 		editor,
+		customHandlers,
 		spies: {
 			setActionKeys,
 			showModelSelector,
 			prompt,
 			updatePendingMessagesDisplay,
+			resetDisplay,
 		},
 	};
 }
 
 describe("InputController keybinding setup", () => {
-	it("registers temporary and persisted model selector actions separately", async () => {
+	it("registers model selector and display reset actions separately", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.display.reset", ["ctrl+l"]);
 		expect(spies.setActionKeys).toHaveBeenCalledWith("app.model.selectTemporary", ["ctrl+y"]);
-		expect(spies.setActionKeys).toHaveBeenCalledWith("app.model.select", ["ctrl+l"]);
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.model.select", ["alt+m"]);
+		expect(editor.onDisplayReset).toBeDefined();
 		expect(editor.onSelectModelTemporary).toBeDefined();
 		expect(editor.onSelectModel).toBeDefined();
 		expect(editor.onSelectModelTemporary).not.toBe(editor.onSelectModel);
 
+		editor.onDisplayReset?.();
 		editor.onSelectModelTemporary?.();
 		editor.onSelectModel?.();
 
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
+		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
 	});
 
 	it("marks streaming follow-up submissions as local", async () => {
