@@ -456,6 +456,7 @@ function keyListIncludes(keys: KeyId | KeyId[] | undefined, target: KeyId): bool
 
 function userBindingClaimsKey(config: KeybindingsConfig, target: KeyId, except: Keybinding): boolean {
 	for (const [keybinding, keys] of Object.entries(config)) {
+		if (!(keybinding in KEYBINDINGS)) continue;
 		if (keybinding === except) continue;
 		if (keyListIncludes(keys, target)) return true;
 	}

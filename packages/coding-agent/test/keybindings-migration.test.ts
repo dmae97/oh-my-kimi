@@ -133,6 +133,14 @@ describe("KeybindingsManager.create", () => {
 		expect(manager.getEffectiveConfig()["app.message.followUp"]).toBe("ctrl+enter");
 	});
 
+	it("keeps the Ctrl+Q follow-up default when only an unknown config key claims it (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"unknown.action": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q", "ctrl+enter"]);
+	});
+
 	it("keeps Ctrl+Q when the user explicitly assigns it to follow-up (#1903)", () => {
 		const manager = KeybindingsManager.inMemory({
 			"app.message.followUp": "ctrl+q",
