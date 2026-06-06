@@ -247,6 +247,33 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("rewrites changed rows before clearing suffixes for non-synchronized hosts", async () => {
+			const term = new VirtualTerminal(40, 8);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent([
+				"assistant output already rendered",
+				"tool output already rendered",
+				"todos/status already rendered",
+			]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const writes = captureWrites(term);
+
+				component.setLines(["assistant output already rendered", "tool", "todos/status already rendered"]);
+				tui.requestRender();
+				await settle(term);
+
+				const paint = writes.at(-1) ?? "";
+				expect(paint).toContain("tool\x1b[0m\x1b[K");
+				expect(paint).not.toContain("\x1b[2Ktool");
+				expect(visible(term)[1]).toBe("tool");
+			} finally {
+				tui.stop();
+			}
+		});
 
 		it("clears removed tail lines after shrink", async () => {
 			const term = new VirtualTerminal(40, 10);
@@ -2142,7 +2169,7 @@ describe("TUI terminal-state regressions", () => {
 					expect(viewport.at(-1)).toBe("spinner-b");
 					expect(term.getScrollBuffer().join("\n")).not.toContain("edited-0");
 					const paint = writes.at(-1) ?? "";
-					expect(paint).toContain("\r\x1b[2Kspinner-b");
+					expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
 					expect(paint).not.toContain("\x1b[H");
 					expect(paint).not.toContain("\x1b[3J");
 				} finally {
@@ -2170,7 +2197,7 @@ describe("TUI terminal-state regressions", () => {
 					expect(visible(scrolledTerm).map(line => line.trim())).toEqual(beforeViewport);
 					expect(scrolledTerm.getScrollBuffer().join("\n")).not.toContain("edited-0");
 					const paint = writes.at(-1) ?? "";
-					expect(paint).toContain("\r\x1b[2Kspinner-b");
+					expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
 					expect(paint).not.toContain("\x1b[H");
 					expect(paint).not.toContain("\x1b[3J");
 				} finally {
@@ -3426,8 +3453,8 @@ describe("TUI terminal-state regressions", () => {
 				// Initial paint: only the styled row carries background cells.
 				expect(backgroundRows(term, height)).toEqual([1]);
 
-				// Diff path: rewriting the row below starts with \x1b[2K — with leaked
-				// background, BCE would paint that whole row red.
+				// Diff path: rewriting the row below clears only after the row reset;
+				// with leaked background, BCE would otherwise paint that row red.
 				component.setLines(["plain-0", UNRESET_BG_ROW, "EDITED-2"]);
 				tui.requestRender();
 				await settle(term);
@@ -3459,8 +3486,8 @@ describe("TUI terminal-state regressions", () => {
 				expect(foregroundRows(term, height)).toEqual([1]);
 				expect(underlineRows(term, height)).toEqual([1]);
 
-				// Rewriting the next row starts with an erase; leaked SGR would make
-				// the edited row green/underlined despite containing plain text.
+				// Rewriting the next row clears only after the row reset; leaked SGR
+				// would make the edited row green/underlined despite containing plain text.
 				component.setLines(["plain-0", UNRESET_FG_UNDERLINE_ROW, "EDITED-2"]);
 				tui.requestRender();
 				await settle(term);
@@ -3495,7 +3522,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				// Force a full repaint (viewport rewrite path emits \x1b[2K per row).
+				// Force a full repaint (viewport rewrite path suffix-clears each text row).
 				tui.requestRender(true);
 				await settle(term);
 

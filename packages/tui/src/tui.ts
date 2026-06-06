@@ -44,6 +44,8 @@ const SEGMENT_RESET = "\x1b[0m";
  * diffing so `#previousLines` mirrors what was actually written.
  */
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
+const ERASE_LINE = "\x1b[2K";
+const ERASE_TO_END_OF_LINE = "\x1b[K";
 // Hide the hardware cursor before each paint/move write. Ghostty-style bar
 // cursors can otherwise leave visual afterimages while the TUI repaints the
 // row under a visible cursor. Paint writes also disable terminal autowrap:
@@ -2276,8 +2278,8 @@ export class TUI extends Container {
 		// Multiplexers (tmux/screen/zellij) cannot erase pane history with `\x1b[3J`
 		// and cannot answer a viewport-position probe, so the destructive checkpoint
 		// rebuild path is forever unavailable. The pinned emitter is built from the
-		// opposite primitives — relative cursor moves, per-line `\x1b[2K`, and
-		// `\r\n` to scroll sealed rows past the viewport bottom — which are exactly
+		// opposite primitives — relative cursor moves, per-row rewrite/suffix-clear,
+		// and `\r\n` to scroll sealed rows past the viewport bottom — which are exactly
 		// what tmux pane history accepts. Without this commit-as-you-go path, the
 		// streaming cap below clipped every frame to the visible tail and the
 		// scrolled-off head was committed nowhere (issue #1974).
@@ -2347,6 +2349,12 @@ export class TUI extends Container {
 		if (visibleWidth(line) <= width) return line;
 		const truncated = truncateToWidth(line, width, Ellipsis.Omit);
 		return truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+	}
+
+	#lineRewriteSequence(line: string, width: number): string {
+		const fitted = this.#fitLineToWidth(line, width);
+		if (TERMINAL.isImageLine(fitted)) return ERASE_LINE + fitted;
+		return visibleWidth(fitted) >= width ? fitted : fitted + ERASE_TO_END_OF_LINE;
 	}
 
 	/**
@@ -2515,8 +2523,7 @@ export class TUI extends Container {
 		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (screenRow > 0) buffer += "\r\n";
-			buffer += "\x1b[2K";
-			buffer += texts[screenRow];
+			buffer += this.#lineRewriteSequence(texts[screenRow], width);
 		}
 		// DECCARA rectangles paint the visible fills before cursor positioning;
 		// the cleared cells written above are what the rectangles repaint.
@@ -2554,8 +2561,8 @@ export class TUI extends Container {
 	 * leaving the transient live region out of saved lines.
 	 *
 	 * Uses only the no-scroll-snap vocabulary of {@link #emitDiff}: relative
-	 * cursor moves, per-line `\x1b[2K`, and `\r\n` to push the sealed chunk into
-	 * history. It deliberately avoids a full-screen erase (`\x1b[2J`) and absolute
+	 * cursor moves, per-row rewrite/suffix-clear, and `\r\n` to push the sealed
+	 * chunk into history. It deliberately avoids a full-screen erase (`\x1b[2J`) and absolute
 	 * cursor home (`\x1b[H`): on Ghostty those snap a reader scrolled into history
 	 * back to the bottom on every frame.
 	 */
@@ -2587,17 +2594,18 @@ export class TUI extends Container {
 
 		// Write the sealed chunk followed by the full viewport from the top row.
 		// The first (boundedAppendTo - boundedAppendFrom) rows scroll into native
-		// history; the trailing `height` rows fill the viewport. Each row clears
-		// itself with `\x1b[2K` instead of relying on a screen-wide erase.
+		// history; the trailing `height` rows fill the viewport. Text rows overwrite
+		// first and clear only the suffix so non-synchronized hosts do not visibly
+		// blank stable content before repainting it.
 		let wroteLine = false;
 		for (let i = boundedAppendFrom; i < boundedAppendTo; i++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += `\x1b[2K${this.#fitLineToWidth(lines[i] ?? "", width)}`;
+			buffer += this.#lineRewriteSequence(lines[i] ?? "", width);
 			wroteLine = true;
 		}
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += `\x1b[2K${this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width)}`;
+			buffer += this.#lineRewriteSequence(lines[viewportTop + screenRow] ?? "", width);
 			wroteLine = true;
 		}
 
@@ -2676,7 +2684,7 @@ export class TUI extends Container {
 		const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
 		const moveDown = height - 1 - currentScreenRow;
 		if (moveDown > 0) buffer += `\x1b[${moveDown}B`;
-		buffer += `\r\x1b[2K${this.#fitLineToWidth(line, width)}\x1b[?25l`;
+		buffer += `\r${this.#lineRewriteSequence(line, width)}\x1b[?25l`;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
@@ -2835,8 +2843,7 @@ export class TUI extends Container {
 		}
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
-			buffer += "\x1b[2K";
-			buffer += fillTexts && i >= fillStart ? fillTexts[i - fillStart] : this.#fitLineToWidth(lines[i], width);
+			buffer += this.#lineRewriteSequence(fillTexts && i >= fillStart ? fillTexts[i - fillStart] : lines[i], width);
 		}
 
 		// If the prior frame was taller, clear the trailing rows.
