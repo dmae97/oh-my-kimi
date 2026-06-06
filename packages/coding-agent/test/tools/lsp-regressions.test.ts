@@ -216,7 +216,7 @@ for await (const chunk of Bun.stdin.stream()) {
 		}
 	});
 
-	it("waits for rust-analyzer workspaces before opening project-indexed files", async () => {
+	it("waits through transient rust-analyzer status timeouts before opening project-indexed files", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
 		try {
 			const sourcePath = path.join(tempDir.path(), "src", "main.rs");
@@ -264,6 +264,9 @@ for await (const chunk of Bun.stdin.stream()) {
 		} else if (message.method === "rust-analyzer/analyzerStatus") {
 			statusRequests++;
 			await Bun.write(statusCountPath, String(statusRequests));
+			if (statusRequests === 1) {
+				continue;
+			}
 			const result = statusRequests < 3 ? "No workspaces" : "Workspaces:\\nLoaded 1 package across 1 workspace.";
 			send({ jsonrpc: "2.0", id: message.id, result });
 		} else if (message.method === "textDocument/didOpen") {

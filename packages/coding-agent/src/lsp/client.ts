@@ -433,6 +433,10 @@ function isRustAnalyzerClient(client: LspClient): boolean {
 	);
 }
 
+function isRustAnalyzerStatusTimeout(err: unknown): boolean {
+	return err instanceof Error && err.message.startsWith("LSP request rust-analyzer/analyzerStatus timed out after ");
+}
+
 async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSignal): Promise<void> {
 	if (rustAnalyzerReadyClients.has(client)) {
 		return;
@@ -444,8 +448,12 @@ async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSig
 		let status: unknown;
 		try {
 			status = await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, 1_000);
-		} catch {
-			return;
+		} catch (err) {
+			if (!isRustAnalyzerStatusTimeout(err) || Date.now() >= deadline) {
+				return;
+			}
+			await Bun.sleep(RUST_ANALYZER_WORKSPACE_READY_POLL_MS);
+			continue;
 		}
 		const ready = typeof status === "string" && !status.startsWith("No workspaces");
 		if (ready && Date.now() - started >= RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS) {
