@@ -262,8 +262,7 @@ export class PythonKernel {
 			// inherit and avoid the #1960 numpy/pandas LoadLibraryExW hang.
 			windowsHide: shouldHideKernelWindow({
 				platform: process.platform,
-				hostHasInheritableConsole:
-					!!process.stdin.isTTY || !!process.stdout.isTTY || !!process.stderr.isTTY,
+				hostHasInheritableConsole: !!process.stdin.isTTY || !!process.stdout.isTTY || !!process.stderr.isTTY,
 			}),
 		});
 		kernel.#proc = proc;
