@@ -73,10 +73,11 @@ function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 	}
 
 	// Same anti-junk rule as the strict tokenizer: a `#XXXX` token followed
-	// by whitespace+content inside the path body is a malformed header (e.g.
-	// stale-tag copy-paste like `src/a.ts#1A2B copied from read`), not a
-	// path with an embedded hex fragment.
-	if (new RegExp(`#[0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}\\s`).test(pathText)) return null;
+	// by whitespace+content or a line suffix inside the path body is a
+	// malformed header (e.g. stale-tag copy-paste like
+	// `src/a.ts#1A2B copied from read` or `src/a.ts#1A2B:42`), not a path
+	// with an embedded hex fragment.
+	if (new RegExp(`#[0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}(?:\\s|:)`).test(pathText)) return null;
 
 	const path = normalizeHashlinePath(pathText, cwd);
 	if (path.length === 0) return null;

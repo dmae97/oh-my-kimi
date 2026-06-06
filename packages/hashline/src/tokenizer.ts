@@ -334,10 +334,11 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 		}
 	}
 
-	// Reject stale-tag copy-paste such as `¶src/a.ts#1A2B copied from read`:
-	// a `#XXXX` token followed by whitespace+more content in the path body
-	// is a malformed header, not a path-with-embedded-hash. Surface the
-	// focused diagnostic instead of silently mis-routing the edit.
+	// Reject stale-tag copy-paste such as `¶src/a.ts#1A2B copied from read`
+	// and line-suffixed tags such as `¶src/a.ts#1A2B:42`: a `#XXXX`
+	// token followed by tag-tail junk in the path body is a malformed header,
+	// not a path-with-embedded-hash. Surface the focused diagnostic instead
+	// of silently mis-routing the edit.
 	for (let i = FILE_PREFIX_LENGTH; i + HL_FILE_HASH_LENGTH < pathEnd; i++) {
 		if (line.charCodeAt(i) !== CHAR_HASH) continue;
 		let allHex = true;
@@ -349,7 +350,9 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 		}
 		if (!allHex) continue;
 		const after = i + HL_FILE_HASH_LENGTH + 1;
-		if (after < pathEnd && isWhitespaceCode(line.charCodeAt(after))) return null;
+		if (after < pathEnd && (isWhitespaceCode(line.charCodeAt(after)) || line.charCodeAt(after) === CHAR_COLON)) {
+			return null;
+		}
 	}
 
 	if (pathEnd === FILE_PREFIX_LENGTH) return null;
