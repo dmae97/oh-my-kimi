@@ -1272,6 +1272,8 @@ function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: numbe
 	if (email) return email;
 	const accountId = (report.metadata?.accountId as string | undefined) ?? limit.scope.accountId;
 	if (accountId) return accountId;
+	const projectId = report.metadata?.projectId as string | undefined;
+	if (projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
@@ -1280,6 +1282,8 @@ function formatUnlimitedReportLabel(report: UsageReport, index: number): string 
 	if (email) return email;
 	const accountId = report.metadata?.accountId as string | undefined;
 	if (accountId) return accountId;
+	const projectId = report.metadata?.projectId as string | undefined;
+	if (projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
@@ -1365,7 +1369,12 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 		return `${formatNumber(remainingPct)}% free`;
 	}
 
-	return `${limits.length} accts`;
+	// Count unique accounts from limit scopes — not limits.length.
+	const uniqueAccountIds = new Set(
+		limits.map(limit => limit.scope.accountId).filter((id): id is string => typeof id === "string" && id.length > 0),
+	);
+	if (uniqueAccountIds.size === 0) return "";
+	return `${uniqueAccountIds.size} ${uniqueAccountIds.size === 1 ? "acct" : "accts"}`;
 }
 
 function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {

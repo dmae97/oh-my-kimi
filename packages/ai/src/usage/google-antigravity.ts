@@ -148,46 +148,78 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	}
 
 	const data = (await response.json()) as AntigravityUsageResponse;
-	const limits: UsageLimit[] = [];
+
+	// The API returns per-model quota entries, but quota is shared across
+	// models within the same tier. Deduplicate by (tier, windowId) so one
+	// account doesn't produce 15 redundant bars.
+	const deduped = new Map<
+		string,
+		{ amount: UsageAmount; window: UsageWindow | undefined; tier: string | undefined }
+	>();
 	let earliestReset: number | undefined;
 
-	for (const [modelId, modelInfo] of Object.entries(data.models ?? {})) {
+	for (const [_modelId, modelInfo] of Object.entries(data.models ?? {})) {
 		const quotaInfos = normalizeQuotaInfos(modelInfo);
 		for (const quotaInfo of quotaInfos) {
+			if (quotaInfo.remainingFraction === undefined) continue;
 			const amount = buildAmount(quotaInfo);
 			const window = parseWindow(quotaInfo);
 			if (window?.resetsAt) {
 				earliestReset = earliestReset ? Math.min(earliestReset, window.resetsAt) : window.resetsAt;
 			}
-			const labelBase = modelInfo.displayName || modelId;
-			const label = quotaInfo.tier ? `${labelBase} (${quotaInfo.tier})` : labelBase;
+			const tier = quotaInfo.tier ?? "default";
 			const windowId = window?.id ?? "default";
-			limits.push({
-				id: `${modelId}:${quotaInfo.tier ?? "default"}:${windowId}`,
-				label,
-				scope: {
-					provider: params.provider,
-					accountId: credential.accountId,
-					projectId: credential.projectId,
-					modelId,
-					tier: quotaInfo.tier,
-					windowId,
-				},
-				window,
-				amount,
-				status: getUsageStatus(amount.remainingFraction),
-			});
+			const key = `${tier}|${windowId}`;
+			const existing = deduped.get(key);
+			if (
+				!existing ||
+				(existing.amount.remainingFraction !== undefined &&
+					amount.remainingFraction !== undefined &&
+					amount.remainingFraction < existing.amount.remainingFraction)
+			) {
+				deduped.set(key, { amount, window, tier: quotaInfo.tier });
+			}
 		}
 	}
+
+	const limits: UsageLimit[] = [];
+	for (const [key, entry] of deduped) {
+		const [tier, windowId] = key.split("|") as [string, string];
+		const label = entry.tier ?? "Usage";
+		limits.push({
+			id: `google-antigravity:${tier}:${windowId}`,
+			label,
+			scope: {
+				provider: params.provider,
+				accountId: credential.accountId,
+				projectId: credential.projectId,
+				tier: entry.tier ?? undefined,
+				windowId,
+			},
+			window: entry.window,
+			amount: entry.amount,
+			status: getUsageStatus(entry.amount.remainingFraction),
+		});
+	}
+
+	limits.sort((a, b) => {
+		const aFraction = a.amount.remainingFraction ?? 1;
+		const bFraction = b.amount.remainingFraction ?? 1;
+		return aFraction - bFraction;
+	});
+
+	const metadata: UsageReport["metadata"] = {
+		endpoint: url,
+		projectId: credential.projectId,
+	};
+	if (credential.email) metadata.email = credential.email;
+	if (credential.accountId) metadata.accountId = credential.accountId;
 
 	const report: UsageReport = {
 		provider: params.provider,
 		fetchedAt: nowMs,
 		limits,
-		metadata: {
-			endpoint: url,
-			projectId: credential.projectId,
-		},
+		metadata,
 		raw: data,
 	};
 
