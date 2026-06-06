@@ -229,7 +229,7 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 		});
 	});
 
-	it("treats focused keyboard input as a user-input opt-in after an ED3-risk shrink defers", async () => {
+	it("treats focused keyboard input as a non-destructive repaint after an ED3-risk shrink defers", async () => {
 		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
 			await withTerminalRisk(true, async () => {
 				const term = new VirtualTerminal(40, 10);
@@ -258,7 +258,7 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 					await settle(term);
 
 					expect(term.getViewport().map(line => line.trim())).toContain("prompt> x");
-					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(eraseScrollbackCount(writes)).toBe(0);
 					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 				} finally {
 					tui.stop();

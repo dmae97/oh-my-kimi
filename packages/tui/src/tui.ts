@@ -569,8 +569,8 @@ export class TUI extends Container {
 	 * (the viewport is never observable there and ConPTY hosts erase host
 	 * scrollback on ED3 — #1635/#1746); only the unknown POSIX case is forced to
 	 * rebuild. POSIX hosts known to disturb scrolled readers on xterm ED3
-	 * (`CSI 3 J`, erase saved lines) also defer the eager opt-in; checkpoint and
-	 * direct user-input rebuilds are unaffected.
+	 * (`CSI 3 J`, erase saved lines) also defer the eager opt-in; checkpoint
+	 * rebuilds are unaffected.
 	 *
 	 * Disabling stays active through one already-requested frame: the event batch
 	 * that ends a foreground stream both removes its UI rows (loader/status
@@ -1759,12 +1759,14 @@ export class TUI extends Container {
 			this.#streamingHighWater = 0;
 		}
 
-		if (
-			this.#nativeScrollbackDirty &&
-			!isMultiplexerSession() &&
-			this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)
-		) {
-			return { kind: "historyRebuild" };
+		if (this.#nativeScrollbackDirty && !isMultiplexerSession()) {
+			// A dirty flag means older native history is stale; it is not required to
+			// make the current focused-input frame correct. Rebuilding it here on
+			// macOS/POSIX terminals with an unobservable viewport turns every
+			// Up/Down selector move into an ED3 clear plus full transcript replay.
+			if (this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), false)) {
+				return { kind: "historyRebuild" };
+			}
 		}
 
 		const diff = this.#diffLines(newLines);
