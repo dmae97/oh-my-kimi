@@ -254,9 +254,16 @@ export class PythonKernel {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			// We pipe all three stdio streams for IPC, but the host process keeps
+			// its own console as long as ANY of stdin/stdout/stderr is still a
+			// TTY — the parent only loses its console when fully detached
+			// (service / daemon). `omp -p "..." > out.txt` redirects stdout but
+			// stdin and stderr stay on the terminal, so the kernel can still
+			// inherit and avoid the #1960 numpy/pandas LoadLibraryExW hang.
 			windowsHide: shouldHideKernelWindow({
 				platform: process.platform,
-				stdoutIsTTY: !!process.stdout.isTTY,
+				hostHasInheritableConsole:
+					!!process.stdin.isTTY || !!process.stdout.isTTY || !!process.stderr.isTTY,
 			}),
 		});
 		kernel.#proc = proc;

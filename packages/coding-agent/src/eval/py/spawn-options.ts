@@ -24,7 +24,17 @@
  * plugin installs) keep `windowsHide: true` because they don't load complex
  * native modules and the brief console flash would be user-visible noise.
  */
-export function shouldHideKernelWindow(opts: { platform: NodeJS.Platform; stdoutIsTTY: boolean }): boolean {
+export function shouldHideKernelWindow(opts: {
+	platform: NodeJS.Platform;
+	/**
+	 * Whether the host process has a console the child can inherit. On Windows
+	 * this should be `true` whenever ANY of stdin/stdout/stderr is still a TTY:
+	 * the parent only loses its console when fully detached (service / daemon),
+	 * not when an individual stdio stream is redirected (e.g. `omp -p > out.txt`
+	 * still has stdin and stderr on the terminal).
+	 */
+	hostHasInheritableConsole: boolean;
+}): boolean {
 	if (opts.platform !== "win32") return false;
-	return !opts.stdoutIsTTY;
+	return !opts.hostHasInheritableConsole;
 }
