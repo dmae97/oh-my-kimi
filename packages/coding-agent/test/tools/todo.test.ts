@@ -345,3 +345,53 @@ describe("todoMatchesAnyDescription", () => {
 		expect(todoMatchesAnyDescription("Audit AGENTS.md compliance", ["Audit AGENTS md compliance"])).toBe(true);
 	});
 });
+
+describe("todoToolRenderer.renderCall malformed-args regression (#2005)", () => {
+	// Reporter saw `TypeError: args?.ops?.map is not a function` against
+	// Xiaomi Token Plan's Anthropic protocol because `parseStreamingJson`
+	// surfaced `{ ops: "[..." }` shapes mid-stream. The renderer is invoked
+	// on every streaming delta, so any non-array `ops` (string, object,
+	// number) must NOT crash the TUI render loop and trigger the spam-warn /
+	// retry cascade.
+	const renderOptions = { expanded: false, isPartial: true } as const;
+
+	it("does not throw when ops is a streaming-truncated string", () => {
+		// Mid-stream `partialJson === '{"ops":"[{'` parses into `{ops: "[{"}`.
+		const args = { ops: '[{"op":"init"' } as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
+		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+	});
+
+	it("does not throw when ops entries are null", () => {
+		// `partialParse` of `'{"ops":[null'` can hand back `{ops: [null]}` in
+		// intermediate states before the entry object opens.
+		const args = { ops: [null] } as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
+		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+	});
+
+	it("does not throw when an entry's items field is a non-array", () => {
+		const args = {
+			ops: [{ op: "append", phase: "Work", items: "Second" as unknown as string[] }],
+		} as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
+		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+	});
+
+	it("still renders ops summary metadata for well-formed args", () => {
+		const args = {
+			ops: [
+				{ op: "init", items: ["a", "b", "c"] },
+				{ op: "done", task: "a" },
+				{ op: "append", phase: "Cleanup", items: ["d"] },
+			],
+		};
+		const component = todoToolRenderer.renderCall(args, renderOptions, theme);
+		// `Text(text, 0, 0)` from `@oh-my-pi/pi-tui` exposes the content via .render().
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("init");
+		expect(rendered).toContain("3 items");
+		expect(rendered).toContain("done");
+		expect(rendered).toContain("a");
+		expect(rendered).toContain("append");
+		expect(rendered).toContain("Cleanup");
+		expect(rendered).toContain("1 item");
+	});
+});
