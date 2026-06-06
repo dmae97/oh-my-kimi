@@ -2291,7 +2291,7 @@ export class TUI extends Container {
 		if (row < 0 || row >= this.#previousLines.length || newLines.length !== this.#previousLines.length) {
 			return { kind: "deferredMutation" };
 		}
-		const line = newLines[newLines.length - 1] ?? "";
+		const line = newLines[row] ?? "";
 		const previousLine = this.#deferredTailLine ?? this.#previousLines[row] ?? "";
 		if (line === previousLine) {
 			return { kind: "deferredMutation" };
