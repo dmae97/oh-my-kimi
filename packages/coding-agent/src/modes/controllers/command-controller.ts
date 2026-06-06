@@ -1272,7 +1272,7 @@ function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: numbe
 	if (email) return email;
 	const accountId = (report.metadata?.accountId as string | undefined) ?? limit.scope.accountId;
 	if (accountId) return accountId;
-	const projectId = report.metadata?.projectId as string | undefined;
+	const projectId = (report.metadata?.projectId as string | undefined) ?? limit.scope.projectId;
 	if (projectId) return projectId;
 	return `account ${index + 1}`;
 }
