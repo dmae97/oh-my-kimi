@@ -194,7 +194,7 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; missingPaths?: string[] } | undefined;
 
-		expect(text).toMatch(/^¶packages\/grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^\[packages\/grep\.txt#[0-9A-F]{4}\]/m);
 		expect(text).toContain("Skipped missing paths: missing.txt");
 		expect(text).not.toContain("apps");
 		expect(details?.fileCount).toBe(1);

@@ -72,7 +72,7 @@ export interface SplitOptions {
 	/** Resolves absolute paths inside hashline headers to cwd-relative form. */
 	cwd?: string;
 	/**
-	 * Fallback path used when the input lacks a `¶PATH` header but contains
+	 * Fallback path used when the input lacks a `[PATH]` header but contains
 	 * recognizable hashline operations. Lets streaming previews work before
 	 * the model has written the header.
 	 */

@@ -15,7 +15,7 @@
  *   - Enter on main session -> close overlay (jump back)
  */
 import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { Container, Markdown, type MarkdownTheme, matchesKey } from "@oh-my-pi/pi-tui";
+import { Container, Markdown, type MarkdownTheme, matchesKey, ScrollView } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
 import type { KeyId } from "../../config/keybindings";
 import { isSilentAbort } from "../../session/messages";
@@ -230,23 +230,21 @@ export class SessionObserverOverlayComponent extends Container {
 		lines.push(...new DynamicBorder().render(width));
 
 		// --- Scrolled content viewport ---
-		const visibleLines = this.#renderedLines.slice(this.#scrollOffset, this.#scrollOffset + this.#viewportHeight);
-		for (const vl of visibleLines) {
-			lines.push(` ${vl}`);
-		}
-		// Pad to fill viewport if content is shorter
-		const pad = this.#viewportHeight - visibleLines.length;
-		for (let i = 0; i < pad; i++) {
-			lines.push("");
-		}
+		const sv = new ScrollView(
+			this.#renderedLines.slice(this.#scrollOffset, this.#scrollOffset + this.#viewportHeight),
+			{
+				height: this.#viewportHeight,
+				scrollbar: "auto",
+				totalRows: this.#renderedLines.length,
+				theme: { track: t => theme.fg("dim", t), thumb: t => theme.fg("accent", t) },
+			},
+		);
+		sv.setScrollOffset(this.#scrollOffset);
+		for (const row of sv.render(Math.max(1, width - 1))) lines.push(` ${row}`);
 
 		// --- Footer ---
-		const scrollInfo =
-			this.#renderedLines.length > this.#viewportHeight
-				? ` ${theme.fg("dim", `[${this.#scrollOffset + 1}-${Math.min(this.#scrollOffset + this.#viewportHeight, this.#renderedLines.length)}/${this.#renderedLines.length}]`)}`
-				: "";
 		lines.push("");
-		lines.push(` ${this.#viewerFooterLines[0] ?? ""}${scrollInfo}`);
+		lines.push(` ${this.#viewerFooterLines[0] ?? ""}`);
 		for (let i = 1; i < this.#viewerFooterLines.length; i++) {
 			lines.push(` ${this.#viewerFooterLines[i]}`);
 		}

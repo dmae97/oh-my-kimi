@@ -344,6 +344,28 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("resetDisplay performs a clean redraw without a geometry change", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const writes = captureWrites(term);
+
+				tui.resetDisplay();
+				await settle(term);
+
+				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
+				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("keeps appended rows in scrollback when a forced render coalesces with content growth", async () => {
 			const term = new VirtualTerminal(20, 3);
 			const tui = new TUI(term);
@@ -2095,6 +2117,66 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 			}
+		});
+
+		it("repaints only the active-grid bottom row while unknown viewport mutation is deferred", async () => {
+			const initial = [...rows("line-", 12), "spinner-a"];
+			const updated = ["edited-0", ...rows("line-", 12).slice(1), "spinner-b"];
+
+			await withTerminalRisk(true, async () => {
+				const term = new UnknownViewportTerminal(40, 6);
+				const tui = new TUI(term);
+				const component = new MutableLinesComponent(initial);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await settle(term);
+					const writes = captureWrites(term);
+
+					component.setLines(updated);
+					tui.requestRender();
+					await settle(term);
+
+					const viewport = visible(term).map(line => line.trim());
+					expect(viewport.at(-1)).toBe("spinner-b");
+					expect(term.getScrollBuffer().join("\n")).not.toContain("edited-0");
+					const paint = writes.at(-1) ?? "";
+					expect(paint).toContain("\r\x1b[2Kspinner-b");
+					expect(paint).not.toContain("\x1b[H");
+					expect(paint).not.toContain("\x1b[3J");
+				} finally {
+					tui.stop();
+				}
+
+				const scrolledTerm = new UnknownViewportTerminal(40, 6);
+				const scrolledTui = new TUI(scrolledTerm);
+				const scrolledComponent = new MutableLinesComponent(initial);
+				scrolledTui.addChild(scrolledComponent);
+
+				try {
+					scrolledTui.start();
+					await settle(scrolledTerm);
+					scrolledTerm.scrollLines(-1);
+					const before = scrolledTerm.getBufferPosition();
+					const beforeViewport = visible(scrolledTerm).map(line => line.trim());
+					const writes = captureWrites(scrolledTerm);
+
+					scrolledComponent.setLines(updated);
+					scrolledTui.requestRender();
+					await settle(scrolledTerm);
+
+					expect(scrolledTerm.getBufferPosition()).toEqual(before);
+					expect(visible(scrolledTerm).map(line => line.trim())).toEqual(beforeViewport);
+					expect(scrolledTerm.getScrollBuffer().join("\n")).not.toContain("edited-0");
+					const paint = writes.at(-1) ?? "";
+					expect(paint).toContain("\r\x1b[2Kspinner-b");
+					expect(paint).not.toContain("\x1b[H");
+					expect(paint).not.toContain("\x1b[3J");
+				} finally {
+					scrolledTui.stop();
+				}
+			});
 		});
 		it("rebuilds history when a shrink leaves no real rows above the scrollback boundary", async () => {
 			// Reviewer scenario (#1599): a large completion-style collapse (e.g. a 100-row

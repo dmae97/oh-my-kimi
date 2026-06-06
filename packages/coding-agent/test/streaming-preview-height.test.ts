@@ -5,8 +5,8 @@ import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES } from "@oh-my-pi/pi-coding-agent/edit";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { TUI } from "@oh-my-pi/pi-tui";
+import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
 
@@ -295,5 +295,108 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		}
 		const hasDecrease = rawLineCounts.some((count, i) => i > 0 && count < rawLineCounts[i - 1]);
 		expect(hasDecrease).toBe(true);
+	});
+});
+
+describe("streaming tool call preview height (bounded across renderers)", () => {
+	let themed = false;
+
+	beforeEach(async () => {
+		if (!themed) {
+			await initTheme();
+			themed = true;
+		}
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+	});
+
+	function renderPending(toolName: string, args: unknown): { lines: string[]; text: string } {
+		const term = new VirtualTerminal(80, 20);
+		const tui = new TUI(term);
+		const component = new ToolExecutionComponent(toolName, args, {}, undefined, tui, process.cwd());
+		try {
+			const lines = component.render(80);
+			return { lines, text: lines.map(line => Bun.stripANSI(line)).join("\n") };
+		} finally {
+			component.stopAnimation();
+		}
+	}
+
+	test("framed inline tool previews span the full tool width", () => {
+		const width = 80;
+		const { lines } = renderPending("bash", { command: "echo hi" });
+		const strippedLines = lines.map(line => Bun.stripANSI(line));
+		const topBorder = strippedLines.find(line => line.includes(activeTheme.boxSharp.topLeft));
+
+		expect(topBorder).toBeDefined();
+		expect(topBorder?.[0]).toBe(activeTheme.boxSharp.topLeft);
+		expect(topBorder?.endsWith(activeTheme.boxSharp.topRight)).toBe(true);
+		expect(visibleWidth(topBorder ?? "")).toBe(width);
+	});
+
+	test("eval/bash/ssh/task pending previews stay short even with very long multiline args", () => {
+		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
+		const cases: Array<{
+			name: string;
+			args: unknown;
+			mustContain: string[];
+			mustHide: string[];
+			marker: RegExp;
+		}> = [
+			{
+				// eval follows the streaming edge: a bounded tail window so the newest
+				// source stays visible while the box never overflows.
+				name: "eval",
+				args: {
+					cells: [{ language: "js", title: "big", code: longLines.map(line => `const ${line} = 1;`).join("\n") }],
+				},
+				mustContain: ["const line-79 = 1;"],
+				mustHide: ["const line-0 = 1;"],
+				marker: /earlier lines/,
+			},
+			{
+				// bash/ssh/task keep a bounded head+tail window: the start and the
+				// latest are both visible, the middle is elided.
+				name: "bash",
+				args: { command: longLines.join("\n") },
+				mustContain: ["line-0", "line-79"],
+				mustHide: ["line-40"],
+				marker: /more lines/,
+			},
+			{
+				name: "ssh",
+				args: { host: "example", command: longLines.join("\n") },
+				mustContain: ["line-0", "line-79"],
+				mustHide: ["line-40"],
+				marker: /more lines/,
+			},
+			{
+				name: "task",
+				args: {
+					agent: "task",
+					context: longLines.join("\n"),
+					tasks: [{ id: "alpha", description: "preview" }],
+				},
+				mustContain: ["line-0", "line-79"],
+				mustHide: ["line-40"],
+				marker: /more lines/,
+			},
+		];
+
+		for (const testCase of cases) {
+			const { lines, text } = renderPending(testCase.name, testCase.args);
+			expect(lines.length, `${testCase.name} preview should stay bounded`).toBeLessThan(20);
+			for (const needle of testCase.mustContain) {
+				expect(text, `${testCase.name} preview should keep ${needle}`).toContain(needle);
+			}
+			for (const needle of testCase.mustHide) {
+				expect(text, `${testCase.name} preview should elide ${needle}`).not.toContain(needle);
+			}
+			expect(text, `${testCase.name} preview should advertise truncation`).toMatch(testCase.marker);
+		}
 	});
 });

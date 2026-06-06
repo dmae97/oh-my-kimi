@@ -203,6 +203,11 @@ describe("Anthropic request fingerprint alignment", () => {
 	});
 
 	it("matches CC system-block layout: billing and instruction uncached, context cached in order", () => {
+		// We mimic Claude Code's billing+instruction system layout but do NOT emit
+		// the `scope: "global"` field that CC attaches to its middle breakpoint —
+		// `prompt-caching-scope-2026-01-05` only works against canonical
+		// `api.anthropic.com`, and third-party Anthropic-compatible proxies
+		// (z.ai, openrouter, g0i, …) reject the unknown field outright.
 		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
@@ -217,7 +222,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(blocks?.[2]).toEqual({
 			type: "text",
 			text: "Use citations when possible",
-			cache_control: { type: "ephemeral", scope: "global" },
+			cache_control: { type: "ephemeral" },
 		});
 		expect(blocks?.[3]).toEqual({
 			type: "text",
@@ -239,7 +244,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.system?.[0]?.cache_control).toBeUndefined();
 		expect(payload.system?.[1]?.text).toBe(claudeCodeSystemInstruction);
 		expect(payload.system?.[1]?.cache_control).toBeUndefined();
-		expect(payload.system?.[2]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h", scope: "global" });
+		expect(payload.system?.[2]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
 		const content = payload.messages?.[0]?.content;
 		expect(Array.isArray(content)).toBe(true);
 		expect(Array.isArray(content) ? content[0]?.cache_control : undefined).toEqual({

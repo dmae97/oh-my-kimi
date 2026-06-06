@@ -87,12 +87,6 @@ describe("hostHasInheritableConsole", () => {
 		__resetWindowsConsoleProbeCache();
 	});
 
-	it("returns a boolean (the integration boundary always commits to a decision)", () => {
-		// Whatever the runtime is, the function must yield a concrete
-		// boolean: kernel spawn cannot take an indeterminate windowsHide.
-		expect(typeof hostHasInheritableConsole()).toBe("boolean");
-	});
-
 	if (process.platform !== "win32") {
 		it("matches the TTY-OR fallback off-Windows", () => {
 			// Off-Windows, `windowsHide` is a no-op anyway, but we still

@@ -10,6 +10,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.clear"
 	| "app.exit"
 	| "app.suspend"
+	| "app.display.reset"
 	| "app.thinking.cycle"
 	| "app.model.cycleForward"
 	| "app.model.cycleBackward"
@@ -30,10 +31,11 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.clear": ["ctrl+c"],
 	"app.exit": ["ctrl+d"],
 	"app.suspend": ["ctrl+z"],
+	"app.display.reset": ["ctrl+l"],
 	"app.thinking.cycle": ["shift+tab"],
 	"app.model.cycleForward": ["ctrl+p"],
 	"app.model.cycleBackward": ["shift+ctrl+p"],
-	"app.model.select": ["ctrl+l"],
+	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["alt+p"],
 	"app.tools.expand": ["ctrl+o"],
 	"app.thinking.toggle": ["ctrl+t"],
@@ -65,6 +67,7 @@ export class CustomEditor extends Editor {
 	onEscape?: () => void;
 	onClear?: () => void;
 	onExit?: () => void;
+	onDisplayReset?: () => void;
 	onCycleThinkingLevel?: () => void;
 	onCycleModelForward?: () => void;
 	onCycleModelBackward?: () => void;
@@ -155,6 +158,12 @@ export class CustomEditor extends Editor {
 		// Intercept configured temporary model selector shortcut
 		if (this.#matchesAction(data, "app.model.selectTemporary") && this.onSelectModelTemporary) {
 			this.onSelectModelTemporary();
+			return;
+		}
+
+		// Intercept configured display reset shortcut
+		if (this.#matchesAction(data, "app.display.reset") && this.onDisplayReset) {
+			this.onDisplayReset();
 			return;
 		}
 

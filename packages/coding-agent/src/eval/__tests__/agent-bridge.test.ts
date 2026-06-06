@@ -10,7 +10,7 @@ import { AgentOutputManager } from "../../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
 import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
-import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
@@ -236,7 +236,6 @@ describe("runEvalAgent", () => {
 describe("agent() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		setBridgeHeartbeatIntervalMs();
 	});
 
 	afterAll(async () => {
@@ -560,24 +559,20 @@ describe("agent() through eval runtimes", () => {
 		expect(displayAgentEvents.length).toBe(2);
 	});
 
-	it("keeps the idle watchdog armed while a quiet agent() runs past the budget", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-agent-heartbeat-");
-		const { session } = makeEvalSession(tempDir, "js-agent-heartbeat");
+	it("pauses the idle watchdog while a quiet agent() runs past the budget", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-timeout-pause-");
+		const { session } = makeEvalSession(tempDir, "js-agent-timeout-pause");
 		mockAgents();
-		// Heartbeat cadence well under the idle budget so a working-but-silent
-		// subagent re-arms the watchdog several times before it could expire.
-		setBridgeHeartbeatIntervalMs(15);
 
-		// runSubprocess runs far past the budget and emits NO progress of its own
-		// — the only thing standing between the subagent and a spurious idle abort
-		// is the heartbeat keepalive the bridge pumps while it awaits.
+		// runSubprocess runs far past the eval timeout budget and emits NO progress
+		// of its own. The bridge pause must make that delegated time invisible to
+		// the watchdog.
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
 			await Bun.sleep(200);
 			return singleResult(options, { output: "done" });
 		});
 
-		// Mirror the eval tool's wiring: an IdleTimeout drives cancellation and
-		// ONLY a bridge heartbeat re-arms it.
+		const ops: string[] = [];
 		using idle = new IdleTimeout(60);
 		const result = await runEvalAgent(
 			{ prompt: "investigate" },
@@ -585,25 +580,29 @@ describe("agent() through eval runtimes", () => {
 				session,
 				signal: idle.signal,
 				emitStatus: event => {
-					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+					ops.push(event.op);
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP) idle.pause();
+					if (event.op === EVAL_TIMEOUT_RESUME_OP) idle.resume();
 				},
 			},
 		);
 
-		expect(idle.signal.aborted).toBe(false);
 		expect(result.text).toBe("done");
+		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP]);
+		expect(idle.signal.aborted).toBe(false);
+
+		await Bun.sleep(90);
+		expect(idle.signal.aborted).toBe(true);
 	});
 
-	it("does not let agent() progress snapshots re-arm the watchdog without a heartbeat", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-agent-progress-no-rearm-");
-		const { session } = makeEvalSession(tempDir, "js-agent-progress-no-rearm");
+	it("keeps timeout paused despite agent() progress snapshots", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-progress-timeout-pause-");
+		const { session } = makeEvalSession(tempDir, "js-agent-progress-timeout-pause");
 		mockAgents();
-		// Heartbeat slower than the budget: only the immediate beat at call start
-		// fires, so after the budget elapses nothing re-arms the watchdog.
-		setBridgeHeartbeatIntervalMs(10_000);
 
 		// Stream frequent progress snapshots (op:"agent") for well past the budget.
-		// Progress is rendered but MUST NOT count as activity — only heartbeats do.
+		// They render as status, but timeout accounting is controlled only by the
+		// bridge pause/resume events.
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
 			for (let i = 0; i < 40; i++) {
 				options.onProgress?.({
@@ -629,21 +628,23 @@ describe("agent() through eval runtimes", () => {
 
 		const ops: string[] = [];
 		using idle = new IdleTimeout(80);
-		await runEvalAgent(
+		const result = await runEvalAgent(
 			{ prompt: "investigate" },
 			{
 				session,
 				signal: idle.signal,
 				emitStatus: event => {
 					ops.push(event.op);
-					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP) idle.pause();
+					if (event.op === EVAL_TIMEOUT_RESUME_OP) idle.resume();
 				},
 			},
 		);
 
-		// Progress streamed, but the watchdog still fired: agent snapshots never
-		// re-armed it, and the lone start heartbeat lapsed before the call ended.
+		expect(result.text).toBe("done");
+		expect(ops[0]).toBe(EVAL_TIMEOUT_PAUSE_OP);
 		expect(ops).toContain("agent");
-		expect(idle.signal.aborted).toBe(true);
+		expect(ops.at(-1)).toBe(EVAL_TIMEOUT_RESUME_OP);
+		expect(idle.signal.aborted).toBe(false);
 	});
 });

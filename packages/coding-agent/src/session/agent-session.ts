@@ -91,6 +91,7 @@ import {
 	extractRetryHint,
 	getAgentDbPath,
 	getInstallId,
+	isBunTestRuntime,
 	isEnoent,
 	isUnexpectedSocketCloseMessage,
 	logger,
@@ -1036,6 +1037,7 @@ export class AgentSession {
 
 	#acquirePowerAssertion(): void {
 		if (process.platform !== "darwin") return;
+		if (isBunTestRuntime()) return;
 		if (this.#powerAssertion) return;
 		const idle = this.settings.get("power.preventIdleSleep");
 		const system = this.settings.get("power.preventSystemSleep");

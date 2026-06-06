@@ -21,6 +21,7 @@ interface AppKeybindings {
 	"app.clear": true;
 	"app.exit": true;
 	"app.suspend": true;
+	"app.display.reset": true;
 	"app.thinking.cycle": true;
 	"app.thinking.toggle": true;
 	"app.model.cycleForward": true;
@@ -86,6 +87,10 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+z",
 		description: "Suspend application",
 	},
+	"app.display.reset": {
+		defaultKeys: "ctrl+l",
+		description: "Reset terminal display",
+	},
 	"app.thinking.cycle": {
 		defaultKeys: "shift+tab",
 		description: "Cycle thinking level",
@@ -103,7 +108,7 @@ export const KEYBINDINGS = {
 		description: "Cycle to previous model",
 	},
 	"app.model.select": {
-		defaultKeys: "ctrl+l",
+		defaultKeys: "alt+m",
 		description: "Select model",
 	},
 	"app.model.selectTemporary": {
@@ -216,6 +221,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	clear: "app.clear",
 	exit: "app.exit",
 	suspend: "app.suspend",
+	displayReset: "app.display.reset",
 	cycleThinkingLevel: "app.thinking.cycle",
 	cycleModelForward: "app.model.cycleForward",
 	cycleModelBackward: "app.model.cycleBackward",
@@ -444,7 +450,6 @@ function migrateKeybindingsConfigFile(agentDir: string): void {
 
 const FOLLOW_UP_KEYBINDING: AppKeybinding = "app.message.followUp";
 const WINDOWS_FOLLOW_UP_FALLBACK_KEY: KeyId = "ctrl+q";
-
 function keyListIncludes(keys: KeyId | KeyId[] | undefined, target: KeyId): boolean {
 	if (keys === undefined) return false;
 	const keyList = Array.isArray(keys) ? keys : [keys];
@@ -525,10 +530,14 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 
 	getKeys(keybinding: Keybinding): KeyId[] {
 		const keys = super.getKeys(keybinding);
-		if (keybinding !== FOLLOW_UP_KEYBINDING) return keys;
-		if (this.#userBindings[FOLLOW_UP_KEYBINDING] !== undefined) return keys;
-		if (!userBindingClaimsKey(this.#userBindings, WINDOWS_FOLLOW_UP_FALLBACK_KEY, FOLLOW_UP_KEYBINDING)) return keys;
-		return removeKey(keys, WINDOWS_FOLLOW_UP_FALLBACK_KEY);
+		if (keybinding === FOLLOW_UP_KEYBINDING) {
+			if (this.#userBindings[FOLLOW_UP_KEYBINDING] !== undefined) return keys;
+			if (!userBindingClaimsKey(this.#userBindings, WINDOWS_FOLLOW_UP_FALLBACK_KEY, FOLLOW_UP_KEYBINDING)) {
+				return keys;
+			}
+			return removeKey(keys, WINDOWS_FOLLOW_UP_FALLBACK_KEY);
+		}
+		return keys;
 	}
 
 	getResolvedBindings(): KeybindingsConfig {

@@ -27,7 +27,7 @@ app.stt.toggle: []
 | `app.model.cycleForward`    | `Ctrl+P`                               | Cycle role models forward                     |
 | `app.model.cycleBackward`   | `Shift+Ctrl+P`                         | Cycle role models in temporary mode           |
 | `app.model.selectTemporary` | `Alt+P`                                | Pick a model temporarily for this session     |
-| `app.model.select`          | `Ctrl+L`                               | Open the model selector and set roles         |
+| `app.model.select`          | `Alt+M`                                | Open the model selector and set roles         |
 | `app.plan.toggle`           | `Alt+Shift+P`                          | Toggle plan mode                              |
 | `app.history.search`        | `Ctrl+R`                               | Search prompt history                         |
 | `app.tools.expand`          | `Ctrl+O`                               | Toggle tool-output expansion                  |
@@ -36,6 +36,7 @@ app.stt.toggle: []
 | `app.editor.external`       | `Ctrl+G`                               | Edit the draft in `$VISUAL` / `$EDITOR`       |
 | `app.message.followUp`      | `Ctrl+Q`, `Ctrl+Enter`                 | Queue a follow-up message                     |
 | `app.message.dequeue`       | `Alt+Up`                               | Dequeue a queued message back into the editor |
+| `app.display.reset`         | `Ctrl+L`                               | Reset terminal display                        |
 | `app.clipboard.copyLine`    | `Alt+Shift+L`                          | Copy the current line                         |
 | `app.clipboard.copyPrompt`  | `Alt+Shift+C`                          | Copy the whole prompt                         |
 | `app.clipboard.pasteImage`  | `Ctrl+V` (`Alt+V` fallback on Windows) | Paste an image from the clipboard             |

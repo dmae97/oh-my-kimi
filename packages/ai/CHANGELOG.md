@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
+## [15.9.67] - 2026-06-06
+
 ### Fixed
 
 - Fixed llama.cpp/OpenAI Responses parallel tool calls losing arguments when `function_call_arguments.done` events omit `output_index` and `item_id`, by routing those identifierless final-argument events through the open function calls in item order. ([#1970](https://github.com/can1357/oh-my-pi/issues/1970))
+- Fixed local Ollama (`openai-responses`) turns failing with HTTP 400 `invalid reasoning value: "minimal"` when a discovered model ran with `minimal` (or `xhigh`) thinking. Ollama's OpenAI-compatible `reasoning.effort` only accepts `high|medium|low|max|none`, so discovered reasoning-capable Ollama models now carry a `compat.reasoningEffortMap` remapping `minimal → low` and `xhigh → max`; non-reasoning models are left untouched.
 
 ## [15.9.2] - 2026-06-05
 

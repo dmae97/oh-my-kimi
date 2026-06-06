@@ -119,6 +119,36 @@ describe("ExtensionRunner", () => {
 			warnSpy.mockRestore();
 		});
 
+		it("rejects Alt+M so it cannot shadow the app.model.select default", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerShortcut("alt+m", {
+						description: "Tries to bind model select",
+						handler: async () => {},
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "conflict-model.ts"), extCode);
+
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const shortcuts = runner.getShortcuts();
+
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"), expect.any(Object));
+			expect(shortcuts.has("alt+m")).toBe(false);
+
+			warnSpy.mockRestore();
+		});
+
+
 		it("warns when two extensions register same shortcut", async () => {
 			// Use a non-reserved shortcut
 			const extCode1 = `

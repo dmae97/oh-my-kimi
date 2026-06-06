@@ -37,9 +37,11 @@ import {
 	setPreferredSearchProvider,
 } from "../../tools";
 import { shortenPath } from "../../tools/render-utils";
+import { copyToClipboard } from "../../utils/clipboard";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
+import { CopySelectorComponent } from "../components/copy-selector";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
 import { ModelSelectorComponent } from "../components/model-selector";
@@ -52,6 +54,8 @@ import { ToolExecutionComponent } from "../components/tool-execution";
 import { TreeSelectorComponent } from "../components/tree-selector";
 import { UserMessageSelectorComponent } from "../components/user-message-selector";
 import type { SessionObserverRegistry } from "../session-observer-registry";
+import { computeContextBreakdown } from "../utils/context-usage";
+import { buildCopyTargets } from "../utils/copy-targets";
 
 const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
 	"anthropic",
@@ -407,6 +411,7 @@ export class SelectorController {
 	}
 
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+		const currentContextTokens = computeContextBreakdown(this.ctx.session).usedTokens;
 		this.showSelector(done => {
 			const selector = new ModelSelectorComponent(
 				this.ctx.ui,
@@ -470,7 +475,7 @@ export class SelectorController {
 					done();
 					this.ctx.ui.requestRender();
 				},
-				options,
+				{ ...options, currentContextTokens },
 			);
 			return { component: selector, focus: selector };
 		});
@@ -596,6 +601,38 @@ export class SelectorController {
 			);
 			return { component: selector, focus: selector.getMessageList() };
 		});
+	}
+
+	showCopySelector(): void {
+		const targets = buildCopyTargets(this.ctx.session);
+		if (targets.length === 0) {
+			this.ctx.showStatus("Nothing to copy yet.");
+			return;
+		}
+
+		let overlayHandle: OverlayHandle | undefined;
+		const done = () => {
+			overlayHandle?.hide();
+			this.ctx.ui.requestRender();
+		};
+		const selector = new CopySelectorComponent(targets, {
+			onPick: target => {
+				done();
+				if (target.content === undefined) return;
+				void copyToClipboard(target.content);
+				this.ctx.showStatus(target.copyMessage ?? "Copied to clipboard");
+			},
+			onCancel: done,
+		});
+
+		overlayHandle = this.ctx.ui.showOverlay(selector, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+		});
+		this.ctx.ui.setFocus(selector);
+		this.ctx.ui.requestRender();
 	}
 
 	showTreeSelector(): void {

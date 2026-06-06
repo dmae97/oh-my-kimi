@@ -1,6 +1,7 @@
 /**
  * Bordered output container with optional header and sections.
  */
+import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, padding, TERMINAL, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import type { Theme } from "../modes/theme/theme";
 import { getSixelLineMask } from "../utils/sixel";
@@ -17,6 +18,19 @@ export interface OutputBlockOptions {
 	applyBg?: boolean;
 	/** Animate the border with a sweeping dark segment (pending/running state). */
 	animate?: boolean;
+}
+
+const FRAMED_BLOCK_COMPONENT = Symbol("framedBlockComponent");
+
+export type FramedBlockComponent = Component & { [FRAMED_BLOCK_COMPONENT]?: true };
+
+export function markFramedBlockComponent<T extends Component>(component: T): T & FramedBlockComponent {
+	(component as T & FramedBlockComponent)[FRAMED_BLOCK_COMPONENT] = true;
+	return component as T & FramedBlockComponent;
+}
+
+export function isFramedBlockComponent(component: Component): boolean {
+	return (component as FramedBlockComponent)[FRAMED_BLOCK_COMPONENT] === true;
 }
 
 const BORDER_SHIMMER_TICK_MS = 16;

@@ -43,7 +43,7 @@ function detectApplyPatchContamination(text: string, _hasPending: boolean): stri
 		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 		return (
 			`apply_patch sentinel ${JSON.stringify(preview)} is not valid in hashline. ` +
-			"File sections start with `¶path#HASH` (no `Update File:` / `Add File:` keyword). " +
+			"File sections start with `[path#HASH]` (no `Update File:` / `Add File:` keyword). " +
 			"Use `replace N..M:`, `delete N..M`, or `insert before|after|head|tail:` ops."
 		);
 	}

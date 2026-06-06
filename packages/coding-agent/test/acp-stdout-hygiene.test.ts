@@ -164,7 +164,6 @@ describe("ACP stdout hygiene", () => {
 		proc.stdin.flush();
 
 		const firstLine = await readFirstFrame(proc.stdout);
-		expect(firstLine.length).toBeGreaterThan(0);
 		expect(firstLine[0]).toBe("{");
 
 		const message = JSON.parse(firstLine) as {

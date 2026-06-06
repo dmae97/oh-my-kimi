@@ -392,17 +392,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "copy",
-		description: "Copy last agent message to clipboard",
-		subcommands: [
-			{ name: "last", description: "Copy full last agent message" },
-			{ name: "code", description: "Copy last code block" },
-			{ name: "all", description: "Copy all code blocks from last message" },
-			{ name: "cmd", description: "Copy last bash/python command" },
-		],
-		allowArgs: true,
-		handleTui: async (command, runtime) => {
-			const sub = command.args.trim().toLowerCase() || undefined;
-			await runtime.ctx.handleCopyCommand(sub);
+		description: "Pick text or code from the conversation to copy",
+		handleTui: (_command, runtime) => {
+			runtime.ctx.showCopySelector();
 			runtime.ctx.editor.setText("");
 		},
 	},

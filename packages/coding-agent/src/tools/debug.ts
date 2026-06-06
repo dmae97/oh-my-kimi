@@ -36,7 +36,7 @@ import {
 import type { Theme } from "../modes/theme/theme";
 import debugDescription from "../prompts/tools/debug.md" with { type: "text" };
 import { renderStatusLine } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import type { OutputMeta } from "./output-meta";
@@ -581,7 +581,7 @@ export const debugToolRenderer = {
 		args?: DebugRenderArgs,
 	): Component {
 		const outputBlock = new CachedOutputBlock();
-		return {
+		return markFramedBlockComponent({
 			render(width: number): string[] {
 				const action = (args?.action ?? result.details?.action ?? "debug").replaceAll("_", " ");
 				const status = options.isPartial ? "running" : result.isError ? "error" : "success";
@@ -620,7 +620,7 @@ export const debugToolRenderer = {
 			invalidate() {
 				outputBlock.invalidate();
 			},
-		};
+		});
 	},
 	mergeCallAndResult: true,
 	inline: true,

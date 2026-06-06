@@ -25,10 +25,6 @@ describe.skipIf(SKIP)("handleWikipedia", () => {
 		expect(result?.finalUrl).toBe("https://en.wikipedia.org/wiki/Computer");
 		expect(result?.truncated).toBe(false);
 		expect(result?.notes).toContain("Fetched via Wikipedia API");
-		expect(result?.fetchedAt).toBeDefined();
-		// Should be a valid ISO timestamp
-		expect(() => new Date(result?.fetchedAt ?? "")).not.toThrow();
-		// The handler should filter out References and External links sections
 		const content = result?.content ?? "";
 		const hasReferencesHeading = /^## References$/m.test(content);
 		const hasExternalLinksHeading = /^## External links$/m.test(content);

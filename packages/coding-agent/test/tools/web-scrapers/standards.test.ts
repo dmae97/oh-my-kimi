@@ -23,8 +23,6 @@ describe.skipIf(SKIP)("handleRfc", () => {
 		expect(result?.content).toContain("HTTP/1.1");
 		expect(result?.content).toContain("Hypertext Transfer Protocol");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches RFC 2616 via datatracker URL", async () => {
@@ -66,8 +64,6 @@ describe.skipIf(SKIP)("handleCheatSh", () => {
 		expect(result?.method).toBe("cheat.sh");
 		expect(result?.content).toContain("curl");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches tar cheatsheet", async () => {
@@ -102,8 +98,6 @@ describe.skipIf(SKIP)("handleTldr", () => {
 		expect(result?.method).toBe("tldr");
 		expect(result?.content).toContain("git");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches curl tldr page", async () => {

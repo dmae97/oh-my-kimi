@@ -45,7 +45,6 @@ describe("issue #899 — sync git metadata reads must survive EINTR", () => {
 		}) as typeof fs.readFileSync);
 
 		// On main this throws EINTR; after fix it must return null (metadata unavailable).
-		expect(() => head.resolveSync(tempDir)).not.toThrow();
 		expect(head.resolveSync(tempDir)).toBeNull();
 		expect(spy).toHaveBeenCalled();
 	});

@@ -14,7 +14,7 @@ import type { ToolSession } from "../sdk";
 import type { AgentStorage } from "../session/agent-storage";
 import { DEFAULT_MAX_BYTES, truncateHead } from "../session/streaming-output";
 import { renderStatusLine, urlHyperlink } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -1488,11 +1488,11 @@ export function renderReadUrlResult(
 		const header = renderStatusLine({ icon: "error", title: "Read", description }, uiTheme);
 		const errorLines = errorText.split("\n").map(line => uiTheme.fg("error", replaceTabs(line)));
 		const outputBlock = new CachedOutputBlock();
-		return {
+		return markFramedBlockComponent({
 			render: (width: number) =>
 				outputBlock.render({ header, state: "error", sections: [{ lines: errorLines }], width }, uiTheme),
 			invalidate: () => outputBlock.invalidate(),
-		};
+		});
 	}
 
 	const description = formatReadUrlDescription(details.finalUrl);
@@ -1542,7 +1542,7 @@ export function renderReadUrlResult(
 	let lastExpanded: boolean | undefined;
 	let contentPreviewLines: string[] | undefined;
 
-	return {
+	return markFramedBlockComponent({
 		render: (width: number) => {
 			const { expanded } = options;
 
@@ -1582,5 +1582,5 @@ export function renderReadUrlResult(
 			contentPreviewLines = undefined;
 			lastExpanded = undefined;
 		},
-	};
+	});
 }

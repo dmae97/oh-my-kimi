@@ -58,7 +58,7 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const LOOSE_HASHLINE_HEADER_RE = /^\s*¶\S+#[^ \t\r\n]*\s*$/;
+const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 
 let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
 async function loadFflate(): Promise<typeof import("fflate")> {
@@ -109,7 +109,7 @@ function stripWriteContentWithPotentialLooseHeader(lines: string[]): { text: str
 /**
  * Strip hashline display prefixes from write content.
  *
- * Only active when hashline edit mode is enabled — the model sees `¶PATH#HASH`
+ * Only active when hashline edit mode is enabled — the model sees `[PATH#HASH]`
  * headers plus `LINE:` prefixes in read output and sometimes copies them into write content.
  */
 function stripWriteContent(session: ToolSession, content: string): { text: string; stripped: boolean } {
@@ -122,7 +122,7 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 /**
  * Record a snapshot of the freshly-written `content` for `absolutePath`
  * so subsequent hashline edits address the new file with a current tag,
- * and return the matching `¶displayPath#TAG` header. Returns `undefined`
+ * and return the matching `[displayPath#TAG]` header. Returns `undefined`
  * when the session is not in hashline mode so callers can no-op cheaply.
  *
  * Mirrors the post-commit snapshot recording the hashline patcher performs
@@ -770,7 +770,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
-			// Strip hashline display prefixes (¶PATH#HASH + LINE:) if the model copied them from read output
+			// Strip hashline display prefixes ([PATH#HASH] + LINE:) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
 			const internalRouter = InternalUrlRouter.instance();
 			if (internalRouter.canHandle(path)) {
@@ -935,11 +935,20 @@ function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
-function formatStreamingContent(content: string, language: string | undefined, uiTheme: Theme): string {
+function formatStreamingContent(
+	content: string,
+	expanded: boolean,
+	language: string | undefined,
+	uiTheme: Theme,
+): string {
 	if (!content) return "";
 	const lines = normalizeDisplayText(content).split("\n");
 	const totalLines = lines.length;
-	const startIndex = Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
+	// Collapsed: follow the streaming edge with a bounded tail window so the box
+	// stays short enough not to strand its scrolled-off head above the viewport
+	// while the block is volatile. `Ctrl+O` (expanded) lifts the cap for a
+	// deliberate full view — matching the eval streaming preview.
+	const startIndex = expanded ? 0 : Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
 	const visibleLines = lines.slice(startIndex);
 	const hidden = startIndex;
 	const highlighted = highlightCode(visibleLines.join("\n"), language);
@@ -1005,8 +1014,8 @@ export const writeToolRenderer = {
 			return new Text(text, 0, 0);
 		}
 
-		// Show streaming preview of content (tail)
-		text += formatStreamingContent(args.content, lang, uiTheme);
+		// Show streaming preview of content — bounded tail while collapsed, full on Ctrl+O.
+		text += formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme);
 
 		return new Text(text, 0, 0);
 	},

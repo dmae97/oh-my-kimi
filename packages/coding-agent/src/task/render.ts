@@ -13,6 +13,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import type { Theme } from "../modes/theme/theme";
 import {
+	capPreviewLines,
 	formatBadge,
 	formatDuration,
 	formatMoreItems,
@@ -561,10 +562,11 @@ export function renderCall(
 
 	if (hasContext) {
 		lines.push(` ${branch} ${theme.fg("dim", "Context")}`);
-		for (const line of context.split("\n")) {
+		const contextLines = context.split("\n").map(line => {
 			const content = line ? theme.fg("muted", replaceTabs(line)) : "";
-			lines.push(` ${vertical}  ${content}`);
-		}
+			return ` ${vertical}  ${content}`;
+		});
+		lines.push(...capPreviewLines(contextLines, theme, { expanded: options.expanded, prefix: ` ${vertical}  ` }));
 	}
 
 	// `Tasks` is the last child unless the isolation flag follows it.

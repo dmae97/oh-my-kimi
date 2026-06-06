@@ -18,7 +18,7 @@ import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit
 import { expandRoleAlias, formatModelString, resolveModelFromString } from "../config/model-resolver";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
-import { withBridgeHeartbeat } from "./heartbeat";
+import { withBridgeTimeoutPause } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 
 /** Synthetic bridge name reserved for the `llm()` helper across both runtimes. */
@@ -132,10 +132,9 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 
 	const telemetry = resolveTelemetry(options.session.getTelemetry?.(), options.session.getSessionId?.() ?? undefined);
 
-	// A oneshot completion emits no status until it returns, so pump a heartbeat
-	// while it runs to keep the eval idle watchdog armed across a slow (e.g.
-	// reasoning-tier) request that would otherwise look like a stalled cell.
-	const response = await withBridgeHeartbeat(options.emitStatus, () =>
+	// Suspend eval timeout accounting while the model request owns control. The
+	// timeout clock restarts once the bridge returns to the cell runtime.
+	const response = await withBridgeTimeoutPause(options.emitStatus, () =>
 		instrumentedCompleteSimple(
 			model,
 			{

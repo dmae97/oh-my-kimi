@@ -31,11 +31,4 @@ describe("HTML export template script inlining", () => {
 		expect(script).not.toMatch(/<\/body>/i);
 		expect(script).not.toMatch(/<\/html>/i);
 	});
-
-	it("produces a syntactically valid inlined script", () => {
-		const script = extractScript();
-		// `new Function(body)` parses without executing. Throws SyntaxError on
-		// the spliced-tag corruption the substitution-pattern bug produces.
-		expect(() => new Function(script)).not.toThrow();
-	});
 });

@@ -21,7 +21,7 @@ import {
 	truncateToWidth,
 } from "../../tools/render-utils";
 import { renderStatusLine, renderTreeList } from "../../tui";
-import { CachedOutputBlock } from "../../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../../tui/output-block";
 import { getSearchProviderLabel } from "./provider";
 import type { SearchResponse } from "./types";
 
@@ -152,7 +152,7 @@ export function renderSearchResult(
 	const answerMarkdown = contentText ? new Markdown(contentText, 0, 0, getMarkdownTheme()) : undefined;
 	const outputBlock = new CachedOutputBlock();
 
-	return {
+	return markFramedBlockComponent({
 		render(width: number): string[] {
 			// Read mutable state at render time
 			const { expanded } = options;
@@ -246,7 +246,7 @@ export function renderSearchResult(
 		invalidate() {
 			outputBlock.invalidate();
 		},
-	};
+	});
 }
 
 /** Render web search call (query preview) */

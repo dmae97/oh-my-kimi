@@ -6,8 +6,9 @@
 
 import type { Cursor } from "./types";
 
-/** File-section header prefix: `¶path#hash`. */
-export const HL_FILE_PREFIX = "¶";
+/** File-section header delimiters: `[path#hash]`. */
+export const HL_FILE_PREFIX = "[";
+export const HL_FILE_SUFFIX = "]";
 
 /** Payload sigil for literal body rows. */
 export const HL_PAYLOAD_REPLACE = "+";
@@ -118,7 +119,7 @@ export function describeAnchorExamples(linePrefix = ""): string {
 
 /** Format a hashline section header for a file path and snapshot tag. */
 export function formatHashlineHeader(filePath: string, fileHash: string): string {
-	return `${HL_FILE_PREFIX}${filePath}${HL_FILE_HASH_SEP}${fileHash}`;
+	return `${HL_FILE_PREFIX}${filePath}${HL_FILE_HASH_SEP}${fileHash}${HL_FILE_SUFFIX}`;
 }
 
 /** Formats a single numbered line as `LINE:TEXT`. */

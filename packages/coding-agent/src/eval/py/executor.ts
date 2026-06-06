@@ -5,7 +5,7 @@ import { Settings } from "../../config/settings";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
-import { EVAL_HEARTBEAT_OP } from "../heartbeat";
+import { isEvalTimeoutControlEvent } from "../bridge-timeout";
 import type { JsStatusEvent } from "../js/shared/types";
 import {
 	checkPythonKernelAvailability,
@@ -27,8 +27,8 @@ export interface PythonExecutorOptions {
 	/** Absolute wall-clock deadline in milliseconds since epoch */
 	deadlineMs?: number;
 	/**
-	 * Inactivity budget (ms). Used only for timeout-annotation text when the
-	 * caller drives cancellation via an idle-aware `signal` instead of a
+	 * Runtime-work budget (ms). Used only for timeout-annotation text when the
+	 * caller drives cancellation via the eval watchdog `signal` instead of a
 	 * wall-clock `deadlineMs`/`timeoutMs`. Does not arm a timer.
 	 */
 	idleTimeoutMs?: number;
@@ -492,10 +492,10 @@ async function executeWithKernel(
 	// long-running bridge helpers (e.g. `agent()`) surface progress mid-cell.
 	const collectDisplay = (output: KernelDisplayOutput) => {
 		if (output.type === "status") {
-			// Heartbeats are pure idle-watchdog keepalives: forward them so the
-			// eval tool re-arms its timer, but never store or render them.
+			// Timeout-control events drive the eval watchdog only; never store or
+			// render them as cell output.
 			options?.onStatus?.(output.event);
-			if (output.event.op === EVAL_HEARTBEAT_OP) return;
+			if (isEvalTimeoutControlEvent(output.event)) return;
 		}
 		displayOutputs.push(output);
 	};

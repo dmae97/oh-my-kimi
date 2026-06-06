@@ -171,6 +171,52 @@ export function formatMoreItems(remaining: number, itemType: string): string {
 	return `… ${safeRemaining} more ${pluralize(itemType, safeRemaining)}`;
 }
 
+/**
+ * Maximum rows a tool's streaming/pending *call* preview may render before it is
+ * capped. This is intentionally conservative: the preview still sits inside a
+ * transcript that already consumed some viewport rows, and tool blocks carry
+ * extra chrome (status/header/border/"more lines"), so a "reasonable" raw code
+ * or command preview like 10-12 lines can still overflow and strand its top
+ * while the block is volatile. Keeping the live call window short avoids that
+ * across terminals without turning the transcript into an interactive scroller.
+ */
+export const CALL_PREVIEW_MAX_LINES = 6;
+
+/**
+ * Cap a pre-rendered pending/call preview to a bounded window. When truncated,
+ * show both the head and the live tail so the user can still see what the tool
+ * is currently writing while the volatile block stays short enough not to strand
+ * its top above the viewport. `Ctrl+O` widens the bounded window, but does not
+ * fully uncap live tool previews for the same reason.
+ *
+ * `prefix` (raw, e.g. a dim tree gutter) is prepended to the summary line so
+ * nested previews stay aligned.
+ */
+export function capPreviewLines(
+	lines: string[],
+	theme: Theme,
+	options: { max?: number; expanded?: boolean; prefix?: string } = {},
+): string[] {
+	const max = options.max ?? (options.expanded ? PREVIEW_LIMITS.EXPANDED_LINES : CALL_PREVIEW_MAX_LINES);
+	if (lines.length <= max) return lines;
+	if (max <= 1) {
+		const hint = formatExpandHint(theme, options.expanded, true);
+		const moreLine = `${formatMoreItems(lines.length, "line")}${hint ? ` ${hint}` : ""}`;
+		return [`${options.prefix ?? ""}${theme.fg("dim", moreLine)}`];
+	}
+	const bodyBudget = max - 1; // reserve one summary row
+	const headCount = Math.max(1, Math.ceil(bodyBudget / 2));
+	const tailCount = Math.max(1, bodyBudget - headCount);
+	const hidden = Math.max(0, lines.length - headCount - tailCount);
+	const hint = formatExpandHint(theme, options.expanded, true);
+	const moreLine = `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}`;
+	return [
+		...lines.slice(0, headCount),
+		`${options.prefix ?? ""}${theme.fg("dim", moreLine)}`,
+		...lines.slice(lines.length - tailCount),
+	];
+}
+
 export function formatMeta(meta: string[], theme: Theme): string {
 	return meta.length > 0 ? ` ${theme.fg("muted", meta.join(theme.sep.dot))}` : "";
 }

@@ -8,7 +8,7 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
-import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
@@ -99,7 +99,6 @@ function assistant(opts: {
 describe("runEvalLlm", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		setBridgeHeartbeatIntervalMs();
 	});
 
 	it("resolves each tier to its expected model", async () => {
@@ -217,31 +216,32 @@ describe("runEvalLlm", () => {
 		);
 	});
 
-	it("keeps the idle watchdog armed while a slow llm() request is in flight", async () => {
-		// A oneshot completion emits no status until it returns; a slow request
-		// must not look like a stalled cell. The bridge pumps a heartbeat while it
-		// awaits, re-arming the watchdog through emitStatus.
-		setBridgeHeartbeatIntervalMs(15);
+	it("pauses the idle watchdog while a slow llm() request is in flight", async () => {
+		// A oneshot completion emits no status until it returns; delegated model
+		// time must be invisible to the eval timeout budget.
 		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
 			await Bun.sleep(200);
 			return assistant({ text: "the answer" });
 		});
 
+		const ops: string[] = [];
 		using idle = new IdleTimeout(60);
 		const result = await runEvalLlm(
 			{ prompt: "q", model: "smol" },
 			{
 				session: makeSession(),
 				signal: idle.signal,
-				// Mirror the eval tool: only a bridge heartbeat re-arms the watchdog.
 				emitStatus: event => {
-					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+					ops.push(event.op);
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP) idle.pause();
+					if (event.op === EVAL_TIMEOUT_RESUME_OP) idle.resume();
 				},
 			},
 		);
 
-		expect(idle.signal.aborted).toBe(false);
 		expect(result.text).toBe("the answer");
+		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, "llm"]);
+		expect(idle.signal.aborted).toBe(false);
 	});
 });
 
