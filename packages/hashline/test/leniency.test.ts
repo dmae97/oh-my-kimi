@@ -106,6 +106,22 @@ describe("hashline body contracts", () => {
 		expect(result.warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
+	it("strips read-output line number prefix from auto-piped bare body rows", () => {
+		const result = parsePatch("replace 2..2:\n2:hello");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\nhello\nc\nd\ne");
+		expect(result.warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
+	});
+	it("preserves `+N:` literal payloads without stripping", () => {
+		const result = parsePatch("replace 2..2:\n+3:keep");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n3:keep\nc\nd\ne");
+		expect(result.warnings.some(w => /Auto-prefixed/.test(w))).toBe(false);
+	});
+	it("strips only one N: prefix from bare body rows (preserves nested digits:colon)", () => {
+		// "2:42:hello" → should yield "42:hello", NOT "hello" (recursive would over-strip)
+		const result = parsePatch("replace 2..2:\n2:42:hello");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n42:hello\nc\nd\ne");
+	});
+
 	it("rejects `-` body rows with a teaching error", () => {
 		expect(() => parsePatch("replace 2..2:\n-old\n+new")).toThrow(/`-` rows are not valid/);
 	});

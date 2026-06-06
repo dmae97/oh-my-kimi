@@ -4,6 +4,7 @@
  * applier.
  */
 import { HL_PAYLOAD_REPLACE } from "./format";
+import { stripOneLeadingHashlinePrefix } from "./prefixes";
 import {
 	BARE_BODY_AUTO_PIPED_WARNING,
 	DELETE_BLOCK_TAKES_NO_BODY,
@@ -220,7 +221,14 @@ export class Executor {
 				throw new Error(`line ${lineNum}: ${DELETE_BLOCK_TAKES_NO_BODY}`);
 			if (text.trimStart().charCodeAt(0) === 45 /* - */) throw new Error(`line ${lineNum}: ${MINUS_ROW_REJECTED}`);
 			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
-			this.#pending.payloads.push({ kind: "literal", text, lineNum });
+			// Strip at most one read-output line-number prefix (e.g. "3:text")
+			// from bare body rows. Lines with an explicit "+" prefix go through
+			// #handleLiteralPayload which skips this stripping — "+3:text" is
+			// intentional literal content, while bare "3:text" is almost always
+			// a copy-paste artifact from snapshot output. Single-pass only:
+			// recursive stripping would corrupt content whose own text starts
+			// with `digits:` (e.g. YAML ports "42:hello", timestamps "12:30").
+			this.#pending.payloads.push({ kind: "literal", text: stripOneLeadingHashlinePrefix(text), lineNum });
 			return;
 		}
 		if (text.trim().length === 0) return;
