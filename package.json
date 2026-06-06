@@ -87,6 +87,7 @@
   "scripts": {
     "install:dev": "bun install && bun --cwd=packages/coding-agent link && ln -sfn \"$(pwd)/packages/coding-agent/scripts/dev-launch\" \"$(bun pm -g bin)/omp\"",
     "dev": "bun --cwd=packages/coding-agent src/cli.ts",
+    "dev:timing": "PI_TIMING=x bun --cwd=packages/coding-agent --preload ../utils/src/module-timer.ts src/cli.ts",
     "stats": "bun --cwd=packages/coding-agent src/cli.ts stats",
     "claude:trace": "bun scripts/claude-trace.ts",
     "build": "bun run --workspaces --if-present build",
