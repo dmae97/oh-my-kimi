@@ -5,6 +5,7 @@
 
 - Added `setPaddingX` to `Box` so horizontal padding can be updated programmatically after creation
 - Added `ScrollView`, a fixed-height viewport component for pre-rendered lines with optional right-edge scrollbars and imperative scroll/page controls.
+- Added optional `Terminal.hasEagerEraseScrollbackRisk()` so custom/test terminal implementations can override the global ED3-risk profile without mutating the shared `TERMINAL` object.
 
 ### Changed
 

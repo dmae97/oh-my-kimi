@@ -1,5 +1,5 @@
-import { describe, expect, it, spyOn } from "bun:test";
-import { Container, Editor, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { describe, expect, it } from "bun:test";
+import { Container, Editor, TUI } from "@oh-my-pi/pi-tui";
 import type { AutocompleteItem, AutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { defaultEditorTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -29,8 +29,19 @@ class SlashProvider implements AutocompleteProvider {
 }
 
 class UnknownViewportTerminal extends VirtualTerminal {
+	#eagerEraseScrollbackRisk: boolean | undefined;
+
+	constructor(columns: number, rows: number, eagerEraseScrollbackRisk?: boolean) {
+		super(columns, rows);
+		this.#eagerEraseScrollbackRisk = eagerEraseScrollbackRisk;
+	}
+
 	isNativeViewportAtBottom(): undefined {
 		return undefined;
+	}
+
+	hasEagerEraseScrollbackRisk(): boolean | undefined {
+		return this.#eagerEraseScrollbackRisk;
 	}
 }
 
@@ -85,11 +96,10 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 
 	it("repaints direct autocomplete shrink on ED3-risk POSIX terminals", async () => {
 		const originalPlatform = process.platform;
-		const riskSpy = spyOn(TERMINAL, "eagerEraseScrollbackRisk", "get").mockReturnValue(true);
 		Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
 		let tui: TUI | undefined;
 		try {
-			const term = new UnknownViewportTerminal(40, 8);
+			const term = new UnknownViewportTerminal(40, 8, true);
 			tui = new TUI(term);
 			const root = new Container();
 			root.addChild({
@@ -161,7 +171,6 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			]);
 		} finally {
 			tui?.stop();
-			riskSpy.mockRestore();
 			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 		}
 	});

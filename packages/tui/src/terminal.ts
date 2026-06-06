@@ -130,6 +130,12 @@ export interface Terminal {
 	isNativeViewportAtBottom?(): boolean | undefined;
 
 	/**
+	 * Override the global terminal-profile ED3 risk decision for custom/test
+	 * terminals. `undefined` falls back to the resolved `TERMINAL` profile.
+	 */
+	hasEagerEraseScrollbackRisk?(): boolean | undefined;
+
+	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.

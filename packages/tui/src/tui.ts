@@ -606,7 +606,7 @@ export class TUI extends Container {
 			this.#eagerNativeScrollbackRebuildDisablePending = true;
 			return;
 		}
-		if (process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk) {
+		if (this.#hasEagerEraseScrollbackRisk()) {
 			this.#streamingHighWater = 0;
 			this.#markNativeScrollbackDirty();
 		}
@@ -1478,7 +1478,7 @@ export class TUI extends Container {
 		const heightChanged =
 			(this.#previousHeight > 0 && this.#previousHeight !== height) ||
 			(resizeEventOccurred && this.#previousHeight > 0);
-		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
+		const eagerEraseScrollbackRisk = this.#hasEagerEraseScrollbackRisk();
 		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !eagerEraseScrollbackRisk;
 		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender;
 		const allowUnknownViewportMutation = explicitViewportMutation || eagerRebuildAllowed;
@@ -1733,7 +1733,7 @@ export class TUI extends Container {
 		if (!this.#hasEverRendered) return { kind: "initial" };
 
 		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
-		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
+		const eagerEraseScrollbackRisk = this.#hasEagerEraseScrollbackRisk();
 		if (overlayVisibilityReduced && !isMultiplexerSession()) {
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
 		}
@@ -2176,6 +2176,11 @@ export class TUI extends Container {
 
 	#clearNativeScrollbackDirty(): void {
 		this.#nativeScrollbackDirty = false;
+	}
+
+	#hasEagerEraseScrollbackRisk(): boolean {
+		if (process.platform === "win32") return false;
+		return this.terminal.hasEagerEraseScrollbackRisk?.() ?? TERMINAL.eagerEraseScrollbackRisk;
 	}
 
 	#readNativeViewportAtBottom(): boolean | undefined {
