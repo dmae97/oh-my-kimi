@@ -56,8 +56,9 @@ const resettingSessions = new Set<string>();
 // Worker startup (module-graph import + WorkerCore construction) is infrastructure
 // cost, not user compute. Floor it independently of Bun's 5s default per-test timeout
 // so a slow cold-start under load isn't aborted mid-init — terminating a still-
-// initializing Bun worker is the documented SIGILL/SIGTRAP crash trigger (see
-// shared/indirect-eval.ts). Callers that pass a larger per-cell budget still dominate.
+// initializing Bun worker triggers the same kind of terminate-race that motivates
+// avoiding `vm.runInContext` (see shared/indirect-eval.ts), here surfacing as a
+// SIGILL/SIGSEGV. Callers that pass a larger per-cell budget still dominate.
 const WORKER_INIT_TIMEOUT_MS = 15_000;
 
 export async function executeInVmContext(options: {
