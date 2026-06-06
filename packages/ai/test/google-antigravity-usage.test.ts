@@ -5,14 +5,12 @@
  * different model entries, and handles mixed-case tier names.
  */
 import { describe, expect, it } from "bun:test";
+import type { UsageFetchContext, UsageFetchParams } from "../src/usage";
 import { antigravityUsageProvider } from "../src/usage/google-antigravity";
-import type { UsageFetchParams, UsageFetchContext } from "../src/usage";
 
 const accessTokenFixture = (() => {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-	const body = Buffer.from(
-		JSON.stringify({ sub: "user-fixture" }),
-	).toString("base64url");
+	const body = Buffer.from(JSON.stringify({ sub: "user-fixture" })).toString("base64url");
 	return `${header}.${body}.sig`;
 })();
 
@@ -20,7 +18,7 @@ function makeCredential(overrides?: Partial<UsageFetchParams["credential"]>) {
 	return {
 		type: "oauth" as const,
 		accessToken: accessTokenFixture,
-		refresh: "refresh-fixture",
+		refreshToken: "refresh-fixture",
 		expiresAt: Date.now() + 3600_000,
 		projectId: "test-project",
 		email: "test@example.com",
@@ -132,7 +130,12 @@ describe("antigravity usage provider", () => {
 		const payload = {
 			models: {
 				modelA: makeApiModel("Model A", { remainingFraction: 0.3, tier: "premium", windowId: "5h", resetTime: t1 }),
-				modelB: makeApiModel("Model B", { remainingFraction: 0.7, tier: "premium", windowId: "daily", resetTime: t2 }),
+				modelB: makeApiModel("Model B", {
+					remainingFraction: 0.7,
+					tier: "premium",
+					windowId: "daily",
+					resetTime: t2,
+				}),
 			},
 		};
 		const report = await antigravityUsageProvider.fetchUsage!(
@@ -145,11 +148,15 @@ describe("antigravity usage provider", () => {
 	it("includes email and projectId in report metadata", async () => {
 		const payload = { models: { m: makeApiModel("M", { remainingFraction: 1 }) } };
 		const report = await antigravityUsageProvider.fetchUsage!(
-			{ provider: "google-antigravity", credential: makeCredential({ email: "user@example.com", projectId: "proj-1" }), signal: undefined },
+			{
+				provider: "google-antigravity",
+				credential: makeCredential({ email: "user@example.com", projectId: "proj-1" }),
+				signal: undefined,
+			},
 			makeCtx(fakeFetch(payload)),
 		);
-		expect(report!.metadata.email).toBe("user@example.com");
-		expect(report!.metadata.projectId).toBe("proj-1");
+		expect(report!.metadata?.email).toBe("user@example.com");
+		expect(report!.metadata?.projectId).toBe("proj-1");
 	});
 
 	it("does not include email when credential has none", async () => {
@@ -158,7 +165,7 @@ describe("antigravity usage provider", () => {
 			{ provider: "google-antigravity", credential: makeCredential({ email: undefined }), signal: undefined },
 			makeCtx(fakeFetch(payload)),
 		);
-		expect(report!.metadata.email).toBeUndefined();
+		expect(report!.metadata?.email).toBeUndefined();
 	});
 
 	it("sorts limits by remainingFraction ascending (worst first)", async () => {
