@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName } from "../../src/modes/theme/theme";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import type { TUI } from "@oh-my-pi/pi-tui";
+import { theme as activeTheme, getThemeByName, initTheme } from "../../src/modes/theme/theme";
 import { readToolRenderer } from "../../src/tools/read";
 
 function extractLinkUris(text: string): string[] {
@@ -8,6 +10,7 @@ function extractLinkUris(text: string): string[] {
 }
 
 beforeAll(async () => {
+	await initTheme();
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 });
@@ -72,5 +75,38 @@ describe("readToolRenderer hyperlinks", () => {
 		const rendered = component.render(200).join("\n");
 		expect(rendered).toContain("example.com /final");
 		expect(extractLinkUris(rendered)).toContain("http://example.com/final");
+	});
+});
+
+describe("read ToolExecutionComponent framing", () => {
+	it("does not add vertical padding around framed read results", () => {
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const component = new ToolExecutionComponent("read", { path: "src/example.ts" }, {}, undefined, uiStub);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "export const x = 1;" }],
+				details: {
+					displayContent: { text: "export const x = 1;", startLine: 1 },
+					contentType: "text/plain",
+				},
+			},
+			false,
+		);
+
+		try {
+			const lines = component.render(80).map(line => Bun.stripANSI(line));
+			const topBorderIndex = lines.findIndex(
+				line => line.includes(activeTheme.boxSharp.topLeft) && line.includes("Read"),
+			);
+			const bottomBorderIndex = lines.findIndex(
+				(line, index) => index > topBorderIndex && line.includes(activeTheme.boxSharp.bottomLeft),
+			);
+
+			expect(topBorderIndex).toBe(1);
+			expect(lines[topBorderIndex + 1]).toContain("export const x = 1;");
+			expect(bottomBorderIndex).toBe(lines.length - 1);
+		} finally {
+			component.stopAnimation();
+		}
 	});
 });

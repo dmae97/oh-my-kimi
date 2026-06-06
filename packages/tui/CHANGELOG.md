@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `setPaddingY` to `Box` so vertical padding can be updated programmatically after creation.
+
 ## [15.9.67] - 2026-06-06
 ### Added
 

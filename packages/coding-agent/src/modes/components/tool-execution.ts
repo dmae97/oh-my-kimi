@@ -51,6 +51,12 @@ function addBoxChild(box: Box, component: unknown): boolean {
 	return isFramedBlockComponent(child);
 }
 
+function setBoxPaddingForFramedBlock(box: Box, hasFramedBlock: boolean): void {
+	const padding = hasFramedBlock ? 0 : 1;
+	box.setPaddingX(padding);
+	box.setPaddingY(padding);
+}
+
 /**
  * Drop trailing removal/hunk-header lines that appear in a streaming diff
  * before the matching `+added` lines have arrived. Without this, a partial
@@ -650,7 +656,7 @@ export class ToolExecutionComponent extends Container {
 					addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 				}
 			}
-			this.#contentBox.setPaddingX(contentBoxHasFramedBlock ? 0 : 1);
+			setBoxPaddingForFramedBlock(this.#contentBox, contentBoxHasFramedBlock);
 		} else if (this.#toolName in toolRenderers) {
 			// Built-in tools with renderers
 			const renderer = toolRenderers[this.#toolName];
@@ -693,7 +699,7 @@ export class ToolExecutionComponent extends Container {
 						);
 						if (resultComponent) {
 							const fileBoxHasFramedBlock = addBoxChild(fileBox, resultComponent);
-							fileBox.setPaddingX(fileBoxHasFramedBlock ? 0 : 1);
+							setBoxPaddingForFramedBlock(fileBox, fileBoxHasFramedBlock);
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
@@ -776,7 +782,7 @@ export class ToolExecutionComponent extends Container {
 						}
 					}
 				}
-				this.#contentBox.setPaddingX(contentBoxHasFramedBlock ? 0 : 1);
+				setBoxPaddingForFramedBlock(this.#contentBox, contentBoxHasFramedBlock);
 			}
 		} else {
 			// Other built-in tools: use Text directly with caching
