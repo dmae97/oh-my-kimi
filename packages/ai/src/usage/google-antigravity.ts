@@ -204,15 +204,15 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	const limits: UsageLimit[] = [];
 	for (const [key, entry] of deduped) {
 		const [tier, windowId] = key.split("|") as [string, string];
-		const label = entry.tier ?? "Usage";
+		const label = "Usage";
 		limits.push({
-			id: `google-antigravity:${tier}:${windowId}`,
+			id: `${params.provider}:${tier}:${windowId}`,
 			label,
 			scope: {
 				provider: params.provider,
 				accountId: credential.accountId,
 				projectId: credential.projectId,
-				tier: entry.tier ?? undefined,
+				tier: entry.tier,
 				windowId,
 			},
 			window: entry.window,

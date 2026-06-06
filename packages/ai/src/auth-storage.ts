@@ -3944,9 +3944,9 @@ function resolveProviderCredentialIdentityKey(provider: string, identifiers: str
 	if ((provider === "openai-codex" || provider === "anthropic") && emailIdentifier) return emailIdentifier;
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
+	if (emailIdentifier) return emailIdentifier;
 	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
 	if (projectIdentifier) return projectIdentifier;
-	if (emailIdentifier) return emailIdentifier;
 	return null;
 }
 
