@@ -328,7 +328,14 @@ async function cmdRelease(version: string): Promise<void> {
 	await git(["commit", "-m", `chore: bump version to ${version}`]);
 	console.log();
 
-	// 8. Tag + push atomically.
+	// 8. Upload LFS objects, then tag + push Git refs atomically.
+	//
+	// The release push sends both refs/heads/main and refs/tags/v… in one
+	// atomic push. The default Git LFS pre-push hook reads every ref Git is
+	// about to send; when the tag ref is present it can abort with
+	// "refs/tags/v… cannot be resolved to branch" before Git pushes anything.
+	// Upload LFS objects for the branch explicitly, then make the atomic Git
+	// ref push with GIT_LFS_SKIP_PUSH so only that LFS hook becomes a no-op.
 	//
 	// Background `git maintenance run` (scheduled via the global `[maintenance]
 	// repo = …` list) fetches origin with `fetch.pruneTags=true` set globally,
@@ -340,15 +347,18 @@ async function cmdRelease(version: string): Promise<void> {
 	// "src refspec … does not match any" symptom that means it got pruned.
 	console.log("Tagging and pushing to remote...");
 	const tagRef = `v${version}`;
+	await git(["lfs", "push", "origin", "main"]);
 	for (let attempt = 1; ; attempt++) {
 		await git(["tag", "-f", tagRef]);
 		const result = await git([
 			"push",
 			"--atomic",
 			"origin",
-			"main",
-			`refs/tags/${tagRef}`,
-		]).nothrow();
+			"refs/heads/main:refs/heads/main",
+			`refs/tags/${tagRef}:refs/tags/${tagRef}`,
+		])
+			.env({ ...Bun.env, GIT_LFS_SKIP_PUSH: "1" })
+			.nothrow();
 		if (result.exitCode === 0) break;
 		const stderr = result.stderr.toString();
 		process.stderr.write(stderr);
@@ -372,7 +382,10 @@ async function cmdRelease(version: string): Promise<void> {
 		console.log("\nTo retry after fixing (repeat until CI passes):");
 		console.log("  git commit -m \"fix: <brief description>\"");
 		console.log(`  git tag -f v${version}`);
-		console.log(`  git push --atomic origin main +refs/tags/v${version}`);
+		console.log("  git lfs push origin main");
+		console.log(
+			`  GIT_LFS_SKIP_PUSH=1 git push --atomic origin refs/heads/main:refs/heads/main +refs/tags/v${version}:refs/tags/v${version}`,
+		);
 		console.log("  bun scripts/release.ts watch");
 		process.exit(1);
 	}
