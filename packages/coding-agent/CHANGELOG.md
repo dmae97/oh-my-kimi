@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Changed authenticated Perplexity ask requests to default to the `experimental` model preference, matching the anonymous fallback.
 - Changed Perplexity explicit provider availability checks so the setup wizard can mark `perplexity` as available for manual selection without credentials, while auto provider discovery still requires auth
 - Changed the default persistent model selector shortcut from `Ctrl+L` to `Alt+M`, leaving `Ctrl+L` for display reset. Existing user remaps in `keybindings.yml` are preserved.
 - Changed the edit tool result header to carry the diff change stats (`+N / -M / K hunks`) inline next to the file path, and removed the redundant lone language-icon metadata row and the blank line between the header and the diff body, so a single-hunk edit renders as `✔ Edit: <icon> path:LINE ⟨+3 / 1 hunk⟩` immediately followed by the diff.

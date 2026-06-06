@@ -338,7 +338,7 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		expect(visibleWidth(topBorder ?? "")).toBe(width);
 	});
 
-	test("eval/bash/ssh/task pending previews stay short even with very long multiline args", () => {
+	test("eval/bash/ssh pending previews stay short even with very long multiline args", () => {
 		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
 		const cases: Array<{
 			name: string;
@@ -359,7 +359,7 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 				marker: /earlier lines/,
 			},
 			{
-				// bash/ssh/task keep a bounded head+tail window: the start and the
+				// bash/ssh keep a bounded head+tail window: the start and the
 				// latest are both visible, the middle is elided.
 				name: "bash",
 				args: { command: longLines.join("\n") },
@@ -370,17 +370,6 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 			{
 				name: "ssh",
 				args: { host: "example", command: longLines.join("\n") },
-				mustContain: ["line-0", "line-79"],
-				mustHide: ["line-40"],
-				marker: /more lines/,
-			},
-			{
-				name: "task",
-				args: {
-					agent: "task",
-					context: longLines.join("\n"),
-					tasks: [{ id: "alpha", description: "preview" }],
-				},
 				mustContain: ["line-0", "line-79"],
 				mustHide: ["line-40"],
 				marker: /more lines/,
@@ -398,5 +387,20 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 			}
 			expect(text, `${testCase.name} preview should advertise truncation`).toMatch(testCase.marker);
 		}
+	});
+
+	test("task pending preview preserves full multiline context", () => {
+		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
+		const { lines, text } = renderPending("task", {
+			agent: "task",
+			context: longLines.join("\n"),
+			tasks: [{ id: "alpha", description: "preview" }],
+		});
+
+		expect(lines.length, "task preview should not be capped").toBeGreaterThan(80);
+		expect(text).toContain("line-0");
+		expect(text).toContain("line-40");
+		expect(text).toContain("line-79");
+		expect(text).not.toMatch(/more lines/);
 	});
 });

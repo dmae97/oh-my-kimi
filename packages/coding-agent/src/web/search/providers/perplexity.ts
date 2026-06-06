@@ -487,7 +487,7 @@ async function callPerplexityAsk(
 		query_str: effectiveQuery,
 		search_focus: "internet",
 		mode: "copilot",
-		model_preference: auth.type === "anonymous" ? "experimental" : "pplx_pro_upgraded",
+		model_preference: "experimental",
 		sources: ["web"],
 		attachments: [],
 		frontend_uuid: crypto.randomUUID(),
