@@ -5,7 +5,7 @@ Every file section starts with `[PATH#TAG]`. `TAG` is the 4-hex snapshot tag fro
 </headers>
 
 <ops>
-replace N..M:      replace original lines N..M with the body rows below.
+replace N..M:      replace original lines N..M with the body rows below. CAUTION, IT IS INCLUSIVE! MAKE SURE YOU INTEND TO DELETE BOTH ENDS!
 replace block N:   replace the whole syntactic block that BEGINS on line N — its header line through its closing line — resolved with tree-sitter. Body rows below. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line.
 delete N..M        delete original lines N..M. No body.
 delete block N     delete the whole syntactic block that BEGINS on line N.
@@ -27,10 +27,13 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - Numbers refer to the ORIGINAL file and stay valid for the whole patch — they do not shift as hunks apply.
 - Across calls they do NOT survive: each applied edit mints a fresh `#TAG` and renumbers the file, so the tag and line numbers you just used are dead. Anchor the next edit on the `[PATH#TAG]` and lines from the edit response (or re-`read`), never on pre-edit numbers.
 - A line number is an offset, not a structural boundary: never `insert after N` into a construct you have not read, and never start or end a `replace`/`delete` range mid-expression or mid-block. If unsure what is on those lines, `read` them first.
+- A valid `#TAG` is NOT permission to patch the whole file — it certifies the snapshot, not your knowledge of it. Authority to touch a line comes from having literally seen that line as a `LINE:TEXT` row in a `read`/`search`, not from holding the tag. Every line in a hunk's range, and the lines bounding it, must be lines you actually saw.
+- An elided or partial read is NOT a read of the gap. A `…` (or any collapsed/truncated region) between two excerpts means those lines are UNSEEN — treat them exactly like lines you never opened. Never place a hunk on, or span a range across, an elided region; `read` that range explicitly first. Reconstructing it from memory of "what the code probably looks like" is how ranges drift off-by-N and shred neighboring blocks.
 - On a stale-tag rejection — or any result you cannot fully account for — STOP and re-`read`. Never stack more line-numbered edits onto output you have not re-grounded; that compounds corruption.
 - One hunk per range; the body is the final content, never an old/new pair.
 - Keep every range as tight as the change: a range must cover ONLY lines whose content actually changes. Never widen it to swallow an unchanged signature, brace, or neighboring statement just to rewrite a few lines inside — change one line with `replace N..N`, not the whole block around it. (A range where every line genuinely changes is correctly long; tightness is about excluding unchanged lines, not about being short.) This bounds the blast radius if a number is off: a stale single-line replace corrupts one line, while a stale block replace shreds the whole block and its structure.
 - To change lines 2 and 5 while keeping 3–4, issue two hunks (`replace 2..2:` and `replace 5..5:`). Untouched lines are simply absent from every range.
+- Pure additions use `insert`, never a widened `replace`. If the change only adds lines, `insert before/after` the spot and keep every existing line out of all ranges. Do NOT `replace` a span of keepers and retype them around the new line "to preserve" them — those retyped keepers are exactly what gets silently dropped when one is forgotten. A keeper that never enters your body cannot be lost. `replace` is only for lines whose own text changes.
 - NEVER use this tool to format code — reordering imports, re-indenting, aligning columns, or any mechanical restyling. That is the project formatter's job; run it instead of hand-editing layout here.
 </rules>
 
@@ -99,6 +102,16 @@ replace 3..3:
 # RIGHT
 replace 3..3:
 +   return msg
+
+# WRONG — a pure insertion done as a widened `replace`: you only want to add one line after 2,
+# but you replace 2..4, retype the keepers in the body, and drop one (here line 4, `greet("world")`).
+replace 2..4:
++    msg = "Hello, " + name
++    extra = compute(name)
++    print(msg)
+# RIGHT — touch nothing you keep; the new line is the whole body.
+insert after 2:
++    extra = compute(name)
 </anti-patterns>
 
 <critical>
