@@ -221,6 +221,93 @@ describe("tool live-region scrollback", () => {
 			component.stopAnimation();
 		}
 	});
+
+	it("commits the scrolled-off head of an expanded eval whose output streams past the viewport", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const title = "stream lots of output";
+			const code = "for (let i = 0; i < 40; i++) console.log('MARK-' + i);";
+			const args = { cells: [{ language: "js", title, code }] };
+			const component = new ToolExecutionComponent("eval", args, {}, undefined, tui, process.cwd());
+			component.setExpanded(true);
+			const out = (n: number) => Array.from({ length: n }, (_unused, i) => `MARK-${i}`).join("\n");
+			const partial = (output: string) =>
+				component.updateResult(
+					{
+						content: [{ type: "text", text: "" }],
+						details: { cells: [{ index: 0, title, code, language: "js", output, status: "running" }] },
+					},
+					true,
+				);
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				// A short output that fits, then the full stream that alone overflows the
+				// 12-row viewport — the frame that scrolls the output head above the top.
+				partial(out(4));
+				tui.requestRender();
+				await term.waitForRender();
+
+				partial(out(40));
+				tui.requestRender();
+				await term.waitForRender();
+
+				const strip = (rows: string[]) => rows.map(row => Bun.stripANSI(row).trimEnd()).join("\n");
+				const scrollText = strip(term.getScrollBuffer());
+				const viewportText = strip(term.getViewport());
+
+				// The streamed output head scrolled above the viewport: it must live in
+				// native scrollback (committed), not nowhere. The fixed code cell rides
+				// along as the stable prefix above it.
+				expect(viewportText).not.toContain("MARK-0");
+				expect(scrollText).toContain("MARK-0");
+				expect(scrollText).toContain("MARK-20");
+				// The streaming tail stays on screen, and nothing went missing between.
+				expect(viewportText).toContain("MARK-39");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("keeps a streaming eval append-only only while expanded and unfinalized", () => {
+		const tui = new TUI(new VirtualTerminal(80, 24));
+		const title = "t";
+		const code = "console.log('x')";
+		const args = { cells: [{ language: "js", title, code }] };
+		const component = new ToolExecutionComponent("eval", args, {}, undefined, tui, process.cwd());
+		type AppendOnly = { isTranscriptBlockAppendOnly(): boolean };
+		const probe = component as unknown as AppendOnly;
+		const details = {
+			cells: [{ index: 0, title, code, language: "js", output: "MARK-0\nMARK-1", status: "running" }],
+		};
+		try {
+			// Collapsed: bounded sliding tail windows — not append-only.
+			expect(probe.isTranscriptBlockAppendOnly()).toBe(false);
+			component.setExpanded(true);
+			// Expanded + partial (streaming output): append-only.
+			component.updateResult({ content: [{ type: "text", text: "" }], details }, true);
+			expect(probe.isTranscriptBlockAppendOnly()).toBe(true);
+			// Final result may collapse to a capped view — boundary closes.
+			component.updateResult({ content: [{ type: "text", text: "" }], details }, false);
+			expect(probe.isTranscriptBlockAppendOnly()).toBe(false);
+		} finally {
+			component.stopAnimation();
+		}
+	});
 });
 
 function makeAssistantMessage(text: string): AssistantMessage {

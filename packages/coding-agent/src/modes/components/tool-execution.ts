@@ -531,25 +531,32 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * While streaming its call preview, a tool block whose preview is append-only
-	 * (rows only grow at the bottom, never re-layout) lets the renderer commit the
-	 * scrolled-off head of an over-tall preview to native scrollback instead of
-	 * dropping it — the same anti-yank path a streaming assistant reply uses (see
-	 * {@link TranscriptContainer} + `NativeScrollbackLiveRegion`). Gated on the
-	 * call-preview phase (no result yet) so the boundary closes the instant the
-	 * preview swaps to a result that may collapse; the renderer decides whether
-	 * its current preview shape qualifies via `isStreamingPreviewAppendOnly`.
+	 * While a tool's preview is still streaming, a block whose preview is
+	 * append-only (rows only grow at the bottom, never re-layout) lets the
+	 * renderer commit the scrolled-off head of an over-tall preview to native
+	 * scrollback instead of dropping it — the same anti-yank path a streaming
+	 * assistant reply uses (see {@link TranscriptContainer} +
+	 * `NativeScrollbackLiveRegion`). Covers both phases: a pre-result call preview
+	 * (a `write` whose content streams in) and a partial-result preview that
+	 * streams output below fixed input (an `eval`/`bash` whose stdout grows under
+	 * its code cell). Gated on {@link isTranscriptBlockFinalized} so the boundary
+	 * closes the instant the block reaches a terminal state — a final result that
+	 * may collapse to a compact view, a backgrounded async tool, or a seal — and
+	 * the renderer decides whether its current preview shape qualifies via
+	 * `isStreamingPreviewAppendOnly` (typically: only the expanded full view,
+	 * which is top-anchored; the collapsed tail window re-layouts but is bounded
+	 * so it never overflows anyway).
 	 */
 	isTranscriptBlockAppendOnly(): boolean {
-		// A result preview can collapse/re-layout; only the live call preview is a
-		// candidate. Sealed/aborted blocks are finalized, not streaming.
-		if (this.#sealed || this.#result !== undefined) return false;
+		// A finalized block's preview can collapse/re-layout; only a live,
+		// still-streaming block is a candidate.
+		if (this.isTranscriptBlockFinalized()) return false;
 		const predicate =
 			(this.#tool as { isStreamingPreviewAppendOnly?: ToolRenderer["isStreamingPreviewAppendOnly"] } | undefined)
 				?.isStreamingPreviewAppendOnly ?? toolRenderers[this.#toolName]?.isStreamingPreviewAppendOnly;
 		if (!predicate) return false;
 		try {
-			return predicate(this.#getCallArgsForRender(), this.#renderState);
+			return predicate(this.#getCallArgsForRender(), this.#renderState, this.#result);
 		} catch (err) {
 			logger.warn("Tool append-only predicate failed", { tool: this.#toolName, error: String(err) });
 			return false;
