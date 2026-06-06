@@ -113,7 +113,7 @@ function rawTextInputFromPartialJson(partialJson: unknown): string | undefined {
 	// Function-tool arguments stream as JSON. Custom/free-form tools stream raw
 	// text in the same transport field; only the raw form is a valid fallback for
 	// the conventional `input` parameter.
-	if (first === "{" || first === "[" || first === '"') return undefined;
+	if (first === "{" || first === '"') return undefined;
 	return partialJson;
 }
 
