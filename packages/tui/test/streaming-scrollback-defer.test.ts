@@ -26,6 +26,18 @@ class LiveLineList extends LineList implements NativeScrollbackLiveRegion {
 	}
 }
 
+/**
+ * A live block whose rendered rows only grow at the bottom and never re-layout
+ * (a streaming assistant reply). Its entire body is append-only, so scrolled-off
+ * head rows are safe to commit to native scrollback. `Infinity` is clamped to
+ * the rendered length by TUI's aggregation.
+ */
+class AppendOnlyLiveLineList extends LiveLineList {
+	getNativeScrollbackCommitSafeEnd(): number | undefined {
+		return Number.POSITIVE_INFINITY;
+	}
+}
+
 async function settle(term: VirtualTerminal): Promise<void> {
 	await Bun.sleep(20);
 	await term.flush();
@@ -145,6 +157,41 @@ describe("streaming scrollback defer", () => {
 				// buffer until a later checkpoint reconciles the full transcript.
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("tool-", 10).slice(-4));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("commits the scrolled-off head of an append-only live block to native scrollback", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(20, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			// The only block is the live one (liveRegionStart === 0), but unlike a
+			// volatile tool preview it is append-only (a streaming assistant reply).
+			// Rows that scroll above the viewport must reach native scrollback rather
+			// than vanishing — committed nowhere, repainted nowhere.
+			const live = new AppendOnlyLiveLineList([]);
+
+			try {
+				tui.addChild(live);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				live.setLines(rows("text-", 10));
+				tui.requestRender();
+				await settle(term);
+
+				// text-0..text-5 scrolled above the 4-row viewport; because the block
+				// is append-only they enter native scrollback (via `\r\n`, no ED3
+				// erase) instead of being dropped like the volatile case above.
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("text-", 10));
 			} finally {
 				tui.stop();
 			}
@@ -319,6 +366,51 @@ describe("streaming scrollback defer", () => {
 
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("erases mis-wrapped native scrollback on resize even mid-stream on ED3-risk terminals", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(40, 10);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const component = new LineList([...rows("init-", 5), "prompt"]);
+
+			try {
+				tui.addChild(component);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				const scrollbackBefore = term.getScrollBuffer().length;
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				// Stream past the viewport: the cap keeps transient rows out of native
+				// history and no ED3 fires.
+				component.setLines([...rows("stream-", 30), "prompt"]);
+				tui.requestRender();
+				await settle(term);
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
+
+				// Resize mid-stream. The terminal re-wrapped its saved lines at the old
+				// width, so the rebuild must erase them (ED 3) rather than capping to a
+				// viewport repaint that would leave the corrupt history on screen.
+				term.resize(30, 10);
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([...rows("stream-", 30), "prompt"]);
+				expect(
+					term
+						.getViewport()
+						.map(line => line.trim())
+						.at(-1),
+				).toBe("prompt");
 			} finally {
 				tui.stop();
 			}

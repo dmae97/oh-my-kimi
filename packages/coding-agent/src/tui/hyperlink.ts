@@ -1,5 +1,5 @@
 /**
- * OSC 8 terminal hyperlink support for file paths.
+ * OSC 8 terminal hyperlink support for paths and URLs.
  *
  * Wraps display text in `ESC ] 8 ; id=HASH ; URI ESC \ TEXT ESC ] 8 ; ; ESC \`
  * sequences when the active terminal supports hyperlinks and the user setting
@@ -63,6 +63,46 @@ export function isHyperlinkEnabled(): boolean {
 	return TERMINAL.hyperlinks;
 }
 
+function safeHyperlinkUri(uri: string): string | undefined {
+	if (!uri || /[\x00-\x1f\x7f]/.test(uri)) return undefined;
+	return uri;
+}
+
+function wrapHyperlink(uri: string, displayText: string): string {
+	if (!isHyperlinkEnabled()) return displayText;
+	// Do not double-wrap if the text already embeds an OSC 8 sequence.
+	if (displayText.includes("\x1b]8;")) return displayText;
+	const safeUri = safeHyperlinkUri(uri);
+	if (!safeUri) return displayText;
+	const id = buildLinkId(safeUri);
+	return `${OSC}8;id=${id};${safeUri}${ST}${displayText}${OSC}8;;${ST}`;
+}
+
+/**
+ * Wrap `displayText` in an OSC 8 hyperlink pointing at `uri`.
+ *
+ * Returns `displayText` unchanged when hyperlinks are disabled, `uri` contains
+ * terminal control bytes, or `displayText` already contains an OSC 8 sequence.
+ */
+export function uriHyperlink(uri: string, displayText: string): string {
+	return wrapHyperlink(uri, displayText);
+}
+
+/**
+ * Wrap `displayText` in an OSC 8 hyperlink pointing at an HTTP(S) URL.
+ * `www.example.com` inputs are linked as `https://www.example.com`.
+ */
+export function urlHyperlink(url: string, displayText: string): string {
+	const normalized = url.match(/^www\./i) ? `https://${url}` : url;
+	try {
+		const parsed = new URL(normalized);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return displayText;
+		return wrapHyperlink(parsed.href, displayText);
+	} catch {
+		return displayText;
+	}
+}
+
 /**
  * Wrap `displayText` in an OSC 8 hyperlink pointing at the given absolute file path.
  *
@@ -78,12 +118,7 @@ export function isHyperlinkEnabled(): boolean {
  * @param opts - Optional line/col position appended as `?line=N&col=M` query params
  */
 export function fileHyperlink(absPath: string, displayText: string, opts?: { line?: number; col?: number }): string {
-	if (!isHyperlinkEnabled()) return displayText;
-	// Do not double-wrap if the text already embeds an OSC 8 sequence.
-	if (displayText.includes("\x1b]8;")) return displayText;
-	const uri = buildFileUri(absPath, opts);
-	const id = buildLinkId(uri);
-	return `${OSC}8;id=${id};${uri}${ST}${displayText}${OSC}8;;${ST}`;
+	return wrapHyperlink(buildFileUri(absPath, opts), displayText);
 }
 
 /**

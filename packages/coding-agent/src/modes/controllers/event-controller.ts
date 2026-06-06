@@ -204,6 +204,7 @@ export class EventController {
 		this.#readToolCallAssistantComponents.clear();
 		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
+		this.ctx.clearPinnedError();
 		if (this.ctx.retryEscapeHandler) {
 			this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
 			this.ctx.retryEscapeHandler = undefined;
@@ -241,16 +242,28 @@ export class EventController {
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "user") {
 			const textContent = this.ctx.getUserMessageText(event.message);
-			const imageCount =
+			const imageBlocks =
 				typeof event.message.content === "string"
-					? 0
-					: event.message.content.filter(content => content.type === "image").length;
+					? []
+					: event.message.content.filter(
+							(content): content is ImageContent =>
+								content.type === "image" &&
+								typeof content.data === "string" &&
+								typeof content.mimeType === "string",
+						);
+			const imageCount = imageBlocks.length;
 			const signature = `${textContent}\u0000${imageCount}`;
 
 			this.#resetReadGroup();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
 			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
 			if (!wasOptimistic) {
+				// Append synchronously: #emit dispatches to this listener fire-and-forget
+				// (see AgentSession.#emit), so any await between the user message_start and
+				// addMessageToChat lets later events (assistant message_start, tool execution
+				// start/end) append their components first and scramble transcript order /
+				// live-region block boundaries. addMessageToChat materializes clickable image
+				// links via the synchronous putBlobSync fallback, so no await is needed here.
 				this.ctx.addMessageToChat(event.message);
 			}
 			if (wasOptimistic) {
@@ -462,11 +475,32 @@ export class EventController {
 				for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
 					component.setArgsComplete(toolCallId);
 				}
+			} else {
+				// The turn ended without running these calls (abort/error/TTSR rewind),
+				// so they will never produce a result. Seal them so they stop animating
+				// and freeze instead of pinning the transcript live region while a retry
+				// streams fresh blocks below them. Background tools keep updating.
+				for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
+					if (!this.#backgroundToolCallIds.has(toolCallId) && component instanceof ToolExecutionComponent) {
+						component.seal();
+					}
+				}
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
+			this.#lastAssistantComponent.markTranscriptBlockFinalized();
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;
+			// Pin a turn-ending provider error (e.g. Anthropic content-filter block)
+			// above the editor so it survives transcript scroll. Cleared at the next
+			// turn's agent_start.
+			if (
+				event.message.stopReason === "error" &&
+				event.message.errorMessage &&
+				!isSilentAbort(event.message.errorMessage)
+			) {
+				this.ctx.showPinnedError(event.message.errorMessage);
+			}
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
 		}
@@ -626,6 +660,11 @@ export class EventController {
 		await this.ctx.flushPendingModelSwitch();
 		for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
 			if (!this.#backgroundToolCallIds.has(toolCallId)) {
+				// A foreground tool still pending at turn end never delivered a result;
+				// seal it so it freezes (and stops animating) rather than lingering in
+				// the transcript live region as a streaming preview until the next thaw.
+				const component = this.ctx.pendingTools.get(toolCallId);
+				if (component instanceof ToolExecutionComponent) component.seal();
 				this.ctx.pendingTools.delete(toolCallId);
 			}
 		}

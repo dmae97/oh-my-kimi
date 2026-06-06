@@ -18,6 +18,7 @@ import {
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
+import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
 import {
@@ -39,6 +40,18 @@ type QueuedMessages = {
 	steering: string[];
 	followUp: string[];
 };
+
+function imageLinksForMessage(
+	message: Extract<AgentMessage, { role: "developer" | "user" }>,
+	putBlobSync: InteractiveModeContext["sessionManager"]["putBlobSync"],
+): (string | undefined)[] | undefined {
+	if (typeof message.content === "string") return undefined;
+	const images = message.content.filter(
+		(content): content is ImageContent =>
+			content.type === "image" && typeof content.data === "string" && typeof content.mimeType === "string",
+	);
+	return materializeImageReferenceLinksSync(images, putBlobSync);
+}
 
 export class UiHelpers {
 	constructor(private ctx: InteractiveModeContext) {}
@@ -84,7 +97,10 @@ export class UiHelpers {
 		this.ctx.ui.requestRender();
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): Component[] {
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[] {
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ctx.ui, message.excludeFromContext);
@@ -253,7 +269,10 @@ export class UiHelpers {
 				const textContent = this.ctx.getUserMessageText(message);
 				if (textContent) {
 					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
-					const userComponent = new UserMessageComponent(textContent, isSynthetic);
+					const imageLinks =
+						options?.imageLinks ??
+						imageLinksForMessage(message, this.ctx.sessionManager.putBlobSync.bind(this.ctx.sessionManager));
+					const userComponent = new UserMessageComponent(textContent, isSynthetic, imageLinks);
 					this.ctx.chatContainer.addChild(userComponent);
 					if (options?.populateHistory && message.role === "user" && !isSynthetic) {
 						this.ctx.editor.addToHistory(textContent);
@@ -513,6 +532,8 @@ export class UiHelpers {
 		}
 		this.ctx.editor.setText("");
 		this.ctx.pendingImages = [];
+		this.ctx.pendingImageLinks = [];
+		this.ctx.editor.imageLinks = undefined;
 		this.ctx.ui.requestRender();
 	}
 

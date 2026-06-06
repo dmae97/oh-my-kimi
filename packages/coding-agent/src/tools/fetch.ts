@@ -13,7 +13,7 @@ import { type Theme, theme } from "../modes/theme/theme";
 import type { ToolSession } from "../sdk";
 import type { AgentStorage } from "../session/agent-storage";
 import { DEFAULT_MAX_BYTES, truncateHead } from "../session/streaming-output";
-import { renderStatusLine } from "../tui";
+import { renderStatusLine, urlHyperlink } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
@@ -1437,6 +1437,27 @@ function countNonEmptyLines(text: string): number {
 	return text.split("\n").filter(l => l.trim()).length;
 }
 
+function readUrlLinkTarget(input: string): string {
+	try {
+		return parseReadUrlTarget(input)?.path ?? input;
+	} catch {
+		return input;
+	}
+}
+
+function formatReadUrlDescription(input: string): string {
+	const target = readUrlLinkTarget(input);
+	const displayUrl = target.match(/^www\./i) ? `https://${target}` : target;
+	const domain = getDomain(displayUrl);
+	const urlPath = truncate(displayUrl.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
+	const label = `${domain}${urlPath ? ` ${urlPath}` : ""}`.trim();
+	return urlHyperlink(target, label);
+}
+
+function formatReadUrlMetadataValue(url: string, uiTheme: Theme): string {
+	return urlHyperlink(url, uiTheme.fg("mdLinkUrl", url));
+}
+
 /** Render URL read call (URL preview) */
 export function renderReadUrlCall(
 	args: { path?: string; url?: string; raw?: boolean },
@@ -1444,9 +1465,7 @@ export function renderReadUrlCall(
 	uiTheme: Theme = theme,
 ): Component {
 	const url = args.path ?? args.url ?? "";
-	const domain = getDomain(url);
-	const path = truncate(url.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
-	const description = `${domain}${path ? ` ${path}` : ""}`.trim();
+	const description = formatReadUrlDescription(url);
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");
 	const text = renderStatusLine({ icon: "pending", title: "Read", description, meta }, uiTheme);
@@ -1465,7 +1484,7 @@ export function renderReadUrlResult(
 		const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
 		const errorText = (rawErrorText || "No response data").replace(/^Error:\s*/, "");
 		const urlText = details?.finalUrl ?? details?.url ?? "";
-		const description = urlText ? `${getDomain(urlText)}${urlText.replace(/^https?:\/\/[^/]+/, "")}` : undefined;
+		const description = urlText ? formatReadUrlDescription(urlText) : undefined;
 		const header = renderStatusLine({ icon: "error", title: "Read", description }, uiTheme);
 		const errorLines = errorText.split("\n").map(line => uiTheme.fg("error", replaceTabs(line)));
 		const outputBlock = new CachedOutputBlock();
@@ -1476,8 +1495,7 @@ export function renderReadUrlResult(
 		};
 	}
 
-	const domain = getDomain(details.finalUrl);
-	const path = truncate(details.finalUrl.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
+	const description = formatReadUrlDescription(details.finalUrl);
 	const hasRedirect = details.url !== details.finalUrl;
 	const hasNotes = details.notes.length > 0;
 	const truncation = details.meta?.truncation;
@@ -1487,7 +1505,7 @@ export function renderReadUrlResult(
 		{
 			icon: truncated ? "warning" : "success",
 			title: "Read",
-			description: `${domain}${path ? ` ${path}` : ""}`,
+			description,
 		},
 		uiTheme,
 	);
@@ -1505,7 +1523,9 @@ export function renderReadUrlResult(
 		`${uiTheme.fg("muted", "Method:")} ${details.method}`,
 	];
 	if (hasRedirect) {
-		metadataLines.push(`${uiTheme.fg("muted", "Final URL:")} ${uiTheme.fg("mdLinkUrl", details.finalUrl)}`);
+		metadataLines.push(
+			`${uiTheme.fg("muted", "Final URL:")} ${formatReadUrlMetadataValue(details.finalUrl, uiTheme)}`,
+		);
 	}
 	const lineLabel = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
 	metadataLines.push(`${uiTheme.fg("muted", "Lines:")} ${lineLabel}`);

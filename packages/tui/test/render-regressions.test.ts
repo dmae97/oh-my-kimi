@@ -398,7 +398,10 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("resize + viewport behavior", () => {
-		it("preserves preexisting shell scrollback on startup and resize redraw", async () => {
+		it("clears preexisting shell scrollback on a resize redraw (clean reset)", async () => {
+			// A resize is a clean reset: the renderer clears the viewport and
+			// scrollback (ED2+ED3) and redraws the transcript at the new geometry, so
+			// preexisting shell scrollback above the UI does not survive.
 			const term = new VirtualTerminal(50, 5);
 			term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 			await settle(term);
@@ -415,7 +418,8 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				const buffer = term.getScrollBuffer().join("\n");
-				expect(buffer.includes("shell-")).toBeTruthy();
+				expect(buffer.includes("shell-")).toBeFalsy();
+				expect(visible(term).at(-1)?.trim()).toBe("ui-7");
 			} finally {
 				tui.stop();
 			}
@@ -468,10 +472,10 @@ describe("TUI terminal-state regressions", () => {
 		});
 
 		it("rewraps committed native scrollback when the terminal widens on POSIX (unknown viewport)", async () => {
-			// POSIX reports no viewport position. A width change rewraps the whole
-			// transcript, but unknown host scrollback is not safe to erase: the renderer
-			// keeps history dirty rather than emitting ED3 without a positive at-tail
-			// proof.
+			// POSIX reports no viewport position. A resize is now an unconditional
+			// clean reset: the renderer clears scrollback (ED3) and redraws the
+			// transcript at the new width, so committed history rewraps even when the
+			// host scroll position is unobservable.
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
@@ -494,9 +498,9 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						const wide = term.getScrollBuffer().map(line => line.trimEnd());
-						// Unknown viewport: no destructive replay is emitted, so old-width
-						// scrollback remains until a later render has a positive at-tail proof.
-						expect(wide).toContain(`L0:${"x".repeat(17)}`);
+						// The resize rewraps history at the new width; the narrow fragment is gone.
+						expect(wide).toContain(`L0:${"x".repeat(33)}`);
+						expect(wide).not.toContain(`L0:${"x".repeat(17)}`);
 					} finally {
 						tui.stop();
 					}
@@ -1537,7 +1541,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("defers resize rebuild while native scrollback is scrolled", async () => {
+		it("rebuilds in place even when the reader is scrolled (clean reset on resize)", async () => {
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(rows("line-", 12));
@@ -1547,16 +1551,20 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 				term.scrollLines(-2);
-				const before = term.getBufferPosition();
-				expect(before.viewportY).toBeGreaterThan(0);
+				expect(term.getBufferPosition().viewportY).toBeGreaterThan(0);
 
 				component.setLines(rows("line-", 8));
 				term.resize(28, 5);
 				await settle(term);
 
-				const after = term.getBufferPosition();
-				expect(after.viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				// A resize is a clean reset: history is rebuilt in place at the new
+				// geometry instead of deferring to keep the reader scrolled. Each line
+				// appears exactly once and nothing is left deferred.
+				const buffer = term.getScrollBuffer().map(line => line.trim());
+				for (let i = 0; i < 8; i++) {
+					expect(buffer.filter(line => line === `line-${i}`).length).toBe(1);
+				}
+				expect(buffer.filter(line => line.startsWith("line-")).length).toBe(8);
 				expect(tui.refreshNativeScrollbackIfDirty()).toBe(false);
 			} finally {
 				tui.stop();

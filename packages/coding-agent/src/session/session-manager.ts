@@ -29,6 +29,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
 import {
+	type BlobPutOptions,
 	type BlobPutResult,
 	BlobStore,
 	externalizeImageData,
@@ -336,6 +337,7 @@ export type ReadonlySessionManager = Pick<
 	| "getTree"
 	| "getUsageStatistics"
 	| "putBlob"
+	| "putBlobSync"
 >;
 
 function createSessionId(): string {
@@ -1219,7 +1221,7 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 				if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
 					if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
 						changed = true;
-						const blobRef = await externalizeImageData(blobStore, item.data);
+						const blobRef = await externalizeImageData(blobStore, item.data, item.mimeType);
 						return { ...item, data: blobRef };
 					}
 				}
@@ -1313,13 +1315,15 @@ function truncateForPersistenceSync(obj: unknown, blobStore: BlobStore, key?: st
 		const result: unknown[] = new Array(obj.length);
 		for (let i = 0; i < obj.length; i++) {
 			const item = obj[i];
-			if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
-				if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
-					changed = true;
-					const blobRef = externalizeImageDataSync(blobStore, item.data);
-					result[i] = { ...item, data: blobRef };
-					continue;
-				}
+			if (
+				key === TEXT_CONTENT_KEY &&
+				isImageBlock(item) &&
+				!isBlobRef(item.data) &&
+				item.data.length >= BLOB_EXTERNALIZE_THRESHOLD
+			) {
+				changed = true;
+				result[i] = { ...item, data: externalizeImageDataSync(blobStore, item.data, item.mimeType) };
+				continue;
 			}
 			const newItem = truncateForPersistenceSync(item, blobStore, key);
 			if (newItem !== item) changed = true;
@@ -1978,8 +1982,13 @@ export class SessionManager {
 	}
 
 	/** Puts a binary blob into the blob store and returns the blob reference */
-	async putBlob(data: Buffer): Promise<BlobPutResult> {
-		return this.#blobStore.put(data);
+	async putBlob(data: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
+		return this.#blobStore.put(data, options);
+	}
+
+	/** Synchronous variant of {@link putBlob} for rebuild-only render paths. */
+	putBlobSync(data: Buffer, options?: BlobPutOptions): BlobPutResult {
+		return this.#blobStore.putSync(data, options);
 	}
 
 	captureState(): SessionManagerStateSnapshot {

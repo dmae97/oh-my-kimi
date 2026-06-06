@@ -242,10 +242,13 @@ If `ollama` is not explicitly configured, registry adds an implicit discoverable
 
 - provider: `ollama`
 - api: `openai-responses`
-- base URL: `OLLAMA_BASE_URL` or `http://127.0.0.1:11434`
+- base URL: `OLLAMA_BASE_URL`, or `OLLAMA_HOST`, or `http://127.0.0.1:11434`
+- context window: `OLLAMA_CONTEXT_LENGTH` if set, otherwise Ollama `/api/show` metadata, otherwise `128000`
 - auth mode: keyless (`auth: none` behavior)
 
 Runtime discovery calls Ollama endpoints and normalizes discovered OpenAI-compatible models to `openai-responses`.
+
+`OLLAMA_CONTEXT_LENGTH` does not configure Ollama's runtime `num_ctx`; set that in Ollama/model configuration separately.
 
 ### Implicit llama.cpp discovery
 

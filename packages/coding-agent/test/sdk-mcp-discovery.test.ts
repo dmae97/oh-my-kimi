@@ -11,6 +11,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "../src/tool-discovery/mode";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
@@ -86,6 +87,34 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		expect(session.systemPrompt.join("\n")).not.toContain(
 			"call `search_tool_bm25` before concluding no such tool exists",
 		);
+	});
+
+	it("default auto discovery hides MCP tools once the total tool set is too large", async () => {
+		const mcpTools = Array.from({ length: TOOL_DISCOVERY_AUTO_THRESHOLD + 1 }, (_, index) =>
+			createMcpCustomTool(`mcp__auto_tool_${index}`, "auto", `tool_${index}`),
+		);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			customTools: mcpTools,
+		});
+
+		const activeNames = session.getActiveToolNames();
+		expect(session.isToolDiscoveryEnabled()).toBe(true);
+		expect(activeNames).toContain("search_tool_bm25");
+		expect(activeNames).not.toContain("mcp__auto_tool_0");
+		expect(session.getDiscoverableTools({ source: "mcp" })).toHaveLength(TOOL_DISCOVERY_AUTO_THRESHOLD + 1);
 	});
 
 	it("advertises discovery guidance for builtin-only tools.discoveryMode all sessions", async () => {
