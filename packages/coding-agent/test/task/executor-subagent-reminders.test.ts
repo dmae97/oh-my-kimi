@@ -474,6 +474,35 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.abortReason).toBe("Cancelled before start");
 		expect(result.stderr).toBe("Cancelled before start");
 	});
+
+	it("surfaces the assistant abort message instead of 'Cancelled by caller' on an internal turn abort", async () => {
+		// No caller signal and no runtime limit: the subagent's own turn ended with
+		// stopReason "aborted" (e.g. a merged request-signal abort). abortReason is
+		// undefined, so the executor must report the assistant's real errorMessage,
+		// not the generic caller-cancellation fallback. This is also what the eval
+		// agent() bridge re-raises, so a blank/misleading reason here surfaces as an
+		// opaque "bridge call '__agent__' failed".
+		const session = createMockSession(({ emit, state }) => {
+			const aborted: AssistantMessage = {
+				...createAssistantStopMessage(""),
+				stopReason: "aborted",
+				errorMessage: "Request was aborted",
+			};
+			state.messages.push(aborted);
+			emit({ type: "message_end", message: aborted });
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-internal-abort" });
+
+		expect(result.aborted).toBe(true);
+		expect(result.exitCode).toBe(1);
+		expect(result.abortReason).toBe("Request was aborted");
+		expect(result.abortReason).not.toBe("Cancelled by caller");
+		expect(result.error).toBeUndefined();
+		expect(result.stderr).toBe("");
+	});
 	it("uses modelRegistry.authStorage when only options.modelRegistry is provided", async () => {
 		const session = createMockSession(({ emit }) => {
 			emit({

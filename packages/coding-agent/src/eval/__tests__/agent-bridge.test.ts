@@ -252,6 +252,15 @@ describe("runEvalAgent", () => {
 			"Subagent runtime limit exceeded (task.maxRuntimeMs=1000)",
 		);
 	});
+
+	it("disables the wall-clock runtime limit for eval subagents", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+
+		await runEvalAgent({ prompt: "hello" }, { session: makeSession() });
+
+		expect(runSpy.mock.calls[0]?.[0].maxRuntimeMs).toBe(0);
+	});
 });
 
 describe("agent() through eval runtimes", () => {
