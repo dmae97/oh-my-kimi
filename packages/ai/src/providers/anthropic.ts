@@ -1778,16 +1778,12 @@ type SystemBlockOptions = {
 	cacheControl?: AnthropicCacheControl;
 };
 
-function withGlobalCacheScope(cacheControl: AnthropicCacheControl): AnthropicCacheControl {
-	return { ...cacheControl, scope: "global" };
-}
-
 function applyClaudeCodeSystemCache(
 	blocks: AnthropicSystemBlock[],
 	cacheControl: AnthropicCacheControl | undefined,
 ): number {
 	if (!cacheControl || blocks.length <= 2) return 0;
-	blocks[2] = { ...blocks[2], cache_control: withGlobalCacheScope(cacheControl) };
+	blocks[2] = { ...blocks[2], cache_control: cacheControl };
 	if (blocks.length === 3) return 1;
 	const lastIndex = blocks.length - 1;
 	blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cacheControl };
