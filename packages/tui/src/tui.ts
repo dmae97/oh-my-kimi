@@ -569,8 +569,8 @@ export class TUI extends Container {
 	 * (the viewport is never observable there and ConPTY hosts erase host
 	 * scrollback on ED3 — #1635/#1746); only the unknown POSIX case is forced to
 	 * rebuild. POSIX hosts known to disturb scrolled readers on xterm ED3
-	 * (`CSI 3 J`, erase saved lines) also defer the eager opt-in; checkpoint and
-	 * direct user-input rebuilds are unaffected.
+	 * (`CSI 3 J`, erase saved lines) also defer the eager opt-in; checkpoint
+	 * rebuilds are unaffected.
 	 *
 	 * Disabling stays active through one already-requested frame: the event batch
 	 * that ends a foreground stream both removes its UI rows (loader/status
@@ -1718,6 +1718,11 @@ export class TUI extends Container {
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
 		}
 
+		// Same dirty-scrollback opt-in policy as the non-overlay branch below: an
+		// ED3-risk macOS/POSIX terminal with an unobservable viewport ignores
+		// focused-input unknown opt-ins, so overlay selector Up/Down moves do not
+		// become ED3 clears plus full transcript replays. Non-ED3-risk POSIX still
+		// honors direct-input/IME/autocomplete opt-ins.
 		if (hasVisibleOverlay) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			// Multiplexer panes never get a destructive scrollback clear
@@ -1725,10 +1730,11 @@ export class TUI extends Container {
 			// "rebuild" would only append a full duplicate copy of the transcript
 			// to pane history on every dirty frame. Keep repainting the viewport
 			// and leave reconciliation to explicit checkpoints.
+			const allowDirtyUnknownViewportMutation = allowUnknownViewportMutation && !eagerEraseScrollbackRisk;
 			if (
 				this.#nativeScrollbackDirty &&
 				!isMultiplexerSession() &&
-				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowDirtyUnknownViewportMutation)
 			) {
 				return { kind: "overlayRebuild" };
 			}
@@ -1759,12 +1765,19 @@ export class TUI extends Container {
 			this.#streamingHighWater = 0;
 		}
 
-		if (
-			this.#nativeScrollbackDirty &&
-			!isMultiplexerSession() &&
-			this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), allowUnknownViewportMutation)
-		) {
-			return { kind: "historyRebuild" };
+		if (this.#nativeScrollbackDirty && !isMultiplexerSession()) {
+			// A dirty flag means older native history is stale; it is not required to
+			// make the current focused-input frame correct. On ED3-risk macOS/POSIX
+			// terminals with an unobservable viewport, ignore focused-input unknown
+			// opt-ins so Up/Down selector moves do not become ED3 clears plus full
+			// transcript replays. Non-ED3-risk POSIX terminals keep their safe
+			// direct-input/IME/autocomplete opt-in.
+			const allowDirtyUnknownViewportMutation = allowUnknownViewportMutation && !eagerEraseScrollbackRisk;
+			if (
+				this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), allowDirtyUnknownViewportMutation)
+			) {
+				return { kind: "historyRebuild" };
+			}
 		}
 
 		const diff = this.#diffLines(newLines);

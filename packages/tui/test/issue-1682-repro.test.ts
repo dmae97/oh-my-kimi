@@ -229,7 +229,7 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 		});
 	});
 
-	it("treats focused keyboard input as a user-input opt-in after an ED3-risk shrink defers", async () => {
+	it("treats focused keyboard input as a non-destructive repaint after an ED3-risk shrink defers", async () => {
 		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
 			await withTerminalRisk(true, async () => {
 				const term = new VirtualTerminal(40, 10);
@@ -258,8 +258,47 @@ describe("issue #1682: TUI eager scrollback rebuild", () => {
 					await settle(term);
 
 					expect(term.getViewport().map(line => line.trim())).toContain("prompt> x");
-					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(eraseScrollbackCount(writes)).toBe(0);
 					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+	});
+
+	it("preserves focused-input dirty scrollback rebuilds on non-ED3-risk terminals", async () => {
+		await withEnvPatch(CLEAR_MULTIPLEXER_ENV, async () => {
+			await withTerminalRisk(false, async () => {
+				const term = new VirtualTerminal(40, 6);
+				overrideProbe(term, false);
+				const tui = new TUI(term);
+				const transcript = new LineList(Array.from({ length: 12 }, (_value, index) => `init-${index}`));
+				const prompt = new PromptInput();
+				tui.addChild(transcript);
+				tui.addChild(prompt);
+				tui.setFocus(prompt);
+
+				try {
+					tui.start();
+					await settle(term);
+					const writes = capture(term);
+
+					transcript.setLines([
+						"init-0 edited",
+						...Array.from({ length: 11 }, (_value, index) => `init-${index + 1}`),
+					]);
+					tui.requestRender();
+					await settle(term);
+
+					expect(eraseScrollbackCount(writes)).toBe(0);
+					overrideProbe(term, undefined);
+
+					term.sendInput("x");
+					await settle(term);
+
+					expect(term.getViewport().map(line => line.trim())).toContain("prompt> x");
+					expect(eraseScrollbackCount(writes)).toBe(1);
 				} finally {
 					tui.stop();
 				}
