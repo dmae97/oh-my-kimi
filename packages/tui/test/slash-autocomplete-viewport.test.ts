@@ -128,6 +128,22 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			expect(editor.getText()).toBe("/st");
 			expect(viewport).toContain("/st");
 			expect(viewport).not.toContain("/s\n");
+			expect(term.getScrollBuffer()).toEqual([
+				"chat-0",
+				"chat-1",
+				"chat-2",
+				"chat-3",
+				"chat-4",
+				"chat-5",
+				"chat-6",
+				"+--------------------------------------+",
+				"+- /st|                               -+",
+				"> status",
+				"  stats",
+				"  stop",
+				"",
+				"",
+			]);
 
 			term.sendInput("\r");
 			await settle(term);
@@ -136,6 +152,22 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			expect(editor.getText()).toBe("");
 			expect(viewport).not.toContain("status");
 			expect(viewport).not.toContain("/st");
+			expect(term.getScrollBuffer()).toEqual([
+				"chat-0",
+				"chat-1",
+				"chat-2",
+				"chat-3",
+				"chat-4",
+				"chat-5",
+				"chat-6",
+				"+--------------------------------------+",
+				"+- |                                  -+",
+				"",
+				"",
+				"",
+				"",
+				"",
+			]);
 		} finally {
 			tui?.stop();
 			setTerminalEagerEraseScrollbackRisk(originalRisk);

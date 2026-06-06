@@ -1837,21 +1837,26 @@ export class TUI extends Container {
 			//
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			// ED3-risk terminals with an unobservable viewport cannot safely clear
-			// saved lines. Direct user-input frames (autocomplete/IME) are still
-			// allowed to repaint the live viewport in place: the user action pins the
-			// host to the tail, and deferring the shrink leaves stale autocomplete rows
-			// on screen until a later checkpoint. Active eager streaming uses the same
-			// non-destructive repaint so the live tail keeps moving. Native history
-			// stays dirty and reconciles at the next checkpoint. With neither a direct
-			// input opt-in nor active eager streaming, the reader may be scrolled; even
-			// a padded shrink repaint can move ED3-risk unknown host scrollback
-			// (WSL/Ghostty-style), so defer completely rather than repainting over their
-			// history.
+			// saved lines. Direct user-input frames (autocomplete/IME) may still
+			// repaint the live viewport: the user action pins the host to the tail, and
+			// emitting zero bytes leaves stale autocomplete rows on screen until a later
+			// checkpoint. When the changed rows are at or below the previous viewport
+			// top, keep the old bottom anchor by padding the frame to its previous
+			// length; that clears stale popup rows without re-exposing rows already
+			// committed to native history. If an offscreen edit shifted rows above the
+			// viewport, padding would repaint the wrong seam, so use a viewport repaint
+			// for liveness and keep history dirty. Active eager streaming also uses a
+			// viewport repaint so the live tail keeps moving. With neither direct input
+			// nor active eager streaming, the reader may be scrolled, so defer
+			// completely rather than repainting over their history.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				return allowUnknownViewportMutation || this.#eagerNativeScrollbackRebuild
-					? { kind: "viewportRepaint" }
-					: { kind: "deferredMutation" };
+				if (allowUnknownViewportMutation) {
+					return diff.firstChanged < prevViewportTop
+						? { kind: "viewportRepaint" }
+						: { kind: "deferredShrink", paddedLength: this.#previousLines.length };
+				}
+				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. `deferredShrink` is
@@ -1962,21 +1967,30 @@ export class TUI extends Container {
 		const contentGrew = newLines.length > this.#previousLines.length;
 		const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
 		const structuralMutation = newLines.length !== this.#previousLines.length || diff.firstChanged < prevViewportTop;
-		if (pureAppend && contentGrew && this.#previousLines.length > height && !isMultiplexerSession()) {
+		if (pureAppend && contentGrew && this.#previousLines.length >= height && !isMultiplexerSession()) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
+			if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
+				this.#markNativeScrollbackDirty();
+				return { kind: "deferredMutation" };
+			}
+			if (nativeViewportAtBottom === undefined && allowUnknownViewportMutation) {
+				// Direct input can grow transient live UI (autocomplete/IME/editor
+				// wraps) while the previous frame already touched the viewport bottom.
+				// A diff append would `\r\n`-scroll those transient rows into native
+				// history, and a later popup shrink would duplicate the stable prefix at
+				// the scrollback seam. Repaint the live viewport in place instead; the
+				// dirty checkpoint owns native-history reconciliation.
+				this.#markNativeScrollbackDirty();
+				return { kind: "viewportRepaint" };
+			}
 			if (this.#nativeViewportIsScrolled(nativeViewportAtBottom, allowUnknownViewportMutation)) {
 				this.#markNativeScrollbackDirty();
-				// Confirmed scrolled (probe returned `false`): the reader is parked in
-				// scrollback and writing the live frame is wasted bytes — defer until
-				// the next checkpoint reconciles. Unknown viewport (e.g. native Windows
-				// Terminal where the probe cannot see WT host scrollback) is a
-				// different case: a no-op there freezes the editor on the keystroke
-				// that grows `lines.length` past the viewport (the wrap keystroke).
-				// Fall through to a non-destructive viewport repaint instead so the
-				// live UI keeps updating without yanking a possibly-scrolled reader.
-				if (this.#nativeViewportIsKnownScrolled(nativeViewportAtBottom)) {
-					return { kind: "deferredMutation" };
-				}
+				// Unknown viewport (e.g. native Windows Terminal where the probe cannot
+				// see WT host scrollback) is a different case: a no-op there freezes the
+				// editor on the keystroke that grows `lines.length` past the viewport
+				// (the wrap keystroke). Fall through to a non-destructive viewport
+				// repaint instead so the live UI keeps updating without yanking a
+				// possibly-scrolled reader.
 				return { kind: "viewportRepaint" };
 			}
 		}
