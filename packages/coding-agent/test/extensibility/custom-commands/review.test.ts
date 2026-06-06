@@ -206,6 +206,7 @@ describe("ReviewCommand", () => {
 			const promptText = result!;
 			expect(promptText).toContain("src/workspace.ts");
 			expect(promptText).toContain("+1/-1");
+			expect(promptText).toContain("MAY read full file context as needed via `read`");
 			expect(jjDiffSpy).toHaveBeenCalledWith(dir);
 			expect(gitStatusSpy).not.toHaveBeenCalled();
 			expect(gitDiffSpy).not.toHaveBeenCalled();
@@ -269,6 +270,21 @@ describe("ReviewCommand", () => {
 			expect(result!).toContain("PR owner/repo#123");
 			expect(diffSpy).toHaveBeenCalledWith({ cwd: dir, repo: "owner/repo", number: 123 });
 		}
+	});
+
+	it("prevents local file reads for PR URL reviews", async () => {
+		const dir = await createTempDir();
+		spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
+		const ctx = { hasUI: false } as unknown as HookCommandContext;
+
+		const result = await command.execute(["https://github.com/owner/repo/pull/123"], ctx);
+
+		expect(result).toBeDefined();
+		expect(result!).toContain("MUST NOT read local workspace files for PR file context");
+		expect(result!).toContain("`pr://owner/repo/123/diff/all`");
+		expect(result!).toContain("per-file `pr://owner/repo/123/diff/<index>`");
+		expect(result!).not.toContain("MAY read full file context as needed via `read`");
 	});
 
 	it("uses PR diff URLs for omitted large PR diff instructions", async () => {

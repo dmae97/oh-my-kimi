@@ -224,6 +224,7 @@ function getDiffPreview(hunks: string, maxLines: number): string {
 const MAX_DIFF_CHARS = 50_000; // Don't include diff above this
 const MAX_FILES_FOR_INLINE_DIFF = 20; // Don't include diff if more files than this
 const DEFAULT_LARGE_DIFF_INSTRUCTION = "MUST run `git diff`/`git show` for assigned files";
+const DEFAULT_CONTEXT_INSTRUCTION = "MAY read full file context as needed via `read`";
 const GIT_UNCOMMITTED_DIFF_INSTRUCTION =
 	"MUST run both `git diff -- <path>` and `git diff --cached -- <path>` for assigned files";
 const JJ_UNCOMMITTED_DIFF_INSTRUCTION = "MUST run `jj --ignore-working-copy diff --git -- <path>` for assigned files";
@@ -235,7 +236,7 @@ function buildReviewPrompt(
 	mode: string,
 	stats: DiffStats,
 	rawDiff: string,
-	options: { additionalInstructions?: string; diffInstruction?: string } = {},
+	options: { additionalInstructions?: string; diffInstruction?: string; contextInstruction?: string } = {},
 ): string {
 	const agentCount = getRecommendedAgentCount(stats);
 	const skipDiff = rawDiff.length > MAX_DIFF_CHARS || stats.files.length > MAX_FILES_FOR_INLINE_DIFF;
@@ -262,6 +263,7 @@ function buildReviewPrompt(
 		linesPerFile,
 		additionalInstructions: options.additionalInstructions,
 		diffInstruction: options.diffInstruction ?? DEFAULT_LARGE_DIFF_INSTRUCTION,
+		contextInstruction: options.contextInstruction ?? DEFAULT_CONTEXT_INSTRUCTION,
 	});
 }
 
@@ -335,6 +337,11 @@ function buildPrLargeDiffInstruction(ref: ReviewPrRef): string {
 	return `MUST read assigned PR file diffs from \`${prDiffUrl}/all\` or per-file \`${prDiffUrl}/<index>\`; NEVER use local \`git diff\`/\`git show\` for PR diff content`;
 }
 
+function buildPrContextInstruction(ref: ReviewPrRef): string {
+	const prDiffUrl = `pr://${ref.repo}/${ref.number}/diff`;
+	return `MUST NOT read local workspace files for PR file context; use the fetched PR diff and \`${prDiffUrl}/all\` or per-file \`${prDiffUrl}/<index>\` only`;
+}
+
 function extractReviewPrRefFromArgs(args: string[]): ParsedReviewArgs {
 	let prRef: ReviewPrRef | undefined;
 	let prRefIndex = -1;
@@ -365,7 +372,7 @@ function buildReviewPromptFromDiff(
 	diffText: string,
 	extraInstructions: string | undefined,
 	emptyMessage: string,
-	options: { diffInstruction?: string; filteredMessage?: string } = {},
+	options: { diffInstruction?: string; filteredMessage?: string; contextInstruction?: string } = {},
 ): string | undefined {
 	if (!diffText.trim()) {
 		if (ctx.hasUI) ctx.ui.notify(emptyMessage, "warning");
@@ -382,6 +389,7 @@ function buildReviewPromptFromDiff(
 	return buildReviewPrompt(mode, stats, diffText, {
 		additionalInstructions: extraInstructions,
 		diffInstruction: options.diffInstruction,
+		contextInstruction: options.contextInstruction,
 	});
 }
 
@@ -411,7 +419,7 @@ async function buildPrReviewPrompt(
 		diffText,
 		extraInstructions || undefined,
 		`PR ${ref.repo}#${ref.number} has no diff content available`,
-		{ diffInstruction: buildPrLargeDiffInstruction(ref) },
+		{ diffInstruction: buildPrLargeDiffInstruction(ref), contextInstruction: buildPrContextInstruction(ref) },
 	);
 	if (promptText !== undefined || ctx.hasUI) return promptText;
 	return `Unable to review PR ${ref.repo}#${ref.number}: no diff content available.`;
