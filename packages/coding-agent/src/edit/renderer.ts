@@ -233,19 +233,22 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 	return preview.trimEnd();
 }
 
-function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
+function formatStreamingDiff(
+	diff: string,
+	rawPath: string,
+	uiTheme: Theme,
+	expanded: boolean,
+	label = "streaming",
+): string {
 	if (!diff) return "";
-	// "Cursor" tail window: pin the last EDIT_STREAMING_PREVIEW_LINES rows to the
-	// bottom of the diff so freshly streamed changes stay on screen, and accept
-	// the trailing rows "from the back" once the diff outgrows the window. The
-	// whole-file diff is recomputed on every streamed chunk and its Myers
-	// alignment is not monotonic in payload length, so a hunk-aware window that
-	// kept whole change segments gained and lost rows tick to tick — the box
-	// stuttered, and the earlier high-water fix traded that for a half-empty
-	// rectangle. A strict fixed-height window keeps the box steady and always
-	// full of real diff context instead of blank padding.
+	// Collapsed uses a "Cursor" tail window: pin the last
+	// EDIT_STREAMING_PREVIEW_LINES rows to the bottom so freshly streamed changes
+	// stay on screen. The whole-file diff is recomputed on every streamed chunk
+	// and its Myers alignment is not monotonic in payload length, so a hunk-aware
+	// window stutters as rows move between hunks. Expanded deliberately lifts that
+	// cap for the approval-time full view.
 	const allLines = diff.replace(/\n+$/u, "").split("\n");
-	const hiddenLines = Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
+	const hiddenLines = expanded ? 0 : Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
 	const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
 	let text = "\n\n";
 	if (hiddenLines > 0) {
@@ -256,7 +259,7 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 		text += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
 	}
 	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
-	text += uiTheme.fg("dim", `\n(${label})`);
+	if (!expanded || label !== "preview") text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
 }
 
@@ -268,7 +271,7 @@ function formatMetadataLine(lineCount: number | null, language: string | undefin
 	return uiTheme.fg("dim", `${icon}`);
 }
 
-function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme): string {
+function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme, expanded: boolean): string {
 	const parts: string[] = [];
 	for (const preview of previews) {
 		if (!preview.diff && !preview.error) continue;
@@ -278,7 +281,7 @@ function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: T
 			continue;
 		}
 		if (preview.diff) {
-			parts.push(`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, "preview")}`);
+			parts.push(`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, expanded, "preview")}`);
 		}
 	}
 	return parts.join("");
@@ -289,16 +292,17 @@ function getCallPreview(
 	rawPath: string,
 	uiTheme: Theme,
 	renderContext: EditRenderContext | undefined,
+	expanded: boolean,
 ): string {
 	const multi = renderContext?.perFileDiffPreview;
 	if (multi && multi.length > 1 && multi.some(p => p.diff || p.error)) {
-		return formatMultiFileStreamingDiff(multi, uiTheme);
+		return formatMultiFileStreamingDiff(multi, uiTheme, expanded);
 	}
 	if (args.previewDiff) {
-		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, "preview");
+		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, expanded, "preview");
 	}
 	if (args.diff && args.op) {
-		return formatStreamingDiff(args.diff, rawPath, uiTheme);
+		return formatStreamingDiff(args.diff, rawPath, uiTheme, expanded);
 	}
 	if (args.diff) {
 		return renderPlainTextPreview(args.diff, uiTheme, rawPath);
@@ -481,7 +485,7 @@ export const editToolRenderer = {
 		if (fileCount > 1) {
 			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 		}
-		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext);
+		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded);
 		if (applyPatchSummary?.error) {
 			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), CALL_TEXT_PREVIEW_WIDTH))}`;
 		}
