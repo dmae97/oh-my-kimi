@@ -952,6 +952,21 @@ describe("normalizeSchemaForCCA", () => {
 			properties: {},
 		});
 	});
+
+	it("strips array-only keys when mixed-type collapse picks a non-array type", () => {
+		// Regression: anyOf [{type:"string"}, {type:"array", items:{type:"string"}}]
+		// collapsed to {type:"string", items:{type:"string"}} which is invalid.
+		// The fix filters mergedVariantFields against the chosen type's allowed keys.
+		const normalized = normalizeSchemaForCCA({
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "pr number, url, or branch",
+		});
+
+		expect(normalized).toEqual({
+			type: "string",
+			description: "pr number, url, or branch",
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------

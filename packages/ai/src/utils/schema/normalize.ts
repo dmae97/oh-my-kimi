@@ -505,8 +505,16 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 	const nextSchema = copySchemaWithout(schema, combiner);
 	const nonNullTypes = variantTypes.filter(t => t !== "null");
 	nextSchema.type = nonNullTypes[0] ?? variantTypes[0];
+	const chosenTypeAllowedKeys = CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS[nextSchema.type as string] ?? {};
 	for (const key in mergedVariantFields) {
 		if (!Object.hasOwn(mergedVariantFields, key)) continue;
+		// Drop type-specific keys that don't belong to the chosen type
+		if (
+			!Object.hasOwn(chosenTypeAllowedKeys, key) &&
+			!Object.hasOwn(CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, key)
+		) {
+			continue;
+		}
 		const value = mergedVariantFields[key];
 		const existingValue = nextSchema[key];
 		if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
