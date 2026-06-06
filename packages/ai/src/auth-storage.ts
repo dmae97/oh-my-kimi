@@ -36,6 +36,8 @@ import { loginOpenAICodexDevice } from "./utils/oauth/openai-codex";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
 import { loginXiaomi, loginXiaomiTokenPlan } from "./utils/oauth/xiaomi";
 
+const USAGE_RANKING_METRIC_EPSILON = 1e-9;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -604,6 +606,14 @@ function getOpenAICodexPlanPriority(report: UsageReport | null): number {
 
 function hasOpenAICodexProPlan(report: UsageReport | null): boolean {
 	return getUsagePlanType(report)?.includes("pro") === true;
+}
+
+function compareUsageRankingMetric(left: number, right: number): number {
+	if (left === right) return 0;
+	if (!Number.isFinite(left) || !Number.isFinite(right)) return left < right ? -1 : 1;
+	const delta = left - right;
+	const tolerance = Math.max(USAGE_RANKING_METRIC_EPSILON, Math.max(Math.abs(left), Math.abs(right)) * 0.000001);
+	return Math.abs(delta) <= tolerance ? 0 : delta;
 }
 
 function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefined {
@@ -2796,12 +2806,14 @@ export class AuthStorage {
 			return left.planPriority - right.planPriority;
 		}
 		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
-		if (left.secondaryDrainRate !== right.secondaryDrainRate) {
-			return left.secondaryDrainRate - right.secondaryDrainRate;
-		}
-		if (left.secondaryUsed !== right.secondaryUsed) return left.secondaryUsed - right.secondaryUsed;
-		if (left.primaryDrainRate !== right.primaryDrainRate) return left.primaryDrainRate - right.primaryDrainRate;
-		if (left.primaryUsed !== right.primaryUsed) return left.primaryUsed - right.primaryUsed;
+		let metric = compareUsageRankingMetric(left.secondaryDrainRate, right.secondaryDrainRate);
+		if (metric !== 0) return metric;
+		metric = compareUsageRankingMetric(left.secondaryUsed, right.secondaryUsed);
+		if (metric !== 0) return metric;
+		metric = compareUsageRankingMetric(left.primaryDrainRate, right.primaryDrainRate);
+		if (metric !== 0) return metric;
+		metric = compareUsageRankingMetric(left.primaryUsed, right.primaryUsed);
+		if (metric !== 0) return metric;
 		return 0;
 	}
 
