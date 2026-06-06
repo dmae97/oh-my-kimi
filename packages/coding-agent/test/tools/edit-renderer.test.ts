@@ -53,6 +53,36 @@ describe("editToolRenderer", () => {
 		expect(rendered).toContain("packages/coding-agent/src/edit/renderer.ts");
 	});
 
+	it("lifts the streaming diff tail window when expanded", async () => {
+		const uiTheme = await getUiTheme();
+		const diff = Array.from({ length: 20 }, (_, index) =>
+			index === 0 ? "-head-line-1" : `+tail-line-${index + 1}`,
+		).join("\n");
+		const renderPreview = (expanded: boolean): string =>
+			Bun.stripANSI(
+				editToolRenderer
+					.renderCall(
+						{ file_path: "/tmp/preview.ts", previewDiff: diff },
+						{ expanded, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "replace" } },
+						uiTheme,
+					)
+					.render(200)
+					.join("\n"),
+			);
+
+		const collapsed = renderPreview(false);
+		expect(collapsed).toContain("tail-line-20");
+		expect(collapsed).not.toContain("head-line-1");
+		expect(collapsed).toContain("more lines above");
+		expect(collapsed).toContain("(preview)");
+
+		const expanded = renderPreview(true);
+		expect(expanded).toContain("head-line-1");
+		expect(expanded).toContain("tail-line-20");
+		expect(expanded).not.toContain("more lines above");
+		expect(expanded).not.toContain("(preview)");
+	});
+
 	it("uses hashline input headers for streaming call path without apply_patch errors", async () => {
 		const uiTheme = await getUiTheme();
 		const component = editToolRenderer.renderCall(
