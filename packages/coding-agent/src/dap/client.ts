@@ -1,4 +1,5 @@
-import { logger, ptree } from "@oh-my-pi/pi-utils";
+import * as fs from "node:fs/promises";
+import { isEnoent, logger, ptree } from "@oh-my-pi/pi-utils";
 import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 import { ToolAbortError } from "../tools/tool-errors";
 import type {
@@ -165,16 +166,8 @@ export class DapClient {
 			detached: true,
 		});
 
-		// Wait for the socket file to appear (dlv needs to start listening)
 		await waitForCondition(
-			() => {
-				try {
-					Bun.file(socketPath).size;
-					return true;
-				} catch {
-					return false;
-				}
-			},
+			() => isUnixSocketReady(socketPath),
 			10_000,
 			proc,
 		);
@@ -553,15 +546,24 @@ export class DapClient {
 	}
 }
 
+async function isUnixSocketReady(socketPath: string): Promise<boolean> {
+	try {
+		return (await fs.stat(socketPath)).isSocket();
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
+}
+
 /** Poll a condition until it returns true, or timeout/process exit. */
 async function waitForCondition(
-	check: () => boolean,
+	check: () => boolean | Promise<boolean>,
 	timeoutMs: number,
 	proc: { exitCode: number | null },
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		if (check()) return;
+		if (await check()) return;
 		if (proc.exitCode !== null) {
 			throw new Error("Adapter process exited before socket was ready");
 		}

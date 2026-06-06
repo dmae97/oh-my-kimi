@@ -22,6 +22,32 @@ const TEST_ADAPTER: DapResolvedAdapter = {
 	connectMode: "stdio",
 };
 
+const DELAYED_UNIX_SOCKET_ADAPTER = `
+const listenPrefix = "--listen=unix:";
+const listenArg = process.argv.find(arg => arg.startsWith(listenPrefix));
+if (!listenArg) {
+	throw new Error("missing --listen=unix argument");
+}
+const socketPath = listenArg.slice(listenPrefix.length);
+let server;
+process.on("SIGTERM", () => {
+	server?.stop();
+	process.exit(0);
+});
+await Bun.sleep(100);
+server = Bun.listen({
+	unix: socketPath,
+	socket: {
+		open() {},
+		data() {},
+		close() {},
+		error() {},
+	},
+});
+await Bun.sleep(2_000);
+server.stop();
+`;
+
 type DapEventHandler = (body: unknown, event: DapEventMessage) => void | Promise<void>;
 
 class FakeDapClient {
@@ -285,6 +311,29 @@ describe("DAP launch failure handling", () => {
 		// regression-prone case is omitting the launch line entirely.
 		expect(message).toContain("launch: 'C:\\repo\\program' is not a valid executable");
 		expect(message).toContain("configurationDone: Expected process to be stopped.");
+	});
+
+	it("waits for delayed Unix socket adapters before connecting on Linux", async () => {
+		if (process.platform !== "linux") return;
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-dlv-socket-"));
+		const adapterPath = path.join(cwd, "delayed-unix-socket-adapter.mjs");
+		await fs.writeFile(adapterPath, DELAYED_UNIX_SOCKET_ADAPTER);
+		const adapter: DapResolvedAdapter = {
+			...TEST_ADAPTER,
+			name: "dlv",
+			command: process.execPath,
+			args: [adapterPath],
+			resolvedCommand: process.execPath,
+			connectMode: "socket",
+		};
+		let client: DapClient | undefined;
+		try {
+			client = await DapClient.spawn({ adapter, cwd });
+			expect(client.isAlive()).toBe(true);
+		} finally {
+			await client?.dispose();
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
 	});
 });
 
