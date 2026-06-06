@@ -304,6 +304,32 @@ const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
 const MAX_GLOB_DIAGNOSTIC_TARGETS = 20;
 const WORKSPACE_SYMBOL_LIMIT = 200;
+const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
+	"definition",
+	"type_definition",
+	"implementation",
+	"references",
+	"rename",
+	"hover",
+]);
+
+const RUST_WORKSPACE_MARKERS = ["Cargo.toml", "rust-analyzer.toml"] as const;
+
+function hasRustWorkspaceAncestor(filePath: string): boolean {
+	let dir = path.dirname(filePath);
+	while (true) {
+		for (const marker of RUST_WORKSPACE_MARKERS) {
+			if (fs.existsSync(path.join(dir, marker))) {
+				return true;
+			}
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return false;
+		}
+		dir = parent;
+	}
+}
 
 function limitDiagnosticMessages(messages: string[]): string[] {
 	if (messages.length <= DIAGNOSTIC_MESSAGE_LIMIT) {
@@ -1940,9 +1966,20 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		try {
 			const client = await getOrCreateClient(serverConfig, this.session.cwd);
 			const targetFile = resolvedFile;
+			const isRustAnalyzerServer =
+				serverName === "rust-analyzer" ||
+				path.basename(serverConfig.command) === "rust-analyzer" ||
+				(serverConfig.resolvedCommand ? path.basename(serverConfig.resolvedCommand) === "rust-analyzer" : false);
+			const needsProjectIndex =
+				targetFile !== null && PROJECT_INDEXED_ACTIONS.has(action) && isProjectAwareLspServer(serverConfig);
+			const rustWorkspaceWait =
+				needsProjectIndex && isRustAnalyzerServer && targetFile !== null && hasRustWorkspaceAncestor(targetFile);
 
 			if (targetFile) {
 				await ensureFileOpen(client, targetFile, signal);
+			}
+			if (rustWorkspaceWait) {
+				await waitForProjectLoaded(client, signal);
 			}
 
 			// For project-aware servers, references/rename/definition without a `symbol`
@@ -1968,10 +2005,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 			let output: string;
 
-			// Wait for project loading to complete before cross-file operations
-			// to ensure the server has indexed all project files.
-			const crossFileActions = new Set(["definition", "type_definition", "implementation", "references", "rename"]);
-			if (crossFileActions.has(action)) {
+			if (needsProjectIndex && !isRustAnalyzerServer) {
 				await waitForProjectLoaded(client, signal);
 			}
 

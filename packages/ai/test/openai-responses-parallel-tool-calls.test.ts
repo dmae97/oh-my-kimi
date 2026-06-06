@@ -202,4 +202,62 @@ describe("processResponsesStream: parallel function_call items", () => {
 		expect(byCallId.get("call_a")?.toolCall.arguments).toEqual({ path: "test.txt" });
 		expect(byCallId.get("call_b")?.toolCall.arguments).toEqual({ path: "test.md" });
 	});
+
+	test("routes identifierless final argument events in item order", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		const argsA = JSON.stringify({ command: "printf a" });
+		const argsB = JSON.stringify({ command: "printf b" });
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.function_call_arguments.done",
+					arguments: argsA,
+				},
+				{
+					type: "response.function_call_arguments.done",
+					arguments: argsB,
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "bash", arguments: "" },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const [blockA, blockB] = output.content;
+		if (blockA?.type !== "toolCall" || blockB?.type !== "toolCall") throw new Error("expected toolCalls");
+		expect(blockA.arguments).toEqual({ command: "printf a" });
+		expect(blockB.arguments).toEqual({ command: "printf b" });
+
+		const ends = emitted.filter(e => e.type === "toolcall_end") as Array<{
+			toolCall: { id: string; arguments: Record<string, unknown> };
+		}>;
+		expect(ends).toHaveLength(2);
+		const byCallId = new Map(ends.map(e => [e.toolCall.id.split("|")[0], e]));
+		expect(byCallId.get("call_a")?.toolCall.arguments).toEqual({ command: "printf a" });
+		expect(byCallId.get("call_b")?.toolCall.arguments).toEqual({ command: "printf b" });
+	});
 });

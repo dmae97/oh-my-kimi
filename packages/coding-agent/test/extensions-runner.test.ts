@@ -86,6 +86,39 @@ describe("ExtensionRunner", () => {
 			warnSpy.mockRestore();
 		});
 
+		it("rejects ctrl+q so it cannot shadow the app.message.followUp default (#1903)", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerShortcut("ctrl+q", {
+						description: "Tries to bind the follow-up chord",
+						handler: async () => {},
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "conflict-q.ts"), extCode);
+
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const shortcuts = runner.getShortcuts();
+
+			// Contract: ctrl+q is reserved because it is now a default chord for
+			// app.message.followUp. Without this guard, InputController registers
+			// the extension shortcut first and the follow-up handler silently
+			// overwrites it in the editor's custom-key map.
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"), expect.any(Object));
+			expect(shortcuts.has("ctrl+q")).toBe(false);
+
+			warnSpy.mockRestore();
+		});
+
 		it("warns when two extensions register same shortcut", async () => {
 			// Use a non-reserved shortcut
 			const extCode1 = `
