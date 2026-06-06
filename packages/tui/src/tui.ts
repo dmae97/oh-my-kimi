@@ -1828,18 +1828,21 @@ export class TUI extends Container {
 			//
 			const paddedViewportTop = Math.max(0, this.#previousLines.length - height);
 			// ED3-risk terminals with an unobservable viewport cannot safely clear
-			// saved lines. During an active eager streaming turn the user follows the
-			// live tail, so paint the shrink's bottom-anchored viewport in place
-			// whether it still overflows OR now fits — otherwise the UI freezes on
-			// stale rows until the next input even though the frame has a fresh bottom
-			// viewport to show (issues #1682, foreground-stream fidelity on collapse).
-			// Native history stays dirty and reconciles at the next checkpoint. With no
-			// active eager turn the reader may be scrolled; even a padded shrink repaint
-			// can move ED3-risk unknown host scrollback (WSL/Ghostty-style), so defer
-			// completely rather than repainting over their history.
+			// saved lines. Direct user-input frames (autocomplete/IME) are still
+			// allowed to repaint the live viewport in place: the user action pins the
+			// host to the tail, and deferring the shrink leaves stale autocomplete rows
+			// on screen until a later checkpoint. Active eager streaming uses the same
+			// non-destructive repaint so the live tail keeps moving. Native history
+			// stays dirty and reconciles at the next checkpoint. With neither a direct
+			// input opt-in nor active eager streaming, the reader may be scrolled; even
+			// a padded shrink repaint can move ED3-risk unknown host scrollback
+			// (WSL/Ghostty-style), so defer completely rather than repainting over their
+			// history.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				return this.#eagerNativeScrollbackRebuild ? { kind: "viewportRepaint" } : { kind: "deferredMutation" };
+				return allowUnknownViewportMutation || this.#eagerNativeScrollbackRebuild
+					? { kind: "viewportRepaint" }
+					: { kind: "deferredMutation" };
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. `deferredShrink` is
