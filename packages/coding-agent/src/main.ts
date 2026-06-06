@@ -40,7 +40,6 @@ import {
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
-import { exportFromFile } from "./export/html";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
@@ -784,6 +783,7 @@ export async function runRootCommand(
 		let result: string;
 		try {
 			const outputPath = parsedArgs.messages.length > 0 ? parsedArgs.messages[0] : undefined;
+			const { exportFromFile } = await import("./export/html");
 			result = await exportFromFile(parsedArgs.export, outputPath);
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
@@ -977,7 +977,7 @@ export async function runRootCommand(
 	// Both are no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset. An empty config
 	// is enough to enable telemetry — content capture is governed by the
 	// standard OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT env var.
-	initTelemetryExport();
+	await initTelemetryExport();
 	if (isTelemetryExportEnabled()) {
 		sessionOptions.telemetry = {};
 	}

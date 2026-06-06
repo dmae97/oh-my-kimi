@@ -13,7 +13,6 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
-import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
 	diffMentalModelContent,
@@ -131,6 +130,7 @@ export class CommandController {
 		}
 
 		try {
+			const { loadCustomShare } = await import("../../export/custom-share");
 			const customShare = await loadCustomShare();
 			if (customShare) {
 				const loader = new BorderedLoader(this.ctx.ui, theme, "Sharing...");
@@ -465,7 +465,7 @@ export class CommandController {
 		const argumentText = text.slice(7).trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
 		const agentDir = this.ctx.settings.getAgentDir();
-		const backend = resolveMemoryBackend(this.ctx.settings);
+		const backend = await resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
 			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings, this.ctx.session);

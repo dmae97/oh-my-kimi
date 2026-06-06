@@ -128,7 +128,6 @@ import {
 } from "../eval/py/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
-import { exportSessionToHtml } from "../export/html";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
@@ -2967,14 +2966,14 @@ export class AgentSession {
 	}
 
 	#rekeyHindsightMemoryForCurrentSessionId(): void {
-		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
+		if (this.settings.get("memory.backend") !== "hindsight") return;
 		const sid = this.agent.sessionId;
 		if (!sid) return;
 		this.getHindsightSessionState()?.setSessionId(sid);
 	}
 
 	#rekeyMnemopiMemoryForCurrentSessionId(): void {
-		if (resolveMemoryBackend(this.settings).id !== "mnemopi") return;
+		if (this.settings.get("memory.backend") !== "mnemopi") return;
 		const sid = this.agent.sessionId;
 		if (!sid) return;
 		this.getMnemopiSessionState()?.setSessionId(sid);
@@ -2982,14 +2981,14 @@ export class AgentSession {
 
 	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
 	#resetHindsightConversationTrackingIfHindsight(): void {
-		if (resolveMemoryBackend(this.settings).id !== "hindsight") return;
+		if (this.settings.get("memory.backend") !== "hindsight") return;
 		const state = this.getHindsightSessionState();
 		if (!state || state.aliasOf) return;
 		state.resetConversationTracking();
 	}
 
 	#resetMnemopiConversationTrackingIfMnemopi(): void {
-		if (resolveMemoryBackend(this.settings).id !== "mnemopi") return;
+		if (this.settings.get("memory.backend") !== "mnemopi") return;
 		const state = this.getMnemopiSessionState();
 		if (!state || state.aliasOf) return;
 		state.resetConversationTracking();
@@ -3670,7 +3669,7 @@ export class AgentSession {
 	}
 
 	async #buildSystemPromptForAgentStart(promptText: string): Promise<string[]> {
-		const backend = resolveMemoryBackend(this.settings);
+		const backend = await resolveMemoryBackend(this.settings);
 		if (!backend.beforeAgentStartPrompt) return this.#baseSystemPrompt;
 
 		try {
@@ -6096,7 +6095,7 @@ export class AgentSession {
 		messagesToSummarize: AgentMessage[];
 		turnPrefixMessages: AgentMessage[];
 	}): Promise<string | undefined> {
-		const backend = resolveMemoryBackend(this.settings);
+		const backend = await resolveMemoryBackend(this.settings);
 		if (!backend.preCompactionContext) return undefined;
 		const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 		try {
@@ -9588,6 +9587,7 @@ export class AgentSession {
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
 		const themeName = getCurrentThemeName();
+		const { exportSessionToHtml } = await import("../export/html");
 		return exportSessionToHtml(this.sessionManager, this.state, { outputPath, themeName });
 	}
 

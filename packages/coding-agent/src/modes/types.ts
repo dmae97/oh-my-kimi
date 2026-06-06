@@ -269,7 +269,7 @@ export interface InteractiveModeContext {
 	handleSessionDeleteCommand(): Promise<void>;
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
-	showDebugSelector(): void;
+	showDebugSelector(): Promise<void>;
 	showSessionObserver(): void;
 	resetObserverRegistry(): void;
 

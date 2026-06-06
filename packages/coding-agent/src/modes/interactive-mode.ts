@@ -2844,8 +2844,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	showDebugSelector(): void {
-		this.#selectorController.showDebugSelector();
+	async showDebugSelector(): Promise<void> {
+		await this.#selectorController.showDebugSelector();
 	}
 
 	showSessionObserver(): void {

@@ -771,7 +771,6 @@ function resolveCanonicalIdForModel(
 		return { id: claudeFamilyAlias, source: claudeFamilyAlias === model.id ? "bundled" : "heuristic" };
 	}
 
-
 	const heuristicCandidates = getHeuristicCanonicalCandidates(model.id, referenceData.officialIds);
 	const officialMatches = new Set<string>();
 	for (const candidate of heuristicCandidates) {

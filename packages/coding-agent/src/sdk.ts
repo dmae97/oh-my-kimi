@@ -36,7 +36,6 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
-import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
@@ -57,7 +56,6 @@ import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { defaultEvalSessionId } from "./eval/session-id";
-import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
 	type LoadedCustomCommand,
@@ -90,7 +88,7 @@ import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
 import { resolveMemoryBackend } from "./memory-backend";
-import { getMnemopiSessionState, type MnemopiSessionState } from "./mnemopi/state";
+import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -1150,6 +1148,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Discover rules and bucket them in one pass to avoid repeated scans over large rule sets.
 	const { ttsrManager, rulebookRules, alwaysApplyRules } = await logger.time("discoverTtsrRules", async () => {
+		const { TtsrManager } = await import("./export/ttsr");
 		const ttsrSettings = settings.getGroup("ttsr");
 		const ttsrManager = new TtsrManager(ttsrSettings);
 		const rulesResult =
@@ -1295,7 +1294,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
-			getMnemopiSessionState: () => getMnemopiSessionState(session),
+			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -1472,7 +1471,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
-		inlineExtensions.push(createAutoresearchExtension);
+		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
@@ -1607,9 +1606,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// `ExtensionToolWrapper` installed below is the only place the per-tool approval gate runs.
 		// A conditional runner means the approval system silently disappears for users with no
 		// extensions, contradicting non-yolo `tools.approvalMode` settings without feedback.
-		// (Today `createAutoresearchExtension` is unconditionally pushed below, so this scenario
-		// is unreachable; the unconditional construction makes that invariant explicit instead of
-		// implicit, so a future change to make autoresearch optional cannot silently re-open the hole.)
+		// (The builtin autoresearch extension is unconditionally loaded above, so this scenario
+		// is unreachable; unconditional runner construction keeps that invariant explicit and
+		// prevents future optional extensions from silently re-opening the hole.)
 		const extensionRunner: ExtensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
 			extensionsResult.runtime,
@@ -1749,7 +1748,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
-			const memoryBackend = resolveMemoryBackend(settings);
+			const memoryBackend = await resolveMemoryBackend(settings);
 			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
@@ -2267,19 +2266,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		logger.time("startMemoryStartupTask", () =>
-			Promise.resolve(
-				resolveMemoryBackend(settings).start({
-					session,
-					settings,
-					modelRegistry,
-					agentDir,
-					taskDepth,
-					parentHindsightSessionState: options.parentHindsightSessionState,
-					parentMnemopiSessionState: options.parentMnemopiSessionState,
-				}),
-			),
-		);
+		logger.time("startMemoryStartupTask", async () => {
+			const memoryBackend = await resolveMemoryBackend(settings);
+			await memoryBackend.start({
+				session,
+				settings,
+				modelRegistry,
+				agentDir,
+				taskDepth,
+				parentHindsightSessionState: options.parentHindsightSessionState,
+				parentMnemopiSessionState: options.parentMnemopiSessionState,
+			});
+		});
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
 		// Skip when reusing a parent's manager — the parent owns the callbacks.

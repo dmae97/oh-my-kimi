@@ -1,7 +1,7 @@
 /**
  * Memory backend abstraction.
  *
- * Backends are mutually exclusive — `resolveMemoryBackend(settings)` returns
+ * Backends are mutually exclusive — `await resolveMemoryBackend(settings)` resolves
  * exactly one. Implementations MUST be self-contained: they own the per-session
  * state they create in `start()` and tear it down on `clear()`.
  */

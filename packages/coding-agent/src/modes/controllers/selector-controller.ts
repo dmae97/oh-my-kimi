@@ -7,7 +7,6 @@ import { getAgentDbPath, getProjectDir, normalizePathForComparison } from "@oh-m
 import { getRoleInfo } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import { settings } from "../../config/settings";
-import { DebugSelectorComponent } from "../../debug";
 import { disableProvider, enableProvider } from "../../discovery";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -1080,7 +1079,8 @@ export class SelectorController {
 		});
 	}
 
-	showDebugSelector(): void {
+	async showDebugSelector(): Promise<void> {
+		const { DebugSelectorComponent } = await import("../../debug");
 		this.showSelector(done => {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
