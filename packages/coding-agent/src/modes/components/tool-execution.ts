@@ -171,7 +171,6 @@ let toolExecutionInstanceSeq = 0;
 export class ToolExecutionComponent extends Container {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
 	#contentText: Text; // For built-in tools (with its own padding/bg)
-	#leadingSpacer: Spacer; // Blank line above the content; collapsed for self-delimiting framed boxes
 	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
@@ -246,8 +245,7 @@ export class ToolExecutionComponent extends Container {
 		this.#cwd = cwd;
 		this.#args = args;
 
-		this.#leadingSpacer = new Spacer(1);
-		this.addChild(this.#leadingSpacer);
+		this.addChild(new Spacer(1));
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins
 		this.#contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
@@ -587,8 +585,6 @@ export class ToolExecutionComponent extends Container {
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
 		this.#renderState.spinnerFrame = this.#spinnerFrame;
-		// Self-delimiting framed boxes don't need the leading blank line for separation.
-		let hasFramedBlock = false;
 
 		// Check for custom tool rendering
 		if (this.#tool && (this.#tool.renderCall || this.#tool.renderResult)) {
@@ -667,7 +663,6 @@ export class ToolExecutionComponent extends Container {
 				}
 			}
 			setBoxPaddingForFramedBlock(this.#contentBox, contentBoxHasFramedBlock);
-			hasFramedBlock = contentBoxHasFramedBlock;
 		} else if (this.#toolName in toolRenderers) {
 			// Built-in tools with renderers
 			const renderer = toolRenderers[this.#toolName];
@@ -711,7 +706,6 @@ export class ToolExecutionComponent extends Container {
 						if (resultComponent) {
 							const fileBoxHasFramedBlock = addBoxChild(fileBox, resultComponent);
 							setBoxPaddingForFramedBlock(fileBox, fileBoxHasFramedBlock);
-							if (fileBoxHasFramedBlock) hasFramedBlock = true;
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
@@ -795,15 +789,12 @@ export class ToolExecutionComponent extends Container {
 					}
 				}
 				setBoxPaddingForFramedBlock(this.#contentBox, contentBoxHasFramedBlock);
-				hasFramedBlock = contentBoxHasFramedBlock;
 			}
 		} else {
 			// Other built-in tools: use Text directly with caching
 			this.#contentText.setCustomBgFn(bgFn);
 			this.#contentText.setText(this.#formatToolExecution());
 		}
-
-		this.#leadingSpacer.setLines(hasFramedBlock ? 0 : 1);
 
 		// Handle images (same for both custom and built-in)
 		for (const img of this.#imageComponents) {

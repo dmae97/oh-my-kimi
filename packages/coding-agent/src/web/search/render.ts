@@ -15,23 +15,16 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	getDomain,
-	getPreviewLines,
 	PREVIEW_LIMITS,
-	TRUNCATE_LENGTHS,
+	replaceTabs,
 	truncateToWidth,
 } from "../../tools/render-utils";
-import { renderStatusLine, renderTreeList } from "../../tui";
+import { renderStatusLine, renderTreeList, urlHyperlink } from "../../tui";
 import { CachedOutputBlock, markFramedBlockComponent } from "../../tui/output-block";
 import { getSearchProviderLabel } from "./provider";
 import type { SearchResponse } from "./types";
 
-const MAX_COLLAPSED_ANSWER_LINES = PREVIEW_LIMITS.COLLAPSED_LINES;
-const MAX_SNIPPET_LINES = 2;
-const MAX_SNIPPET_LINE_LEN = TRUNCATE_LENGTHS.LINE;
 const MAX_COLLAPSED_ITEMS = PREVIEW_LIMITS.COLLAPSED_ITEMS;
-const MAX_QUERY_PREVIEW = 2;
-const MAX_QUERY_LEN = 90;
-const MAX_REQUEST_ID_LEN = 36;
 
 function renderFallbackText(contentText: string, expanded: boolean, theme: Theme): Component {
 	const lines = contentText.split("\n").filter(line => line.trim());
@@ -66,6 +59,21 @@ export interface SearchRenderDetails {
 	error?: string;
 }
 
+/** Render a web search failure as a framed error panel, matching the success layout. */
+function renderSearchErrorPanel(message: string, providerLabel: string | undefined, theme: Theme): Component {
+	const header = renderStatusLine({ icon: "error", title: "Web Search", description: providerLabel }, theme);
+	const body = theme.fg("error", `Error: ${replaceTabs(message)}`);
+	const outputBlock = new CachedOutputBlock();
+	return markFramedBlockComponent({
+		render(width: number): string[] {
+			return outputBlock.render({ header, state: "error", sections: [{ lines: [body] }], width }, theme);
+		},
+		invalidate() {
+			outputBlock.invalidate();
+		},
+	});
+}
+
 /** Render web search result with tree-based layout */
 export function renderSearchResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: SearchRenderDetails },
@@ -78,9 +86,12 @@ export function renderSearchResult(
 ): Component {
 	const details = result.details;
 
-	// Handle error case
+	// Handle error case as a framed panel, matching the success layout.
 	if (details?.error) {
-		return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+		const errorProvider = details.response?.provider;
+		const errorProviderLabel =
+			errorProvider && errorProvider !== "none" ? getSearchProviderLabel(errorProvider) : undefined;
+		return renderSearchErrorPanel(details.error, errorProviderLabel, theme);
 	}
 
 	const rawText = result.content?.find(block => block.type === "text")?.text?.trim() ?? "";
@@ -91,8 +102,6 @@ export function renderSearchResult(
 
 	const sources = Array.isArray(response.sources) ? response.sources : [];
 	const sourceCount = sources.length;
-	const citations = Array.isArray(response.citations) ? response.citations : [];
-	const citationCount = citations.length;
 	const searchQueries = Array.isArray(response.searchQueries)
 		? response.searchQueries.filter(item => typeof item === "string")
 		: [];
@@ -118,16 +127,11 @@ export function renderSearchResult(
 		theme,
 	);
 
-	const metaLines: string[] = [];
-	metaLines.push(`${theme.fg("muted", "Provider:")} ${theme.fg("text", providerLabel)}`);
-	if (response.authMode)
-		metaLines.push(
-			`${theme.fg("muted", "Auth:")} ${theme.fg("text", response.authMode === "oauth" ? "OAuth" : response.authMode === "api_key" ? "API key" : response.authMode)}`,
-		);
-	if (response.model) metaLines.push(`${theme.fg("muted", "Model:")} ${theme.fg("text", response.model)}`);
-	metaLines.push(`${theme.fg("muted", "Sources:")} ${theme.fg("text", String(sourceCount))}`);
-	if (citationCount > 0)
-		metaLines.push(`${theme.fg("muted", "Citations:")} ${theme.fg("text", String(citationCount))}`);
+	const authShort =
+		response.authMode === "oauth" ? "OAuth" : response.authMode === "api_key" ? "API" : response.authMode;
+	let providerInfo = response.model ? `${response.model} @ ${providerLabel}` : providerLabel;
+	if (authShort) providerInfo += ` (${authShort})`;
+	const metaLines: string[] = [`${theme.fg("muted", "Provider:")} ${theme.fg("text", providerInfo)}`];
 	if (response.usage) {
 		const usageParts: string[] = [];
 		if (response.usage.inputTokens !== undefined) usageParts.push(`in ${response.usage.inputTokens}`);
@@ -136,17 +140,6 @@ export function renderSearchResult(
 		if (response.usage.searchRequests !== undefined) usageParts.push(`search ${response.usage.searchRequests}`);
 		if (usageParts.length > 0)
 			metaLines.push(`${theme.fg("muted", "Usage:")} ${theme.fg("text", usageParts.join(theme.sep.dot))}`);
-	}
-	if (response.requestId) {
-		metaLines.push(
-			`${theme.fg("muted", "Request:")} ${theme.fg("text", truncateToWidth(response.requestId, MAX_REQUEST_ID_LEN))}`,
-		);
-	}
-	if (searchQueries.length > 0) {
-		const queriesPreview = searchQueries.slice(0, MAX_QUERY_PREVIEW);
-		const queryList = queriesPreview.map(q => truncateToWidth(q, MAX_QUERY_LEN));
-		const suffix = searchQueries.length > queriesPreview.length ? "…" : "";
-		metaLines.push(`${theme.fg("muted", "Queries:")} ${theme.fg("text", queryList.join("; "))}${suffix}`);
 	}
 
 	const answerMarkdown = contentText ? new Markdown(contentText, 0, 0, getMarkdownTheme()) : undefined;
@@ -163,15 +156,15 @@ export function renderSearchResult(
 			let answerLines: string[];
 			if (renderedAnswer.length === 0) {
 				answerLines = [theme.fg("muted", "No answer text returned")];
-			} else if (expanded) {
-				answerLines = renderedAnswer;
-			} else {
-				const collapsedCap = args?.maxAnswerLines ?? MAX_COLLAPSED_ANSWER_LINES;
-				answerLines = renderedAnswer.slice(0, collapsedCap);
+			} else if (args?.maxAnswerLines !== undefined && !expanded) {
+				// CLI compact mode (`omp q`) caps the answer; the TUI passes no cap and shows it in full.
+				answerLines = renderedAnswer.slice(0, args.maxAnswerLines);
 				const remaining = renderedAnswer.length - answerLines.length;
 				if (remaining > 0) {
 					answerLines.push(theme.fg("muted", formatMoreItems(remaining, "line")));
 				}
+			} else {
+				answerLines = renderedAnswer;
 			}
 
 			const sourceTree = renderTreeList(
@@ -187,30 +180,22 @@ export function renderSearchResult(
 								: typeof src.url === "string" && src.url.trim()
 									? src.url
 									: "Untitled";
-						const title = truncateToWidth(titleText, MAX_SNIPPET_LINE_LEN);
 						const url = typeof src.url === "string" ? src.url : "";
 						const domain = url ? getDomain(url) : "";
 						const age =
 							formatAge(src.ageSeconds) || (typeof src.publishedDate === "string" ? src.publishedDate : "");
 						const metaParts: string[] = [];
 						if (domain) metaParts.push(theme.fg("dim", `(${domain})`));
-						if (typeof src.author === "string" && src.author.trim())
-							metaParts.push(theme.fg("muted", truncateToWidth(src.author.trim(), 40)));
 						if (age) metaParts.push(theme.fg("muted", age));
 						const metaSep = theme.fg("dim", theme.sep.dot);
 						const metaSuffix = metaParts.length > 0 ? ` ${metaParts.join(metaSep)}` : "";
-						const srcLines: string[] = [
-							truncateToWidth(`${theme.fg("accent", title)}${metaSuffix}`, MAX_SNIPPET_LINE_LEN),
-						];
-						const snippetText = typeof src.snippet === "string" ? src.snippet : "";
-						if (snippetText.trim()) {
-							const snippetLines = getPreviewLines(snippetText, MAX_SNIPPET_LINES, MAX_SNIPPET_LINE_LEN);
-							for (const snippetLine of snippetLines) {
-								srcLines.push(theme.fg("muted", `${theme.format.dash} ${snippetLine}`));
-							}
-						}
-						if (url) srcLines.push(theme.fg("mdLinkUrl", truncateToWidth(url, MAX_SNIPPET_LINE_LEN)));
-						return srcLines;
+						// One line per source: the title links to its URL, followed by domain · age.
+						// Reserve room for the box borders, the tree branch, and the meta suffix.
+						const lineBudget = Math.max(24, width - 6);
+						const titleBudget = Math.max(12, lineBudget - Bun.stringWidth(metaSuffix));
+						const title = theme.fg("accent", truncateToWidth(titleText, titleBudget));
+						const linkedTitle = url ? urlHyperlink(url, title) : title;
+						return [`${linkedTitle}${metaSuffix}`];
 					},
 				},
 				theme,

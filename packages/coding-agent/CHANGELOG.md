@@ -12,6 +12,7 @@
 
 - Changed the default persistent model selector shortcut from `Ctrl+L` to `Alt+M`, leaving `Ctrl+L` for display reset. Existing user remaps in `keybindings.yml` are preserved.
 - Changed the edit tool result header to carry the diff change stats (`+N / -M / K hunks`) inline next to the file path, and removed the redundant lone language-icon metadata row and the blank line between the header and the diff body, so a single-hunk edit renders as `✔ Edit: <icon> path:LINE ⟨+3 / 1 hunk⟩` immediately followed by the diff.
+- Changed the `web_search` tool result rendering: the answer text now shows in full instead of being truncated to a "… N more lines" preview (the `omp q` CLI still caps its compact output), each source renders as a single `title (domain) · age` line with the URL linked on the title (dropping the snippet and bare-URL rows), and the metadata block collapses to one `Provider: <model> @ <provider> (<auth>)` line plus `Usage:` (removing the redundant Sources/Citations/Request/Queries rows).
 
 ### Fixed
 
