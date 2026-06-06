@@ -245,9 +245,16 @@ parameterized over `(env, platform)` so they are unit-testable:
   VTE, iTerm2, Apple Terminal, GNOME Terminal, Ptyxis, xfce4-terminal), Linux
   truecolor, **and every other unknown POSIX terminal**. The default is *risky*
   on purpose.
-- `shouldEnableSynchronizedOutputByDefault(env, platform, id)` → DEC 2026 on by
-  default only for kitty/ghostty/wezterm/iterm2, off for win32 / SSH /
-  multiplexers / VTE-family. Layered with a runtime DECRQM auto-disable.
+- `shouldEnableSynchronizedOutputByDefault(env, id)` → DEC 2026 default. Precedence:
+  user opt-out (`PI_NO_SYNC_OUTPUT`/`PI_TUI_SYNC_OUTPUT=0`) → user force-on
+  (`PI_FORCE_SYNC_OUTPUT=1`/`PI_TUI_SYNC_OUTPUT=1`) → `TERM_FEATURES` advertises
+  `Sy` → `WT_SESSION` (WT/WSL) → known direct terminals
+  (kitty/ghostty/wezterm/iterm2/alacritty/vscode; SSH passes through) → off for
+  risky multiplexers and everything else (VTE-family, GNU screen, Apple Terminal,
+  legacy conhost, unknown). Reconciled at runtime by the DECRQM mode-2026 report:
+  a positive report **enables** sync (upgrading default-off muxes like
+  zellij/tmux-master), a negative one disables it; a user override still wins.
+  `synchronizedOutputUserOverride(env)` is the shared opt-out/force resolver.
 - `detectRectangularSgrSupport(id, env)` → DECCARA fills: **kitty only**
   (ghostty does not implement the SGR-background extension), off in multiplexers
   and under `PI_NO_DECCARA`.

@@ -24,6 +24,7 @@ import {
 	setCellDimensions,
 	setTerminalImageProtocol,
 	shouldEnableSynchronizedOutputByDefault,
+	synchronizedOutputUserOverride,
 	TERMINAL,
 } from "./terminal-capabilities";
 import {
@@ -573,8 +574,9 @@ export class TUI extends Container {
 
 	/**
 	 * Whether DEC 2026 synchronized-output wrappers are currently emitted around
-	 * paints. Starts from conservative terminal/env detection and is force-disabled
-	 * at runtime if the terminal reports mode 2026 unsupported via DECRQM.
+	 * paints. Starts from conservative terminal/env detection and is reconciled at
+	 * runtime against the terminal's DECRQM mode-2026 report — enabled on a
+	 * positive report, disabled on a negative one.
 	 */
 	get synchronizedOutput(): boolean {
 		return this.#synchronizedOutputEnabled;
@@ -744,14 +746,15 @@ export class TUI extends Container {
 
 	start(): void {
 		this.#stopped = false;
-		// Disable synchronized output if the terminal reports DEC 2026 unsupported
-		// via DECRQM. PI_NO_SYNC_OUTPUT already forces it off at construction, so
-		// only react when the user has not already opted out. Future paints drop
-		// the begin/end markers; the autowrap guards stay (see #1765).
+		// A DECRQM report for mode 2026 is authoritative: enable synchronized
+		// output when the terminal reports support (upgrading conservatively
+		// defaulted-off hosts like zellij/tmux-master/foot) and disable it when
+		// the terminal reports it unsupported. An explicit user opt-out/force
+		// (resolved at construction) still wins, so skip the probe in that case.
 		this.terminal.onPrivateModeReport?.((mode, supported) => {
-			if (mode === 2026 && !supported && !$flag("PI_NO_SYNC_OUTPUT")) {
-				this.#setSynchronizedOutput(false);
-			}
+			if (mode !== 2026) return;
+			if (synchronizedOutputUserOverride() !== null) return;
+			this.#setSynchronizedOutput(supported);
 		});
 		this.terminal.start(
 			data => this.#handleInput(data),
@@ -914,8 +917,8 @@ export class TUI extends Container {
 
 	/**
 	 * Toggle synchronized-output (DEC 2026) wrappers on paint/cursor writes and
-	 * recompute the cached begin/end sequences. Honors a DECRQM report that the
-	 * terminal does not support 2026 (#1765 covers the static env opt-out).
+	 * recompute the cached begin/end sequences. Driven by the terminal's DECRQM
+	 * mode-2026 report (#1765 covers the static env opt-out).
 	 */
 	#setSynchronizedOutput(enabled: boolean): void {
 		if (this.#synchronizedOutputEnabled === enabled) return;

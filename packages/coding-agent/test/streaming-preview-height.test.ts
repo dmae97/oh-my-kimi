@@ -338,7 +338,7 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		expect(visibleWidth(topBorder ?? "")).toBe(width);
 	});
 
-	test("eval/bash/ssh pending previews stay short even with very long multiline args", () => {
+	test("bash/ssh pending previews stay short even with very long multiline args", () => {
 		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
 		const cases: Array<{
 			name: string;
@@ -347,17 +347,6 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 			mustHide: string[];
 			marker: RegExp;
 		}> = [
-			{
-				// eval follows the streaming edge: a bounded tail window so the newest
-				// source stays visible while the box never overflows.
-				name: "eval",
-				args: {
-					cells: [{ language: "js", title: "big", code: longLines.map(line => `const ${line} = 1;`).join("\n") }],
-				},
-				mustContain: ["const line-79 = 1;"],
-				mustHide: ["const line-0 = 1;"],
-				marker: /earlier lines/,
-			},
 			{
 				// bash/ssh keep a bounded head+tail window: the start and the
 				// latest are both visible, the middle is elided.
@@ -402,5 +391,19 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		expect(text).toContain("line-40");
 		expect(text).toContain("line-79");
 		expect(text).not.toMatch(/more lines/);
+	});
+
+	test("eval pending preview preserves full code (never collapsed)", () => {
+		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
+		const { lines, text } = renderPending("eval", {
+			cells: [{ language: "js", title: "big", code: longLines.map(line => `const ${line} = 1;`).join("\n") }],
+		});
+
+		expect(lines.length, "eval code preview should not be capped").toBeGreaterThan(80);
+		expect(text).toContain("const line-0 = 1;");
+		expect(text).toContain("const line-40 = 1;");
+		expect(text).toContain("const line-79 = 1;");
+		expect(text).not.toMatch(/more lines/);
+		expect(text).not.toMatch(/earlier lines/);
 	});
 });

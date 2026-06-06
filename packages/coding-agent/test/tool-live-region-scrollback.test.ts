@@ -73,7 +73,7 @@ describe("tool live-region scrollback", () => {
 					.join("\n");
 				expect(bufferText).not.toContain("pending [1/1]");
 				expect(bufferText).toContain("const line9 = 9;");
-				expect(bufferText).toContain("… 10 more lines");
+				expect(bufferText).toContain("const line19 = 19;");
 			} finally {
 				component.stopAnimation();
 				tui.stop();
