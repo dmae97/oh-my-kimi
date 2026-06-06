@@ -40,16 +40,6 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
-async function settleUntil(term: VirtualTerminal, matches: (viewport: string) => boolean): Promise<string> {
-	let viewport = "";
-	for (let attempt = 0; attempt < 10; attempt++) {
-		await settle(term);
-		viewport = term.getViewport().join("\n");
-		if (matches(viewport)) return viewport;
-	}
-	return viewport;
-}
-
 describe("slash command autocomplete with unknown native viewport state", () => {
 	it("keeps repainting the editor while the autocomplete list changes height", async () => {
 		const originalPlatform = process.platform;
@@ -72,7 +62,8 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			await settle(term);
 			for (const char of "/model") {
 				term.sendInput(char);
-				const viewport = await settleUntil(term, viewport => viewport.includes(editor.getText()));
+				await settle(term);
+				const viewport = term.getViewport().join("\n");
 				expect(viewport).toContain(editor.getText());
 			}
 			expect(editor.getText()).toBe("/model");
@@ -112,7 +103,8 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 				// background row, so the bypass MUST still kick in for the live UI rows.
 				transcriptCounter += 1;
 				term.sendInput(char);
-				const viewport = await settleUntil(term, viewport => viewport.includes(editor.getText()));
+				await settle(term);
+				const viewport = term.getViewport().join("\n");
 				expect(viewport).toContain(editor.getText());
 			}
 			expect(editor.getText()).toBe("/mo");
