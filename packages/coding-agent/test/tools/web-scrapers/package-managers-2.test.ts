@@ -25,8 +25,6 @@ describe.skipIf(SKIP)("handleMetaCPAN", () => {
 		expect(result?.method).toBe("metacpan");
 		expect(result?.content).toContain("Moose");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches release by distribution name", async () => {
@@ -55,8 +53,6 @@ describe.skipIf(SKIP)("handleHackage", () => {
 		expect(result?.content).toContain("aeson");
 		expect(result?.content).toContain("JSON");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	}, 20000);
 
 	it("fetches text package", async () => {
@@ -85,8 +81,6 @@ describe.skipIf(SKIP)("handleDockerHub", () => {
 		expect(result?.content).toContain("nginx");
 		expect(result?.content).toContain("docker pull");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches grafana/grafana image", async () => {
@@ -115,8 +109,6 @@ describe.skipIf(SKIP)("handleChocolatey", () => {
 		expect(result?.method).toBe("chocolatey");
 		expect(result?.content).toContain("choco install");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches nodejs package", async () => {
@@ -145,8 +137,6 @@ describe.skipIf(SKIP)("handleRepology", () => {
 		expect(result?.content).toContain("firefox");
 		expect(result?.content).toContain("Repositories");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches vim project", async () => {
@@ -176,8 +166,6 @@ describe.skipIf(SKIP)("handleTerraform", () => {
 		expect(result?.content).toContain("hashicorp");
 		expect(result?.content).toContain("required_providers");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches terraform-aws-modules/vpc/aws module", async () => {

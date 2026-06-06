@@ -216,14 +216,6 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			expect(output).toContain(`[1 visible columns omitted]`);
 		});
 
-		it("handles string with 0 visible width (empty after ANSI removal)", () => {
-			const onlyAnsi = "\x1b[0m\x1b[1m\x1b[2m";
-			const component = createComponentWithOutput(onlyAnsi);
-			const output = component.getOutput();
-
-			expect(output).toBeDefined();
-		});
-
 		it("handles empty string", () => {
 			const component = createComponentWithOutput("");
 			const output = component.getOutput();

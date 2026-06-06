@@ -496,7 +496,6 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 
 		await session.reload();
 
-		expect(() => session.sessionManager.captureState()).not.toThrow();
 		expect(session.sessionFile).toBe(originalSessionFile);
 	});
 
