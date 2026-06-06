@@ -1761,10 +1761,15 @@ export class TUI extends Container {
 
 		if (this.#nativeScrollbackDirty && !isMultiplexerSession()) {
 			// A dirty flag means older native history is stale; it is not required to
-			// make the current focused-input frame correct. Rebuilding it here on
-			// macOS/POSIX terminals with an unobservable viewport turns every
-			// Up/Down selector move into an ED3 clear plus full transcript replay.
-			if (this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), false)) {
+			// make the current focused-input frame correct. On ED3-risk macOS/POSIX
+			// terminals with an unobservable viewport, ignore focused-input unknown
+			// opt-ins so Up/Down selector moves do not become ED3 clears plus full
+			// transcript replays. Non-ED3-risk POSIX terminals keep their safe
+			// direct-input/IME/autocomplete opt-in.
+			const allowDirtyUnknownViewportMutation = allowUnknownViewportMutation && !eagerEraseScrollbackRisk;
+			if (
+				this.#canRebuildNativeScrollbackLive(this.#readNativeViewportAtBottom(), allowDirtyUnknownViewportMutation)
+			) {
 				return { kind: "historyRebuild" };
 			}
 		}
