@@ -1602,6 +1602,7 @@ export class TUI extends Container {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
 				});
+				this.#hasEverRendered = true;
 				return;
 			case "historyRebuild":
 				this.#clearNativeScrollbackDirty();
@@ -1686,13 +1687,17 @@ export class TUI extends Container {
 		liveRegionStart: number | undefined,
 		commitSafeEnd: number | undefined,
 	): RenderIntent {
+		// A forced scrollback wipe can be queued before start()'s initial paint runs
+		// (cold `omp --resume` does this while replacing the welcome frame with the
+		// restored transcript). Honor it before the normal initial-preserve path so
+		// the first committed frame is the clean session replay, not a deferred wipe
+		// that waits for the user's first keystroke.
+		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
+
 		// Initial paint after start(): scrollback must keep its prior shell
 		// content, but the viewport must be cleared so stale rows do not bleed
 		// into the new UI.
 		if (!this.#hasEverRendered) return { kind: "initial" };
-
-		// Caller opted into a scrollback wipe via requestRender(true, { clearScrollback: true }).
-		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
 		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
 		const eagerEraseScrollbackRisk = process.platform !== "win32" && TERMINAL.eagerEraseScrollbackRisk;
