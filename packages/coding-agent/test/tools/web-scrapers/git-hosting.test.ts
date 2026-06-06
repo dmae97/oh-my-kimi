@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { handleGitHub } from "@oh-my-pi/pi-coding-agent/web/scrapers/github";
+import { handleGitHub, parseGitHubUrl, stripActionsLogTimestamps } from "@oh-my-pi/pi-coding-agent/web/scrapers/github";
 import { handleGitHubGist } from "@oh-my-pi/pi-coding-agent/web/scrapers/github-gist";
 
 const SKIP = !Bun.env.WEB_FETCH_INTEGRATION;
@@ -201,5 +201,59 @@ describe.skipIf(SKIP)("handleGitHubGist", () => {
 		// This test just ensures no errors are thrown
 		const result = await handleGitHubGist("https://gist.github.com/gaearon/edf814aeee85062bc9b9830aeaf27b88", 5000);
 		expect(result).toBeDefined();
+	});
+});
+
+// =============================================================================
+// GitHub Actions URL parsing (pure, network-free)
+// =============================================================================
+
+describe("parseGitHubUrl — Actions", () => {
+	it("classifies a workflow run URL", () => {
+		const gh = parseGitHubUrl("https://github.com/can1357/oh-my-pi/actions/runs/27070071296");
+		expect(gh).toEqual({ type: "actions-run", owner: "can1357", repo: "oh-my-pi", runId: 27070071296 });
+	});
+
+	it("classifies a job URL using the web-form singular `job` segment", () => {
+		const gh = parseGitHubUrl("https://github.com/can1357/oh-my-pi/actions/runs/27070071296/job/79897931171");
+		expect(gh).toEqual({
+			type: "actions-job",
+			owner: "can1357",
+			repo: "oh-my-pi",
+			runId: 27070071296,
+			jobId: 79897931171,
+		});
+	});
+
+	it("classifies a job URL using the API-form plural `jobs` segment", () => {
+		const gh = parseGitHubUrl("https://github.com/can1357/oh-my-pi/actions/runs/27070071296/jobs/79897931171");
+		expect(gh?.type).toBe("actions-job");
+		expect(gh?.jobId).toBe(79897931171);
+	});
+
+	it("does not treat non-run Actions URLs (e.g. workflow files) as runs/jobs", () => {
+		expect(parseGitHubUrl("https://github.com/can1357/oh-my-pi/actions/workflows/ci.yml")?.type).toBe("other");
+		expect(parseGitHubUrl("https://github.com/can1357/oh-my-pi/actions")?.type).toBe("other");
+	});
+
+	it("does not misparse a run URL with a non-numeric id", () => {
+		expect(parseGitHubUrl("https://github.com/can1357/oh-my-pi/actions/runs/latest")?.type).toBe("other");
+	});
+
+	it("returns null for non-github hosts", () => {
+		expect(parseGitHubUrl("https://gitlab.com/o/r/actions/runs/1")).toBeNull();
+	});
+});
+
+describe("stripActionsLogTimestamps", () => {
+	it("removes the per-line ISO timestamp prefix and a leading BOM", () => {
+		const raw =
+			"\uFEFF2026-06-06T18:14:12.8793443Z Current runner version: '2.334.0'\n2026-06-06T18:14:13.0000000Z done\n";
+		expect(stripActionsLogTimestamps(raw)).toBe("Current runner version: '2.334.0'\ndone\n");
+	});
+
+	it("leaves grouped/non-timestamped lines untouched", () => {
+		const raw = "2026-06-06T18:14:12.0000000Z ##[group]Operating System\nUbuntu\n##[endgroup]\n";
+		expect(stripActionsLogTimestamps(raw)).toBe("##[group]Operating System\nUbuntu\n##[endgroup]\n");
 	});
 });

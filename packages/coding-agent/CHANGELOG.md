@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a GitHub Actions read handler to the `read`/web-fetch GitHub scraper. Fetching `github.com/{owner}/{repo}/actions/runs/{id}` renders the run metadata plus a per-job breakdown (steps listed for any job that did not succeed), and `…/actions/runs/{id}/job/{id}` (also the API-style `…/jobs/{id}`) renders a single job's metadata, step table, and full plain-text logs. Logs are fetched via the `actions/jobs/{id}/logs` redirect using `GITHUB_TOKEN`/`GH_TOKEN` when present, with the per-line ISO timestamp prefix and leading BOM stripped; the section degrades to an explicit notice when logs are unavailable (no token, private repo, or expired/unfinalized run).
+
+
 ## [15.9.69] - 2026-06-06
 ### Fixed
 
