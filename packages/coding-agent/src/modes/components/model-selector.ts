@@ -6,6 +6,7 @@ import {
 	getKeybindings,
 	Input,
 	matchesKey,
+	ScrollView,
 	Spacer,
 	type Tab,
 	TabBar,
@@ -778,6 +779,7 @@ export class ModelSelectorComponent extends Container {
 
 		const showProvider = this.#getActiveTabId() === ALL_TAB;
 
+		const rows: string[] = [];
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = visibleItems[i];
@@ -836,13 +838,18 @@ export class ModelSelectorComponent extends Container {
 				}
 			}
 
-			this.#listContainer.addChild(new Text(line, 0, 0));
+			rows.push(line);
 		}
 
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < visibleItems.length) {
-			const scrollInfo = theme.fg("muted", `  (${this.#selectedIndex + 1}/${visibleItems.length})`);
-			this.#listContainer.addChild(new Text(scrollInfo, 0, 0));
+		if (rows.length > 0) {
+			const sv = new ScrollView(rows, {
+				height: rows.length,
+				scrollbar: "auto",
+				totalRows: visibleItems.length,
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			sv.setScrollOffset(startIndex);
+			this.#listContainer.addChild(sv);
 		}
 
 		// Show error message or "no results" if empty

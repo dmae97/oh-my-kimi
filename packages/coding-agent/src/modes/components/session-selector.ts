@@ -6,6 +6,7 @@ import {
 	matchesKey,
 	padding,
 	replaceTabs,
+	ScrollView,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -247,6 +248,11 @@ class SessionList implements Component {
 		const endIndex = Math.min(startIndex + maxVisible, this.#filteredSessions.length);
 
 		// Render visible sessions (3 lines, or 4 when a title adds a preview line).
+		// Each session block is built into sessionLines, then wrapped by ScrollView
+		// so the right-edge scrollbar is proportional at the physical-line level.
+		const sessionLines: string[] = [];
+		const overflow = this.#filteredSessions.length > maxVisible;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
 		for (let i = startIndex; i < endIndex; i++) {
 			const session = this.#filteredSessions[i];
 			const isSelected = i === this.#selectedIndex;
@@ -258,22 +264,22 @@ class SessionList implements Component {
 			const cursorSymbol = `${theme.nav.cursor} `;
 			const cursorWidth = visibleWidth(cursorSymbol);
 			const cursor = isSelected ? theme.fg("accent", cursorSymbol) : padding(cursorWidth);
-			const maxWidth = width - cursorWidth; // Account for cursor width
+			const maxWidth = rowWidth - cursorWidth; // Account for cursor width
 
 			if (session.title) {
 				// Has title: show title on first line, dimmed first message on second line
 				const truncatedTitle = truncateToWidth(session.title, maxWidth);
 				const titleLine = cursor + (isSelected ? theme.bold(truncatedTitle) : truncatedTitle);
-				lines.push(titleLine);
+				sessionLines.push(titleLine);
 
 				// Second line: dimmed first message preview
 				const truncatedPreview = truncateToWidth(normalizedMessage, maxWidth);
-				lines.push(`  ${theme.fg("dim", truncatedPreview)}`);
+				sessionLines.push(`  ${theme.fg("dim", truncatedPreview)}`);
 			} else {
 				// No title: show first message as main line
 				const truncatedMsg = truncateToWidth(normalizedMessage, maxWidth);
 				const messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
-				lines.push(messageLine);
+				sessionLines.push(messageLine);
 			}
 
 			// Metadata line: date + file size + lifecycle status (+ project dir in
@@ -290,18 +296,23 @@ class SessionList implements Component {
 			if (this.#showCwd && session.cwd) {
 				metadata += ` ${dot} ${dim(shortenPath(session.cwd))}`;
 			}
-			const metadataLine = truncateToWidth(metadata, width);
+			const metadataLine = truncateToWidth(metadata, rowWidth);
 
-			lines.push(metadataLine);
-			lines.push(""); // Blank line between sessions
+			sessionLines.push(metadataLine);
+			sessionLines.push(""); // Blank line between sessions
 		}
 
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < this.#filteredSessions.length) {
-			const scrollText = `  (${this.#selectedIndex + 1}/${this.#filteredSessions.length})`;
-			const scrollInfo = theme.fg("muted", truncateToWidth(scrollText, width));
-			lines.push(scrollInfo);
-		}
+		// Wrap the rendered window in a ScrollView for a proportional right-edge bar.
+		const visibleCount = endIndex - startIndex;
+		const linesPerItem = visibleCount > 0 ? sessionLines.length / visibleCount : 1;
+		const sv = new ScrollView(sessionLines, {
+			height: sessionLines.length,
+			scrollbar: "auto",
+			totalRows: Math.round(this.#filteredSessions.length * linesPerItem),
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(Math.round(startIndex * linesPerItem));
+		lines.push(...sv.render(width));
 
 		// Add keybinding hint
 		lines.push("");

@@ -1,6 +1,14 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { Container, extractPrintableText, fuzzyFilter, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
+import {
+	Container,
+	extractPrintableText,
+	fuzzyFilter,
+	matchesKey,
+	ScrollView,
+	Spacer,
+	TruncatedText,
+} from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";
@@ -162,14 +170,10 @@ export class OAuthSelectorComponent extends Container {
 		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
 	}
 
-	#renderStatusLine(total: number): string {
-		const selectedCount = total === 0 ? 0 : this.#selectedIndex + 1;
-		const count =
-			this.#searchQuery.trim() && total !== this.#allProviders.length
-				? `${selectedCount}/${total} of ${this.#allProviders.length}`
-				: `${selectedCount}/${total}`;
-		const suffix = this.#searchQuery.trim() ? `  Search: ${this.#searchQuery}` : "  Type to search";
-		return theme.fg("muted", `  (${count})${suffix}`);
+	#renderStatusLine(_total: number): string {
+		const query = this.#searchQuery.trim();
+		const suffix = query ? `Search: ${this.#searchQuery}` : "Type to search";
+		return theme.fg("muted", `  ${suffix}`);
 	}
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
@@ -223,6 +227,7 @@ export class OAuthSelectorComponent extends Container {
 				: Math.max(0, Math.min(this.#selectedIndex - Math.floor(maxVisible / 2), total - maxVisible));
 		const endIndex = Math.min(startIndex + maxVisible, total);
 
+		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
 			const provider = this.#filteredProviders[i];
 			if (!provider) continue;
@@ -239,11 +244,22 @@ export class OAuthSelectorComponent extends Container {
 				const text = isAvailable ? `  ${provider.name}` : theme.fg("dim", `  ${provider.name}`);
 				line = text + statusIndicator;
 			}
-			this.#listContainer.addChild(new TruncatedText(line, 0, 0));
+			rows.push(line);
 		}
 
-		// Scroll/search indicator when list is windowed or searchable
-		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+		if (rows.length > 0) {
+			const sv = new ScrollView(rows, {
+				height: rows.length,
+				scrollbar: "auto",
+				totalRows: total,
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			sv.setScrollOffset(startIndex);
+			this.#listContainer.addChild(sv);
+		}
+
+		// Search status line (scrollbar covers overflow indication)
+		if (this.#shouldRenderSearchStatus()) {
 			this.#listContainer.addChild(new TruncatedText(this.#renderStatusLine(total), 0, 0));
 		}
 

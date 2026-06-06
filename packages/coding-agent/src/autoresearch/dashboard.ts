@@ -1,4 +1,4 @@
-import { matchesKey, replaceTabs, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { matchesKey, replaceTabs, ScrollView, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { Theme } from "../modes/theme/theme";
 import { formatElapsed, formatNum, isBetter } from "./helpers";
 import { currentResults, findBaselineMetric, findBaselineRunNumber, findBaselineSecondary } from "./state";
@@ -76,14 +76,14 @@ export function createDashboardController(): DashboardController {
 							const viewportRows = Math.max(4, terminalRows - 4);
 							const maxScroll = Math.max(0, body.length - viewportRows);
 							if (scrollOffset > maxScroll) scrollOffset = maxScroll;
-							const visible = body.slice(scrollOffset, scrollOffset + viewportRows);
-							const footer = renderOverlayFooter(width, scrollOffset, viewportRows, body.length, theme);
-							return [
-								header,
-								...visible,
-								...Array.from({ length: Math.max(0, viewportRows - visible.length) }, () => ""),
-								footer,
-							];
+							const sv = new ScrollView(body.slice(scrollOffset, scrollOffset + viewportRows), {
+								height: viewportRows,
+								scrollbar: "auto",
+								totalRows: body.length,
+								theme: { track: t => theme.fg("dim", t), thumb: t => theme.fg("accent", t) },
+							});
+							sv.setScrollOffset(scrollOffset);
+							return [header, ...sv.render(width), renderOverlayFooter(width, theme)];
 						},
 						handleInput(data: string): void {
 							const totalRows =
@@ -406,18 +406,8 @@ function renderOverlayRunningLine(
 	);
 }
 
-function renderOverlayFooter(
-	width: number,
-	scrollOffset: number,
-	viewportRows: number,
-	totalRows: number,
-	theme: Theme,
-): string {
-	const position =
-		totalRows > viewportRows
-			? ` ${scrollOffset + 1}-${Math.min(totalRows, scrollOffset + viewportRows)}/${totalRows}`
-			: "";
-	const hint = theme.fg("dim", ` up/down j/k pageup pagedown g G esc${position} `);
+function renderOverlayFooter(width: number, theme: Theme): string {
+	const hint = theme.fg("dim", " up/down j/k pageup pagedown g G esc ");
 	const fill = Math.max(0, width - visibleWidth(hint));
 	return theme.fg("borderMuted", "-".repeat(fill)) + hint;
 }
