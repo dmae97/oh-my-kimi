@@ -334,7 +334,13 @@ async function callPerplexityOAuth(
 	params: PerplexitySearchParams,
 ): Promise<{ answer: string; sources: SearchSource[]; model?: string; requestId?: string }> {
 	const requestId = crypto.randomUUID();
-	const effectiveQuery = params.system_prompt ? `${params.system_prompt}\n\n${params.query}` : params.query;
+	// The consumer `perplexity_ask` endpoint is itself a research assistant and
+	// has no system-message slot. Prepending the API-style system prompt to the
+	// query makes the model read it as a meta-instruction and refuse with
+	// "I don't have access to web-search tools in this turn", so OAuth/cookie
+	// searches send the bare query. (The API-key path still uses system_prompt
+	// as a proper `system` message.)
+	const effectiveQuery = params.query;
 
 	const response = await fetch(PERPLEXITY_OAUTH_ASK_URL, {
 		method: "POST",
