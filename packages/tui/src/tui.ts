@@ -1718,6 +1718,11 @@ export class TUI extends Container {
 			return hasVisibleOverlay ? { kind: "overlayRebuild" } : { kind: "historyRebuild" };
 		}
 
+		// Same dirty-scrollback opt-in policy as the non-overlay branch below: an
+		// ED3-risk macOS/POSIX terminal with an unobservable viewport ignores
+		// focused-input unknown opt-ins, so overlay selector Up/Down moves do not
+		// become ED3 clears plus full transcript replays. Non-ED3-risk POSIX still
+		// honors direct-input/IME/autocomplete opt-ins.
 		if (hasVisibleOverlay) {
 			const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
 			// Multiplexer panes never get a destructive scrollback clear
@@ -1725,10 +1730,11 @@ export class TUI extends Container {
 			// "rebuild" would only append a full duplicate copy of the transcript
 			// to pane history on every dirty frame. Keep repainting the viewport
 			// and leave reconciliation to explicit checkpoints.
+			const allowDirtyUnknownViewportMutation = allowUnknownViewportMutation && !eagerEraseScrollbackRisk;
 			if (
 				this.#nativeScrollbackDirty &&
 				!isMultiplexerSession() &&
-				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowUnknownViewportMutation)
+				this.#canRebuildNativeScrollbackLive(nativeViewportAtBottom, allowDirtyUnknownViewportMutation)
 			) {
 				return { kind: "overlayRebuild" };
 			}

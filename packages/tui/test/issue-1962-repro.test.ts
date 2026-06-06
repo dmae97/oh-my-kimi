@@ -127,4 +127,42 @@ describe("issue #1962: arrow navigation after dirty scrollback", () => {
 			}
 		});
 	});
+
+	it("does not clear and replay the whole transcript for a focused arrow-key frame inside an overlay", async () => {
+		await withTerminalRisk(true, async () => {
+			const term = new UnknownViewportTerminal(40, 6);
+			const tui = new TUI(term);
+			const transcript = new MutableLinesComponent(
+				Array.from({ length: 12 }, (_value, index) => `history-${index}`),
+			);
+			tui.addChild(transcript);
+			const selector = new ArrowSelectorComponent();
+			tui.showOverlay(selector);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				tui.setEagerNativeScrollbackRebuild(true);
+				transcript.setLines([
+					"history-0 updated",
+					...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
+				]);
+				tui.requestRender();
+				await settle(term);
+				tui.setEagerNativeScrollbackRebuild(false);
+
+				const writes = captureWrites(term);
+				term.sendInput("\x1b[B");
+				await settle(term);
+
+				const output = writes.join("");
+				expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
+				expect(output).not.toContain("history-0 updated");
+				expect(term.getViewport().map(line => line.trimEnd())).toContain("> second");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });
