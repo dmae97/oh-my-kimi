@@ -366,6 +366,10 @@ export class Container implements Component {
  * - `deferredShrink`: pure content shrink would re-expose rows already in
  *   native history. Keep row indices stable with blank tail padding, repaint
  *   only the viewport, and defer the real shorter replay to a checkpoint.
+ * - `deferredTailRepaint`: a deferred history mutation also changed the active
+ *   grid's bottom row; repaint only that row relative to the tracked hardware
+ *   cursor so a bottom-anchored spinner can advance without rewriting rows that
+ *   a slightly-scrolled reader can still see.
  * - `deferredMutation`: a row-inserting edit would reindex native scrollback
  *   while the user is scrolled. Defer all bytes until a safe rebuild checkpoint.
  * - `shrink`: trailing rows were dropped — clear extras inline.
@@ -380,6 +384,7 @@ type RenderIntent =
 	| { kind: "liveRegionPinned"; appendFrom: number; appendTo: number; renderViewportTop: number }
 	| { kind: "viewportRepaint"; appendFrom?: number }
 	| { kind: "deferredShrink"; paddedLength: number }
+	| { kind: "deferredTailRepaint"; row: number; line: string }
 	| { kind: "deferredMutation" }
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
@@ -430,6 +435,7 @@ export class TUI extends Container {
 	#nativeScrollbackLiveRegionStart: number | undefined;
 	#nativeScrollbackCommitSafeEnd: number | undefined;
 	#nativeScrollbackDirty = false;
+	#deferredTailLine: string | undefined;
 	// Highest `#maxLinesRendered` reached during a foreground tool turn while
 	// intermediate frames were prevented from committing to terminal scrollback.
 	// Used after the tool finishes to push the settled content into scrollback
@@ -1655,6 +1661,16 @@ export class TUI extends Container {
 				}
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
+			case "deferredTailRepaint":
+				this.#emitDeferredTailRepaint(
+					intent.line,
+					width,
+					height,
+					intent.row,
+					prevViewportTop,
+					prevHardwareCursorRow,
+				);
+				return;
 			case "deferredMutation":
 				return;
 			case "deferredShrink":
@@ -1846,19 +1862,19 @@ export class TUI extends Container {
 			// committed to native history. If an offscreen edit shifted rows above the
 			// viewport, padding would repaint the wrong seam, so use a viewport repaint
 			// for liveness and keep history dirty. Active eager streaming also uses a
-			// viewport repaint so the live tail keeps moving. An unobservable
-			// viewport is treated as at-bottom here: emitting zero bytes froze the
-			// live region (spinner/footer) and poisoned the diff basis until the
-			// next keystroke. Repaint for liveness and keep history dirty; a
-			// *known*-scrolled reader was already deferred above.
+			// viewport repaint so the live tail keeps moving. With neither direct input
+			// nor active eager streaming, the reader may be scrolled, so defer
+			// completely rather than repainting over their history.
 			if (nativeViewportAtBottom === undefined && eagerEraseScrollbackRisk) {
 				this.#markNativeScrollbackDirty();
-				if (this.#eagerNativeScrollbackRebuild) {
-					return { kind: "viewportRepaint" };
+				if (allowUnknownViewportMutation) {
+					return diff.firstChanged < prevViewportTop
+						? { kind: "viewportRepaint" }
+						: { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 				}
-				return diff.firstChanged < prevViewportTop
+				return this.#eagerNativeScrollbackRebuild
 					? { kind: "viewportRepaint" }
-					: { kind: "deferredShrink", paddedLength: this.#previousLines.length };
+					: this.#planDeferredTailRepaint(newLines, prevViewportTop, height);
 			}
 
 			// Non-ED3-risk POSIX with an unobservable viewport. `deferredShrink` is
@@ -1870,7 +1886,7 @@ export class TUI extends Container {
 			}
 			this.#markNativeScrollbackDirty();
 			if (diff.firstChanged < prevViewportTop) {
-				return { kind: "viewportRepaint" };
+				return this.#planDeferredTailRepaint(newLines, prevViewportTop, height);
 			}
 			return { kind: "deferredShrink", paddedLength: this.#previousLines.length };
 		}
@@ -2070,6 +2086,14 @@ export class TUI extends Container {
 				return { kind: "historyRebuild" };
 			}
 			this.#markNativeScrollbackDirty();
+			if (
+				nativeViewportAtBottom === undefined &&
+				eagerEraseScrollbackRisk &&
+				!cleanTailAppend &&
+				!this.#eagerNativeScrollbackRebuild
+			) {
+				return this.#planDeferredTailRepaint(newLines, prevViewportTop, height);
+			}
 			return { kind: "viewportRepaint", appendFrom: cleanTailAppend ? this.#previousLines.length : undefined };
 		}
 
@@ -2262,6 +2286,19 @@ export class TUI extends Container {
 		return { kind: "liveRegionPinned", appendFrom, appendTo, renderViewportTop };
 	}
 
+	#planDeferredTailRepaint(newLines: string[], prevViewportTop: number, height: number): RenderIntent {
+		const row = prevViewportTop + height - 1;
+		if (row < 0 || row >= this.#previousLines.length || newLines.length !== this.#previousLines.length) {
+			return { kind: "deferredMutation" };
+		}
+		const line = newLines[newLines.length - 1] ?? "";
+		const previousLine = this.#deferredTailLine ?? this.#previousLines[row] ?? "";
+		if (line === previousLine) {
+			return { kind: "deferredMutation" };
+		}
+		return { kind: "deferredTailRepaint", row, line };
+	}
+
 	#padDeferredShrinkLines(lines: string[], paddedLength: number): string[] {
 		if (lines.length >= paddedLength) return lines;
 		return [...lines, ...new Array<string>(paddedLength - lines.length).fill("")];
@@ -2293,6 +2330,7 @@ export class TUI extends Container {
 	 */
 
 	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
+		this.#deferredTailLine = undefined;
 		this.#previousLines = lines;
 		this.#previousVisibleOverlayComponents = this.#visibleOverlayComponentsThisRender;
 		this.#forceViewportRepaintOnNextRender = false;
@@ -2590,6 +2628,41 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Paint only the active-grid bottom row while a scrollback mutation remains
+	 * deferred. If the native viewport is unknown and the user is scrolled up by a
+	 * single line, every active-grid row except the bottom can still be visible in
+	 * their scrollback window; touching only this row keeps that reader's viewport
+	 * unchanged while allowing bottom-anchored live chrome (spinner/status tail) to
+	 * advance for users at the tail.
+	 */
+	#emitDeferredTailRepaint(
+		line: string,
+		width: number,
+		height: number,
+		row: number,
+		prevViewportTop: number,
+		prevHardwareCursorRow: number,
+	): void {
+		const viewportBottom = prevViewportTop + height - 1;
+		if (row !== viewportBottom) return;
+
+		let buffer = this.#paintBeginSequence;
+		const clampedCursor = Math.min(prevHardwareCursorRow, viewportBottom);
+		const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
+		const moveDown = height - 1 - currentScreenRow;
+		if (moveDown > 0) buffer += `\x1b[${moveDown}B`;
+		buffer += `\r\x1b[2K${this.#fitLineToWidth(line, width)}\x1b[?25l`;
+		buffer += this.#paintEndSequence;
+		this.terminal.write(buffer);
+
+		this.#deferredTailLine = line;
+		this.#previousWidth = width;
+		this.#previousHeight = height;
+		this.#viewportTopRow = prevViewportTop;
+		this.#hardwareCursorRow = row;
+	}
+
+	/**
 	 * Trailing-shrink: prior content shared a prefix with the new content; the
 	 * extra rows below the new tail need to be cleared without scrolling. Falls
 	 * back to {@link #emitViewportRepaint} when more rows must be cleared than
@@ -2793,7 +2866,9 @@ export class TUI extends Container {
 					? `${intent.kind}(append=${intent.appendFrom}..${intent.appendTo}, viewportTop=${intent.renderViewportTop})`
 					: intent.kind === "viewportRepaint" && intent.appendFrom !== undefined
 						? `${intent.kind}(appendFrom=${intent.appendFrom})`
-						: intent.kind;
+						: intent.kind === "deferredTailRepaint"
+							? `${intent.kind}(row=${intent.row})`
+							: intent.kind;
 		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height})\n`;
 		fs.appendFileSync(getDebugLogPath(), msg);
 	}
