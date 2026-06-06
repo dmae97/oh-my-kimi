@@ -15,6 +15,7 @@
 - Fixed framed read results rendering with an extra blank row above and below the output block.
 - Fixed collapsed search result previews that could show only "… N more matches" when the first grouped section exceeded the preview budget. Collapsed search output now compacts to match rows, fills the budget with visible hits before the summary, and keeps truncation details out of the bottom user-visible notice.
 - Fixed boolean environment flag overrides that were ORed with settings, so `PI_INTENT_TRACING=0`, `PI_AUTO_QA=0`, and per-backend eval flags now take precedence when present while falling back to config when unset.
+- Fixed Python eval `agent()` collapsing subagent runtime-limit aborts (and other empty-stderr aborts) into a generic `RuntimeError: bridge call '__agent__' failed`. `runEvalAgent` coalesced the failure message with `??`, which stopped at the empty `stderr` and never reached `abortReason`, shipping an empty error through the loopback bridge. The bridge now prefers `abortReason` for aborts and trims empty `stderr`/`error` out of the fallback chain, so Python surfaces the actionable reason (e.g. `Subagent runtime limit exceeded (task.maxRuntimeMs=900000)`) ([#2006](https://github.com/can1357/oh-my-pi/issues/2006)).
 
 ## [15.9.67] - 2026-06-06
 ### Added

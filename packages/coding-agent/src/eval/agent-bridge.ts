@@ -13,7 +13,7 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import * as taskDiscovery from "../task/discovery";
 import * as taskExecutor from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
-import type { AgentDefinition, AgentProgress } from "../task/types";
+import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
@@ -174,6 +174,26 @@ function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undef
 }
 
 /**
+ * Coalesce a subagent failure into a non-empty, human-meaningful error message.
+ *
+ * When the executor aborts a subagent (runtime limit, parent cancellation, …)
+ * the actionable explanation lives on `abortReason`, while `error`/`stderr`
+ * are routinely empty strings. Plain `??` coalescing stops at the empty string
+ * and ships an empty error through the bridge — Python then surfaces only the
+ * generic `bridge call '__agent__' failed`. See #2006.
+ */
+function buildSubagentFailureMessage(agentName: string, result: SingleResult): string {
+	const abortReason = trimToUndefined(result.abortReason);
+	if (result.aborted && abortReason) return abortReason;
+	return (
+		trimToUndefined(result.error) ??
+		trimToUndefined(result.stderr) ??
+		abortReason ??
+		`agent() subagent '${agentName}' failed.`
+	);
+}
+
+/**
  * Run a single subagent on behalf of an eval cell's `agent()` call.
  */
 export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOptions): Promise<EvalAgentResult> {
@@ -278,10 +298,8 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		}),
 	);
 
-	if (result.exitCode !== 0 || result.error) {
-		const failureMessage =
-			result.error ?? result.stderr ?? result.abortReason ?? `agent() subagent '${agentName}' failed.`;
-		throw new ToolError(failureMessage);
+	if (result.exitCode !== 0 || result.error || result.aborted) {
+		throw new ToolError(buildSubagentFailureMessage(agentName, result));
 	}
 
 	options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);

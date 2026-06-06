@@ -231,6 +231,57 @@ describe("runEvalAgent", () => {
 		});
 		await expect(runEvalAgent({ prompt: "fail" }, { session: makeSession() })).rejects.toThrow("boom");
 	});
+
+	// Regression: a runtime-limit abort returns exitCode=1, stderr="", error=undefined,
+	// aborted=true, abortReason="Subagent runtime limit exceeded (...)". The previous
+	// failure-message coalesce stopped at the empty `stderr` (since `??` only skips
+	// nullish values) and shipped an empty error through the bridge — Python then
+	// surfaced the generic `bridge call '__agent__' failed`. See #2006.
+	it("surfaces abortReason for aborts that leave stderr empty", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess");
+		runSpy.mockImplementationOnce(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				error: undefined,
+				aborted: true,
+				abortReason: "Subagent runtime limit exceeded (task.maxRuntimeMs=900000)",
+			}),
+		);
+		runSpy.mockImplementationOnce(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "   ",
+				error: "   ",
+				aborted: true,
+				abortReason: "Cancelled by caller",
+			}),
+		);
+		runSpy.mockImplementationOnce(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				error: undefined,
+			}),
+		);
+
+		await expect(runEvalAgent({ prompt: "slow" }, { session: makeSession() })).rejects.toThrow(
+			"Subagent runtime limit exceeded (task.maxRuntimeMs=900000)",
+		);
+		// Whitespace-only stderr/error must not mask abortReason either.
+		await expect(runEvalAgent({ prompt: "cancelled" }, { session: makeSession() })).rejects.toThrow(
+			"Cancelled by caller",
+		);
+		// Last resort: still produce a non-empty message even when nothing useful is set,
+		// so Python never falls back to `bridge call '__agent__' failed`.
+		await expect(runEvalAgent({ prompt: "blank" }, { session: makeSession() })).rejects.toThrow(
+			"agent() subagent 'task' failed.",
+		);
+	});
 });
 
 describe("agent() through eval runtimes", () => {
