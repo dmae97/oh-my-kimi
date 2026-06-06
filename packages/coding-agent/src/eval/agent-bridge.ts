@@ -16,7 +16,7 @@ import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition, AgentProgress } from "../task/types";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
-import { withBridgeHeartbeat } from "./heartbeat";
+import { withBridgeTimeoutPause } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 // Import review tools for side effects (registers subagent tool handlers).
 import "../tools/review";
@@ -232,10 +232,9 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	const id = await outputManager.allocate(outputIdBase(parsed.label, agentName));
 	const assignment = parsed.prompt.trim();
 	const context = trimToUndefined(parsed.context);
-	// Pump a heartbeat while the subagent runs so the eval idle watchdog stays
-	// armed across quiet stretches (time-to-first-token, long nested tools)
-	// where `onProgress` would otherwise emit no status to re-arm it.
-	const result = await withBridgeHeartbeat(options.emitStatus, () =>
+	// Suspend eval timeout accounting while the subagent owns control. The
+	// timeout clock restarts once the bridge returns to the cell runtime.
+	const result = await withBridgeTimeoutPause(options.emitStatus, () =>
 		taskExecutor.runSubprocess({
 			cwd: options.session.cwd,
 			agent: effectiveAgent,

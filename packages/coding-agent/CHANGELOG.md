@@ -1,17 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Added
 
-### Fixed
+- Added `timeout-pause` and `timeout-resume` eval bridge status events emitted around `agent()`/`llm()` operations
 
-- Fixed retry recovery to allow automatic retries without switching models when `retry.modelFallback` is disabled.
-- Fixed `ttsr.enabled: false` being ignored at runtime. TTSR rules were still being registered with `TtsrManager.addRule` and matched against stream deltas even when the global toggle was off, so disabling TTSR did not suppress rule injection or stream abort. The manager now gates `addRule`, `hasRules`, and `#matchBuffer` on the enabled flag, so disabling fully short-circuits the TTSR path. Condition rules fall through to the rulebook bucket instead of being silently swallowed. ([#1767](https://github.com/can1357/oh-my-pi/issues/1767))
 ### Changed
 
+- Changed eval timeout accounting so delegated bridge calls now suspend the cell watchdog and start a fresh timeout window when runtime control returns
+- Changed `IdleTimeout` to support reference-counted pauses so overlapping delegated bridge calls keep timeout paused until all calls complete
 - Changed the default `app.message.followUp` binding from `Ctrl+Enter` alone to `[Ctrl+Q, Ctrl+Enter]` so the follow-up shortcut works in Windows Terminal, which does not deliver a distinct `Ctrl+Enter` event to console apps. `Ctrl+Q` mirrors the GitHub Copilot CLI default for the same action; existing remaps in `~/.omp/agent/keybindings.yml` are untouched, and if another user-remapped action already claims `Ctrl+Q`, that user binding wins while follow-up keeps `Ctrl+Enter`. `Ctrl+Q` is also reserved by `ExtensionRunner` so an extension cannot register that chord and be silently overwritten by the built-in follow-up handler ([#1903](https://github.com/can1357/oh-my-pi/issues/1903)).
 
 ### Fixed
 
+- Fixed potential `TimeoutError` aborts for short `timeout` eval cells during long bridged `agent()`/`llm()` work where no progress events are emitted until completion
+- Fixed retry recovery to allow automatic retries without switching models when `retry.modelFallback` is disabled.
+- Fixed `ttsr.enabled: false` being ignored at runtime. TTSR rules were still being registered with `TtsrManager.addRule` and matched against stream deltas even when the global toggle was off, so disabling TTSR did not suppress rule injection or stream abort. The manager now gates `addRule`, `hasRules`, and `#matchBuffer` on the enabled flag, so disabling fully short-circuits the TTSR path. Condition rules fall through to the rulebook bucket instead of being silently swallowed. ([#1767](https://github.com/can1357/oh-my-pi/issues/1767))
 - Fixed the Python eval kernel hanging on Windows during `import pandas` / `import numpy`, with SIGINT unable to recover the cell. `PythonKernel.start()` spawned the runner with `windowsHide: true`, which in Bun maps to the Win32 `CREATE_NO_WINDOW` flag and detaches the long-lived child from any inherited console — so native extensions like `numpy/_core/_multiarray_umath.pyd` (and its bundled OpenBLAS/SLEEF thread-pool init) could deadlock inside `LoadLibraryExW`, and `GenerateConsoleCtrlEvent`-based SIGINT delivery silently became a no-op. The kernel now hides its window only when the host itself has no console to share (service / piped launch); an interactive TUI launch lets the kernel inherit the parent's console, matching the behavior of `python.exe` invoked from `cmd.exe` ([#1960](https://github.com/can1357/oh-my-pi/issues/1960)).
 - Fixed `task` renderer crashing the TUI with `TypeError: completeData?.map is not a function` when a subagent's `extractedToolData.yield` slot held a non-array value. `renderAgentResult` (and the live-progress sibling) cast the slot to `Array<{ data }>` and called `?.map`, but optional chaining short-circuits only on `null`/`undefined`, so a plain object made `.map` `undefined` and threw — taking down every `review` task render. Both sites now go through `normalizeYieldData`, which wraps a single object as a 1-element array and drops primitives ([#1987](https://github.com/can1357/oh-my-pi/issues/1987))
 - Fixed `sdk-async-job-manager-singleton` tests flaking under the full parallel suite. The four `createAgentSession`-based cases ran on the default 5000ms per-test timeout, which two real session startups can exceed when `test:ts` saturates the machine across packages; on timeout the still-running test body and `afterEach` reset raced, surfacing a spurious "Unhandled error between tests" on the `AsyncJobManager.instance()` assertion. They now carry an explicit 60000ms timeout, matching the convention used by the other session-creating tests in this suite.

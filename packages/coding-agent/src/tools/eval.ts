@@ -4,7 +4,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
-import { EVAL_HEARTBEAT_OP } from "../eval/heartbeat";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
 import { IdleTimeout } from "../eval/idle-timeout";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
@@ -313,16 +313,13 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				for (let i = 0; i < cells.length; i++) {
 					const cell = cells[i];
 					const backend = cell.resolved.backend;
-					// The per-cell `timeout` is a wall-clock budget on the cell's *own*
-					// work, but it is paused while a host-side `agent()`/`llm()` bridge
-					// call is in flight: those calls pump a heartbeat (see
-					// `withBridgeHeartbeat`) that re-arms the watchdog, so a long fanout
-					// or a slow completion runs to completion. Nothing else re-arms it —
-					// compute, stdout, `log()`/`phase()`, and ordinary tool calls all
-					// count against the budget — so a cell that is not delegating to an
-					// agent/llm is bounded by a plain wall-clock timeout. The watchdog
-					// drives `combinedSignal`; we pass no wall-clock deadline downstream
-					// so the backends never arm a competing fixed timer.
+					// The per-cell `timeout` is a budget on the cell runtime's *own*
+					// work. Host-side `agent()`/`parallel()`/`llm()` bridge calls suspend
+					// that budget entirely and restart a fresh timeout window when control
+					// returns to Python/JS. Compute, stdout, `log()`/`phase()`, and
+					// ordinary tool calls all count against the budget. The watchdog drives
+					// `combinedSignal`; we pass no wall-clock deadline downstream so the
+					// backends never arm a competing fixed timer.
 					const idleTimeoutMs = timeoutSecondsFromMs(cell.timeoutMs) * 1000;
 					const idle = new IdleTimeout(idleTimeoutMs);
 					const combinedSignal = signal
@@ -355,14 +352,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 								outputSink!.push(chunk);
 							},
 							onStatus: event => {
-								// Only a bridge heartbeat re-arms the watchdog: it is the
-								// keepalive `agent()`/`llm()` pump while a host-side call is
-								// in flight, so those calls effectively pause the budget. It
-								// carries no payload — bump and drop it. Every other event
-								// (compute helpers, log()/phase(), tool results) renders but
-								// counts against the plain wall-clock budget.
-								if (event.op === EVAL_HEARTBEAT_OP) {
-									idle.bump();
+								if (event.op === EVAL_TIMEOUT_PAUSE_OP) {
+									idle.pause();
+									return;
+								}
+								if (event.op === EVAL_TIMEOUT_RESUME_OP) {
+									idle.resume();
 									return;
 								}
 								cellResult.statusEvents ??= [];
