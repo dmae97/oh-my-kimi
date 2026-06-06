@@ -37,6 +37,7 @@ import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
+	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
 	formatStatusIcon,
@@ -1021,7 +1022,7 @@ export const writeToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
@@ -1032,6 +1033,15 @@ export const writeToolRenderer = {
 		const lang = getLanguageFromPath(rawPath);
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+
+		if (result.isError) {
+			const errorText = result.content?.find(c => c.type === "text")?.text ?? "";
+			const errorHeader = renderStatusLine(
+				{ icon: "error", title: "Write", description: `${langIcon} ${pathDisplay}` },
+				uiTheme,
+			);
+			return new Text(`${errorHeader}\n${formatErrorDetail(errorText, uiTheme)}`, 0, 0);
+		}
 		const lineCount = countLines(fileContent);
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
 		const execSuffix = result.details?.madeExecutable

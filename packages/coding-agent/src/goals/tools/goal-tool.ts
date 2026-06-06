@@ -8,7 +8,7 @@ import type { Theme, ThemeColor } from "../../modes/theme/theme";
 import goalDescription from "../../prompts/tools/goal.md" with { type: "text" };
 import { formatDuration } from "../../slash-commands/helpers/format";
 import type { ToolSession } from "../../tools";
-import { formatErrorMessage, TRUNCATE_LENGTHS } from "../../tools/render-utils";
+import { formatErrorDetail, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import { ToolError } from "../../tools/tool-errors";
 import { renderStatusLine, truncateToWidth } from "../../tui";
 import { completionBudgetReport, remainingTokens } from "../runtime";
@@ -190,7 +190,7 @@ export const goalToolRenderer = {
 
 		if (result.isError) {
 			const header = renderStatusLine({ icon: "error", title: "Goal", description }, uiTheme);
-			const body = formatErrorMessage(fallbackText || "Goal tool failed", uiTheme);
+			const body = formatErrorDetail(fallbackText || "Goal tool failed", uiTheme);
 			return new Text([header, body].join("\n"), 0, 0);
 		}
 
