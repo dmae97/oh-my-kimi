@@ -1173,6 +1173,10 @@ interface SearchRenderArgs {
 }
 
 const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
+/** Line budget for the expanded view. Larger than collapsed so expanding
+ * reveals more matches with context, but still bounded so a single hot file
+ * whose matches span the whole file can't dump its entire length. */
+const EXPANDED_TEXT_LIMIT = PREVIEW_LIMITS.EXPANDED_LINES * 2;
 
 const SEARCH_CODE_FRAME_LINE_RE = /^\s*\*?(\d+)│/;
 
@@ -1283,16 +1287,20 @@ function countPreviewMatches(lines: readonly RenderedSearchLine[], hasMarkedMatc
 	return lines.reduce((count, line) => count + (!isSearchHeaderLine(line.raw) && line.raw.length > 0 ? 1 : 0), 0);
 }
 
-function renderCollapsedSearchGroups(
+function renderBudgetedSearchGroups(
 	groups: string[][],
 	maxLines: number,
 	matchCount: number,
 	searchBase: string | undefined,
 	uiTheme: Theme,
+	compact: boolean,
 ): string[] {
 	if (maxLines <= 0) return [];
 	const renderedGroups = groups
-		.map(group => compactSearchPreviewGroup(renderSearchDisplayGroup(group, searchBase, uiTheme)))
+		.map(group => {
+			const rendered = renderSearchDisplayGroup(group, searchBase, uiTheme);
+			return compact ? compactSearchPreviewGroup(rendered) : rendered;
+		})
 		.filter(group => group.length > 0);
 	if (renderedGroups.length === 0) return [];
 
@@ -1451,22 +1459,19 @@ export const searchToolRenderer = {
 		return createCachedComponent(
 			() => options.expanded,
 			width => {
-				const collapsedMatchLineBudget = Math.max(COLLAPSED_TEXT_LIMIT - extraLines.length, 0);
+				const budget = Math.max(
+					(options.expanded ? EXPANDED_TEXT_LIMIT : COLLAPSED_TEXT_LIMIT) - extraLines.length,
+					0,
+				);
 				const searchBase = details?.searchPath;
-				const matchLines = options.expanded
-					? renderTreeList(
-							{
-								items: matchGroups,
-								expanded: true,
-								maxCollapsed: matchGroups.length,
-								maxCollapsedLines: collapsedMatchLineBudget,
-								itemType: "match",
-								renderItem: group =>
-									renderSearchDisplayGroup(group, searchBase, uiTheme).map(line => line.styled),
-							},
-							uiTheme,
-						)
-					: renderCollapsedSearchGroups(matchGroups, collapsedMatchLineBudget, matchCount, searchBase, uiTheme);
+				const matchLines = renderBudgetedSearchGroups(
+					matchGroups,
+					budget,
+					matchCount,
+					searchBase,
+					uiTheme,
+					!options.expanded,
+				);
 				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
 		);
