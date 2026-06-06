@@ -151,7 +151,7 @@ export type KnownProvider =
 	| "lm-studio";
 export type Provider = KnownProvider | string;
 
-import type { Effort } from "./model-thinking";
+import type { Effort } from "./effort";
 
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };

@@ -24,6 +24,7 @@ import {
 	setCellDimensions,
 	setTerminalImageProtocol,
 	shouldEnableSynchronizedOutputByDefault,
+	synchronizedOutputUserOverride,
 	TERMINAL,
 } from "./terminal-capabilities";
 import {
@@ -44,6 +45,8 @@ const SEGMENT_RESET = "\x1b[0m";
  * diffing so `#previousLines` mirrors what was actually written.
  */
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
+const ERASE_LINE = "\x1b[2K";
+const ERASE_TO_END_OF_LINE = "\x1b[K";
 // Hide the hardware cursor before each paint/move write. Ghostty-style bar
 // cursors can otherwise leave visual afterimages while the TUI repaints the
 // row under a visible cursor. Paint writes also disable terminal autowrap:
@@ -340,7 +343,8 @@ export class Container implements Component {
 		width = Math.max(1, width);
 		const lines: string[] = [];
 		for (const child of this.children) {
-			lines.push(...child.render(width));
+			const childLines = child.render(width);
+			for (let i = 0; i < childLines.length; i++) lines.push(childLines[i]);
 		}
 		return lines;
 	}
@@ -395,6 +399,11 @@ type RenderIntent =
 export class TUI extends Container {
 	terminal: Terminal;
 	#previousLines: string[] = [];
+	// Per-frame cache of #fitLineToWidth results. Cleared at the top of every
+	// #doRender (where the frame width is fixed), so it only ever holds entries
+	// for one width. Eliminates the duplicate fit work between the compose pass
+	// and the emitters, plus repeated fits of identical blank padding rows.
+	#fitLineCache = new Map<string, string>();
 	#previousWidth = 0;
 	#previousHeight = 0;
 	#focusedComponent: Component | null = null;
@@ -507,7 +516,7 @@ export class TUI extends Container {
 					this.#nativeScrollbackCommitSafeEnd = offset + boundedEnd;
 				}
 			}
-			lines.push(...childLines);
+			for (let i = 0; i < childLines.length; i++) lines.push(childLines[i]);
 		}
 		return lines;
 	}
@@ -565,11 +574,17 @@ export class TUI extends Container {
 
 	/**
 	 * Whether DEC 2026 synchronized-output wrappers are currently emitted around
-	 * paints. Starts from conservative terminal/env detection and is force-disabled
-	 * at runtime if the terminal reports mode 2026 unsupported via DECRQM.
+	 * paints. Starts from conservative terminal/env detection and is reconciled at
+	 * runtime against the terminal's DECRQM mode-2026 report — enabled on a
+	 * positive report, disabled on a negative one.
 	 */
 	get synchronizedOutput(): boolean {
 		return this.#synchronizedOutputEnabled;
+	}
+	#deccaraFillsEnabled(): boolean {
+		// DECCARA fill rectangles arrive after shortened row text; synchronized
+		// output hides that intermediate default-background state from users.
+		return TERMINAL.deccara && this.#synchronizedOutputEnabled;
 	}
 
 	/**
@@ -731,14 +746,15 @@ export class TUI extends Container {
 
 	start(): void {
 		this.#stopped = false;
-		// Disable synchronized output if the terminal reports DEC 2026 unsupported
-		// via DECRQM. PI_NO_SYNC_OUTPUT already forces it off at construction, so
-		// only react when the user has not already opted out. Future paints drop
-		// the begin/end markers; the autowrap guards stay (see #1765).
+		// A DECRQM report for mode 2026 is authoritative: enable synchronized
+		// output when the terminal reports support (upgrading conservatively
+		// defaulted-off hosts like zellij/tmux-master/foot) and disable it when
+		// the terminal reports it unsupported. An explicit user opt-out/force
+		// (resolved at construction) still wins, so skip the probe in that case.
 		this.terminal.onPrivateModeReport?.((mode, supported) => {
-			if (mode === 2026 && !supported && !$flag("PI_NO_SYNC_OUTPUT")) {
-				this.#setSynchronizedOutput(false);
-			}
+			if (mode !== 2026) return;
+			if (synchronizedOutputUserOverride() !== null) return;
+			this.#setSynchronizedOutput(supported);
 		});
 		this.terminal.start(
 			data => this.#handleInput(data),
@@ -901,8 +917,8 @@ export class TUI extends Container {
 
 	/**
 	 * Toggle synchronized-output (DEC 2026) wrappers on paint/cursor writes and
-	 * recompute the cached begin/end sequences. Honors a DECRQM report that the
-	 * terminal does not support 2026 (#1765 covers the static env opt-out).
+	 * recompute the cached begin/end sequences. Driven by the terminal's DECRQM
+	 * mode-2026 report (#1765 covers the static env opt-out).
 	 */
 	#setSynchronizedOutput(enabled: boolean): void {
 		if (this.#synchronizedOutputEnabled === enabled) return;
@@ -979,9 +995,18 @@ export class TUI extends Container {
 	 * scrollback. This is the keyboard-accessible equivalent of the resize reset:
 	 * no queued diff frame or terminal scrollback probe can downgrade it to a
 	 * viewport-only repaint.
+	 *
+	 * Invalidates every component first so the replay reflects current state. A
+	 * geometry-driven reset thaws frozen scrollback snapshots implicitly (the new
+	 * width misses every cached snapshot), but a same-width reset would otherwise
+	 * replay stale snapshots — leaving host-frozen blocks (e.g. a transcript whose
+	 * committed rows are immutable on ED3-risk terminals) showing pre-mutation
+	 * content. Invalidation is the generic signal those containers use to retire
+	 * their snapshots, which is exactly what a user-driven display reset wants.
 	 */
 	resetDisplay(): void {
 		if (this.#stopped) return;
+		this.invalidate();
 		this.#prepareForcedRender(!isMultiplexerSession(), true);
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;
@@ -1454,6 +1479,9 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
+		// Reset the per-frame fit memo: width is fixed for this frame, so cached
+		// fit results stay valid across the compose pass and every emitter re-fit.
+		this.#fitLineCache.clear();
 
 		// 1. Compose the frame. Bracket the transcript render so the image budget
 		// observes every inline image in display order (overlays carry none).
@@ -2271,8 +2299,8 @@ export class TUI extends Container {
 		// Multiplexers (tmux/screen/zellij) cannot erase pane history with `\x1b[3J`
 		// and cannot answer a viewport-position probe, so the destructive checkpoint
 		// rebuild path is forever unavailable. The pinned emitter is built from the
-		// opposite primitives — relative cursor moves, per-line `\x1b[2K`, and
-		// `\r\n` to scroll sealed rows past the viewport bottom — which are exactly
+		// opposite primitives — relative cursor moves, per-row rewrite/suffix-clear,
+		// and `\r\n` to scroll sealed rows past the viewport bottom — which are exactly
 		// what tmux pane history accepts. Without this commit-as-you-go path, the
 		// streaming cap below clipped every frame to the visible tail and the
 		// scrolled-off head was committed nowhere (issue #1974).
@@ -2338,10 +2366,31 @@ export class TUI extends Container {
 	}
 
 	#fitLineToWidth(line: string, width: number): string {
-		if (TERMINAL.isImageLine(line)) return line;
-		if (visibleWidth(line) <= width) return line;
-		const truncated = truncateToWidth(line, width, Ellipsis.Omit);
-		return truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+		// Frame-scoped memo: #doRender clears this each frame after reading the
+		// terminal width, so within a frame `width` is constant and this map is
+		// keyed by line alone. The compose/fit pass (#fitLinesToWidth) and every
+		// emitter re-fit the same lines (and many repeated blank rows); the result
+		// is pure for a fixed width, so caching it is byte-identical and skips the
+		// redundant native visibleWidth/truncate work.
+		const cached = this.#fitLineCache.get(line);
+		if (cached !== undefined) return cached;
+		let result: string;
+		if (TERMINAL.isImageLine(line)) {
+			result = line;
+		} else if (visibleWidth(line) <= width) {
+			result = line;
+		} else {
+			const truncated = truncateToWidth(line, width, Ellipsis.Omit);
+			result = truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+		}
+		this.#fitLineCache.set(line, result);
+		return result;
+	}
+
+	#lineRewriteSequence(line: string, width: number): string {
+		const fitted = this.#fitLineToWidth(line, width);
+		if (TERMINAL.isImageLine(fitted)) return ERASE_LINE + fitted;
+		return visibleWidth(fitted) >= width ? fitted : fitted + ERASE_TO_END_OF_LINE;
 	}
 
 	/**
@@ -2404,7 +2453,7 @@ export class TUI extends Container {
 		const visibleStart = Math.max(0, lines.length - height);
 		let fillSequence = "";
 		let visibleTexts: string[] | null = null;
-		if (TERMINAL.deccara && visibleStart < lines.length) {
+		if (this.#deccaraFillsEnabled() && visibleStart < lines.length) {
 			const visible: string[] = new Array(lines.length - visibleStart);
 			for (let k = 0; k < visible.length; k++) {
 				visible[k] = this.#fitLineToWidth(lines[visibleStart + k], width);
@@ -2504,14 +2553,13 @@ export class TUI extends Container {
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			visible[screenRow] = this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
 		}
-		const { texts, sequence } = TERMINAL.deccara
+		const { texts, sequence } = this.#deccaraFillsEnabled()
 			? planDeccaraFills(visible, width)
 			: { texts: visible, sequence: "" };
 		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (screenRow > 0) buffer += "\r\n";
-			buffer += "\x1b[2K";
-			buffer += texts[screenRow];
+			buffer += this.#lineRewriteSequence(texts[screenRow], width);
 		}
 		// DECCARA rectangles paint the visible fills before cursor positioning;
 		// the cleared cells written above are what the rectangles repaint.
@@ -2549,8 +2597,8 @@ export class TUI extends Container {
 	 * leaving the transient live region out of saved lines.
 	 *
 	 * Uses only the no-scroll-snap vocabulary of {@link #emitDiff}: relative
-	 * cursor moves, per-line `\x1b[2K`, and `\r\n` to push the sealed chunk into
-	 * history. It deliberately avoids a full-screen erase (`\x1b[2J`) and absolute
+	 * cursor moves, per-row rewrite/suffix-clear, and `\r\n` to push the sealed
+	 * chunk into history. It deliberately avoids a full-screen erase (`\x1b[2J`) and absolute
 	 * cursor home (`\x1b[H`): on Ghostty those snap a reader scrolled into history
 	 * back to the bottom on every frame.
 	 */
@@ -2582,17 +2630,18 @@ export class TUI extends Container {
 
 		// Write the sealed chunk followed by the full viewport from the top row.
 		// The first (boundedAppendTo - boundedAppendFrom) rows scroll into native
-		// history; the trailing `height` rows fill the viewport. Each row clears
-		// itself with `\x1b[2K` instead of relying on a screen-wide erase.
+		// history; the trailing `height` rows fill the viewport. Text rows overwrite
+		// first and clear only the suffix so non-synchronized hosts do not visibly
+		// blank stable content before repainting it.
 		let wroteLine = false;
 		for (let i = boundedAppendFrom; i < boundedAppendTo; i++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += `\x1b[2K${this.#fitLineToWidth(lines[i] ?? "", width)}`;
+			buffer += this.#lineRewriteSequence(lines[i] ?? "", width);
 			wroteLine = true;
 		}
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += `\x1b[2K${this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width)}`;
+			buffer += this.#lineRewriteSequence(lines[viewportTop + screenRow] ?? "", width);
 			wroteLine = true;
 		}
 
@@ -2671,7 +2720,7 @@ export class TUI extends Container {
 		const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
 		const moveDown = height - 1 - currentScreenRow;
 		if (moveDown > 0) buffer += `\x1b[${moveDown}B`;
-		buffer += `\r\x1b[2K${this.#fitLineToWidth(line, width)}\x1b[?25l`;
+		buffer += `\r${this.#lineRewriteSequence(line, width)}\x1b[?25l`;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
@@ -2814,7 +2863,12 @@ export class TUI extends Container {
 		const fillStart = Math.max(firstChanged, fillViewportTop);
 		let fillSequence = "";
 		let fillTexts: string[] | null = null;
-		if (TERMINAL.deccara && !appendStart && moveTargetRow <= prevViewportBottom && renderEnd >= fillStart) {
+		if (
+			this.#deccaraFillsEnabled() &&
+			!appendStart &&
+			moveTargetRow <= prevViewportBottom &&
+			renderEnd >= fillStart
+		) {
 			const slice: string[] = new Array(renderEnd - fillStart + 1);
 			for (let i = fillStart; i <= renderEnd; i++) {
 				slice[i - fillStart] = this.#fitLineToWidth(lines[i], width);
@@ -2825,8 +2879,7 @@ export class TUI extends Container {
 		}
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) buffer += "\r\n";
-			buffer += "\x1b[2K";
-			buffer += fillTexts && i >= fillStart ? fillTexts[i - fillStart] : this.#fitLineToWidth(lines[i], width);
+			buffer += this.#lineRewriteSequence(fillTexts && i >= fillStart ? fillTexts[i - fillStart] : lines[i], width);
 		}
 
 		// If the prior frame was taller, clear the trailing rows.

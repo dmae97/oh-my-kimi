@@ -11,6 +11,7 @@ import { dereferenceJsonSchema } from "./dereference";
 import { upgradeJsonSchemaTo202012 } from "./draft";
 import { areJsonValuesEqual, mergePropertySchemas } from "./equality";
 import {
+	ALL_CCA_TYPE_SPECIFIC_KEYS,
 	CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS,
 	CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS,
 	COMBINATOR_KEYS,
@@ -501,12 +502,32 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 	if (variantTypes.length < 2 || variantTypes.every(type => type === "object")) {
 		return schema;
 	}
-
 	const nextSchema = copySchemaWithout(schema, combiner);
 	const nonNullTypes = variantTypes.filter(t => t !== "null");
-	nextSchema.type = nonNullTypes[0] ?? variantTypes[0];
+	const chosenType: string = nonNullTypes[0] ?? variantTypes[0];
+	nextSchema.type = chosenType;
+	const chosenTypeAllowedKeys = CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS[chosenType] ?? {};
+
+	// Strip sibling keys that were copied from the parent and belong to a
+	// different type (e.g. `items` sibling on a now-string-typed schema).
+	for (const key in nextSchema) {
+		if (!Object.hasOwn(nextSchema, key)) continue;
+		if (key === "type") continue;
+		if (
+			Object.hasOwn(ALL_CCA_TYPE_SPECIFIC_KEYS, key) &&
+			!Object.hasOwn(chosenTypeAllowedKeys, key) &&
+			!Object.hasOwn(CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, key)
+		) {
+			delete nextSchema[key];
+		}
+	}
+
 	for (const key in mergedVariantFields) {
 		if (!Object.hasOwn(mergedVariantFields, key)) continue;
+		// Drop type-specific keys that don't belong to the chosen type
+		if (!Object.hasOwn(chosenTypeAllowedKeys, key) && !Object.hasOwn(CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, key)) {
+			continue;
+		}
 		const value = mergedVariantFields[key];
 		const existingValue = nextSchema[key];
 		if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {

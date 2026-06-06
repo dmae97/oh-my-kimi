@@ -40,14 +40,6 @@ import {
 	wrapBrackets,
 } from "./render-utils";
 export const EVAL_DEFAULT_PREVIEW_LINES = 10;
-/**
- * Rows of source kept in the *pending* eval preview. The window follows the
- * streaming edge (newest lines pinned to the bottom) so you can watch the code
- * being written, while staying bounded — a volatile tool block taller than the
- * viewport would otherwise strand its scrolled-off head out of native scrollback
- * on ED3-risk terminals. Matches the streaming windows used by edit/write.
- */
-export const EVAL_STREAMING_PREVIEW_LINES = 12;
 
 function languageForHighlighter(language: EvalLanguage | undefined): "python" | "javascript" {
 	return language === "js" ? "javascript" : "python";
@@ -517,15 +509,12 @@ export const evalToolRenderer = {
 							title: cell.title,
 							status: "pending",
 							width,
-							codeMaxLines: EVAL_STREAMING_PREVIEW_LINES,
-							// Follow the streaming edge with a bounded tail window so the
-							// newest source stays visible as it is written, instead of
-							// rendering every line of a >100-line `code` — which would
-							// overflow the viewport and, because a tool block is volatile
-							// (it collapses to a capped result), strand its scrolled-off head
-							// out of native scrollback, cutting the box top. `Ctrl+O` lifts
-							// the window via `expanded` for a deliberate full view.
-							codeTail: true,
+							// Always render the full source: the code is fixed input, not the
+							// streaming part, so it is never compacted. While still pending
+							// (args streaming) the block is not yet committed to native
+							// scrollback — its head is only committed once a result exists and
+							// the code has finalized (see `isStreamingPreviewAppendOnly`).
+							codeMaxLines: Number.POSITIVE_INFINITY,
 							expanded: options.expanded,
 							animate,
 						},
@@ -628,7 +617,9 @@ export const evalToolRenderer = {
 								duration: cell.durationMs,
 								output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
 								outputMaxLines: outputLines.length,
-								codeMaxLines: expanded ? Number.POSITIVE_INFINITY : EVAL_DEFAULT_PREVIEW_LINES,
+								// Code is fixed input — always shown in full, never compacted.
+								// Only `output` honors the collapsed preview cap above.
+								codeMaxLines: Number.POSITIVE_INFINITY,
 								expanded,
 								width,
 								animate,
@@ -759,6 +750,18 @@ export const evalToolRenderer = {
 				cachedPreviewLines = undefined;
 			},
 		};
+	},
+
+	// Append-only once a result exists (args complete → code finalized). The code
+	// is rendered in full as a fixed top-anchored prefix, and the streamed stdout
+	// below it only appends rows at the bottom, so the scrolled-off head commits
+	// to native scrollback instead of being yanked — collapsed or expanded, since
+	// the collapsed output cap keeps its sliding tail in the bottom live region.
+	// Returns false while still pending: the code is mid-stream (args incomplete)
+	// and its header still reads "pending", so committing it would strand a stale
+	// pending preview in history.
+	isStreamingPreviewAppendOnly(_args: EvalRenderArgs, _options: RenderResultOptions, result?: unknown): boolean {
+		return result != null;
 	},
 	mergeCallAndResult: true,
 	inline: true,

@@ -173,6 +173,25 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["a-final", "b1"]); // reconciled
 	});
 
+	it("invalidate() retires frozen snapshots so resetDisplay reflects current state", () => {
+		// resetDisplay() (Ctrl+L, and the Ctrl+O expand path) reflows by calling
+		// TUI.invalidate(), which propagates to this container. That must retire the
+		// frozen snapshots the same way thaw() does, or a forced full replay would
+		// still emit the pre-mutation (e.g. collapsed) render.
+		riskFlag.eagerEraseScrollbackRisk = true;
+		const container = new TranscriptContainer();
+		const a = new MutableBlock(["a-collapsed"]);
+		const b = new MutableBlock(["b1"]);
+		container.addChild(a);
+		container.addChild(b);
+		container.render(40);
+		a.set(["a-expanded-1", "a-expanded-2"]);
+		expect(container.render(40)).toEqual(["a-collapsed", "b1"]); // frozen
+
+		container.invalidate();
+		expect(container.render(40)).toEqual(["a-expanded-1", "a-expanded-2", "b1"]);
+	});
+
 	it("recomputes a frozen block on a width change", () => {
 		riskFlag.eagerEraseScrollbackRisk = true;
 		const container = new TranscriptContainer();

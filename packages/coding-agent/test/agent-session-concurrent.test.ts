@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { Agent, AgentBusyError, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { type AssistantMessage, getBundledModel, type Message, type ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -24,6 +25,19 @@ import * as z from "zod/v4";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 // Mock stream that mimics AssistantMessageEventStream
+
+// AgentSession schedules its TTSR retry and context-promotion continuations
+// through `scheduler.wait(delayMs, { signal })` (node:timers/promises), with
+// blind 50ms/100ms "settle" delays. Tests that drive a continuation to
+// completion would otherwise pay that wall-clock time on every run. This spy
+// collapses the blind delay to a single macrotask hop (`scheduler.wait(0)`)
+// while preserving the real abort-signal semantics, so the continuation still
+// fires only after the aborted/overflowed turn has been recorded. Each test
+// that opts in must run inside a block whose afterEach restores mocks.
+const originalSchedulerWait = scheduler.wait.bind(scheduler);
+function collapseSchedulerSettleDelays(): void {
+	vi.spyOn(scheduler, "wait").mockImplementation((_delayMs, options) => originalSchedulerWait(0, options));
+}
 
 describe("AgentSession concurrent prompt guard", () => {
 	let session: AgentSession;
@@ -101,7 +115,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
 			if (predicate()) return;
-			await Bun.sleep(10);
+			await Bun.sleep(1);
 		}
 
 		throw new Error("Timed out waiting for condition");
@@ -595,13 +609,14 @@ describe("AgentSession TTSR resume gate", () => {
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true });
 		}
+		vi.restoreAllMocks();
 	});
 
 	async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
 			if (predicate()) return;
-			await Bun.sleep(10);
+			await Bun.sleep(1);
 		}
 
 		throw new Error("Timed out waiting for condition");
@@ -674,6 +689,7 @@ describe("AgentSession TTSR resume gate", () => {
 	}
 
 	it("prompt() blocks until TTSR interrupt continuation completes", async () => {
+		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let streamCallCount = 0;
 		let continuationCompleted = false;
@@ -734,6 +750,7 @@ describe("AgentSession TTSR resume gate", () => {
 	});
 
 	it("relativizes the rule file path in the TTSR interrupt injection (no absolute leak)", async () => {
+		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let streamCallCount = 0;
 
@@ -946,6 +963,7 @@ describe("AgentSession TTSR resume gate", () => {
 	});
 
 	it("prompt() waits for TTSR continuation with tool calls to finish", async () => {
+		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let streamCallCount = 0;
 		let toolExecutionFinished = false;
@@ -1306,6 +1324,7 @@ describe("AgentSession TTSR resume gate", () => {
 	});
 
 	it("prompt() waits for context-promotion continuation to finish", async () => {
+		collapseSchedulerSettleDelays();
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-promo.db"));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey("openai-codex", "test-key");

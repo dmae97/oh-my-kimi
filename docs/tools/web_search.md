@@ -161,9 +161,9 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - Output: `sources`, `requestId`.
   - **Kagi** — `packages/coding-agent/src/web/search/providers/kagi.ts`, `packages/coding-agent/src/web/kagi.ts`
     - Availability: env or `agent.db` credential for `kagi`.
-    - Querying: GET `https://kagi.com/api/v0/search?q=<query>&limit=<n>` with `Authorization: Bot <key>`.
+    - Querying: POST `https://kagi.com/api/v1/search` with `Authorization: Bearer <key>` and JSON body `{ query, workflow: "search", limit, filters?: { after } }`. `recency` maps to `filters.after` as a UTC `YYYY-MM-DD` string (`day`/`week`/`month`/`year`).
     - `limit` and `num_search_results` are collapsed together before dispatch, clamped to `1..40`, default `10`.
-    - Output: `sources`, `relatedQuestions`, `requestId`.
+    - Output: `sources` (concatenated `data.search` + `data.video` + `data.news` + `data.infobox`, with video/news/infobox results tagged in the title), `relatedQuestions` (`data.adjacent_question` + `data.related_search` `props.question`), `answer` (`data.direct_answer[0].snippet ?? title`), `requestId` (`meta.trace`).
   - **Synthetic** — `packages/coding-agent/src/web/search/providers/synthetic.ts`
     - Availability: env or `agent.db` credential for `synthetic`.
     - Querying: POST `https://api.synthetic.new/v2/search` with `{ query }`.

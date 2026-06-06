@@ -27,6 +27,34 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+// Models a component that caches its rendered output and only refreshes it when
+// `invalidate()` fires — like a transcript block that freezes a snapshot. A
+// state change behind the cache is invisible until something invalidates it,
+// which is exactly what `resetDisplay()` must do to surface a Ctrl+O expansion.
+class CachedComponent implements Component {
+	#current: string[];
+	#cache: string[] | undefined;
+
+	constructor(lines: string[]) {
+		this.#current = [...lines];
+	}
+
+	setLines(lines: string[]): void {
+		this.#current = [...lines];
+	}
+
+	invalidate(): void {
+		this.#cache = undefined;
+	}
+
+	render(width: number): string[] {
+		if (this.#cache === undefined) {
+			this.#cache = this.#current.map(line => line.slice(0, width));
+		}
+		return this.#cache;
+	}
+}
+
 class WrappingLinesComponent implements Component {
 	#lines: string[];
 
@@ -247,6 +275,33 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
+		it("rewrites changed rows before clearing suffixes for non-synchronized hosts", async () => {
+			const term = new VirtualTerminal(40, 8);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent([
+				"assistant output already rendered",
+				"tool output already rendered",
+				"todos/status already rendered",
+			]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const writes = captureWrites(term);
+
+				component.setLines(["assistant output already rendered", "tool", "todos/status already rendered"]);
+				tui.requestRender();
+				await settle(term);
+
+				const paint = writes.at(-1) ?? "";
+				expect(paint).toContain("tool\x1b[0m\x1b[K");
+				expect(paint).not.toContain("\x1b[2Ktool");
+				expect(visible(term)[1]).toBe("tool");
+			} finally {
+				tui.stop();
+			}
+		});
 
 		it("clears removed tail lines after shrink", async () => {
 			const term = new VirtualTerminal(40, 10);
@@ -361,6 +416,32 @@ describe("TUI terminal-state regressions", () => {
 				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
 				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("resetDisplay surfaces a state change hidden behind a component's render cache", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new CachedComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+
+				// The component's content changes, but its render stays cached (a
+				// frozen transcript snapshot). resetDisplay() must invalidate it so the
+				// forced replay reflects the new content rather than the stale cache —
+				// the Ctrl+O expansion path depends on this.
+				component.setLines(rows("M", 8));
+				tui.resetDisplay();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("M", 8));
+				expect(visible(term)).toEqual(["M5", "M6", "M7"]);
 			} finally {
 				tui.stop();
 			}
@@ -2142,7 +2223,7 @@ describe("TUI terminal-state regressions", () => {
 					expect(viewport.at(-1)).toBe("spinner-b");
 					expect(term.getScrollBuffer().join("\n")).not.toContain("edited-0");
 					const paint = writes.at(-1) ?? "";
-					expect(paint).toContain("\r\x1b[2Kspinner-b");
+					expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
 					expect(paint).not.toContain("\x1b[H");
 					expect(paint).not.toContain("\x1b[3J");
 				} finally {
@@ -2170,7 +2251,7 @@ describe("TUI terminal-state regressions", () => {
 					expect(visible(scrolledTerm).map(line => line.trim())).toEqual(beforeViewport);
 					expect(scrolledTerm.getScrollBuffer().join("\n")).not.toContain("edited-0");
 					const paint = writes.at(-1) ?? "";
-					expect(paint).toContain("\r\x1b[2Kspinner-b");
+					expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
 					expect(paint).not.toContain("\x1b[H");
 					expect(paint).not.toContain("\x1b[3J");
 				} finally {
@@ -3426,8 +3507,8 @@ describe("TUI terminal-state regressions", () => {
 				// Initial paint: only the styled row carries background cells.
 				expect(backgroundRows(term, height)).toEqual([1]);
 
-				// Diff path: rewriting the row below starts with \x1b[2K — with leaked
-				// background, BCE would paint that whole row red.
+				// Diff path: rewriting the row below clears only after the row reset;
+				// with leaked background, BCE would otherwise paint that row red.
 				component.setLines(["plain-0", UNRESET_BG_ROW, "EDITED-2"]);
 				tui.requestRender();
 				await settle(term);
@@ -3459,8 +3540,8 @@ describe("TUI terminal-state regressions", () => {
 				expect(foregroundRows(term, height)).toEqual([1]);
 				expect(underlineRows(term, height)).toEqual([1]);
 
-				// Rewriting the next row starts with an erase; leaked SGR would make
-				// the edited row green/underlined despite containing plain text.
+				// Rewriting the next row clears only after the row reset; leaked SGR
+				// would make the edited row green/underlined despite containing plain text.
 				component.setLines(["plain-0", UNRESET_FG_UNDERLINE_ROW, "EDITED-2"]);
 				tui.requestRender();
 				await settle(term);
@@ -3495,7 +3576,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				// Force a full repaint (viewport rewrite path emits \x1b[2K per row).
+				// Force a full repaint (viewport rewrite path suffix-clears each text row).
 				tui.requestRender(true);
 				await settle(term);
 

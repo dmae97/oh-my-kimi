@@ -1,5 +1,5 @@
+import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
-import { Effort } from "../model-thinking";
 import { getBundledModels } from "../models";
 import type { Api, Model, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";

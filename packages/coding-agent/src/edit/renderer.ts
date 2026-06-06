@@ -179,11 +179,6 @@ function countEditFiles(edits: EditRenderEntry[]): number {
 	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
-function countLines(text: string): number {
-	if (!text) return 0;
-	return text.split("\n").length;
-}
-
 function getOperationTitle(op: Operation | undefined): string {
 	return op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
 }
@@ -261,14 +256,6 @@ function formatStreamingDiff(
 	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
 	if (!expanded || label !== "preview") text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
-}
-
-function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
-	const icon = uiTheme.getLangIcon(language);
-	if (lineCount !== null) {
-		return uiTheme.fg("dim", `${icon} ${lineCount} lines`);
-	}
-	return uiTheme.fg("dim", `${icon}`);
 }
 
 function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme, expanded: boolean): string {
@@ -387,6 +374,13 @@ function getApplyPatchRenderSummary(
 	}
 }
 
+function formatDiffStatsSuffix(diff: string, uiTheme: Theme): string {
+	const { added, removed, hunks } = getDiffStats(diff);
+	const stats = formatDiffStats(added, removed, hunks, uiTheme);
+	if (!stats) return "";
+	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
+}
+
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -394,15 +388,6 @@ function renderDiffSection(
 	uiTheme: Theme,
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
 ): string {
-	let text = "";
-	const diffStats = getDiffStats(diff);
-	text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${formatDiffStats(
-		diffStats.added,
-		diffStats.removed,
-		diffStats.hunks,
-		uiTheme,
-	)}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
-
 	const {
 		text: truncatedDiff,
 		hiddenHunks,
@@ -411,7 +396,7 @@ function renderDiffSection(
 		? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
 		: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
 
-	text += `\n\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
+	let text = `\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
 	if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
 		const remainder: string[] = [];
 		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
@@ -532,11 +517,6 @@ function renderSingleFileResult(
 		"";
 	const op = args?.op || firstEdit?.op || details?.op;
 	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
-	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
-
-	const editTextSource = args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch;
-	const metadataLineCount = editTextSource ? countLines(editTextSource) : null;
-	const metadataLine = op !== "delete" ? `\n${formatMetadataLine(metadataLineCount, language, uiTheme)}` : "";
 
 	const displayErrorText = isError && details && "displayErrorText" in details ? details.displayErrorText : undefined;
 	const errorText = isError
@@ -560,6 +540,11 @@ function renderSingleFileResult(
 				(details && !isError ? details.firstChangedLine : undefined);
 			const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine });
 
+			// Change stats ride inline on the header next to the path rather than a separate row.
+			const previewDiff = editDiffPreview && !("error" in editDiffPreview) ? editDiffPreview.diff : undefined;
+			const headerDiff = isError ? undefined : details?.diff || previewDiff;
+			const statsSuffix = headerDiff ? formatDiffStatsSuffix(headerDiff, uiTheme) : "";
+
 			const header = renderStatusLine(
 				{
 					icon: isError ? "error" : "success",
@@ -568,8 +553,7 @@ function renderSingleFileResult(
 				},
 				uiTheme,
 			);
-			let text = header;
-			text += metadataLine;
+			let text = header + statsSuffix;
 
 			if (isError) {
 				if (errorText) {

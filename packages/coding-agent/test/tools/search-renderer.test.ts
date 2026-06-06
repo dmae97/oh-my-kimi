@@ -154,4 +154,54 @@ describe("searchToolRenderer", () => {
 
 		expect(extractLinkUris(rendered)).toContain("file:///tmp/omp-project/file.ts?line=7");
 	});
+
+	it("bounds the expanded single-file view instead of dumping every match", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		// One file's matches collapse into a single blank-line group (no `#`/`##`
+		// headers, `│...` gap separators). Before the fix the expanded renderer
+		// dumped the entire span because the tree list ignored the line budget.
+		const clusters = Array.from({ length: 12 }, (_, i) => i * 100 + 1);
+		const displayContent = clusters
+			.map((line, idx) => {
+				const cluster = [` ${line}│ context before`, `*${line + 1}│ MATCH ${idx}`, ` ${line + 2}│ context after`];
+				return idx === 0 ? cluster.join("\n") : ["    │...", ...cluster].join("\n");
+			})
+			.join("\n");
+
+		const result = {
+			content: [{ type: "text", text: "" }],
+			details: {
+				matchCount: clusters.length,
+				fileCount: 1,
+				searchPath: "/tmp/omp-project/renderer.ts",
+				scopePath: "renderer.ts",
+				displayContent,
+			},
+		};
+
+		const render = (expanded: boolean) =>
+			sanitizeText(
+				searchToolRenderer
+					.renderResult(result as never, { expanded, isPartial: false }, uiTheme, { pattern: "needle" })
+					.render(200)
+					.join("\n"),
+			).split("\n");
+
+		const expanded = render(true);
+		const expandedBody = expanded.slice(1);
+		// Bounded: must not render all 12 clusters (36+ lines).
+		expect(expandedBody.length).toBeLessThan(clusters.length * 3);
+		expect(expandedBody.some(line => line.includes("more matches"))).toBe(true);
+		// Expanded keeps surrounding context lines (unlike the compact collapsed view).
+		expect(expandedBody.some(line => line.includes("context before"))).toBe(true);
+
+		const collapsedBody = render(false).slice(1);
+		expect(collapsedBody.length).toBeLessThan(expandedBody.length);
+		// Collapsed compacts to match lines only — no context.
+		expect(collapsedBody.some(line => line.includes("context before"))).toBe(false);
+		expect(collapsedBody.some(line => line.includes("more matches"))).toBe(true);
+	});
 });

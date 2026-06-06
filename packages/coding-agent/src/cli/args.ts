@@ -1,7 +1,7 @@
 /**
  * CLI argument parsing and help display
  */
-import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai/effort";
 import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { parseEffort } from "../thinking";
@@ -284,7 +284,7 @@ export function getExtraHelpText(): string {
   ${chalk.dim("# Search & Tools")}
   EXA_API_KEY                - Exa web search
   BRAVE_API_KEY              - Brave web search
-  PERPLEXITY_API_KEY         - Perplexity web search (API)
+  PERPLEXITY_API_KEY         - Perplexity web search API key (optional; anonymous fallback)
   PERPLEXITY_COOKIES         - Perplexity web search (session cookie)
   TAVILY_API_KEY             - Tavily web search
   ANTHROPIC_SEARCH_API_KEY   - Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)

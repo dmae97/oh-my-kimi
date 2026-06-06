@@ -187,41 +187,76 @@ export function detectTerminalEagerEraseScrollbackRisk(
 	return true;
 }
 
-/** Whether DEC 2026 synchronized-output wrappers should be enabled by default. */
-export function shouldEnableSynchronizedOutputByDefault(
-	env: NodeJS.ProcessEnv = Bun.env,
-	platform: NodeJS.Platform = process.platform,
-	terminalId: TerminalId = TERMINAL_ID,
-): boolean {
+/**
+ * Resolve an explicit user override for DEC 2026 synchronized output. Returns
+ * `false` for an opt-out, `true` for a force-on, or `null` when the user has
+ * expressed no preference. Shared by the static default and the runtime DECRQM
+ * probe so both honor the same precedence — an opt-out beats a force-on.
+ */
+export function synchronizedOutputUserOverride(env: NodeJS.ProcessEnv = Bun.env): boolean | null {
 	if (env.PI_NO_SYNC_OUTPUT || env.PI_TUI_SYNC_OUTPUT === "0") return false;
 	if (env.PI_FORCE_SYNC_OUTPUT === "1" || env.PI_TUI_SYNC_OUTPUT === "1") return true;
-	if (platform === "win32") return false;
+	return null;
+}
 
+/**
+ * Whether `TERM_FEATURES` advertises DEC 2026 synchronized output via the `Sy`
+ * capability token. `TERM_FEATURES` is a run of capitalized two-letter codes
+ * (e.g. `…Sy…`), so a case-sensitive substring match is unambiguous: `Sy`
+ * cannot straddle a code boundary because those are always lowercase→uppercase.
+ */
+function advertisesSynchronizedOutput(termFeatures: string | undefined): boolean {
+	return termFeatures?.includes("Sy") ?? false;
+}
+
+/**
+ * Whether DEC 2026 synchronized-output wrappers should be enabled by default.
+ *
+ * Policy (highest precedence first):
+ *   1. Explicit user override (`PI_NO_SYNC_OUTPUT`/`PI_TUI_SYNC_OUTPUT=0` off,
+ *      `PI_FORCE_SYNC_OUTPUT=1`/`PI_TUI_SYNC_OUTPUT=1` on).
+ *   2. Positive `TERM_FEATURES` advertisement (`Sy`) — survives SSH/mux wrapping.
+ *   3. Windows Terminal (1.24+) via `WT_SESSION`, on native win32 and the
+ *      WSL/SSH-fronted host alike.
+ *   4. Known direct terminals with confirmed support. SSH does *not* disable —
+ *      DEC 2026 passes through SSH when the outer terminal honors it.
+ *   5. Everything else starts off, including risky multiplexers; the runtime
+ *      DECRQM probe upgrades any of them when the terminal actually reports
+ *      `?2026` supported (current zellij, tmux master, foot, contour, mintty…).
+ */
+export function shouldEnableSynchronizedOutputByDefault(
+	env: NodeJS.ProcessEnv = Bun.env,
+	terminalId: TerminalId = TERMINAL_ID,
+): boolean {
+	const override = synchronizedOutputUserOverride(env);
+	if (override !== null) return override;
+
+	if (advertisesSynchronizedOutput(env.TERM_FEATURES)) return true;
+	if (env.WT_SESSION) return true;
+
+	// Risky multiplexers start off even when an inner terminal id leaks through:
+	// older tmux/screen synchronized-output handling is flaky and a mux may not
+	// pass DEC 2026 to the outer host. The DECRQM probe re-enables sync when the
+	// mux reports `?2026` supported.
 	const term = env.TERM?.toLowerCase() ?? "";
-	const termProgram = env.TERM_PROGRAM?.toLowerCase() ?? "";
-	if (
-		env.SSH_CONNECTION ||
-		env.SSH_CLIENT ||
-		env.SSH_TTY ||
-		env.TMUX ||
-		env.STY ||
-		env.ZELLIJ ||
-		term.startsWith("tmux") ||
-		term.startsWith("screen")
-	) {
+	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
 		return false;
 	}
-	if (env.VTE_VERSION) return false;
-	switch (termProgram) {
-		case "gnome-terminal":
-		case "kgx":
-		case "ptyxis":
-		case "xfce4-terminal":
-			return false;
+
+	switch (terminalId) {
+		case "kitty":
+		case "ghostty":
+		case "wezterm":
+		case "iterm2":
+		case "alacritty":
+		case "vscode":
+			return true;
 		default:
-			break;
+			// VTE family, GNU screen, Apple Terminal, legacy native console host
+			// (no WT_SESSION), and bare/unknown xterm profiles stay off until the
+			// DECRQM probe proves support.
+			return false;
 	}
-	return terminalId === "kitty" || terminalId === "ghostty" || terminalId === "wezterm" || terminalId === "iterm2";
 }
 
 /**

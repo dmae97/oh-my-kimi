@@ -581,14 +581,25 @@ function parseFeedToMarkdown(content: string, maxItems = 10): string {
  */
 const REMOTE_READER_MAX_MS = 10_000;
 
+/** Reader backends for {@link renderHtmlToText}, in default priority order. */
+export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina";
+
+const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = ["native", "trafilatura", "lynx", "parallel", "jina"];
+
 /**
- * Render HTML to markdown using Parallel, jina, trafilatura, lynx, then the
- * in-process native converter. The overall `timeout` budget bounds the call,
- * but remote reader requests are additionally capped at `REMOTE_READER_MAX_MS`
- * so that a hung remote endpoint cannot prevent local fallbacks from running.
- * Only a real `userSignal` cancellation aborts the chain — remote per-attempt
- * timeouts and the overall reader-mode timeout still allow later renderers
- * (especially the purely-local native converter) to be tried.
+ * Render HTML to markdown by trying reader backends in priority order: native
+ * (in-process), trafilatura, lynx, Parallel, then Jina. The `providers.fetch`
+ * setting picks the order — `auto` uses the default above; any specific backend
+ * is tried first, then the remaining backends as fallbacks. Every backend's
+ * output must clear the same quality gate (>100 non-whitespace chars and not
+ * {@link isLowQualityOutput}) before it is accepted, otherwise the next backend
+ * is tried.
+ *
+ * The overall `timeout` budget bounds the whole call; remote backends (Parallel,
+ * Jina) are additionally capped at `REMOTE_READER_MAX_MS` so a hung endpoint
+ * cannot starve later renderers — especially the purely-local native converter,
+ * which always works on already-loaded HTML. Only a real `userSignal`
+ * cancellation aborts the chain (#1449).
  */
 export async function renderHtmlToText(
 	url: string,
@@ -607,92 +618,74 @@ export async function renderHtmlToText(
 		signal: overallSignal,
 	};
 	const remoteBudgetMs = Math.min(timeout * 1000, REMOTE_READER_MAX_MS);
+	// Per-attempt budget for remote endpoints so one stall cannot consume the
+	// whole reader-mode budget and starve the local fallbacks.
+	const remoteSignal = () => ptree.combineSignals(userSignal, remoteBudgetMs);
 
-	// Try Parallel extract first when credentials are configured
-	if (settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
-		try {
+	const runners: Record<FetchProvider, () => Promise<string | null>> = {
+		// Purely local, no network/subprocess: still works on already-loaded HTML
+		// even after remote/subprocess attempts are aborted by the budget.
+		native: () => htmlToMarkdown(html, { cleanContent: true }),
+		trafilatura: async () => {
+			const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
+			if (!trafilatura) return null;
+			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
+			return result.ok ? result.stdout : null;
+		},
+		lynx: async () => {
+			if (!hasCommand("lynx")) return null;
+			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
+			return result.ok ? result.stdout : null;
+		},
+		parallel: async () => {
+			if (!findParallelApiKey(storage)) return null;
 			const parallelResult = await extractWithParallel(
 				[url],
-				{
-					objective: "Extract the main content",
-					excerpts: true,
-					fullContent: false,
-					signal: ptree.combineSignals(userSignal, remoteBudgetMs),
-				},
+				{ objective: "Extract the main content", excerpts: true, fullContent: false, signal: remoteSignal() },
 				storage,
 			);
 			const firstDocument = parallelResult.results[0];
-			if (firstDocument) {
-				const content = getParallelExtractContent(firstDocument);
-				if (content.trim().length > 100 && !isLowQualityOutput(content)) {
-					return { content, ok: true, method: "parallel" };
-				}
+			return firstDocument ? getParallelExtractContent(firstDocument) : null;
+		},
+		jina: async () => {
+			const response = await fetch(`https://r.jina.ai/${url}`, {
+				headers: { Accept: "text/markdown" },
+				signal: remoteSignal(),
+			});
+			return response.ok ? await response.text() : null;
+		},
+	};
+
+	const preference = settings.get("providers.fetch");
+	const order: readonly FetchProvider[] =
+		preference === "auto"
+			? FETCH_PROVIDER_ORDER
+			: [preference, ...FETCH_PROVIDER_ORDER.filter(method => method !== preference)];
+
+	// Highest-priority output that is substantial but fails the low-quality gate.
+	// Surfaced (ok: true) only when no backend clears the gate, so the caller's
+	// targeted fallbacks (llms.txt / document extraction) still run and we beat
+	// returning the unrendered raw HTML.
+	let lowQuality: { content: string; method: FetchProvider } | null = null;
+
+	for (const method of order) {
+		// Honour real user cancellation between attempts; remote per-attempt and
+		// overall-budget timeouts still fall through to later (local) renderers.
+		userSignal?.throwIfAborted();
+		try {
+			const content = await runners[method]();
+			if (!content || content.trim().length <= 100) continue;
+			if (!isLowQualityOutput(content)) {
+				return { content, ok: true, method };
 			}
+			lowQuality ??= { content, method };
 		} catch {
-			// Parallel extract failed or stalled; honour real cancellation only.
 			userSignal?.throwIfAborted();
 		}
 	}
 
-	// Try jina reader API with its own sub-budget so a stall cannot starve
-	// later fallbacks (#1449).
-	try {
-		const jinaUrl = `https://r.jina.ai/${url}`;
-		const response = await fetch(jinaUrl, {
-			headers: { Accept: "text/markdown" },
-			signal: ptree.combineSignals(userSignal, remoteBudgetMs),
-		});
-		if (response.ok) {
-			const content = await response.text();
-			if (content.trim().length > 100 && !isLowQualityOutput(content)) {
-				return { content, ok: true, method: "jina" };
-			}
-		}
-	} catch {
-		// Jina failed or stalled; honour real cancellation only.
-		userSignal?.throwIfAborted();
-	}
-
-	// Try trafilatura (auto-install via uv/pip)
-	try {
-		const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
-		if (trafilatura) {
-			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
-			if (result.ok && result.stdout.trim().length > 100) {
-				return { content: result.stdout, ok: true, method: "trafilatura" };
-			}
-		}
-	} catch {
-		// trafilatura unavailable or stalled; continue to next method.
-		userSignal?.throwIfAborted();
-	}
-
-	// Try lynx (can't auto-install, system package)
-	try {
-		const lynx = hasCommand("lynx");
-		if (lynx) {
-			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
-			if (result.ok) {
-				return { content: result.stdout, ok: true, method: "lynx" };
-			}
-		}
-	} catch {
-		// lynx failed or stalled; continue to native converter.
-		userSignal?.throwIfAborted();
-	}
-
-	// Fall back to native converter (purely local, no network/subprocess).
-	// Always attempted: even if remote renderers and subprocesses were aborted
-	// by the overall reader-mode timeout, this still works on already-loaded
-	// HTML (#1449).
-	try {
-		const content = await htmlToMarkdown(html, { cleanContent: true });
-		if (content.trim().length > 100 && !isLowQualityOutput(content)) {
-			return { content, ok: true, method: "native" };
-		}
-	} catch {
-		// Native converter failed; nothing else to try.
-		userSignal?.throwIfAborted();
+	if (lowQuality) {
+		return { content: lowQuality.content, ok: true, method: lowQuality.method };
 	}
 	return { content: "", ok: false, method: "none" };
 }
@@ -1141,10 +1134,27 @@ async function renderUrl(
 			throw new ToolAbortError();
 		}
 
-		// 5E: Render HTML with lynx or html2text
+		// 5E: Render HTML via the reader-backend chain (native/trafilatura/lynx/parallel/jina)
 		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal, storage);
 		if (!htmlResult.ok) {
-			notes.push("html rendering failed (lynx/html2text unavailable)");
+			notes.push("html rendering failed (no reader backend produced usable output)");
+
+			const llmResult = await tryLlmEndpoints(finalUrl, timeout, signal);
+			if (llmResult) {
+				notes.push(`Used llms.txt fallback: ${llmResult.endpoint}`);
+				const output = finalizeOutput(llmResult.content);
+				return {
+					url,
+					finalUrl,
+					contentType: "text/plain",
+					method: "llms.txt",
+					content: output.content,
+					fetchedAt,
+					truncated: output.truncated,
+					notes,
+				};
+			}
+
 			const output = finalizeOutput(rawContent);
 			return {
 				url,

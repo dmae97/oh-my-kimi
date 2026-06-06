@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
-import type { Effort } from "./model-thinking";
+import type { Effort } from "./effort";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,

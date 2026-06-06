@@ -2427,22 +2427,31 @@ function isZaiAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 }
 
 /**
- * Returns true for providers whose Anthropic-compatible endpoints do NOT
- * implement signature-based thinking-chain integrity (DeepSeek, Z.AI, etc.).
- * For these providers, unsigned thinking blocks must be preserved as
- * `type: "thinking"` instead of being degraded to text.
+ * Returns true when unsigned `thinking` blocks from prior assistant turns should
+ * be replayed as Anthropic-native thinking instead of demoted to text.
+ *
+ * Official Anthropic (matched via `isAnthropicApiBaseUrl`, which intentionally
+ * treats a missing baseUrl as official since `resolveAnthropicBaseUrl` routes
+ * it to `https://api.anthropic.com`) enforces signature-based thinking-chain
+ * integrity, so unsigned blocks must remain text there. Anthropic-compatible
+ * reasoning endpoints commonly emit unsigned thinking blocks while still
+ * expecting them back as `type: "thinking"` on continuation; demoting them
+ * loses the model's reasoning chain and can destabilize the next tool-call
+ * arguments (#2005). Known non-signing hosts are also preserved for
+ * compatibility.
  */
-function isNonSigningAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
-	// Known non-signing providers
+function shouldReplayUnsignedThinking(model: Model<"anthropic-messages">): boolean {
 	if (model.provider === "zai" || model.provider === "deepseek") return true;
 	const baseUrl = model.baseUrl;
-	if (!baseUrl) return false;
-	try {
-		const hostname = new URL(baseUrl).hostname.toLowerCase();
-		return hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com");
-	} catch {
-		return false;
+	if (baseUrl) {
+		try {
+			const hostname = new URL(baseUrl).hostname.toLowerCase();
+			if (hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com")) return true;
+		} catch {
+			// Fall through to the protocol-level reasoning rule below.
+		}
 	}
+	return model.reasoning && !isAnthropicApiBaseUrl(baseUrl);
 }
 
 function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
@@ -2533,7 +2542,7 @@ export function convertAnthropicMessages(
 					}
 					if (block.thinking.trim().length === 0) continue;
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						if (isNonSigningAnthropicEndpoint(model)) {
+						if (shouldReplayUnsignedThinking(model)) {
 							blocks.push({
 								type: "thinking",
 								thinking: block.thinking.toWellFormed(),

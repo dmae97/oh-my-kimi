@@ -212,6 +212,59 @@ export function repairOrphanResponsesToolOutputs(input: ResponseInput): Response
 	});
 }
 
+/** Placeholder output for a tool call whose result is absent from the input. */
+const ORPHAN_TOOL_CALL_PLACEHOLDER =
+	"[No tool output recorded: the tool call was interrupted before it produced a result.]";
+
+/**
+ * Synthesize a placeholder `function_call_output` / `custom_tool_call_output`
+ * for every `function_call` / `custom_tool_call` whose `call_id` has no matching
+ * output later in the same input. The Responses API rejects an unpaired call
+ * with `400 No tool output found for function call …`.
+ *
+ * Orphan calls surface when the user branches/navigates the session tree to a
+ * node that ends on a tool call (the tool-result child is excluded from the
+ * reconstructed history) or when a turn is aborted/crashes after the call
+ * streamed but before its result persisted. Dropping the call would erase the
+ * assistant's action; a placeholder output keeps the call visible so the model
+ * can recover (e.g. re-issue the call). Symmetric to
+ * {@link repairOrphanResponsesToolOutputs}.
+ */
+export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseInput {
+	const outputCallIds = new Set<string>();
+	for (const item of input) {
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call_output" && t !== "custom_tool_call_output") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId === "string") outputCallIds.add(callId);
+	}
+	let hasOrphan = false;
+	for (const item of input) {
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call" && t !== "custom_tool_call") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId === "string" && !outputCallIds.has(callId)) {
+			hasOrphan = true;
+			break;
+		}
+	}
+	if (!hasOrphan) return input;
+	const repaired: ResponseInput = [];
+	for (const item of input) {
+		repaired.push(item);
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call" && t !== "custom_tool_call") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId !== "string" || outputCallIds.has(callId)) continue;
+		repaired.push({
+			type: t === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output",
+			call_id: callId,
+			output: ORPHAN_TOOL_CALL_PLACEHOLDER,
+		} as ResponseInput[number]);
+	}
+	return repaired;
+}
+
 export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent>,
 	supportsImages: boolean,

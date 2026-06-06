@@ -1,22 +1,6 @@
+import { Effort, THINKING_EFFORTS } from "./effort";
 import { resolveOpenAICompat } from "./providers/openai-completions-compat";
 import type { Api, Model as ApiModel, ThinkingConfig } from "./types";
-
-/** User-facing thinking levels, ordered least to most intensive. */
-export const enum Effort {
-	Minimal = "minimal",
-	Low = "low",
-	Medium = "medium",
-	High = "high",
-	XHigh = "xhigh",
-}
-
-export const THINKING_EFFORTS: readonly Effort[] = [
-	Effort.Minimal,
-	Effort.Low,
-	Effort.Medium,
-	Effort.High,
-	Effort.XHigh,
-];
 
 const DEFAULT_REASONING_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
 const DEFAULT_REASONING_EFFORTS_WITH_XHIGH: readonly Effort[] = [

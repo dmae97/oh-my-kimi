@@ -40,19 +40,13 @@ import {
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
-import { exportFromFile } from "./export/html";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
-import {
-	getInstalledPluginsRegistryPath,
-	getMarketplacesCacheDir,
-	getMarketplacesRegistryPath,
-	getPluginsCacheDir,
-	MarketplaceManager,
-} from "./extensibility/plugins/marketplace";
+import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import type { MCPManager } from "./mcp";
-import { InteractiveMode, runAcpMode, runPrintMode, runRpcMode } from "./modes";
-import { ALL_SCENES, runSetupWizard, selectSetupScenes } from "./modes/setup-wizard";
+import { InteractiveMode } from "./modes/interactive-mode";
+import type { PrintModeOptions } from "./modes/print-mode";
+import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import {
@@ -71,6 +65,13 @@ import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
+
+type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
+type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
+type RunRpcMode = (
+	session: AgentSession,
+	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
+) => Promise<never>;
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
@@ -261,17 +262,26 @@ async function runInteractiveMode(
 		eventBus,
 	);
 
-	const setupScenes = await selectSetupScenes(settings.get("setupVersion"), ALL_SCENES, mode, {
-		resuming,
-		isTTY: process.stdin.isTTY && process.stdout.isTTY,
-		setupWizardEnabled: settings.get("startup.setupWizard"),
-		force: forceSetupWizard,
-	});
+	// Cold-launch gate: the full setup wizard (every scene + the overlay and
+	// their TUI/OAuth/search/theme deps) is heavy, yet the common case only needs
+	// to know whether the stored setup version is current. Lazy-load the wizard
+	// barrel only when setup is stale or forced; otherwise skip it entirely.
+	const storedSetupVersion = settings.get("setupVersion");
+	const setupWizard =
+		forceSetupWizard || storedSetupVersion < CURRENT_SETUP_VERSION ? await import("./modes/setup-wizard") : undefined;
+	const setupScenes = setupWizard
+		? await setupWizard.selectSetupScenes(storedSetupVersion, setupWizard.ALL_SCENES, mode, {
+				resuming,
+				isTTY: process.stdin.isTTY && process.stdout.isTTY,
+				setupWizardEnabled: settings.get("startup.setupWizard"),
+				force: forceSetupWizard,
+			})
+		: [];
 
 	await mode.init({ suppressWelcomeIntro: resuming || setupScenes.length > 0 });
 
-	if (setupScenes.length > 0) {
-		await runSetupWizard(mode, setupScenes);
+	if (setupWizard && setupScenes.length > 0) {
+		await setupWizard.runSetupWizard(mode, setupScenes);
 	}
 
 	versionCheckPromise
@@ -716,7 +726,7 @@ async function buildSessionOptions(
 interface RunRootCommandDependencies {
 	createAgentSession?: typeof createAgentSession;
 	discoverAuthStorage?: typeof discoverAuthStorage;
-	runAcpMode?: typeof runAcpMode;
+	runAcpMode?: RunAcpMode;
 	settings?: Settings;
 	forceSetupWizard?: boolean;
 }
@@ -773,6 +783,7 @@ export async function runRootCommand(
 		let result: string;
 		try {
 			const outputPath = parsedArgs.messages.length > 0 ? parsedArgs.messages[0] : undefined;
+			const { exportFromFile } = await import("./export/html");
 			result = await exportFromFile(parsedArgs.export, outputPath);
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
@@ -940,33 +951,11 @@ export async function runRootCommand(
 
 	await pluginPreloadPromise;
 
-	// Background marketplace auto-update — never blocks startup.
-	const autoUpdate = settingsInstance.get("marketplace.autoUpdate");
-	if (autoUpdate !== "off") {
-		void (async () => {
-			try {
-				const mgr = new MarketplaceManager({
-					marketplacesRegistryPath: getMarketplacesRegistryPath(),
-					installedRegistryPath: getInstalledPluginsRegistryPath(),
-					projectInstalledRegistryPath: (await resolveActiveProjectRegistryPath(getProjectDir())) ?? undefined,
-					marketplacesCacheDir: getMarketplacesCacheDir(),
-					pluginsCacheDir: getPluginsCacheDir(),
-					clearPluginRootsCache: clearPluginRootsAndCaches,
-				});
-				await mgr.refreshStaleMarketplaces();
-				const updates = await mgr.checkForUpdates();
-				if (updates.length === 0) return;
-				if (autoUpdate === "auto") {
-					await mgr.upgradeAllPlugins();
-					logger.debug(`Auto-upgraded ${updates.length} marketplace plugin(s)`);
-				} else {
-					logger.debug(`${updates.length} marketplace plugin update(s) available — /marketplace upgrade`);
-				}
-			} catch {
-				// Silently ignore — network failure, corrupt data, offline.
-			}
-		})();
-	}
+	scheduleMarketplaceAutoUpdate({
+		autoUpdate: settingsInstance.get("marketplace.autoUpdate"),
+		resolveActiveProjectRegistryPath,
+		clearPluginRootsCache: clearPluginRootsAndCaches,
+	});
 
 	const { options: sessionOptions } = await logger.time(
 		"buildSessionOptions",
@@ -988,7 +977,7 @@ export async function runRootCommand(
 	// Both are no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset. An empty config
 	// is enough to enable telemetry — content capture is governed by the
 	// standard OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT env var.
-	initTelemetryExport();
+	await initTelemetryExport();
 	if (isTelemetryExportEnabled()) {
 		sessionOptions.telemetry = {};
 	}
@@ -1027,7 +1016,9 @@ export async function runRootCommand(
 			rawArgs,
 			createSession,
 		});
-		await (deps.runAcpMode ?? runAcpMode)(createAcpSession);
+		// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
+		const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
+		await runAcpMode(createAcpSession);
 	} else {
 		// Resolve extension-registered CLI flags before creating the session so a
 		// bad `@file` fails fast WITHOUT leaving a junk session/breadcrumb
@@ -1091,6 +1082,8 @@ export async function runRootCommand(
 		}
 
 		if (mode === "rpc" || mode === "rpc-ui") {
+			// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
+			const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 			await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined);
 		} else if (isInteractive) {
 			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
@@ -1109,7 +1102,7 @@ export async function runRootCommand(
 
 			if ($env.PI_TIMING) {
 				logger.printTimings();
-				if ($env.PI_TIMING === "x") {
+				if (logger.shouldExitAfterTimings()) {
 					process.exit(0);
 				}
 			}
@@ -1132,6 +1125,8 @@ export async function runRootCommand(
 				initialImages,
 			);
 		} else {
+			// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.
+			const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 			await runPrintMode(session, {
 				mode,
 				messages: initialArgs.messages,

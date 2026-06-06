@@ -250,6 +250,20 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 }
 
+/**
+ * Plan-review preview block. Once rendered it is static (a one-shot Markdown of
+ * the plan file), so even while it sits as the live bottom block beneath the
+ * approval selector its scrolled-off head is safe to commit to native
+ * scrollback. Reporting append-only lets an over-tall plan + selector commit the
+ * plan's head instead of clipping it — without this a plain {@link Container} is
+ * deferred and a long plan is cut off the top on ED3-risk terminals.
+ */
+class PlanReviewBlock extends Container {
+	isTranscriptBlockAppendOnly(): boolean {
+		return true;
+	}
+}
+
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -1680,7 +1694,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#renderPlanPreview(planContent: string, options?: { append?: boolean }): void {
 		const existingContainer = this.#planReviewContainer;
 		const replaceExisting = options?.append !== true && existingContainer !== undefined;
-		const planReviewContainer = replaceExisting ? existingContainer : new Container();
+		const planReviewContainer = replaceExisting ? existingContainer : new PlanReviewBlock();
 		planReviewContainer.clear();
 		planReviewContainer.addChild(new Spacer(1));
 		planReviewContainer.addChild(new DynamicBorder());
@@ -2844,8 +2858,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	showDebugSelector(): void {
-		this.#selectorController.showDebugSelector();
+	async showDebugSelector(): Promise<void> {
+		await this.#selectorController.showDebugSelector();
 	}
 
 	showSessionObserver(): void {

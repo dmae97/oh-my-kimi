@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Effort } from "../src/model-thinking";
+import { Effort } from "../src/effort";
 import { streamBedrock } from "../src/providers/amazon-bedrock";
 import type { Context, Model } from "../src/types";
 

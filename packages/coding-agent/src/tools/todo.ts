@@ -777,13 +777,26 @@ function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
 
 export const todoToolRenderer = {
 	renderCall(args: TodoRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const ops = args?.ops?.map(entry => {
-			const parts = [entry.op ?? "update"];
-			if (entry.task) parts.push(entry.task);
-			if (entry.phase) parts.push(entry.phase);
-			if (entry.items?.length) parts.push(`${entry.items.length} item${entry.items.length === 1 ? "" : "s"}`);
-			return parts.join(" ");
-		}) ?? ["update"];
+		// `args` here is the raw partially-parsed JSON from the streaming
+		// tool-call delta and may not satisfy `TodoRenderArgs` at runtime:
+		// `parseStreamingJson` can hand back `{ ops: "[" }` mid-delta, or
+		// entries that are `null` / strings before fields stream. Guard
+		// against non-array `ops` and non-object entries so a malformed
+		// delta never breaks the TUI render loop (#2005).
+		const opsList = Array.isArray(args?.ops) ? args.ops : [];
+		const ops =
+			opsList.length === 0
+				? ["update"]
+				: opsList.map(entry => {
+						const e = entry && typeof entry === "object" ? entry : ({} as NonNullable<typeof entry>);
+						const parts = [e.op ?? "update"];
+						if (e.task) parts.push(e.task);
+						if (e.phase) parts.push(e.phase);
+						if (Array.isArray(e.items) && e.items.length) {
+							parts.push(`${e.items.length} item${e.items.length === 1 ? "" : "s"}`);
+						}
+						return parts.join(" ");
+					});
 		const text = renderStatusLine({ icon: "pending", title: "Todo", meta: ops }, uiTheme);
 		return new Text(text, 0, 0);
 	},

@@ -36,6 +36,8 @@ import { loginOpenAICodexDevice } from "./utils/oauth/openai-codex";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./utils/oauth/types";
 import { loginXiaomi, loginXiaomiTokenPlan } from "./utils/oauth/xiaomi";
 
+const USAGE_RANKING_METRIC_EPSILON = 1e-9;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -604,6 +606,14 @@ function getOpenAICodexPlanPriority(report: UsageReport | null): number {
 
 function hasOpenAICodexProPlan(report: UsageReport | null): boolean {
 	return getUsagePlanType(report)?.includes("pro") === true;
+}
+
+function compareUsageRankingMetric(left: number, right: number): number {
+	if (left === right) return 0;
+	if (!Number.isFinite(left) || !Number.isFinite(right)) return left < right ? -1 : 1;
+	const delta = left - right;
+	const tolerance = Math.max(USAGE_RANKING_METRIC_EPSILON, Math.max(Math.abs(left), Math.abs(right)) * 0.000001);
+	return Math.abs(delta) <= tolerance ? 0 : delta;
 }
 
 function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefined {
@@ -2288,6 +2298,16 @@ export class AuthStorage {
 		return undefined;
 	}
 
+	#getUsageReportScopeProjectId(report: UsageReport): string | undefined {
+		const ids = new Set<string>();
+		for (const limit of report.limits) {
+			const projectId = limit.scope.projectId?.trim();
+			if (projectId) ids.add(projectId);
+		}
+		if (ids.size === 1) return [...ids][0];
+		return undefined;
+	}
+
 	#getUsageReportIdentifiers(report: UsageReport): string[] {
 		const identifiers: string[] = [];
 		const email = this.#getUsageReportMetadataValue(report, "email");
@@ -2295,6 +2315,11 @@ export class AuthStorage {
 		if (report.provider === "openai-codex" || report.provider === "anthropic") {
 			return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 		}
+		const projectId =
+			this.#getUsageReportMetadataValue(report, "projectId") ?? this.#getUsageReportScopeProjectId(report);
+		// Only add project as a fallback when no email is available — two users
+		// with different emails on the same GCP project must not merge.
+		if (projectId && !email) identifiers.push(`project:${projectId}`);
 		const accountId = this.#getUsageReportMetadataValue(report, "accountId");
 		if (accountId) identifiers.push(`account:${accountId}`);
 		const account = this.#getUsageReportMetadataValue(report, "account");
@@ -2781,12 +2806,14 @@ export class AuthStorage {
 			return left.planPriority - right.planPriority;
 		}
 		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
-		if (left.secondaryDrainRate !== right.secondaryDrainRate) {
-			return left.secondaryDrainRate - right.secondaryDrainRate;
-		}
-		if (left.secondaryUsed !== right.secondaryUsed) return left.secondaryUsed - right.secondaryUsed;
-		if (left.primaryDrainRate !== right.primaryDrainRate) return left.primaryDrainRate - right.primaryDrainRate;
-		if (left.primaryUsed !== right.primaryUsed) return left.primaryUsed - right.primaryUsed;
+		let metric = compareUsageRankingMetric(left.secondaryDrainRate, right.secondaryDrainRate);
+		if (metric !== 0) return metric;
+		metric = compareUsageRankingMetric(left.secondaryUsed, right.secondaryUsed);
+		if (metric !== 0) return metric;
+		metric = compareUsageRankingMetric(left.primaryDrainRate, right.primaryDrainRate);
+		if (metric !== 0) return metric;
+		metric = compareUsageRankingMetric(left.primaryUsed, right.primaryUsed);
+		if (metric !== 0) return metric;
 		return 0;
 	}
 
@@ -3932,6 +3959,8 @@ function resolveProviderCredentialIdentityKey(provider: string, identifiers: str
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
+	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
+	if (projectIdentifier) return projectIdentifier;
 	return null;
 }
 
@@ -3967,6 +3996,8 @@ function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[
 	if (accountId) identifiers.add(`account:${accountId}`);
 	const email = normalizeStoredEmail(credential.email);
 	if (email) identifiers.add(`email:${email}`);
+	const projectId = normalizeStoredAccountId(credential.projectId);
+	if (projectId) identifiers.add(`project:${projectId}`);
 	const accessIdentifiers = extractOAuthTokenIdentifiers(credential.access) ?? [];
 	for (const identifier of accessIdentifiers) {
 		identifiers.add(identifier);

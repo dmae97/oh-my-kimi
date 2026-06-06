@@ -19,7 +19,7 @@
  */
 import { extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
-import { Effort } from "../model-thinking";
+import { Effort } from "../effort";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";

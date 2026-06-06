@@ -2,7 +2,7 @@
  * Tests for ExtensionRunner - conflict detection, error handling, tool wrapping.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -20,21 +20,34 @@ describe("ExtensionRunner", () => {
 	let tempDir: TempDir;
 	let extensionsDir: string;
 	let sessionManager: SessionManager;
+	// Shared immutable fixtures. ModelRegistry's constructor synchronously loads
+	// every bundled model and rebuilds the canonical index (~100ms); these tests
+	// never mutate the registry or auth storage, so build them once per file
+	// instead of paying that cost in every beforeEach.
+	let sharedTempDir: TempDir;
 	let modelRegistry: ModelRegistry;
 	let authStorage: AuthStorage;
 
-	beforeEach(async () => {
+	beforeAll(async () => {
+		sharedTempDir = TempDir.createSync("@pi-runner-shared-");
+		authStorage = await AuthStorage.create(path.join(sharedTempDir.path(), "testauth.db"));
+		modelRegistry = new ModelRegistry(authStorage);
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		sharedTempDir.removeSync();
+	});
+
+	beforeEach(() => {
 		tempDir = TempDir.createSync("@pi-runner-test-");
 		extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
 		fs.mkdirSync(extensionsDir, { recursive: true });
 		sessionManager = SessionManager.inMemory();
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		modelRegistry = new ModelRegistry(authStorage);
 	});
 
 	afterEach(() => {
 		testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
-		authStorage.close();
 		tempDir.removeSync();
 	});
 
@@ -147,7 +160,6 @@ describe("ExtensionRunner", () => {
 
 			warnSpy.mockRestore();
 		});
-
 
 		it("warns when two extensions register same shortcut", async () => {
 			// Use a non-reserved shortcut

@@ -304,4 +304,29 @@ describe("editToolRenderer", () => {
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("plain streamed text");
 	});
+
+	it("renders change stats inline on the result header with no separate metadata or stats row", async () => {
+		const uiTheme = await getUiTheme();
+		const diff = [" 115│ ctx", "-116│ old", "+117│ new one", "+118│ new two"].join("\n");
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated demo.go" }],
+				details: { diff, op: "update" },
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "demo.go" },
+		);
+
+		const lines = Bun.stripANSI(component.render(160).join("\n")).split("\n");
+		// Stats ride on the header line next to the path…
+		expect(lines[0]).toContain("demo.go");
+		expect(lines[0]).toContain("+2");
+		expect(lines[0]).toContain("-1");
+		expect(lines[0]).toContain("1 hunk");
+		// …only there (no standalone stats row), and the diff starts immediately
+		// below the header (no blank line, no lone lang-icon metadata row).
+		expect(lines[1]).toContain("115│ ctx");
+		expect(lines.filter(line => line.includes("hunk"))).toHaveLength(1);
+	});
 });

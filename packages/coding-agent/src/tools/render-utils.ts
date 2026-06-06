@@ -221,10 +221,24 @@ export function formatMeta(meta: string[], theme: Theme): string {
 	return meta.length > 0 ? ` ${theme.fg("muted", meta.join(theme.sep.dot))}` : "";
 }
 
-export function formatErrorMessage(message: string | undefined, theme: Theme): string {
+function sanitizeErrorText(message: string | undefined): string {
 	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
-	const safe = clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
-	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${safe}`)}`;
+	return clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
+}
+
+export function formatErrorMessage(message: string | undefined, theme: Theme): string {
+	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${sanitizeErrorText(message)}`)}`;
+}
+
+/**
+ * Error message rendered as a subordinate detail line beneath a status header
+ * that already carries the error icon (e.g. `✘ Write: <path>`). The header's
+ * icon already signals failure, so this omits the redundant error symbol and
+ * "Error:" prefix that `formatErrorMessage` adds for standalone single-line
+ * errors, indenting two columns to sit under the header title instead.
+ */
+export function formatErrorDetail(message: string | undefined, theme: Theme): string {
+	return `  ${theme.fg("error", sanitizeErrorText(message))}`;
 }
 
 export function formatEmptyMessage(message: string, theme: Theme): string {

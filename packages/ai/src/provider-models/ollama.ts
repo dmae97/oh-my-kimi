@@ -1,6 +1,6 @@
 import { fetchWithRetry } from "@oh-my-pi/pi-utils";
+import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
-import { Effort } from "../model-thinking";
 import type { ThinkingConfig } from "../types";
 import { createBundledReferenceMap, createReferenceResolver } from "./bundled-references";
 
