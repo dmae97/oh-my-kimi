@@ -525,10 +525,7 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 	for (const key in mergedVariantFields) {
 		if (!Object.hasOwn(mergedVariantFields, key)) continue;
 		// Drop type-specific keys that don't belong to the chosen type
-		if (
-			!Object.hasOwn(chosenTypeAllowedKeys, key) &&
-			!Object.hasOwn(CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, key)
-		) {
+		if (!Object.hasOwn(chosenTypeAllowedKeys, key) && !Object.hasOwn(CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS, key)) {
 			continue;
 		}
 		const value = mergedVariantFields[key];
