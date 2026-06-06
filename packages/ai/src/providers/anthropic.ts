@@ -2426,35 +2426,40 @@ function isZaiAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 	}
 }
 
-/**
- * Returns true for providers whose Anthropic-compatible endpoints do NOT
- * implement signature-based thinking-chain integrity (DeepSeek, Z.AI,
- * Xiaomi MiMo Token Plan, …). For these providers, unsigned `thinking`
- * blocks emitted on prior assistant turns must be replayed as
- * `type: "thinking"` instead of being degraded to `type: "text"` — the
- * model relies on seeing its own reasoning chain back in the conversation
- * to keep tool-call argument serialization stable (#2005).
- */
-function isNonSigningAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
-	// Known non-signing providers
-	if (model.provider === "zai" || model.provider === "deepseek") return true;
-	// Xiaomi MiMo (catalog `xiaomi` + every Token Plan region) exposes an
-	// Anthropic-compat endpoint that does not sign its `thinking` blocks.
-	// Match the provider-id pattern used in `openai-completions-compat.ts`.
-	if (model.provider === "xiaomi" || model.provider.startsWith("xiaomi-token-plan-")) return true;
+function isOfficialAnthropicEndpoint(model: Model<"anthropic-messages">): boolean {
 	const baseUrl = model.baseUrl;
 	if (!baseUrl) return false;
 	try {
 		const hostname = new URL(baseUrl).hostname.toLowerCase();
-		if (hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com")) return true;
-		// Cover user-defined providers pointed at any Xiaomi Token Plan host
-		// (e.g. `token-plan-sgp.xiaomimimo.com/anthropic`), matching the
-		// existing `xiaomimimo.com` detection in `append-only-context-mode.ts`.
-		if (hostname === "xiaomimimo.com" || hostname.endsWith(".xiaomimimo.com")) return true;
-		return false;
+		return hostname === "api.anthropic.com";
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Returns true when unsigned `thinking` blocks from prior assistant turns should
+ * be replayed as Anthropic-native thinking instead of demoted to text.
+ *
+ * Official Anthropic enforces signature-based thinking-chain integrity, so
+ * unsigned blocks must remain text there. Anthropic-compatible reasoning
+ * endpoints commonly emit unsigned thinking blocks while still expecting those
+ * blocks back as `type: "thinking"` on continuation; demoting them loses the
+ * model's reasoning chain and can destabilize the next tool-call arguments
+ * (#2005). Known non-signing hosts are also preserved for compatibility.
+ */
+function shouldReplayUnsignedThinking(model: Model<"anthropic-messages">): boolean {
+	if (model.provider === "zai" || model.provider === "deepseek") return true;
+	const baseUrl = model.baseUrl;
+	if (baseUrl) {
+		try {
+			const hostname = new URL(baseUrl).hostname.toLowerCase();
+			if (hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com")) return true;
+		} catch {
+			// Fall through to the protocol-level reasoning rule below.
+		}
+	}
+	return model.reasoning && !isOfficialAnthropicEndpoint(model);
 }
 
 function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
@@ -2545,7 +2550,7 @@ export function convertAnthropicMessages(
 					}
 					if (block.thinking.trim().length === 0) continue;
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						if (isNonSigningAnthropicEndpoint(model)) {
+						if (shouldReplayUnsignedThinking(model)) {
 							blocks.push({
 								type: "thinking",
 								thinking: block.thinking.toWellFormed(),
