@@ -58,7 +58,7 @@ const EMPTY_COMPILED_EQUIVALENCE: CompiledEquivalenceConfig = {
 };
 const kModelResolutionCache = Symbol("model-equivalence.resolutionCache");
 interface CompiledEquivalenceConfigWithCache extends CompiledEquivalenceConfig {
-	[kModelResolutionCache]?: WeakMap<Model<Api>, ResolvedCanonicalModel>;
+	[kModelResolutionCache]?: Map<string, ResolvedCanonicalModel>;
 }
 const FAMILY_EXTRACTION_PATTERNS = [
 	/(?:^|[/:._-])((?:claude|gemini|gpt|grok|glm|qwen|minimax|kimi|deepseek|llama|gemma|nova|mistral|ministral|pixtral|codestral|devstral|magistral|ernie|doubao|seed|aion|olmo|molmo|nemotron|palmyra|command|codex|coder|o[1345])[-a-z0-9.]+)(?::|$)/i,
@@ -128,8 +128,16 @@ function normalizeCanonicalIdKey(canonicalId: string): string {
 	return canonicalId.trim().toLowerCase();
 }
 
+function getCanonicalSuffixAliasKey(candidate: string): string {
+	return PENALTY_HAS_UPPERCASE.test(candidate) ? normalizeCanonicalIdKey(candidate) : candidate;
+}
+
 export function formatCanonicalVariantSelector(model: Model<Api>): string {
 	return `${model.provider}/${model.id}`;
+}
+
+function getModelResolutionCacheKey(model: Model<Api>): string {
+	return `${model.provider}\0${model.id}`;
 }
 
 function buildOverrideMap(overrides: Record<string, string> | undefined): Map<string, string> {
@@ -728,10 +736,10 @@ function getPreferredFallbackCanonicalCandidate(modelId: string, candidates: rea
 
 function resolveCanonicalIdForModel(
 	model: Model<Api>,
+	selector: string,
 	equivalence: CompiledEquivalenceConfig,
 	referenceData: CanonicalReferenceData,
 ): ResolvedCanonicalModel {
-	const selector = formatCanonicalVariantSelector(model);
 	const normalizedSelector = normalizeSelectorKey(selector);
 
 	if (equivalence.overrides.has(normalizedSelector)) {
@@ -752,10 +760,14 @@ function resolveCanonicalIdForModel(
 		return { id: claudeFamilyAlias, source: claudeFamilyAlias === model.id ? "bundled" : "heuristic" };
 	}
 
+	if (referenceData.officialIds.has(model.id) && !model.id.includes("/") && !model.id.includes(":")) {
+		return { id: model.id, source: "bundled" };
+	}
+
 	const heuristicCandidates = getHeuristicCanonicalCandidates(model.id, referenceData.officialIds);
 	const officialMatches = new Set(heuristicCandidates.filter(candidate => referenceData.officialIds.has(candidate)));
 	for (const candidate of heuristicCandidates) {
-		const aliased = referenceData.suffixAliases.get(normalizeCanonicalIdKey(candidate));
+		const aliased = referenceData.suffixAliases.get(getCanonicalSuffixAliasKey(candidate));
 		if (aliased) {
 			officialMatches.add(aliased);
 		}
@@ -814,17 +826,18 @@ export function buildCanonicalModelIndex(
 	const compiledWithCache = compiledEquivalence as CompiledEquivalenceConfigWithCache;
 	let modelCache = compiledWithCache[kModelResolutionCache];
 	if (!modelCache) {
-		modelCache = new WeakMap<Model<Api>, ResolvedCanonicalModel>();
+		modelCache = new Map<string, ResolvedCanonicalModel>();
 		compiledWithCache[kModelResolutionCache] = modelCache;
 	}
 
 	for (const model of models) {
-		let canonical = modelCache.get(model);
-		if (!canonical) {
-			canonical = resolveCanonicalIdForModel(model, compiledEquivalence, referenceData);
-			modelCache.set(model, canonical);
-		}
 		const selector = formatCanonicalVariantSelector(model);
+		const cacheKey = getModelResolutionCacheKey(model);
+		let canonical = modelCache.get(cacheKey);
+		if (!canonical) {
+			canonical = resolveCanonicalIdForModel(model, selector, compiledEquivalence, referenceData);
+			modelCache.set(cacheKey, canonical);
+		}
 		const variant: CanonicalModelVariant = {
 			canonicalId: canonical.id,
 			selector,
