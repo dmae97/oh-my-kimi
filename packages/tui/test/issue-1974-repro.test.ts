@@ -1,10 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	type Component,
-	type NativeScrollbackLiveRegion,
-	TERMINAL,
-	TUI,
-} from "@oh-my-pi/pi-tui";
+import { type Component, type NativeScrollbackLiveRegion, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1974
@@ -83,10 +78,7 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
-async function withEnvPatch<T>(
-	patch: Record<string, string | undefined>,
-	run: () => T | Promise<T>,
-): Promise<T> {
+async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
 	const saved: Record<string, string | undefined> = {};
 	for (const key in patch) {
 		saved[key] = Bun.env[key];
@@ -233,9 +225,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 
 					const writes = capture(term);
 					for (let chunk = 5; chunk <= 40; chunk += 5) {
-						stream.setLines(
-							Array.from({ length: chunk }, (_unused, i) => `row-${String(i).padStart(3, "0")}`),
-						);
+						stream.setLines(Array.from({ length: chunk }, (_unused, i) => `row-${String(i).padStart(3, "0")}`));
 						tui.requestRender();
 						await settle(term);
 					}
