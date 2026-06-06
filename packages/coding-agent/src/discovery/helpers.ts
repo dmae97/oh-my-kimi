@@ -102,6 +102,17 @@ export function getProjectPath(ctx: LoadContext, source: SourceId, subpath: stri
 }
 
 /**
+ * Resolve GitHub Copilot CLI's user-global config root. Copilot stores per-user
+ * instructions/prompts/agents/MCP under `~/.copilot`, relocatable via the
+ * `COPILOT_HOME` env var (mirrors Copilot CLI's `--config-dir`). Falls back to
+ * `<home>/.copilot` when the override is unset.
+ */
+export function resolveCopilotHome(home: string): string {
+	const override = process.env.COPILOT_HOME?.trim();
+	return override ? override : path.join(home, ".copilot");
+}
+
+/**
  * Create source metadata for an item.
  */
 export function createSourceMeta(provider: string, filePath: string, level: "user" | "project"): SourceMeta {
