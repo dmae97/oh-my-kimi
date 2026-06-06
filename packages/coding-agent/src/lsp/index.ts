@@ -313,6 +313,24 @@ const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
 	"hover",
 ]);
 
+const RUST_WORKSPACE_MARKERS = ["Cargo.toml", "rust-analyzer.toml"] as const;
+
+function hasRustWorkspaceAncestor(filePath: string): boolean {
+	let dir = path.dirname(filePath);
+	while (true) {
+		for (const marker of RUST_WORKSPACE_MARKERS) {
+			if (fs.existsSync(path.join(dir, marker))) {
+				return true;
+			}
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return false;
+		}
+		dir = parent;
+	}
+}
+
 function limitDiagnosticMessages(messages: string[]): string[] {
 	if (messages.length <= DIAGNOSTIC_MESSAGE_LIMIT) {
 		return messages;
@@ -1954,12 +1972,14 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				(serverConfig.resolvedCommand ? path.basename(serverConfig.resolvedCommand) === "rust-analyzer" : false);
 			const needsProjectIndex =
 				targetFile !== null && PROJECT_INDEXED_ACTIONS.has(action) && isProjectAwareLspServer(serverConfig);
-			if (needsProjectIndex && isRustAnalyzerServer) {
-				await waitForProjectLoaded(client, signal);
-			}
+			const rustWorkspaceWait =
+				needsProjectIndex && isRustAnalyzerServer && targetFile !== null && hasRustWorkspaceAncestor(targetFile);
 
 			if (targetFile) {
 				await ensureFileOpen(client, targetFile, signal);
+			}
+			if (rustWorkspaceWait) {
+				await waitForProjectLoaded(client, signal);
 			}
 
 			// For project-aware servers, references/rename/definition without a `symbol`
