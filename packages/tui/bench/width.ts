@@ -5,7 +5,7 @@
  */
 import { visibleWidth as nativeVisibleWidth } from "@oh-my-pi/pi-natives";
 import { getDefaultTabWidth } from "@oh-my-pi/pi-utils";
-import { visibleWidthRaw as hybridVisibleWidth, replaceTabs } from "../src/utils";
+import { visibleWidth as hybridVisibleWidth, replaceTabs } from "../src/utils";
 
 const ITERATIONS = 10_000;
 const WARMUP = 500;
