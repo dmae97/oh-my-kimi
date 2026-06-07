@@ -784,9 +784,13 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 		if (issue.code === "invalid_union") {
 			const inner = (issue as unknown as { errors?: ReadonlyArray<ReadonlyArray<ZodIssue>> }).errors;
 			if (inner) {
+				// A union-branch issue only competes with a sibling branch when it
+				// sits at the union node's own path. Issues whose own path is
+				// non-empty live on a deeper field that an already-identified
+				// branch owns, so the singleton-array repair should still apply.
 				for (const branch of inner) {
 					for (const child of branch) {
-						walk(child, fullPath, true);
+						walk(child, fullPath, child.path.length === 0);
 					}
 				}
 			}
