@@ -20,6 +20,7 @@
 
 - Fixed streaming auth retries to handle `401` and usage-limit errors before replay-unsafe content is emitted, including failures surfaced only via `errorStatus`
 - Fixed streaming retries to buffer and suppress partial `start` events from failed auth attempts so only clean retried events are delivered
+- Fixed the HTTP 400 raw-request dumper (`appendRawHttpRequestDumpFor400`) littering the real `~/.omp/logs/http-400-requests` directory during tests. Provider suites exercise the 400 error path with mocked `fetch` responses, which the dumper could not distinguish from genuine failures; it now skips persistence under the Bun test runner (`isBunTestRuntime()`).
 
 ## [15.10.0] - 2026-06-06
 
