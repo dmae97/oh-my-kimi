@@ -17,38 +17,42 @@ const enum ToolCallStatus {
 	Aborted = 2,
 }
 
-type PendingToolResultRewrite = { originalId: string; replacementId: string } | undefined;
+type PendingToolResultRewrite = { replacementId: string } | undefined;
 
 function deduplicateToolCallIds(messages: Message[]): Message[] {
 	const seenToolCallIds = new Map<string, number>();
-	let pendingToolResultRewrites: PendingToolResultRewrite[] = [];
-	let pendingToolResultRewriteIndex = 0;
+	const pendingToolResultRewrites = new Map<string, PendingToolResultRewrite[]>();
 
 	return messages.map(msg => {
 		if (msg.role === "toolResult") {
-			const rewrite = pendingToolResultRewrites[pendingToolResultRewriteIndex];
-			pendingToolResultRewriteIndex += 1;
-			if (pendingToolResultRewriteIndex >= pendingToolResultRewrites.length) {
-				pendingToolResultRewrites = [];
-				pendingToolResultRewriteIndex = 0;
-			}
-			if (rewrite && msg.toolCallId === rewrite.originalId) return { ...msg, toolCallId: rewrite.replacementId };
+			const rewrites = pendingToolResultRewrites.get(msg.toolCallId);
+			if (!rewrites || rewrites.length === 0) return msg;
+
+			const rewrite = rewrites.shift();
+			if (rewrites.length === 0) pendingToolResultRewrites.delete(msg.toolCallId);
+			if (rewrite) return { ...msg, toolCallId: rewrite.replacementId };
 			return msg;
 		}
 
-		pendingToolResultRewrites = [];
-		pendingToolResultRewriteIndex = 0;
 		if (msg.role !== "assistant") return msg;
 
+		const enqueueToolResultRewrite = (id: string, rewrite: PendingToolResultRewrite): void => {
+			const rewrites = pendingToolResultRewrites.get(id);
+			if (rewrites) {
+				rewrites.push(rewrite);
+				return;
+			}
+			pendingToolResultRewrites.set(id, [rewrite]);
+		};
+
 		let contentChanged = false;
-		const nextToolResultRewrites: PendingToolResultRewrite[] = [];
 		const content = msg.content.map(block => {
 			if (block.type !== "toolCall") return block;
 
 			const previousCount = seenToolCallIds.get(block.id) ?? 0;
 			if (previousCount === 0) {
 				seenToolCallIds.set(block.id, 1);
-				nextToolResultRewrites.push(undefined);
+				enqueueToolResultRewrite(block.id, undefined);
 				return block;
 			}
 
@@ -60,14 +64,12 @@ function deduplicateToolCallIds(messages: Message[]): Message[] {
 			}
 			seenToolCallIds.set(block.id, duplicateIndex + 1);
 			seenToolCallIds.set(replacementId, 1);
-			nextToolResultRewrites.push({ originalId: block.id, replacementId });
+			enqueueToolResultRewrite(block.id, { replacementId });
 			contentChanged = true;
 			return { ...block, id: replacementId };
 		});
 
 		if (!contentChanged) return msg;
-		pendingToolResultRewrites = nextToolResultRewrites;
-		pendingToolResultRewriteIndex = 0;
 		return { ...msg, content };
 	});
 }

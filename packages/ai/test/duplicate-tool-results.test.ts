@@ -413,6 +413,27 @@ describe("Duplicate Tool Results Regression", () => {
 			{ type: "text", text: "second" },
 		]);
 	});
+
+	it("preserves delayed duplicate tool results across message gaps", () => {
+		const duplicateId = "functions.eval:301";
+		const developerMessage: DeveloperMessage = { role: "developer", content: "handoff summary", timestamp: 4 };
+		const messages: Message[] = [
+			makeEvalAssistantMessage(duplicateId, 1),
+			makeEvalToolResult(duplicateId, "first", 2),
+			makeEvalAssistantMessage(duplicateId, 3),
+			developerMessage,
+			makeEvalToolResult(duplicateId, "second", 5),
+		];
+
+		const transformed = transformMessages(messages, model);
+		const toolResults = getToolResults(transformed);
+
+		expect(getAssistantToolIds(transformed)).toEqual([duplicateId, `${duplicateId}_dup1`]);
+		expect(toolResults.map(result => result.toolCallId)).toEqual([duplicateId, `${duplicateId}_dup1`]);
+		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup1`)?.content).toEqual([
+			{ type: "text", text: "second" },
+		]);
+	});
 });
 
 /**
