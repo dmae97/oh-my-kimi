@@ -167,9 +167,8 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 				}
 			}
 
-			if (options.signal?.aborted && !sawTerminalEvent) {
-				const reason = options.signal.reason;
-				throw reason instanceof Error ? reason : new Error(String(reason ?? "Request aborted"));
+			if (!sawTerminalEvent) {
+				throw new Error("Proxy stream ended without a terminal event (done or error)");
 			}
 
 			stream.end();
