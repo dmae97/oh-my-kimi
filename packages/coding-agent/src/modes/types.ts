@@ -182,6 +182,9 @@ export interface InteractiveModeContext {
 	flushPendingModelSwitch(): Promise<void>;
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
+	/** Acknowledge a user interrupt (Esc) by switching the loader to an
+	 *  "Interrupting…" label until the agent turn unwinds. */
+	notifyInterrupting(): void;
 	ensureLoadingAnimation(): void;
 	startPendingSubmission(input: {
 		text: string;
