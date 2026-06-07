@@ -57,6 +57,11 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 export async function applyStartupCwd(parsed: Args): Promise<void> {
 	if (parsed.cwd) {
 		setProjectDir(parsed.cwd);
+		// setProjectDir resolves the (possibly relative) target against the launch
+		// cwd and chdirs into it. Re-sync parsed.cwd to the resolved absolute path
+		// so downstream consumers (buildSessionOptions, settings/discovery, session
+		// persistence) don't re-resolve a relative string against the new cwd.
+		parsed.cwd = getProjectDir();
 		return;
 	}
 	await maybeAutoChdir(parsed);

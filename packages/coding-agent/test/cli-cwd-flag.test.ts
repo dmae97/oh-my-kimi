@@ -38,4 +38,25 @@ describe("parseArgs — --cwd flag", () => {
 		expect(getProjectDir()).toBe(targetDir);
 		expect(process.cwd()).toBe(targetDir);
 	});
+
+	it("normalizes a relative --cwd target to the resolved absolute path", async () => {
+		const launchDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-cwd-rel-"));
+		const childName = "repo";
+		const childDir = path.join(launchDir, childName);
+		fs.mkdirSync(childDir);
+		setProjectDir(launchDir);
+
+		const parsed = parseArgs(["--cwd", childName]);
+		await applyStartupCwd(parsed);
+
+		// parsed.cwd must be the resolved absolute target, not the raw relative
+		// string that would re-resolve against the new cwd (e.g. repo/repo).
+		expect(path.isAbsolute(parsed.cwd ?? "")).toBe(true);
+		expect(parsed.cwd).toBe(getProjectDir());
+		expect(getProjectDir()).toBe(childDir);
+		// Re-resolving the normalized value against the (now changed) process cwd
+		// is idempotent — no doubled "repo/repo" segment.
+		expect(path.resolve(parsed.cwd ?? "")).toBe(getProjectDir());
+		expect(parsed.cwd?.endsWith(`${childName}${path.sep}${childName}`)).toBe(false);
+	});
 });
