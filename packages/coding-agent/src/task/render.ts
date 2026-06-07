@@ -11,6 +11,7 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
+import { shimmerEnabled, shimmerText } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import {
 	formatBadge,
@@ -628,11 +629,24 @@ function renderAgentProgress(
 	const description = progress.description?.trim();
 	const displayId = formatTaskId(progress.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
-	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
+	const indent = prefix ? `${prefix} ` : "";
+	let statusLine: string;
+	if (progress.status === "running") {
+		const bullet = theme.fg("accent", "•");
+		const name = shimmerEnabled()
+			? shimmerText(displayId, theme)
+			: theme.fg("accent", description ? theme.bold(displayId) : displayId);
+		statusLine = `${indent}${bullet} ${name}`;
+		if (description) {
+			statusLine += theme.fg("accent", `: ${description}`);
+		}
+	} else {
+		statusLine = `${indent}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
+	}
 
 	// Show retry-blocked badge so the parent immediately sees that a child
 	// is sleeping on a provider 429, not silently progressing. Wins over the
-	// generic running spinner because "we're waiting on a quota window" is
+	// generic running marker because "we're waiting on a quota window" is
 	// the operationally meaningful state.
 	if (progress.retryState && progress.status === "running") {
 		statusLine += ` ${formatBadge("retrying", "warning", theme)}`;

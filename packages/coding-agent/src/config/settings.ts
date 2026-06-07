@@ -240,11 +240,13 @@ export class Settings {
 		return promise.then(
 			instance => {
 				globalInstance = instance;
+				clearBoundSettingsMethods();
 				globalInstancePromise = Promise.resolve(instance);
 				return instance;
 			},
 			error => {
 				globalInstance = null;
+				clearBoundSettingsMethods();
 				throw error;
 			},
 		);
@@ -978,6 +980,13 @@ export function onHindsightScopeChanged(cb: () => void): () => void {
 
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
+let boundSettingsInstance: Settings | null = null;
+let boundSettingsMethods = new Map<PropertyKey, unknown>();
+
+function clearBoundSettingsMethods(): void {
+	boundSettingsInstance = null;
+	boundSettingsMethods = new Map<PropertyKey, unknown>();
+}
 
 export function isSettingsInitialized(): boolean {
 	return globalInstance !== null;
@@ -990,6 +999,7 @@ export function isSettingsInitialized(): boolean {
 export function resetSettingsForTest(): void {
 	globalInstance = null;
 	globalInstancePromise = null;
+	clearBoundSettingsMethods();
 }
 
 /**
@@ -1001,9 +1011,17 @@ export const settings = new Proxy({} as Settings, {
 		if (!globalInstance) {
 			throw new Error("Settings not initialized. Call Settings.init() first.");
 		}
-		const value = (globalInstance as unknown as Record<string | symbol, unknown>)[prop];
+		if (boundSettingsInstance !== globalInstance) {
+			clearBoundSettingsMethods();
+			boundSettingsInstance = globalInstance;
+		}
+		const value = (globalInstance as unknown as Record<PropertyKey, unknown>)[prop];
 		if (typeof value === "function") {
-			return value.bind(globalInstance);
+			const cached = boundSettingsMethods.get(prop);
+			if (cached) return cached;
+			const bound = value.bind(globalInstance);
+			boundSettingsMethods.set(prop, bound);
+			return bound;
 		}
 		return value;
 	},

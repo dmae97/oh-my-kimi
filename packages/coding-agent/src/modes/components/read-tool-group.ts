@@ -81,6 +81,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#text: Text;
 	#expanded = false;
 	#showContentPreview: boolean;
+	// A read group accretes entries across multiple assistant completions for as
+	// long as the run of reads is uninterrupted. While it is the active group it
+	// must stay in the transcript's repaintable live region — its header line
+	// re-layouts from `Read <path>` to `Read (N)` + tree as entries arrive, so a
+	// frozen snapshot taken on a risk terminal would strand the single-entry form
+	// (see TranscriptContainer / NativeScrollbackLiveRegion). The controller calls
+	// `finalize()` once the run breaks so the block can commit to native scrollback.
+	#finalized = false;
 
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
@@ -88,6 +96,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#text = new Text("", 0, 0);
 		this.addChild(this.#text);
 		this.#updateDisplay();
+	}
+
+	isTranscriptBlockFinalized(): boolean {
+		return this.#finalized;
+	}
+
+	finalize(): void {
+		this.#finalized = true;
 	}
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {

@@ -20,7 +20,7 @@ import {
 	modelsAreEqual,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
-import type { Component, EditorTheme, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
+import type { Component, EditorTheme, LoaderMessageColorFn, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
 	clearRenderCache,
@@ -2659,13 +2659,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	ensureLoadingAnimation(): void {
 		if (!this.loadingAnimation) {
 			this.statusContainer.clear();
+			const messageColorFn = ((message: string) =>
+				renderWorkingMessage(message, this.#getWorkingMessageAccent())) as LoaderMessageColorFn & {
+				animated: true;
+			};
+			messageColorFn.animated = true;
 			this.loadingAnimation = new Loader(
 				this.ui,
 				spinner => {
 					const accent = this.#getWorkingMessageAccent();
 					return accent ? `${accent.main}${spinner}\x1b[39m` : theme.fg("accent", spinner);
 				},
-				message => renderWorkingMessage(message, this.#getWorkingMessageAccent()),
+				messageColorFn,
 				this.#defaultWorkingMessage,
 				getSymbolTheme().spinnerFrames,
 			);

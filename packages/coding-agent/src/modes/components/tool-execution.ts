@@ -133,12 +133,12 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
-/** Drive pending-tool redraws at ~60fps so the animated border sweep is smooth.
- * The TUI already throttles at its 16ms `MIN_RENDER_INTERVAL_MS`, so this is the
- * natural upper bound and static frames diff to a no-op redraw at ~zero cost. */
-const SPINNER_RENDER_INTERVAL_MS = 16;
+/** Drive pending-tool redraws at 30fps so the animated border sweep stays
+ * smooth without spending twice the frame budget. The TUI throttles at the same
+ * cadence, and static frames diff to a no-op redraw at ~zero cost. */
+const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
 /** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
- * 60fps render cadence (mirrors `Loader`). */
+ * render cadence (mirrors `Loader`). */
 const SPINNER_GLYPH_ADVANCE_MS = 80;
 
 // Stable per-instance counter so each tool execution's inline images get a
@@ -436,17 +436,28 @@ export class ToolExecutionComponent extends Container {
 			!isBackgroundAsyncRunning;
 		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
 		if (needsSpinner && !this.#spinnerInterval) {
-			this.#lastSpinnerAdvanceAt = performance.now();
+			const now = performance.now();
+			const frameCount = theme.spinnerFrames.length;
+			this.#lastSpinnerAdvanceAt = now;
+			if (frameCount > 0 && this.#spinnerFrame === undefined) {
+				this.#spinnerFrame = 0;
+				this.#renderState.spinnerFrame = 0;
+			}
 			this.#spinnerInterval = setInterval(() => {
 				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
-				// Redraw at ~60fps for a smooth border sweep, but only step the spinner
-				// glyph at its classic ~12.5fps cadence. The TUI throttles renders at
-				// 16ms and the differ drops no-op redraws, so the extra ticks are free.
-				if (frameCount > 0 && now - this.#lastSpinnerAdvanceAt >= SPINNER_GLYPH_ADVANCE_MS) {
-					this.#spinnerFrame = ((this.#spinnerFrame ?? -1) + 1) % frameCount;
-					this.#renderState.spinnerFrame = this.#spinnerFrame;
-					this.#lastSpinnerAdvanceAt = now;
+				// Redraw at 30fps for a smooth border sweep, but keep the spinner
+				// glyph phase-locked to its classic ~12.5fps cadence. Advancing the
+				// anchor by elapsed frames instead of resetting to `now` avoids the
+				// 30fps timer quantizing the glyph down to one step every three ticks.
+				if (frameCount > 0) {
+					const elapsed = now - this.#lastSpinnerAdvanceAt;
+					if (elapsed >= SPINNER_GLYPH_ADVANCE_MS) {
+						const steps = Math.floor(elapsed / SPINNER_GLYPH_ADVANCE_MS);
+						this.#spinnerFrame = ((this.#spinnerFrame ?? 0) + steps) % frameCount;
+						this.#renderState.spinnerFrame = this.#spinnerFrame;
+						this.#lastSpinnerAdvanceAt += steps * SPINNER_GLYPH_ADVANCE_MS;
+					}
 				}
 				this.#ui.requestRender();
 			}, SPINNER_RENDER_INTERVAL_MS);

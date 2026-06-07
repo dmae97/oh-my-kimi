@@ -336,7 +336,15 @@ export class UiHelpers {
 				if (assistantComponent) {
 					assistantComponent.setUsageInfo(message.usage);
 				}
-				readGroup = null;
+				const hasVisibleAssistantContent = message.content.some(
+					content =>
+						(content.type === "text" && content.text.trim().length > 0) ||
+						(content.type === "thinking" && content.thinking.trim().length > 0),
+				);
+				if (hasVisibleAssistantContent) {
+					readGroup?.finalize();
+					readGroup = null;
+				}
 				const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
 				const hasErrorStop =
 					!isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
@@ -384,6 +392,7 @@ export class UiHelpers {
 						continue;
 					}
 
+					readGroup?.finalize();
 					readGroup = null;
 					const tool = this.ctx.session.getToolByName(content.name);
 					const renderArgs =
@@ -470,6 +479,10 @@ export class UiHelpers {
 				this.ctx.addMessageToChat(message, options);
 			}
 		}
+
+		// The trailing read run has no following break to close it; finalize so the
+		// rebuilt group commits to native scrollback like every other historical block.
+		readGroup?.finalize();
 
 		// Render deferred messages (compaction summaries) at the bottom so they're visible
 		for (const message of deferredMessages) {

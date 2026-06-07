@@ -17,6 +17,9 @@
 
 ### Changed
 
+- Changed shimmer-driven TUI animations (working text, pending bash/eval borders, and theme activity-spinner documentation) to render at 30fps instead of 60fps.
+- Changed running `task` tool agent rows to use a static `•` marker and shimmer only the subagent name, leaving descriptions, stats, and nested tool detail text solid while removing the rotating status glyph from those rows.
+- Changed settings singleton method access to reuse bound methods for the active instance instead of allocating a new bound function on every `settings.get` lookup.
 - Changed plan-mode approval to keep the drafted `local://<slug>-plan.md` file at its original name as the canonical plan path, so approved plans are no longer renamed when leaving plan mode
 - Changed plan-mode write enforcement so only `local://` artifact files are writable during planning, blocking working-tree edits and allowing scratch or draft plan files in the local artifact area
 - Changed the `todo` tool result renderer to stop redrawing every phase's full task list on each update: when a multi-phase list is rendered collapsed (the default, not manually expanded), only phases the latest update touched — the phase holding the in_progress task, any phase with a just-completed task, and phases named by the ops that ran (`init` counts as touching all) — render their tasks; untouched phases collapse to a one-line `N. Name  done/total` summary. When call args are unavailable (e.g. transcript rebuilds) it falls back to the in_progress/completed-transition signals, and the manual expand toggle still shows every task. Also dropped the blank separator line previously inserted between phases.
@@ -37,6 +40,9 @@
 - Removed the `/background` (and `/bg`) slash command and the background-mode subsystem it was the sole entry point for — `InteractiveMode.isBackgrounded`, `createBackgroundUiContext`, `handleBackgroundEvent`, and every `isBackgrounded` guard across the input/event/extension-UI controllers and UI helpers. The command suspended the whole process group via `SIGTSTP` (a leftover testing shortcut) instead of detaching the running agent, which is not the expected workflow — use terminal panes or a multiplexer instead.
 
 ### Fixed
+
+- Fixed the working-status shimmer to opt into the loader's 30fps animated-message repaint path while keeping both the status spinner and pending bash/eval tool spinners on their normal 80 ms glyph cadence.
+- Fixed consecutive `read` tool calls failing to collapse into a single grouped block when a reasoning model emits one read per completion (`[thinking, read]`). The read group was reset on every assistant `message_start`, so each read rendered as its own one-entry `Read …` line; now a read run accretes across completions and is broken only by a rendered non-empty text/thinking block, a non-read tool, or a user/IRC message — matching the transcript-rebuild path. `ReadToolGroupComponent` now reports its live/finalized state so the growing `Read (N)` header repaints correctly on native-scrollback (risk) terminals.
 
 - Fixed the `task` tool shared-context brief rendering raw Markdown headings (`# Goal`, `# Constraints`) inside framed call/result blocks instead of using the normal Markdown renderer.
 - Fixed the animated pending border on `bash`/`eval` blocks leaving a frozen dark "bar" segment behind after a backgrounded command finalized through the async update path. Once a command is auto-backgrounded (`details.async.state === "running"`) the block stays "partial" in the TUI until the async job-manager delivers the final result, but it also gets committed to native scrollback — so a mid-sweep shimmer frame baked a stray darkened border segment into the committed copy. The border now stops animating (and the 60fps redraw loop stops) the moment a block enters the backgrounded state, so the committed frame is a clean static border.

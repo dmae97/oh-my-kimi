@@ -44,7 +44,13 @@ type AgentSessionEventHandlers = {
 
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
-	#lastThinkingCount = 0;
+	// Count of visible assistant content blocks (rendered non-empty text/thinking)
+	// already seen in the current streaming message. A newly appearing one breaks
+	// the read run: the rendered reasoning/answer is a visual separator, so reads
+	// after it start a fresh group. Empty/absent thinking — common when a model
+	// emits one read per completion — does not break it, so a run of consecutive
+	// reads collapses into one group even across completion boundaries.
+	#lastVisibleBlockCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
@@ -103,6 +109,7 @@ export class EventController {
 	}
 
 	#resetReadGroup(): void {
+		this.#lastReadGroup?.finalize();
 		this.#lastReadGroup = undefined;
 	}
 
@@ -208,6 +215,7 @@ export class EventController {
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
+		this.#resetReadGroup();
 		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
 		// Restore the previous turn's inline error in the transcript before dropping
@@ -298,9 +306,8 @@ export class EventController {
 			this.ctx.addMessageToChat(event.message);
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
-			this.#lastThinkingCount = 0;
 			this.#assistantMessageStreaming = true;
-			this.#resetReadGroup();
+			this.#lastVisibleBlockCount = 0;
 			this.ctx.streamingComponent = new AssistantMessageComponent(
 				undefined,
 				this.ctx.hideThinkingBlock,
@@ -356,14 +363,15 @@ export class EventController {
 			this.ctx.streamingMessage = event.message;
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
 
-			const thinkingCount = this.ctx.streamingMessage.content.filter(
-				content => content.type === "thinking" && content.thinking.trim(),
+			const visibleBlockCount = this.ctx.streamingMessage.content.filter(
+				content =>
+					(content.type === "text" && content.text.trim().length > 0) ||
+					(content.type === "thinking" && content.thinking.trim().length > 0),
 			).length;
-			if (thinkingCount > this.#lastThinkingCount) {
+			if (visibleBlockCount > this.#lastVisibleBlockCount) {
 				this.#resetReadGroup();
-				this.#lastThinkingCount = thinkingCount;
+				this.#lastVisibleBlockCount = visibleBlockCount;
 			}
-
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
 				if (content.name === "read") {
@@ -685,6 +693,7 @@ export class EventController {
 		);
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
+		this.#resetReadGroup();
 		this.#lastAssistantComponent = undefined;
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
