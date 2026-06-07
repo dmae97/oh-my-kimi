@@ -6,7 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TanCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -25,6 +25,9 @@ function assistantText(text: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
+		api: "anthropic-messages",
+		provider: model.provider,
+		model: model.id,
 		usage: {
 			input: 0,
 			output: 0,
@@ -33,6 +36,8 @@ function assistantText(text: string): AssistantMessage {
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
+		stopReason: "stop",
+		timestamp: 0,
 	};
 }
 
@@ -204,7 +209,7 @@ describe("TanCommandController", () => {
 		expect(clone.abort).toHaveBeenCalled();
 		expect(clone.dispose).toHaveBeenCalled();
 		expect(createAgentSessionSpy.mock.calls[0]?.[0]).toEqual(
-			expect.objectContaining<CreateAgentSessionOptions>({
+			expect.objectContaining({
 				providerPromptCacheKey: "parent-session",
 				parentTaskPrefix: expect.stringMatching(/^Tan-/) as unknown as string,
 				agentDisplayName: "tan",
