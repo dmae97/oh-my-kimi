@@ -499,17 +499,44 @@ export class InputController {
 	}
 
 	handleCtrlZ(): void {
-		// Set up handler to restore TUI when resumed
-		process.once("SIGCONT", () => {
+		// SIGTSTP is POSIX job-control: Windows has no equivalent and
+		// `process.kill(_, "SIGTSTP")` throws `TypeError: Unknown signal:
+		// SIGTSTP` there, taking the whole agent down via an uncaught
+		// exception (issue #2036). No-op on platforms that cannot suspend.
+		if (process.platform === "win32") {
+			this.ctx.showStatus("Suspend (Ctrl+Z) is not supported on this platform");
+			return;
+		}
+
+		// Capture the listener so we can detach it if the signal never
+		// fires; otherwise a failed suspend would leave a stale SIGCONT
+		// handler that fires on the next unrelated continue and tries to
+		// re-`start()` an already-running TUI.
+		const onResume = (): void => {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
-		});
+		};
+		process.once("SIGCONT", onResume);
 
-		// Stop the TUI (restore terminal to normal mode)
+		// Stop the TUI (restore terminal to normal mode) before sending the
+		// signal so the parent shell sees a sane terminal state.
 		this.ctx.ui.stop();
 
-		// Send SIGTSTP to process group (pid=0 means all processes in group)
-		process.kill(0, "SIGTSTP");
+		try {
+			// pid=0 → entire foreground process group; the shell receives
+			// SIGTSTP and parks the job.
+			process.kill(0, "SIGTSTP");
+		} catch (err) {
+			// Either the runtime refused the signal or the kernel rejected
+			// it (some sandboxes block sending to pid=0). Tear the resume
+			// hook down and bring the TUI back so the user is not stranded
+			// on a frozen prompt.
+			process.removeListener("SIGCONT", onResume);
+			this.ctx.ui.start();
+			this.ctx.ui.requestRender(true);
+			const reason = err instanceof Error ? err.message : String(err);
+			this.ctx.showError(`Failed to suspend: ${reason}`);
+		}
 	}
 
 	handleDequeue(): void {

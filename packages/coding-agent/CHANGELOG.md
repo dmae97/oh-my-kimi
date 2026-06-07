@@ -25,6 +25,10 @@
 
 - Fixed follow-up shortcut submission of builtin slash commands so `/goal set ...` applies goal mode instead of queueing as plain text.
 
+### Fixed
+
+- Fixed Ctrl+Z crashing the agent on Windows with `TypeError: Unknown signal: SIGTSTP`. `InputController.handleCtrlZ` called `process.kill(0, "SIGTSTP")` unconditionally, but `SIGTSTP` is POSIX job-control and Bun/Node on Windows rejects the signal name from the JS side; the throw propagated out of the TUI input dispatcher as an uncaught exception. The handler now no-ops with a "Suspend (Ctrl+Z) is not supported on this platform" status on Windows, and on POSIX wraps `process.kill` in a try/catch that detaches the registered SIGCONT resume hook and re-`start()`s the TUI on failure so a rejected signal can never leave the UI stranded with a leaked listener ([#2036](https://github.com/can1357/oh-my-pi/issues/2036)).
+
 ## [15.10.1] - 2026-06-07
 
 ### Added
