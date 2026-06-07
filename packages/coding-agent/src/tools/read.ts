@@ -34,7 +34,7 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
-import { type ArchiveReader, openArchive, parseArchivePathCandidates } from "./archive-reader";
+import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "./archive-reader";
 import {
 	type ConflictEntry,
 	type ConflictScope,
@@ -1154,17 +1154,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const limitedEntries = listLimit.items;
 		const limitMeta = listLimit.meta;
 
-		const results: string[] = [];
-		for (const entry of limitedEntries) {
+		for (let index = 0; index < limitedEntries.length; index++) {
 			throwIfAborted(signal);
-			if (entry.isDirectory) {
-				results.push(`${entry.name}/`);
-				continue;
-			}
-
-			const sizeSuffix = entry.size > 0 ? ` (${formatBytes(entry.size)})` : "";
-			results.push(`${entry.name}${sizeSuffix}`);
 		}
+		const results = formatArchiveEntryLines(limitedEntries);
 
 		const output = results.length > 0 ? results.join("\n") : "(empty archive directory)";
 		const text = prependSuffixResolutionNotice(output, details.suffixResolution);
