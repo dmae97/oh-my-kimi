@@ -434,6 +434,35 @@ describe("Duplicate Tool Results Regression", () => {
 			{ type: "text", text: "second" },
 		]);
 	});
+
+	it("routes the late result to the most recent duplicate call when a new turn re-emits the id across a gap", () => {
+		const duplicateId = "functions.eval:301";
+		const developerMessage: DeveloperMessage = { role: "developer", content: "handoff summary", timestamp: 4 };
+		const messages: Message[] = [
+			makeEvalAssistantMessage(duplicateId, 1),
+			makeEvalToolResult(duplicateId, "first", 2),
+			makeEvalAssistantMessage(duplicateId, 3),
+			developerMessage,
+			makeEvalAssistantMessage(duplicateId, 5),
+			makeEvalToolResult(duplicateId, "second", 6),
+		];
+
+		const transformed = transformMessages(messages, model);
+		const toolResults = getToolResults(transformed);
+
+		expect(getAssistantToolIds(transformed)).toEqual([duplicateId, `${duplicateId}_dup1`, `${duplicateId}_dup2`]);
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			duplicateId,
+			`${duplicateId}_dup1`,
+			`${duplicateId}_dup2`,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup1`)?.content).toEqual([
+			{ type: "text", text: "No result provided" },
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup2`)?.content).toEqual([
+			{ type: "text", text: "second" },
+		]);
+	});
 });
 
 /**

@@ -45,9 +45,25 @@ function deduplicateToolCallIds(messages: Message[]): Message[] {
 			pendingToolResultRewrites.set(id, [rewrite]);
 		};
 
+		// Ids this turn has already touched; used to scope the "drop carried-over
+		// pending rewrites" semantics to the FIRST occurrence per turn so multiple
+		// blocks of the same id within one turn still accumulate as duplicates.
+		const idsTouchedInTurn = new Set<string>();
 		let contentChanged = false;
 		const content = msg.content.map(block => {
 			if (block.type !== "toolCall") return block;
+
+			// Drop any pending rewrites carried over from a prior assistant turn
+			// for this id on its first appearance this turn. When a later turn
+			// re-emits the same id, the older duplicate call's expected result
+			// never landed in time — the second pass synthesizes
+			// "No result provided" for it, and the upcoming real result(id) must
+			// route to one of THIS turn's calls. Without this guard the older
+			// `_dup` id would steal the next result.
+			if (!idsTouchedInTurn.has(block.id)) {
+				pendingToolResultRewrites.delete(block.id);
+				idsTouchedInTurn.add(block.id);
+			}
 
 			const previousCount = seenToolCallIds.get(block.id) ?? 0;
 			if (previousCount === 0) {
