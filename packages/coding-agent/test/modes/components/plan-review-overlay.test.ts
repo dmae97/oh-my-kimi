@@ -343,6 +343,59 @@ describe("PlanReviewOverlay", () => {
 		expect(feedback).toContain("needs detail");
 	});
 
+	// Click a rendered row. The fullscreen overlay paints from screen row 0, so a
+	// 1-based SGR mouse row equals the rendered-line index + 1.
+	const clickRow = (overlay: PlanReviewOverlay, needle: string, col = 4): boolean => {
+		const lines = overlay.render(80);
+		const row = lines.findIndex(line => stripVTControlCharacters(line).includes(needle));
+		if (row < 0) return false;
+		overlay.handleInput(`\x1b[<0;${col};${row + 1}M`);
+		return true;
+	};
+
+	it("activates an approval option on click", () => {
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick, onCancel: vi.fn() },
+		);
+		render(overlay);
+		expect(clickRow(overlay, "Refine plan", 10)).toBe(true);
+		expect(onPick).toHaveBeenCalledWith("Refine plan");
+	});
+
+	it("selects a ToC section on click and scrubs the body to it", () => {
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		render(overlay);
+		// Click the "Steps" entry in the sidebar column.
+		expect(clickRow(overlay, "Steps", 4)).toBe(true);
+		const out = render(overlay);
+		expect(out).toContain("a annotate"); // ToC focus
+		// The body scrubbed to the clicked section.
+		expect(out.split("\n").slice(1, 5).join(" ")).toContain("Steps");
+	});
+
+	it("includes deleted sections in the refinement feedback", () => {
+		const onFeedbackChange = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn(), onPlanEdited: vi.fn(), onFeedbackChange },
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput(DOWN); // -> Goal
+		overlay.handleInput("d"); // delete Goal
+		const feedback = onFeedbackChange.mock.calls.at(-1)?.[0] as string;
+		expect(feedback).toContain("Remove these sections:");
+		expect(feedback).toContain("Goal");
+	});
+
 	it("drives the slider with both arrows even when a sidebar is present", () => {
 		const changes: number[] = [];
 		const slider: HookSelectorSlider = {

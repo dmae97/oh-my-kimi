@@ -68,6 +68,11 @@ const CURSOR_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}`;
 const CURSOR_BEGIN_NO_SYNC = HIDE_CURSOR;
 const CURSOR_END = SYNC_OUTPUT_END;
 const CURSOR_END_NO_SYNC = "";
+// Mouse reporting (normal click tracking + SGR extended coordinates), enabled
+// only for the lifetime of a fullscreen overlay so the rest of the app keeps the
+// terminal's native text selection.
+const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1000l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -977,7 +982,7 @@ export class TUI extends Container {
 		// Leave the alt buffer first so the teardown cursor math below runs against
 		// the restored normal screen (which #previousLines still describes).
 		if (this.#altActive) {
-			this.terminal.write("\x1b[?1049l");
+			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 		}
@@ -1542,14 +1547,14 @@ export class TUI extends Container {
 		// exiting reconciles cleanly against the terminal-restored screen.
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
-			this.terminal.write("\x1b[?1049h");
+			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
 			this.terminal.hideCursor();
 			this.#altActive = true;
 			this.#altPreviousLines = [];
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
-			this.terminal.write("\x1b[?1049l");
+			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 			// A resize while on the alt buffer reflowed the terminal's saved normal

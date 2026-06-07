@@ -68,10 +68,12 @@ interface OverlaySection {
 	annotations: string[];
 }
 
-/** Undo snapshot: the joined plan text plus annotations aligned by section. */
+/** Undo snapshot: joined plan text, annotations aligned by section, and the
+ *  accumulated deleted-section feedback at the time of the snapshot. */
 interface UndoEntry {
 	text: string;
 	annotations: string[][];
+	deleted: string[];
 }
 
 export interface PlanReviewOverlayCallbacks {
@@ -115,6 +117,8 @@ export class PlanReviewOverlay implements Component {
 	#tocBaseLevel = 1;
 	#sectionOffsets: number[] = [];
 	#undo: UndoEntry[] = [];
+	/** Titles of sections deleted in the overlay, surfaced as Refine feedback. */
+	#deleted: string[] = [];
 
 	#options: string[];
 	#disabled: Set<number>;
@@ -129,6 +133,14 @@ export class PlanReviewOverlay implements Component {
 	#tocCursor = 0;
 	#sidebarShown = false;
 	#pendingScrollToToc = false;
+
+	// Click hit-testing, rebuilt every render. Keys are 0-based rendered-line
+	// indices (== screen rows, since the fullscreen overlay paints from row 0).
+	#optionClickRows = new Map<number, number>();
+	#tocClickRows = new Map<number, number>();
+	#bodyClickRows = new Set<number>();
+	/** 1-based column at/under which a region-row click targets the sidebar. */
+	#sidebarClickMaxCol = 0;
 
 	#annotating = false;
 	#input: Input;
@@ -177,6 +189,9 @@ export class PlanReviewOverlay implements Component {
 		this.#setSections(planContent);
 		this.#scrollView.scrollToTop();
 		this.#tocCursor = 0;
+		// A wholesale external-editor swap supersedes prior in-overlay deletions.
+		this.#deleted = [];
+		this.#undo = [];
 		this.#recomputeFeedback();
 	}
 
@@ -262,6 +277,7 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		if (keyData.startsWith("\x1b[<") && this.#handleMouse(keyData)) return;
 		if (this.#annotating) {
 			this.#input.handleInput(keyData);
 			return;
@@ -293,6 +309,50 @@ export class PlanReviewOverlay implements Component {
 				this.#handleToc(keyData);
 				return;
 		}
+	}
+
+	/**
+	 * Hit-test an SGR mouse report (`\x1b[<b;x;yM/m`) against the click maps the
+	 * last render recorded. Returns true when consumed. The fullscreen overlay
+	 * paints from screen row 0, so a 1-based mouse row maps directly to the
+	 * rendered-line index. Wheel scrolls the body; a left click on an option
+	 * activates it (select + confirm), on a ToC row jumps to that section, and on
+	 * the body column focuses the body.
+	 */
+	#handleMouse(data: string): boolean {
+		const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+		if (!match) return false;
+		const button = Number(match[1]);
+		const x = Number(match[2]);
+		const row = Number(match[3]) - 1;
+		if (button & 64) {
+			// Scroll wheel: low bit selects direction (64 up, 65 down).
+			this.#scrollView.scroll(button & 1 ? 3 : -3);
+			return true;
+		}
+		if (match[4] !== "M") return true; // release
+		if (button & 32) return true; // motion/drag
+		if ((button & 3) !== 0) return true; // not the left button
+		const optionIndex = this.#optionClickRows.get(row);
+		if (optionIndex !== undefined) {
+			if (!this.#disabled.has(optionIndex)) {
+				this.#focus = "actions";
+				this.#selectedIndex = optionIndex;
+				this.#confirmSelection();
+			}
+			return true;
+		}
+		const tocPos = this.#tocClickRows.get(row);
+		if (tocPos !== undefined && x <= this.#sidebarClickMaxCol) {
+			this.#focus = "toc";
+			this.#tocCursor = tocPos;
+			this.#scrubBodyToToc();
+			return true;
+		}
+		if (this.#bodyClickRows.has(row)) {
+			this.#setFocus("body");
+		}
+		return true;
 	}
 
 	#cycleRegion(direction: number): void {
@@ -453,6 +513,7 @@ export class PlanReviewOverlay implements Component {
 		this.#undo.push({
 			text: joinPlanSections(this.#sections),
 			annotations: this.#sections.map(section => [...section.annotations]),
+			deleted: [...this.#deleted],
 		});
 	}
 
@@ -462,6 +523,12 @@ export class PlanReviewOverlay implements Component {
 		const span = sectionDeletionSpan(this.#sections, sectionIndex);
 		if (span.length === 0) return;
 		this.#pushUndo();
+		// Record the removed headings so the Refine feedback can ask the model to
+		// drop them, then splice from the bottom up so earlier indices stay valid.
+		for (const i of span) {
+			const section = this.#sections[i]!;
+			if (section.level >= 1 && section.title) this.#deleted.push(section.title);
+		}
 		for (let i = span.length - 1; i >= 0; i--) this.#sections.splice(span[i]!, 1);
 		this.#rebuildToc();
 		this.#tocCursor = Math.min(this.#tocCursor, Math.max(0, this.#toc.length - 1));
@@ -477,6 +544,7 @@ export class PlanReviewOverlay implements Component {
 		for (let i = 0; i < this.#sections.length; i++) {
 			this.#sections[i]!.annotations = entry.annotations[i] ? [...entry.annotations[i]!] : [];
 		}
+		this.#deleted = [...entry.deleted];
 		this.#tocCursor = Math.min(this.#tocCursor, Math.max(0, this.#toc.length - 1));
 		this.#pendingScrollToToc = true;
 		this.callbacks.onPlanEdited?.(joinPlanSections(this.#sections));
@@ -508,13 +576,18 @@ export class PlanReviewOverlay implements Component {
 
 	#recomputeFeedback(): void {
 		const annotated = this.#sections.filter(section => section.level >= 1 && section.annotations.length > 0);
-		let feedback = "";
-		if (annotated.length > 0) {
-			feedback = "Refinement feedback on the plan:\n";
-			for (const section of annotated) {
-				feedback += `\n## ${section.title}\n`;
-				for (const note of section.annotations) feedback += `- ${note}\n`;
-			}
+		if (annotated.length === 0 && this.#deleted.length === 0) {
+			this.callbacks.onFeedbackChange?.("");
+			return;
+		}
+		let feedback = "Refinement feedback on the plan:\n";
+		if (this.#deleted.length > 0) {
+			feedback += "\nRemove these sections:\n";
+			for (const title of this.#deleted) feedback += `- ${title}\n`;
+		}
+		for (const section of annotated) {
+			feedback += `\n## ${section.title}\n`;
+			for (const note of section.annotations) feedback += `- ${note}\n`;
 		}
 		this.callbacks.onFeedbackChange?.(feedback);
 	}
@@ -603,11 +676,16 @@ export class PlanReviewOverlay implements Component {
 		return splitBodyWidth(width, this.#sidebarWidthFor(width)) >= SIDEBAR_MIN_BODY_WIDTH;
 	}
 
-	#renderSidebarLines(regionRows: number, sidebarWidth: number): string[] {
+	/** Sidebar lines plus, per row, the ToC position shown there (for clicks). */
+	#renderSidebarLines(
+		regionRows: number,
+		sidebarWidth: number,
+	): { lines: string[]; posForRow: (number | undefined)[] } {
 		// No "Contents" label and no plan-title entry: the box title already says
 		// "Plan Review", so the sidebar is just the bare list of sections, VS
 		// Code-style. Window the entries around the cursor.
 		const lines: string[] = [];
+		const posForRow: (number | undefined)[] = [];
 		const slots = Math.max(0, regionRows);
 		const total = this.#toc.length;
 		let start = 0;
@@ -617,8 +695,9 @@ export class PlanReviewOverlay implements Component {
 		for (let r = 0; r < slots; r++) {
 			const p = start + r;
 			lines.push(p < total ? this.#renderTocEntry(p, sidebarWidth) : "");
+			posForRow.push(p < total ? p : undefined);
 		}
-		return lines;
+		return { lines, posForRow };
 	}
 
 	#renderTocEntry(p: number, width: number): string {
@@ -682,22 +761,36 @@ export class PlanReviewOverlay implements Component {
 		if (this.#focus !== "toc") this.#tocCursor = this.#deriveTocCursorFromScroll();
 		const body = this.#scrollView.render(bodyContentWidth);
 
+		this.#optionClickRows.clear();
+		this.#tocClickRows.clear();
+		this.#bodyClickRows.clear();
+		this.#sidebarClickMaxCol = sidebarShown ? sidebarWidth + 3 : 0;
+
 		const out: string[] = [];
 		if (sidebarShown) {
-			const sidebar = this.#renderSidebarLines(regionRows, sidebarWidth);
+			const { lines: sidebar, posForRow } = this.#renderSidebarLines(regionRows, sidebarWidth);
 			out.push(topBorderSplit(width, OVERLAY_TITLE, sidebarWidth));
 			for (let i = 0; i < regionRows; i++) {
+				const pos = posForRow[i];
+				if (pos !== undefined) this.#tocClickRows.set(out.length, pos);
+				this.#bodyClickRows.add(out.length);
 				out.push(splitRow(sidebar[i] ?? "", body[i] ?? "", width, sidebarWidth));
 			}
 			out.push(dividerSplit(width, sidebarWidth));
 		} else {
 			out.push(topBorder(width, OVERLAY_TITLE));
-			for (const line of body) out.push(row(line, width));
+			for (const line of body) {
+				this.#bodyClickRows.add(out.length);
+				out.push(row(line, width));
+			}
 			out.push(divider(width));
 		}
 		for (const line of promptLines) out.push(row(line, width));
 		for (const line of sliderLines) out.push(row(line, width));
-		for (const line of optionLines) out.push(row(line, width));
+		for (let i = 0; i < optionLines.length; i++) {
+			this.#optionClickRows.set(out.length, i);
+			out.push(row(optionLines[i]!, width));
+		}
 		out.push(divider(width));
 		for (const line of footerLines) out.push(row(line, width));
 		out.push(bottomBorder(width));

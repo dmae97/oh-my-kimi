@@ -3233,6 +3233,9 @@ describe("TUI terminal-state regressions", () => {
 				const modalWrites = writes.slice(showFrom).join("");
 				// Borrowed the alternate screen buffer …
 				expect(modalWrites).toContain("\x1b[?1049h");
+				// … enabled mouse tracking for click/scroll support …
+				expect(modalWrites).toContain("\x1b[?1000h");
+				expect(modalWrites).toContain("\x1b[?1006h");
 				// … and never erased scrollback (ED3) or otherwise touched the transcript.
 				expect(modalWrites).not.toContain("\x1b[3J");
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeTrue();
@@ -3241,7 +3244,11 @@ describe("TUI terminal-state regressions", () => {
 				handle.hide();
 				await settle(term);
 
-				expect(writes.slice(hideFrom).join("")).toContain("\x1b[?1049l");
+				const hideWrites = writes.slice(hideFrom).join("");
+				expect(hideWrites).toContain("\x1b[?1049l");
+				// Mouse tracking is disabled again so the rest of the app keeps native
+				// terminal selection.
+				expect(hideWrites).toContain("\x1b[?1000l");
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
