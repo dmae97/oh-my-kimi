@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP tools hanging in non-yolo modes by declaring `approval = "write"` on `MCPTool` and `DeferredMCPTool`, and propagating the `approval` property through `customToolToDefinition()` in `sdk.ts`
+
 ## [15.10.1] - 2026-06-07
 
 ### Added
