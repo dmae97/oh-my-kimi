@@ -778,8 +778,12 @@ export class TUI extends Container {
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
+				// Repaint immediately rather than via the throttled path: a resize must
+				// clear and replay at the fresh geometry before the terminal's reflow
+				// settles into a state a throttled frame would race. Forced render skips
+				// the 16ms coalescing window, matching resetDisplay()'s prompt repaint.
 				this.#resizeEventPending = true;
-				this.requestRender();
+				this.requestRender(true);
 			},
 		);
 		this.terminal.hideCursor();

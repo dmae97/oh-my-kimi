@@ -1,11 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed Kitty temp-file image transmission, its startup support probe, the `PI_KITTY_IMAGE_TRANSMISSION` override, and the temp-file helper exports. Kitty/Ghostty image payloads now stay on in-band base64 before placeholder/direct placement, avoiding blank first renders from temp-file load races.
+
 ### Added
 
 - Added an optional `dispose()` lifecycle method to `Component` so components can release timers and subscriptions during permanent teardown
 - Added `Container.dispose()` to propagate teardown to child components when a component tree is permanently discarded
 - Added `Loader.dispose()` to stop the loader animation timer when the component is disposed
+- Added a `ScrollView` `ellipsis` option (defaults to `Ellipsis.Unicode`) so callers that pre-wrap content to width can pass `Ellipsis.Omit` and suppress the stray per-line `…` that lands on trailing padding.
+- Added `ScrollView.handleScrollKey()` plus a `fastScrollLines` option so every scroll view gets shared navigation keys, including Shift+Arrow to scroll faster.
 
 ## [15.10.0] - 2026-06-06
 
