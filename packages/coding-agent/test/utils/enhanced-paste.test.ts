@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { EnhancedPasteController } from "../../src/utils/enhanced-paste";
 
 const ST = "\x1b\\";
+const BEL = "\x07";
 const OSC = "\x1b]5522;";
 
 function packet(metadata: string, payload?: string): string {
@@ -34,7 +35,7 @@ describe("EnhancedPasteController", () => {
 		controller.handleInput(packet("type=read:status=DONE"));
 
 		const pasteEventName = Buffer.from("Paste event", "utf8").toString("base64");
-		expect(writes.at(-1)).toBe(`${OSC}type=read:pw=${password}:name=${pasteEventName};${imageMime}${ST}`);
+		expect(writes.at(-1)).toBe(`${OSC}type=read:pw=${password}:name=${pasteEventName}:mime=${imageMime}${BEL}`);
 
 		controller.handleInput(packet("type=read:status=OK"));
 		controller.handleInput(
@@ -74,7 +75,9 @@ describe("EnhancedPasteController", () => {
 		controller.handleInput(packet(`type=read:status=DATA:mime=${textMime}`));
 		controller.handleInput(packet("type=read:status=DONE"));
 
-		expect(writes).toEqual([`${OSC}type=read:loc=primary:pw=${password}:name=${pasteEventName};${textMime}${ST}`]);
+		expect(writes).toEqual([
+			`${OSC}type=read:loc=primary:pw=${password}:name=${pasteEventName}:mime=${textMime}${BEL}`,
+		]);
 
 		controller.handleInput(packet("type=read:status=OK"));
 		controller.handleInput(
@@ -134,7 +137,7 @@ describe("EnhancedPasteController", () => {
 		);
 		controller.handleInput(packet(`type=read:status=DONE:pw=${password}`));
 
-		expect(writes.at(-1)).toBe(`${OSC}type=read:pw=${password}:name=${pasteEventName};${textMime}${ST}`);
+		expect(writes.at(-1)).toBe(`${OSC}type=read:pw=${password}:name=${pasteEventName};${textMime}${BEL}`);
 
 		controller.handleInput(packet("type=read:status=OK"));
 		controller.handleInput(
@@ -171,6 +174,6 @@ describe("EnhancedPasteController", () => {
 		);
 		controller.handleInput(packet("type=read:status=DONE"));
 
-		expect(writes.at(-1)).toBe(`${OSC}type=read;${imageMime}${ST}`);
+		expect(writes.at(-1)).toBe(`${OSC}type=read;${imageMime}${BEL}`);
 	});
 });
