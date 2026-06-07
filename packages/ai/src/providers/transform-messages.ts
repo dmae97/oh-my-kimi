@@ -17,6 +17,23 @@ const enum ToolCallStatus {
 	Aborted = 2,
 }
 
+/**
+ * Maximum tool-call id length the strictest replay provider accepts.
+ *
+ * Anthropic requires `^[a-zA-Z0-9_-]+$` with a 64-char cap; Google and Codex
+ * `normalizeToolCallId` implementations cap individual id segments to the same
+ * 64-char ceiling. Replacement ids minted here flow back through
+ * `convertAnthropicMessages` (and friends) unchanged, so the `_dupN` suffix
+ * MUST not push a normalized id past this bound.
+ */
+const MAX_TOOL_CALL_ID_LENGTH = 64;
+
+function appendDuplicateSuffix(originalId: string, suffix: string): string {
+	if (originalId.length + suffix.length <= MAX_TOOL_CALL_ID_LENGTH) return `${originalId}${suffix}`;
+	const prefixBudget = Math.max(0, MAX_TOOL_CALL_ID_LENGTH - suffix.length);
+	return `${originalId.slice(0, prefixBudget)}${suffix}`;
+}
+
 type PendingToolResultRewrite = { replacementId: string } | undefined;
 
 function deduplicateToolCallIds(messages: Message[]): Message[] {
@@ -73,10 +90,10 @@ function deduplicateToolCallIds(messages: Message[]): Message[] {
 			}
 
 			let duplicateIndex = previousCount;
-			let replacementId = `${block.id}_dup${duplicateIndex}`;
+			let replacementId = appendDuplicateSuffix(block.id, `_dup${duplicateIndex}`);
 			while (seenToolCallIds.has(replacementId)) {
 				duplicateIndex += 1;
-				replacementId = `${block.id}_dup${duplicateIndex}`;
+				replacementId = appendDuplicateSuffix(block.id, `_dup${duplicateIndex}`);
 			}
 			seenToolCallIds.set(block.id, duplicateIndex + 1);
 			seenToolCallIds.set(replacementId, 1);

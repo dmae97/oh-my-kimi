@@ -463,6 +463,34 @@ describe("Duplicate Tool Results Regression", () => {
 			{ type: "text", text: "second" },
 		]);
 	});
+
+	it("keeps duplicate-id rewrites within the 64-char tool-call id limit", () => {
+		const baseId = `toolu_${"a".repeat(58)}`;
+		expect(baseId.length).toBe(64);
+		const messages: Message[] = [
+			makeEvalAssistantMessage(baseId, 1),
+			makeEvalToolResult(baseId, "first", 2),
+			makeEvalAssistantMessage(baseId, 3),
+			makeEvalToolResult(baseId, "second", 4),
+		];
+
+		const transformed = transformMessages(messages, model);
+		const assistantToolIds = getAssistantToolIds(transformed);
+		const toolResults = getToolResults(transformed);
+
+		expect(assistantToolIds).toHaveLength(2);
+		for (const id of assistantToolIds) {
+			expect(id.length).toBeLessThanOrEqual(64);
+			expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+		}
+		const rewrittenId = assistantToolIds[1];
+		expect(rewrittenId).not.toBe(baseId);
+		expect(rewrittenId.endsWith("_dup1")).toBe(true);
+		expect(toolResults.map(result => result.toolCallId)).toEqual([baseId, rewrittenId]);
+		expect(toolResults.find(result => result.toolCallId === rewrittenId)?.content).toEqual([
+			{ type: "text", text: "second" },
+		]);
+	});
 });
 
 /**
