@@ -2365,12 +2365,24 @@ export class ModelRegistry {
 
 	/**
 	 * Get API key for a provider (e.g., "openai").
+	 *
+	 * `options.forceRefresh` powers step (b) of the auth-retry policy — it
+	 * re-mints the session-sticky OAuth token even when the cached copy still
+	 * looks valid. `options.signal` is threaded into any broker-bound refresh.
 	 */
-	async getApiKeyForProvider(provider: string, sessionId?: string, baseUrl?: string): Promise<string | undefined> {
+	async getApiKeyForProvider(
+		provider: string,
+		sessionId?: string,
+		options?: { baseUrl?: string; forceRefresh?: boolean; signal?: AbortSignal },
+	): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
-		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
+		return this.authStorage.getApiKey(provider, sessionId, {
+			baseUrl: options?.baseUrl,
+			forceRefresh: options?.forceRefresh,
+			signal: options?.signal,
+		});
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {

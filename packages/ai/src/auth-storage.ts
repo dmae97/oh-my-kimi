@@ -11,6 +11,8 @@ import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
+import type { ApiKeyResolver } from "./auth-retry";
+import { isUsageLimitError } from "./rate-limit-utils";
 import { getEnvApiKey } from "./stream";
 import type { Provider } from "./types";
 import type {
@@ -546,6 +548,13 @@ type AuthApiKeyOptions = {
 	 * stranding the caller for `timeoutMs * (maxRetries + 1)`.
 	 */
 	signal?: AbortSignal;
+	/**
+	 * Force a re-mint of the session-preferred OAuth credential's access token,
+	 * bypassing the not-yet-expired short-circuit. Powers step (b) of the
+	 * auth-retry policy ("refresh the SAME account") so a locally-cached token
+	 * that a peer/broker rotated out from under us is replaced before retrying.
+	 */
+	forceRefresh?: boolean;
 };
 type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential };
 
@@ -579,6 +588,36 @@ export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false 
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
 	sessionId?: string;
+}
+
+/**
+ * Build an {@link ApiKeyResolver} backed directly by an {@link AuthStorage},
+ * implementing the central a/b/c auth-retry policy for consumers that hold an
+ * AuthStorage rather than a higher-level registry (e.g. web-search providers):
+ *
+ * - initial (`error: undefined`) → resolve the session credential.
+ * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential.
+ * - step (c) `lastChance` → rotate to a sibling credential, then re-resolve.
+ */
+export function createAuthStorageResolver(
+	storage: Pick<AuthStorage, "getApiKey" | "rotateSessionCredential">,
+	provider: string,
+	options?: { sessionId?: string; baseUrl?: string; modelId?: string },
+): ApiKeyResolver {
+	const { sessionId, baseUrl, modelId } = options ?? {};
+	return async ({ lastChance, error, signal }) => {
+		if (error === undefined) {
+			return storage.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
+		}
+		if (lastChance) {
+			// Rotate to a sibling credential on an account constraint. No
+			// retry-after handling here — `markUsageLimitReached` owns the block
+			// duration and the outer retry layer owns the no-sibling wait.
+			await storage.rotateSessionCredential(provider, sessionId, { error, signal });
+			return storage.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
+		}
+		return storage.getApiKey(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
+	};
 }
 
 function isAbortSignalOption(
@@ -3046,19 +3085,38 @@ export class AuthStorage {
 				candidates.unshift(preferred);
 			}
 		}
+		// Step (b) of the auth-retry policy: when `forceRefresh` is set, re-mint
+		// the session-preferred credential (or the first candidate when no
+		// session preference exists yet) even if its cached token still looks
+		// valid — a peer/broker may have rotated it out from under us.
+		const forceRefreshIndex = options?.forceRefresh
+			? (sessionPreferredIndex ?? candidates[0]?.selection.index)
+			: undefined;
 		await Promise.all(
 			candidates.map(async candidate => {
-				if (Date.now() + OAUTH_REFRESH_SKEW_MS < candidate.selection.credential.expires) return;
+				const force = forceRefreshIndex !== undefined && candidate.selection.index === forceRefreshIndex;
+				if (!force && Date.now() + OAUTH_REFRESH_SKEW_MS < candidate.selection.credential.expires) return;
 				const latestCredential = this.#getCredentialsForProvider(provider)[candidate.selection.index];
-				if (latestCredential?.type === "oauth" && Date.now() + OAUTH_REFRESH_SKEW_MS < latestCredential.expires) {
+				if (
+					!force &&
+					latestCredential?.type === "oauth" &&
+					Date.now() + OAUTH_REFRESH_SKEW_MS < latestCredential.expires
+				) {
 					candidate.selection.credential = latestCredential;
 					return;
 				}
 				try {
 					const credentialId = this.#getStoredCredentials(provider)[candidate.selection.index]?.id;
+					// Hand #refreshOAuthCredential a stale clone (expires:0) so its
+					// not-yet-expired short-circuit doesn't suppress the forced
+					// re-mint; an in-flight peer refresh is still awaited via the
+					// per-credential single-flight.
+					const refreshTarget = force
+						? { ...candidate.selection.credential, expires: 0 }
+						: candidate.selection.credential;
 					const refreshedCredentials = await this.#refreshOAuthCredential(
 						provider,
-						candidate.selection.credential,
+						refreshTarget,
 						credentialId,
 						options?.signal,
 					);
@@ -3668,6 +3726,65 @@ export class AuthStorage {
 			latestRows.map(row => ({ id: row.id, credential: row.credential })),
 		);
 		return true;
+	}
+
+	/**
+	 * Rotate away from the session's current credential after a retryable auth
+	 * error — step (c) of the auth-retry policy. Stateless: looks up the
+	 * session-sticky credential (no API-key matching needed), applies the
+	 * storage action for the error class, then clears the sticky so the next
+	 * {@link AuthStorage.getApiKey} for this session picks a sibling.
+	 *
+	 * - usage-limit / account-rate-limit error → {@link AuthStorage.markUsageLimitReached}
+	 *   (temporary block via its own backoff — default plus server usage-report
+	 *   reset; sticky left intact so the next resolve re-ranks around the block).
+	 * - otherwise (hard 401 / auth failure) → mark the credential suspect (or
+	 *   reload when no broker hook is wired) and block it, then drop the sticky.
+	 *
+	 * Returns whether another usable credential of the same type remains.
+	 */
+	async rotateSessionCredential(
+		provider: string,
+		sessionId: string | undefined,
+		options?: { error?: unknown; signal?: AbortSignal },
+	): Promise<boolean> {
+		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		if (!sessionCredential) return false;
+
+		const error = options?.error;
+		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+		if (message && isUsageLimitError(message)) {
+			return this.markUsageLimitReached(provider, sessionId, { signal: options?.signal });
+		}
+
+		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
+		// Snapshot sibling availability before mutating so a soft-deleting
+		// suspect hook can't reindex the answer out from under us.
+		const hasSibling = this.#getCredentialsForProvider(provider).some(
+			(credential, index) =>
+				credential.type === sessionCredential.type &&
+				index !== sessionCredential.index &&
+				!this.#isCredentialBlocked(providerKey, index),
+		);
+		const target = this.#getStoredCredentials(provider)[sessionCredential.index];
+		this.#clearSessionCredential(provider, sessionId);
+		this.#markCredentialBlocked(providerKey, sessionCredential.index, Date.now() + AuthStorage.#defaultBackoffMs);
+
+		if (target) {
+			const markSuspect = this.#store.markCredentialSuspect?.bind(this.#store);
+			if (markSuspect) {
+				await markSuspect(target.id, { signal: options?.signal });
+			} else {
+				await this.reload();
+			}
+			const latestRows = this.#store.listAuthCredentials(provider);
+			this.#setStoredCredentials(
+				provider,
+				latestRows.map(row => ({ id: row.id, credential: row.credential })),
+			);
+		}
+
+		return hasSibling;
 	}
 
 	// ─── Auth Broker integration ────────────────────────────────────────────

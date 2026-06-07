@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { ScrollView } from "../src/components/scroll-view";
-import { visibleWidth } from "../src/utils";
+import { Ellipsis, visibleWidth } from "../src/utils";
 
 const theme = {
 	track: () => "T",
@@ -75,5 +75,29 @@ describe("ScrollView", () => {
 		expect(rendered).toHaveLength(2);
 		expect(rendered.every(line => visibleWidth(line) <= 5)).toBe(true);
 		expect(rendered[0]).toContain("B");
+	});
+
+	it("appends an overflow ellipsis by default and omits it when configured", () => {
+		const long = ["abcdefghij"];
+		const def = new ScrollView(long, { height: 1, scrollbar: "never", theme });
+		expect(def.render(5)[0]).toContain("…");
+
+		const omit = new ScrollView(long, { height: 1, scrollbar: "never", ellipsis: Ellipsis.Omit, theme });
+		expect(omit.render(5)[0]).toBe("abcde");
+	});
+
+	it("handles navigation keys, with Shift+Arrow scrolling by fastScrollLines", () => {
+		const view = new ScrollView(
+			Array.from({ length: 50 }, (_, i) => String(i)),
+			{ height: 5, fastScrollLines: 7, theme },
+		);
+
+		expect(view.handleScrollKey("\x1b[B")).toBe(true); // down
+		expect(view.getScrollOffset()).toBe(1);
+		expect(view.handleScrollKey("\x1b[1;2B")).toBe(true); // shift+down
+		expect(view.getScrollOffset()).toBe(8);
+		expect(view.handleScrollKey("\x1b[1;2A")).toBe(true); // shift+up
+		expect(view.getScrollOffset()).toBe(1);
+		expect(view.handleScrollKey("x")).toBe(false);
 	});
 });

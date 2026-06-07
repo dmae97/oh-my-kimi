@@ -38,6 +38,8 @@ describe("commit role thinking selection", () => {
 		const registry = {
 			getAvailable: () => [defaultModel, commitModel],
 			getApiKey: async () => "test-key",
+			getApiKeyForProvider: async () => "test-key",
+			authStorage: { rotateSessionCredential: async () => false },
 		};
 
 		const primary = await resolvePrimaryModel(undefined, settings, registry);

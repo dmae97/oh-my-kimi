@@ -1,6 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added optional `ApiKeyResolveContext` parameter to `getApiKey` in `AgentOptions` and `AgentLoopConfig` so key resolvers can receive retry context
+
+### Changed
+
+- Enabled streaming API calls to re-resolve credentials through the `getApiKey` callback when retries occur after authentication-related errors
+
+### Fixed
+
+- Fixed handling of short-lived API keys so that expired tokens are retried with a refreshed value during 401/usage-limit failures
+- Ensured fallback API key resolution uses the initially configured static `apiKey` when `getApiKey` is present
 
 ## [15.9.5] - 2026-06-05
 

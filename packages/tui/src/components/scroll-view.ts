@@ -1,3 +1,4 @@
+import { matchesKey } from "../keys";
 import type { Component } from "../tui";
 import { Ellipsis, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 
@@ -20,6 +21,18 @@ export interface ScrollViewOptions {
 	theme?: ScrollViewTheme;
 	trackChar?: string;
 	thumbChar?: string;
+	/**
+	 * Indicator appended when a row overflows `contentWidth`. Defaults to
+	 * {@link Ellipsis.Unicode}. Pass {@link Ellipsis.Omit} when callers wrap
+	 * lines to width themselves and only trailing padding can overflow (e.g.
+	 * the plan-review overlay), so no stray `…` lands on every padded row.
+	 */
+	ellipsis?: Ellipsis;
+	/**
+	 * Rows moved per keystroke when {@link ScrollView.handleScrollKey} sees a
+	 * Shift+Arrow (the "scroll faster" affordance). Defaults to 5.
+	 */
+	fastScrollLines?: number;
 }
 
 function normalizeScrollbarMode(scrollbar: ScrollViewOptions["scrollbar"]): ScrollbarMode {
@@ -48,6 +61,8 @@ export class ScrollView implements Component {
 	#theme: Required<ScrollViewTheme>;
 	#trackChar: string;
 	#thumbChar: string;
+	#ellipsis: Ellipsis;
+	#fastScrollLines: number;
 
 	constructor(lines: readonly string[], options: ScrollViewOptions) {
 		this.#lines = [...lines];
@@ -60,6 +75,8 @@ export class ScrollView implements Component {
 		};
 		this.#trackChar = firstCellGlyph(options.trackChar ?? DEFAULT_TRACK, DEFAULT_TRACK);
 		this.#thumbChar = firstCellGlyph(options.thumbChar ?? DEFAULT_THUMB, DEFAULT_THUMB);
+		this.#ellipsis = options.ellipsis ?? Ellipsis.Unicode;
+		this.#fastScrollLines = Math.max(1, Math.trunc(options.fastScrollLines ?? 5));
 		this.#clampScrollOffset();
 	}
 
@@ -113,6 +130,50 @@ export class ScrollView implements Component {
 		this.#scrollOffset = this.getMaxScrollOffset();
 	}
 
+	/**
+	 * Apply a standard navigation key to the viewport. Shift+Arrow scrolls by
+	 * {@link ScrollViewOptions.fastScrollLines} (the "scroll faster" affordance);
+	 * plain Arrow by one line; PageUp/PageDown by a page; Home/End to the ends.
+	 * Returns true when the key was consumed, so callers can fall through to
+	 * their own (e.g. vim-style) bindings. Generic on purpose: every ScrollView
+	 * consumer gets the same scroll keys, including Shift-to-go-faster.
+	 */
+	handleScrollKey(data: string): boolean {
+		if (matchesKey(data, "shift+up")) {
+			this.scroll(-this.#fastScrollLines);
+			return true;
+		}
+		if (matchesKey(data, "shift+down")) {
+			this.scroll(this.#fastScrollLines);
+			return true;
+		}
+		if (matchesKey(data, "up")) {
+			this.scroll(-1);
+			return true;
+		}
+		if (matchesKey(data, "down")) {
+			this.scroll(1);
+			return true;
+		}
+		if (matchesKey(data, "pageUp")) {
+			this.page(-1);
+			return true;
+		}
+		if (matchesKey(data, "pageDown")) {
+			this.page(1);
+			return true;
+		}
+		if (matchesKey(data, "home")) {
+			this.scrollToTop();
+			return true;
+		}
+		if (matchesKey(data, "end")) {
+			this.scrollToBottom();
+			return true;
+		}
+		return false;
+	}
+
 	invalidate(): void {
 		// No cached layout to invalidate.
 	}
@@ -128,7 +189,7 @@ export class ScrollView implements Component {
 		for (let row = 0; row < this.#height; row++) {
 			const sourceIndex = this.#totalRows === undefined ? this.#scrollOffset + row : row;
 			const source = this.#lines[sourceIndex] ?? "";
-			const truncated = truncateToWidth(replaceTabs(source), contentWidth, Ellipsis.Unicode);
+			const truncated = truncateToWidth(replaceTabs(source), contentWidth, this.#ellipsis);
 			if (!showScrollbar) {
 				lines.push(truncated);
 				continue;
