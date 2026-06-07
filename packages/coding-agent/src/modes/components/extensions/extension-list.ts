@@ -10,6 +10,7 @@ import {
 	extractPrintableText,
 	matchesKey,
 	padding,
+	ScrollView,
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
@@ -134,25 +135,33 @@ export class ExtensionList implements Component {
 		const startIdx = this.#scrollOffset;
 		const endIdx = Math.min(startIdx + this.#maxVisible, this.#listItems.length);
 
+		// Reserve the rightmost column for the scrollbar when overflowing
+		const overflow = this.#listItems.length > this.#maxVisible;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+
 		// Render visible items
+		const rows: string[] = [];
 		for (let i = startIdx; i < endIdx; i++) {
 			const listItem = this.#listItems[i];
 			const isSelected = this.#focused && i === this.#selectedIndex;
 
 			if (listItem.type === "master") {
-				lines.push(this.#renderMasterSwitch(listItem, isSelected, width));
+				rows.push(this.#renderMasterSwitch(listItem, isSelected, rowWidth));
 			} else if (listItem.type === "kind-header") {
-				lines.push(this.#renderKindHeader(listItem, isSelected, width));
+				rows.push(this.#renderKindHeader(listItem, isSelected, rowWidth));
 			} else {
-				lines.push(this.#renderExtensionRow(listItem.item, isSelected, width, masterDisabled));
+				rows.push(this.#renderExtensionRow(listItem.item, isSelected, rowWidth, masterDisabled));
 			}
 		}
 
-		// Scroll indicator
-		if (this.#listItems.length > this.#maxVisible) {
-			const indicator = theme.fg("muted", `  (${this.#selectedIndex + 1}/${this.#listItems.length})`);
-			lines.push(indicator);
-		}
+		const sv = new ScrollView(rows, {
+			height: rows.length,
+			scrollbar: "auto",
+			totalRows: this.#listItems.length,
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(this.#scrollOffset);
+		lines.push(...sv.render(width));
 
 		return lines;
 	}

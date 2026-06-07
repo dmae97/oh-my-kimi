@@ -82,7 +82,7 @@ export class SetupWizardComponent implements Component {
 	}
 
 	invalidate(): void {
-		this.#activeScene?.invalidate();
+		this.#activeScene?.invalidate?.();
 	}
 
 	handleInput(data: string): void {

@@ -2,7 +2,7 @@
  * Tests for ExtensionRunner - conflict detection, error handling, tool wrapping.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -20,21 +20,34 @@ describe("ExtensionRunner", () => {
 	let tempDir: TempDir;
 	let extensionsDir: string;
 	let sessionManager: SessionManager;
+	// Shared immutable fixtures. ModelRegistry's constructor synchronously loads
+	// every bundled model and rebuilds the canonical index (~100ms); these tests
+	// never mutate the registry or auth storage, so build them once per file
+	// instead of paying that cost in every beforeEach.
+	let sharedTempDir: TempDir;
 	let modelRegistry: ModelRegistry;
 	let authStorage: AuthStorage;
 
-	beforeEach(async () => {
+	beforeAll(async () => {
+		sharedTempDir = TempDir.createSync("@pi-runner-shared-");
+		authStorage = await AuthStorage.create(path.join(sharedTempDir.path(), "testauth.db"));
+		modelRegistry = new ModelRegistry(authStorage);
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		sharedTempDir.removeSync();
+	});
+
+	beforeEach(() => {
 		tempDir = TempDir.createSync("@pi-runner-test-");
 		extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
 		fs.mkdirSync(extensionsDir, { recursive: true });
 		sessionManager = SessionManager.inMemory();
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		modelRegistry = new ModelRegistry(authStorage);
 	});
 
 	afterEach(() => {
 		testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
-		authStorage.close();
 		tempDir.removeSync();
 	});
 
@@ -82,6 +95,68 @@ describe("ExtensionRunner", () => {
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"), expect.any(Object));
 			expect(shortcuts.has("ctrl+c")).toBe(false);
+
+			warnSpy.mockRestore();
+		});
+
+		it("rejects ctrl+q so it cannot shadow the app.message.followUp default (#1903)", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerShortcut("ctrl+q", {
+						description: "Tries to bind the follow-up chord",
+						handler: async () => {},
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "conflict-q.ts"), extCode);
+
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const shortcuts = runner.getShortcuts();
+
+			// Contract: ctrl+q is reserved because it is now a default chord for
+			// app.message.followUp. Without this guard, InputController registers
+			// the extension shortcut first and the follow-up handler silently
+			// overwrites it in the editor's custom-key map.
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"), expect.any(Object));
+			expect(shortcuts.has("ctrl+q")).toBe(false);
+
+			warnSpy.mockRestore();
+		});
+
+		it("rejects Alt+M so it cannot shadow the app.model.select default", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerShortcut("alt+m", {
+						description: "Tries to bind model select",
+						handler: async () => {},
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "conflict-model.ts"), extCode);
+
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const shortcuts = runner.getShortcuts();
+
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"), expect.any(Object));
+			expect(shortcuts.has("alt+m")).toBe(false);
 
 			warnSpy.mockRestore();
 		});

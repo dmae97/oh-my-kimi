@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "../src/model-thinking";
+import { Effort } from "../src/effort";
 import { encodeStream, formatError, parseRequest } from "../src/providers/pi-native-server";
 import type {
 	AssistantMessage,

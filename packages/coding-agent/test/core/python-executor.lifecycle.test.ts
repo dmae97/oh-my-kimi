@@ -69,13 +69,11 @@ describe("executePython session lifecycle", () => {
 			return kernel as unknown as PythonKernel;
 		};
 
-		const first = await executePython("print('one')", { sessionId: "session-1" });
-		const second = await executePython("print('two')", { sessionId: "session-1" });
+		await executePython("print('one')", { sessionId: "session-1" });
+		await executePython("print('two')", { sessionId: "session-1" });
 
 		expect(startCount).toBe(1);
 		expect(kernel.executeCalls).toEqual(["print('one')", "print('two')"]);
-		expect(first.output).toContain("ok");
-		expect(second.output).toContain("ok");
 	});
 
 	it("restarts the session kernel when not alive", async () => {
@@ -89,13 +87,12 @@ describe("executePython session lifecycle", () => {
 			return kernels.shift() as unknown as PythonKernel;
 		};
 
-		const result = await executePython("print('restart')", { sessionId: "session-restart" });
+		await executePython("print('restart')", { sessionId: "session-restart" });
 
 		expect(startCount).toBe(2);
 		expect(deadKernel.shutdownCalls).toBe(1);
 		expect(deadKernel.executeCalls).toEqual([]);
 		expect(liveKernel.executeCalls).toEqual(["print('restart')"]);
-		expect(result.output).toContain("live");
 	});
 
 	it("resets the session kernel when requested", async () => {

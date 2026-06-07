@@ -14,7 +14,7 @@ import { normalizeToLF } from "./normalize";
 /**
  * Upper bound on the file size we snapshot. A section tag is a content hash of
  * the *whole* file, so minting one means holding the full normalized text in
- * the store. Files above this cap emit no `¶path#tag` header — line-anchored
+ * the store. Files above this cap emit no `[path#tag]` header — line-anchored
  * editing of multi-megabyte files is out of scope under the full-content model.
  */
 export const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;

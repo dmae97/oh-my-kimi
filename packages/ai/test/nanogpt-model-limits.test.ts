@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Effort } from "../src/model-thinking";
+import { Effort } from "../src/effort";
 import { nanoGptModelManagerOptions } from "../src/provider-models/openai-compat";
 
 const originalFetch = global.fetch;

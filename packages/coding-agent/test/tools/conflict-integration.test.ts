@@ -26,7 +26,11 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 }
 
 async function getTool(session: ToolSession, name: "read" | "write") {
-	const tools = await createTools(session);
+	// Request only the tool under test: createTools(session) with no toolNames
+	// builds every builtin factory (LSP, MCP discovery, browser, eval preflight,
+	// …) on each call, which is pure overhead here. The conflict contract lives
+	// entirely in the read/write tools + session.conflictHistory.
+	const tools = await createTools(session, [name]);
 	const tool = tools.find(entry => entry.name === name);
 	if (!tool) throw new Error(`Missing ${name} tool`);
 	return tool;
@@ -511,7 +515,7 @@ describe("write resolves conflicts via conflict://N", () => {
 		await read.execute("read-hashed", { path: "hashed.ts" });
 		const result = await write.execute("write-hashed", {
 			path: "conflict://1",
-			content: "¶hashed.ts#1a2b\n42:cleanline\n",
+			content: "[hashed.ts#1a2b]\n42:cleanline\n",
 		});
 		expect(getText(result)).toContain("auto-stripped hashline display prefixes");
 		const after = await Bun.file(filePath).text();

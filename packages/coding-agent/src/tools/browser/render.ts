@@ -9,7 +9,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
-import { Hasher, renderCodeCell, renderStatusLine } from "../../tui";
+import { Hasher, isFramedBlockComponent, markFramedBlockComponent, renderCodeCell, renderStatusLine } from "../../tui";
 import type { BrowserToolDetails } from "../browser";
 import { formatStyledTruncationWarning, stripOutputNotice } from "../output-meta";
 import { replaceTabs, shortenPath } from "../render-utils";
@@ -65,13 +65,14 @@ function dropTrailingBlankLines(text: string): string {
 
 function appendLine(component: Component, line: string | undefined): Component {
 	if (!line) return component;
-	return {
+	const wrapped = {
 		render: (width: number): string[] => {
 			const base = component.render(width);
 			return [...base, line];
 		},
 		invalidate: () => component.invalidate?.(),
 	};
+	return isFramedBlockComponent(component) ? markFramedBlockComponent(wrapped) : wrapped;
 }
 
 function renderRunCell(
@@ -93,7 +94,7 @@ function renderRunCell(
 	const title = titleParts.join(" · ");
 
 	let cached: { key: bigint; width: number; lines: string[] } | undefined;
-	return {
+	return markFramedBlockComponent({
 		render: (width: number): string[] => {
 			const expanded = options.renderContext?.expanded ?? options.expanded;
 			const previewLines = options.renderContext?.previewLines ?? BROWSER_DEFAULT_PREVIEW_LINES;
@@ -131,7 +132,7 @@ function renderRunCell(
 		invalidate: () => {
 			cached = undefined;
 		},
-	};
+	});
 }
 
 function renderOpenOrCloseLine(

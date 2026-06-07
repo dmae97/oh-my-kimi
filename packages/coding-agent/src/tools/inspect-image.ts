@@ -4,6 +4,7 @@ import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import { extractTextContent } from "../commit/utils";
+
 import { expandRoleAlias, resolveModelFromString } from "../config/model-resolver";
 import inspectImageDescription from "../prompts/tools/inspect-image.md" with { type: "text" };
 import inspectImageSystemPromptTemplate from "../prompts/tools/inspect-image-system.md" with { type: "text" };
@@ -136,7 +137,13 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 					},
 				],
 			},
-			{ apiKey, signal },
+			{
+				apiKey: modelRegistry.resolver(model.provider, {
+					sessionId: this.session.getSessionId?.() ?? undefined,
+					baseUrl: model.baseUrl,
+				}),
+				signal,
+			},
 			{ telemetry, oneshotKind: "inspect_image", completeImpl: this.completeImageRequest },
 		);
 

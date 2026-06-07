@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { Effort } from "../src/model-thinking";
+import { Effort } from "../src/effort";
 import { ollamaModelManagerOptions } from "../src/provider-models/openai-compat";
 import { streamOllama } from "../src/providers/ollama";
 import type { Context, Model, Tool } from "../src/types";
@@ -52,6 +52,48 @@ describe("ollama local provider discovery", () => {
 		expect(model?.reasoning).toBe(true);
 		expect(model?.thinking).toEqual({ mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High });
 		expect(model?.input).toEqual(["text", "image"]);
+	});
+
+	test("remaps Ollama's unsupported reasoning levels and skips non-reasoning models", async () => {
+		global.fetch = vi.fn(async (input, init) => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:11434/v1/models") {
+				return new Response(
+					JSON.stringify({
+						object: "list",
+						data: [
+							{ id: "gemma4:e4b", object: "model" },
+							{ id: "llama-plain:latest", object: "model" },
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:11434/api/show") {
+				const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+				const thinking = body.model === "gemma4:e4b";
+				return new Response(
+					JSON.stringify({
+						capabilities: thinking ? ["completion", "tools", "thinking"] : ["completion", "tools"],
+						model_info: {},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as unknown as typeof fetch;
+
+		const models = await ollamaModelManagerOptions().fetchDynamicModels?.();
+		const reasoningModel = models?.find(candidate => candidate.id === "gemma4:e4b");
+		const plainModel = models?.find(candidate => candidate.id === "llama-plain:latest");
+
+		// Ollama's OpenAI-compatible endpoint rejects "minimal"/"xhigh" with HTTP 400;
+		// reasoning models must remap them onto accepted levels (low/max).
+		expect(reasoningModel?.reasoning).toBe(true);
+		expect(reasoningModel?.compat?.reasoningEffortMap).toMatchObject({ minimal: "low", xhigh: "max" });
+		// Non-reasoning models never send an effort, so they carry no remap.
+		expect(plainModel?.reasoning).toBe(false);
+		expect(plainModel?.compat?.reasoningEffortMap).toBeUndefined();
 	});
 });
 

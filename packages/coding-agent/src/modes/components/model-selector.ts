@@ -6,6 +6,7 @@ import {
 	getKeybindings,
 	Input,
 	matchesKey,
+	ScrollView,
 	Spacer,
 	type Tab,
 	TabBar,
@@ -13,6 +14,7 @@ import {
 	type TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-registry";
 import { resolveModelRoleValue } from "../../config/model-resolver";
@@ -147,6 +149,7 @@ export class ModelSelectorComponent extends Container {
 	#tui: TUI;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#temporaryOnly: boolean;
+	#currentContextTokens: number;
 
 	#menuRoleActions: MenuRoleAction[] = [];
 
@@ -172,7 +175,7 @@ export class ModelSelectorComponent extends Container {
 		scopedModels: ReadonlyArray<ScopedModelItem>,
 		onSelect: RoleSelectCallback,
 		onCancel: () => void,
-		options?: { temporaryOnly?: boolean; initialSearchInput?: string },
+		options?: { temporaryOnly?: boolean; initialSearchInput?: string; currentContextTokens?: number },
 	) {
 		super();
 
@@ -183,6 +186,9 @@ export class ModelSelectorComponent extends Container {
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		this.#temporaryOnly = options?.temporaryOnly ?? false;
+		const currentContextTokens = options?.currentContextTokens ?? 0;
+		this.#currentContextTokens =
+			Number.isFinite(currentContextTokens) && currentContextTokens > 0 ? Math.floor(currentContextTokens) : 0;
 		const initialSearchInput = options?.initialSearchInput;
 
 		// Initialize menu role actions (built-in + custom from settings)
@@ -215,8 +221,8 @@ export class ModelSelectorComponent extends Container {
 			this.#searchInput.setValue(initialSearchInput);
 		}
 		this.#searchInput.onSubmit = () => {
-			// Enter on search input opens menu if we have a selection
-			if (this.#filteredModels[this.#selectedIndex]) {
+			// Enter on search input opens menu if we have an enabled selection
+			if (this.#getSelectedItem()) {
 				this.#openMenu();
 			}
 		};
@@ -460,7 +466,11 @@ export class ModelSelectorComponent extends Container {
 		this.#filteredModels = models;
 		this.#canonicalModels = canonicalModels;
 		this.#filteredCanonicalModels = canonicalModels;
-		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, models.length - 1));
+		const visibleModels = this.#isCanonicalTab() ? canonicalModels : models;
+		this.#selectedIndex = this.#coerceSelectedIndex(
+			Math.min(this.#selectedIndex, Math.max(0, visibleModels.length - 1)),
+			visibleModels,
+		);
 	}
 
 	async #loadModels(): Promise<void> {
@@ -626,6 +636,74 @@ export class ModelSelectorComponent extends Container {
 		return this.#getActiveTabId() === CANONICAL_TAB;
 	}
 
+	#isModelOverContextLimit(model: Model): boolean {
+		const contextWindow = model.contextWindow ?? 0;
+		return this.#currentContextTokens > 0 && contextWindow > 0 && this.#currentContextTokens > contextWindow;
+	}
+
+	#isItemDisabled(item: ModelItem | CanonicalModelItem): boolean {
+		return this.#isModelOverContextLimit(item.model);
+	}
+
+	#formatContextLimitSuffix(model: Model): string {
+		if (!this.#isModelOverContextLimit(model)) {
+			return "";
+		}
+		return ` ${theme.status.disabled} context>${formatNumber(model.contextWindow).toLowerCase()}`;
+	}
+
+	#getVisibleItems(): ReadonlyArray<ModelItem | CanonicalModelItem> {
+		return this.#isCanonicalTab() ? this.#filteredCanonicalModels : this.#filteredModels;
+	}
+
+	#coerceSelectedIndex(
+		index: number,
+		visibleItems: ReadonlyArray<ModelItem | CanonicalModelItem> = this.#getVisibleItems(),
+	): number {
+		const maxIndex = visibleItems.length - 1;
+		if (maxIndex < 0) {
+			return 0;
+		}
+		const clamped = Math.max(0, Math.min(index, maxIndex));
+		const clampedItem = visibleItems[clamped];
+		if (clampedItem && !this.#isItemDisabled(clampedItem)) {
+			return clamped;
+		}
+		for (let i = clamped + 1; i <= maxIndex; i++) {
+			const item = visibleItems[i];
+			if (item && !this.#isItemDisabled(item)) {
+				return i;
+			}
+		}
+		for (let i = clamped - 1; i >= 0; i--) {
+			const item = visibleItems[i];
+			if (item && !this.#isItemDisabled(item)) {
+				return i;
+			}
+		}
+		return clamped;
+	}
+
+	#moveSelection(delta: number): void {
+		const visibleItems = this.#getVisibleItems();
+		const count = visibleItems.length;
+		if (count === 0) {
+			return;
+		}
+		let index = this.#selectedIndex;
+		for (let step = 0; step < count; step++) {
+			index = (index + delta + count) % count;
+			const item = visibleItems[index];
+			if (item && !this.#isItemDisabled(item)) {
+				this.#selectedIndex = index;
+				this.#updateList();
+				return;
+			}
+		}
+		this.#selectedIndex = this.#coerceSelectedIndex(this.#selectedIndex, visibleItems);
+		this.#updateList();
+	}
+
 	#filterModels(query: string): void {
 		const activeTabId = this.#getActiveTabId();
 		const activeProviderId = this.#getActiveProviderId();
@@ -696,8 +774,11 @@ export class ModelSelectorComponent extends Container {
 			this.#filteredCanonicalModels = baseCanonicalModels;
 		}
 
-		const visibleCount = isCanonicalTab ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
-		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, visibleCount - 1));
+		const visibleItems = isCanonicalTab ? this.#filteredCanonicalModels : this.#filteredModels;
+		this.#selectedIndex = this.#coerceSelectedIndex(
+			Math.min(this.#selectedIndex, Math.max(0, visibleItems.length - 1)),
+			visibleItems,
+		);
 		this.#updateList();
 	}
 
@@ -778,6 +859,7 @@ export class ModelSelectorComponent extends Container {
 
 		const showProvider = this.#getActiveTabId() === ALL_TAB;
 
+		const rows: string[] = [];
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = visibleItems[i];
@@ -786,6 +868,8 @@ export class ModelSelectorComponent extends Container {
 			const providerItem = isCanonicalTab ? undefined : (item as ModelItem);
 
 			const isSelected = i === this.#selectedIndex;
+			const isDisabled = this.#isItemDisabled(item);
+			const disabledSuffix = this.#formatContextLimitSuffix(item.model);
 
 			// Build role badges (inverted: color as background, black text)
 			const roleBadgeTokens: string[] = [];
@@ -815,34 +899,42 @@ export class ModelSelectorComponent extends Container {
 				if (isCanonicalTab) {
 					const variants = theme.fg("dim", ` [${canonicalItem?.variantCount ?? 0}]`);
 					const backing = theme.fg("dim", ` -> ${item.model.provider}/${item.model.id}`);
-					line = `${prefix}${theme.fg("accent", item.id)}${variants}${backing}${badgeText}`;
+					line = `${prefix}${theme.fg("accent", item.id)}${variants}${backing}${badgeText}${disabledSuffix}`;
 				} else if (showProvider) {
 					const providerPrefix = theme.fg("dim", `${providerItem?.provider ?? ""}/`);
-					line = `${prefix}${providerPrefix}${theme.fg("accent", providerItem?.id ?? item.id)}${badgeText}`;
+					line = `${prefix}${providerPrefix}${theme.fg("accent", providerItem?.id ?? item.id)}${badgeText}${disabledSuffix}`;
 				} else {
-					line = `${prefix}${theme.fg("accent", item.id)}${badgeText}`;
+					line = `${prefix}${theme.fg("accent", item.id)}${badgeText}${disabledSuffix}`;
 				}
 			} else {
 				const prefix = "  ";
 				if (isCanonicalTab) {
 					const variants = theme.fg("dim", ` [${canonicalItem?.variantCount ?? 0}]`);
 					const backing = theme.fg("dim", ` -> ${item.model.provider}/${item.model.id}`);
-					line = `${prefix}${item.id}${variants}${backing}${badgeText}`;
+					line = `${prefix}${item.id}${variants}${backing}${badgeText}${disabledSuffix}`;
 				} else if (showProvider) {
 					const providerPrefix = theme.fg("dim", `${providerItem?.provider ?? ""}/`);
-					line = `${prefix}${providerPrefix}${providerItem?.id ?? item.id}${badgeText}`;
+					line = `${prefix}${providerPrefix}${providerItem?.id ?? item.id}${badgeText}${disabledSuffix}`;
 				} else {
-					line = `${prefix}${item.id}${badgeText}`;
+					line = `${prefix}${item.id}${badgeText}${disabledSuffix}`;
 				}
 			}
 
-			this.#listContainer.addChild(new Text(line, 0, 0));
+			if (isDisabled) {
+				line = theme.fg("dim", Bun.stripANSI(line));
+			}
+			rows.push(line);
 		}
 
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < visibleItems.length) {
-			const scrollInfo = theme.fg("muted", `  (${this.#selectedIndex + 1}/${visibleItems.length})`);
-			this.#listContainer.addChild(new Text(scrollInfo, 0, 0));
+		if (rows.length > 0) {
+			const sv = new ScrollView(rows, {
+				height: rows.length,
+				scrollbar: "auto",
+				totalRows: visibleItems.length,
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			sv.setScrollOffset(startIndex);
+			this.#listContainer.addChild(sv);
 		}
 
 		// Show error message or "no results" if empty
@@ -863,8 +955,14 @@ export class ModelSelectorComponent extends Container {
 			const suffix = isCanonicalTab
 				? ` (${selected.model.provider}/${selected.model.id}, ${(selected as CanonicalModelItem).variantCount} variants)`
 				: "";
+			const limitWarning = this.#isItemDisabled(selected)
+				? theme.fg(
+						"dim",
+						` — current context ${formatNumber(this.#currentContextTokens).toLowerCase()} > ${formatNumber(selected.model.contextWindow).toLowerCase()} limit`,
+					)
+				: "";
 			this.#listContainer.addChild(
-				new Text(theme.fg("muted", `  Model Name: ${selected.model.name}${suffix}`), 0, 0),
+				new Text(theme.fg("muted", `  Model Name: ${selected.model.name}${suffix}`) + limitWarning, 0, 0),
 			);
 		}
 	}
@@ -890,7 +988,8 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#openMenu(): void {
-		if (!this.#getSelectedItem()) return;
+		const selectedItem = this.#getSelectedItem();
+		if (!selectedItem || this.#isItemDisabled(selectedItem)) return;
 
 		this.#isMenuOpen = true;
 		this.#menuStep = "role";
@@ -978,26 +1077,20 @@ export class ModelSelectorComponent extends Container {
 
 		// Up arrow - navigate list (wrap to bottom when at top)
 		if (matchesSelectUp(keyData)) {
-			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
-			if (itemCount === 0) return;
-			this.#selectedIndex = this.#selectedIndex === 0 ? itemCount - 1 : this.#selectedIndex - 1;
-			this.#updateList();
+			this.#moveSelection(-1);
 			return;
 		}
 
 		// Down arrow - navigate list (wrap to top when at bottom)
 		if (matchesSelectDown(keyData)) {
-			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
-			if (itemCount === 0) return;
-			this.#selectedIndex = this.#selectedIndex === itemCount - 1 ? 0 : this.#selectedIndex + 1;
-			this.#updateList();
+			this.#moveSelection(1);
 			return;
 		}
 
 		// Enter - open context menu or select directly in temporary mode
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			const selectedItem = this.#getSelectedItem();
-			if (selectedItem) {
+			if (selectedItem && !this.#isItemDisabled(selectedItem)) {
 				if (this.#temporaryOnly) {
 					// In temporary mode, skip menu and select directly
 					this.#handleSelect(selectedItem, null);
@@ -1020,7 +1113,7 @@ export class ModelSelectorComponent extends Container {
 	}
 	#handleMenuInput(keyData: string): void {
 		const selectedItem = this.#getSelectedItem();
-		if (!selectedItem) return;
+		if (!selectedItem || this.#isItemDisabled(selectedItem)) return;
 
 		const optionCount =
 			this.#menuStep === "thinking" && this.#menuSelectedRole !== null
@@ -1079,6 +1172,9 @@ export class ModelSelectorComponent extends Container {
 		role: string | null,
 		thinkingLevel?: ConfiguredThinkingLevel,
 	): void {
+		if (this.#isItemDisabled(item)) {
+			return;
+		}
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
 			this.#onSelectCallback(item.model, null, undefined, item.selector);

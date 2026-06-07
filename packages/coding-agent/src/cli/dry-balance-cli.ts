@@ -1,8 +1,10 @@
 import type {
 	Api,
+	ApiKeyResolver,
 	AssistantMessage,
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
+	AuthCredentialSnapshotEntry,
 	Context,
 	Model,
 	OAuthAccess,
@@ -59,6 +61,12 @@ export interface DryBalanceAuthStorage {
 		options?: DryBalanceAuthOptions,
 	): Promise<OAuthAccess | undefined>;
 	getOAuthAccesses?(provider: string, options?: DryBalanceAuthOptions): Promise<OAuthAccessResolution[]>;
+	/**
+	 * Force-refresh a single credential by id (step (b) of the auth-retry
+	 * policy). The bench re-mints the failing account's token in place on a
+	 * 401 rather than rotating accounts — it is measuring each account.
+	 */
+	forceRefreshCredentialById?(id: number, signal?: AbortSignal): Promise<AuthCredentialSnapshotEntry>;
 }
 
 export interface DryBalanceModelRegistry {
@@ -152,6 +160,8 @@ export interface DryBalanceDependencies {
 	now?: () => number;
 	stdoutIsTTY?: boolean;
 	stderrIsTTY?: boolean;
+	stdoutColumns?: number;
+	stderrColumns?: number;
 }
 
 type DryBalanceAttemptResult =
@@ -181,6 +191,7 @@ type DryBalanceBenchTarget =
 			ok: true;
 			account: string;
 			accessToken: string;
+			credentialId?: number;
 	  }
 	| {
 			ok: false;
@@ -310,10 +321,11 @@ function renderBenchStatusLine(
 	}
 }
 
-function createBenchProgressSink(
+export function createBenchProgressSink(
 	total: number,
 	write: (text: string) => void,
 	interactive: boolean,
+	columns: number,
 ): DryBalanceBenchProgressSink {
 	const statuses: DryBalanceBenchProgressStatus[] = Array.from({ length: total }, () => ({ state: "waiting" }));
 	if (!interactive) {
@@ -333,13 +345,21 @@ function createBenchProgressSink(
 	let frame = 0;
 	let lineCount = 0;
 	let timer: NodeJS.Timeout | undefined;
+	const width = Number.isFinite(columns) && columns > 0 ? Math.trunc(columns) : 80;
 	const render = (): void => {
 		const lines = [
 			chalk.bold("bench requests"),
 			...statuses.map((status, index) => renderBenchStatusLine(status, index, total, frame)),
 		];
-		if (lineCount > 0) write(`\x1b[${lineCount}A`);
-		write(`${lines.map(line => `\x1b[2K${line}`).join("\n")}\n`);
+		// Anchor every redraw at column 0 and terminate each row with CRLF: a
+		// bare `\n` only returns to column 0 when the tty performs ONLCR
+		// translation, which is off whenever the terminal is in raw mode — there
+		// the old column-preserving cursor-up staircased each frame into
+		// scrollback. Cap each line to the terminal width so a wrapped row never
+		// desyncs the `\x1b[<n>A` cursor-up from the logical line count.
+		const move = lineCount > 0 ? `\x1b[${lineCount}A` : "";
+		const body = lines.map(line => `\x1b[2K${truncateToWidth(line, width)}`).join("\r\n");
+		write(`${move}\r${body}\r\n`);
 		lineCount = lines.length;
 	};
 	render();
@@ -370,13 +390,23 @@ function createBenchProgressSink(
 async function runBenchRequest(
 	model: Model<Api>,
 	sessionId: string,
-	account: string,
-	accessToken: string,
+	target: Extract<DryBalanceBenchTarget, { ok: true }>,
+	authStorage: DryBalanceAuthStorage,
 	streamFn: DryBalanceStreamSimple,
 	now: () => number,
 ): Promise<DryBalanceBenchResult> {
+	const { account, accessToken, credentialId } = target;
 	const startedAt = now();
 	let firstTokenAt: number | undefined;
+	// Re-mint the cached token on a 401: a peer/broker may have rotated it out
+	// from under our snapshot (Anthropic rotates refresh tokens on every use).
+	// The bench measures one account, so the switch step intentionally declines.
+	const apiKey: ApiKeyResolver = async ({ lastChance, error }) => {
+		if (error === undefined) return accessToken;
+		if (lastChance || credentialId === undefined || !authStorage.forceRefreshCredentialById) return undefined;
+		const refreshed = await authStorage.forceRefreshCredentialById(credentialId);
+		return refreshed.credential.type === "oauth" ? refreshed.credential.access : undefined;
+	};
 	try {
 		const context: Context = {
 			messages: [
@@ -389,7 +419,7 @@ async function runBenchRequest(
 			],
 		};
 		const stream = streamFn(model, context, {
-			apiKey: accessToken,
+			apiKey,
 			sessionId,
 			maxTokens: resolveBenchMaxTokens(model),
 			temperature: 0.2,
@@ -454,7 +484,7 @@ async function resolveBenchTargets(
 		seen.add(key);
 		const account = extractAccount(entry);
 		if (entry.ok) {
-			targets.push({ ok: true, account, accessToken: entry.accessToken });
+			targets.push({ ok: true, account, accessToken: entry.accessToken, credentialId: entry.credentialId });
 		} else {
 			targets.push({ ok: false, account, error: entry.error });
 		}
@@ -465,6 +495,7 @@ async function resolveBenchTargets(
 async function runBenchTargets(
 	model: Model<Api>,
 	targets: DryBalanceBenchTarget[],
+	authStorage: DryBalanceAuthStorage,
 	randomSessionId: () => string,
 	progress: DryBalanceBenchProgressSink | undefined,
 	streamFn: DryBalanceStreamSimple,
@@ -482,14 +513,7 @@ async function runBenchTargets(
 				return result;
 			}
 			progress?.markRunning(index, target.account);
-			const result = await runBenchRequest(
-				model,
-				randomSessionId(),
-				target.account,
-				target.accessToken,
-				streamFn,
-				now,
-			);
+			const result = await runBenchRequest(model, randomSessionId(), target, authStorage, streamFn, now);
 			progress?.complete(index, result);
 			return result;
 		}),
@@ -792,8 +816,19 @@ export async function runDryBalanceCommand(
 			const progressInteractive = command.flags.json
 				? (deps.stderrIsTTY ?? process.stderr.isTTY === true)
 				: (deps.stdoutIsTTY ?? process.stdout.isTTY === true);
-			progress = createBenchProgressSink(targets.length, progressWrite, progressInteractive);
-			benchResults = await runBenchTargets(model, targets, randomSessionId, progress, streamFn, now);
+			const progressColumns = command.flags.json
+				? (deps.stderrColumns ?? process.stderr.columns ?? 80)
+				: (deps.stdoutColumns ?? process.stdout.columns ?? 80);
+			progress = createBenchProgressSink(targets.length, progressWrite, progressInteractive, progressColumns);
+			benchResults = await runBenchTargets(
+				model,
+				targets,
+				runtime.modelRegistry.authStorage,
+				randomSessionId,
+				progress,
+				streamFn,
+				now,
+			);
 			results = targets.map(target =>
 				target.ok ? { ok: true, account: target.account } : { ok: false, reason: target.error },
 			);

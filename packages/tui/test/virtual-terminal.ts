@@ -134,7 +134,7 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	stop(): void {
-		this.#engineWrite("\x1b[?2004l");
+		this.#engineWrite("\x1b[?2004l\x1b[?5522l");
 		this.#inputHandler = undefined;
 		this.#resizeHandler = undefined;
 	}
@@ -219,12 +219,12 @@ export class VirtualTerminal implements Terminal {
 
 	// --- Test-only helpers ---------------------------------------------------
 
-	/** Wait for TUI's throttled render pipeline to settle (matches the 16ms frame budget). */
+	/** Wait for TUI's throttled render pipeline to settle (matches the ~33ms frame budget). */
 	async waitForRender(): Promise<void> {
 		const nextTick = Promise.withResolvers<void>();
 		process.nextTick(nextTick.resolve);
 		await nextTick.promise;
-		await Bun.sleep(20);
+		await Bun.sleep(40);
 		await this.flush();
 	}
 

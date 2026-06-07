@@ -1,8 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { parseRuleConditionAndScope, type Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
+import type { TtsrSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES } from "@oh-my-pi/pi-coding-agent/edit";
 import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
+
+function ttsrManager(overrides: Partial<TtsrSettings> = {}): TtsrManager {
+	return new TtsrManager({
+		enabled: true,
+		contextMode: "discard",
+		interruptMode: "always",
+		repeatMode: "once",
+		repeatGap: 10,
+		...overrides,
+	});
+}
 
 function makeRule(partial: Partial<Rule>): Rule {
 	return {
@@ -274,6 +286,52 @@ describe("TtsrManager scope matching", () => {
 	});
 });
 
+describe("TtsrManager enabled gate", () => {
+	it("rejects registration when ttsr is disabled", () => {
+		const manager = ttsrManager({ enabled: false });
+		const rule = makeRule({
+			name: "no-foo",
+			condition: ["FORBIDDEN"],
+			scope: ["text"],
+		});
+
+		expect(manager.addRule(rule)).toBe(false);
+	});
+
+	it("reports no rules when ttsr is disabled, even after a registration attempt", () => {
+		const manager = ttsrManager({ enabled: false });
+		manager.addRule(
+			makeRule({
+				name: "no-foo",
+				condition: ["FORBIDDEN"],
+				scope: ["text"],
+			}),
+		);
+
+		expect(manager.hasRules()).toBe(false);
+	});
+
+	it("returns no matches from stream deltas when ttsr is disabled", () => {
+		const manager = ttsrManager({ enabled: false });
+
+		expect(manager.checkDelta("contains FORBIDDEN token", { source: "text" })).toEqual([]);
+		expect(manager.checkDelta("FORBIDDEN", { source: "tool", toolName: "edit" })).toEqual([]);
+	});
+
+	it("preserves the default (enabled) registration and matching contract", () => {
+		const manager = ttsrManager();
+		const rule = makeRule({
+			name: "no-foo",
+			condition: ["FORBIDDEN"],
+			scope: ["text"],
+		});
+
+		expect(manager.addRule(rule)).toBe(true);
+		expect(manager.hasRules()).toBe(true);
+		expect(manager.checkDelta("FORBIDDEN", { source: "text" })).toEqual([rule]);
+	});
+});
+
 describe("TtsrManager snapshot matching", () => {
 	it("matches source-level conditions against a tool digest where the raw patch grammar fails", () => {
 		const manager = new TtsrManager();
@@ -291,7 +349,7 @@ describe("TtsrManager snapshot matching", () => {
 			streamKey: "toolcall:tc-1",
 		};
 		const patch = [
-			"¶src/repo.ts#AB12",
+			"[src/repo.ts#AB12]",
 			"replace block 1:",
 			"+export async function isRepository(cwd: string): Promise<boolean> {",
 			"+\treturn repo.isRepository(cwd);",

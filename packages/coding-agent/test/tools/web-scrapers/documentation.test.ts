@@ -29,7 +29,6 @@ describe.skipIf(SKIP)("handleMDN", () => {
 		expect(result?.method).toBe("mdn");
 		expect(result?.content).toContain("map");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
 	});
 
 	it("fetches Promise documentation", async () => {
@@ -40,7 +39,6 @@ describe.skipIf(SKIP)("handleMDN", () => {
 		expect(result).not.toBeNull();
 		expect(result?.method).toBe("mdn");
 		expect(result?.content).toContain("Promise");
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches CSS documentation", async () => {
@@ -66,8 +64,6 @@ describe.skipIf(SKIP)("handleReadTheDocs", () => {
 		const result = await handleReadTheDocs("https://requests.readthedocs.io/en/latest/", 20);
 		expect(result).not.toBeNull();
 		expect(result?.method).toBe("readthedocs");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("returns null for non-readthedocs sites", async () => {

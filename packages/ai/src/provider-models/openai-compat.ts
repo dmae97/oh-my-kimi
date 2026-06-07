@@ -1,5 +1,5 @@
+import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
-import { Effort } from "../model-thinking";
 import { getBundledModels } from "../models";
 import type { Api, Model, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
@@ -242,6 +242,22 @@ async function fetchOllamaNativeModels(
 const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
+/**
+ * Ollama's OpenAI-compatible `reasoning.effort` only accepts
+ * `high|medium|low|max|none`; passing OMP's `minimal`/`xhigh` levels verbatim
+ * makes the server reject the turn with HTTP 400 `invalid reasoning value`.
+ * Map the two unsupported levels onto the closest accepted ones (`low`/`max`).
+ */
+const OLLAMA_REASONING_EFFORT_MAP = { minimal: "low", xhigh: "max" } as const;
+
+/** Stamp the Ollama reasoning-effort map onto a reasoning-capable model. */
+function applyOllamaReasoningCompat(model: Model<"openai-responses">): void {
+	if (!model.reasoning) return;
+	model.compat = {
+		...model.compat,
+		reasoningEffortMap: { ...OLLAMA_REASONING_EFFORT_MAP, ...model.compat?.reasoningEffortMap },
+	};
+}
 
 interface OllamaResolvedMetadata {
 	contextWindow: number;
@@ -955,6 +971,29 @@ export function clampFireworksKimiMaxTokens(modelId: string, candidate: number):
 	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
 }
 
+/**
+ * Fireworks DeepSeek V4 accepts effort via `reasoning_effort` but rejects the
+ * DeepSeek-native binary `thinking` toggle when both are present.
+ */
+export function stripFireworksDeepSeekThinkingToggle(
+	model: Model<"openai-completions">,
+	publicModelId: string,
+): Model<"openai-completions"> {
+	if (!publicModelId.startsWith("deepseek-v4")) return model;
+	const compat = model.compat;
+	if (!compat?.extraBody || !("thinking" in compat.extraBody)) return model;
+
+	const extraBody = { ...compat.extraBody };
+	delete extraBody.thinking;
+	if (Object.keys(extraBody).length > 0) {
+		return { ...model, compat: { ...compat, extraBody } };
+	}
+
+	const nextCompat = { ...compat };
+	delete nextCompat.extraBody;
+	return { ...model, compat: nextCompat };
+}
+
 export interface FireworksModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -1024,7 +1063,10 @@ export function fireworksModelManagerOptions(
 					mapModel: (entry, defaults) => {
 						const publicModelId = toFireworksPublicModelId(defaults.id);
 						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
-						const model = mapWithBundledReference(entry, defaults, reference);
+						const model = stripFireworksDeepSeekThinkingToggle(
+							mapWithBundledReference(entry, defaults, reference),
+							publicModelId,
+						);
 						return {
 							...model,
 							id: publicModelId,
@@ -1357,12 +1399,14 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						if (metadata.input) {
 							model.input = metadata.input;
 						}
+						applyOllamaReasoningCompat(model);
 					}),
 				);
 				return openAiCompatible;
 			}
 			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveMetadata);
 			if (nativeFallback && nativeFallback.length > 0) {
+				for (const model of nativeFallback) applyOllamaReasoningCompat(model);
 				return nativeFallback;
 			}
 			return openAiCompatible;

@@ -12,6 +12,7 @@ import {
 import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { LRUCache } from "lru-cache/raw";
 import * as z from "zod/v4";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
@@ -94,6 +95,7 @@ export type SymbolKey =
 	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
+	| "icon.search"
 	| "icon.scratchFolder"
 	| "icon.file"
 	| "icon.git"
@@ -263,6 +265,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
+	"icon.search": "🔍",
 	"icon.scratchFolder": "🗑",
 	"icon.file": "📄",
 	"icon.git": "⎇",
@@ -487,6 +490,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.loop": "\uf021",
 	// pick:  | alt:  
 	"icon.folder": "\uf115",
+	"icon.search": "\uf002",
 	// pick:  | alt:
 	"icon.scratchFolder": "\uf014",
 	// pick:  | alt:  
@@ -700,6 +704,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
+	"icon.search": "[/]",
 	"icon.scratchFolder": "[T]",
 	"icon.file": "[F]",
 	"icon.git": "git:",
@@ -2430,16 +2435,53 @@ function getHighlightColors(t: Theme): NativeHighlightColors {
 }
 
 /**
+ * Memoized native syntax highlight. Returns the joined ANSI string, or `null`
+ * when the native tokenizer throws so callers can apply their own fallback.
+ *
+ * Keyed on `(lang, code)` and reset whenever the active `theme` instance
+ * changes — the ANSI colors are baked into the highlighted output, so a theme
+ * switch (which always reassigns `theme`) must invalidate every entry.
+ *
+ * Why this exists: animated tool blocks (eval/bash) repaint their box on every
+ * ~33ms border-shimmer frame, and markdown re-lexes on every streamed delta.
+ * Without memoization each frame can re-tokenize an unchanged code body through
+ * the Rust FFI — ~26ms for 100 lines, ~40ms for 150 — consuming or overrunning
+ * the 33ms frame budget and starving the spinner/render timers (the "TUI freeze").
+ */
+const HIGHLIGHT_CACHE_MAX = 256;
+const highlightCache = new LRUCache<string, string>({ max: HIGHLIGHT_CACHE_MAX });
+let highlightCacheTheme: Theme | undefined;
+
+function highlightCached(code: string, validLang: string | undefined): string | null {
+	if (highlightCacheTheme !== theme) {
+		highlightCache.clear();
+		highlightCacheTheme = theme;
+	}
+	const key = `${validLang ?? ""}\x00${code}`;
+	const hit = highlightCache.get(key);
+	if (hit !== undefined) {
+		return hit;
+	}
+	let highlighted: string;
+	try {
+		highlighted = nativeHighlightCode(code, validLang, getHighlightColors(theme));
+	} catch {
+		return null;
+	}
+	highlightCache.set(key, highlighted);
+	return highlighted;
+}
+
+/**
  * Highlight code with syntax coloring based on file extension or language.
  * Returns array of highlighted lines.
  */
 export function highlightCode(code: string, lang?: string): string[] {
 	const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
-	try {
-		return nativeHighlightCode(code, validLang, getHighlightColors(theme)).split("\n");
-	} catch {
-		return code.split("\n");
-	}
+	const highlighted = highlightCached(code, validLang);
+	// Always return a fresh array: callers (e.g. renderCodeCell) push extra lines
+	// onto the result, which would corrupt the cached string otherwise.
+	return (highlighted ?? code).split("\n");
 }
 
 export function getSymbolTheme(): SymbolTheme {
@@ -2484,11 +2526,9 @@ export function getMarkdownTheme(): MarkdownTheme {
 		resolveMermaidAscii,
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
-			try {
-				return nativeHighlightCode(code, validLang, getHighlightColors(theme)).split("\n");
-			} catch {
-				return code.split("\n").map(line => theme.fg("mdCodeBlock", line));
-			}
+			const highlighted = highlightCached(code, validLang);
+			if (highlighted !== null) return highlighted.split("\n");
+			return code.split("\n").map(line => theme.fg("mdCodeBlock", line));
 		},
 	};
 	cachedMarkdownTheme = markdownTheme;

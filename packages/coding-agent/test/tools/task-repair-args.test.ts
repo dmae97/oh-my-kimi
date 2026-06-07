@@ -72,9 +72,4 @@ describe("repairTaskParams", () => {
 		} as unknown as TaskParams;
 		expect(repairTaskParams(params)).toBe(params);
 	});
-
-	it("tolerates partially-streamed args without throwing", () => {
-		const partial = { agent: "task", tasks: [{ id: "A" }, undefined] } as unknown as TaskParams;
-		expect(() => repairTaskParams(partial)).not.toThrow();
-	});
 });

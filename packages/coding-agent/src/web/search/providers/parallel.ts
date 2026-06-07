@@ -1,4 +1,4 @@
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchResponse } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { ParallelApiError, type ParallelSearchResult, type ParallelSearchSource } from "../../parallel";
@@ -123,30 +123,41 @@ async function searchWithAuthStorage(
 		);
 	}
 
-	const response = await fetch(PARALLEL_SEARCH_URL, {
-		method: "POST",
-		headers: {
-			Accept: "application/json",
-			"Content-Type": "application/json",
-			"x-api-key": apiKey,
-			"parallel-beta": PARALLEL_BETA_HEADER,
-		},
-		body: JSON.stringify({
-			objective,
-			search_queries: queries,
-			mode: "fast",
-			excerpts: {
-				max_chars_per_result: 10_000,
-			},
-		}),
-		signal: withHardTimeout(params.signal),
-	});
-	if (!response.ok) {
-		throw parseParallelErrorResponse(response.status, await response.text());
-	}
+	// Drive the (already-present) credential through the central force-refresh /
+	// sibling-rotate retry policy. The `ParallelApiError` thrown below carries a
+	// `statusCode`, which `withAuth`'s default classifier reads to detect a
+	// retryable 401 / usage-limit.
+	const keyOrResolver: ApiKey = authStorage.resolver("parallel", { sessionId });
+	return withAuth(
+		keyOrResolver,
+		async key => {
+			const response = await fetch(PARALLEL_SEARCH_URL, {
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					"x-api-key": key,
+					"parallel-beta": PARALLEL_BETA_HEADER,
+				},
+				body: JSON.stringify({
+					objective,
+					search_queries: queries,
+					mode: "fast",
+					excerpts: {
+						max_chars_per_result: 10_000,
+					},
+				}),
+				signal: withHardTimeout(params.signal),
+			});
+			if (!response.ok) {
+				throw parseParallelErrorResponse(response.status, await response.text());
+			}
 
-	const payload: unknown = await response.json();
-	return parseSearchPayload(payload);
+			const payload: unknown = await response.json();
+			return parseSearchPayload(payload);
+		},
+		{ signal: params.signal },
+	);
 }
 
 export async function searchParallel(

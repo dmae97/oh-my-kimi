@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { parseFileDiffs } from "../../commit/git/diff";
 import type { ConventionalAnalysis } from "../../commit/types";
@@ -21,10 +21,10 @@ export interface MapReduceSettings {
 
 export interface MapReduceInput {
 	model: Model<Api>;
-	apiKey: string;
+	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
 	smolModel: Model<Api>;
-	smolApiKey: string;
+	smolApiKey: ApiKey;
 	smolThinkingLevel?: ThinkingLevel;
 	diff: string;
 	stat: string;

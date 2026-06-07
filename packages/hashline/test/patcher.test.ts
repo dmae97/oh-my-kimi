@@ -25,7 +25,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const tag = snapshots.record(PATH, "before\n");
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\nreplace 1..1:\n+after`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 1..1:\n+after`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(result.sections[0]?.fileHash).toMatch(/^[0-9A-F]{4}$/);
@@ -45,14 +45,14 @@ describe("Patcher snapshot tag integrity", () => {
 		expect(snapshots.byHash(PATH, tag)).toBeNull();
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\nreplace 3..3:\n+L3`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 3..3:\n+L3`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("l1\nl2\nL3\nl4\nl5\n");
 	});
 
 	it("normalizes lowercase section tags while parsing", () => {
-		const section = Patch.parseSingle(`¶${PATH}#1a2b\nreplace 1..1:\n+after`);
+		const section = Patch.parseSingle(`[${PATH}#1a2b]\nreplace 1..1:\n+after`);
 
 		expect(section.fileHash).toBe("1A2B");
 	});
@@ -65,7 +65,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const patcher = new Patcher({ fs, snapshots });
 
 		try {
-			await patcher.apply(Patch.parse(`¶${PATH}#${tag}\nreplace 1..1:\n+after`));
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 1..1:\n+after`));
 			throw new Error("expected MismatchError");
 		} catch (error) {
 			expect(error).toBeInstanceOf(MismatchError);
@@ -89,7 +89,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const bogus = live === "FFFF" ? "0000" : "FFFF";
 
 		try {
-			await patcher.apply(Patch.parse(`¶${PATH}#${bogus}\nreplace 1..1:\n+after`));
+			await patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nreplace 1..1:\n+after`));
 			throw new Error("expected MismatchError");
 		} catch (error) {
 			expect(error).toBeInstanceOf(MismatchError);
@@ -109,7 +109,7 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		const snapshots = new InMemorySnapshotStore();
 		const patcher = new Patcher({ fs, snapshots });
 
-		await expect(patcher.apply(Patch.parse(`¶${PATH}\ninsert tail:\n+c`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[${PATH}]\ninsert tail:\n+c`))).rejects.toThrow(
 			/Missing hashline snapshot tag.*use the write tool/s,
 		);
 		expect(fs.get(PATH)).toBe("a\nb\n");
@@ -120,7 +120,7 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		const snapshots = new InMemorySnapshotStore();
 		const patcher = new Patcher({ fs, snapshots });
 
-		await expect(patcher.apply(Patch.parse(`¶${PATH}\nreplace 1..1:\n+X`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[${PATH}]\nreplace 1..1:\n+X`))).rejects.toThrow(
 			/Missing hashline snapshot tag/,
 		);
 	});
@@ -130,7 +130,7 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		const snapshots = new InMemorySnapshotStore();
 		const patcher = new Patcher({ fs, snapshots });
 
-		await expect(patcher.apply(Patch.parse(`¶ghost.ts#1A2B\ninsert tail:\n+c`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[ghost.ts#1A2B]\ninsert tail:\n+c`))).rejects.toThrow(
 			/File not found.*use the write tool/is,
 		);
 	});
@@ -143,7 +143,7 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		const stale = live === "0000" ? "FFFF" : "0000";
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`¶${PATH}#${stale}\ninsert tail:\n+c`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${stale}]\ninsert tail:\n+c`));
 
 		const section = result.sections[0];
 		expect(section?.op).toBe("update");
@@ -158,7 +158,7 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		const tag = snapshots.record(PATH, content);
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`¶${PATH}#${tag}\ninsert tail:\n+c`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\ninsert tail:\n+c`));
 
 		const section = result.sections[0];
 		expect(section?.op).toBe("update");

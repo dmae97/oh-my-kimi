@@ -37,6 +37,7 @@ interface ModelRegistryLike {
 	find: (...args: unknown[]) => Model;
 	getAll: () => Model[];
 	getApiKey: (...args: unknown[]) => Promise<string>;
+	resolver: (...args: unknown[]) => () => Promise<string>;
 }
 
 const createdDirs = new Set<string>();
@@ -62,6 +63,7 @@ function createModelRegistry(model: Model): ModelRegistryLike {
 		find: vi.fn(() => model),
 		getAll: vi.fn(() => [model]),
 		getApiKey: vi.fn(async () => "test-api-key"),
+		resolver: vi.fn(() => async () => "test-api-key"),
 	};
 }
 

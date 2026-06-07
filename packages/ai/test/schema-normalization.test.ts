@@ -728,6 +728,18 @@ describe("stripResidualCombiners", () => {
 		expect(normalized.anyOf).toBeUndefined();
 		expect(normalized.oneOf).toBeUndefined();
 	});
+
+	it("drops array-only keys when mixed-type collapse picks string from anyOf fixpoint", () => {
+		const stripped = stripResidualCombiners({
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "pr number, url, or branch",
+		}) as Record<string, unknown>;
+
+		expect(stripped.type).toBe("string");
+		expect(stripped.items).toBeUndefined();
+		expect(stripped.anyOf).toBeUndefined();
+		expect(stripped.description).toBe("pr number, url, or branch");
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -950,6 +962,36 @@ describe("normalizeSchemaForCCA", () => {
 		expect(normalizeSchemaForCCA(ajvInvalid)).toEqual({
 			type: "object",
 			properties: {},
+		});
+	});
+
+	it("strips array-only keys when mixed-type collapse picks a non-array type", () => {
+		// Regression: anyOf [{type:"string"}, {type:"array", items:{type:"string"}}]
+		// collapsed to {type:"string", items:{type:"string"}} which is invalid.
+		// The fix filters mergedVariantFields against the chosen type's allowed keys.
+		const normalized = normalizeSchemaForCCA({
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "pr number, url, or branch",
+		});
+
+		expect(normalized).toEqual({
+			type: "string",
+			description: "pr number, url, or branch",
+		});
+	});
+
+	it("strips sibling type-specific keys copied from parent when mixed-type collapse picks opposing type", () => {
+		// Edge case: parent has a sibling `items` outside the anyOf,
+		// and the chosen type is string. The sibling must be stripped.
+		const normalized = normalizeSchemaForCCA({
+			anyOf: [{ type: "string" }, { type: "array", items: { type: "number" } }],
+			items: { type: "string" },
+			description: "pr number, url, or branch",
+		});
+
+		expect(normalized).toEqual({
+			type: "string",
+			description: "pr number, url, or branch",
 		});
 	});
 });

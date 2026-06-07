@@ -1,22 +1,6 @@
+import { Effort, THINKING_EFFORTS } from "./effort";
 import { resolveOpenAICompat } from "./providers/openai-completions-compat";
 import type { Api, Model as ApiModel, ThinkingConfig } from "./types";
-
-/** User-facing thinking levels, ordered least to most intensive. */
-export const enum Effort {
-	Minimal = "minimal",
-	Low = "low",
-	Medium = "medium",
-	High = "high",
-	XHigh = "xhigh",
-}
-
-export const THINKING_EFFORTS: readonly Effort[] = [
-	Effort.Minimal,
-	Effort.Low,
-	Effort.Medium,
-	Effort.High,
-	Effort.XHigh,
-];
 
 const DEFAULT_REASONING_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
 const DEFAULT_REASONING_EFFORTS_WITH_XHIGH: readonly Effort[] = [
@@ -377,18 +361,6 @@ export function supportsMidConversationSystemMessages(modelId: string): boolean 
 	const parsed = parseAnthropicModel(getCanonicalModelId(modelId));
 	if (!parsed) return false;
 	return parsed.kind === "opus" && semverGte(parsed.version, "4.8");
-}
-
-/**
- * Claude Opus 4.8 must emit at most one tool call per turn: the Anthropic
- * Messages provider sends `tool_choice.disable_parallel_tool_use = true` for
- * this model. Scoped to exactly 4.8 — earlier and later Opus versions keep
- * Anthropic's default parallel tool-calling.
- */
-export function disablesParallelToolUse(modelId: string): boolean {
-	const parsed = parseAnthropicModel(getCanonicalModelId(modelId));
-	if (!parsed) return false;
-	return parsed.kind === "opus" && semverEqual(parsed.version, "4.8");
 }
 
 function anthropicModelHasRealXHighEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {

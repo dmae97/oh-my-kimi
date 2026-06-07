@@ -1,27 +1,19 @@
 import * as path from "node:path";
+import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { readModelCache } from "@oh-my-pi/pi-ai/model-cache";
+import { createModelManager, type ModelManagerOptions, type ModelRefreshStrategy } from "@oh-my-pi/pi-ai/model-manager";
+import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
+import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-ai/models";
 import {
-	type Api,
-	type AssistantMessageEventStream,
-	type Context,
-	createModelManager,
-	enrichModelThinking,
-	getBundledModels,
-	getBundledProviders,
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
-	type Model,
-	type ModelManagerOptions,
-	type ModelRefreshStrategy,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-	readModelCache,
-	registerCustomApi,
-	type SimpleStreamOptions,
-	type ThinkingConfig,
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
-	unregisterCustomApis,
-} from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-ai/provider-models";
+import type { Api, Context, Model, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
@@ -103,12 +95,14 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 	...SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
 ];
 
+import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
+import { type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { type ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCanonicalModelIndex,
@@ -2373,12 +2367,33 @@ export class ModelRegistry {
 
 	/**
 	 * Get API key for a provider (e.g., "openai").
+	 *
+	 * `options.forceRefresh` powers step (b) of the auth-retry policy — it
+	 * re-mints the session-sticky OAuth token even when the cached copy still
+	 * looks valid. `options.signal` is threaded into any broker-bound refresh.
 	 */
-	async getApiKeyForProvider(provider: string, sessionId?: string, baseUrl?: string): Promise<string | undefined> {
+	async getApiKeyForProvider(
+		provider: string,
+		sessionId?: string,
+		options?: { baseUrl?: string; forceRefresh?: boolean; signal?: AbortSignal },
+	): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
-		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
+		return this.authStorage.getApiKey(provider, sessionId, {
+			baseUrl: options?.baseUrl,
+			forceRefresh: options?.forceRefresh,
+			signal: options?.signal,
+		});
+	}
+
+	/**
+	 * Build an {@link ApiKeyResolver} for this provider, implementing the
+	 * central a/b/c auth-retry policy. Callers that need the initial key for
+	 * a guard can call `resolveApiKeyOnce(resolver)`.
+	 */
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver {
+		return createApiKeyResolver(this, provider, options);
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
@@ -2608,6 +2623,14 @@ export class ModelRegistry {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Clear all cooldown suppressions recorded via {@link suppressSelector}.
+	 * Used to reset retry-fallback cooldown state without a full {@link refresh}.
+	 */
+	clearSuppressedSelectors(): void {
+		this.#suppressedSelectors.clear();
 	}
 }
 

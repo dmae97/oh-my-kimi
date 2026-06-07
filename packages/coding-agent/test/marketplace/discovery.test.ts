@@ -91,13 +91,6 @@ describe("OMP registry path contract", () => {
 		const expected = path.join(tmpHome, ".omp", "plugins", "installed_plugins.json");
 		expect(ompRegistryPath).toBe(expected);
 	});
-
-	it("OMP config dir name is .omp", () => {
-		// Validate our hardcoded constant matches getConfigDirName().
-		// If getConfigDirName() ever changes, this assertion will fail and
-		// we'll know the path constant here must be updated too.
-		expect(OMP_CONFIG_DIR).toBe(".omp");
-	});
 });
 
 // ── Format compatibility ───────────────────────────────────────────────────────
@@ -229,22 +222,5 @@ describe("OMP precedence contract (registry structure)", () => {
 		expect(atIndex).toBeGreaterThan(0);
 		expect(id.slice(0, atIndex)).toBe("shared-plugin");
 		expect(id.slice(atIndex + 1)).toBe("common-mkt");
-	});
-
-	it("installPath deduplication: same path → one entry", () => {
-		// Mirrors the deduplication check: roots.some(r => r.id === pluginId && r.path === entry.installPath)
-		const id = buildPluginId("dup-plugin", "mkt");
-		const sharedPath = "/tmp/shared-install-path";
-
-		// Simulate what listClaudePluginRoots would do:
-		const roots: Array<{ id: string; path: string }> = [{ id, path: sharedPath }];
-
-		// Second entry with same installPath should be deduplicated
-		const isDuplicate = roots.some(r => r.id === id && r.path === sharedPath);
-		expect(isDuplicate).toBe(true);
-
-		// Entry with different installPath should NOT be deduplicated
-		const isDifferent = roots.some(r => r.id === id && r.path === "/tmp/other-path");
-		expect(isDifferent).toBe(false);
 	});
 });

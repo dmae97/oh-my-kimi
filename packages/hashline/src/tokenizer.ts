@@ -3,7 +3,7 @@
  *
  * Format shape:
  * ```
- * ¶path/to/file.ts#0A3
+ * [path/to/file.ts#1A2B]
  * replace 5..7:
  * +literal new line
  * ```
@@ -15,6 +15,7 @@ import {
 	HL_FILE_HASH_LENGTH,
 	HL_FILE_HASH_SEP,
 	HL_FILE_PREFIX,
+	HL_FILE_SUFFIX,
 	HL_HEADER_COLON,
 	HL_INSERT_AFTER,
 	HL_INSERT_BEFORE,
@@ -45,6 +46,7 @@ const CHAR_LOWER_F = 102;
 const CHAR_PAYLOAD_REPLACE = HL_PAYLOAD_REPLACE.charCodeAt(0);
 const CHAR_COLON = HL_HEADER_COLON.charCodeAt(0);
 const FILE_PREFIX_LENGTH = HL_FILE_PREFIX.length;
+const FILE_SUFFIX_LENGTH = HL_FILE_SUFFIX.length;
 
 function isDigitCode(code: number): boolean {
 	return code >= CHAR_ZERO && code <= CHAR_NINE;
@@ -137,7 +139,7 @@ export function parseLid(raw: string, lineNum: number): Anchor {
 	if (number === null || skipWhitespace(raw, number.nextIndex, end) !== end) {
 		throw new Error(
 			`line ${lineNum}: expected a line number such as ${describeAnchorExamples("119")}; ` +
-				`got ${JSON.stringify(raw)}. Use ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}hash from your latest read for file-version binding.`,
+				`got ${JSON.stringify(raw)}. Use ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}hash${HL_FILE_SUFFIX} from your latest read for file-version binding.`,
 		);
 	}
 	return { line: number.line };
@@ -312,28 +314,44 @@ function tryParseHunkHeader(line: string): ParsedHunkHeader | null {
 function tryParseHeader(line: string): { path: string; fileHash?: string } | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const end = trimEndIndex(line);
-	let index = FILE_PREFIX_LENGTH;
-	if (index >= end) return null;
-	const pathStart = index;
-	while (index < end) {
-		const code = line.charCodeAt(index);
-		if (code === CHAR_HASH || code === CHAR_SPACE || code === CHAR_TAB) break;
-		index++;
-	}
-	if (index === pathStart) return null;
-	const path = line.slice(pathStart, index);
+	if (FILE_PREFIX_LENGTH + FILE_SUFFIX_LENGTH >= end) return null;
+	if (!line.endsWith(HL_FILE_SUFFIX, end)) return null;
+	const bodyEnd = end - FILE_SUFFIX_LENGTH;
+	if (FILE_PREFIX_LENGTH >= bodyEnd) return null;
+
+	// The snapshot tag, when present, is the trailing `#XXXX` block inside the
+	// bracketed header. We detect it from the suffix so the path may
+	// legitimately contain whitespace (e.g. `OneDrive - Company/file.ts`).
+	let pathEnd = bodyEnd;
 	let fileHash: string | undefined;
-	if (index < end && line.charCodeAt(index) === CHAR_HASH) {
-		const hashStart = index + 1;
-		const hashEnd = hashStart + HL_FILE_HASH_LENGTH;
-		if (hashEnd > end) return null;
-		for (let probe = hashStart; probe < hashEnd; probe++) {
-			if (!isHexDigitCode(line.charCodeAt(probe))) return null;
+	const trailingHashStart = bodyEnd - HL_FILE_HASH_LENGTH - 1;
+	if (trailingHashStart >= FILE_PREFIX_LENGTH && line.charCodeAt(trailingHashStart) === CHAR_HASH) {
+		let allHex = true;
+		for (let probe = trailingHashStart + 1; probe < bodyEnd; probe++) {
+			if (!isHexDigitCode(line.charCodeAt(probe))) {
+				allHex = false;
+				break;
+			}
 		}
-		fileHash = line.slice(hashStart, hashEnd).toUpperCase();
-		index = hashEnd;
+		if (allHex) {
+			pathEnd = trailingHashStart;
+			fileHash = line.slice(trailingHashStart + 1, bodyEnd).toUpperCase();
+		}
 	}
-	if (skipWhitespace(line, index, end) !== end) return null;
+
+	// The hashline header grammar uses `#` as the path/tag separator and
+	// does not allow `#` inside filenames. Anything `#` left in the path
+	// body — short tags (`#1A2`), non-hex tags (`#1A2G`), over-long tags
+	// (`#1A2B5`), stale-tag copy-paste (`#1A2B copied from read`), or
+	// line-suffixed tags (`#1A2B:42`) — means the header is malformed.
+	// Surface the focused diagnostic instead of silently mis-routing the
+	// edit or reporting a missing tag downstream.
+	for (let i = FILE_PREFIX_LENGTH; i < pathEnd; i++) {
+		if (line.charCodeAt(i) === CHAR_HASH) return null;
+	}
+
+	if (pathEnd === FILE_PREFIX_LENGTH) return null;
+	const path = line.slice(FILE_PREFIX_LENGTH, pathEnd);
 	return fileHash !== undefined ? { path, fileHash } : { path };
 }
 

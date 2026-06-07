@@ -37,6 +37,9 @@ export interface ContextBreakdown {
 	freeTokens: number;
 }
 
+const EMPTY_STRING_PARTS: readonly string[] = [];
+const EMPTY_TOOLS: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">> = [];
+
 export function estimateSkillsTokens(skills: readonly Skill[]): number {
 	const fragments: string[] = [];
 	for (const skill of skills) {
@@ -75,15 +78,16 @@ export function estimateToolSchemaTokens(
  * messages walked incrementally as new entries append.
  */
 export function computeNonMessageTokens(session: AgentSession): number {
-	const parts = computeNonMessageBreakdown(session);
-	return parts.systemPromptTokens + parts.systemContextTokens + parts.toolsTokens + parts.skillsTokens;
+	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
+	const tools = session.agent?.state?.tools ?? EMPTY_TOOLS;
+	return countTokens(systemPromptParts) + estimateToolSchemaTokens(tools);
 }
 
 /**
- * Shared helper for the four non-message token totals. Single source of truth
- * for both `computeNonMessageTokens` (status-line incremental cache) and
- * `computeContextBreakdown` (/context panel). The split avoids drift between
- * the two surfaces — they MUST report the same numbers.
+ * Shared helper for the four non-message token totals used by
+ * `computeContextBreakdown` (/context panel). Keep this category split stable:
+ * the status-line fast path intentionally uses the equivalent collapsed total
+ * in `computeNonMessageTokens`.
  */
 function computeNonMessageBreakdown(session: AgentSession): {
 	skillsTokens: number;

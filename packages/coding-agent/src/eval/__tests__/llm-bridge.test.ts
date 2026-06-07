@@ -4,16 +4,17 @@ import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { $ } from "bun";
 import type { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
-import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
 import { runEvalLlm } from "../llm-bridge";
-import { disposeAllKernelSessions, executePython } from "../py/executor";
+import { disposeAllKernelSessions, type PythonResult } from "../py/executor";
 
 function makeModel(provider: string, id: string, extra: Partial<Model<Api>> = {}): Model<Api> {
 	return {
@@ -57,6 +58,7 @@ function makeSession(opts: SessionOptions = {}): ToolSession {
 	const modelRegistry = {
 		getAvailable: () => opts.available ?? [SMOL, DEFAULT, SLOW],
 		getApiKey: async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
+		resolver: () => async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
 	} as unknown as ModelRegistry;
 	return {
 		settings,
@@ -96,10 +98,80 @@ function assistant(opts: {
 	};
 }
 
+async function runPythonLlmInSubprocess(options: { structured: boolean; tempDir: TempDir }): Promise<PythonResult> {
+	const repoRoot = path.resolve(import.meta.dir, "../../../..");
+	const scriptPath = path.join(options.tempDir.path(), "run-python-llm.ts");
+	const resultPath = path.join(options.tempDir.path(), "python-llm-result.json");
+	const aiPath = path.resolve(import.meta.dir, "../../../../ai/src/index.ts");
+	const executorPath = path.resolve(import.meta.dir, "../py/executor.ts");
+	const settingsPath = path.resolve(import.meta.dir, "../../config/settings.ts");
+	const code = options.structured
+		? 'import json\nprint(json.dumps(llm("hi", schema={"type": "object"})))'
+		: 'print(llm("hi", model="smol"))';
+	const responseContent = options.structured
+		? '[{ type: "toolCall", id: "tc-1", name: "respond", arguments: { ok: true } }]'
+		: '[{ type: "text", text: "hello from python" }]';
+	await Bun.write(
+		scriptPath,
+		`
+import { vi } from "bun:test";
+import * as ai from ${JSON.stringify(aiPath)};
+import { executePython } from ${JSON.stringify(executorPath)};
+import { Settings } from ${JSON.stringify(settingsPath)};
+
+const SMOL = {
+	id: "smol",
+	name: "smol",
+	api: "openai-responses",
+	provider: "p",
+	baseUrl: "https://example.test/v1",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
+	contextWindow: 128000,
+	maxTokens: 4096,
+};
+const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
+settings.setModelRole("smol", "p/smol");
+settings.setModelRole("slow", "p/slow");
+const session = {
+	settings,
+	modelRegistry: {
+		getAvailable: () => [SMOL],
+		getApiKey: async () => "test-key",
+		resolver: () => async () => "test-key",
+	},
+	getActiveModelString: () => "p/smol",
+};
+vi.spyOn(ai, "completeSimple").mockResolvedValue({
+	role: "assistant",
+	api: "openai-responses",
+	provider: "p",
+	model: "smol",
+	stopReason: "stop",
+	content: ${responseContent},
+});
+const result = await executePython(${JSON.stringify(code)}, {
+	cwd: ${JSON.stringify(options.tempDir.path())},
+	sessionId: ${JSON.stringify(`py-llm:${options.structured ? "struct" : "plain"}`)},
+	sessionFile: ${JSON.stringify(path.join(options.tempDir.path(), "session.jsonl"))},
+	toolSession: session,
+	kernelMode: "per-call",
+});
+await Bun.write(${JSON.stringify(resultPath)}, JSON.stringify(result));
+process.exit(0);
+`,
+	);
+	const child = await $`bun ${scriptPath}`.cwd(repoRoot).quiet().nothrow();
+	const stdout = child.stdout.toString();
+	const stderr = child.stderr.toString();
+	if (child.exitCode !== 0) throw new Error(stderr || stdout || `Python llm subprocess exited with ${child.exitCode}`);
+	return (await Bun.file(resultPath).json()) as PythonResult;
+}
+
 describe("runEvalLlm", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		setBridgeHeartbeatIntervalMs();
 	});
 
 	it("resolves each tier to its expected model", async () => {
@@ -217,31 +289,32 @@ describe("runEvalLlm", () => {
 		);
 	});
 
-	it("keeps the idle watchdog armed while a slow llm() request is in flight", async () => {
-		// A oneshot completion emits no status until it returns; a slow request
-		// must not look like a stalled cell. The bridge pumps a heartbeat while it
-		// awaits, re-arming the watchdog through emitStatus.
-		setBridgeHeartbeatIntervalMs(15);
+	it("pauses the idle watchdog while a slow llm() request is in flight", async () => {
+		// A oneshot completion emits no status until it returns; delegated model
+		// time must be invisible to the eval timeout budget.
 		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
 			await Bun.sleep(200);
 			return assistant({ text: "the answer" });
 		});
 
+		const ops: string[] = [];
 		using idle = new IdleTimeout(60);
 		const result = await runEvalLlm(
 			{ prompt: "q", model: "smol" },
 			{
 				session: makeSession(),
 				signal: idle.signal,
-				// Mirror the eval tool: only a bridge heartbeat re-arms the watchdog.
 				emitStatus: event => {
-					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+					ops.push(event.op);
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP) idle.pause();
+					if (event.op === EVAL_TIMEOUT_RESUME_OP) idle.resume();
 				},
 			},
 		);
 
-		expect(idle.signal.aborted).toBe(false);
 		expect(result.text).toBe("the answer");
+		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, "llm"]);
+		expect(idle.signal.aborted).toBe(false);
 	});
 });
 
@@ -290,38 +363,24 @@ describe("llm() through eval runtimes", () => {
 	});
 
 	it("exposes llm() in the Python runtime", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-llm-py-");
-		const sessionFile = path.join(tempDir.path(), "session.jsonl");
-		const sessionId = `py-llm:${crypto.randomUUID()}`;
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "hello from python" }));
-
-		const result = await executePython('print(llm("hi", model="smol"))', {
-			cwd: tempDir.path(),
-			sessionId,
-			sessionFile,
-			toolSession: makeSession(),
-		});
-
-		expect(result.exitCode).toBe(0);
-		expect(result.output.trim()).toBe("hello from python");
+		const tempDir = TempDir.createSync("@omp-eval-llm-py-");
+		try {
+			const result = await runPythonLlmInSubprocess({ structured: false, tempDir });
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("hello from python");
+		} finally {
+			tempDir.removeSync();
+		}
 	});
 
 	it("parses structured llm() output in the Python runtime", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-llm-py-struct-");
-		const sessionFile = path.join(tempDir.path(), "session.jsonl");
-		const sessionId = `py-llm-struct:${crypto.randomUUID()}`;
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(
-			assistant({ toolCall: { name: "respond", arguments: { ok: true } } }),
-		);
-
-		const result = await executePython('import json\nprint(json.dumps(llm("hi", schema={"type": "object"})))', {
-			cwd: tempDir.path(),
-			sessionId,
-			sessionFile,
-			toolSession: makeSession(),
-		});
-
-		expect(result.exitCode).toBe(0);
-		expect(JSON.parse(result.output.trim())).toEqual({ ok: true });
+		const tempDir = TempDir.createSync("@omp-eval-llm-py-struct-");
+		try {
+			const result = await runPythonLlmInSubprocess({ structured: true, tempDir });
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.output.trim())).toEqual({ ok: true });
+		} finally {
+			tempDir.removeSync();
+		}
 	});
 });

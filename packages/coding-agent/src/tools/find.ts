@@ -13,6 +13,7 @@ import findDescription from "../prompts/tools/find.md" with { type: "text" };
 import { type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, fileHyperlink, renderFileList, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
+import { buildPathTree, walkPathTree } from "./grouped-file-output";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
@@ -54,34 +55,27 @@ const MIN_GLOB_TIMEOUT_MS = 500;
 const MAX_GLOB_TIMEOUT_MS = 60_000;
 
 /**
- * Group find matches by their directory so the model doesn't pay repeated
- * tokens for shared path prefixes. Preserves the input order: groups appear in
- * the order their first member was emitted (mtime-desc for native glob), and
- * within a group entries keep their relative order.
+ * Group find matches into a multi-level directory tree so the model doesn't pay
+ * repeated tokens for shared path prefixes. Single-child directory chains fold
+ * into one header (`# a/b/c/`), so a common prefix — including an absolute root
+ * for out-of-cwd results — collapses to a single line. Each level adds one `#`;
+ * files are listed bare under the deepest directory header that owns them.
+ *
+ * Order follows the input (mtime-desc for native glob): a directory appears when
+ * its first member is emitted, and a node's own files precede its subdirectories.
  */
 export function formatFindGroupedOutput(paths: readonly string[]): string {
 	if (paths.length === 0) return "";
-	const groups = new Map<string, string[]>();
-	for (const entry of paths) {
-		const hasTrailingSlash = entry.endsWith("/");
-		const trimmed = hasTrailingSlash ? entry.slice(0, -1) : entry;
-		const slash = trimmed.lastIndexOf("/");
-		const dir = slash === -1 ? "" : trimmed.slice(0, slash);
-		const base = slash === -1 ? trimmed : trimmed.slice(slash + 1);
-		const label = hasTrailingSlash ? `${base}/` : base;
-		const list = groups.get(dir);
-		if (list) list.push(label);
-		else groups.set(dir, [label]);
-	}
-	const sections: string[] = [];
-	for (const [dir, entries] of groups) {
-		if (dir === "") {
-			sections.push(entries.join("\n"));
+	const tree = buildPathTree(paths.map(entry => ({ path: entry, isDir: entry.endsWith("/") })));
+	const lines: string[] = [];
+	for (const event of walkPathTree(tree)) {
+		if (event.kind === "dir") {
+			lines.push(`${"#".repeat(event.depth + 1)} ${event.name}/`);
 		} else {
-			sections.push(`# ${dir}/\n${entries.join("\n")}`);
+			lines.push(event.name);
 		}
 	}
-	return sections.join("\n\n");
+	return lines.join("\n");
 }
 
 export interface FindToolDetails {
@@ -434,6 +428,10 @@ function formatFindRenderPaths(paths: FindRenderArgs["paths"]): string | undefin
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 
+function findStatusIcon(uiTheme: Theme): string {
+	return uiTheme.fg("toolTitle", uiTheme.symbol("icon.search"));
+}
+
 export const findToolRenderer = {
 	inline: true,
 	renderCall(args: FindRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -441,10 +439,16 @@ export const findToolRenderer = {
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: formatFindRenderPaths(args.paths) || "*", meta },
+			{
+				icon: "pending",
+				title: "Find",
+				titleColor: "toolTitle",
+				description: formatFindRenderPaths(args.paths) || "*",
+				meta,
+			},
 			uiTheme,
 		);
-		return new Text(text, 0, 0);
+		return new Text(text, 1, 0);
 	},
 
 	renderResult(
@@ -457,7 +461,7 @@ export const findToolRenderer = {
 
 		if (result.isError || details?.error) {
 			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || "Unknown error";
-			return new Text(formatErrorMessage(errorText, uiTheme), 0, 0);
+			return new Text(formatErrorMessage(errorText, uiTheme), 1, 0);
 		}
 
 		const hasDetailedData = details?.fileCount !== undefined;
@@ -470,14 +474,15 @@ export const findToolRenderer = {
 				textContent.includes("No files found") ||
 				textContent.trim() === ""
 			) {
-				return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+				return new Text(formatEmptyMessage("No files found", uiTheme), 1, 0);
 			}
 
 			const lines = textContent.split("\n").filter(l => l.trim());
 			const header = renderStatusLine(
 				{
-					icon: "success",
+					iconOverride: findStatusIcon(uiTheme),
 					title: "Find",
+					titleColor: "toolTitle",
 					description: formatFindRenderPaths(args?.paths),
 					meta: [formatCount("file", lines.length)],
 				},
@@ -498,6 +503,7 @@ export const findToolRenderer = {
 					);
 					return [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 				},
+				{ paddingX: 1 },
 			);
 		}
 
@@ -513,20 +519,27 @@ export const findToolRenderer = {
 
 		if (fileCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", description: formatFindRenderPaths(args?.paths), meta: ["0 files"] },
+				{
+					icon: "warning",
+					title: "Find",
+					titleColor: "toolTitle",
+					description: formatFindRenderPaths(args?.paths),
+					meta: ["0 files"],
+				},
 				uiTheme,
 			);
 			const lines = [header, formatEmptyMessage("No files found", uiTheme)];
 			if (missingNote) lines.push(missingNote);
-			return new Text(lines.join("\n"), 0, 0);
+			return new Text(lines.join("\n"), 1, 0);
 		}
 		const meta: string[] = [formatCount("file", fileCount)];
 		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
 			{
-				icon: truncated ? "warning" : "success",
+				...(truncated ? { icon: "warning" as const } : { iconOverride: findStatusIcon(uiTheme) }),
 				title: "Find",
+				titleColor: "toolTitle",
 				description: formatFindRenderPaths(args?.paths),
 				meta,
 			},
@@ -565,6 +578,7 @@ export const findToolRenderer = {
 				);
 				return [header, ...fileLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
+			{ paddingX: 1 },
 		);
 	},
 	mergeCallAndResult: true,

@@ -4,7 +4,7 @@
  * Uses Moonshot Kimi Code search API to retrieve web results.
  * Endpoint: POST https://api.kimi.com/coding/v1/search
  */
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, withAuth } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
@@ -54,20 +54,26 @@ function resolveBaseUrl(): string {
 	return asTrimmed($env.MOONSHOT_SEARCH_BASE_URL) ?? asTrimmed($env.KIMI_SEARCH_BASE_URL) ?? KIMI_SEARCH_URL;
 }
 
-/** Find Kimi search credentials from environment or AuthStorage. */
-async function findApiKey(
+/**
+ * Resolve the Kimi search credential. Highest precedence is the static env key;
+ * otherwise an AuthStorage-backed resolver for whichever stored provider id
+ * holds a key (`moonshot` first, then `kimi-code`), so a stale token triggers
+ * the central force-refresh / sibling-rotate retry. Returns `undefined` when
+ * neither is configured.
+ */
+async function resolveKey(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-): Promise<string | null> {
+): Promise<ApiKey | undefined> {
 	const envKey = asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ?? asTrimmed($env.KIMI_SEARCH_API_KEY);
 	if (envKey) return envKey;
 
-	return (
-		(await authStorage.getApiKey("moonshot", sessionId, { signal })) ??
-		(await authStorage.getApiKey("kimi-code", sessionId, { signal })) ??
-		null
-	);
+	for (const provider of ["moonshot", "kimi-code"] as const) {
+		const stored = await authStorage.getApiKey(provider, sessionId, { signal });
+		if (stored) return authStorage.resolver(provider, { sessionId });
+	}
+	return undefined;
 }
 
 async function callKimiSearch(
@@ -108,20 +114,25 @@ async function callKimiSearch(
 
 /** Execute Kimi web search. */
 export async function searchKimi(params: KimiSearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
-	if (!apiKey) {
+	const keyOrResolver = await resolveKey(params.authStorage, params.sessionId, params.signal);
+	if (!keyOrResolver) {
 		throw new Error(
 			"Kimi search credentials not found. Set MOONSHOT_SEARCH_API_KEY, KIMI_SEARCH_API_KEY, MOONSHOT_API_KEY, or login with 'omp /login moonshot'.",
 		);
 	}
 
 	const limit = clampNumResults(params.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-	const { response, requestId } = await callKimiSearch(apiKey, {
-		query: params.query,
-		limit,
-		includeContent: params.include_content ?? false,
-		signal: params.signal,
-	});
+	const { response, requestId } = await withAuth(
+		keyOrResolver,
+		key =>
+			callKimiSearch(key, {
+				query: params.query,
+				limit,
+				includeContent: params.include_content ?? false,
+				signal: params.signal,
+			}),
+		{ signal: params.signal },
+	);
 	const sources: SearchSource[] = [];
 
 	for (const result of response.search_results ?? []) {

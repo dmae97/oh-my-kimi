@@ -234,7 +234,8 @@ export function streamGitLabDuo(
 
 	(async () => {
 		try {
-			if (!options?.apiKey) {
+			const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+			if (!apiKey || !options) {
 				throw new Error("Missing GitLab access token. Run /login gitlab-duo or set GITLAB_TOKEN.");
 			}
 
@@ -243,7 +244,7 @@ export function streamGitLabDuo(
 				throw new Error(`Unsupported GitLab Duo model: ${model.id}`);
 			}
 
-			const directAccess = await getDirectAccessToken(options.apiKey, options.fetch);
+			const directAccess = await getDirectAccessToken(apiKey, options.fetch);
 			const headers = {
 				...directAccess.headers,
 				...options.headers,

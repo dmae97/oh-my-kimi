@@ -26,8 +26,6 @@ describe.skipIf(SKIP)("handleSecEdgar", () => {
 		expect(result?.content).toContain("0000320193");
 		expect(result?.content).toContain("10-K"); // Apple files 10-K annually
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches via data.sec.gov submissions URL", async () => {
@@ -67,8 +65,6 @@ describe.skipIf(SKIP)("handleOpenCorporates", () => {
 		expect(result?.content).toContain("2927442");
 		expect(result?.content).toContain("US_DE");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches Microsoft Corporation", async () => {

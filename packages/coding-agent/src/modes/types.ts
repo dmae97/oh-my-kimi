@@ -14,7 +14,7 @@ import type {
 import type { CompactOptions } from "../extensibility/extensions/types";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { AgentSession } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
@@ -63,6 +63,7 @@ export type TodoPhase = {
 
 export interface InteractiveModeInitOptions {
 	suppressWelcomeIntro?: boolean;
+	clearInitialTerminalHistory?: boolean;
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions & Pick<HookSelectorOptions, "disabledIndices">;
@@ -95,7 +96,6 @@ export interface InteractiveModeContext {
 
 	// State
 	isInitialized: boolean;
-	isBackgrounded: boolean;
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
@@ -149,15 +149,25 @@ export interface InteractiveModeContext {
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void;
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void;
-	createBackgroundUiContext(): ExtensionUIContext;
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void;
 
-	// Event handling
-	handleBackgroundEvent(event: AgentSessionEvent): Promise<void>;
-
 	// UI helpers
+	/**
+	 * Mount transcript content and repaint once. The single sink for "show this in
+	 * chat": producers build and return a `Component` (or a `ChatBlock` carrying
+	 * its own lifecycle) and hand it here instead of touching `chatContainer` /
+	 * `ui.requestRender()` directly. `ChatBlock`s are mounted (their `onMount`
+	 * runs) so their timers/subscriptions start.
+	 */
+	present(content: Component | readonly Component[]): void;
+	/**
+	 * Dispose every live block in the transcript (stopping timers/subscriptions)
+	 * and clear it. Used before a full rebuild so animated/streaming blocks do not
+	 * leak.
+	 */
+	resetTranscript(): void;
 	showStatus(message: string, options?: { dim?: boolean }): void;
 	showError(message: string): void;
 	showPinnedError(message: string): void;
@@ -222,7 +232,6 @@ export interface InteractiveModeContext {
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
-	handleCopyCommand(sub?: string): void;
 	handleTodoCommand(args: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
@@ -234,6 +243,7 @@ export interface InteractiveModeContext {
 	handleDumpCommand(): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
+	handleFreshCommand(): Promise<void>;
 	handleDropCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
@@ -263,13 +273,14 @@ export interface InteractiveModeContext {
 	showModelSelector(options?: { temporaryOnly?: boolean }): void;
 	showPluginSelector(mode?: "install" | "uninstall"): void;
 	showUserMessageSelector(): void;
+	showCopySelector(): void;
 	showTreeSelector(): void;
 	showSessionSelector(): void;
 	handleResumeSession(sessionPath: string): Promise<void>;
 	handleSessionDeleteCommand(): Promise<void>;
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
-	showDebugSelector(): void;
+	showDebugSelector(): Promise<void>;
 	showSessionObserver(): void;
 	resetObserverRegistry(): void;
 
@@ -278,9 +289,9 @@ export interface InteractiveModeContext {
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	handleDequeue(): void;
-	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
 	handleBtwCommand(question: string): Promise<void>;
+	handleTanCommand(work: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
 	handleOmfgCommand(complaint: string): Promise<void>;

@@ -212,6 +212,59 @@ export function repairOrphanResponsesToolOutputs(input: ResponseInput): Response
 	});
 }
 
+/** Placeholder output for a tool call whose result is absent from the input. */
+const ORPHAN_TOOL_CALL_PLACEHOLDER =
+	"[No tool output recorded: the tool call was interrupted before it produced a result.]";
+
+/**
+ * Synthesize a placeholder `function_call_output` / `custom_tool_call_output`
+ * for every `function_call` / `custom_tool_call` whose `call_id` has no matching
+ * output later in the same input. The Responses API rejects an unpaired call
+ * with `400 No tool output found for function call …`.
+ *
+ * Orphan calls surface when the user branches/navigates the session tree to a
+ * node that ends on a tool call (the tool-result child is excluded from the
+ * reconstructed history) or when a turn is aborted/crashes after the call
+ * streamed but before its result persisted. Dropping the call would erase the
+ * assistant's action; a placeholder output keeps the call visible so the model
+ * can recover (e.g. re-issue the call). Symmetric to
+ * {@link repairOrphanResponsesToolOutputs}.
+ */
+export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseInput {
+	const outputCallIds = new Set<string>();
+	for (const item of input) {
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call_output" && t !== "custom_tool_call_output") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId === "string") outputCallIds.add(callId);
+	}
+	let hasOrphan = false;
+	for (const item of input) {
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call" && t !== "custom_tool_call") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId === "string" && !outputCallIds.has(callId)) {
+			hasOrphan = true;
+			break;
+		}
+	}
+	if (!hasOrphan) return input;
+	const repaired: ResponseInput = [];
+	for (const item of input) {
+		repaired.push(item);
+		const t = (item as { type?: string }).type;
+		if (t !== "function_call" && t !== "custom_tool_call") continue;
+		const callId = (item as { call_id?: unknown }).call_id;
+		if (typeof callId !== "string" || outputCallIds.has(callId)) continue;
+		repaired.push({
+			type: t === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output",
+			call_id: callId,
+			output: ORPHAN_TOOL_CALL_PLACEHOLDER,
+		} as ResponseInput[number]);
+	}
+	return repaired;
+}
+
 export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent>,
 	supportsImages: boolean,
@@ -395,7 +448,7 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: ProcessResponsesStreamOptions,
 ): Promise<void> {
-	type StreamingToolCallBlock = ToolCall & { partialJson: string; lastParseLen?: number };
+	type StreamingToolCallBlock = ToolCall & { partialJson: string; lastParseLen?: number; argumentsDone?: boolean };
 	interface StreamingItem {
 		item: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
 		block: ThinkingContent | TextContent | StreamingToolCallBlock;
@@ -406,17 +459,28 @@ export async function processResponsesStream<TApi extends Api>(
 	// see https://github.com/can1357/oh-my-pi/issues/1880 — llama.cpp emits parallel
 	// function_call deltas interleaved, and a singleton `current` reference would
 	// fold them into the wrong block and drop arguments on every call but the last.
+	//
+	// llama.cpp's `to_json_oaicompat_resp` (issue #2015) compounds this: `output_item.added`
+	// for function_call/custom_tool_call carries `item.call_id` but no `item.id` and no
+	// `output_index`, while the matching `function_call_arguments.delta` carries
+	// `item_id = "fc_<call_id>"`. Registering function-call items by `call_id` as a
+	// secondary key lets the delta lookup find the right block on hosts that emit one
+	// identifier but not the other.
 	const openItemsByOutputIndex = new Map<number, StreamingItem>();
 	const openItemsByItemId = new Map<string, StreamingItem>();
 	let lastOpenItem: StreamingItem | null = null;
+	const openItemsInOrder: StreamingItem[] = [];
 
 	const registerOpenItem = (
 		outputIndex: number | undefined,
 		itemId: string | undefined,
 		entry: StreamingItem,
+		alternateItemKey?: string,
 	): void => {
 		if (typeof outputIndex === "number") openItemsByOutputIndex.set(outputIndex, entry);
 		if (itemId) openItemsByItemId.set(itemId, entry);
+		if (alternateItemKey && alternateItemKey !== itemId) openItemsByItemId.set(alternateItemKey, entry);
+		openItemsInOrder.push(entry);
 		lastOpenItem = entry;
 	};
 	const lookupOpenItem = (event: { output_index?: number; item_id?: string }): StreamingItem | undefined => {
@@ -431,13 +495,37 @@ export async function processResponsesStream<TApi extends Api>(
 		// Fallback for tests / mock providers that omit identifiers on stream events.
 		return lastOpenItem ?? undefined;
 	};
+	const hasOpenItemKey = (event: { output_index?: number; item_id?: string }): boolean =>
+		typeof event.output_index === "number" || event.item_id !== undefined;
+	const lookupOpenFunctionCallItem = (event: {
+		output_index?: number;
+		item_id?: string;
+	}): StreamingItem | undefined => {
+		if (hasOpenItemKey(event)) return lookupOpenItem(event);
+		for (const candidate of openItemsInOrder) {
+			if (
+				candidate.item.type === "function_call" &&
+				candidate.block.type === "toolCall" &&
+				!candidate.block.argumentsDone
+			) {
+				return candidate;
+			}
+		}
+		return lastOpenItem?.item.type === "function_call" ? lastOpenItem : undefined;
+	};
 	const closeOpenItem = (
 		outputIndex: number | undefined,
 		itemId: string | undefined,
 		entry: StreamingItem | undefined,
+		alternateItemKey?: string,
 	): void => {
 		if (typeof outputIndex === "number") openItemsByOutputIndex.delete(outputIndex);
 		if (itemId) openItemsByItemId.delete(itemId);
+		if (alternateItemKey && alternateItemKey !== itemId) openItemsByItemId.delete(alternateItemKey);
+		if (entry) {
+			const index = openItemsInOrder.indexOf(entry);
+			if (index >= 0) openItemsInOrder.splice(index, 1);
+		}
 		if (entry && lastOpenItem === entry) lastOpenItem = null;
 	};
 	const contentIndexOf = (block: ThinkingContent | TextContent | StreamingToolCallBlock): number =>
@@ -473,7 +561,7 @@ export async function processResponsesStream<TApi extends Api>(
 					partialJson: item.arguments || "",
 				};
 				output.content.push(block);
-				registerOpenItem(event.output_index, item.id, { item, block });
+				registerOpenItem(event.output_index, item.id, { item, block }, item.call_id);
 				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
 			} else if (item.type === "custom_tool_call") {
 				const block: StreamingToolCallBlock = {
@@ -491,7 +579,7 @@ export async function processResponsesStream<TApi extends Api>(
 					partialJson: item.input ?? "",
 				};
 				output.content.push(block);
-				registerOpenItem(event.output_index, item.id, { item, block });
+				registerOpenItem(event.output_index, item.id, { item, block }, item.call_id);
 				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
@@ -584,7 +672,7 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 			}
 		} else if (event.type === "response.function_call_arguments.delta") {
-			const entry = lookupOpenItem(event);
+			const entry = lookupOpenFunctionCallItem(event);
 			if (entry?.item.type === "function_call" && entry.block.type === "toolCall") {
 				const block = entry.block;
 				block.partialJson += event.delta;
@@ -601,11 +689,12 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
-			const entry = lookupOpenItem(event);
+			const entry = lookupOpenFunctionCallItem(event);
 			if (entry?.item.type === "function_call" && entry.block.type === "toolCall") {
 				const block = entry.block;
 				block.partialJson = event.arguments;
 				block.arguments = parseStreamingJson(block.partialJson);
+				block.argumentsDone = true;
 				delete (block as { partialJson?: string }).partialJson;
 				delete (block as { lastParseLen?: number }).lastParseLen;
 			}
@@ -631,7 +720,10 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.output_item.done") {
 			const item = structuredCloneJSON(event.item);
 			options?.onOutputItemDone?.(item);
-			const entry = lookupOpenItem({ output_index: event.output_index, item_id: item.id });
+			const entry =
+				item.type === "function_call" || item.type === "custom_tool_call"
+					? lookupOpenItem({ output_index: event.output_index, item_id: item.id ?? item.call_id })
+					: lookupOpenItem({ output_index: event.output_index, item_id: item.id });
 			if (item.type === "reasoning") {
 				const thinking =
 					item.summary?.length > 0
@@ -668,9 +760,11 @@ export async function processResponsesStream<TApi extends Api>(
 				closeOpenItem(event.output_index, item.id, entry);
 			} else if (item.type === "function_call") {
 				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
-				const args = block?.partialJson
-					? parseStreamingJson(block.partialJson)
-					: parseStreamingJson(item.arguments || "{}");
+				const args = block?.argumentsDone
+					? block.arguments
+					: block?.partialJson
+						? parseStreamingJson(block.partialJson)
+						: parseStreamingJson(item.arguments || "{}");
 				const toolCall: ToolCall = {
 					type: "toolCall",
 					id: encodeResponsesToolCallId(item.call_id, item.id),
@@ -685,9 +779,10 @@ export async function processResponsesStream<TApi extends Api>(
 					block.arguments = args;
 					delete (block as { partialJson?: string }).partialJson;
 					delete (block as { lastParseLen?: number }).lastParseLen;
+					delete (block as { argumentsDone?: boolean }).argumentsDone;
 				}
 				const contentIndex = block ? contentIndexOf(block) : output.content.length - 1;
-				closeOpenItem(event.output_index, item.id, entry);
+				closeOpenItem(event.output_index, item.id, entry, item.call_id);
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			} else if (item.type === "custom_tool_call") {
 				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
@@ -700,7 +795,7 @@ export async function processResponsesStream<TApi extends Api>(
 					customWireName: item.name,
 				};
 				const contentIndex = block ? contentIndexOf(block) : output.content.length - 1;
-				closeOpenItem(event.output_index, item.id, entry);
+				closeOpenItem(event.output_index, item.id, entry, item.call_id);
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			}
 		} else if (event.type === "response.completed") {

@@ -6,6 +6,7 @@ import {
 	fuzzyMatch,
 	Input,
 	matchesKey,
+	ScrollView,
 	Spacer,
 	Text,
 	TruncatedText,
@@ -492,6 +493,10 @@ class TreeList implements Component {
 		const contentReserve = Math.max(MIN_CONTENT_COLS, Math.floor(width / 2));
 		const maxIndentLevels = Math.max(1, Math.floor((width - contentReserve - OVERHEAD_COLS) / 3));
 
+		const overflow = this.#filteredNodes.length > this.maxVisibleLines;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const rows: string[] = [];
+
 		for (let i = startIndex; i < endIndex; i++) {
 			const flatNode = this.#filteredNodes[i];
 			const entry = flatNode.node.entry;
@@ -560,15 +565,22 @@ class TreeList implements Component {
 			if (isSelected) {
 				line = theme.bg("selectedBg", line);
 			}
-			lines.push(truncateToWidth(line, width));
+			rows.push(truncateToWidth(line, rowWidth));
 		}
 
-		lines.push(
-			truncateToWidth(
-				theme.fg("muted", `  (${this.#selectedIndex + 1}/${this.#filteredNodes.length})${this.#getFilterLabel()}`),
-				width,
-			),
-		);
+		const sv = new ScrollView(rows, {
+			height: rows.length,
+			scrollbar: "auto",
+			totalRows: this.#filteredNodes.length,
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(startIndex);
+		lines.push(...sv.render(width));
+
+		const filterLabel = this.#getFilterLabel();
+		if (filterLabel) {
+			lines.push(truncateToWidth(theme.fg("muted", `  ${filterLabel.trim()}`), width));
+		}
 
 		return lines;
 	}

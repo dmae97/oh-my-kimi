@@ -33,7 +33,11 @@ export const SEARCH_PROVIDER_OPTIONS = [
 		description: "Automatically uses the first configured web-search provider",
 	},
 	{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
-	{ value: "perplexity", label: "Perplexity", description: "Requires PERPLEXITY_COOKIES or PERPLEXITY_API_KEY" },
+	{
+		value: "perplexity",
+		label: "Perplexity",
+		description: "Uses auth when configured; explicit selection falls back to anonymous search",
+	},
 	{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
 	{ value: "jina", label: "Jina", description: "Requires JINA_API_KEY" },
 	{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },

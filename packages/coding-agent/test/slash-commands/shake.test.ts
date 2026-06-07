@@ -31,7 +31,6 @@ function tuiRuntime() {
 			handleShakeCommand,
 			showWarning,
 		} as unknown as InteractiveModeContext,
-		handleBackgroundCommand: vi.fn(),
 	};
 	return { handleShakeCommand, setText, showWarning, runtime };
 }

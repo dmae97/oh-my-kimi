@@ -1,14 +1,35 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("AsyncJobManager singleton across concurrent top-level sessions", () => {
 	const tempDirs: string[] = [];
+	// Building a ModelRegistry per session is the dominant cost here: createAgentSession
+	// otherwise runs discoverAuthStorage (a fresh AuthStorage DB create+reload) and a
+	// background online model refresh for every spawn (~450ms each). The singleton
+	// ownership behavior under test is independent of model resolution, so we hand every
+	// session one shared, network-free registry built once (~10ms/session instead).
+	let sharedTempDir: string;
+	let sharedAuthStorage: AuthStorage;
+	let sharedModelRegistry: ModelRegistry;
+
+	beforeAll(async () => {
+		sharedTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-async-singleton-shared-"));
+		sharedAuthStorage = await AuthStorage.create(path.join(sharedTempDir, "auth.db"));
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedTempDir, "models.yml"));
+	});
+
+	afterAll(() => {
+		sharedAuthStorage.close();
+		fs.rmSync(sharedTempDir, { recursive: true, force: true });
+	});
 
 	afterEach(async () => {
 		for (const tempDir of tempDirs.splice(0)) {
@@ -34,6 +55,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
+			modelRegistry: sharedModelRegistry,
 		});
 		return session;
 	}
@@ -65,7 +87,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		// Once the owning primary session disposes the singleton clears, matching
 		// the documented single-owner invariant.
 		expect(AsyncJobManager.instance()).toBeUndefined();
-	});
+	}, 60000);
 
 	it("does not cancel the primary session's running jobs when a secondary session disposes", async () => {
 		const primary = await spawnTopLevelSession();
@@ -106,7 +128,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		} finally {
 			await primary.dispose();
 		}
-	});
+	}, 60000);
 
 	it("refuses async bash from a secondary session instead of routing it to the primary's manager", async () => {
 		const primary = await spawnTopLevelSession({ "async.enabled": true });
@@ -132,7 +154,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		} finally {
 			await primary.dispose();
 		}
-	});
+	}, 60000);
 
 	it("clears a manager installed before a top-level session startup failure takes ownership", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-async-startup-failure-${Snowflake.next()}-`));
@@ -153,6 +175,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
+				modelRegistry: sharedModelRegistry,
 				systemPrompt: () => {
 					throw new Error("forced startup failure");
 				},
@@ -168,5 +191,5 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 		} finally {
 			await replacement.dispose();
 		}
-	});
+	}, 60000);
 });

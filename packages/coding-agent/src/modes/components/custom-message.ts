@@ -1,5 +1,5 @@
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Box, Container, Spacer } from "@oh-my-pi/pi-tui";
+import { Box, Container } from "@oh-my-pi/pi-tui";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { theme } from "../../modes/theme/theme";
 import type { CustomMessage } from "../../session/messages";
@@ -19,8 +19,6 @@ export class CustomMessageComponent extends Container {
 		private readonly customRenderer?: MessageRenderer,
 	) {
 		super();
-
-		this.addChild(new Spacer(1));
 
 		// Create box with custom background (used for default rendering)
 		this.#box = new Box(1, 1, t => theme.bg("customMessageBg", t));

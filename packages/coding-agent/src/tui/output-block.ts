@@ -1,8 +1,9 @@
 /**
  * Bordered output container with optional header and sections.
  */
+import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, padding, TERMINAL, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import type { Theme } from "../modes/theme/theme";
+import type { Theme, ThemeColor } from "../modes/theme/theme";
 import { getSixelLineMask } from "../utils/sixel";
 import type { State } from "./types";
 import type { RenderCache } from "./utils";
@@ -12,14 +13,31 @@ export interface OutputBlockOptions {
 	header?: string;
 	headerMeta?: string;
 	state?: State;
-	sections?: Array<{ label?: string; lines: string[] }>;
+	sections?: Array<{ label?: string; lines: string[]; separator?: boolean }>;
 	width: number;
 	applyBg?: boolean;
+	contentPaddingLeft?: number;
 	/** Animate the border with a sweeping dark segment (pending/running state). */
 	animate?: boolean;
+	/** Override the state-derived border color. Used for muted "legacy" tool
+	 * frames that should not visually compete with framed-output tools. */
+	borderColor?: ThemeColor;
 }
 
-const BORDER_SHIMMER_TICK_MS = 16;
+const FRAMED_BLOCK_COMPONENT = Symbol("framedBlockComponent");
+
+export type FramedBlockComponent = Component & { [FRAMED_BLOCK_COMPONENT]?: true };
+
+export function markFramedBlockComponent<T extends Component>(component: T): T & FramedBlockComponent {
+	(component as T & FramedBlockComponent)[FRAMED_BLOCK_COMPONENT] = true;
+	return component as T & FramedBlockComponent;
+}
+
+export function isFramedBlockComponent(component: Component): boolean {
+	return (component as FramedBlockComponent)[FRAMED_BLOCK_COMPONENT] === true;
+}
+
+const BORDER_SHIMMER_TICK_MS = 1000 / 30;
 /** Duration of one full left↔right↔left bounce of the bottom-edge segment, in
  * ms. Position is derived from the wall clock against this fixed cycle so a
  * resize only nudges the segment proportionally instead of teleporting it. */
@@ -28,9 +46,9 @@ const BORDER_BOUNCE_MS = 3000;
 const BORDER_SEGMENT_LEN = 8;
 
 /**
- * Monotonic frame counter for animated borders, quantized to the TUI's ~16ms
- * render cap so the cache key advances once per ~60fps frame — fine enough for a
- * smooth segment sweep, coarse enough to coalesce multiple render passes that
+ * Monotonic frame counter for animated borders, quantized to the TUI's ~30fps
+ * render cap so the cache key advances once per animation frame — fine enough
+ * for a smooth segment sweep, coarse enough to coalesce multiple render passes
  * land inside the same frame.
  */
 export function borderShimmerTick(): number {
@@ -78,6 +96,11 @@ type BlockRow =
 	| { kind: "content"; inner: string }
 	| { kind: "sixel"; raw: string };
 
+function normalizeContentPaddingLeft(value: number | undefined): number {
+	if (value === undefined || !Number.isFinite(value)) return 1;
+	return Math.max(0, Math.floor(value));
+}
+
 export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): string[] {
 	const { header, headerMeta, state, sections = [], width, applyBg = true } = options;
 	const h = theme.boxSharp.horizontal;
@@ -85,14 +108,15 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 	const cap = h.repeat(3);
 	const lineWidth = Math.max(0, width);
 	// Border colors: running/pending use accent, success uses dim (gray), error/warning keep their colors
-	const borderColor: "error" | "warning" | "accent" | "dim" =
-		state === "error"
+	const borderColor: ThemeColor =
+		options.borderColor ??
+		(state === "error"
 			? "error"
 			: state === "warning"
 				? "warning"
 				: state === "running" || state === "pending"
 					? "accent"
-					: "dim";
+					: "dim");
 	const border = (text: string) => theme.fg(borderColor, text);
 	const bgFn = (() => {
 		if (!state || !applyBg) return undefined;
@@ -107,7 +131,9 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 		};
 	})();
 
-	const contentWidth = Math.max(0, lineWidth - visibleWidth(`${v} `) - visibleWidth(v));
+	const contentPaddingLeft = normalizeContentPaddingLeft(options.contentPaddingLeft);
+	const contentWidth = Math.max(0, lineWidth - visibleWidth(v) - contentPaddingLeft - visibleWidth(v));
+	const contentLeftPadding = contentPaddingLeft > 0 ? padding(contentPaddingLeft) : "";
 
 	// ── Layout pass: collect row descriptors so the border perimeter length is
 	// known before the moving segment is positioned. ──
@@ -121,13 +147,23 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 	});
 
 	const normalizedSections = sections.length > 0 ? sections : [{ lines: [] as string[] }];
-	for (const section of normalizedSections) {
+	for (let sectionIndex = 0; sectionIndex < normalizedSections.length; sectionIndex++) {
+		const section = normalizedSections[sectionIndex]!;
+		// A labeled section always draws its titled separator bar. A label-less
+		// section can still request a plain divider via `separator`, but only
+		// between sections — leading with one would just double the header bar.
 		if (section.label) {
 			rows.push({
 				kind: "bar",
 				leftChar: theme.boxSharp.teeRight,
 				rightChar: theme.boxSharp.teeLeft,
 				label: section.label,
+			});
+		} else if (section.separator && sectionIndex > 0) {
+			rows.push({
+				kind: "bar",
+				leftChar: theme.boxSharp.teeRight,
+				rightChar: theme.boxSharp.teeLeft,
 			});
 		}
 		const allLines = section.lines.flatMap(l => l.split("\n"));
@@ -188,7 +224,12 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 		const rightGlyph = row.rightChar;
 		if (lineWidth <= 0) return border(leftGlyphs) + border(rightGlyph);
 		const labelText = [row.label, row.meta].filter(Boolean).join(theme.sep.dot);
-		const rawLabel = labelText ? ` ${labelText} ` : " ";
+		if (!labelText) {
+			// No header: draw a clean, continuous top/separator bar (no 1-col gap).
+			const fillCount = Math.max(0, lineWidth - visibleWidth(leftGlyphs) - visibleWidth(rightGlyph));
+			return `${border(leftGlyphs)}${border(h.repeat(fillCount))}${border(rightGlyph)}`;
+		}
+		const rawLabel = ` ${labelText} `;
 		const leftWidth = visibleWidth(leftGlyphs);
 		const rightWidth = visibleWidth(rightGlyph);
 		const maxLabelWidth = Math.max(0, lineWidth - leftWidth - rightWidth);
@@ -211,7 +252,7 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 		return `${leftStr}${fillStr}${rightStr}`;
 	};
 
-	const renderContent = (inner: string): string => `${border(`${v} `)}${inner}${border(v)}`;
+	const renderContent = (inner: string): string => `${border(v)}${contentLeftPadding}${inner}${border(v)}`;
 
 	const lines: string[] = [];
 	for (let r = 0; r < H; r++) {
@@ -255,15 +296,18 @@ export class CachedOutputBlock {
 	#buildKey(options: OutputBlockOptions): bigint {
 		const h = new Hasher();
 		h.u32(options.width);
+		h.u32(normalizeContentPaddingLeft(options.contentPaddingLeft));
 		h.optional(options.header);
 		h.optional(options.headerMeta);
 		h.optional(options.state);
+		h.optional(options.borderColor);
 		h.bool(options.applyBg ?? true);
 		h.bool(options.animate ?? false);
 		if (options.animate) h.u32(borderShimmerTick());
 		if (options.sections) {
 			for (const s of options.sections) {
 				h.optional(s.label);
+				h.bool(s.separator ?? false);
 				for (const line of s.lines) {
 					h.str(line);
 				}
@@ -271,4 +315,21 @@ export class CachedOutputBlock {
 		}
 		return h.digest();
 	}
+}
+
+/**
+ * Build a self-framing tool component backed by a cached output block. The
+ * `build` callback returns the block options for a given width; the cache
+ * dedupes re-renders. Pass `borderColor: "borderMuted"` for the dim "legacy"
+ * look that does not compete with the state-colored framed tools.
+ */
+export function framedBlock(theme: Theme, build: (width: number) => OutputBlockOptions): Component {
+	const block = new CachedOutputBlock();
+	// Marked so the tool-execution container treats it as self-framing (renders
+	// flush, no extra padding/background) the same way `markFramedBlockComponent`
+	// blocks are treated.
+	return markFramedBlockComponent({
+		render: (width: number): string[] => block.render(build(width), theme),
+		invalidate: () => block.invalidate(),
+	});
 }

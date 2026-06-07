@@ -5,6 +5,7 @@ import {
 	Input,
 	matchesKey,
 	padding,
+	ScrollView,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -115,15 +116,19 @@ class HistoryResultsList implements Component {
 		);
 		const endIndex = Math.min(startIndex + this.#maxVisible, this.#results.length);
 
+		const overflow = this.#results.length > this.#maxVisible;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const rows: string[] = [];
+
 		for (let i = startIndex; i < endIndex; i++) {
 			const entry = this.#results[i];
 			const isSelected = i === this.#selectedIndex;
 
 			const timeStr = relativeTime(entry.created_at);
 			const timeWidth = visibleWidth(timeStr);
-			const showTime = width >= gutterWidth + 12 + timeWidth;
+			const showTime = rowWidth >= gutterWidth + 12 + timeWidth;
 
-			const promptBudget = Math.max(4, width - gutterWidth - (showTime ? timeWidth + 1 : 0));
+			const promptBudget = Math.max(4, rowWidth - gutterWidth - (showTime ? timeWidth + 1 : 0));
 			const normalized = entry.prompt.replace(/\s+/g, " ").trim();
 			const plain = truncateToWidth(normalized, promptBudget);
 			const highlighted = highlightTokens(plain, this.#tokens);
@@ -133,21 +138,24 @@ class HistoryResultsList implements Component {
 
 			if (showTime) {
 				// Pad the prompt region so the timestamp sits flush right with a one-cell gap.
-				line = `${truncateToWidth(line, width - timeWidth - 1, Ellipsis.Unicode, true)} ${theme.fg("dim", timeStr)}`;
+				line = `${truncateToWidth(line, rowWidth - timeWidth - 1, Ellipsis.Unicode, true)} ${theme.fg("dim", timeStr)}`;
 			}
 
-			lines.push(
+			rows.push(
 				isSelected
-					? theme.bg("selectedBg", truncateToWidth(line, width, Ellipsis.Omit, true))
-					: truncateToWidth(line, width),
+					? theme.bg("selectedBg", truncateToWidth(line, rowWidth, Ellipsis.Omit, true))
+					: truncateToWidth(line, rowWidth),
 			);
 		}
 
-		if (startIndex > 0 || endIndex < this.#results.length) {
-			const scrollText = `  ${this.#selectedIndex + 1}/${this.#results.length}`;
-			lines.push(theme.fg("muted", truncateToWidth(scrollText, width, Ellipsis.Omit)));
-		}
-
+		const sv = new ScrollView(rows, {
+			height: rows.length,
+			scrollbar: "auto",
+			totalRows: this.#results.length,
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(startIndex);
+		lines.push(...sv.render(width));
 		return lines;
 	}
 }

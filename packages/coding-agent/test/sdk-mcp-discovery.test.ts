@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,6 +11,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "../src/tool-discovery/mode";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
@@ -46,18 +47,34 @@ const oldSessionMtime = new Date("2000-01-01T00:00:00.000Z");
 
 describe("createAgentSession MCP discovery prompt gating", () => {
 	let tempDir: string;
+	let registryDir: string;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
 
-	beforeEach(async () => {
-		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-${Snowflake.next()}`);
-		fs.mkdirSync(tempDir, { recursive: true });
-		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+	// Immutable across tests: ModelRegistry's constructor eagerly loads the bundled
+	// model catalog (~120ms). The tests pass models explicitly and never mutate the
+	// registry (refreshInBackground is skipped when modelRegistry is supplied, and
+	// extension source sync is empty under disableExtensionDiscovery), so build it once.
+	beforeAll(async () => {
+		registryDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-registry-${Snowflake.next()}`);
+		fs.mkdirSync(registryDir, { recursive: true });
+		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
-	afterEach(() => {
+	afterAll(() => {
 		authStorage.close();
+		if (registryDir && fs.existsSync(registryDir)) {
+			fs.rmSync(registryDir, { recursive: true, force: true });
+		}
+	});
+
+	beforeEach(() => {
+		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -86,6 +103,34 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		expect(session.systemPrompt.join("\n")).not.toContain(
 			"call `search_tool_bm25` before concluding no such tool exists",
 		);
+	});
+
+	it("default auto discovery hides MCP tools once the total tool set is too large", async () => {
+		const mcpTools = Array.from({ length: TOOL_DISCOVERY_AUTO_THRESHOLD + 1 }, (_, index) =>
+			createMcpCustomTool(`mcp__auto_tool_${index}`, "auto", `tool_${index}`),
+		);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			customTools: mcpTools,
+		});
+
+		const activeNames = session.getActiveToolNames();
+		expect(session.isToolDiscoveryEnabled()).toBe(true);
+		expect(activeNames).toContain("search_tool_bm25");
+		expect(activeNames).not.toContain("mcp__auto_tool_0");
+		expect(session.getDiscoverableTools({ source: "mcp" })).toHaveLength(TOOL_DISCOVERY_AUTO_THRESHOLD + 1);
 	});
 
 	it("advertises discovery guidance for builtin-only tools.discoveryMode all sessions", async () => {

@@ -4,6 +4,7 @@ import {
 	extractPrintableText,
 	fuzzyFilter,
 	matchesKey,
+	ScrollView,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -48,14 +49,10 @@ class UserMessageList implements Component {
 		return this.#isSearchEnabled() || this.#searchQuery.length > 0;
 	}
 
-	#renderStatusLine(total: number): string {
-		const selectedCount = total === 0 ? 0 : this.#selectedIndex + 1;
-		const count =
-			this.#searchQuery.trim() && total !== this.messages.length
-				? `${selectedCount}/${total} of ${this.messages.length}`
-				: `${selectedCount}/${total}`;
-		const suffix = this.#searchQuery.trim() ? `  Search: ${this.#searchQuery}` : "  Type to search";
-		return theme.fg("muted", `  (${count})${suffix}`);
+	#renderStatusLine(_total: number): string {
+		const query = this.#searchQuery.trim();
+		const suffix = query ? `Search: ${this.#searchQuery}` : "Type to search";
+		return theme.fg("muted", `  ${suffix}`);
 	}
 
 	#setSearchQuery(query: string): void {
@@ -103,6 +100,9 @@ class UserMessageList implements Component {
 		const endIndex = Math.min(startIndex + this.#maxVisible, total);
 
 		// Render visible messages (2 lines per message + blank line)
+		const overflow = total > this.#maxVisible;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const messageLines: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
 			const message = this.#filteredMessages[i];
 			if (!message) continue;
@@ -113,26 +113,37 @@ class UserMessageList implements Component {
 
 			// First line: cursor + message
 			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
-			const maxMsgWidth = width - 2; // Account for cursor (2 chars)
+			const maxMsgWidth = rowWidth - 2; // Account for cursor (2 chars)
 			const truncatedMsg = truncateToWidth(normalizedMessage, maxMsgWidth);
 			const messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
 
-			lines.push(messageLine);
+			messageLines.push(messageLine);
 
 			// Second line: metadata (position in history)
 			const position = this.messages.indexOf(message) + 1;
 			const metadata = `  Message ${position} of ${this.messages.length}`;
 			const metadataLine = theme.fg("muted", metadata);
-			lines.push(metadataLine);
-			lines.push(""); // Blank line between messages
+			messageLines.push(metadataLine);
+			messageLines.push(""); // Blank line between messages
 		}
 
 		if (total === 0) {
 			lines.push(theme.fg("muted", "  No matching messages"));
+		} else {
+			const visibleCount = endIndex - startIndex;
+			const linesPerItem = visibleCount > 0 ? messageLines.length / visibleCount : 1;
+			const sv = new ScrollView(messageLines, {
+				height: messageLines.length,
+				scrollbar: "auto",
+				totalRows: Math.round(total * linesPerItem),
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			sv.setScrollOffset(Math.round(startIndex * linesPerItem));
+			lines.push(...sv.render(width));
 		}
 
-		// Add scroll/search indicator if needed
-		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus()) {
+		// Add search indicator if needed
+		if (this.#shouldRenderSearchStatus()) {
 			lines.push(this.#renderStatusLine(total));
 		}
 

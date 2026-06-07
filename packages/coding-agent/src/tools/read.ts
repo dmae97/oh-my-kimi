@@ -29,12 +29,12 @@ import {
 	truncateLine,
 } from "../session/streaming-output";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, tryResolveInternalUrlSync } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
-import { type ArchiveReader, openArchive, parseArchivePathCandidates } from "./archive-reader";
+import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "./archive-reader";
 import {
 	type ConflictEntry,
 	type ConflictScope,
@@ -1154,17 +1154,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const limitedEntries = listLimit.items;
 		const limitMeta = listLimit.meta;
 
-		const results: string[] = [];
-		for (const entry of limitedEntries) {
+		for (let index = 0; index < limitedEntries.length; index++) {
 			throwIfAborted(signal);
-			if (entry.isDirectory) {
-				results.push(`${entry.name}/`);
-				continue;
-			}
-
-			const sizeSuffix = entry.size > 0 ? ` (${formatBytes(entry.size)})` : "";
-			results.push(`${entry.name}${sizeSuffix}`);
 		}
+		const results = formatArchiveEntryLines(limitedEntries);
 
 		const output = results.length > 0 ? results.join("\n") : "(empty archive directory)";
 		const text = prependSuffixResolutionNotice(output, details.suffixResolution);
@@ -2337,10 +2330,20 @@ function firstReadSelectorLine(sel: string | undefined): number | undefined {
 	}
 }
 
+/** Absolute fs path the read result actually resolved to, used as the OSC 8 link
+ * target when the structured `resolvedPath` isn't set (the common plain-file and
+ * image reads only record the path in `meta.source`). URL/internal sources are
+ * not fs paths, so only `type: "path"` qualifies. */
+function readSourceFsPath(details: ReadToolDetails | undefined): string | undefined {
+	const source = details?.meta?.source;
+	return source?.type === "path" ? source.value : undefined;
+}
+
 function formatReadPathLink(
 	rawPath: string,
 	options: {
 		resolvedPath?: string;
+		sourcePath?: string;
 		suffixResolution?: { from: string; to: string };
 		offset?: number;
 		fallbackLabel?: string;
@@ -2352,7 +2355,7 @@ function formatReadPathLink(
 	const plainDisplayPath = options.suffixResolution
 		? shortenPath(options.suffixResolution.to)
 		: shortenPath(basePath || options.resolvedPath || options.fallbackLabel || rawPath);
-	const target = options.resolvedPath ?? tryResolveInternalUrlSync(basePath);
+	const target = options.resolvedPath ?? options.sourcePath ?? tryResolveInternalUrlSync(basePath);
 	const line = firstReadSelectorLine(split.sel) ?? options.offset;
 	const linkOptions = line !== undefined ? { line } : undefined;
 	const displayPath = target ? fileHyperlink(target, plainDisplayPath, linkOptions) : plainDisplayPath;
@@ -2403,7 +2406,9 @@ export const readToolRenderer = {
 			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
 			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
 			const rawPath = args?.file_path || args?.path || "";
-			const filePath = formatReadPathLink(rawPath, { offset: args?.offset }) || shortenPath(rawPath);
+			const filePath =
+				formatReadPathLink(rawPath, { offset: args?.offset, sourcePath: readSourceFsPath(result.details) }) ||
+				shortenPath(rawPath);
 			let title = filePath ? `Read ${filePath}` : "Read";
 			if (args?.offset !== undefined || args?.limit !== undefined) {
 				const startLine = args.offset ?? 1;
@@ -2413,11 +2418,11 @@ export const readToolRenderer = {
 			const header = renderStatusLine({ icon: "error", title }, uiTheme);
 			const errorLines = errorText.split("\n").map(line => uiTheme.fg("error", replaceTabs(line)));
 			const outputBlock = new CachedOutputBlock();
-			return {
+			return markFramedBlockComponent({
 				render: (width: number) =>
 					outputBlock.render({ header, state: "error", sections: [{ lines: errorLines }], width }, uiTheme),
 				invalidate: () => outputBlock.invalidate(),
-			};
+			});
 		}
 		const details = result.details;
 		const rawText = result.content?.find(c => c.type === "text")?.text ?? "";
@@ -2454,6 +2459,7 @@ export const readToolRenderer = {
 			const suffix = details?.suffixResolution;
 			const displayPath = formatReadPathLink(rawPath, {
 				resolvedPath: details?.resolvedPath,
+				sourcePath: readSourceFsPath(details),
 				suffixResolution: suffix,
 				fallbackLabel: "image",
 			});
@@ -2465,7 +2471,7 @@ export const readToolRenderer = {
 			const detailLines = contentText ? contentText.split("\n").map(line => uiTheme.fg("toolOutput", line)) : [];
 			const lines = [...detailLines, ...warningLines];
 			const outputBlock = new CachedOutputBlock();
-			return {
+			return markFramedBlockComponent({
 				render: (width: number) =>
 					outputBlock.render(
 						{
@@ -2482,16 +2488,17 @@ export const readToolRenderer = {
 						uiTheme,
 					),
 				invalidate: () => outputBlock.invalidate(),
-			};
+			});
 		}
 
 		const suffix = details?.suffixResolution;
-		// resolvedPath is the absolute fs path for fs-backed reads (regular files plus
-		// local:// / memory:// / skill:// / artifact:// resources). Fall back to a sync
-		// resolver for fs-backed internal URLs so the title is clickable even before the
-		// result lands or if the handler didn't populate resolvedPath.
+		// resolvedPath is the absolute fs path when a read resolved/corrected the
+		// input (suffix match, internal URL, archive/sqlite/notebook); plain file
+		// reads only record the absolute path in meta.source, so fall back to that
+		// (and then to a sync internal-URL resolver) to keep the title clickable.
 		const displayPath = formatReadPathLink(rawPath, {
 			resolvedPath: details?.resolvedPath,
+			sourcePath: readSourceFsPath(details),
 			suffixResolution: suffix,
 			offset: args?.offset,
 		});
@@ -2514,7 +2521,7 @@ export const readToolRenderer = {
 		let cachedWidth: number | undefined;
 		let cachedExpanded: boolean | undefined;
 		let cachedLines: string[] | undefined;
-		return {
+		return markFramedBlockComponent({
 			render: (width: number) => {
 				const expanded = options.expanded;
 				if (cachedLines && cachedWidth === width && cachedExpanded === expanded) return cachedLines;
@@ -2551,7 +2558,7 @@ export const readToolRenderer = {
 				cachedExpanded = undefined;
 				cachedLines = undefined;
 			},
-		};
+		});
 	},
 	mergeCallAndResult: true,
 };
