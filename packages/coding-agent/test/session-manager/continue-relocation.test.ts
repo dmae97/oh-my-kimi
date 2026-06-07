@@ -30,6 +30,17 @@ function writeBreadcrumb(cwd: string, sessionFile: string): string {
 	return file;
 }
 
+function stripHeaderCwd(file: string): void {
+	const lines = fs.readFileSync(file, "utf8").split("\n");
+	const rewritten = lines.map(line => {
+		if (!line.trim()) return line;
+		const obj = JSON.parse(line) as { type?: string; cwd?: unknown };
+		if (obj.type === "session") delete obj.cwd;
+		return JSON.stringify(obj);
+	});
+	fs.writeFileSync(file, rewritten.join("\n"));
+}
+
 describe("SessionManager.continueRecent relocation", () => {
 	let testAgentDir: string;
 	let cwdA: string;
@@ -226,6 +237,49 @@ describe("SessionManager.continueRecent relocation", () => {
 			expect(resumed.getSessionFile()).toBe(localFile);
 			expect(resumed.getCwd()).toBe(path.resolve(cwdB));
 			expect(fs.existsSync(movedFile)).toBe(true);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("re-roots past a cwd-less legacy session in a shared explicit sessionDir", async () => {
+		// Regression: SessionInfo.cwd is "" for sessions whose header has no cwd, and
+		// path.resolve("") === process.cwd(). A guard that only excluded `undefined`
+		// treated such a legacy session as "belongs to the current cwd" whenever
+		// --continue ran from process.cwd(), hijacking the moved session. Resume must
+		// be invoked with process.cwd() to reproduce the path.resolve("") collision.
+		const explicitSessionDir = path.join(testAgentDir, "shared-legacy-sessions");
+		const currentCwd = process.cwd();
+
+		// Older session with no recorded cwd (header cwd stripped → "" on load).
+		const legacy = SessionManager.create(cwdB, explicitSessionDir);
+		legacy.appendMessage({ role: "user", content: "legacy cwd-less", timestamp: 1 });
+		legacy.appendMessage(makeAssistantMessage());
+		await legacy.flush();
+		const legacyFile = legacy.getSessionFile();
+		if (!legacyFile) throw new Error("Expected persisted legacy session file");
+		await legacy.close();
+		stripHeaderCwd(legacyFile);
+
+		// Newer moved session, recorded under the now-missing worktree cwd.
+		await new Promise(resolve => setTimeout(resolve, 20));
+		const moved = SessionManager.create(cwdA, explicitSessionDir);
+		moved.appendMessage({ role: "user", content: "newer moved cwd", timestamp: 2 });
+		moved.appendMessage(makeAssistantMessage());
+		await moved.flush();
+		const movedFile = moved.getSessionFile();
+		if (!movedFile) throw new Error("Expected persisted moved session file");
+		await moved.close();
+
+		writeBreadcrumb(cwdA, movedFile);
+		await fsp.rm(cwdA, { recursive: true, force: true });
+
+		const resumed = await SessionManager.continueRecent(currentCwd, explicitSessionDir);
+		try {
+			// The moved session is re-rooted; the cwd-less legacy session is not hijacked.
+			expect(resumed.getSessionFile()).toBe(movedFile);
+			expect(resumed.getCwd()).toBe(path.resolve(currentCwd));
+			expect(fs.existsSync(legacyFile)).toBe(true);
 		} finally {
 			await resumed.close();
 		}

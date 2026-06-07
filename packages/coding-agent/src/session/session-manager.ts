@@ -3518,7 +3518,7 @@ export class SessionManager {
 			// current-directory session. If that shared dir also contains an older session
 			// that already belongs to the current cwd, prefer that local session instead
 			// of re-rooting the stale breadcrumb over it.
-			const resolvedBreadcrumbCwd = breadcrumbCwd ?? path.resolve(breadcrumb.cwd);
+			const resolvedBreadcrumbCwd = path.resolve(breadcrumb.cwd);
 			mostRecent = await findMostRecentSession(dir, storage);
 			const sourceCwdGone = !fs.existsSync(resolvedBreadcrumbCwd);
 			const breadcrumbSessionFile = path.resolve(breadcrumb.sessionFile);
@@ -3529,7 +3529,7 @@ export class SessionManager {
 				const currentCwdSession = (await SessionManager.list(cwd, dir, storage)).find(
 					session =>
 						path.resolve(session.path) !== breadcrumbSessionFile &&
-						session.cwd !== undefined &&
+						session.cwd &&
 						path.resolve(session.cwd) === resolvedCwd,
 				);
 				if (currentCwdSession) {
