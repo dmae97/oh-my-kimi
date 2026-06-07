@@ -471,6 +471,12 @@ export interface SessionStats {
 	cost: number;
 }
 
+export interface FreshSessionResult {
+	previousSessionId: string;
+	sessionId: string;
+	closedProviderSessions: number;
+}
+
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
 // Constants
@@ -922,6 +928,7 @@ export class AgentSession {
 	#agentId: string | undefined;
 	#agentRegistry: AgentRegistry | undefined;
 	#providerSessionId: string | undefined;
+	#freshProviderSessionId: string | undefined;
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -2946,6 +2953,10 @@ export class AgentSession {
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
 	}
 
+	#activeProviderSessionId(sessionId?: string): string {
+		return this.#freshProviderSessionId ?? this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
+	}
+
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
 	 * metadata resolver so every Anthropic API request carries
@@ -2958,7 +2969,7 @@ export class AgentSession {
 	 * `#syncAgentSessionId()` on every such event.
 	 */
 	#syncAgentSessionId(sessionId?: string): void {
-		const sid = this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
+		const sid = this.#activeProviderSessionId(sessionId);
 		this.agent.sessionId = sid;
 		this.agent.setMetadataResolver((provider: string) =>
 			buildSessionMetadata(sid, provider, this.#modelRegistry.authStorage),
@@ -3086,6 +3097,23 @@ export class AgentSession {
 		}
 
 		this.#providerSessionState.clear();
+	}
+
+	freshSession(): FreshSessionResult | undefined {
+		if (this.isStreaming) return undefined;
+		const previousSessionId = this.sessionId;
+		const closedProviderSessions = this.#providerSessionState.size;
+		this.#closeAllProviderSessions("fresh session");
+		this.#freshProviderSessionId = Bun.randomUUIDv7();
+		this.#syncAgentSessionId();
+		this.#rekeyHindsightMemoryForCurrentSessionId();
+		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.agent.appendOnlyContext?.invalidateForModelChange();
+		return {
+			previousSessionId,
+			sessionId: this.sessionId,
+			closedProviderSessions,
+		};
 	}
 
 	// =========================================================================
@@ -3992,7 +4020,7 @@ export class AgentSession {
 
 	/** Current session ID */
 	get sessionId(): string {
-		return this.#providerSessionId ?? this.sessionManager.getSessionId();
+		return this.#activeProviderSessionId();
 	}
 	getEvalSessionId(): string | null {
 		if (this.#parentEvalSessionId !== undefined) return this.#parentEvalSessionId;
@@ -5162,6 +5190,7 @@ export class AgentSession {
 		}
 		await this.sessionManager.newSession(options);
 		this.setTodoPhases([]);
+		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -5259,6 +5288,7 @@ export class AgentSession {
 		}
 
 		// Update agent session ID
+		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -6226,6 +6256,7 @@ export class AgentSession {
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
 			this.agent.reset();
+			this.#freshProviderSessionId = undefined;
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -8941,6 +8972,7 @@ export class AgentSession {
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
+		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousFallbackSelectedMCPToolNames = previousSessionFile
 			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
 			: undefined;
@@ -8952,6 +8984,9 @@ export class AgentSession {
 
 		try {
 			await this.sessionManager.setSessionFile(sessionPath);
+			if (switchingToDifferentSession) {
+				this.#freshProviderSessionId = undefined;
+			}
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -9061,6 +9096,7 @@ export class AgentSession {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -9159,6 +9195,7 @@ export class AgentSession {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
 		}
 		this.#syncTodoPhasesFromBranch();
+		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();

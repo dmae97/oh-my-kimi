@@ -21,6 +21,7 @@ import {
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
 import type { InteractiveModeContext } from "../modes/types";
+import type { FreshSessionResult } from "../session/agent-session";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
@@ -50,6 +51,11 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.updateEditorTopBorder();
 	ctx.ui.requestRender();
+}
+
+function formatFreshSessionResult(result: FreshSessionResult): string {
+	const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
+	return `Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`;
 }
 
 const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): SlashCommandResult => {
@@ -768,6 +774,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.handleClearCommand();
+		},
+	},
+	{
+		name: "fresh",
+		description: "Reset provider stream state without changing the local transcript",
+		handle: async (_command, runtime) => {
+			const result = runtime.session.freshSession();
+			if (!result) {
+				await runtime.output(
+					"Wait for the current response to finish or abort it before refreshing provider state.",
+				);
+				return commandConsumed();
+			}
+			await runtime.output(formatFreshSessionResult(result));
+			return commandConsumed();
+		},
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleFreshCommand();
 		},
 	},
 	{

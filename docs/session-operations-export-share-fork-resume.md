@@ -1,4 +1,4 @@
-# Session Operations: export, dump, share, fork, resume/continue
+# Session Operations: export, dump, share, fresh, fork, resume/continue
 
 This document describes operator-visible behavior for session export/share/fork/resume operations as currently implemented.
 
@@ -19,6 +19,7 @@ This document describes operator-visible behavior for session export/share/fork/
 | `/export [path]`                        | Interactive slash command | No                                    | No                                                                                 | HTML file                                                       |
 | `--export <session.jsonl> [outputPath]` | CLI startup fast-path     | No runtime session mutation           | No active session; reads target file                                               | HTML file                                                       |
 | `/share`                                | Interactive slash command | No                                    | No                                                                                 | Temp HTML + share URL/gist                                      |
+| `/fresh`                               | Interactive slash command | Yes (provider-facing in-memory id/state only) | No; keeps current session file/header                                               | None                                                            |
 | `/fork`                                 | Interactive slash command | Yes (active session identity changes) | Creates new session file and switches current session to it (persistent mode only) | Copies artifact directory to new session namespace when present |
 | `--fork <id\|path>`                     | CLI startup               | Yes after session creation            | Creates a new session fork from the selected source into current cwd/session dir   | None                                                            |
 | `/resume`                               | Interactive slash command | Yes (active in-memory state replaced) | Switches to selected existing session file                                         | None                                                            |

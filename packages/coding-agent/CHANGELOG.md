@@ -3,6 +3,8 @@
 ## [Unreleased]
 ### Added
 
+- Added `/fresh` to rotate the provider-facing session id and clear in-memory provider stream/cache state without changing the local session file.
+
 - Added a `ChatBlock` transcript primitive (`modes/components/chat-block.ts`) and a single `ctx.present(...)` sink (with `ctx.resetTranscript()`) so chat output is mounted in one place instead of the repeated `chatContainer.addChild(...)` + `ui.requestRender()` pattern scattered across controllers. `ChatBlock` carries a React/Svelte-style lifecycle — `onMount` starts effects, `onCleanup` registers teardown, `finish()` self-completes (stops timers and freezes the block at its final content), and `dispose()`/`resetTranscript()` tears everything down — so animated blocks own their own resources instead of leaking `setInterval`/`requestRender` bookkeeping into callers. The MCP "Connecting…" spinner is now such a block.
 
 ### Changed

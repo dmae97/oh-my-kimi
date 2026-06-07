@@ -802,6 +802,18 @@ export class CommandController {
 		await this.#runNewSessionFlow();
 	}
 
+	async handleFreshCommand(): Promise<void> {
+		const result = this.ctx.session.freshSession();
+		if (!result) {
+			this.ctx.showWarning("Wait for the current response to finish or abort it before refreshing provider state.");
+			return;
+		}
+		const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorTopBorder();
+		this.ctx.showStatus(`Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`);
+	}
+
 	async handleDropCommand(): Promise<void> {
 		if (!this.ctx.sessionManager.getSessionFile()) {
 			this.ctx.showError("Nothing to drop (in-memory session)");
