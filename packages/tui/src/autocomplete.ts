@@ -231,7 +231,11 @@ function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): bool
 function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
 	if (lowerPrefix.length === 0) return 1;
 	if (lowerPrefix === lowerTarget) return 1000;
-	if (lowerTarget.startsWith(lowerPrefix)) return 900 - Math.max(0, lowerTarget.length - lowerPrefix.length);
+	// Flat score for every prefix match so same-prefix commands keep registry
+	// order under the stable sort. A length penalty here would rank the shorter
+	// name first (e.g. `/set` → `setup` above `settings`), silently changing the
+	// command that the sync-completion path applies on Enter.
+	if (lowerTarget.startsWith(lowerPrefix)) return 900;
 	return fuzzyMatch(lowerPrefix, lowerTarget) ? fuzzyScore(lowerPrefix, lowerTarget) : 0;
 }
 

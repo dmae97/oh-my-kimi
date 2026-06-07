@@ -305,6 +305,21 @@ describe("trySyncSlashCompletion", () => {
 		expect(result!.items.map(i => i.value)).toEqual(["setup", "usage"]);
 	});
 
+	it("keeps registry order for same-prefix commands so /set still applies settings", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "settings", description: "Open settings menu", value: "settings" },
+				{ name: "setup", description: "Open provider setup", value: "setup" },
+			],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/set");
+		expect(result).not.toBeNull();
+		// The sync-completion path applies items[0] on Enter; the shorter `setup`
+		// must not jump ahead of the earlier-registered `settings`.
+		expect(result!.items[0]?.value).toBe("settings");
+	});
+
 	it("prefers exact command aliases over fuzzy description matches", () => {
 		const provider = new CombinedAutocompleteProvider(
 			[
