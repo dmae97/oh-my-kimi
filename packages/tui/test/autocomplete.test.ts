@@ -292,6 +292,19 @@ describe("trySyncSlashCompletion", () => {
 		expect(result!.items.map(i => i.value)).toEqual(["model"]);
 	});
 
+	it("does not list aliases as separate rows for bare slash suggestions", async () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "setup", aliases: ["providers"], description: "Open provider setup" },
+				{ name: "usage", description: "Show provider usage and limits" },
+			],
+			"/tmp",
+		);
+		const result = await provider.getSuggestions(["/"], 0, 1);
+		expect(result).not.toBeNull();
+		expect(result!.items.map(i => i.value)).toEqual(["setup", "usage"]);
+	});
+
 	it("prefers exact command aliases over fuzzy description matches", () => {
 		const provider = new CombinedAutocompleteProvider(
 			[

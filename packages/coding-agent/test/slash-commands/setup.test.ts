@@ -71,4 +71,15 @@ describe("/setup slash command", () => {
 		expect(harness.showWarning).toHaveBeenCalledWith("Usage: /setup [providers]");
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
+
+	it("shows alias-specific usage for unsupported providers alias arguments", async () => {
+		const harness = createRuntime();
+
+		const handled = await executeBuiltinSlashCommand("/providers theme", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.showProviderSetup).not.toHaveBeenCalled();
+		expect(harness.showWarning).toHaveBeenCalledWith("Usage: /providers [providers]");
+		expect(harness.setText).toHaveBeenCalledWith("");
+	});
 });

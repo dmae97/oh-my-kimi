@@ -86,7 +86,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "setup",
 		aliases: ["providers"],
 		description: "Open provider setup",
-		inlineHint: "[providers]",
 		allowArgs: true,
 		subcommands: [{ name: "providers", description: "Configure sign-in and web search providers" }],
 		handleTui: async (command, runtime) => {
@@ -95,7 +94,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (opensProviders) {
 				await runtime.ctx.showProviderSetup();
 			} else {
-				runtime.ctx.showWarning("Usage: /setup [providers]");
+				runtime.ctx.showWarning(`Usage: /${command.name} [providers]`);
 			}
 			runtime.ctx.editor.setText("");
 		},

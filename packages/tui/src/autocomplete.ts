@@ -259,16 +259,18 @@ function buildSlashCommandCompletions(commands: CommandEntry[], lowerPrefix: str
 				});
 			}
 
-			for (const alias of getCommandAliases(cmd)) {
-				if (alias === name) continue;
-				const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
-				if (aliasScore === 0) continue;
-				candidates.push({
-					value: alias,
-					label: alias,
-					score: aliasScore,
-					...(fullDesc && { description: fullDesc }),
-				});
+			if (lowerPrefix.length > 0) {
+				for (const alias of getCommandAliases(cmd)) {
+					if (alias === name) continue;
+					const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
+					if (aliasScore === 0) continue;
+					candidates.push({
+						value: alias,
+						label: alias,
+						score: aliasScore,
+						...(fullDesc && { description: fullDesc }),
+					});
+				}
 			}
 
 			return candidates;
