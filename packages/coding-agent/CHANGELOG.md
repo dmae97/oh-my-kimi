@@ -70,6 +70,7 @@
 ### Fixed
 
 - Fixed working-message loader session accents so spinner/message color math is cached per session name, session-accent setting, and theme luminance while still updating immediately on renames, setting toggles, and theme changes.
+- Fixed JS eval worker reset/dispose to close workers gracefully before forced termination, avoiding Bun 1.3.14 N-API teardown crashes with native modules such as `canvas`.
 - Fixed startup model fallback selection so sessions now prefer each provider’s configured default model before choosing the first available authenticated model
 - Fixed implicit model selection path for tools and sessions by honoring persisted model-provider order when no explicit pattern is provided
 - Fixed the working spinner appearing to ignore Esc for 2-3 seconds when an interrupt lands mid-tool. Esc fires the abort synchronously, but the agent loop only stops the loader at `agent_end`, which it cannot reach until every in-flight tool settles in `executeToolCalls`' `await Promise.allSettled(...)` — and process/subagent/kernel-owning tools tear down gracefully (SIGTERM, 2-3s grace, SIGKILL), so the loader kept showing the unchanged "Working…/<intent>" line and read as a dropped keypress. The loader now switches to "Interrupting…" the instant Esc requests the abort and freezes intent-driven label updates until the turn unwinds (`EventController.notifyInterrupting`), so the interrupt is acknowledged immediately even while teardown completes.
