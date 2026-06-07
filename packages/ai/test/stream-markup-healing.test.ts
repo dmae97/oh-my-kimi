@@ -148,6 +148,7 @@ describe("StreamMarkupHealing pattern selection", () => {
 		expect(getStreamMarkupHealingPattern("minimax-code", "MiniMax-M2.5", { parseThinkingTags: true })).toBe(
 			"thinking",
 		);
+		expect(getStreamMarkupHealingPattern("opencode-zen", "minimax-m3")).toBe("thinking");
 		expect(getStreamMarkupHealingPattern("nanogpt", "deepseek/deepseek-v4-pro")).toBe("dsml");
 		expect(getStreamMarkupHealingPattern("ollama-cloud", "gpt-oss:120b")).toBeUndefined();
 		expect(getStreamMarkupHealingPattern("openai", "deepseek-v4-pro")).toBeUndefined();
@@ -579,6 +580,39 @@ describe("Ollama provider DSML envelope healing", () => {
 			.join("");
 		expect(text).toBe("Inline `<｜literal｜>` token in prose.");
 		expect(result.stopReason).toBe("stop");
+	});
+});
+
+describe("OpenAI completions MiniMax thinking healing", () => {
+	it("parses OpenCode Zen MiniMax think tags into a thinking block", async () => {
+		const model: Model<"openai-completions"> = {
+			id: "minimax-m3",
+			name: "MiniMax M3",
+			api: "openai-completions",
+			provider: "opencode-zen",
+			baseUrl: "https://opencode.ai/zen/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 8_192,
+		};
+		global.fetch = mockFetch([
+			chunk(model.id, { content: "visible <thin" }),
+			chunk(model.id, { content: "k>hidden reasoning</think" }),
+			chunk(model.id, { content: ">" }),
+			chunk(model.id, { content: " answer" }),
+			chunk(model.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+
+		expect(result.content).toEqual([
+			{ type: "text", text: "visible " },
+			{ type: "thinking", thinking: "hidden reasoning", thinkingSignature: undefined },
+			{ type: "text", text: " answer" },
+		]);
 	});
 });
 
