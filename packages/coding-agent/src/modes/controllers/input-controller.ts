@@ -589,7 +589,7 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
-		const text = this.ctx.editor.getText().trim();
+		let text = this.ctx.editor.getText().trim();
 		if (!text) return;
 
 		// Compaction first: while compacting, free text gets queued via
@@ -601,6 +601,16 @@ export class InputController {
 		if (this.ctx.session.isCompacting) {
 			this.ctx.queueCompactionMessage(text, "followUp");
 			return;
+		}
+
+		const slashResult = await executeBuiltinSlashCommand(text, {
+			ctx: this.ctx,
+		});
+		if (slashResult === true) {
+			return;
+		}
+		if (typeof slashResult === "string") {
+			text = slashResult;
 		}
 
 		// Skill commands invoke through the custom-message path regardless of
