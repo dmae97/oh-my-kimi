@@ -291,4 +291,47 @@ describe("trySyncSlashCompletion", () => {
 		expect(result).not.toBeNull();
 		expect(result!.items.map(i => i.value)).toEqual(["model"]);
 	});
+
+	it("prefers exact command aliases over fuzzy description matches", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "setup", aliases: ["providers"], description: "Open provider setup" },
+				{ name: "usage", description: "Show provider usage and limits" },
+			],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/providers");
+		expect(result).not.toBeNull();
+		expect(result!.items[0]?.value).toBe("providers");
+	});
+
+	it("uses aliases when completing slash command arguments", async () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{
+					name: "setup",
+					aliases: ["onboarding"],
+					getArgumentCompletions: prefix =>
+						"providers".startsWith(prefix) ? [{ value: "providers ", label: "providers" }] : null,
+				},
+			],
+			"/tmp",
+		);
+		const result = await provider.getSuggestions(["/onboarding pro"], 0, "/onboarding pro".length);
+		expect(result?.items.map(i => i.value)).toEqual(["providers "]);
+	});
+
+	it("uses aliases when rendering inline slash command hints", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{
+					name: "setup",
+					aliases: ["onboarding"],
+					getInlineHint: argumentText => (argumentText === "pro" ? "viders" : null),
+				},
+			],
+			"/tmp",
+		);
+		expect(provider.getInlineHint(["/onboarding pro"], 0, "/onboarding pro".length)).toBe("viders");
+	});
 });

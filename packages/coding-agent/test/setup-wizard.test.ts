@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 import { runOnboardingSetup } from "@oh-my-pi/pi-coding-agent/commands/setup";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SETTINGS_SCHEMA } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
@@ -6,11 +6,13 @@ import {
 	ALL_SCENES,
 	CURRENT_SETUP_VERSION,
 	markSetupWizardComplete,
+	runSetupWizard,
 	type SetupScene,
 	type SetupSceneHost,
 	selectSetupScenes,
 } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard";
 import { WebSearchTab } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/web-search";
+import type { SetupWizardComponent } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/wizard-overlay";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "@oh-my-pi/pi-coding-agent/web/search/types";
@@ -113,6 +115,49 @@ describe("setup wizard persistence", () => {
 		const settings = Settings.isolated();
 		await markSetupWizardComplete(settings);
 		expect(settings.get("setupVersion")).toBe(CURRENT_SETUP_VERSION);
+	});
+
+	it("can run a targeted scene without setup-version or welcome-intro side effects", async () => {
+		const settings = Settings.isolated({ setupVersion: 0 });
+		const hideOverlay = mock(() => {});
+		const setFocus = mock((_component: unknown) => {});
+		const requestRender = mock(() => {});
+		const playWelcomeIntro = mock(() => {});
+		let component: SetupWizardComponent | undefined;
+		const scene: SetupScene = {
+			id: "providers",
+			title: "providers",
+			minVersion: 1,
+			mount: host => ({
+				title: "providers",
+				onMount: () => host.finish("done"),
+				render: () => [],
+				invalidate: () => {},
+			}),
+		};
+		const ctx = {
+			settings,
+			playWelcomeIntro,
+			ui: {
+				terminal: { rows: 24 },
+				showOverlay: (nextComponent: SetupWizardComponent) => {
+					component = nextComponent;
+					return { hide: hideOverlay };
+				},
+				setFocus,
+				requestRender,
+			},
+		} as unknown as InteractiveModeContext;
+
+		const pending = runSetupWizard(ctx, [scene], { markComplete: false, playWelcomeIntro: false });
+		component?.handleInput?.("\n");
+		component?.handleInput?.("\n");
+		await pending;
+
+		expect(settings.get("setupVersion")).toBe(0);
+		expect(playWelcomeIntro).not.toHaveBeenCalled();
+		expect(hideOverlay).toHaveBeenCalledTimes(1);
+		expect(setFocus).toHaveBeenCalled();
 	});
 });
 
