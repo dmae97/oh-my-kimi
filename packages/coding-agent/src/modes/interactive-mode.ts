@@ -20,7 +20,7 @@ import {
 	modelsAreEqual,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
-import type { Component, EditorTheme, SlashCommand } from "@oh-my-pi/pi-tui";
+import type { Component, EditorTheme, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
 	clearRenderCache,
@@ -101,6 +101,7 @@ import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent, HookSelectorSlider } from "./components/hook-selector";
+import { PlanReviewOverlay } from "./components/plan-review-overlay";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { TranscriptContainer } from "./components/transcript-container";
@@ -250,20 +251,6 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 }
 
-/**
- * Plan-review preview block. Once rendered it is static (a one-shot Markdown of
- * the plan file), so even while it sits as the live bottom block beneath the
- * approval selector its scrolled-off head is safe to commit to native
- * scrollback. Reporting append-only lets an over-tall plan + selector commit the
- * plan's head instead of clipping it — without this a plain {@link Container} is
- * deferred and a long plan is cut off the top on ED3-risk terminals.
- */
-class PlanReviewBlock extends Container {
-	isTranscriptBlockAppendOnly(): boolean {
-		return true;
-	}
-}
-
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -355,7 +342,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planModePreviousModelState: { model: Model; thinkingLevel?: ThinkingLevel } | undefined;
 	#pendingModelSwitch: { model: Model; thinkingLevel?: ThinkingLevel } | undefined;
 	#planModeHasEntered = false;
-	#planReviewContainer: Container | undefined;
+	#planReviewOverlay: PlanReviewOverlay | undefined;
+	#planReviewOverlayHandle: OverlayHandle | undefined;
 	readonly lspServers: LspStartupServerInfo[] | undefined = undefined;
 	mcpManager?: import("../mcp").MCPManager;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
@@ -1691,22 +1679,60 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	#renderPlanPreview(planContent: string, options?: { append?: boolean }): void {
-		const existingContainer = this.#planReviewContainer;
-		const replaceExisting = options?.append !== true && existingContainer !== undefined;
-		const planReviewContainer = replaceExisting ? existingContainer : new PlanReviewBlock();
-		planReviewContainer.clear();
-		planReviewContainer.addChild(new Spacer(1));
-		planReviewContainer.addChild(new DynamicBorder());
-		planReviewContainer.addChild(new Text(theme.bold(theme.fg("accent", "Plan Review")), 1, 1));
-		planReviewContainer.addChild(new Spacer(1));
-		planReviewContainer.addChild(new Markdown(planContent, 1, 1, getMarkdownTheme()));
-		planReviewContainer.addChild(new DynamicBorder());
-		if (!replaceExisting) {
-			this.chatContainer.addChild(planReviewContainer);
-		}
-		this.#planReviewContainer = planReviewContainer;
+	showPlanReview(
+		planContent: string,
+		title: string,
+		options: string[],
+		dialogOptions?: {
+			helpText?: string;
+			disabledIndices?: number[];
+			onExternalEditor?: () => void;
+			initialIndex?: number;
+		},
+		extra?: { slider?: HookSelectorSlider },
+	): Promise<string | undefined> {
+		this.#hidePlanReview();
+		const { promise, resolve } = Promise.withResolvers<string | undefined>();
+		let settled = false;
+		const finish = (choice: string | undefined): void => {
+			if (settled) return;
+			settled = true;
+			this.#hidePlanReview();
+			this.ui.requestRender();
+			resolve(choice);
+		};
+		const overlay = new PlanReviewOverlay(
+			planContent,
+			{
+				promptTitle: title,
+				options,
+				disabledIndices: dialogOptions?.disabledIndices,
+				helpText: dialogOptions?.helpText,
+				initialIndex: dialogOptions?.initialIndex,
+				slider: extra?.slider,
+			},
+			{
+				onPick: choice => finish(choice),
+				onCancel: () => finish(undefined),
+				onExternalEditor: dialogOptions?.onExternalEditor,
+			},
+		);
+		this.#planReviewOverlay = overlay;
+		this.#planReviewOverlayHandle = this.ui.showOverlay(overlay, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+		});
+		this.ui.setFocus(overlay);
 		this.ui.requestRender();
+		return promise;
+	}
+
+	#hidePlanReview(): void {
+		this.#planReviewOverlayHandle?.hide();
+		this.#planReviewOverlayHandle = undefined;
+		this.#planReviewOverlay = undefined;
 	}
 
 	#getEditorTerminalPath(): string | null {
@@ -1731,9 +1757,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	#getPlanReviewHelpText(): string {
 		const externalEditorKey = this.keybindings.getDisplayString("app.editor.external");
 		if (!externalEditorKey) {
-			return "up/down navigate  enter select  esc cancel";
+			return "up/down select  enter confirm  pgup/pgdn scroll  esc cancel";
 		}
-		return `up/down navigate  enter select  ${externalEditorKey.toLowerCase()} open in editor  esc cancel`;
+		return `up/down select  enter confirm  pgup/pgdn scroll  ${externalEditorKey.toLowerCase()} open in editor  esc cancel`;
 	}
 
 	#getPlanApprovalContextUsage(): ContextUsage | undefined {
@@ -1794,7 +1820,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 			if (result !== null) {
 				await Bun.write(resolvedPath, result);
-				this.#renderPlanPreview(result);
+				this.#planReviewOverlay?.setPlanContent(result);
 				this.showStatus("Plan updated in external editor.");
 			}
 		} catch (error) {
@@ -2223,7 +2249,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		this.#renderPlanPreview(planContent, { append: true });
 		const contextUsage = this.#getPlanApprovalContextUsage();
 		const keepContextLabel = this.#formatKeepContextLabel(contextUsage);
 		const keepContextDisabled = this.#isKeepContextDisabled(contextUsage);
@@ -2255,7 +2280,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				: undefined;
 		const helpText = slider ? `${this.#getPlanReviewHelpText()}  ◂/▸ model` : this.#getPlanReviewHelpText();
 
-		const choice = await this.showHookSelector(
+		const choice = await this.showPlanReview(
+			planContent,
 			"Plan mode - next step",
 			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
 			{
@@ -2751,7 +2777,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.clearPinnedError();
-		this.#planReviewContainer = undefined;
+		this.#hidePlanReview();
 	}
 
 	handleClearCommand(): Promise<void> {

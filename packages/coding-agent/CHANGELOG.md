@@ -4,6 +4,7 @@
 ### Changed
 
 - Changed the directory grouping for `find`, `search`, `ast_grep`, `ast_edit`, and `lsp` diagnostics from a single flat `# dir/` heading per immediate directory to a multi-level tree that folds the common path prefix into one heading. Previously every group repeated the full directory path — so results rooted outside cwd printed the absolute prefix (e.g. `/Users/me/proj/`) on every heading and nested directories were never collapsed. Now a single-child directory chain folds into one heading (`# packages/pkg/src/`, including an absolute root for out-of-cwd results), subdirectories nest one `#` deeper (`## nested/` → `### child.ts`), and each directory's own files are listed before its subdirectories. TUI hyperlink reconstruction tracks the nested directory stack across the whole output so file and code-frame links keep resolving to the correct absolute paths.
+- Changed the plan-mode approval surface from an inline transcript block plus a separate bottom selector into a single fullscreen overlay (like `/copy`). The overlay owns its entire content via `ScrollView`: the plan renders once as Markdown and scrolls inside the outlined box (PageUp/PageDown, g/G), with the approval options and the model-tier slider beneath it. ↑/↓ move the option cursor, ←/→ drive the slider, Enter confirms, the external-editor key opens the plan, and Esc cancels — so a tall plan no longer competes with the selector for vertical space or clips its head on ED3-risk terminals.
 
 ### Fixed
 
