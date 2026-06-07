@@ -530,6 +530,14 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 	}
 }
 
+export async function applyStartupCwd(parsed: Args): Promise<void> {
+	if (parsed.cwd) {
+		setProjectDir(parsed.cwd);
+		return;
+	}
+	await maybeAutoChdir(parsed);
+}
+
 /** Discover SYSTEM.md file if no CLI system prompt was provided */
 function discoverSystemPromptFile(): string | undefined {
 	// Check project-local first (.omp/SYSTEM.md, .pi/SYSTEM.md legacy)
@@ -745,7 +753,7 @@ export async function runRootCommand(
 	await logger.time("initTheme:initial", initTheme);
 
 	const parsedArgs = parsed;
-	await logger.time("maybeAutoChdir", maybeAutoChdir, parsedArgs);
+	await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 
 	const notifs: (InteractiveModeNotify | null)[] = [];
 
