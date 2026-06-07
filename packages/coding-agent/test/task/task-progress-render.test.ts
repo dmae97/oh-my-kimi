@@ -47,33 +47,37 @@ describe("task progress rendering", () => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 	});
-	it("uses a static bullet and shimmers only the running subagent name", async () => {
+	it("keeps the subagent label solid and shimmers the running description", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		expect(theme).toBeDefined();
-		// Pin the sweep so the shimmer crest deterministically lands on the name.
-		vi.spyOn(Date, "now").mockReturnValue(683);
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({ id: "CountPackages", description: "List workspace packages" });
 
-		const rawRow = findRow(
-			taskToolRenderer.renderResult(
-				{ content: [{ type: "text", text: "" }], details: detailsFor(progress) },
-				options,
-				theme,
-			),
-			"CountPackages",
-		);
-		const strippedRow = Bun.stripANSI(rawRow);
+		const renderRow = (timeMs: number): string => {
+			vi.spyOn(Date, "now").mockReturnValue(timeMs);
+			return findRow(
+				taskToolRenderer.renderResult(
+					{ content: [{ type: "text", text: "" }], details: detailsFor(progress) },
+					options,
+					theme,
+				),
+				"CountPackages",
+			);
+		};
+
+		const rawRow0 = renderRow(0);
+		const rawRow1 = renderRow(700);
+		const strippedRow = Bun.stripANSI(rawRow0);
 
 		expect(strippedRow).toContain("• CountPackages: List workspace packages");
 		expect(strippedRow).not.toContain(theme.status.running);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
-		// Bold crest only comes from the shimmer palette; the description remains
-		// one solid, non-shimmered run.
-		expect(rawRow).toContain("\x1b[1m");
-		const descriptionIndex = rawRow.indexOf(": List workspace packages");
-		expect(descriptionIndex).toBeGreaterThan(0);
-		expect(rawRow.slice(descriptionIndex)).not.toContain("\x1b[1m");
+		// The label is one solid bold-accent run, identical across shimmer frames.
+		const label = theme.fg("accent", theme.bold("CountPackages"));
+		expect(rawRow0).toContain(label);
+		expect(rawRow1).toContain(label);
+		// The description shimmers, so the row as a whole animates between frames.
+		expect(rawRow0).not.toBe(rawRow1);
 	});
 
 	it("keeps the bullet replacement when shimmer is disabled", async () => {

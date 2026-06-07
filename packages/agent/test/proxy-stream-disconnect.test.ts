@@ -7,8 +7,8 @@
  * event — it must NOT silently complete with default stopReason='stop'.
  */
 import { describe, expect, it } from "bun:test";
-import { streamProxy, ProxyMessageEventStream } from "@oh-my-pi/pi-agent-core/proxy";
 import type { ProxyAssistantMessageEvent } from "@oh-my-pi/pi-agent-core/proxy";
+import { type ProxyMessageEventStream, streamProxy } from "@oh-my-pi/pi-agent-core/proxy";
 import type { AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 
@@ -43,10 +43,7 @@ function buildSseBody(events: ProxyAssistantMessageEvent[]): ReadableStream<Uint
 	});
 }
 
-async function collectEvents(
-	stream: ProxyMessageEventStream,
-	timeoutMs = 2000,
-): Promise<AssistantMessageEvent[]> {
+async function collectEvents(stream: ProxyMessageEventStream, timeoutMs = 2000): Promise<AssistantMessageEvent[]> {
 	const events: AssistantMessageEvent[] = [];
 	const iterator = stream[Symbol.asyncIterator]();
 	const deadline = Date.now() + timeoutMs;
@@ -54,7 +51,10 @@ async function collectEvents(
 	while (Date.now() < deadline) {
 		const { promise: timeoutPromise, resolve: timeoutResolve } =
 			Promise.withResolvers<IteratorResult<AssistantMessageEvent>>();
-		const timer = setTimeout(() => timeoutResolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>), timeoutMs);
+		const timer = setTimeout(
+			() => timeoutResolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>),
+			timeoutMs,
+		);
 		const result = await Promise.race([iterator.next(), timeoutPromise]);
 		clearTimeout(timer);
 		if (result.done) break;
@@ -84,7 +84,7 @@ describe("streamProxy — server disconnect without terminal event", () => {
 			authToken: "test",
 		});
 		const collected = await collectEvents(stream);
-		const errorEvent = collected.find((e) => e.type === "error");
+		const errorEvent = collected.find(e => e.type === "error");
 		expect(errorEvent).toBeDefined();
 		if (errorEvent && errorEvent.type === "error") {
 			expect(errorEvent.reason).toBe("error");
@@ -108,7 +108,7 @@ describe("streamProxy — server disconnect without terminal event", () => {
 
 		// Consume iterator so the internal async function runs
 		const collected = await collectEvents(stream);
-		expect(collected.some((e) => e.type === "error")).toBe(true);
+		expect(collected.some(e => e.type === "error")).toBe(true);
 
 		// stream.result() MUST resolve (not hang) with an error message
 		const result = await stream.result();
@@ -134,7 +134,7 @@ describe("streamProxy — server disconnect without terminal event", () => {
 
 		const collected = await collectEvents(stream);
 		// Should get an error event with reason 'aborted'
-		const errorEvent = collected.find((e) => e.type === "error");
+		const errorEvent = collected.find(e => e.type === "error");
 		expect(errorEvent).toBeDefined();
 		if (errorEvent && errorEvent.type === "error") {
 			expect(errorEvent.reason).toBe("aborted");
@@ -159,7 +159,7 @@ describe("streamProxy — server disconnect without terminal event", () => {
 			signal: abortController.signal,
 		});
 
-		const collected = await collectEvents(stream);
+		await collectEvents(stream);
 		const result = await stream.result();
 		expect(result.stopReason).toBe("aborted");
 		// Custom abort reason must be preserved in errorMessage, not overwritten
@@ -189,7 +189,7 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		});
 
 		const collected = await collectEvents(stream);
-		expect(collected.some((e) => e.type === "done")).toBe(true);
+		expect(collected.some(e => e.type === "done")).toBe(true);
 
 		const result = await stream.result();
 		expect(result.stopReason).toBe("stop");
@@ -218,7 +218,7 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		});
 
 		const collected = await collectEvents(stream);
-		expect(collected.some((e) => e.type === "error")).toBe(true);
+		expect(collected.some(e => e.type === "error")).toBe(true);
 
 		const result = await stream.result();
 		expect(result.stopReason).toBe("error");
