@@ -1279,8 +1279,11 @@ describe("ACP agent", () => {
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 
-		// Attach a fake extensionRunner that exposes two extension commands:
-		// one unique and one whose name collides with an ACP builtin ("fast").
+		// Extension command colliding with a custom TS command; extension wins (dispatch order).
+		(session as unknown as { customCommands: unknown[] }).customCommands = [
+			{ command: { name: "my-ext-cmd", description: "Custom TS version" } },
+		];
+		// Extension runner: unique command + one colliding with an ACP builtin ("fast").
 		(session as unknown as { extensionRunner: unknown }).extensionRunner = {
 			getRegisteredCommands(reserved?: Set<string>) {
 				return [
@@ -1296,24 +1299,19 @@ describe("ACP agent", () => {
 			update =>
 				update.sessionId === created.sessionId && update.update.sessionUpdate === "available_commands_update",
 		);
-		const names = commandUpdates.flatMap(update =>
-			update.update.sessionUpdate === "available_commands_update"
-				? update.update.availableCommands.map(command => command.name)
-				: [],
+		// Flatten all advertised commands from all updates for this session.
+		const allCommands = commandUpdates.flatMap(update =>
+			update.update.sessionUpdate === "available_commands_update" ? update.update.availableCommands : [],
 		);
+		const names = allCommands.map(c => c.name);
 
 		// Extension command must surface.
 		expect(names).toContain("my-ext-cmd");
-		// ACP builtin "fast" must still appear exactly once (not shadowed/duplicated).
+		// Extension wins the name collision: advertised description is the extension's, not the custom TS one.
+		const extCmdEntry = allCommands.find(c => c.name === "my-ext-cmd");
+		expect(extCmdEntry?.description).toBe("Extension command");
+		// ACP builtin "fast" appears exactly once (reserved-set exclusion, no duplicate from extension).
 		expect(names.filter(n => n === "fast").length).toBe(1);
-		// Extension command that collided with the builtin must not add a duplicate.
-		// (The builtin "fast" entry wins via the reserved-set exclusion.)
-		const fastEntries = commandUpdates.flatMap(update =>
-			update.update.sessionUpdate === "available_commands_update"
-				? update.update.availableCommands.filter(c => c.name === "fast")
-				: [],
-		);
-		expect(fastEntries.length).toBe(1);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

@@ -1582,14 +1582,12 @@ export class AcpAgent implements Agent {
 			commands.push(command);
 		};
 
-		// Advertise in the order dispatch resolves them: ACP builtins first
-		// (so core commands like `/model`, `/mcp`, `/todo` cannot be shadowed),
-		// then skills, then custom/user (TypeScript) commands, then
-		// extension-registered commands, then file-based slash commands.
-		// `appendCommand` dedupes by name so earlier entries win; skills and
-		// custom TS commands intentionally shadow extension commands of the
-		// same name (unlike interactive mode, which inserts extension commands
-		// before customs/skills).
+		// Advertise in the order dispatch resolves them (mirrors AgentSession
+		// dispatch: builtins → skills → extensions → custom TS → file-based).
+		// `appendCommand` dedupes by name so earlier entries win; extension
+		// commands therefore correctly shadow custom TS commands of the same
+		// name, matching the runtime behaviour of #tryExecuteExtensionCommand
+		// running before #tryExecuteCustomCommand.
 		for (const command of ACP_BUILTIN_SLASH_COMMANDS) {
 			appendCommand(command);
 		}
@@ -1604,19 +1602,19 @@ export class AcpAgent implements Agent {
 			}
 		}
 
-		for (const command of session.customCommands) {
-			appendCommand({
-				name: command.command.name,
-				description: command.command.description,
-				input: { hint: "arguments" },
-			});
-		}
-
 		const acpBuiltinNames = new Set(ACP_BUILTIN_SLASH_COMMANDS.map(c => c.name));
 		for (const command of session.extensionRunner?.getRegisteredCommands(acpBuiltinNames) ?? []) {
 			appendCommand({
 				name: command.name,
 				description: command.description ?? "(extension command)",
+				input: { hint: "arguments" },
+			});
+		}
+
+		for (const command of session.customCommands) {
+			appendCommand({
+				name: command.command.name,
+				description: command.command.description,
 				input: { hint: "arguments" },
 			});
 		}
