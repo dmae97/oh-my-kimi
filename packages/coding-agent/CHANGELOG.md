@@ -13,6 +13,10 @@
 
 - Fixed Anthropic empty `toolUse` stops without tool calls corrupting session history by retrying them and removing orphaned turns even at the retry cap.
 
+### Fixed
+
+- Fixed MCP tools hanging in non-yolo modes by declaring `approval = "write"` on `MCPTool` and `DeferredMCPTool`, and propagating the `approval` property through `customToolToDefinition()` in `sdk.ts`
+
 ## [15.10.1] - 2026-06-07
 
 ### Added
