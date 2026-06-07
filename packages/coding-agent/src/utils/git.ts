@@ -629,7 +629,10 @@ async function resolveHeadStateReftable(repository: GitRepository, signal?: Abor
 		return null;
 	});
 	throwIfAborted(signal);
-	const revResult = await git(repository.repoRoot, ["rev-parse", "HEAD"], { readOnly: true, signal }).catch(err => {
+	const revResult = await git(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], {
+		readOnly: true,
+		signal,
+	}).catch(err => {
 		if (signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))) {
 			throw err;
 		}
@@ -668,7 +671,7 @@ function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState |
 		windowsHide: true,
 	});
 
-	const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "HEAD"]));
+	const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", "HEAD"]));
 	const revResult = Bun.spawnSync(["git", ...revArgs], {
 		cwd: repository.repoRoot,
 		stdout: "pipe",
