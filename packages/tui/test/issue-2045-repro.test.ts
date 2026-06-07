@@ -64,7 +64,7 @@ async function settle(): Promise<void> {
 }
 
 describe("issue #2045: renderer bounds oversized rows", () => {
-	it("clips pathological zero-width ANSI rows before building terminal writes", async () => {
+	it("preserves visible text after pathological zero-width ANSI prefixes", async () => {
 		const term = new CaptureTerminal(80, 4);
 		const tui = new TUI(term);
 		const line = `${"\x1b[31m".repeat(20_000)}payload`;
@@ -77,7 +77,26 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 			tui.stop();
 		}
 
-		const renderedBytes = term.writes.join("").length;
-		expect(renderedBytes).toBeLessThan(12_000);
+		const rendered = term.writes.join("");
+		expect(rendered).toContain("payload");
+		expect(rendered.length).toBeLessThan(12_000);
+	});
+
+	it("preserves visible text after oversized OSC hyperlink prefixes", async () => {
+		const term = new CaptureTerminal(80, 4);
+		const tui = new TUI(term);
+		const line = `\x1b]8;;https://example.com/${"a".repeat(70_000)}\x07link-label\x1b]8;;\x07`;
+
+		tui.addChild(new RawLinesComponent([line]));
+		try {
+			tui.start();
+			await settle();
+		} finally {
+			tui.stop();
+		}
+
+		const rendered = term.writes.join("");
+		expect(rendered).toContain("link-label");
+		expect(rendered.length).toBeLessThan(12_000);
 	});
 });
