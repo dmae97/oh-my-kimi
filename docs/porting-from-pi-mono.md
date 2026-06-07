@@ -47,6 +47,9 @@ Upstream uses different package scopes. Replace them consistently.
   - `@mariozechner/pi-agent-core` → `@oh-my-pi/pi-agent-core`
   - `@mariozechner/pi-tui` → `@oh-my-pi/pi-tui`
   - `@mariozechner/pi-ai` → `@oh-my-pi/pi-ai`
+  - `@mariozechner/pi-utils` → `@oh-my-pi/pi-utils`
+- Some upstream packages publish under the `@earendil-works/*` scope instead of `@mariozechner/*`. Map it the same way (`@earendil-works/pi-coding-agent` → `@oh-my-pi/pi-coding-agent`, and so on).
+- The bare `typebox` package is not an `@oh-my-pi/*` scope; do not rewrite it as one. See the Extensions divergence in section 15 for how tool-parameter schemas map.
 
 ## 4) Use Bun APIs where they improve on Node
 
@@ -353,10 +356,13 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 
 ### Extensions
 
-| Upstream                      | Our Fork                                          |
-| ----------------------------- | ------------------------------------------------- |
-| `jiti` for TypeScript loading | Native Bun `import()`                             |
-| `pkg.pi` manifest field       | `pkg.omp` preferred; fallback to `pkg.pi` remains |
+| Upstream                                                         | Our Fork                                                                                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `jiti` for TypeScript loading                                    | Native Bun `import()`                                                                              |
+| `pkg.pi` manifest field                                          | `pkg.omp` preferred; fallback to `pkg.pi` remains                                                  |
+| `StringEnum` from `pi-ai`                                        | `Type.Enum` from the `pi.typebox` shim (or author the schema with `pi.zod`); `pi-ai` no longer exports `StringEnum` |
+| `formatSize` from `pi-coding-agent`                              | `formatBytes` from `@oh-my-pi/pi-utils`                                                            |
+| `DefaultResourceLoader` / `DefaultPackageManager` / `SettingsManager` / `createEventBus` | Capability-based discovery (`loadCapability(...)`) plus the `Settings` singleton and `EventBus` |
 
 ### Skip These Upstream Features
 
