@@ -359,6 +359,10 @@
 - Fixed `lsp request` error path swallowing the params that were sent, making shape/coercion bugs on raw LSP calls impossible to diagnose in one round-trip; the error now echoes a truncated copy of the request params.
 - Fixed `find` with a single-star segment like `dir/*` recursing into subdirectories and returning nested matches. `parseFindPattern` already prepends `**/` for top-level globs (`*.ts` → `**/*.ts`), so anything reaching native without `**/` was deliberately scoped by the user; `recursive: false` is now passed to `natives.glob` to honor that scope.
 
+### Fixed
+
+- Fixed `enabledModels` being ignored by the ACP model picker (Zed and other ACP clients) — `AgentSession.getAvailableModels()` now applies the configured allow-list, so only the models listed in `enabledModels` appear in the UI. Also applies consistently to the RPC `get_available_models` endpoint and the `/model` slash command.
+
 ## [15.10.1] - 2026-06-07
 
 ### Added

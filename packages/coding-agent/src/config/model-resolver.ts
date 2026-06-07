@@ -1060,19 +1060,25 @@ export async function resolveAllowedModels(
 
 /**
  * Synchronous subset of {@link resolveAllowedModels} for contexts where async is unavailable
- * (e.g. the ACP model-list advertisement). Handles the patterns that cover real-world configs:
+ * (e.g. `getAvailableModels()` which is called from the ACP model-list advertisement, RPC
+ * `get_available_models`, and the `/model` slash command). Handles the patterns that cover
+ * real-world configs:
  *
  * - Exact `provider/modelId` selectors
  * - Canonical ids (expanded via `getCanonicalVariants`)
  * - Bare model ids (matched across all available providers)
- * - Optional `:thinkingLevel` suffix on any of the above is stripped before matching
+ * - Optional `:thinkingLevel` suffix validated via `parseThinkingLevel` before stripping,
+ *   so colon-bearing OpenRouter ids (e.g. `openrouter/qwen/qwen3-coder:exacto`) are preserved
  *
- * Glob patterns (`*`, `?`, `[`) require async resolution; when any pattern contains a glob
- * the full unfiltered list is returned so the UI is never accidentally empty.
+ * Glob patterns (`*`, `?`, `[`) require the async `resolveModelScope` path; they are skipped
+ * here with a warning. When ALL patterns are globs (none can be evaluated synchronously) the
+ * full available list is returned so the UI is never accidentally empty. Mixed glob + exact
+ * patterns apply only the exact ones.
  *
- * Returns the unfiltered list when no pattern resolves to any model, mirroring the
- * "no usable model" guard in {@link resolveAllowedModels} but leaning toward showing
- * more rather than nothing in a UI context.
+ * When no pattern resolves to any model (misconfiguration / typo) an empty list is returned,
+ * consistent with the empty-list contract of {@link resolveAllowedModels}. Callers that render
+ * a UI picker should treat an empty list as "hide the picker entry", matching how the SDK
+ * surfaces the same misconfiguration during session initialization.
  */
 export function filterAvailableModelsByEnabledPatterns(
 	available: Model<Api>[],
@@ -1082,16 +1088,26 @@ export function filterAvailableModelsByEnabledPatterns(
 	if (patterns.length === 0) return available;
 
 	const allowed = new Set<string>();
+	let allGlobs = true;
 	for (const pattern of patterns) {
-		// Glob patterns need the async resolveModelScope path; return all rather than
-		// accidentally hiding models.
+		// Glob patterns need the async resolveModelScope path; skip them here and warn.
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
-			return available;
+			logger.warn(
+				"filterAvailableModelsByEnabledPatterns: glob pattern skipped in sync context (use exact provider/modelId or canonical ids in enabledModels for ACP model filtering)",
+				{ pattern },
+			);
+			continue;
 		}
+		allGlobs = false;
 
-		// Strip optional thinking-level suffix (e.g. "claude-sonnet-4-6:high").
+		// Strip a `:thinkingLevel` suffix only when the part after the last colon is a
+		// recognised thinking level. This preserves colon-bearing OpenRouter ids such as
+		// `openrouter/qwen/qwen3-coder:exacto` where the suffix is NOT a thinking level.
 		const colonIdx = pattern.lastIndexOf(":");
-		const basePattern = colonIdx !== -1 ? pattern.slice(0, colonIdx) : pattern;
+		const basePattern =
+			colonIdx !== -1 && parseThinkingLevel(pattern.slice(colonIdx + 1))
+				? pattern.slice(0, colonIdx)
+				: pattern;
 
 		// Explicit provider/modelId — resolve directly via the existing reference matcher.
 		if (basePattern.includes("/")) {
@@ -1119,10 +1135,13 @@ export function filterAvailableModelsByEnabledPatterns(
 		}
 	}
 
-	if (allowed.size === 0) return available;
-	return available.filter(m => allowed.has(`${m.provider}/${m.id}`));
-}
+	// All patterns were globs — fall back to the full list since we cannot evaluate them.
+	if (allGlobs) return available;
 
+	// Empty allowed set means every non-glob pattern failed to resolve (misconfiguration).
+	// Return [] consistent with resolveAllowedModels so callers can surface the problem.
+	return allowed.size === 0 ? [] : available.filter(m => allowed.has(`${m.provider}/${m.id}`));
+}
 
 export interface ResolveCliModelResult {
 	model: Model<Api> | undefined;

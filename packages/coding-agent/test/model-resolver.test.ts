@@ -1049,20 +1049,41 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result[0].id).toBe("claude-sonnet-4-5");
 	});
 
-	test("strips thinking-level suffix before matching", () => {
+	test("strips :thinkingLevel suffix before matching", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/claude-sonnet-4-5:high"], registry);
 		expect(result).toHaveLength(1);
 		expect(result[0].id).toBe("claude-sonnet-4-5");
 	});
 
-	test("returns all models when a glob pattern is present", () => {
+	test("preserves colon-bearing OpenRouter ids (suffix is not a thinking level)", () => {
+		const openRouterModels = mockOpenRouterModels as Model[];
+		const result = filterAvailableModelsByEnabledPatterns(
+			openRouterModels,
+			["openrouter/qwen/qwen3-coder:exacto"],
+			registry,
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
+	});
+
+	test("returns all models when ALL patterns are globs (cannot evaluate)", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*"], registry);
 		expect(result).toEqual(models);
 	});
 
-	test("returns all models when no pattern matches (rather than empty)", () => {
+	test("applies exact patterns when mixed with globs", () => {
+		const result = filterAvailableModelsByEnabledPatterns(
+			models,
+			["anthropic/*", "openai/gpt-4o"],
+			registry,
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("gpt-4o");
+	});
+
+	test("returns empty list when no pattern matches (misconfiguration)", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["nonexistent-model"], registry);
-		expect(result).toEqual(models);
+		expect(result).toHaveLength(0);
 	});
 
 	test("includes multiple patterns from different providers", () => {
