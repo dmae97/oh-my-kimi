@@ -2515,7 +2515,81 @@ export class TUI extends Container {
 		);
 		if (raw.length <= maxSourceLength) return raw;
 
-		return truncateToWidth(raw, safeWidth, Ellipsis.Omit) + SEGMENT_RESET;
+		let output = "";
+		let cells = 0;
+		for (let i = 0; i < raw.length && cells < safeWidth; ) {
+			if (raw.charCodeAt(i) === 0x1b) {
+				const end = this.#ansiSequenceEnd(raw, i);
+				if (end < 0) break;
+				if (this.#ansiSequenceHasVisiblePayload(raw, i)) {
+					const sequence = raw.slice(i, end);
+					if (output.length + sequence.length <= maxSourceLength) {
+						output += sequence;
+						cells += visibleWidth(sequence);
+					}
+				}
+				i = end;
+				continue;
+			}
+
+			const code = raw.charCodeAt(i);
+			const next = code >= 0xd800 && code <= 0xdbff && i + 1 < raw.length ? i + 2 : i + 1;
+			const char = raw.slice(i, next);
+			const charWidth = visibleWidth(char);
+			if (charWidth > 0 && cells + charWidth > safeWidth) break;
+			if (output.length + char.length > maxSourceLength) {
+				if (charWidth > 0) break;
+				i = next;
+				continue;
+			}
+			if (charWidth === 0) {
+				const remainingVisibleCells = safeWidth - cells;
+				const reservedCodeUnits = remainingVisibleCells * 2;
+				if (output.length + char.length > maxSourceLength - reservedCodeUnits) {
+					i = next;
+					continue;
+				}
+			}
+			output += char;
+			cells += charWidth;
+			i = next;
+		}
+
+		return output + SEGMENT_RESET;
+	}
+
+	#ansiSequenceEnd(line: string, start: number): number {
+		const next = line.charCodeAt(start + 1);
+		if (next === 0x5b) {
+			let i = start + 2;
+			while (i < line.length) {
+				const final = line.charCodeAt(i);
+				if (final >= 0x40 && final <= 0x7e) return i + 1;
+				i++;
+			}
+			return -1;
+		}
+		if (next === 0x5d) {
+			let i = start + 2;
+			while (i < line.length) {
+				const osc = line.charCodeAt(i);
+				if (osc === 0x07) return i + 1;
+				if (osc === 0x1b && line.charCodeAt(i + 1) === 0x5c) return i + 2;
+				i++;
+			}
+			return -1;
+		}
+		return start + 2 <= line.length ? start + 2 : -1;
+	}
+
+	#ansiSequenceHasVisiblePayload(line: string, start: number): boolean {
+		// OSC 66 (`\x1b]66;META;TEXT\x1b\\`) carries visible cells inside the payload.
+		return (
+			line.charCodeAt(start + 1) === 0x5d &&
+			line.charCodeAt(start + 2) === 0x36 &&
+			line.charCodeAt(start + 3) === 0x36 &&
+			line.charCodeAt(start + 4) === 0x3b
+		);
 	}
 
 	#ansiAsciiLineWidth(line: string, maxWidth: number): number | undefined {
