@@ -1,11 +1,10 @@
+# Changelog
 ## [Unreleased]
 
 ### Added
 
 - Added support for `impersonated_service_account` Application Default Credentials (ADC) in Vertex AI to enable chained impersonation without failing via 401 `invalid_client`.
-# Changelog
 
-## [Unreleased]
 
 ## [15.10.1] - 2026-06-07
 
