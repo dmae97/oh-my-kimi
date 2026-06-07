@@ -1,7 +1,7 @@
-import { type Component, padding, Text, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, padding, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
-import { renderStatusLine } from "../tui";
+import { framedBlock, renderStatusLine } from "../tui";
 import type {
 	GhRunWatchFailedLogDetails,
 	GhRunWatchJobDetails,
@@ -239,7 +239,7 @@ function renderFailedLogs(
 		return [];
 	}
 
-	const lines = ["", theme.fg("error", "failed logs")];
+	const lines: string[] = [];
 	for (const entry of failedLogs) {
 		const context = entry.workflowName ? `${entry.workflowName}  #${entry.runId}` : `run #${entry.runId}`;
 		lines.push(
@@ -268,36 +268,45 @@ function renderFailedLogs(
 	return lines;
 }
 
-function buildWatchLines(
+function buildWatchSections(
 	watch: GhRunWatchViewDetails,
 	theme: Theme,
 	options: RenderResultOptions,
 	width: number,
-): string[] {
-	const lines = [theme.fg("muted", getWatchHeader(watch))];
+): Array<{ label?: string; lines: string[] }> {
+	const main: string[] = [];
 
 	if (watch.note) {
-		lines.push(theme.fg("dim", replaceTabs(watch.note)));
+		main.push(theme.fg("dim", replaceTabs(watch.note)));
 	}
 
 	if (watch.mode === "run" && watch.run) {
-		lines.push(...renderRunBlock(watch.run, width, theme));
+		main.push(...renderRunBlock(watch.run, width, theme));
 	} else if (watch.mode === "commit") {
 		const runs = watch.runs ?? [];
 		if (runs.length === 0) {
-			lines.push(theme.fg("dim", "waiting for workflow runs..."));
+			main.push(theme.fg("dim", "waiting for workflow runs..."));
 		} else {
 			runs.forEach((run, index) => {
 				if (index > 0) {
-					lines.push("");
+					main.push("");
 				}
-				lines.push(...renderRunBlock(run, width, theme));
+				main.push(...renderRunBlock(run, width, theme));
 			});
 		}
 	}
 
-	lines.push(...renderFailedLogs(watch.failedLogs ?? [], width, theme, options.expanded));
-	return lines;
+	const sections: Array<{ label?: string; lines: string[] }> = [];
+	if (main.length > 0) {
+		sections.push({ lines: main });
+	}
+
+	const failed = renderFailedLogs(watch.failedLogs ?? [], width, theme, options.expanded);
+	if (failed.length > 0) {
+		sections.push({ label: "failed logs", lines: failed });
+	}
+
+	return sections;
 }
 
 function extractText(content: Array<{ type: string; text?: string }>): string {
@@ -335,29 +344,44 @@ function renderFallbackComponent(
 	}
 
 	const allLines = replaceTabs(text).split("\n");
+	while (allLines.length > 0 && allLines[0].trim() === "") allLines.shift();
+	while (allLines.length > 0 && allLines[allLines.length - 1].trim() === "") allLines.pop();
 
-	return {
-		render(width: number): string[] {
-			const lineWidth = Math.max(24, width || FALLBACK_WIDTH);
-			const expanded = options.expanded;
-			const limit = expanded ? allLines.length : Math.min(allLines.length, PREVIEW_LIMITS.OUTPUT_EXPANDED);
-			const visible = allLines.slice(0, limit);
-			const remaining = allLines.length - visible.length;
+	// Trivial one-line *success* result: a clean status line beats an almost-empty box.
+	// Errors always frame so the message reads as a structured block, never a raw red wrap.
+	if (allLines.length <= 1 && !isError) {
+		const body = allLines[0];
+		if (!body) return new Text(header, 0, 0);
+		const colored = isError ? theme.fg("error", body) : theme.fg("toolOutput", body);
+		return new Text(`${header}\n${colored}`, 0, 0);
+	}
 
-			const out: string[] = [header];
-			for (const line of visible) {
-				const colored = isError ? theme.fg("error", line) : theme.fg("toolOutput", line);
-				out.push(truncateVisualWidth(colored, lineWidth));
-			}
-			if (!expanded && remaining > 0) {
-				const hint = formatExpandHint(theme, expanded, true);
-				const more = `${formatMoreItems(remaining, "line")}${hint ? ` ${hint}` : ""}`;
-				out.push(theme.fg("dim", more));
-			}
-			return out.map(line => truncateToWidth(line, lineWidth));
-		},
-		invalidate() {},
-	};
+	return framedBlock(theme, width => {
+		const lineWidth = Math.max(1, (width || FALLBACK_WIDTH) - 3);
+		const expanded = options.expanded;
+		const limit = expanded ? allLines.length : Math.min(allLines.length, PREVIEW_LIMITS.OUTPUT_EXPANDED);
+		const visible = allLines.slice(0, limit);
+		const remaining = allLines.length - visible.length;
+
+		const out: string[] = [];
+		for (const line of visible) {
+			const colored = isError ? theme.fg("error", line) : theme.fg("toolOutput", line);
+			out.push(truncateVisualWidth(colored, lineWidth));
+		}
+		if (!expanded && remaining > 0) {
+			const hint = formatExpandHint(theme, expanded, true);
+			const more = `${formatMoreItems(remaining, "line")}${hint ? ` ${hint}` : ""}`;
+			out.push(theme.fg("dim", more));
+		}
+		return {
+			header,
+			sections: out.length > 0 ? [{ lines: out }] : [],
+			state: isError ? "error" : "success",
+			borderColor: isError ? "error" : "borderMuted",
+			applyBg: false,
+			width,
+		};
+	});
 }
 
 function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOptions, theme: Theme): Component {
@@ -380,7 +404,7 @@ function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOption
 	}
 
 	const header = `${icon} ${titleText}  ${metaText}`;
-	const wait = theme.fg("dim", "  waiting for workflow data...");
+	const wait = theme.fg("dim", "waiting for workflow data...");
 	return new Text(`${header}\n${wait}`, 0, 0);
 }
 
@@ -412,13 +436,28 @@ export const githubToolRenderer = {
 	): Component {
 		const watch = result.details?.watch;
 		if (watch) {
-			return {
-				render(width: number): string[] {
-					const lineWidth = Math.max(24, width || FALLBACK_WIDTH);
-					return buildWatchLines(watch, uiTheme, options, lineWidth).map(line => truncateToWidth(line, lineWidth));
+			const isError = result.isError === true;
+			const header = renderStatusLine(
+				{
+					icon: isError ? "error" : "success",
+					title: "GitHub Run Watch",
+					titleColor: isError ? "error" : "accent",
+					meta: [getWatchHeader(watch)],
 				},
-				invalidate() {},
-			};
+				uiTheme,
+			);
+			return framedBlock(uiTheme, width => {
+				const innerWidth = Math.max(1, (width || FALLBACK_WIDTH) - 3);
+				const sections = buildWatchSections(watch, uiTheme, options, innerWidth);
+				return {
+					header,
+					sections,
+					state: isError ? "error" : "success",
+					borderColor: isError ? "error" : "borderMuted",
+					applyBg: false,
+					width,
+				};
+			});
 		}
 
 		return renderFallbackComponent(result, options, uiTheme, args ?? {});

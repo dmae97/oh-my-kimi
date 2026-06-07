@@ -29,6 +29,9 @@ function createRegistry(model: Model<Api>) {
 	return {
 		getAvailable: () => [model],
 		getApiKey: async () => "test-key",
+		getApiKeyForProvider: async () => "test-key",
+		authStorage: { rotateSessionCredential: async () => false },
+		resolver: () => async () => "test-key",
 	} as never;
 }
 

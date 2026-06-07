@@ -154,7 +154,12 @@ fn try_strip_head_tail(
 	// span under-reports when its suffix contains unlocated `IoRedirect`s
 	// (e.g. the synthetic `2>&1` inserted by `|&`).
 	let bytes = cmd.as_bytes();
-	let last_start = last_loc.start.index;
+	let Some(last_start) = byte_offset(cmd, last_loc.start.index) else {
+		return default;
+	};
+	let Some(last_end) = byte_offset(cmd, last_loc.end.index) else {
+		return default;
+	};
 	let Some(head) = cmd.get(..last_start) else {
 		return default;
 	};
@@ -172,7 +177,7 @@ fn try_strip_head_tail(
 	// Reported text starts at the pipe and is right-trimmed. The deletion
 	// range walks back through any leading whitespace so the rewrite is
 	// contiguous.
-	let stripped_text = cmd[pipe_pos..last_loc.end.index].trim_end().to_owned();
+	let stripped_text = cmd[pipe_pos..last_end].trim_end().to_owned();
 	if stripped_text.is_empty() {
 		return default;
 	}
@@ -180,7 +185,7 @@ fn try_strip_head_tail(
 	while delete_start > 0 && matches!(bytes[delete_start - 1], b' ' | b'\t') {
 		delete_start -= 1;
 	}
-	ranges.push((delete_start, last_loc.end.index));
+	ranges.push((delete_start, last_end));
 	stripped.push(stripped_text);
 	HeadTailOutcome { stripped: true, last_idx: n - 2 }
 }
@@ -253,10 +258,14 @@ fn try_strip_2to1(
 	let Some(name_loc) = name_word.loc.as_ref() else {
 		return;
 	};
-	let mut anchor = name_loc.end.index;
+	let Some(mut anchor) = byte_offset(cmd, name_loc.end.index) else {
+		return;
+	};
 	for item in &suffix.0 {
-		if let Some(loc) = item.location() {
-			anchor = anchor.max(loc.end.index);
+		if let Some(loc) = item.location()
+			&& let Some(end) = byte_offset(cmd, loc.end.index)
+		{
+			anchor = anchor.max(end);
 		}
 	}
 	let bytes = cmd.as_bytes();
@@ -281,6 +290,28 @@ fn try_strip_2to1(
 	}
 	ranges.push((delete_start, pos + 4));
 	stripped.push("2>&1".to_owned());
+}
+
+/// Translate a `brush-parser` source-position index into a byte offset in
+/// `cmd`. The parser counts positions in Unicode scalars (one increment per
+/// `char`; see `tokenizer::next_char`), but we slice `cmd` — a `&str` — by
+/// byte index, so the two diverge as soon as the command contains any
+/// multi-byte UTF-8 (e.g. a `✓`/`×` literal inside a `grep` pattern). Without
+/// this conversion the head/tail and `2>&1` strips cut at the wrong place,
+/// corrupting the command (notably orphaning a closing quote).
+///
+/// Returns `None` only when `char_idx` is past the end of the input. The
+/// end-of-input position (`char_idx == cmd.chars().count()`) maps to
+/// `cmd.len()`.
+fn byte_offset(cmd: &str, char_idx: usize) -> Option<usize> {
+	let mut count = 0usize;
+	for (byte, _) in cmd.char_indices() {
+		if count == char_idx {
+			return Some(byte);
+		}
+		count += 1;
+	}
+	(count == char_idx).then_some(cmd.len())
 }
 
 fn is_stderr_to_stdout(io: &IoRedirect) -> bool {
@@ -378,6 +409,45 @@ mod tests {
 			assert_eq!(cmd, *want_cmd, "input: {input:?}");
 			assert_eq!(stripped, *want_stripped, "input: {input:?}");
 		}
+	}
+
+	#[test]
+	fn strips_with_multibyte_content() {
+		// brush-parser reports char-indexed positions; multi-byte UTF-8 before
+		// the trailing `| tail` must not shift the byte-level cut. Regression
+		// for a corrupted command that orphaned the grep pattern's closing
+		// quote (`… |✓|×-80`) and broke later re-parsing.
+		let cases: &[(&str, &str, &[&str])] = &[
+			// Mirrors the real bug: `2>&1` sits mid-pipeline (grep becomes the
+			// effective tail) so only `| tail -80` is stripped, leaving the
+			// quoted grep pattern intact.
+			(
+				"xcodebuild 2>&1 | grep -E \"a|✓|×|b\" | tail -80",
+				"xcodebuild 2>&1 | grep -E \"a|✓|×|b\"",
+				&["| tail -80"],
+			),
+			("echo ✓ | head -3", "echo ✓", &["| head -3"]),
+			("printf '日本語' | tail -n 5", "printf '日本語'", &["| tail -n 5"]),
+		];
+		for (input, want_cmd, want_stripped) in cases {
+			let (cmd, stripped) = run(input);
+			assert_eq!(cmd, *want_cmd, "input: {input:?}");
+			assert_eq!(stripped, *want_stripped, "input: {input:?}");
+			// The rewrite must remain valid shell (no orphaned quote).
+			let options = ParserOptions::default();
+			let source_info = SourceInfo::default();
+			let mut reader = BufReader::new(cmd.as_bytes());
+			let mut parser = Parser::new(&mut reader, &options, &source_info);
+			assert!(parser.parse_program().is_ok(), "rewrite not re-parseable: {cmd:?}");
+		}
+	}
+
+	#[test]
+	fn strips_2to1_after_multibyte() {
+		// Multi-byte before a trailing `2>&1` must not misplace the strip.
+		let (cmd, stripped) = run("echo ✓ × 2>&1");
+		assert_eq!(cmd, "echo ✓ ×");
+		assert_eq!(stripped, vec!["2>&1"]);
 	}
 
 	#[test]

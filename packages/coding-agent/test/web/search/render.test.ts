@@ -75,13 +75,25 @@ describe("renderSearchResult", () => {
 		expect(answer).not.toMatch(/more line/);
 	});
 
-	it("truncates the answer with a summary when collapsed", async () => {
+	it("shows the full answer when collapsed by default", async () => {
 		const uiTheme = (await getThemeByName("dark"))!;
 		const component = renderSearchResult(buildResult(ANSWER), { expanded: false, isPartial: false }, uiTheme, {
 			query: "test query",
 		});
 		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
-		// Collapsed view caps the answer and signals how many lines were hidden.
+		// TUI collapsed view keeps the answer intact; only explicit compact mode caps it.
+		expect(answer).toContain("FINAL_UNIQUE_MARKER");
+		expect(answer).not.toMatch(/more line/);
+	});
+
+	it("truncates the answer only when compact mode provides maxAnswerLines", async () => {
+		const uiTheme = (await getThemeByName("dark"))!;
+		const component = renderSearchResult(buildResult(ANSWER), { expanded: false, isPartial: false }, uiTheme, {
+			query: "test query",
+			maxAnswerLines: 3,
+		});
+		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
+
 		expect(answer).toMatch(/more line/);
 		expect(answer).not.toContain("FINAL_UNIQUE_MARKER");
 	});

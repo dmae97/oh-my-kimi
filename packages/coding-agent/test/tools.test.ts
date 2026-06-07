@@ -16,6 +16,7 @@ import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { DEFAULT_FILE_LIMIT, MULTI_FILE_PER_FILE_MATCHES, SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import * as toolTimeouts from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
 import { unzipSync } from "fflate";
@@ -1164,7 +1165,7 @@ function b() {
 			const updates: string[] = [];
 			const result = await bashTool.execute(
 				"test-call-8-stream",
-				{ command: "for i in 1 2 3; do echo $i; sleep 0.2; done" },
+				{ command: "for i in 1 2 3; do echo $i; sleep 0.1; done" },
 				undefined,
 				update => {
 					const text = update.content?.find(c => c.type === "text")?.text ?? "";
@@ -1310,13 +1311,19 @@ function b() {
 					),
 				),
 			);
+			// Drive the effective timeout via the production clamp seam so the
+			// backgrounded job times out in ~0.5s instead of a real wall-clock
+			// second. 0.5s still renders as "1 seconds" in the executor message
+			// (Math.round), so that delivery assertion is unchanged; the
+			// auto-background-on-timeout decision path is identical.
+			vi.spyOn(toolTimeouts, "clampTimeout").mockReturnValue(0.5);
 
 			const result = await autoBackgroundBashTool.execute("test-call-9-auto-timeout-background", {
 				command: "printf 'start\\n'; sleep 1.2; printf 'done\\n'",
 				timeout: 1,
 			});
 
-			expect(result.details?.timeoutSeconds).toBe(1);
+			expect(result.details?.timeoutSeconds).toBe(0.5);
 			expect(result.details?.async?.state).toBe("running");
 			expect(getTextOutput(result)).toContain("Background job");
 			const jobId = result.details?.async?.jobId;
@@ -1344,6 +1351,9 @@ function b() {
 		});
 
 		it("should respect timeout", async () => {
+			// Reduce the effective timeout through the production clamp seam; the
+			// real subprocess kill-on-timeout path is still exercised, just faster.
+			vi.spyOn(toolTimeouts, "clampTimeout").mockReturnValue(0.1);
 			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
 				/timed out/i,
 			);
@@ -1351,10 +1361,19 @@ function b() {
 
 		it("should abort and recover for subsequent commands", async () => {
 			const controller = new AbortController();
-			const promise = bashTool.execute("test-call-10-abort", { command: "sleep 60" }, controller.signal);
-			// Give the native shell a beat to enter `sleep`; do not depend on chunk
-			// delivery timing, which is flaky on loaded CI runners.
-			await Bun.sleep(100);
+			const started = Promise.withResolvers<void>();
+			const promise = bashTool.execute(
+				"test-call-10-abort",
+				{ command: "echo READY; sleep 60" },
+				controller.signal,
+				update => {
+					const text = update.content?.find(c => c.type === "text")?.text ?? "";
+					if (text.includes("READY")) started.resolve();
+				},
+			);
+			// Abort as soon as the command has emitted output (proving the shell is
+			// live), instead of blindly waiting a fixed beat for it to enter `sleep`.
+			await started.promise;
 			controller.abort("test abort");
 			await expect(promise).rejects.toThrow(/abort|cancel|timed out/i);
 

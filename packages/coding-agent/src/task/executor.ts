@@ -34,7 +34,11 @@ import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
-import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
+import {
+	buildOutputValidator,
+	type OutputValidator,
+	summarizeValidationFailure,
+} from "../tools/output-schema-validator";
 
 import { type ReportFindingDetails, toReviewFinding } from "../tools/review";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -166,6 +170,13 @@ export interface ExecutorOptions {
 	outputSchema?: unknown;
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
+	/**
+	 * Override the `task.maxRuntimeMs` wall-clock cap for this run. When provided
+	 * it wins over the settings value; `0` disables the per-subagent wall-clock
+	 * limit entirely. Used by the eval `agent()` bridge, whose parent cell
+	 * watchdog is already suspended for the call's duration.
+	 */
+	maxRuntimeMs?: number;
 	enableLsp?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
@@ -249,21 +260,40 @@ function extractCompletionData(parsed: unknown): unknown {
 	return parsed;
 }
 
-function normalizeCompleteData(data: unknown, reportFindings?: ReviewFinding[]): unknown {
-	let normalized = parseStringifiedJson(data ?? null);
+/**
+ * Resolve the final yielded payload, optionally splicing collected
+ * `report_finding` entries into a top-level `findings` array.
+ *
+ * Injection is suppressed when an active validator would reject the augmented
+ * payload (e.g. a caller-supplied schema with `additionalProperties: false`
+ * that does not declare `findings`). That keeps the in-tool yield validator
+ * (which only sees the raw, pre-injection data) in lockstep with this
+ * post-mortem validator — honoring the "accepted in-tool ⇒ accepted
+ * post-mortem" guarantee documented in `output-schema-validator.ts`. The
+ * dropped findings are still preserved verbatim in the agent's progress
+ * stream and JSONL artifact, so no information is lost when injection is
+ * suppressed.
+ */
+function normalizeCompleteData(
+	data: unknown,
+	reportFindings: ReviewFinding[] | undefined,
+	validator: OutputValidator | undefined,
+): unknown {
+	const normalized = parseStringifiedJson(data ?? null);
 	if (
-		Array.isArray(reportFindings) &&
-		reportFindings.length > 0 &&
-		normalized &&
-		typeof normalized === "object" &&
-		!Array.isArray(normalized)
+		!Array.isArray(reportFindings) ||
+		reportFindings.length === 0 ||
+		!normalized ||
+		typeof normalized !== "object" ||
+		Array.isArray(normalized)
 	) {
-		const record = normalized as Record<string, unknown>;
-		if (!("findings" in record)) {
-			normalized = { ...record, findings: reportFindings };
-		}
+		return normalized;
 	}
-	return normalized;
+	const record = normalized as Record<string, unknown>;
+	if ("findings" in record) return normalized;
+	const injected = { ...record, findings: reportFindings };
+	if (validator && !validator.validate(injected).success) return normalized;
+	return injected;
 }
 
 function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { data: unknown } | null {
@@ -353,13 +383,13 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			if (submitData === null || submitData === undefined) {
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
-				const completeData = normalizeCompleteData(submitData, reportFindings);
 				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
 				if (schemaError) {
 					rawOutput = `{"error":"schema_violation","message":"invalid output schema: ${schemaError.replace(/"/g, '\\"')}"}`;
 					stderr = `schema_violation: invalid output schema: ${schemaError}`;
 					exitCode = 1;
 				} else {
+					const completeData = normalizeCompleteData(submitData, reportFindings, validator);
 					const result = validator?.validate(completeData) ?? { success: true as const };
 					if (!result.success) {
 						const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
@@ -386,8 +416,8 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
 		if (fallback) {
-			const completeData = normalizeCompleteData(fallback.data, reportFindings);
 			const { validator } = buildOutputValidator(outputSchema);
+			const completeData = normalizeCompleteData(fallback.data, reportFindings, validator);
 			const result = validator?.validate(completeData) ?? { success: true as const };
 			if (!result.success) {
 				const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
@@ -481,7 +511,7 @@ function getUsageTokens(usage: unknown): number {
 /**
  * Create proxy tools that reuse the parent's MCP connections.
  */
-function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
+export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	return mcpManager.getTools().map(tool => {
 		const mcpTool = tool as { mcpToolName?: string; mcpServerName?: string };
 		return {
@@ -531,7 +561,10 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	});
 }
 
-function createSubagentSettings(baseSettings: Settings, overrides?: Partial<Record<SettingPath, unknown>>): Settings {
+export function createSubagentSettings(
+	baseSettings: Settings,
+	overrides?: Partial<Record<SettingPath, unknown>>,
+): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
@@ -625,7 +658,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
 	);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
-	const maxRuntimeMs = Math.max(0, Math.trunc(Number(settings.get("task.maxRuntimeMs") ?? 0) || 0));
+	const maxRuntimeMs = Math.max(
+		0,
+		Math.trunc(Number(options.maxRuntimeMs ?? settings.get("task.maxRuntimeMs") ?? 0) || 0),
+	);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
@@ -1484,7 +1520,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				if (lastAssistant.stopReason === "aborted") {
 					aborted = abortReason === "signal" || runtimeLimitExceeded || abortReason === undefined;
 					if (aborted) {
-						abortReasonText ??= resolveAbortReasonText();
+						// A real caller signal or the wall-clock timer carries a precise
+						// reason (signal.reason / "runtime limit exceeded"). An internal
+						// turn abort (abortReason === undefined) does NOT — prefer the
+						// assistant message's own errorMessage ("Request was aborted" or a
+						// specific stream error) over the misleading "Cancelled by caller".
+						abortReasonText ??=
+							abortReason === "signal" || runtimeLimitExceeded
+								? resolveAbortReasonText()
+								: lastAssistant.errorMessage?.trim() || resolveAbortReasonText();
 					}
 					exitCode = 1;
 				} else if (lastAssistant.stopReason === "error") {

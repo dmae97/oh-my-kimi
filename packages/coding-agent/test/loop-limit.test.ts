@@ -16,7 +16,6 @@ describe("/loop slash command", () => {
 				handleLoopCommand,
 				editor: { setText: vi.fn() },
 			},
-			handleBackgroundCommand: vi.fn(),
 		} as unknown as BuiltinSlashCommandRuntime;
 		const result = await executeBuiltinSlashCommand("/loop 10min", runtime);
 

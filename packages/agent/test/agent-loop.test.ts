@@ -157,6 +157,35 @@ describe("agentLoop with AgentMessage", () => {
 		expect(events.map(event => event.type)).toContain("agent_end");
 	});
 
+	it("surfaces a custom abort reason on the synthesized aborted message", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const mock = createMockModel();
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, maxToolCallsPerTurn: 8 };
+		const controller = new AbortController();
+		const streamFn = () => new AssistantMessageEventStream();
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, controller.signal, streamFn);
+		// Abort with a reason (as the coding agent does for a user Esc interrupt).
+		queueMicrotask(() => controller.abort("Interrupted by user"));
+
+		for await (const _event of stream) {
+			// drain
+		}
+
+		const messages = await stream.result();
+		const finalMessage = messages[messages.length - 1];
+		expect(finalMessage.role).toBe("assistant");
+		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");
+		expect(finalMessage.stopReason).toBe("aborted");
+		// The reason rides AbortController.abort(reason) onto the message verbatim,
+		// instead of the generic "Request was aborted" default.
+		expect(finalMessage.errorMessage).toBe("Interrupted by user");
+	});
+
 	it("should handle custom message types via convertToLlm", async () => {
 		// Create a custom message type
 		interface CustomNotification {

@@ -287,6 +287,35 @@ function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
+const RAW_OUTPUT_ARTIFACT_PREFIX = "[raw output: artifact://";
+const RAW_OUTPUT_ARTIFACT_SUFFIX = "]";
+
+function stripRawOutputArtifactNotice(text: string): { text: string; artifactId?: string } {
+	const trimmed = text.trimEnd();
+	const lineStart = trimmed.lastIndexOf("\n");
+	const candidateStart = lineStart === -1 ? 0 : lineStart + 1;
+	if (
+		!trimmed.startsWith(RAW_OUTPUT_ARTIFACT_PREFIX, candidateStart) ||
+		!trimmed.endsWith(RAW_OUTPUT_ARTIFACT_SUFFIX)
+	) {
+		return { text };
+	}
+
+	const idStart = candidateStart + RAW_OUTPUT_ARTIFACT_PREFIX.length;
+	const idEnd = trimmed.length - RAW_OUTPUT_ARTIFACT_SUFFIX.length;
+	if (idStart === idEnd) return { text };
+	for (let i = idStart; i < idEnd; i++) {
+		const code = trimmed.charCodeAt(i);
+		if (code < 48 || code > 57) return { text };
+	}
+
+	const artifactId = trimmed.slice(idStart, idEnd);
+	return {
+		text: trimmed.slice(0, lineStart === -1 ? 0 : lineStart).trimEnd(),
+		artifactId,
+	};
+}
+
 /**
  * Strip the trailing occurrence of `notice` (plus a single surrounding newline
  * on each side) so the TUI can echo the value via a styled footer label
@@ -1028,6 +1057,7 @@ export interface ShellRendererConfig<TArgs> {
 	resolveCommand?: (args: TArgs | undefined) => string | undefined;
 	resolveCwd?: (args: TArgs | undefined) => string | undefined;
 	resolveEnv?: (args: TArgs | undefined) => Record<string, string> | undefined;
+	showHeader?: boolean;
 }
 
 function getPartialJson<TArgs>(args: TArgs | undefined): string | undefined {
@@ -1079,9 +1109,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	return {
 		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const renderArgs = toBashRenderArgs(args, config);
-			const title = config.resolveTitle(args, options);
 			const cmdLines = formatBashCommandLines(renderArgs, uiTheme);
-			const header = renderStatusLine({ icon: "pending", title }, uiTheme);
+			const header =
+				config.showHeader === false
+					? undefined
+					: renderStatusLine({ icon: "pending", title: config.resolveTitle(args, options) }, uiTheme);
 			const outputBlock = new CachedOutputBlock();
 			return markFramedBlockComponent({
 				render: (width: number): string[] =>
@@ -1115,8 +1147,10 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const cmdLines = args ? formatBashCommandLines(renderArgs, uiTheme) : undefined;
 			const isError = result.isError === true;
 			const icon = options.isPartial ? "pending" : isError ? "error" : "success";
-			const title = config.resolveTitle(args, options);
-			const header = renderStatusLine({ icon, title }, uiTheme);
+			const header =
+				config.showHeader === false
+					? undefined
+					: renderStatusLine({ icon, title: config.resolveTitle(args, options) }, uiTheme);
 			const details = result.details;
 			const outputBlock = new CachedOutputBlock();
 
@@ -1133,7 +1167,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 					const strippedOutput = stripOutputNotice(rawOutput, details?.meta);
 					const withoutExit = stripExitCodeNotice(strippedOutput, details?.exitCode);
-					const output = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
+					const withoutWall = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
+					const rawOutputArtifact = stripRawOutputArtifactNotice(withoutWall);
+					const output = rawOutputArtifact.text;
 					const displayOutput = output.trimEnd();
 					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
@@ -1151,6 +1187,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
 								: `Timeout: ${timeoutSeconds}s`,
 						);
+					}
+					if (rawOutputArtifact.artifactId) {
+						statsParts.push(`Artifact: ${rawOutputArtifact.artifactId}`);
 					}
 					if (isError && typeof details?.exitCode === "number") {
 						statsParts.push(`Exit: ${details.exitCode}`);
@@ -1215,7 +1254,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
-							animate: options.isPartial && shimmerEnabled(),
+							// Don't animate once the command has been backgrounded: the block
+							// gets committed to scrollback and finalizes later via the async
+							// update path, so a mid-sweep frame would freeze a stray dark
+							// border segment.
+							animate: options.isPartial && shimmerEnabled() && details?.async?.state !== "running",
 						},
 						uiTheme,
 					);
@@ -1235,4 +1278,5 @@ export const bashToolRenderer = createShellRenderer<BashRenderArgs>({
 	resolveCommand: args => args?.command,
 	resolveCwd: args => args?.cwd,
 	resolveEnv: args => args?.env,
+	showHeader: false,
 });

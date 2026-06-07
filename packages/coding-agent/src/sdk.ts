@@ -10,7 +10,6 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CredentialDisabledEvent,
-	isUsageLimitError,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
@@ -24,7 +23,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
 	$flag,
-	extractRetryHint,
 	getAgentDbPath,
 	getAgentDir,
 	getAuthBrokerSnapshotCachePath,
@@ -36,10 +34,10 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
-import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
+import { createApiKeyResolver } from "./config/api-key-resolver";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
@@ -57,7 +55,6 @@ import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { defaultEvalSessionId } from "./eval/session-id";
-import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
 	type LoadedCustomCommand,
@@ -90,7 +87,7 @@ import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
 import { resolveMemoryBackend } from "./memory-backend";
-import { getMnemopiSessionState, type MnemopiSessionState } from "./mnemopi/state";
+import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
@@ -282,6 +279,8 @@ export interface CreateAgentSessionOptions {
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
+	/** Optional provider-facing prompt cache key, distinct from request lineage. */
+	providerPromptCacheKey?: string;
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];
@@ -710,6 +709,7 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		parameters: tool.parameters,
 		hidden: tool.hidden,
 		deferrable: tool.deferrable,
+		approval: typeof tool.approval === "function" ? tool.approval.bind(tool) : tool.approval,
 		mcpServerName: tool.mcpServerName,
 		mcpToolName: tool.mcpToolName,
 		execute: (toolCallId, params, signal, onUpdate, ctx) =>
@@ -1150,6 +1150,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Discover rules and bucket them in one pass to avoid repeated scans over large rule sets.
 	const { ttsrManager, rulebookRules, alwaysApplyRules } = await logger.time("discoverTtsrRules", async () => {
+		const { TtsrManager } = await import("./export/ttsr");
 		const ttsrSettings = settings.getGroup("ttsr");
 		const ttsrManager = new TtsrManager(ttsrSettings);
 		const rulesResult =
@@ -1295,7 +1296,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
-			getMnemopiSessionState: () => getMnemopiSessionState(session),
+			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -1472,7 +1473,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
-		inlineExtensions.push(createAutoresearchExtension);
+		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
@@ -1607,9 +1608,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// `ExtensionToolWrapper` installed below is the only place the per-tool approval gate runs.
 		// A conditional runner means the approval system silently disappears for users with no
 		// extensions, contradicting non-yolo `tools.approvalMode` settings without feedback.
-		// (Today `createAutoresearchExtension` is unconditionally pushed below, so this scenario
-		// is unreachable; the unconditional construction makes that invariant explicit instead of
-		// implicit, so a future change to make autoresearch optional cannot silently re-open the hole.)
+		// (The builtin autoresearch extension is unconditionally loaded above, so this scenario
+		// is unreachable; unconditional runner construction keeps that invariant explicit and
+		// prevents future optional extensions from silently re-opening the hole.)
 		const extensionRunner: ExtensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
 			extensionsResult.runtime,
@@ -1749,7 +1750,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
-			const memoryBackend = resolveMemoryBackend(settings);
+			const memoryBackend = await resolveMemoryBackend(settings);
 			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
@@ -2002,6 +2003,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onPayload,
 			onResponse,
 			sessionId: providerSessionId,
+			promptCacheKey: options.providerPromptCacheKey,
 			transformContext,
 			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
 			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
@@ -2018,9 +2020,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
-			getApiKey: async provider => {
+			getApiKey: async (provider, ctx) => {
 				// Read agent.sessionId at call time so credential selection stays aligned
 				// with metadataResolver after /new, fork, resume, or branch switches.
+				// Retry steps (ctx carries an auth error) drive the central a/b/c
+				// policy — force-refresh the same account, then rotate to a sibling —
+				// and may legitimately yield no key when every account is exhausted.
+				if (ctx?.error !== undefined) {
+					return createApiKeyResolver(modelRegistry, provider, { sessionId: agent.sessionId })(ctx);
+				}
 				const key = await modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
 				if (!key) {
 					throw new Error(`No API key found for provider "${provider}"`);
@@ -2034,40 +2042,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return streamSimple(streamModel, context, {
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
-					onAuthError: async (provider, oldKey, error) => {
-						const message = error instanceof Error ? error.message : String(error);
-						// streamSimple invokes this for both 401 auth failures AND
-						// rotatable usage-limit errors (Codex usage_limit_reached,
-						// Anthropic usage_limit_reached, etc.). The two need
-						// different storage actions: a real 401 means the credential
-						// is bad and should be marked suspect; a usage limit just
-						// means this account is parked until reset and should be
-						// temporarily blocked so a sibling can pick the request up.
-						if (isUsageLimitError(message)) {
-							const retryAfterMs = extractRetryHint(undefined, message);
-							const switched = await modelRegistry.authStorage.markUsageLimitReached(provider, agent.sessionId, {
-								retryAfterMs,
-								signal: streamOptions?.signal,
-							});
-							logger.debug("Retrying provider request after usage-limit block", {
-								provider,
-								switched,
-								retryAfterMs,
-								error: message,
-							});
-							if (!switched) return undefined;
-							return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
-						}
-						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, {
-							signal: streamOptions?.signal,
-							sessionId: agent.sessionId,
-						});
-						logger.debug("Retrying provider request after credential invalidation", {
-							provider,
-							error: message,
-						});
-						return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
-					},
 				});
 			},
 			cursorExecHandlers,
@@ -2267,19 +2241,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		logger.time("startMemoryStartupTask", () =>
-			Promise.resolve(
-				resolveMemoryBackend(settings).start({
-					session,
-					settings,
-					modelRegistry,
-					agentDir,
-					taskDepth,
-					parentHindsightSessionState: options.parentHindsightSessionState,
-					parentMnemopiSessionState: options.parentMnemopiSessionState,
-				}),
-			),
-		);
+		logger.time("startMemoryStartupTask", async () => {
+			const memoryBackend = await resolveMemoryBackend(settings);
+			await memoryBackend.start({
+				session,
+				settings,
+				modelRegistry,
+				agentDir,
+				taskDepth,
+				parentHindsightSessionState: options.parentHindsightSessionState,
+				parentMnemopiSessionState: options.parentMnemopiSessionState,
+			});
+		});
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
 		// Skip when reusing a parent's manager — the parent owns the callbacks.

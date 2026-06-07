@@ -3,6 +3,7 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 import {
+	type ApiKeyResolveContext,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type Context,
@@ -727,8 +728,9 @@ async function streamAssistantResponse(
 	// Resolve API key (important for expiring tokens) — do this before resolving
 	// metadata so that the session-sticky credential recorded by getApiKey is
 	// visible to metadataResolver (e.g. for the correct account_uuid in metadata.user_id).
+	const staticApiKey = typeof config.apiKey === "string" ? config.apiKey : undefined;
 	const resolvedApiKey =
-		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
+		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || staticApiKey;
 
 	// Re-resolve metadata after credential selection so the per-request value
 	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
@@ -798,7 +800,19 @@ async function streamAssistantResponse(
 		return await runInActiveSpan(chatSpan, async () => {
 			const response = await streamFunction(config.model, llmContext, {
 				...config,
-				apiKey: resolvedApiKey,
+				// Hand streamSimple a resolver so its central auth-retry policy can
+				// re-resolve on 401 / usage-limit: the initial step reuses the key
+				// already resolved above (which set the session-sticky credential
+				// feeding metadataResolver), and retry steps forward the a/b/c ctx
+				// to config.getApiKey (force-refresh, then rotate). With no
+				// getApiKey hook the caller's own apiKey (string or resolver) flows
+				// through unchanged.
+				apiKey: config.getApiKey
+					? (ctx: ApiKeyResolveContext) =>
+							ctx.error === undefined
+								? resolvedApiKey
+								: Promise.resolve(config.getApiKey!(config.model.provider, ctx))
+					: config.apiKey,
 				metadata: resolvedMetadata,
 				toolChoice: effectiveToolChoice,
 				reasoning: effectiveReasoning,
@@ -839,7 +853,14 @@ async function streamAssistantResponse(
 			let detachAbortListener: (() => void) | undefined;
 			if (requestSignal) {
 				if (requestSignal.aborted) {
-					const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+					const aborted = emitAbortedAssistantMessage(
+						partialMessage,
+						addedPartial,
+						context,
+						config,
+						stream,
+						requestSignal,
+					);
 					await finishChat(aborted);
 					return aborted;
 				}
@@ -861,7 +882,14 @@ async function streamAssistantResponse(
 								if (capped) return capped;
 							}
 							responseIterator.return?.()?.catch(() => {});
-							const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+							const aborted = emitAbortedAssistantMessage(
+								partialMessage,
+								addedPartial,
+								context,
+								config,
+								stream,
+								requestSignal,
+							);
 							await finishChat(aborted);
 							return aborted;
 						}
@@ -874,7 +902,14 @@ async function streamAssistantResponse(
 							const capped = await finishCappedAssistantMessage();
 							if (capped) return capped;
 						}
-						const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+						const aborted = emitAbortedAssistantMessage(
+							partialMessage,
+							addedPartial,
+							context,
+							config,
+							stream,
+							requestSignal,
+						);
 						await finishChat(aborted);
 						return aborted;
 					}
@@ -982,14 +1017,30 @@ async function streamAssistantResponse(
 	}
 }
 
+/** Resolve the human-readable reason an abort carried. A caller that aborts via
+ *  `AbortController.abort(reason)` with a string or a non-`AbortError` `Error`
+ *  (e.g. the coding agent's user-interrupt label) gets that text surfaced on the
+ *  synthesized assistant message's `errorMessage`; a bare `abort()` (whose
+ *  `signal.reason` is the default `AbortError` `DOMException`) falls back to the
+ *  generic sentinel that downstream renderers treat as "no specific reason". */
+export function abortReasonText(signal: AbortSignal | undefined): string {
+	const reason = signal?.reason;
+	if (typeof reason === "string" && reason.trim().length > 0) return reason;
+	if (reason instanceof Error && reason.name !== "AbortError" && reason.message.trim().length > 0) {
+		return reason.message;
+	}
+	return "Request was aborted";
+}
+
 function emitAbortedAssistantMessage(
 	partialMessage: AssistantMessage | null,
 	addedPartial: boolean,
 	context: AgentContext,
 	config: AgentLoopConfig,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
+	requestSignal: AbortSignal | undefined,
 ): AssistantMessage {
-	const errorMessage = "Request was aborted";
+	const errorMessage = abortReasonText(requestSignal);
 	const abortedMessage: AssistantMessage = partialMessage
 		? { ...partialMessage, stopReason: "aborted", errorMessage }
 		: {

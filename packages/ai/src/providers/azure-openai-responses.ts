@@ -40,6 +40,7 @@ import {
 	isOpenAIResponsesProgressEvent,
 	normalizeResponsesToolCallIdForTransform,
 	processResponsesStream,
+	repairOrphanResponsesToolCalls,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
 
@@ -347,7 +348,7 @@ function convertMessages(
 		msgIndex++;
 	}
 
-	return messages;
+	return repairOrphanResponsesToolCalls(messages);
 }
 
 function convertTools(tools: Tool[]): OpenAITool[] {

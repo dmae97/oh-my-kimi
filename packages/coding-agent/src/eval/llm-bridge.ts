@@ -15,6 +15,7 @@ import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent
 import { type Api, Effort, getSupportedEfforts, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
+
 import { expandRoleAlias, formatModelString, resolveModelFromString } from "../config/model-resolver";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
@@ -112,8 +113,9 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 		);
 	}
 
-	const apiKey = await options.session.modelRegistry?.getApiKey(model);
-	if (!apiKey) {
+	const registry = options.session.modelRegistry;
+	const apiKey = await registry?.getApiKey(model);
+	if (!registry || !apiKey) {
 		throw new ToolError(
 			`llm() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
 		);
@@ -143,7 +145,10 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 				tools,
 			},
 			{
-				apiKey,
+				apiKey: registry.resolver(model.provider, {
+					sessionId: options.session.getSessionId?.() ?? undefined,
+					baseUrl: model.baseUrl,
+				}),
 				signal: options.signal,
 				reasoning: reasoningForTier(tier, model),
 				toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,

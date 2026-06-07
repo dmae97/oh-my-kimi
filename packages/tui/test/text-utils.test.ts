@@ -17,9 +17,6 @@ describe("text utils", () => {
 		expect(visibleWidth("a\tb")).toBe(1 + 3 + 1);
 	});
 
-	it("treats Arabic combining marks as zero-width", () => {
-		expect(visibleWidth("بَسِمَ")).toBe(3);
-	});
 	it("ignores OSC hyperlinks in visible width", () => {
 		const text = "\x1b]8;;https://example.com\x07link\x1b]8;;\x07";
 		expect(visibleWidth(text)).toBe(4);

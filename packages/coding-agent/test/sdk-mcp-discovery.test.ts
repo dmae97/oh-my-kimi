@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,18 +47,34 @@ const oldSessionMtime = new Date("2000-01-01T00:00:00.000Z");
 
 describe("createAgentSession MCP discovery prompt gating", () => {
 	let tempDir: string;
+	let registryDir: string;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
 
-	beforeEach(async () => {
-		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-${Snowflake.next()}`);
-		fs.mkdirSync(tempDir, { recursive: true });
-		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+	// Immutable across tests: ModelRegistry's constructor eagerly loads the bundled
+	// model catalog (~120ms). The tests pass models explicitly and never mutate the
+	// registry (refreshInBackground is skipped when modelRegistry is supplied, and
+	// extension source sync is empty under disableExtensionDiscovery), so build it once.
+	beforeAll(async () => {
+		registryDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-registry-${Snowflake.next()}`);
+		fs.mkdirSync(registryDir, { recursive: true });
+		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
-	afterEach(() => {
+	afterAll(() => {
 		authStorage.close();
+		if (registryDir && fs.existsSync(registryDir)) {
+			fs.rmSync(registryDir, { recursive: true, force: true });
+		}
+	});
+
+	beforeEach(() => {
+		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}

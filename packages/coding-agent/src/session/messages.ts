@@ -70,6 +70,32 @@ export function isSilentAbort(errorMessage: string | undefined): boolean {
 	return errorMessage === SILENT_ABORT_MARKER;
 }
 
+/** Reason threaded through `AbortController.abort(reason)` when the user aborts
+ *  the turn with Esc (see `AgentSession.abort`). The agent surfaces it verbatim
+ *  on the aborted assistant message's `errorMessage`, so the transcript reads as
+ *  a deliberate user interrupt instead of an opaque failure. */
+export const USER_INTERRUPT_LABEL = "Interrupted by user";
+
+/** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
+ *  reason (bare `abort()`). Renderers treat it as "no specific reason given". */
+const GENERIC_ABORT_SENTINEL = "Request was aborted";
+
+/** Resolve the operator-facing label for an aborted assistant turn. A custom
+ *  abort reason (e.g. `USER_INTERRUPT_LABEL`) threaded onto `errorMessage` is
+ *  shown verbatim; aborts with no threaded reason fall back to the retry-aware
+ *  generic label. Centralizes the live-stream (`EventController`), replay
+ *  (`ui-helpers`), and component (`AssistantMessageComponent`) render paths so
+ *  they stay in lockstep. */
+export function resolveAbortLabel(errorMessage: string | undefined, retryAttempt = 0): string {
+	if (errorMessage && errorMessage !== GENERIC_ABORT_SENTINEL && !isSilentAbort(errorMessage)) {
+		return errorMessage;
+	}
+	if (retryAttempt > 0) {
+		return `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`;
+	}
+	return "Operation aborted";
+}
+
 /** Extract the optional `__pendingDisplayTag` field from a CustomMessage's
  *  `details` blob. Safe over `unknown`; returns undefined when the field is
  *  absent or non-string. */

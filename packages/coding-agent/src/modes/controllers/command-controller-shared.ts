@@ -7,10 +7,11 @@
  * wording, and add-flow logic stay in the per-controller files because they
  * diverge in workflow.
  */
-import { Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import type { SourceMeta } from "../../capability/types";
 import { shortenPath } from "../../tools/render-utils";
 import { DynamicBorder } from "../components/dynamic-border";
+import { TranscriptBlock } from "../components/transcript-container";
 import { parseCommandArgs } from "../shared";
 import type { InteractiveModeContext } from "../types";
 
@@ -100,9 +101,9 @@ export function* groupBySource<T>(
  * container and request a render.
  */
 export function showCommandMessage(ctx: InteractiveModeContext, text: string): void {
-	ctx.chatContainer.addChild(new Spacer(1));
-	ctx.chatContainer.addChild(new DynamicBorder());
-	ctx.chatContainer.addChild(new Text(text, 1, 1));
-	ctx.chatContainer.addChild(new DynamicBorder());
-	ctx.ui.requestRender();
+	const block = new TranscriptBlock();
+	block.addChild(new DynamicBorder());
+	block.addChild(new Text(text, 1, 1));
+	block.addChild(new DynamicBorder());
+	ctx.present(block);
 }

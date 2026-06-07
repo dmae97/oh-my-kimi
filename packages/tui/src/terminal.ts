@@ -2,13 +2,64 @@ import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
 import { $env, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
-import { encodeKittyTempFileProbe, getKittyGraphics, kittyTempFileAllowed, setKittyGraphics } from "./kitty-graphics";
 import { StdinBuffer } from "./stdin-buffer";
-import { ImageProtocol, NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
+import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
+
+/**
+ * Maximum bytes per `process.stdout.write` call on Windows.
+ *
+ * Windows ConPTY ties viewport tracking to per-`WriteFile` boundaries: when a
+ * single write exceeds ~32-64 KB, the pseudo-console stops following the
+ * cursor and the host UI's viewport stays parked at whatever scroll position
+ * the write started from. The visible symptom is that a full-paint of a long
+ * session (resume, history rebuild, large permission dialog) shows only the
+ * first ~30 lines until any focus event forces the host to re-query the
+ * cursor. The data is delivered correctly — it's purely a viewport-sync bug.
+ *
+ * 8 KiB is well below the 32 KiB threshold reported on Windows Terminal and
+ * leaves headroom for the other ConPTY hosts (Tabby, Hyper, VS Code) where
+ * the exact limit is undocumented. The cost is a handful of extra syscalls
+ * per full paint — invisible compared to the cost of the paint itself.
+ */
+const MAX_CONPTY_WRITE_CHUNK = 8 * 1024;
+
+/**
+ * Split `data` into chunks no larger than `maxChunkSize`, preferring a line
+ * boundary (`\n`) as the cut point so escape sequences (which never contain
+ * `\n`) stay intact. The TUI's full-paint buffers are line-structured
+ * (`buffer += "\r\n"` between rows), so a newline almost always exists within
+ * the window. The fallback for a buffer with no newline in range is a hard
+ * cut at `maxChunkSize`: the ConPTY viewport bug from a single oversized
+ * write is strictly worse than a one-frame escape-sequence glitch on a buffer
+ * the renderer effectively never produces.
+ *
+ * Exported for unit testing of the chunking contract; `#safeWrite` is the
+ * sole production caller.
+ */
+export function chunkForConPTY(data: string, maxChunkSize: number = MAX_CONPTY_WRITE_CHUNK): string[] {
+	if (data.length <= maxChunkSize) return [data];
+	const chunks: string[] = [];
+	let pos = 0;
+	while (pos < data.length) {
+		const remaining = data.length - pos;
+		if (remaining <= maxChunkSize) {
+			chunks.push(data.slice(pos));
+			break;
+		}
+		const windowEnd = pos + maxChunkSize;
+		// Prefer the last newline inside the window so escape sequences stay
+		// intact within their chunk; hard-cut at `windowEnd` otherwise.
+		const nl = data.lastIndexOf("\n", windowEnd - 1);
+		const cut = nl >= pos ? nl + 1 : windowEnd;
+		chunks.push(data.slice(pos, cut));
+		pos = cut;
+	}
+	return chunks;
+}
 
 /**
  * Minimal terminal interface for TUI
@@ -40,6 +91,7 @@ export function emergencyTerminalRestore(): void {
 					"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
 					"\x1b[?2048l" + // Disable in-band resize notifications
+					"\x1b[?5522l" + // Disable enhanced paste notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?25h", // Show cursor
@@ -159,11 +211,9 @@ type Da1SentinelOwner =
 	| { kind: "keyboard" }
 	| { kind: "osc11" }
 	| { kind: "privateMode"; mode: number }
-	| { kind: "kittyGraphicsProbe"; id: number }
 	| { kind: "osc99Probe"; id: string };
 
 let nextOsc99ProbeId = 1;
-let nextKittyGraphicsProbeId = 1;
 
 function parseOsc99KeyValues(section: string): Map<string, string> {
 	const values = new Map<string, string>();
@@ -198,8 +248,6 @@ export class ProcessTerminal implements Terminal {
 	#osc99PendingId: string | undefined;
 	#osc99ResponseBuffer = "";
 	#osc99Capabilities = new Map<string, string>();
-	#kittyGraphicsPendingId: number | undefined;
-	#kittyGraphicsProbeCleanup: (() => void) | undefined;
 	#privateCsiResponseBuffer = "";
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
 	/** Resolved DECRQM support per private mode (mode → supported). */
@@ -284,11 +332,6 @@ export class ProcessTerminal implements Terminal {
 		// same DA1 sentinel FIFO as OSC 11/DECRQM so unsupported terminals resolve
 		// without leaking probe bytes to application input.
 		this.#queryOsc99Support();
-
-		// Probe Kitty temp-file (`t=t`) graphics transmission support. Rides the
-		// same DA1 sentinel FIFO; promotes the transmission medium to temp-file
-		// only on an explicit `OK`, so unsupported terminals stay on direct base64.
-		this.#queryKittyGraphicsTempFile();
 
 		// Subscribe to Mode 2031 appearance change notifications.
 		// When the terminal reports a change, we re-query OSC 11 to get the
@@ -508,18 +551,24 @@ export class ProcessTerminal implements Terminal {
 						this.#resolveOsc99Support(owner.id, false);
 						break;
 					}
-					case "kittyGraphicsProbe":
-						this.#resolveKittyGraphicsTempFile(owner.id, false);
-						break;
 				}
 				return;
 			}
 
 			const match = sequence.match(kittyResponsePattern);
-			if (match && !this.#modifyOtherKeysActive) {
+			if (match) {
 				if (this.#modifyOtherKeysTimeout) {
 					clearTimeout(this.#modifyOtherKeysTimeout);
 					this.#modifyOtherKeysTimeout = undefined;
+				}
+				// A DA1 sentinel that beat the kitty reply may have already
+				// engaged the modifyOtherKeys fallback (terminals such as
+				// Superset/xterm-on-Electron answer DA1 before `\x1b[?u`).
+				// Kitty is strictly preferred — undo the fallback so the two
+				// modes do not stack. See #2042.
+				if (this.#modifyOtherKeysActive) {
+					this.#safeWrite("\x1b[>4;0m");
+					this.#modifyOtherKeysActive = false;
 				}
 				// Any reply to `\x1b[?u` means the terminal speaks the kitty keyboard
 				// protocol. The reported flag value is the *current* stack-top — fresh
@@ -573,21 +622,6 @@ export class ProcessTerminal implements Terminal {
 					this.#osc99ResponseBuffer = "";
 					this.#handleOsc99CapabilityResponse(meta!, payload!);
 					return;
-				}
-			}
-
-			// Kitty graphics temp-file probe reply: ESC _ G i=<id>;OK ESC \. The
-			// owner remains in the FIFO and is drained by its DA1 sentinel (no-op
-			// once resolved here).
-			if (this.#kittyGraphicsPendingId !== undefined && sequence.startsWith("\x1b_G")) {
-				const graphicsMatch = sequence.match(/^\x1b_G([^;]*);([\s\S]*?)\x1b\\$/u);
-				if (graphicsMatch) {
-					const idMatch = graphicsMatch[1]!.match(/(?:^|,)i=(\d+)(?:,|$)/);
-					const replyId = idMatch ? parseInt(idMatch[1]!, 10) : undefined;
-					if (replyId === this.#kittyGraphicsPendingId) {
-						this.#resolveKittyGraphicsTempFile(replyId, graphicsMatch[2]!.trim() === "OK");
-						return;
-					}
 				}
 			}
 
@@ -686,37 +720,6 @@ export class ProcessTerminal implements Terminal {
 		setOsc99Supported(supported);
 	}
 
-	#shouldQueryKittyGraphicsTempFile(): boolean {
-		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return false;
-		// Honor the remote/explicit env gate, and skip when temp-file is already on.
-		if (!kittyTempFileAllowed() || getKittyGraphics().transmissionMedium === "temp-file") return false;
-		return !isBunTestRuntime() || $env.PI_TUI_KITTY_GRAPHICS_PROBE === "1";
-	}
-
-	#queryKittyGraphicsTempFile(): void {
-		this.#clearKittyGraphicsProbe();
-		if (this.#dead || !this.#shouldQueryKittyGraphicsTempFile()) return;
-
-		const id = nextKittyGraphicsProbeId++;
-		const probe = encodeKittyTempFileProbe(id);
-		if (!probe) return;
-		this.#kittyGraphicsPendingId = id;
-		this.#kittyGraphicsProbeCleanup = probe.cleanup;
-		this.#da1SentinelOwners.push({ kind: "kittyGraphicsProbe", id });
-		this.#safeWrite(`${probe.sequence}\x1b[c`);
-	}
-
-	#resolveKittyGraphicsTempFile(id: number, supported: boolean): void {
-		if (this.#kittyGraphicsPendingId !== id) return;
-		if (supported) setKittyGraphics({ transmissionMedium: "temp-file" });
-		this.#clearKittyGraphicsProbe();
-	}
-
-	#clearKittyGraphicsProbe(): void {
-		this.#kittyGraphicsPendingId = undefined;
-		this.#kittyGraphicsProbeCleanup?.();
-		this.#kittyGraphicsProbeCleanup = undefined;
-	}
 	/**
 	 * Parse an OSC 11 background color response and compute BT.601 luminance.
 	 * Handles 1-, 2-, 3-, and 4-digit XParseColor hex components.
@@ -943,6 +946,7 @@ export class ProcessTerminal implements Terminal {
 
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");
+		this.#safeWrite("\x1b[?5522l");
 
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
@@ -965,7 +969,6 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99ResponseBuffer = "";
 		this.#osc99Capabilities.clear();
 		setOsc99Supported(false);
-		this.#clearKittyGraphicsProbe();
 		this.#privateCsiResponseBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
@@ -1036,7 +1039,23 @@ export class ProcessTerminal implements Terminal {
 		// files). They serve no purpose there and would surface as visible noise.
 		if (!process.stdout.isTTY) return;
 		try {
-			process.stdout.write(data);
+			// Windows ConPTY drops viewport tracking when a single write exceeds
+			// ~32-64 KB: the host UI's scroll position stays parked at wherever
+			// the write began, even though every byte landed in scrollback. Split
+			// large paints into newline-aligned chunks so each underlying
+			// `WriteFile` stays well below the threshold. The gate also covers
+			// WSL — `process.platform === "linux"` there, but stdout still
+			// crosses into ConPTY at the `wslhost` boundary, so the same per-
+			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
+			// path. See #2034.
+			const conptyHosted = process.platform === "win32" || isWindowsSubsystemForLinux();
+			if (conptyHosted && data.length > MAX_CONPTY_WRITE_CHUNK) {
+				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK)) {
+					process.stdout.write(chunk);
+				}
+			} else {
+				process.stdout.write(data);
+			}
 		} catch (err) {
 			// Any write failure means terminal is dead - no recovery possible
 			this.#dead = true;

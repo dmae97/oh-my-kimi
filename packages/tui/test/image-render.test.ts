@@ -69,6 +69,18 @@ describe("terminal image rendering", () => {
 		expect(parseKittyParam(result?.sequence ?? "", "r")).toBe(10);
 	});
 
+	it("transmits stable Kitty images in-band before placement", () => {
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		const result = renderImage(BASE64_ONE_PIXEL_PNG, SQUARE_DIMENSIONS, {
+			imageId: 42,
+			includeTransmit: true,
+		});
+
+		expect(result).not.toBeNull();
+		expect(result?.transmit).toBe(`\x1b_Ga=t,f=100,q=2,i=42;${BASE64_ONE_PIXEL_PNG}\x1b\\`);
+		expect(result?.transmit).not.toContain("t=t");
+	});
+
 	it("reduces iTerm2 width when max height is the limiting bound", () => {
 		terminal.imageProtocol = ImageProtocol.Iterm2;
 		const result = renderImage(BASE64_DUMMY, SQUARE_DIMENSIONS, {

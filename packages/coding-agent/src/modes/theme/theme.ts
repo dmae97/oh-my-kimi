@@ -95,6 +95,7 @@ export type SymbolKey =
 	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
+	| "icon.search"
 	| "icon.scratchFolder"
 	| "icon.file"
 	| "icon.git"
@@ -264,6 +265,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
+	"icon.search": "🔍",
 	"icon.scratchFolder": "🗑",
 	"icon.file": "📄",
 	"icon.git": "⎇",
@@ -488,6 +490,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.loop": "\uf021",
 	// pick:  | alt:  
 	"icon.folder": "\uf115",
+	"icon.search": "\uf002",
 	// pick:  | alt:
 	"icon.scratchFolder": "\uf014",
 	// pick:  | alt:  
@@ -701,6 +704,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
+	"icon.search": "[/]",
 	"icon.scratchFolder": "[T]",
 	"icon.file": "[F]",
 	"icon.git": "git:",
@@ -2439,10 +2443,10 @@ function getHighlightColors(t: Theme): NativeHighlightColors {
  * switch (which always reassigns `theme`) must invalidate every entry.
  *
  * Why this exists: animated tool blocks (eval/bash) repaint their box on every
- * ~16ms border-shimmer frame, and markdown re-lexes on every streamed delta.
- * Without memoization each frame re-tokenizes an unchanged code body through the
- * Rust FFI — ~26ms for 100 lines, ~40ms for 150 — overrunning the 16ms frame
- * budget and starving the spinner/render timers (the "TUI freeze").
+ * ~33ms border-shimmer frame, and markdown re-lexes on every streamed delta.
+ * Without memoization each frame can re-tokenize an unchanged code body through
+ * the Rust FFI — ~26ms for 100 lines, ~40ms for 150 — consuming or overrunning
+ * the 33ms frame budget and starving the spinner/render timers (the "TUI freeze").
  */
 const HIGHLIGHT_CACHE_MAX = 256;
 const highlightCache = new LRUCache<string, string>({ max: HIGHLIGHT_CACHE_MAX });

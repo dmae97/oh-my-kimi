@@ -68,6 +68,9 @@ function createSession(
 		modelRegistry: {
 			getAvailable: () => availableModels,
 			getApiKey: async () => apiKey,
+			getApiKeyForProvider: async () => apiKey,
+			authStorage: { rotateSessionCredential: async () => false },
+			resolver: () => async () => apiKey,
 		} as unknown as NonNullable<ToolSession["modelRegistry"]>,
 	};
 }
@@ -170,7 +173,7 @@ describe("InspectImageTool", () => {
 			uiTheme,
 		);
 		const callOutput = sanitizeText(callComponent.render(100).join("\n"));
-		expect(callOutput).toContain("Inspect Image");
+		expect(callOutput).toContain("Inspect");
 		expect(callOutput).toContain("Question:");
 		expect(callOutput).toContain("What error text is visible?");
 
@@ -188,7 +191,7 @@ describe("InspectImageTool", () => {
 			{ path: "/tmp/screenshot.png", question: "What error text is visible?" },
 		);
 		const resultOutput = sanitizeText(resultComponent.render(100).join("\n"));
-		expect(resultOutput).toContain("Inspect Image");
+		expect(resultOutput).toContain("Inspect");
 		expect(resultOutput).toContain("image/png");
 		expect(resultOutput).toContain("Question:");
 		expect(resultOutput).toContain("What error text is visible?");

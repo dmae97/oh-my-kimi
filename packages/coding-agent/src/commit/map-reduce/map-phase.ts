@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import fileObserverSystemPrompt from "../../commit/prompts/file-observer-system.md" with { type: "text" };
@@ -18,7 +18,7 @@ const RETRY_BACKOFF_MS = 1000;
 
 export interface MapPhaseInput {
 	model: Model<Api>;
-	apiKey: string;
+	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
 	files: FileDiff[];
 	config?: {

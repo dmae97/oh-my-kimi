@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -85,15 +85,24 @@ function runGit(cwd: string, args: string[]): string {
 	return new TextDecoder().decode(result.stdout).trim();
 }
 
-async function createPrFixture(): Promise<{
+interface PrFixture {
 	baseDir: string;
 	repoRoot: string;
 	originBare: string;
 	forkBare: string;
 	headRefName: string;
 	headRefOid: string;
-}> {
-	const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-"));
+}
+
+// Building the fixture costs ~16 real `git` subprocess spawns (~200ms). Six
+// tests need it, so we build it ONCE as an immutable template in `beforeAll`
+// and materialize per-test copies via `fs.cp` (~12ms). Each copy is a fully
+// independent repo tree, so the mutating tests (worktree checkout, config
+// writes, extra branches) can't contaminate each other.
+let prFixtureTemplate: PrFixture | null = null;
+
+async function buildPrFixtureTemplate(): Promise<PrFixture> {
+	const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-template-"));
 	const repoRoot = path.join(baseDir, "repo");
 	const originBare = path.join(baseDir, "origin.git");
 	const forkBare = path.join(baseDir, "fork.git");
@@ -119,13 +128,32 @@ async function createPrFixture(): Promise<{
 	runGit(repoRoot, ["push", "-u", "forksrc", headRefName]);
 	runGit(repoRoot, ["checkout", "main"]);
 
+	return { baseDir, repoRoot, originBare, forkBare, headRefName, headRefOid };
+}
+
+async function createPrFixture(): Promise<PrFixture> {
+	const template = prFixtureTemplate;
+	if (!template) throw new Error("PR fixture template was not built (missing beforeAll)");
+
+	const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-"));
+	const repoRoot = path.join(baseDir, "repo");
+	const originBare = path.join(baseDir, "origin.git");
+	const forkBare = path.join(baseDir, "fork.git");
+
+	await fs.cp(template.baseDir, baseDir, { recursive: true });
+	// Remote URLs in the copied repo still point at the template's absolute
+	// `origin.git`/`fork.git`. Repoint them at this copy so pushes/fetches stay
+	// isolated and `remote get-url` assertions match the returned paths.
+	runGit(repoRoot, ["remote", "set-url", "origin", originBare]);
+	runGit(repoRoot, ["remote", "set-url", "forksrc", forkBare]);
+
 	return {
 		baseDir,
 		repoRoot,
 		originBare,
 		forkBare,
-		headRefName,
-		headRefOid,
+		headRefName: template.headRefName,
+		headRefOid: template.headRefOid,
 	};
 }
 
@@ -210,6 +238,17 @@ describe("parsePrUnifiedDiff", () => {
 });
 
 describe("github tool", () => {
+	beforeAll(async () => {
+		prFixtureTemplate = await buildPrFixtureTemplate();
+	});
+
+	afterAll(async () => {
+		if (prFixtureTemplate) {
+			await fs.rm(prFixtureTemplate.baseDir, { recursive: true, force: true });
+			prFixtureTemplate = null;
+		}
+	});
+
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();

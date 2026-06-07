@@ -1,4 +1,4 @@
-import type { Effort } from "../model-thinking";
+import type { Effort } from "../effort";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,

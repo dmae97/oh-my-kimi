@@ -1,4 +1,5 @@
 import type { Settings } from "../../config/settings";
+import { CURRENT_SETUP_VERSION } from "../setup-version";
 import type { InteractiveModeContext } from "../types";
 import { glyphSetupScene } from "./scenes/glyph";
 import { providersSetupScene } from "./scenes/providers";
@@ -8,13 +9,13 @@ import { SetupWizardComponent } from "./wizard-overlay";
 
 export type { SetupScene, SetupSceneController, SetupSceneHost, SetupSceneResult } from "./scenes/types";
 
+export { CURRENT_SETUP_VERSION };
+
 export const ALL_SCENES = [
 	providersSetupScene,
 	glyphSetupScene,
 	themeSetupScene,
 ] as const satisfies readonly SetupScene[];
-
-export const CURRENT_SETUP_VERSION = ALL_SCENES.reduce((max, scene) => Math.max(max, scene.minVersion), 0);
 
 export interface SetupSceneSelectionOptions {
 	resuming?: boolean;

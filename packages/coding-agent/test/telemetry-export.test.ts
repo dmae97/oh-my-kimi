@@ -33,45 +33,45 @@ afterEach(() => {
 });
 
 describe("initTelemetryExport gating", () => {
-	it("stays disabled when no OTLP endpoint is configured", () => {
-		initTelemetryExport();
+	it("stays disabled when no OTLP endpoint is configured", async () => {
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 	});
 
-	it("stays disabled when OTEL_SDK_DISABLED=true even with an endpoint", () => {
+	it("stays disabled when OTEL_SDK_DISABLED=true even with an endpoint", async () => {
 		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318";
 		process.env.OTEL_SDK_DISABLED = "true";
-		initTelemetryExport();
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 	});
 
-	it("stays disabled when OTEL_TRACES_EXPORTER=none even with an endpoint", () => {
+	it("stays disabled when OTEL_TRACES_EXPORTER=none even with an endpoint", async () => {
 		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318";
 		process.env.OTEL_TRACES_EXPORTER = "none";
-		initTelemetryExport();
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 	});
 
-	it("declines unsupported OTLP protocols instead of misrouting spans", () => {
+	it("declines unsupported OTLP protocols instead of misrouting spans", async () => {
 		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317";
 		process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
-		initTelemetryExport();
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 
 		process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "http/json";
-		initTelemetryExport();
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 	});
 
-	it("honors the kill-switches case-insensitively per the OTEL env contract", () => {
+	it("honors the kill-switches case-insensitively per the OTEL env contract", async () => {
 		process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318";
 		process.env.OTEL_SDK_DISABLED = "TRUE";
-		initTelemetryExport();
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 
 		delete process.env.OTEL_SDK_DISABLED;
 		process.env.OTEL_TRACES_EXPORTER = "otlp,None";
-		initTelemetryExport();
+		await initTelemetryExport();
 		expect(isTelemetryExportEnabled()).toBe(false);
 	});
 });

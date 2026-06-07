@@ -28,7 +28,7 @@ export interface Component {
   render(width: number): string[];
   handleInput?(data: string): void;
   wantsKeyRelease?: boolean;
-  invalidate(): void;
+  invalidate?(): void;
 }
 ```
 
