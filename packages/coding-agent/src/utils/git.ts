@@ -561,10 +561,27 @@ function parsePackedRefs(content: string | null, targetRef: string): string | nu
 	return null;
 }
 
+function stripGitConfigComments(line: string): string {
+	let clean = "";
+	let inQuotes = false;
+	for (let i = 0; i < line.length; i++) {
+		const char = line[i];
+		if (char === '"') {
+			inQuotes = !inQuotes;
+			clean += char;
+		} else if (!inQuotes && (char === ";" || char === "#")) {
+			break;
+		} else {
+			clean += char;
+		}
+	}
+	return clean.trim();
+}
+
 function parseGitConfigHasReftable(content: string): boolean {
 	let inExtensions = false;
 	for (const line of content.split("\n")) {
-		const trimmed = line.trim();
+		const trimmed = stripGitConfigComments(line);
 		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
 			const section = trimmed.slice(1, -1).trim().toLowerCase();
 			inExtensions = section === "extensions";
@@ -572,27 +589,12 @@ function parseGitConfigHasReftable(content: string): boolean {
 			const eqIndex = trimmed.indexOf("=");
 			if (eqIndex !== -1) {
 				const key = trimmed.slice(0, eqIndex).trim().toLowerCase();
-				const value = trimmed.slice(eqIndex + 1).trim();
+				let value = trimmed.slice(eqIndex + 1).trim();
 				if (key === "refstorage") {
-					// Strip trailing comments per git-config(5)
-					let cleanValue = "";
-					let inQuotes = false;
-					for (let i = 0; i < value.length; i++) {
-						const char = value[i];
-						if (char === '"') {
-							inQuotes = !inQuotes;
-							cleanValue += char;
-						} else if (!inQuotes && (char === ";" || char === "#")) {
-							break;
-						} else {
-							cleanValue += char;
-						}
+					if (value.startsWith('"') && value.endsWith('"')) {
+						value = value.slice(1, -1).trim();
 					}
-					cleanValue = cleanValue.trim().toLowerCase();
-					if (cleanValue.startsWith('"') && cleanValue.endsWith('"')) {
-						cleanValue = cleanValue.slice(1, -1).trim();
-					}
-					if (cleanValue === "reftable") {
+					if (value.toLowerCase() === "reftable") {
 						return true;
 					}
 				}

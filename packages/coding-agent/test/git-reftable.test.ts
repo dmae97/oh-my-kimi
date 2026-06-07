@@ -158,6 +158,20 @@ describe.skipIf(!supportsReftable)("git reftable support", () => {
 			expect(await git.repo.isReftable(repository6)).toBe(true);
 			expect(git.repo.isReftableSync(repository6)).toBe(true);
 		}
+
+		// Test section header with trailing comment
+		const newConfigWithSectionComment = baseConfig.replace(
+			"[extensions]",
+			"[extensions] # extensions section comment",
+		);
+		await fs.writeFile(configPath, newConfigWithSectionComment);
+
+		const repository7 = await git.repo.resolve(testRepoDir);
+		expect(repository7).not.toBeNull();
+		if (repository7) {
+			expect(await git.repo.isReftable(repository7)).toBe(true);
+			expect(git.repo.isReftableSync(repository7)).toBe(true);
+		}
 	});
 
 	test("resolves references in a reftable worktree", async () => {
