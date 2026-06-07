@@ -13,7 +13,7 @@ export interface OutputBlockOptions {
 	header?: string;
 	headerMeta?: string;
 	state?: State;
-	sections?: Array<{ label?: string; lines: string[] }>;
+	sections?: Array<{ label?: string; lines: string[]; separator?: boolean }>;
 	width: number;
 	applyBg?: boolean;
 	contentPaddingLeft?: number;
@@ -147,13 +147,23 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 	});
 
 	const normalizedSections = sections.length > 0 ? sections : [{ lines: [] as string[] }];
-	for (const section of normalizedSections) {
+	for (let sectionIndex = 0; sectionIndex < normalizedSections.length; sectionIndex++) {
+		const section = normalizedSections[sectionIndex]!;
+		// A labeled section always draws its titled separator bar. A label-less
+		// section can still request a plain divider via `separator`, but only
+		// between sections — leading with one would just double the header bar.
 		if (section.label) {
 			rows.push({
 				kind: "bar",
 				leftChar: theme.boxSharp.teeRight,
 				rightChar: theme.boxSharp.teeLeft,
 				label: section.label,
+			});
+		} else if (section.separator && sectionIndex > 0) {
+			rows.push({
+				kind: "bar",
+				leftChar: theme.boxSharp.teeRight,
+				rightChar: theme.boxSharp.teeLeft,
 			});
 		}
 		const allLines = section.lines.flatMap(l => l.split("\n"));
@@ -297,6 +307,7 @@ export class CachedOutputBlock {
 		if (options.sections) {
 			for (const s of options.sections) {
 				h.optional(s.label);
+				h.bool(s.separator ?? false);
 				for (const line of s.lines) {
 					h.str(line);
 				}

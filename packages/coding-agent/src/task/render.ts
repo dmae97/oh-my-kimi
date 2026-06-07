@@ -560,8 +560,7 @@ export function renderCall(
 	const showIsolated = "isolated" in args && args.isolated === true;
 	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
 	return framedBlock(theme, width => {
-		const taskCount = args.tasks?.length ?? 0;
-		const sections: Array<{ label?: string; lines: string[] }> = [];
+		const sections: Array<{ label?: string; lines: string[]; separator?: boolean }> = [];
 
 		const contextSection = buildContextSection(args, theme);
 		if (contextSection) sections.push(contextSection);
@@ -572,7 +571,7 @@ export function renderCall(
 		// section here would just repeat the count the result frame already shows.
 		if (!options.renderContext?.hasResult) {
 			sections.push({
-				label: `Tasks (${taskCount})`,
+				separator: true,
 				lines: renderTaskItemLines(args.tasks, options.expanded, theme),
 			});
 		}
@@ -1059,7 +1058,7 @@ export function renderResult(
 			header,
 			sections: [
 				...(contextSection ? [contextSection] : []),
-				...(text ? [{ lines: [theme.fg("dim", truncateToWidth(text, width))] }] : []),
+				...(text ? [{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] }] : []),
 			],
 			state: "success",
 			borderColor: "borderMuted",
@@ -1126,7 +1125,7 @@ export function renderResult(
 				header,
 				sections: [
 					...(contextSection ? [contextSection] : []),
-					{ lines: [theme.fg("dim", truncateToWidth(text, width))] },
+					{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] },
 				],
 				state,
 				borderColor,
@@ -1154,7 +1153,10 @@ export function renderResult(
 		while (lines.length > 0 && lines[0].trim() === "") lines.shift();
 		return {
 			header,
-			sections: [...(contextSection ? [contextSection] : []), ...(lines.length > 0 ? [{ lines }] : [])],
+			sections: [
+				...(contextSection ? [contextSection] : []),
+				...(lines.length > 0 ? [{ separator: true, lines }] : []),
+			],
 			state,
 			borderColor,
 			width,

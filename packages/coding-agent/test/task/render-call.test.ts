@@ -41,8 +41,9 @@ describe("task renderer: streaming call preview", () => {
 		expect(out).toContain("Audit the auth module");
 		expect(out).toContain("ReviewDb");
 		expect(out).toContain("Audit the db layer");
-		// Count is kept as a compact header, but the old flat "N agents" line is gone.
-		expect(out).toContain("Tasks (2)");
+		// The per-task list stands on its own — neither the redundant "Tasks (N)"
+		// section label nor the old flat "N agents" line is drawn.
+		expect(out).not.toContain("Tasks (");
 		expect(out).not.toContain("2 agents");
 	});
 
@@ -61,7 +62,7 @@ describe("task renderer: streaming call preview", () => {
 		expect(out).toContain("Second");
 		// Missing-id slot falls back to a positional placeholder rather than crashing.
 		expect(out).toContain("#3");
-		expect(out).toContain("Tasks (3)");
+		expect(out).not.toContain("Tasks (");
 	});
 
 	it("caps the collapsed list and reports the overflow as agents", () => {
