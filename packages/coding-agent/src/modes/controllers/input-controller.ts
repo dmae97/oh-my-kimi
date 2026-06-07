@@ -9,7 +9,7 @@ import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { isLowSignalTitleInput } from "../../tiny/text";
@@ -90,7 +90,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					void this.ctx.session.abort();
+					void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
@@ -120,7 +120,7 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				void this.ctx.session.abort();
+				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
@@ -242,7 +242,7 @@ export class InputController {
 			// Empty submit while streaming with queued messages: flush queues immediately
 			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
 				// Abort current stream and let queued messages be processed
-				await this.ctx.session.abort();
+				await this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 				return;
 			}
 
@@ -598,7 +598,7 @@ export class InputController {
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.ctx.session.abort();
+				this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			}
 			return 0;
 		}
@@ -608,7 +608,7 @@ export class InputController {
 		this.ctx.editor.setText(combinedText);
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.ctx.session.abort();
+			this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 		}
 		return allQueued.length;
 	}

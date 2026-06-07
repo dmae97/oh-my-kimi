@@ -17,7 +17,7 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
+import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
 
@@ -459,16 +459,14 @@ export class EventController {
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
 			const ttsrSilenced = aborted && this.ctx.session.isTtsrAbortPending;
 			if (aborted && !silentlyAborted && !ttsrSilenced) {
-				// Real user-cancel / network / provider abort: surface the standard
-				// operator-facing label. AgentSession.#handleAgentEvent already stamped
-				// SILENT_ABORT_MARKER for the plan-compact transition before this
-				// controller ran, so reaching this branch implies the abort was NOT a
-				// silent internal transition.
-				const retryAttempt = this.ctx.session.retryAttempt;
-				errorMessage =
-					retryAttempt > 0
-						? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-						: "Operation aborted";
+				// Resolve the operator-facing label: a user-interrupt (Esc) abort
+				// carries USER_INTERRUPT_LABEL on errorMessage (threaded through the
+				// AbortController), which is preserved verbatim; any other abort with
+				// no threaded reason falls back to the retry-aware generic label.
+				// AgentSession.#handleAgentEvent already stamped SILENT_ABORT_MARKER for
+				// the plan-compact transition before this controller ran, so reaching
+				// this branch implies the abort was NOT a silent internal transition.
+				errorMessage = resolveAbortLabel(this.ctx.streamingMessage.errorMessage, this.ctx.session.retryAttempt);
 				this.ctx.streamingMessage.errorMessage = errorMessage;
 			}
 			if (silentlyAborted || ttsrSilenced) {

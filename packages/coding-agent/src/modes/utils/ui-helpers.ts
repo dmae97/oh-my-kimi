@@ -25,6 +25,7 @@ import type { CompactionQueuedMessage, InteractiveModeContext } from "../../mode
 import {
 	type CustomMessage,
 	isSilentAbort,
+	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
@@ -341,12 +342,7 @@ export class UiHelpers {
 					!isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
 				const errorMessage = hasErrorStop
 					? message.stopReason === "aborted"
-						? (() => {
-								const retryAttempt = this.ctx.session.retryAttempt;
-								return retryAttempt > 0
-									? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-									: "Operation aborted";
-							})()
+						? resolveAbortLabel(message.errorMessage, this.ctx.session.retryAttempt)
 						: message.errorMessage || "Error"
 					: null;
 

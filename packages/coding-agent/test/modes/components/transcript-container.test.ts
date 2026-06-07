@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "../../../src/config/settings";
 import { AssistantMessageComponent } from "../../../src/modes/components/assistant-message";
 import { TranscriptContainer } from "../../../src/modes/components/transcript-container";
 import { initTheme } from "../../../src/modes/theme/theme";
+import { USER_INTERRUPT_LABEL } from "../../../src/session/messages";
 
 // Models a transcript block that re-lays-out (tool preview collapsing, assistant
 // message finalizing, late async result) after it has scrolled past the live
@@ -270,14 +271,14 @@ describe("TranscriptContainer", () => {
 			makeAssistantMessage({
 				content: [{ type: "text", text: "The config file write went through despite the interruption." }],
 				stopReason: "aborted",
-				errorMessage: "Operation aborted",
+				errorMessage: USER_INTERRUPT_LABEL,
 			}),
 		);
 		assistant.markTranscriptBlockFinalized();
 
 		const rendered = plain(container.render(80));
 		expect(rendered).toContain("The config file write went through despite the interruption.");
-		expect(rendered).toContain("Operation aborted");
+		expect(rendered).toContain(USER_INTERRUPT_LABEL);
 		expect(rendered).toContain("Copied raw SSE stream");
 		expect(container.getNativeScrollbackLiveRegionStart()).not.toBe(0);
 	});

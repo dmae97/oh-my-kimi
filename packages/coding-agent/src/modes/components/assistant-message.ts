@@ -4,7 +4,7 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
-import { isSilentAbort } from "../../session/messages";
+import { isSilentAbort, resolveAbortLabel } from "../../session/messages";
 import { resolveImageOptions } from "../../tools/render-utils";
 
 /**
@@ -253,10 +253,7 @@ export class AssistantMessageComponent extends Container {
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (!hasToolCalls) {
 			if (message.stopReason === "aborted" && !isSilentAbort(message.errorMessage)) {
-				const abortMessage =
-					message.errorMessage && message.errorMessage !== "Request was aborted"
-						? message.errorMessage
-						: "Operation aborted";
+				const abortMessage = resolveAbortLabel(message.errorMessage);
 				if (hasVisibleContent) {
 					this.#contentContainer.addChild(new Spacer(1));
 				} else {

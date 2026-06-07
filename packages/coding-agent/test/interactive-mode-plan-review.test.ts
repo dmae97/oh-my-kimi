@@ -6,7 +6,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import type { HookSelectorSlider } from "../src/modes/components/hook-selector";
@@ -893,9 +893,10 @@ describe("InteractiveMode plan review rendering", () => {
 	// ==========================================================================
 	// Phase 6 — D layer: replay-side render branches in AssistantMessageComponent.
 	//
-	// D1 asserts that the persisted `SILENT_ABORT_MARKER` suppresses the red
-	// "Operation aborted" line. D2 is the over-suppression regression guard —
-	// an aborted message with NO marker must still render the line.
+	// D1 asserts that the persisted `SILENT_ABORT_MARKER` suppresses the red abort
+	// line. D2 is the over-suppression regression guard — an aborted message with
+	// NO marker still renders the generic label. D3 covers a threaded interrupt
+	// reason rendering verbatim.
 	// ==========================================================================
 
 	function renderAssistant(message: AssistantMessage, width = 120): string {
@@ -925,20 +926,30 @@ describe("InteractiveMode plan review rendering", () => {
 		};
 	}
 
-	it("D1: Replay of an assistant message with SILENT_ABORT_MARKER + aborted: rendered component contains no /Operation aborted/", () => {
+	it("D1: Replay of an assistant message with SILENT_ABORT_MARKER + aborted: rendered component contains no abort line", () => {
 		const message = buildAbortedAssistantMessage({ errorMessage: SILENT_ABORT_MARKER });
 		const rendered = renderAssistant(message);
-		expect(rendered).not.toMatch(/Operation aborted/);
+		expect(rendered).not.toContain("Operation aborted");
+		expect(rendered).not.toContain(USER_INTERRUPT_LABEL);
 		// The marker itself MUST NOT leak into rendered output either.
 		expect(rendered).not.toContain(SILENT_ABORT_MARKER);
 	});
 
-	it("D2: Replay of an aborted message with no marker + empty content: rendered component DOES contain 'Operation aborted'", () => {
+	it("D2: Replay of an aborted message with no threaded reason + empty content: rendered component DOES contain the generic label", () => {
 		// Over-suppression regression guard: silent path is opt-in via the
-		// persisted marker. A user-cancel abort with no marker and no content
-		// still surfaces the standard label.
+		// persisted marker. An abort with no marker and no threaded reason still
+		// surfaces the generic operator-facing label.
 		const message = buildAbortedAssistantMessage({ content: [], errorMessage: undefined });
 		const rendered = renderAssistant(message);
 		expect(rendered).toContain("Operation aborted");
+	});
+
+	it("D3: Replay of an aborted message carrying a user-interrupt reason renders it verbatim", () => {
+		// The Esc-interrupt reason persisted on errorMessage must render as-is,
+		// not collapse into the generic label.
+		const message = buildAbortedAssistantMessage({ content: [], errorMessage: USER_INTERRUPT_LABEL });
+		const rendered = renderAssistant(message);
+		expect(rendered).toContain(USER_INTERRUPT_LABEL);
+		expect(rendered).not.toContain("Operation aborted");
 	});
 });

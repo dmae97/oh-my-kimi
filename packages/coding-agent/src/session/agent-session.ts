@@ -5119,8 +5119,13 @@ export class AgentSession {
 
 	/**
 	 * Abort current operation and wait for agent to become idle.
+	 *
+	 * `reason` (e.g. `USER_INTERRUPT_LABEL`) rides the agent's `AbortController`
+	 * and surfaces verbatim on the aborted assistant message's `errorMessage`, so
+	 * the transcript can distinguish a deliberate user interrupt from an opaque
+	 * abort. Omit it for internal/lifecycle aborts.
 	 */
-	async abort(options?: { goalReason?: "interrupted" | "internal" }): Promise<void> {
+	async abort(options?: { goalReason?: "interrupted" | "internal"; reason?: string }): Promise<void> {
 		this.abortRetry();
 		this.#promptGeneration++;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -5129,7 +5134,7 @@ export class AgentSession {
 		this.abortBash();
 		this.abortEval();
 		const postPromptDrain = this.#cancelPostPromptTasks();
-		this.agent.abort();
+		this.agent.abort(options?.reason);
 		await postPromptDrain;
 		await this.agent.waitForIdle();
 		await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });

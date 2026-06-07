@@ -22,7 +22,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { agentLoop, agentLoopContinue } from "./agent-loop";
+import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type {
@@ -769,8 +769,8 @@ export class Agent {
 		this.#state.messages.length = 0;
 	}
 
-	abort() {
-		this.#abortController?.abort();
+	abort(reason?: unknown) {
+		this.#abortController?.abort(reason);
 	}
 
 	waitForIdle(): Promise<void> {
@@ -1054,8 +1054,12 @@ export class Agent {
 				}
 			}
 		} catch (err) {
-			const errorMessage = err instanceof Error ? err.message : String(err);
 			const stoppedForAbort = this.#abortController?.signal.aborted === true;
+			const errorMessage = stoppedForAbort
+				? abortReasonText(this.#abortController?.signal)
+				: err instanceof Error
+					? err.message
+					: String(err);
 			const shouldEmitVisibleOutputBlockedError = !stoppedForAbort && isAnthropicOutputBlockedError(errorMessage);
 			const assistantPartial = partial?.role === "assistant" ? partial : undefined;
 			const hadAssistantStart = assistantPartial !== undefined;

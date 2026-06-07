@@ -853,7 +853,14 @@ async function streamAssistantResponse(
 			let detachAbortListener: (() => void) | undefined;
 			if (requestSignal) {
 				if (requestSignal.aborted) {
-					const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+					const aborted = emitAbortedAssistantMessage(
+						partialMessage,
+						addedPartial,
+						context,
+						config,
+						stream,
+						requestSignal,
+					);
 					await finishChat(aborted);
 					return aborted;
 				}
@@ -875,7 +882,14 @@ async function streamAssistantResponse(
 								if (capped) return capped;
 							}
 							responseIterator.return?.()?.catch(() => {});
-							const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+							const aborted = emitAbortedAssistantMessage(
+								partialMessage,
+								addedPartial,
+								context,
+								config,
+								stream,
+								requestSignal,
+							);
 							await finishChat(aborted);
 							return aborted;
 						}
@@ -888,7 +902,14 @@ async function streamAssistantResponse(
 							const capped = await finishCappedAssistantMessage();
 							if (capped) return capped;
 						}
-						const aborted = emitAbortedAssistantMessage(partialMessage, addedPartial, context, config, stream);
+						const aborted = emitAbortedAssistantMessage(
+							partialMessage,
+							addedPartial,
+							context,
+							config,
+							stream,
+							requestSignal,
+						);
 						await finishChat(aborted);
 						return aborted;
 					}
@@ -996,14 +1017,30 @@ async function streamAssistantResponse(
 	}
 }
 
+/** Resolve the human-readable reason an abort carried. A caller that aborts via
+ *  `AbortController.abort(reason)` with a string or a non-`AbortError` `Error`
+ *  (e.g. the coding agent's user-interrupt label) gets that text surfaced on the
+ *  synthesized assistant message's `errorMessage`; a bare `abort()` (whose
+ *  `signal.reason` is the default `AbortError` `DOMException`) falls back to the
+ *  generic sentinel that downstream renderers treat as "no specific reason". */
+export function abortReasonText(signal: AbortSignal | undefined): string {
+	const reason = signal?.reason;
+	if (typeof reason === "string" && reason.trim().length > 0) return reason;
+	if (reason instanceof Error && reason.name !== "AbortError" && reason.message.trim().length > 0) {
+		return reason.message;
+	}
+	return "Request was aborted";
+}
+
 function emitAbortedAssistantMessage(
 	partialMessage: AssistantMessage | null,
 	addedPartial: boolean,
 	context: AgentContext,
 	config: AgentLoopConfig,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
+	requestSignal: AbortSignal | undefined,
 ): AssistantMessage {
-	const errorMessage = "Request was aborted";
+	const errorMessage = abortReasonText(requestSignal);
 	const abortedMessage: AssistantMessage = partialMessage
 		? { ...partialMessage, stopReason: "aborted", errorMessage }
 		: {

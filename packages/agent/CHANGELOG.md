@@ -8,6 +8,7 @@
 ### Changed
 
 - Enabled streaming API calls to re-resolve credentials through the `getApiKey` callback when retries occur after authentication-related errors
+- `Agent.abort(reason?)` now forwards `reason` to the underlying `AbortController`, and the synthesized aborted assistant message carries that reason on `errorMessage` (string or non-`AbortError` `Error` message) instead of always defaulting to `"Request was aborted"`. Bare `abort()` is unchanged.
 
 ### Fixed
 
