@@ -34,7 +34,11 @@ import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
-import { buildOutputValidator, type OutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
+import {
+	buildOutputValidator,
+	type OutputValidator,
+	summarizeValidationFailure,
+} from "../tools/output-schema-validator";
 
 import { type ReportFindingDetails, toReviewFinding } from "../tools/review";
 import { ToolAbortError } from "../tools/tool-errors";
