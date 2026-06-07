@@ -48,7 +48,6 @@ describe("EventController idle compaction teardown", () => {
 		const runIdleCompaction = vi.fn();
 		const context = {
 			isInitialized: true,
-			isBackgrounded: false,
 			loadingAnimation: undefined,
 			streamingComponent: undefined,
 			streamingMessage: undefined,

@@ -14,7 +14,7 @@ import type {
 import type { CompactOptions } from "../extensibility/extensions/types";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { AgentSession } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
@@ -95,7 +95,6 @@ export interface InteractiveModeContext {
 
 	// State
 	isInitialized: boolean;
-	isBackgrounded: boolean;
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
@@ -149,13 +148,9 @@ export interface InteractiveModeContext {
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void;
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void;
-	createBackgroundUiContext(): ExtensionUIContext;
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void;
-
-	// Event handling
-	handleBackgroundEvent(event: AgentSessionEvent): Promise<void>;
 
 	// UI helpers
 	/**
@@ -293,7 +288,6 @@ export interface InteractiveModeContext {
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
 	handleDequeue(): void;
-	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
 	handleBtwCommand(question: string): Promise<void>;
 	hasActiveBtw(): boolean;

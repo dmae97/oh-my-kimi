@@ -2,12 +2,12 @@
  * Regression test for the abort-guard on `EventController.sendCompletionNotification`.
  *
  * Bug: a user Ctrl+C on the `ask` tool selector throws `ToolAbortError`,
- * the turn ends with `stopReason === "aborted"`, and `handleBackgroundEvent`
- * fires `sendCompletionNotification()` unconditionally. The pre-fix code
- * then produced a misleading "Task complete" desktop toast for a turn that
- * never actually completed. The fix mirrors the `stopReason !== "aborted"`
- * pattern already used by `#currentContextTokens`, `#handleMessageEnd`, and
- * the retry / TTSR / compaction skip paths in `agent-session.ts`.
+ * the turn ends with `stopReason === "aborted"`, and `#handleAgentEnd`
+ * fires `sendCompletionNotification()`. Without a guard this produced a
+ * misleading "Task complete" desktop toast for a turn that never actually
+ * completed. The fix mirrors the `stopReason !== "aborted"` pattern already
+ * used by `#currentContextTokens`, `#handleMessageEnd`, and the
+ * retry / TTSR / compaction skip paths in `agent-session.ts`.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -49,8 +49,6 @@ function makeAssistantMessage(stopReason: StopReason): AssistantMessage {
 
 function makeContext(lastMessage: AssistantMessage | undefined): InteractiveModeContext {
 	return {
-		// sendCompletionNotification only fires when backgrounded.
-		isBackgrounded: true,
 		sessionManager: {
 			getSessionName: () => "test-session",
 		},
@@ -94,16 +92,6 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 		const controller = new EventController(makeContext(undefined));
 		controller.sendCompletionNotification();
 		expect(spy).toHaveBeenCalledTimes(1);
-	});
-
-	it("honors the existing isBackgrounded gate (no notification when foreground)", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
-		settings.override("completion.notify", "on");
-		const ctx = makeContext(makeAssistantMessage("stop"));
-		(ctx as unknown as { isBackgrounded: boolean }).isBackgrounded = false;
-		const controller = new EventController(ctx);
-		controller.sendCompletionNotification();
-		expect(spy).toHaveBeenCalledTimes(0);
 	});
 
 	it("honors the existing completion.notify=off gate", () => {

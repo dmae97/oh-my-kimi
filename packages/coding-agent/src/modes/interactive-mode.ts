@@ -275,7 +275,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusLine: StatusLineComponent;
 
 	isInitialized = false;
-	isBackgrounded = false;
 	isBashMode = false;
 	toolOutputExpanded = false;
 	todoExpanded = false;
@@ -2506,9 +2505,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void {
 		this.#extensionUiController.initializeHookRunner(uiContext, hasUI);
 	}
-	createBackgroundUiContext(): ExtensionUIContext {
-		return this.#extensionUiController.createBackgroundUiContext();
-	}
 
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
@@ -2550,11 +2546,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	// Event handling
-	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {
-		await this.#eventController.handleBackgroundEvent(event);
-	}
-
 	// UI helpers
 	present(content: Component | readonly Component[]): void {
 		if (Array.isArray(content)) {
@@ -2594,7 +2585,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showPinnedError(message: string): void {
-		if (this.isBackgrounded) return;
 		this.errorBannerContainer.clear();
 		this.errorBannerContainer.addChild(new ErrorBannerComponent(message));
 		this.ui.requestRender();
@@ -3068,10 +3058,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleDequeue(): void {
 		this.#inputController.handleDequeue();
-	}
-
-	handleBackgroundCommand(): void {
-		this.#inputController.handleBackgroundCommand();
 	}
 
 	handleImagePaste(): Promise<boolean> {

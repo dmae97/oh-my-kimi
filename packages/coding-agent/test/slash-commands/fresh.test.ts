@@ -12,7 +12,6 @@ function createRuntimeHarness(handleFreshCommand: InteractiveModeContext["handle
 				editor: { setText } as unknown as InteractiveModeContext["editor"],
 				handleFreshCommand,
 			} as InteractiveModeContext,
-			handleBackgroundCommand: () => {},
 		},
 	};
 }

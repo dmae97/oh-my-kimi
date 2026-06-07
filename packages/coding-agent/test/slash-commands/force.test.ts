@@ -20,7 +20,6 @@ function createRuntimeHarness(overrides?: { setForcedToolChoice?: (toolName: str
 	return {
 		runtime: {
 			ctx,
-			handleBackgroundCommand: () => {},
 		},
 		setForcedToolChoice,
 		setText,

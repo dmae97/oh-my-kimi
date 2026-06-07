@@ -30,7 +30,6 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 			for (const item of items) ctx.chatContainer.addChild(item);
 			ctx.ui.requestRender();
 		},
-		isBackgrounded: false,
 		sessionManager: {
 			buildSessionContext: () => buildSessionContext([]),
 			getEntries: () => [],
@@ -69,7 +68,6 @@ describe("InteractiveMode.showStatus", () => {
 				for (const item of items) ctx.chatContainer.addChild(item);
 				ctx.ui.requestRender();
 			},
-			isBackgrounded: false,
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
 		} as unknown as InteractiveModeContext;
@@ -95,7 +93,6 @@ describe("InteractiveMode.showStatus", () => {
 				for (const item of items) ctx.chatContainer.addChild(item);
 				ctx.ui.requestRender();
 			},
-			isBackgrounded: false,
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
 		} as unknown as InteractiveModeContext;

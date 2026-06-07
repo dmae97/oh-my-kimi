@@ -9,7 +9,6 @@ import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
-import type { AgentSessionEvent } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
@@ -41,7 +40,7 @@ export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
-		if (!isTinyTitleLocalModelKey(modelKey) || this.ctx.isBackgrounded) return;
+		if (!isTinyTitleLocalModelKey(modelKey)) return;
 		const component = new TinyTitleDownloadProgressComponent(modelKey);
 		let added = false;
 		let disposed = false;
@@ -291,7 +290,6 @@ export class InputController {
 			// Handle built-in slash commands
 			const slashResult = await executeBuiltinSlashCommand(text, {
 				ctx: this.ctx,
-				handleBackgroundCommand: () => this.handleBackgroundCommand(),
 			});
 			if (slashResult === true) {
 				return;
@@ -613,67 +611,6 @@ export class InputController {
 			this.ctx.session.abort();
 		}
 		return allQueued.length;
-	}
-
-	handleBackgroundCommand(): void {
-		if (this.ctx.isBackgrounded) {
-			this.ctx.showStatus("Background mode already enabled");
-			return;
-		}
-		if (!this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0) {
-			this.ctx.showWarning("Agent is idle; nothing to background");
-			return;
-		}
-		if (this.ctx.hasActiveBtw()) {
-			this.ctx.handleBtwEscape();
-		}
-		if (this.ctx.hasActiveOmfg()) {
-			this.ctx.handleOmfgEscape();
-		}
-
-		this.ctx.isBackgrounded = true;
-		const backgroundUiContext = this.ctx.createBackgroundUiContext();
-
-		// Background mode disables interactive UI so tools like ask fail fast.
-		this.ctx.setToolUIContext(backgroundUiContext, false);
-		this.ctx.initializeHookRunner(backgroundUiContext, false);
-
-		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-		}
-		if (this.ctx.autoCompactionLoader) {
-			this.ctx.autoCompactionLoader.stop();
-			this.ctx.autoCompactionLoader = undefined;
-		}
-		if (this.ctx.retryLoader) {
-			this.ctx.retryLoader.stop();
-			this.ctx.retryLoader = undefined;
-		}
-		this.ctx.statusContainer.clear();
-		this.ctx.statusLine.dispose();
-
-		if (this.ctx.unsubscribe) {
-			this.ctx.unsubscribe();
-		}
-		this.ctx.unsubscribe = this.ctx.session.subscribe(async (event: AgentSessionEvent) => {
-			await this.ctx.handleBackgroundEvent(event);
-		});
-
-		// Backgrounding keeps the current process to preserve in-flight agent state.
-		if (this.ctx.isInitialized) {
-			this.ctx.ui.stop();
-			this.ctx.isInitialized = false;
-		}
-
-		process.stdout.write("Background mode enabled. Run `bg` to continue in background.\n");
-
-		if (process.platform === "win32" || !process.stdout.isTTY) {
-			process.stdout.write("Backgrounding requires POSIX job control; continuing in foreground.\n");
-			return;
-		}
-
-		process.kill(0, "SIGTSTP");
 	}
 
 	async handleImagePaste(): Promise<boolean> {

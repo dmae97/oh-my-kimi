@@ -916,15 +916,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "background",
-		aliases: ["bg"],
-		description: "Detach UI and continue running in background",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.editor.setText("");
-			runtime.handleBackgroundCommand();
-		},
-	},
-	{
 		name: "debug",
 		description: "Open debug tools selector",
 		handleTui: (_command, runtime) => {

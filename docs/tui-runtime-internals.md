@@ -199,18 +199,6 @@ Escape exits inactive mode by clearing editor text and restoring border color; w
 2. Stops TUI before suspend.
 3. Sends `SIGTSTP` to process group.
 
-### Background mode (`/background` or `/bg`)
-
-`handleBackgroundCommand()`:
-
-- Rejects when idle.
-- Switches tool UI context to non-interactive (`hasUI=false`) so interactive UI tools fail fast.
-- Stops loaders/status line and unsubscribes foreground event handler.
-- Subscribes background event handler (primarily waits for `agent_end`).
-- Stops TUI and sends `SIGTSTP` (POSIX job control path).
-
-On `agent_end` in background with no queued work, controller sends completion notification and shuts down.
-
 ## Cancellation paths
 
 Primary cancellation inputs:

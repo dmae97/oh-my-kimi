@@ -1,6 +1,5 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
 import { KeybindingsManager } from "../../config/keybindings";
 import type {
 	CompactOptions,
@@ -326,10 +325,6 @@ export class ExtensionUiController {
 					.then(() => this.#applyCustomMessageDisplay(wasStreaming, message.display))
 					.catch((err: unknown) => {
 						const errorText = `Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`;
-						if (this.ctx.isBackgrounded) {
-							logger.error(errorText);
-							return;
-						}
 						this.ctx.showError(errorText);
 					});
 			},
@@ -374,9 +369,6 @@ export class ExtensionUiController {
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			waitForIdle: () => this.ctx.session.agent.waitForIdle(),
 			reload: async () => {
-				if (this.ctx.isBackgrounded) {
-					return;
-				}
 				await this.ctx.session.reload();
 				this.ctx.chatContainer.clear();
 				this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
@@ -384,9 +376,6 @@ export class ExtensionUiController {
 				this.ctx.showStatus("Reloaded session");
 			},
 			newSession: async options => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				// Stop any loading animation
 				if (this.ctx.loadingAnimation) {
 					this.ctx.loadingAnimation.stop();
@@ -425,9 +414,6 @@ export class ExtensionUiController {
 				return { cancelled: false };
 			},
 			branch: async entryId => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				const result = await this.ctx.session.branch(entryId);
 				if (result.cancelled) {
 					return { cancelled: true };
@@ -443,9 +429,6 @@ export class ExtensionUiController {
 				return { cancelled: false };
 			},
 			navigateTree: async (targetId, options) => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				const result = await this.ctx.session.navigateTree(targetId, { summarize: options?.summarize });
 				if (result.cancelled) {
 					return { cancelled: true };
@@ -464,9 +447,6 @@ export class ExtensionUiController {
 			},
 			compact: async instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
 			switchSession: async sessionPath => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				this.clearHookWidgets();
 				const result = await this.ctx.session.switchSession(sessionPath);
 				if (!result) {
@@ -480,36 +460,6 @@ export class ExtensionUiController {
 		};
 
 		extensionRunner.initialize(actions, contextActions, commandActions, uiContext);
-	}
-
-	createBackgroundUiContext(): ExtensionUIContext {
-		return {
-			select: async (_title: string, _options: ExtensionUISelectItem[], _dialogOptions) => undefined,
-			confirm: async (_title: string, _message: string, _dialogOptions) => false,
-			input: async (_title: string, _placeholder?: string, _dialogOptions?: unknown) => undefined,
-			notify: () => {},
-			onTerminalInput: () => () => {},
-			setStatus: () => {},
-			setWorkingMessage: () => {},
-			setWidget: () => {},
-			setTitle: () => {},
-			custom: async () => undefined as never,
-			setEditorText: () => {},
-			pasteToEditor: () => {},
-			getEditorText: () => "",
-			editor: async () => undefined,
-			get theme() {
-				return theme;
-			},
-			getAllThemes: () => Promise.resolve([]),
-			getTheme: () => Promise.resolve(undefined),
-			setTheme: () => Promise.resolve({ success: false, error: "Background mode" }),
-			setFooter: () => {},
-			setHeader: () => {},
-			setEditorComponent: () => {},
-			getToolsExpanded: () => false,
-			setToolsExpanded: () => {},
-		};
 	}
 
 	/**
@@ -531,7 +481,7 @@ export class ExtensionUiController {
 						ui: uiContext,
 						getContextUsage: () => this.ctx.session.getContextUsage(),
 						compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
-						hasUI: !this.ctx.isBackgrounded,
+						hasUI: true,
 						cwd: this.ctx.sessionManager.getCwd(),
 						sessionManager: this.ctx.session.sessionManager,
 						modelRegistry: this.ctx.session.modelRegistry,
@@ -557,10 +507,6 @@ export class ExtensionUiController {
 	 * Show a tool error in the chat.
 	 */
 	showToolError(toolName: string, error: string): void {
-		if (this.ctx.isBackgrounded) {
-			logger.error(`Tool "${toolName}" error: ${error}`);
-			return;
-		}
 		const errorText = new Text(theme.fg("error", `Tool "${toolName}" error: ${error}`), 1, 0);
 		this.ctx.present(errorText);
 	}
@@ -569,9 +515,6 @@ export class ExtensionUiController {
 	 * Set hook status text in the footer.
 	 */
 	setHookStatus(key: string, text: string | undefined): void {
-		if (this.ctx.isBackgrounded) {
-			return;
-		}
 		this.ctx.statusLine.setHookStatus(key, text);
 		this.ctx.ui.requestRender();
 	}
@@ -862,10 +805,6 @@ export class ExtensionUiController {
 		this.ctx.present(errorText);
 	}
 	async #handleInteractiveCompact(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
-		if (this.ctx.isBackgrounded) {
-			await this.#compactSession(instructionsOrOptions);
-			return;
-		}
 		await this.ctx.executeCompaction(instructionsOrOptions, false);
 	}
 
@@ -890,7 +829,7 @@ export class ExtensionUiController {
 	#applyCustomMessageDisplay(wasStreaming: boolean, shouldDisplay: boolean | undefined): void {
 		// For non-streaming cases with display=true, update UI
 		// (streaming cases update via message_end event)
-		if (!this.ctx.isBackgrounded && !wasStreaming && shouldDisplay) {
+		if (!wasStreaming && shouldDisplay) {
 			this.ctx.rebuildChatFromMessages();
 		}
 	}

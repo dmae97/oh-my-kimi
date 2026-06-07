@@ -888,7 +888,6 @@ export class EventController {
 	}
 
 	sendCompletionNotification(): void {
-		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
 
@@ -906,16 +905,5 @@ export class EventController {
 			type: "completion",
 			actions: "focus",
 		});
-	}
-
-	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "agent_end") {
-			return;
-		}
-		if (this.ctx.session.queuedMessageCount > 0 || this.ctx.session.isStreaming) {
-			return;
-		}
-		this.sendCompletionNotification();
-		await this.ctx.shutdown();
 	}
 }
