@@ -1066,6 +1066,18 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
 	});
 
+	test("matches bare OpenRouter-style model id with slash but no provider prefix", () => {
+		const openRouterModels = mockOpenRouterModels as Model[];
+		const result = filterAvailableModelsByEnabledPatterns(
+			openRouterModels,
+			["qwen/qwen3-coder:exacto"],
+			registry,
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
+		expect(result[0].provider).toBe("openrouter");
+	});
+
 	test("returns all models when ALL patterns are globs (cannot evaluate)", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*"], registry);
 		expect(result).toEqual(models);

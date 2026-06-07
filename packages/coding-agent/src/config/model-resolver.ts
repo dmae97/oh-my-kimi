@@ -1114,6 +1114,14 @@ export function filterAvailableModelsByEnabledPatterns(
 			const match = findExactModelReferenceMatch(basePattern, available);
 			if (match) {
 				allowed.add(`${match.provider}/${match.id}`);
+				continue;
+			}
+			// Fallback: treat the whole pattern as a model ID (handles OpenRouter-style bare IDs
+			// like "qwen/qwen3-coder:exacto" where the "/" is part of the id, not a provider separator).
+			for (const m of available) {
+				if (m.id === basePattern) {
+					allowed.add(`${m.provider}/${m.id}`);
+				}
 			}
 			continue;
 		}
