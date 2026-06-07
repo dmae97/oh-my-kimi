@@ -6,12 +6,12 @@
  */
 import path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Container, Text } from "@oh-my-pi/pi-tui";
+import { Container, Markdown, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
-import type { Theme } from "../modes/theme/theme";
+import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import {
 	formatBadge,
 	formatDuration,
@@ -540,13 +540,29 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, expanded: boolean, t
  * the merged result frame so the brief stays visible for the whole task
  * lifecycle — not just until the first progress snapshot replaces the call view.
  */
-function buildContextSection(args: TaskParams | undefined, theme: Theme): { lines: string[] } | undefined {
+type TaskRenderSection = { lines: string[] };
+type ContextSectionRenderer = (width: number) => TaskRenderSection;
+
+// Default output-block layout is: left border + one-cell content inset + right
+// border. Render markdown at that inner width so the output block does not need
+// to rewrap already-rendered context lines.
+const CONTEXT_FRAME_INSET = 3;
+
+function contextMarkdownWidth(frameWidth: number): number {
+	return Math.max(1, frameWidth - CONTEXT_FRAME_INSET);
+}
+
+function createContextSectionRenderer(args: TaskParams | undefined, theme: Theme): ContextSectionRenderer | undefined {
 	// `renderResult` receives the raw tool args (unlike `renderCall`, which is
 	// fed through `repairTaskParams`), so undo any per-field double-encoding here
 	// too. The repair is idempotent on already-clean text.
 	const context = repairDoubleEncodedJsonString(args?.context ?? "").trim();
 	if (!context) return undefined;
-	return { lines: context.split("\n").map(line => (line ? theme.fg("muted", replaceTabs(line)) : "")) };
+
+	const markdown = new Markdown(context, 0, 0, getMarkdownTheme(), {
+		color: text => theme.fg("muted", text),
+	});
+	return width => ({ lines: markdown.render(contextMarkdownWidth(width)) });
 }
 
 /**
@@ -559,11 +575,11 @@ export function renderCall(
 ): Component {
 	const showIsolated = "isolated" in args && args.isolated === true;
 	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
+	const contextSectionRenderer = createContextSectionRenderer(args, theme);
 	return framedBlock(theme, width => {
 		const sections: Array<{ label?: string; lines: string[]; separator?: boolean }> = [];
 
-		const contextSection = buildContextSection(args, theme);
-		if (contextSection) sections.push(contextSection);
+		if (contextSectionRenderer) sections.push(contextSectionRenderer(width));
 
 		// The per-task preview list only exists to surface dispatched agents while
 		// the call args stream in. Once a result snapshot exists, `renderResult`
@@ -1049,7 +1065,7 @@ export function renderResult(
 ): Component {
 	const fallbackText = result.content.find(c => c.type === "text")?.text ?? "";
 	const details = result.details;
-	const contextSection = buildContextSection(args, theme);
+	const contextSectionRenderer = createContextSectionRenderer(args, theme);
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
@@ -1057,7 +1073,7 @@ export function renderResult(
 		return framedBlock(theme, width => ({
 			header,
 			sections: [
-				...(contextSection ? [contextSection] : []),
+				...(contextSectionRenderer ? [contextSectionRenderer(width)] : []),
 				...(text ? [{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] }] : []),
 			],
 			state: "success",
@@ -1124,7 +1140,7 @@ export function renderResult(
 			return {
 				header,
 				sections: [
-					...(contextSection ? [contextSection] : []),
+					...(contextSectionRenderer ? [contextSectionRenderer(width)] : []),
 					{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] },
 				],
 				state,
@@ -1154,7 +1170,7 @@ export function renderResult(
 		return {
 			header,
 			sections: [
-				...(contextSection ? [contextSection] : []),
+				...(contextSectionRenderer ? [contextSectionRenderer(width)] : []),
 				...(lines.length > 0 ? [{ separator: true, lines }] : []),
 			],
 			state,

@@ -1215,7 +1215,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
-							animate: options.isPartial && shimmerEnabled(),
+							// Don't animate once the command has been backgrounded: the block
+							// gets committed to scrollback and finalizes later via the async
+							// update path, so a mid-sweep frame would freeze a stray dark
+							// border segment.
+							animate: options.isPartial && shimmerEnabled() && details?.async?.state !== "running",
 						},
 						uiTheme,
 					);

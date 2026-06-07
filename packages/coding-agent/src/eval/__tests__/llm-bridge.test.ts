@@ -57,7 +57,7 @@ function makeSession(opts: SessionOptions = {}): ToolSession {
 	const modelRegistry = {
 		getAvailable: () => opts.available ?? [SMOL, DEFAULT, SLOW],
 		getApiKey: async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
-		resolver: vi.fn(() => async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey)),
+		resolver: () => async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
 	} as unknown as ModelRegistry;
 	return {
 		settings,
@@ -301,6 +301,7 @@ describe("llm() through eval runtimes", () => {
 			sessionId,
 			sessionFile,
 			toolSession: makeSession(),
+			kernelMode: "per-call",
 		});
 
 		expect(result.exitCode).toBe(0);
@@ -320,6 +321,7 @@ describe("llm() through eval runtimes", () => {
 			sessionId,
 			sessionFile,
 			toolSession: makeSession(),
+			kernelMode: "per-call",
 		});
 
 		expect(result.exitCode).toBe(0);

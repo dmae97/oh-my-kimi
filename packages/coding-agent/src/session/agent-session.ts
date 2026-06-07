@@ -2206,11 +2206,16 @@ export class AgentSession {
 	 * project, `~`-relative when it lives under home, else the raw path.
 	 */
 	#displayRulePath(rulePath: string): string {
-		const cwdRel = relativePathWithinRoot(this.sessionManager.getCwd(), rulePath);
+		const cwdRel = relativePathWithinRoot(this.sessionManager.getCwd(), rulePath) ?? this.#displayPathWithinRoot(this.sessionManager.getCwd(), rulePath);
 		if (cwdRel) return cwdRel;
 		const homeRel = relativePathWithinRoot(os.homedir(), rulePath);
 		if (homeRel) return `~/${homeRel}`;
 		return rulePath;
+	}
+
+	#displayPathWithinRoot(root: string, candidate: string): string | null {
+		const relative = path.relative(path.resolve(root), path.resolve(candidate));
+		return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : null;
 	}
 
 	#addPendingTtsrInjections(rules: Rule[]): void {

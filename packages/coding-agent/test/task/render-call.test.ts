@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { TaskParams } from "@oh-my-pi/pi-coding-agent/task";
+import type { TaskParams, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
 
 describe("task renderer: streaming call preview", () => {
@@ -22,6 +22,35 @@ describe("task renderer: streaming call preview", () => {
 
 	function render(args: TaskParams, expanded = false): string {
 		const component = taskToolRenderer.renderCall(args, { expanded, isPartial: true }, theme);
+		return Bun.stripANSI(component.render(160).join("\n"));
+	}
+
+	function renderCompleted(args: TaskParams): string {
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			totalDurationMs: 12,
+			results: [
+				{
+					index: 0,
+					id: "Only",
+					agent: args.agent,
+					agentSource: "bundled",
+					task: "Render the shared context",
+					exitCode: 0,
+					output: "Done.",
+					stderr: "",
+					truncated: false,
+					durationMs: 12,
+					tokens: 1,
+				},
+			],
+		};
+		const component = taskToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "1 agent completed." }], details },
+			{ expanded: false, isPartial: false },
+			theme,
+			args,
+		);
 		return Bun.stripANSI(component.render(160).join("\n"));
 	}
 
@@ -98,6 +127,23 @@ describe("task renderer: streaming call preview", () => {
 		// Isolation is surfaced as header meta in the frame's top bar (first line),
 		// not as a trailing child row under the task list.
 		expect(lines[0]).toContain("isolated");
+	});
+
+	it("renders shared context as markdown in call and result frames", () => {
+		const args: TaskParams = {
+			agent: "task",
+			context: ["# Goal", "Fix **rendering**.", "", "# Constraints", "- Keep `task` visible"].join("\n"),
+			tasks: [{ id: "Only", description: "Single task", assignment: "..." }],
+		};
+
+		for (const out of [render(args), renderCompleted(args)]) {
+			expect(out).toContain("Goal");
+			expect(out).toContain("Fix rendering.");
+			expect(out).toContain("Constraints");
+			expect(out).toContain("Keep task visible");
+			expect(out).not.toContain("# Goal");
+			expect(out).not.toContain("# Constraints");
+		}
 	});
 
 	// Once the tool produces a result, the container suppresses the call entirely

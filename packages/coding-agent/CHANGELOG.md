@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- Fixed the `task` tool shared-context brief rendering raw Markdown headings (`# Goal`, `# Constraints`) inside framed call/result blocks instead of using the normal Markdown renderer.
+- Fixed the animated pending border on `bash`/`eval` blocks leaving a frozen dark "bar" segment behind after a backgrounded command finalized through the async update path. Once a command is auto-backgrounded (`details.async.state === "running"`) the block stays "partial" in the TUI until the async job-manager delivers the final result, but it also gets committed to native scrollback — so a mid-sweep shimmer frame baked a stray darkened border segment into the committed copy. The border now stops animating (and the 60fps redraw loop stops) the moment a block enters the backgrounded state, so the committed frame is a clean static border.
 - Fixed cold `omp` launch to clear native terminal history on the first paint, avoiding a once-per-launch duplicate welcome/transcript copy before the normal session replay.
 - Fixed plan approval resolution so `resolve` with `action: "apply"` can still find the plan file when `extra.title` is missing or stale by falling back to the current plan path and most-recent local plan artifacts
 - Fixed the search-family tool magnifier glyph (`find`, `search`, `ast_grep`, `search_tool_bm25`) to use the `accent` title color instead of `success` green, so the icon matches the tool title in the status header instead of standing out

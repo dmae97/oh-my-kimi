@@ -421,13 +421,19 @@ export class ToolExecutionComponent extends Container {
 	#updateSpinnerAnimation(): void {
 		// Spinner for: task tool with partial result, or edit/write while args streaming
 		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
-		const isBackgroundAsyncTask =
-			this.#toolName === "task" &&
+		const isBackgroundAsyncRunning =
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
+		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		// Sweep the border of bash/eval execution blocks while they're pending.
+		// Sweep the border of bash/eval execution blocks while they're pending — but
+		// not once they've been backgrounded: a backgrounded job's block gets
+		// committed to scrollback and finalizes later via the async update path, so a
+		// mid-sweep frame would freeze a stray dark "bar" segment into the border.
 		const isPendingExecBlock =
-			this.#isPartial && shimmerEnabled() && (this.#toolName === "bash" || this.#toolName === "eval");
+			this.#isPartial &&
+			shimmerEnabled() &&
+			(this.#toolName === "bash" || this.#toolName === "eval") &&
+			!isBackgroundAsyncRunning;
 		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
 		if (needsSpinner && !this.#spinnerInterval) {
 			this.#lastSpinnerAdvanceAt = performance.now();
