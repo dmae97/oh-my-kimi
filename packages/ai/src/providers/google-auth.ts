@@ -46,6 +46,7 @@ interface ImpersonatedServiceAccountCredentials {
 	type: "impersonated_service_account";
 	service_account_impersonation_url: string;
 	source_credentials: AuthorizedUserCredentials | ServiceAccountCredentials;
+	delegates?: string[];
 }
 
 type AdcFileCredentials = ServiceAccountCredentials | AuthorizedUserCredentials | ImpersonatedServiceAccountCredentials;
@@ -206,18 +207,28 @@ async function resolveAccessTokenUncached(
 		let token: TokenResponse;
 
 		if (creds.type === "impersonated_service_account") {
+			const targetPrincipalMatch = /(?<target>[^/]+):(generateAccessToken|generateIdToken)$/.exec(
+				creds.service_account_impersonation_url,
+			);
+			const targetPrincipal = targetPrincipalMatch?.groups?.target;
+			if (!targetPrincipal) {
+				throw new RangeError(
+					`Cannot extract target principal from ${creds.service_account_impersonation_url}`,
+				);
+			}
+
 			const sourceToken =
 				creds.source_credentials.type === "service_account"
 					? await exchangeJwtForToken(creds.source_credentials, signal, fetchImpl)
 					: await exchangeRefreshToken(creds.source_credentials, signal, fetchImpl);
 
-			const response = await fetchImpl(creds.service_account_impersonation_url, {
+			const response = await fetchImpl(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${targetPrincipal}:generateAccessToken`, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 					Authorization: `Bearer ${sourceToken.access_token}`,
 				},
-				body: JSON.stringify({ delegates: [], scope: [CLOUD_PLATFORM_SCOPE], lifetime: "3600s" }),
+				body: JSON.stringify({ delegates: creds.delegates ?? [], scope: [CLOUD_PLATFORM_SCOPE], lifetime: "3600s" }),
 				signal,
 			});
 			if (!response.ok) {
