@@ -933,7 +933,6 @@ export class SelectorController {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
 				onAuth: (info: { url: string; instructions?: string }) => {
 					const block = new TranscriptBlock();
-					this.ctx.chatContainer.addChild(block);
 					block.addChild(new Text(theme.fg("dim", info.url), 1, 0));
 					const hyperlink = `\x1b]8;;${info.url}\x07Click here to login\x1b]8;;\x07`;
 					block.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
@@ -945,17 +944,16 @@ export class SelectorController {
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("dim", MANUAL_LOGIN_TIP), 1, 0));
 					}
-					this.ctx.ui.requestRender();
+					this.ctx.present(block);
 					this.ctx.openInBrowser(info.url);
 				},
 				onPrompt: async (prompt: { message: string; placeholder?: string }) => {
 					const promptBlock = new TranscriptBlock();
-					this.ctx.chatContainer.addChild(promptBlock);
 					promptBlock.addChild(new Text(theme.fg("warning", prompt.message), 1, 0));
 					if (prompt.placeholder) {
 						promptBlock.addChild(new Text(theme.fg("dim", prompt.placeholder), 1, 0));
 					}
-					this.ctx.ui.requestRender();
+					this.ctx.present(promptBlock);
 					const { promise, resolve } = Promise.withResolvers<string>();
 					const codeInput = new Input();
 					codeInput.onSubmit = () => {
@@ -972,8 +970,7 @@ export class SelectorController {
 					return promise;
 				},
 				onProgress: (message: string) => {
-					this.ctx.chatContainer.addChild(new Text(theme.fg("dim", message), 1, 0));
-					this.ctx.ui.requestRender();
+					this.ctx.present(new Text(theme.fg("dim", message), 1, 0));
 				},
 				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
 			});
@@ -983,8 +980,7 @@ export class SelectorController {
 				new Text(theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}`), 1, 0),
 			);
 			block.addChild(new Text(theme.fg("dim", `Credentials saved to ${getAgentDbPath()}`), 1, 0));
-			this.ctx.chatContainer.addChild(block);
-			this.ctx.ui.requestRender();
+			this.ctx.present(block);
 		} catch (error: unknown) {
 			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
@@ -1017,8 +1013,7 @@ export class SelectorController {
 					new Text(theme.fg("warning", `${providerId} is still authenticated via ${remainingSource}`), 1, 0),
 				);
 			}
-			this.ctx.chatContainer.addChild(block);
-			this.ctx.ui.requestRender();
+			this.ctx.present(block);
 		} catch (error: unknown) {
 			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
 		}

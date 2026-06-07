@@ -71,6 +71,11 @@ export class Loader extends Text {
 		}
 	}
 
+	/** Lifecycle teardown: stop the animation timer. Idempotent. */
+	dispose() {
+		this.stop();
+	}
+
 	setMessage(message: string) {
 		this.message = message;
 		this.#updateDisplay();

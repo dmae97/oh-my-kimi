@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added an optional `dispose()` lifecycle method to `Component` so components can release timers and subscriptions during permanent teardown
+- Added `Container.dispose()` to propagate teardown to child components when a component tree is permanently discarded
+- Added `Loader.dispose()` to stop the loader animation timer when the component is disposed
 
 ## [15.10.0] - 2026-06-06
 

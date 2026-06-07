@@ -94,6 +94,7 @@ import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-colo
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
+import { ChatBlock, type ChatBlockHost } from "./components/chat-block";
 import { CustomEditor } from "./components/custom-editor";
 import { DynamicBorder } from "./components/dynamic-border";
 import { ErrorBannerComponent } from "./components/error-banner";
@@ -367,6 +368,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#welcomeComponent?: WelcomeComponent;
+	readonly #chatHost: ChatBlockHost = { requestRender: () => this.ui.requestRender() };
 
 	constructor(
 		session: AgentSession,
@@ -2529,6 +2531,25 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	// UI helpers
+	present(content: Component | readonly Component[]): void {
+		if (Array.isArray(content)) {
+			for (const item of content) this.#mountChatChild(item);
+		} else {
+			this.#mountChatChild(content as Component);
+		}
+		this.ui.requestRender();
+	}
+
+	#mountChatChild(item: Component): void {
+		this.chatContainer.addChild(item);
+		if (item instanceof ChatBlock) item.mount(this.#chatHost);
+	}
+
+	resetTranscript(): void {
+		this.chatContainer.dispose();
+		this.chatContainer.clear();
+	}
+
 	showStatus(message: string, options?: { dim?: boolean }): void {
 		this.#uiHelpers.showStatus(message, options);
 	}

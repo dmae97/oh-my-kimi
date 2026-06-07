@@ -158,6 +158,20 @@ export interface InteractiveModeContext {
 	handleBackgroundEvent(event: AgentSessionEvent): Promise<void>;
 
 	// UI helpers
+	/**
+	 * Mount transcript content and repaint once. The single sink for "show this in
+	 * chat": producers build and return a `Component` (or a `ChatBlock` carrying
+	 * its own lifecycle) and hand it here instead of touching `chatContainer` /
+	 * `ui.requestRender()` directly. `ChatBlock`s are mounted (their `onMount`
+	 * runs) so their timers/subscriptions start.
+	 */
+	present(content: Component | readonly Component[]): void;
+	/**
+	 * Dispose every live block in the transcript (stopping timers/subscriptions)
+	 * and clear it. Used before a full rebuild so animated/streaming blocks do not
+	 * leak.
+	 */
+	resetTranscript(): void;
 	showStatus(message: string, options?: { dim?: boolean }): void;
 	showError(message: string): void;
 	showPinnedError(message: string): void;

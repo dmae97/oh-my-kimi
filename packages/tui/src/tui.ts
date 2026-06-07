@@ -128,6 +128,14 @@ export interface Component {
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
 	invalidate(): void;
+
+	/**
+	 * Optional teardown. Called when the component is permanently removed from
+	 * the live tree (e.g. a transcript reset). Release timers, intervals, and
+	 * subscriptions here. Must be idempotent. Containers propagate dispose to
+	 * their children; leaf components without resources may omit it.
+	 */
+	dispose?(): void;
 }
 
 /**
@@ -336,6 +344,17 @@ export class Container implements Component {
 	invalidate(): void {
 		for (const child of this.children) {
 			child.invalidate?.();
+		}
+	}
+
+	/**
+	 * Propagate teardown to children. Call when the container's children are
+	 * being permanently discarded (not when they are detached for reuse — use
+	 * {@link clear} for that). Idempotent per child via each child's own dispose.
+	 */
+	dispose(): void {
+		for (const child of this.children) {
+			child.dispose?.();
 		}
 	}
 

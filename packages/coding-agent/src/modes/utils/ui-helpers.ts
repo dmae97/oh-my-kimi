@@ -91,11 +91,9 @@ export class UiHelpers {
 
 		const spacer = new Spacer(1);
 		const text = new Text(rendered, 1, 0);
-		this.ctx.chatContainer.addChild(spacer);
-		this.ctx.chatContainer.addChild(text);
+		this.ctx.present([spacer, text]);
 		this.ctx.lastStatusSpacer = spacer;
 		this.ctx.lastStatusText = text;
-		this.ctx.ui.requestRender();
 	}
 
 	addMessageToChat(
@@ -492,8 +490,15 @@ export class UiHelpers {
 	renderInitialMessages(prebuiltContext?: SessionContext, options: RenderInitialMessagesOptions = {}): void {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
+		// On a non-preserving rebuild the existing blocks are discarded for good, so
+		// dispose them (stopping any live timers/subscriptions) before clearing. When
+		// preserving, the same instances are re-added below, so detach without dispose.
 		const preservedChatChildren = options.preserveExistingChat ? this.ctx.chatContainer.children : undefined;
-		this.ctx.chatContainer.clear();
+		if (preservedChatChildren) {
+			this.ctx.chatContainer.clear();
+		} else {
+			this.ctx.resetTranscript();
+		}
 		this.ctx.pendingMessagesContainer.clear();
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
@@ -544,9 +549,7 @@ export class UiHelpers {
 			process.stderr.write(`Error: ${errorMessage}\n`);
 			return;
 		}
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0)]);
 	}
 
 	showWarning(warningMessage: string): void {
@@ -554,9 +557,7 @@ export class UiHelpers {
 			process.stderr.write(`Warning: ${warningMessage}\n`);
 			return;
 		}
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0)]);
 	}
 
 	showNewVersionNotification(newVersion: string): void {
@@ -573,8 +574,7 @@ export class UiHelpers {
 			),
 		);
 		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
-		this.ctx.chatContainer.addChild(block);
-		this.ctx.ui.requestRender();
+		this.ctx.present(block);
 	}
 
 	updatePendingMessagesDisplay(): void {

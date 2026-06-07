@@ -4,7 +4,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { buildSessionContext, type SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Container } from "@oh-my-pi/pi-tui";
+import { type Component, Container } from "@oh-my-pi/pi-tui";
 
 function renderLastLine(container: Container, width = 120): string {
 	const last = container.children[container.children.length - 1];
@@ -25,6 +25,11 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 		pendingPythonComponents: [],
 		pendingTools: new Map(),
 		ui: { requestRender: vi.fn() },
+		present: (content: Component | readonly Component[]) => {
+			const items = Array.isArray(content) ? content : [content];
+			for (const item of items) ctx.chatContainer.addChild(item);
+			ctx.ui.requestRender();
+		},
 		isBackgrounded: false,
 		sessionManager: {
 			buildSessionContext: () => buildSessionContext([]),
@@ -59,6 +64,11 @@ describe("InteractiveMode.showStatus", () => {
 		const ctx = {
 			chatContainer: new Container(),
 			ui: { requestRender: vi.fn() },
+			present: (content: Component | readonly Component[]) => {
+				const items = Array.isArray(content) ? content : [content];
+				for (const item of items) ctx.chatContainer.addChild(item);
+				ctx.ui.requestRender();
+			},
 			isBackgrounded: false,
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
@@ -80,6 +90,11 @@ describe("InteractiveMode.showStatus", () => {
 		const ctx = {
 			chatContainer: new Container(),
 			ui: { requestRender: vi.fn() },
+			present: (content: Component | readonly Component[]) => {
+				const items = Array.isArray(content) ? content : [content];
+				for (const item of items) ctx.chatContainer.addChild(item);
+				ctx.ui.requestRender();
+			},
 			isBackgrounded: false,
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,

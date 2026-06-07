@@ -176,10 +176,10 @@ export class ExtensionUiController {
 				this.ctx.streamingMessage = undefined;
 				this.ctx.pendingTools.clear();
 
-				this.ctx.chatContainer.addChild(new Spacer(1));
-				this.ctx.chatContainer.addChild(
+				this.ctx.present([
+					new Spacer(1),
 					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				);
+				]);
 				await this.ctx.reloadTodos();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
 
@@ -415,10 +415,10 @@ export class ExtensionUiController {
 				this.ctx.streamingMessage = undefined;
 				this.ctx.pendingTools.clear();
 
-				this.ctx.chatContainer.addChild(new Spacer(1));
-				this.ctx.chatContainer.addChild(
+				this.ctx.present([
+					new Spacer(1),
 					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				);
+				]);
 				await this.ctx.reloadTodos();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
 
@@ -562,8 +562,7 @@ export class ExtensionUiController {
 			return;
 		}
 		const errorText = new Text(theme.fg("error", `Tool "${toolName}" error: ${error}`), 1, 0);
-		this.ctx.chatContainer.addChild(errorText);
-		this.ctx.ui.requestRender();
+		this.ctx.present(errorText);
 	}
 
 	/**
@@ -860,8 +859,7 @@ export class ExtensionUiController {
 
 	showExtensionError(extensionPath: string, error: string): void {
 		const errorText = new Text(theme.fg("error", `Extension "${extensionPath}" error: ${error}`), 1, 0);
-		this.ctx.chatContainer.addChild(errorText);
-		this.ctx.ui.requestRender();
+		this.ctx.present(errorText);
 	}
 	async #handleInteractiveCompact(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
 		if (this.ctx.isBackgrounded) {

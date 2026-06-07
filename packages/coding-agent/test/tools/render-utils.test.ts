@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as os from "node:os";
 import * as path from "node:path";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
-import { getThemeByName, initTheme, theme, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, initTheme, type Theme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	dedupeParseErrors,
 	expandKeyHint,
@@ -14,7 +14,7 @@ import {
 	formatScreenshot,
 	truncateDiffByHunk,
 } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
-import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import { getKeybindings, setKeybindings, type KeybindingsManager as TuiKeybindingsManager } from "@oh-my-pi/pi-tui";
 
 describe("parse error formatting", () => {
 	it("deduplicates parse errors while preserving order", () => {
@@ -295,7 +295,7 @@ describe("formatExpandHint / expandKeyHint", () => {
 		format: { bracketLeft: "[", bracketRight: "]" },
 	} as unknown as Theme;
 
-	let previous: ReturnType<typeof getKeybindings>;
+	let previous: TuiKeybindingsManager;
 	beforeEach(() => {
 		previous = getKeybindings();
 	});

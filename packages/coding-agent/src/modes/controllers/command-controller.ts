@@ -53,8 +53,7 @@ function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown:
 	block.addChild(new Spacer(1));
 	block.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
 	block.addChild(new DynamicBorder());
-	ctx.chatContainer.addChild(block);
-	ctx.ui.requestRender();
+	ctx.present(block);
 }
 
 export class CommandController {
@@ -336,9 +335,7 @@ export class CommandController {
 			}
 		}
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(info, 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
 	async handleJobsCommand(): Promise<void> {
@@ -355,9 +352,7 @@ export class CommandController {
 
 		if (snapshot.running.length === 0 && snapshot.recent.length === 0) {
 			info += `\n${theme.fg("dim", "No async jobs yet.")}\n`;
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new Text(info, 1, 0));
-			this.ctx.ui.requestRender();
+			this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 			return;
 		}
 
@@ -377,9 +372,7 @@ export class CommandController {
 			}
 		}
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(info.trimEnd(), 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(info.trimEnd(), 1, 0)]);
 	}
 
 	async handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {
@@ -405,9 +398,7 @@ export class CommandController {
 
 		const availableWidth = Math.max(40, (this.ctx.ui.terminal.columns ?? 100) - 2);
 		const output = renderUsageReports(usageReports, theme, Date.now(), availableWidth);
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(output, 1, 0)]);
 	}
 
 	async handleChangelogCommand(showFull = false): Promise<void> {
@@ -434,8 +425,7 @@ export class CommandController {
 		block.addChild(new Spacer(1));
 		block.addChild(new Markdown(changelogMarkdown + hint, 1, 1, getMarkdownTheme()));
 		block.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(block);
-		this.ctx.ui.requestRender();
+		this.ctx.present(block);
 	}
 
 	handleHotkeysCommand(): void {
@@ -461,8 +451,7 @@ export class CommandController {
 		block.addChild(new Spacer(1));
 		block.addChild(new Text(output, 1, 0));
 		block.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(block);
-		this.ctx.ui.requestRender();
+		this.ctx.present(block);
 	}
 
 	async handleMemoryCommand(text: string): Promise<void> {
@@ -483,8 +472,7 @@ export class CommandController {
 			block.addChild(new Spacer(1));
 			block.addChild(new Markdown(payload, 1, 1, getMarkdownTheme()));
 			block.addChild(new DynamicBorder());
-			this.ctx.chatContainer.addChild(block);
-			this.ctx.ui.requestRender();
+			this.ctx.present(block);
 			return;
 		}
 
@@ -805,8 +793,7 @@ export class CommandController {
 		this.ctx.streamingMessage = undefined;
 		this.ctx.pendingTools.clear();
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1));
+		this.ctx.present([new Spacer(1), new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1)]);
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender(true, { clearScrollback: true });
 	}
@@ -845,11 +832,10 @@ export class CommandController {
 
 		const sessionFile = this.ctx.session.sessionFile;
 		const shortPath = sessionFile ? sessionFile.split("/").pop() : "new session";
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
+		this.ctx.present([
+			new Spacer(1),
 			new Text(`${theme.fg("accent", `${theme.status.success} Session forked to ${shortPath}`)}`, 1, 1),
-		);
-		this.ctx.ui.requestRender();
+		]);
 	}
 
 	async handleMoveCommand(targetPath: string): Promise<void> {
@@ -883,11 +869,10 @@ export class CommandController {
 			await this.ctx.sessionManager.moveTo(resolvedPath);
 			await this.ctx.applyCwdChange(resolvedPath);
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			this.ctx.present([
+				new Spacer(1),
 				new Text(`${theme.fg("accent", `${theme.status.success} Session moved to ${resolvedPath}`)}`, 1, 1),
-			);
-			this.ctx.ui.requestRender();
+			]);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -918,7 +903,7 @@ export class CommandController {
 			this.ctx.pendingMessagesContainer.addChild(this.ctx.bashComponent);
 			this.ctx.pendingBashComponents.push(this.ctx.bashComponent);
 		} else {
-			this.ctx.chatContainer.addChild(this.ctx.bashComponent);
+			this.ctx.present(this.ctx.bashComponent);
 		}
 		this.ctx.ui.requestRender();
 
@@ -959,7 +944,7 @@ export class CommandController {
 			this.ctx.pendingMessagesContainer.addChild(this.ctx.pythonComponent);
 			this.ctx.pendingPythonComponents.push(this.ctx.pythonComponent);
 		} else {
-			this.ctx.chatContainer.addChild(this.ctx.pythonComponent);
+			this.ctx.present(this.ctx.pythonComponent);
 		}
 		this.ctx.ui.requestRender();
 
@@ -1148,10 +1133,10 @@ export class CommandController {
 			this.ctx.updateEditorBorderColor();
 			await this.ctx.reloadTodos();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			this.ctx.present([
+				new Spacer(1),
 				new Text(`${theme.fg("accent", `${theme.status.success} New session started with handoff context`)}`, 1, 1),
-			);
+			]);
 			if (result.savedPath) {
 				this.ctx.showStatus(`Handoff document saved to: ${result.savedPath}`);
 			}
