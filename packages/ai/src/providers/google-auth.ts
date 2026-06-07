@@ -42,7 +42,13 @@ interface AuthorizedUserCredentials {
 	refresh_token: string;
 }
 
-type AdcFileCredentials = ServiceAccountCredentials | AuthorizedUserCredentials;
+interface ImpersonatedServiceAccountCredentials {
+	type: "impersonated_service_account";
+	service_account_impersonation_url: string;
+	source_credentials: AuthorizedUserCredentials | ServiceAccountCredentials;
+}
+
+type AdcFileCredentials = ServiceAccountCredentials | AuthorizedUserCredentials | ImpersonatedServiceAccountCredentials;
 
 interface TokenResponse {
 	access_token: string;
@@ -196,10 +202,37 @@ async function resolveAccessTokenUncached(
 ): Promise<{ source: string; token: TokenResponse }> {
 	const adc = await loadAdcCredentials();
 	if (adc) {
-		const token =
-			adc.creds.type === "service_account"
-				? await exchangeJwtForToken(adc.creds, signal, fetchImpl)
-				: await exchangeRefreshToken(adc.creds, signal, fetchImpl);
+		const creds = adc.creds;
+		let token: TokenResponse;
+
+		if (creds.type === "impersonated_service_account") {
+			const sourceToken =
+				creds.source_credentials.type === "service_account"
+					? await exchangeJwtForToken(creds.source_credentials, signal, fetchImpl)
+					: await exchangeRefreshToken(creds.source_credentials, signal, fetchImpl);
+
+			const response = await fetchImpl(creds.service_account_impersonation_url, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${sourceToken.access_token}`,
+				},
+				body: JSON.stringify({ delegates: [], scope: [CLOUD_PLATFORM_SCOPE], lifetime: "3600s" }),
+				signal,
+			});
+			if (!response.ok) {
+				const detail = await response.text().catch(() => "");
+				throw new Error(`Google Impersonation token exchange failed (${response.status}): ${detail}`);
+			}
+			const data = (await response.json()) as { accessToken: string; expireTime: string };
+			const expiresIn = Math.max(0, Math.floor((new Date(data.expireTime).getTime() - Date.now()) / 1000));
+			token = { access_token: data.accessToken, expires_in: expiresIn, token_type: "Bearer" };
+		} else {
+			token =
+				creds.type === "service_account"
+					? await exchangeJwtForToken(creds, signal, fetchImpl)
+					: await exchangeRefreshToken(creds, signal, fetchImpl);
+		}
 		return { source: adc.source, token };
 	}
 	const metadata = await fetchMetadataToken(signal, fetchImpl);
