@@ -375,6 +375,38 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 	}
 }
 
+type MissingCwdMoveResult =
+	| { status: "not-needed" }
+	| { status: "declined" }
+	| { status: "moved"; manager: SessionManager };
+
+async function moveMissingCwdSessionIfNeeded(
+	sessionArg: string,
+	session: SessionInfo,
+	cwd: string,
+	sessionDir: string | undefined,
+	askToMoveSession: SessionPrompt,
+): Promise<MissingCwdMoveResult> {
+	const sourceCwd = session.cwd;
+	if (!sourceCwd || fsSync.existsSync(sourceCwd)) {
+		return { status: "not-needed" };
+	}
+
+	const movePromptResult = await askToMoveSession(session);
+	if (movePromptResult === "unavailable") {
+		throw new Error(
+			`Session "${sessionArg}" belongs to a directory that no longer exists (${sourceCwd}); run interactively to move it into the current project.`,
+		);
+	}
+	if (movePromptResult === "declined") {
+		return { status: "declined" };
+	}
+
+	const manager = await SessionManager.open(session.path, sessionDir);
+	await manager.moveTo(cwd, sessionDir);
+	return { status: "moved", manager };
+}
+
 async function getChangelogForDisplay(parsed: Args): Promise<string | undefined> {
 	if (parsed.continue || parsed.resume) {
 		return undefined;
@@ -450,27 +482,37 @@ export async function createSessionManager(
 		if (!match) {
 			throw new Error(`Session "${sessionArg}" not found.`);
 		}
+		if (match.scope === "local") {
+			const moveResult = await moveMissingCwdSessionIfNeeded(
+				sessionArg,
+				match.session,
+				cwd,
+				parsed.sessionDir,
+				askToMoveSession,
+			);
+			if (moveResult.status === "moved") {
+				return moveResult.manager;
+			}
+			if (moveResult.status === "declined") {
+				return undefined;
+			}
+		}
 		if (match.scope === "global") {
 			const normalizedCwd = normalizePathForComparison(cwd);
 			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
 			if (normalizedCwd !== normalizedMatchCwd) {
-				// If the session's recorded directory no longer exists, it was almost
-				// certainly moved/renamed (e.g. `git worktree move`). Re-root the existing
-				// session here instead of forking a duplicate copy.
-				const sourceCwd = match.session.cwd;
-				if (sourceCwd && !fsSync.existsSync(sourceCwd)) {
-					const movePromptResult = await askToMoveSession(match.session);
-					if (movePromptResult === "unavailable") {
-						throw new Error(
-							`Session "${sessionArg}" belongs to a directory that no longer exists (${sourceCwd}); run interactively to move it into the current project.`,
-						);
-					}
-					if (movePromptResult === "declined") {
-						return undefined;
-					}
-					const manager = await SessionManager.open(match.session.path, parsed.sessionDir);
-					await manager.moveTo(cwd, parsed.sessionDir);
-					return manager;
+				const moveResult = await moveMissingCwdSessionIfNeeded(
+					sessionArg,
+					match.session,
+					cwd,
+					parsed.sessionDir,
+					askToMoveSession,
+				);
+				if (moveResult.status === "moved") {
+					return moveResult.manager;
+				}
+				if (moveResult.status === "declined") {
+					return undefined;
 				}
 				const forkPromptResult = await askToForkSession(match.session);
 				if (forkPromptResult === "unavailable") {

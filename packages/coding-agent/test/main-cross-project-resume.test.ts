@@ -15,12 +15,13 @@ import * as path from "node:path";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
-import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionHeader, SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as sessionManagerModule from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
-function buildArgs(resume: string): Args {
+function buildArgs(resume: string, sessionDir?: string): Args {
 	return {
 		resume,
+		sessionDir,
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
@@ -123,5 +124,65 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 		await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
 			`Session "019e84ed" belongs to a directory that no longer exists (${missingProject}); run interactively to move it into the current project.`,
 		);
+	});
+
+	it("moves a local explicit-session-dir match whose recorded cwd is gone", async () => {
+		const currentProject = path.join(missingRoot, "current-project");
+		const explicitSessionDir = path.join(missingRoot, "sessions");
+		await fsp.mkdir(currentProject, { recursive: true });
+
+		const moved = sessionManagerModule.SessionManager.create(missingProject, explicitSessionDir);
+		moved.appendMessage({ role: "user", content: "before local move", timestamp: 1 });
+		await moved.flush();
+		const oldFile = moved.getSessionFile();
+		if (!oldFile) throw new Error("Expected persisted session file");
+		const resumePrefix = moved.getSessionId().slice(0, 8);
+		const sessionInfo: SessionInfo = {
+			path: oldFile,
+			id: moved.getSessionId(),
+			cwd: missingProject,
+			title: "moved-local",
+			created: new Date(0),
+			modified: new Date(0),
+			messageCount: 1,
+			size: 0,
+			firstMessage: "before local move",
+			allMessagesText: "before local move",
+		};
+		await moved.close();
+		expect(fs.existsSync(missingProject)).toBe(false);
+		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue({
+			scope: "local",
+			session: sessionInfo,
+		});
+
+		const forkPrompt = vi.fn(async () => "accepted" as const);
+		const movePrompt = vi.fn(async () => "accepted" as const);
+		const result = await createSessionManager(
+			buildArgs(resumePrefix, explicitSessionDir),
+			currentProject,
+			stubSettings,
+			forkPrompt,
+			movePrompt,
+		);
+
+		if (!result) throw new Error("Expected moved session manager");
+		try {
+			expect(result.getSessionFile()).toBe(oldFile);
+			expect(result.getCwd()).toBe(path.resolve(currentProject));
+			const entries = await sessionManagerModule.loadEntriesFromFile(oldFile);
+			const header = entries.find(
+				(entry): entry is SessionHeader =>
+					typeof entry === "object" &&
+					entry !== null &&
+					"type" in entry &&
+					(entry as { type: unknown }).type === "session",
+			);
+			expect(header?.cwd).toBe(path.resolve(currentProject));
+		} finally {
+			await result.close();
+		}
+		expect(forkPrompt).not.toHaveBeenCalled();
+		expect(movePrompt).toHaveBeenCalledTimes(1);
 	});
 });
