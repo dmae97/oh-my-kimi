@@ -250,8 +250,16 @@ function validateSchemaNode(
 		const branchValid = keyword === "anyOf" ? matches > 0 : matches === 1;
 		if (!branchValid) {
 			if (matches === 0 && firstIssues && firstIssues.length > 0) {
+				// Only tag issues that sit at the combinator's own path as
+				// union-branch; deeper issues describe a specific field within
+				// the failed branch and should remain individually repairable.
+				const unionDepth = path.length;
 				for (const branchIssue of firstIssues) {
-					issues.push({ ...branchIssue, fromUnionBranch: true });
+					if (branchIssue.path.length === unionDepth) {
+						issues.push({ ...branchIssue, fromUnionBranch: true });
+					} else {
+						issues.push(branchIssue);
+					}
 				}
 			} else {
 				pushIssue(

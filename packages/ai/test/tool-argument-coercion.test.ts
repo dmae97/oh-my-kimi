@@ -195,6 +195,61 @@ describe("Tool argument coercion", () => {
 		).toThrow("Validation failed");
 	});
 
+	it("still wraps nested array fields inside a tag-selected Zod union branch", () => {
+		const tool: Tool = {
+			name: "tagged_union",
+			description: "",
+			parameters: z.union([
+				z.object({ type: z.literal("indices"), indices: z.array(z.number()) }),
+				z.object({ type: z.literal("all") }),
+			]),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-tagged-union",
+			name: "tagged_union",
+			arguments: { type: "indices", indices: 1 },
+		});
+
+		expect(result).toEqual({ type: "indices", indices: [1] });
+	});
+
+	it("still wraps nested array fields inside a tag-selected JSON Schema anyOf branch", () => {
+		const tool: Tool = {
+			name: "tagged_json_union",
+			description: "",
+			parameters: {
+				anyOf: [
+					{
+						type: "object",
+						properties: {
+							type: { const: "indices" },
+							indices: { type: "array", items: { type: "number" } },
+						},
+						required: ["type", "indices"],
+						additionalProperties: false,
+					},
+					{
+						type: "object",
+						properties: { type: { const: "all" } },
+						required: ["type"],
+						additionalProperties: false,
+					},
+				],
+			},
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-tagged-json-union",
+			name: "tagged_json_union",
+			arguments: { type: "indices", indices: 1 },
+		});
+
+		expect(result).toEqual({ type: "indices", indices: [1] });
+	});
+
 	it("parses JSON objects in string values when schema expects object", () => {
 		const tool: Tool = {
 			name: "t4",
