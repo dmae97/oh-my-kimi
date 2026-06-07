@@ -53,7 +53,13 @@ interface JsSession {
 const sessions = new Map<string, JsSession>();
 const startingSessions = new Map<string, Promise<JsSession>>();
 const resettingSessions = new Set<string>();
-const READY_TIMEOUT_MS_DEFAULT = 5_000;
+// Worker startup (module-graph import + WorkerCore construction) is infrastructure
+// cost, not user compute. Floor it independently of Bun's 5s default per-test timeout
+// so a slow cold-start under load isn't aborted mid-init — terminating a still-
+// initializing Bun worker triggers the same kind of terminate-race that motivates
+// avoiding `vm.runInContext` (see shared/indirect-eval.ts), here surfacing as a
+// SIGILL/SIGSEGV. Callers that pass a larger per-cell budget still dominate.
+const WORKER_INIT_TIMEOUT_MS = 15_000;
 
 export async function executeInVmContext(options: {
 	sessionKey: string;
@@ -191,9 +197,9 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 			handleSessionMessage(session, msg);
 		});
 		try {
-			// Cold-start can exceed 5s on slow hosts. Let the caller's per-cell timeout dominate so
-			// users can grant more headroom when they raise `timeout` on a cell.
-			const readyTimeoutMs = Math.max(READY_TIMEOUT_MS_DEFAULT, timeoutMs ?? 0);
+			// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
+			// dominates when larger so users can grant more by raising `timeout` on a cell.
+			const readyTimeoutMs = Math.max(WORKER_INIT_TIMEOUT_MS, timeoutMs ?? 0);
 			await raceWithTimeout(readyPromise, readyTimeoutMs, "Timed out initializing JS eval worker");
 			worker.send({ type: "init", snapshot });
 			sessions.set(sessionKey, session);

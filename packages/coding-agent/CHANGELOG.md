@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed a flaky JS eval worker startup that intermittently failed unrelated CI runs. The worker-ready wait reused Bun's 5s default per-test timeout as its floor, so a slow cold-start under `--isolate` + high concurrency was aborted mid-init; terminating a still-initializing Bun worker is the documented SIGILL/SIGTRAP crash trigger, which took down the whole test file. Worker init now floors at a fixed 15s infrastructure budget (independent of, and still dominated by, a larger per-cell `timeout`), and the JS eval test suites set a 20s file-local timeout so cold starts complete instead of being torn down.
 
 ### Fixed
 
