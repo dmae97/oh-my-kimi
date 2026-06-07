@@ -71,9 +71,9 @@ describe("withAuth", () => {
 	});
 
 	it("throws when a static key is missing", async () => {
-		await expect(
-			withAuth(undefined, async () => "never", { missingKeyMessage: "no key for foo" }),
-		).rejects.toThrow("no key for foo");
+		await expect(withAuth(undefined, async () => "never", { missingKeyMessage: "no key for foo" })).rejects.toThrow(
+			"no key for foo",
+		);
 	});
 
 	it("refreshes the same account, then switches, in order", async () => {

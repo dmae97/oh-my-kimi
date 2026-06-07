@@ -155,9 +155,7 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 	test("rotateSessionCredential returns false when the session has no sticky credential", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		registerProvider();
-		await authStorage.set(PROVIDER, [
-			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
-		]);
+		await authStorage.set(PROVIDER, [{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() }]);
 
 		// Never resolved a key for this session → nothing to rotate away from.
 		expect(await authStorage.rotateSessionCredential(PROVIDER, "untouched", { error: authError() })).toBe(false);

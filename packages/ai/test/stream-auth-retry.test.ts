@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai";
 import type { ApiKeyResolveContext } from "@oh-my-pi/pi-ai";
+import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
