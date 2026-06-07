@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-registry";
@@ -17,7 +18,8 @@ import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
-import { ensureSupportedImageInput } from "../../utils/image-loading";
+import { EnhancedPasteController } from "../../utils/enhanced-paste";
+import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 
@@ -38,6 +40,8 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
+
+	#enhancedPaste?: EnhancedPasteController;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
 		if (!isTinyTitleLocalModelKey(modelKey)) return;
@@ -175,6 +179,7 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
 		);
 		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
+		this.ctx.editor.onPasteImagePath = path => void this.handleImagePathPaste(path);
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteTextRaw",
 			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
@@ -222,6 +227,8 @@ export class InputController {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionObserver());
 		}
 
+		this.#setupEnhancedPaste();
+
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
 			const wasPythonMode = this.ctx.isPythonMode;
@@ -232,6 +239,24 @@ export class InputController {
 				this.ctx.updateEditorBorderColor();
 			}
 		};
+	}
+
+	#setupEnhancedPaste(): void {
+		if (this.#enhancedPaste) return;
+
+		this.#enhancedPaste = new EnhancedPasteController({
+			write: data => this.ctx.ui.terminal.write(data),
+			pasteText: text => {
+				this.ctx.editor.pasteText(text);
+				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			},
+			pasteImage: async image => {
+				await this.#normalizeAndInsertPastedImage(image, `Unsupported pasted image format: ${image.mimeType}`);
+			},
+			showStatus: message => this.ctx.showStatus(message),
+		});
+		this.ctx.ui.addInputListener(data => (this.#enhancedPaste?.handleInput(data) ? { consume: true } : undefined));
+		this.ctx.ui.addStartListener(() => this.#enhancedPaste?.enable());
 	}
 
 	setupEditorSubmitHandler(): void {
@@ -613,62 +638,92 @@ export class InputController {
 		return allQueued.length;
 	}
 
-	async handleImagePaste(): Promise<boolean> {
-		try {
-			const image = await readImageFromClipboard();
-			if (image) {
-				const base64Data = image.data.toBase64();
-				let imageData = await ensureSupportedImageInput({
-					type: "image",
-					data: base64Data,
-					mimeType: image.mimeType,
-				});
-				if (!imageData) {
-					this.ctx.showStatus(`Unsupported clipboard image format: ${image.mimeType}`);
-					return false;
-				}
-				if (settings.get("images.autoResize")) {
-					try {
-						const resized = await resizeImage({
-							type: "image",
-							data: imageData.data,
-							mimeType: imageData.mimeType,
-						});
-						imageData = { type: "image", data: resized.data, mimeType: resized.mimeType };
-					} catch {
-						// Keep the normalized image when resize fails.
-					}
-				}
+	async #insertPendingImage(imageData: ImageContent): Promise<void> {
+		const imageLink = (
+			await materializeImageReferenceLinks(
+				[
+					{
+						type: "image",
+						data: imageData.data,
+						mimeType: imageData.mimeType,
+					},
+				],
+				this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
+			)
+		)?.[0];
+		this.ctx.pendingImages.push({
+			type: "image",
+			data: imageData.data,
+			mimeType: imageData.mimeType,
+		});
+		this.ctx.pendingImageLinks.push(imageLink);
+		this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+		const imageNum = this.ctx.pendingImages.length;
+		this.ctx.editor.insertText(`[Image #${imageNum}] `);
+		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+	}
 
-				const imageLink = (
-					await materializeImageReferenceLinks(
-						[
-							{
-								type: "image",
-								data: imageData.data,
-								mimeType: imageData.mimeType,
-							},
-						],
-						this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
-					)
-				)?.[0];
-				this.ctx.pendingImages.push({
+	async #normalizeAndInsertPastedImage(image: ImageContent, unsupportedMessage: string): Promise<boolean> {
+		let imageData = await ensureSupportedImageInput(image);
+		if (!imageData) {
+			this.ctx.showStatus(unsupportedMessage);
+			return false;
+		}
+		if (settings.get("images.autoResize")) {
+			try {
+				const resized = await resizeImage({
 					type: "image",
 					data: imageData.data,
 					mimeType: imageData.mimeType,
 				});
-				this.ctx.pendingImageLinks.push(imageLink);
-				this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
-				// Insert placeholder at cursor like Claude does
-				const imageNum = this.ctx.pendingImages.length;
-				const placeholder = `[Image #${imageNum}]`;
-				this.ctx.editor.insertText(`${placeholder} `);
-				this.ctx.ui.requestRender();
-				return true;
+				imageData = { type: "image", data: resized.data, mimeType: resized.mimeType };
+			} catch {
+				// Keep the normalized image when resize fails.
 			}
-			// No image in clipboard - show hint
-			this.ctx.showStatus("No image in clipboard (use terminal paste for text)");
-			return false;
+		}
+		await this.#insertPendingImage(imageData);
+		return true;
+	}
+
+	async handleImagePathPaste(path: string): Promise<void> {
+		try {
+			const image = await loadImageInput({
+				path,
+				cwd: this.ctx.sessionManager.getCwd(),
+				autoResize: false,
+			});
+			if (!image) {
+				this.ctx.editor.pasteText(path);
+				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+				this.ctx.showStatus("Pasted path is not a supported image");
+				return;
+			}
+			await this.#normalizeAndInsertPastedImage(
+				{ type: "image", data: image.data, mimeType: image.mimeType },
+				`Unsupported pasted image format: ${image.mimeType}`,
+			);
+		} catch (error) {
+			this.ctx.editor.pasteText(path);
+			this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			this.ctx.showStatus(error instanceof ImageInputTooLargeError ? error.message : "Failed to read pasted image path");
+		}
+	}
+
+	async handleImagePaste(): Promise<boolean> {
+		try {
+			const image = await readImageFromClipboard();
+			if (!image) {
+				this.ctx.showStatus("No image in clipboard (use terminal paste for text)");
+				return false;
+			}
+			return await this.#normalizeAndInsertPastedImage(
+				{
+					type: "image",
+					data: image.data.toBase64(),
+					mimeType: image.mimeType,
+				},
+				`Unsupported clipboard image format: ${image.mimeType}`,
+			);
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;

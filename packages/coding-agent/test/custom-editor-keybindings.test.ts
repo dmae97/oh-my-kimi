@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import { defaultEditorTheme } from "../../tui/test/test-themes";
-import { CustomEditor } from "../src/modes/components/custom-editor";
+import { CustomEditor, extractBracketedImagePastePath } from "../src/modes/components/custom-editor";
 
 function ctrl(key: string): string {
 	return String.fromCharCode(key.toLowerCase().charCodeAt(0) & 31);
@@ -17,6 +17,23 @@ describe("CustomEditor literal question mark input", () => {
 		editor.handleInput("?");
 
 		expect(editor.getText()).toBe("?");
+	});
+});
+
+describe("CustomEditor bracketed image path paste", () => {
+	it("routes a single pasted image path to the image-path handler", () => {
+		const editor = createEditor();
+		const paths: string[] = [];
+		editor.onPasteImagePath = path => paths.push(path);
+
+		editor.handleInput("\x1b[200~/tmp/screenshot.png\x1b[201~");
+
+		expect(paths).toEqual(["/tmp/screenshot.png"]);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("leaves ordinary bracketed paste text on the editor path", () => {
+		expect(extractBracketedImagePastePath("\x1b[200~not an image.txt\x1b[201~")).toBeUndefined();
 	});
 });
 

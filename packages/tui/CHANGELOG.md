@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed Kitty temp-file image transmission, its startup support probe, the `PI_KITTY_IMAGE_TRANSMISSION` override, and the temp-file helper exports. Kitty/Ghostty image payloads now stay on in-band base64 before placeholder/direct placement, avoiding blank first renders from temp-file load races.
@@ -9,6 +8,8 @@
 
 ### Added
 
+- Added `TUI.addStartListener()` so feature hooks can re-enable terminal modes after temporary stop/start cycles such as external-editor handoffs.
+- Added `Editor.pasteText()` to apply terminal-style paste handling for text inserted from non-bracketed paste transports
 - Added an optional `dispose()` lifecycle method to `Component` so components can release timers and subscriptions during permanent teardown
 - Added `Container.dispose()` to propagate teardown to child components when a component tree is permanently discarded
 - Added `Loader.dispose()` to stop the loader animation timer when the component is disposed
@@ -24,6 +25,7 @@
 
 ### Fixed
 
+- Fixed terminal stop and restore cleanup to disable enhanced paste mode so it does not remain enabled after shutdown
 - Removed the per-frame line-fit `Map` cache from the render timer path to avoid forcing JSC rope-string hashing during scheduled viewport repaints.
 - Fixed `visibleWidth()` so terminal column measurements for ANSI and OSC text now match the native truncation/wrapping helpers, including OSC 66 text-sizing spans being counted at their scaled payload width
 - Fixed cursor, padding, and line-fit behavior when strings contain tabs or OSC escapes by aligning `visibleWidth()` with the native text-width model

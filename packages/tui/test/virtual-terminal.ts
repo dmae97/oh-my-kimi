@@ -134,7 +134,7 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	stop(): void {
-		this.#engineWrite("\x1b[?2004l");
+		this.#engineWrite("\x1b[?2004l\x1b[?5522l");
 		this.#inputHandler = undefined;
 		this.#resizeHandler = undefined;
 	}

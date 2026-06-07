@@ -76,6 +76,7 @@ const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1000l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
+type StartListener = () => void;
 
 export interface RenderTimer {
 	cancel(): void;
@@ -437,6 +438,7 @@ export class TUI extends Container {
 	#previousHeight = 0;
 	#focusedComponent: Component | null = null;
 	#inputListeners = new Set<InputListener>();
+	#startListeners = new Set<StartListener>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
@@ -806,10 +808,24 @@ export class TUI extends Container {
 				this.requestRender(true);
 			},
 		);
+		for (const listener of this.#startListeners) {
+			try {
+				listener();
+			} catch {
+				// Startup listeners are feature hooks; one broken hook must not prevent rendering.
+			}
+		}
 		this.terminal.hideCursor();
 		this.#querySixelSupport();
 		this.#queryCellSize();
 		this.requestRender(true);
+	}
+
+	addStartListener(listener: StartListener): () => void {
+		this.#startListeners.add(listener);
+		return () => {
+			this.#startListeners.delete(listener);
+		};
 	}
 
 	addInputListener(listener: InputListener): () => void {
