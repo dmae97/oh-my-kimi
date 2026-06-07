@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
+import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
-import { formatNumber } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 
 describe("task renderer: nested live rendering", () => {
 	beforeAll(async () => {
@@ -203,5 +203,81 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).not.toContain("tools");
 		expect(text).not.toContain("ctx");
 		expect(text).not.toContain("Σ");
+	});
+
+	it("keeps the shared context visible while the task is in progress", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [makeRunningProgress({ id: "Probe", description: "Investigate padding" })],
+		};
+		const args = {
+			agent: "task",
+			context: "# Goal\nHarden the auth stack before the cut.",
+			tasks: [],
+		} as unknown as TaskParams;
+		const component = taskToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "Running 1 agents..." }], details },
+			{ expanded: false, isPartial: true, spinnerFrame: 0 },
+			theme,
+			args,
+		);
+		const text = Bun.stripANSI(component.render(160).join("\n"));
+		// The brief no longer vanishes the moment the first progress snapshot
+		// replaces the streaming call view.
+		expect(text).toContain("# Goal");
+		expect(text).toContain("Harden the auth stack before the cut.");
+	});
+
+	it("renders a static result header while the body keeps the progress spinner", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [makeRunningProgress({ id: "Probe", description: "Investigate padding" })],
+		};
+		const renderFrame = (frame: number): string[] => {
+			const component = taskToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "Running 1 agents..." }], details },
+				{ expanded: false, isPartial: true, spinnerFrame: frame },
+				theme,
+			);
+			return Bun.stripANSI(component.render(160).join("\n")).split("\n");
+		};
+		const f0 = renderFrame(0);
+		const f1 = renderFrame(1);
+		const header0 = f0.find(l => l.includes("Task"))!;
+		const header1 = f1.find(l => l.includes("Task"))!;
+		const body0 = f0.find(l => l.includes("Probe"))!;
+		const body1 = f1.find(l => l.includes("Probe"))!;
+		// Header is static across spinner frames — no clock ticking beside "Task".
+		expect(header0).toBe(header1);
+		// The per-agent body line still advances its spinner, conveying progress.
+		expect(body0).not.toBe(body1);
+	});
+
+	it("wraps the completed run summary in bracket glyphs, dropping the Total: label", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const ok = makeCompletedSubResult("Alpha", "did the thing");
+		const bad: SingleResult = { ...makeCompletedSubResult("Beta", "blew up"), exitCode: 1, error: "boom" };
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [ok, bad],
+			totalDurationMs: 39_400,
+		};
+		const component = taskToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "2 agents completed" }], details },
+			{ expanded: false, isPartial: false },
+			theme,
+		);
+		const text = Bun.stripANSI(component.render(160).join("\n"));
+		// Bash-style bracketed footer: dim bracket chrome wrapping colored counts,
+		// with no "Total:" prefix between the bracket and the first count.
+		const expected = `${theme.format.bracketLeft}1 succeeded${theme.sep.dot}1 failed${theme.sep.dot}${formatDuration(39_400)}${theme.format.bracketRight}`;
+		expect(text).toContain(expected);
+		expect(text).not.toContain("Total:");
 	});
 });

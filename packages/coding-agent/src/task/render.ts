@@ -30,6 +30,7 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/review";
 import { framedBlock, renderStatusLine } from "../tui";
+import { repairDoubleEncodedJsonString } from "./repair-args";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
@@ -534,6 +535,21 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, expanded: boolean, t
 }
 
 /**
+ * Build the shared-context section (the `# Goal / # Constraints` background
+ * passed to every subagent). Rendered in both the streaming call preview and
+ * the merged result frame so the brief stays visible for the whole task
+ * lifecycle — not just until the first progress snapshot replaces the call view.
+ */
+function buildContextSection(args: TaskParams | undefined, theme: Theme): { lines: string[] } | undefined {
+	// `renderResult` receives the raw tool args (unlike `renderCall`, which is
+	// fed through `repairTaskParams`), so undo any per-field double-encoding here
+	// too. The repair is idempotent on already-clean text.
+	const context = repairDoubleEncodedJsonString(args?.context ?? "").trim();
+	if (!context) return undefined;
+	return { lines: context.split("\n").map(line => (line ? theme.fg("muted", replaceTabs(line)) : "")) };
+}
+
+/**
  * Render the tool call arguments.
  */
 export function renderCall(
@@ -544,15 +560,11 @@ export function renderCall(
 	const showIsolated = "isolated" in args && args.isolated === true;
 	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
 	return framedBlock(theme, width => {
-		const context = (args.context ?? "").trim();
 		const taskCount = args.tasks?.length ?? 0;
 		const sections: Array<{ label?: string; lines: string[] }> = [];
 
-		if (context) {
-			sections.push({
-				lines: context.split("\n").map(line => (line ? theme.fg("muted", replaceTabs(line)) : "")),
-			});
-		}
+		const contextSection = buildContextSection(args, theme);
+		if (contextSection) sections.push(contextSection);
 
 		// The per-task preview list only exists to surface dispatched agents while
 		// the call args stream in. Once a result snapshot exists, `renderResult`
@@ -1034,16 +1046,21 @@ export function renderResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: TaskToolDetails },
 	options: RenderResultOptions,
 	theme: Theme,
+	args?: TaskParams,
 ): Component {
 	const fallbackText = result.content.find(c => c.type === "text")?.text ?? "";
 	const details = result.details;
+	const contextSection = buildContextSection(args, theme);
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
 		const header = renderStatusLine({ icon: "success", title: "Task" }, theme);
 		return framedBlock(theme, width => ({
 			header,
-			sections: text ? [{ lines: [theme.fg("dim", truncateToWidth(text, width))] }] : [],
+			sections: [
+				...(contextSection ? [contextSection] : []),
+				...(text ? [{ lines: [theme.fg("dim", truncateToWidth(text, width))] }] : []),
+			],
 			state: "success",
 			borderColor: "borderMuted",
 			width,
@@ -1060,7 +1077,6 @@ export function renderResult(
 	const header = renderStatusLine(
 		{
 			icon,
-			spinnerFrame: options.spinnerFrame,
 			title: "Task",
 			meta: agentCount > 0 ? [`${agentCount} ${agentCount === 1 ? "agent" : "agents"}`] : undefined,
 		},
@@ -1086,24 +1102,19 @@ export function renderResult(
 			const mergeFailedCount = details.results.filter(r => !r.aborted && r.exitCode === 0 && r.error).length;
 			const successCount = details.results.filter(r => !r.aborted && r.exitCode === 0 && !r.error).length;
 			const failCount = details.results.length - successCount - mergeFailedCount - abortedCount;
-			let summary = `${theme.fg("dim", "Total:")} `;
-			if (abortedCount > 0) {
-				summary += theme.fg("error", `${abortedCount} aborted`);
-				if (successCount > 0 || mergeFailedCount > 0 || failCount > 0) summary += theme.sep.dot;
-			}
-			if (successCount > 0) {
-				summary += theme.fg("success", `${successCount} succeeded`);
-				if (mergeFailedCount > 0 || failCount > 0) summary += theme.sep.dot;
-			}
-			if (mergeFailedCount > 0) {
-				summary += theme.fg("warning", `${mergeFailedCount} merge failed`);
-				if (failCount > 0) summary += theme.sep.dot;
-			}
-			if (failCount > 0) {
-				summary += theme.fg("error", `${failCount} failed`);
-			}
-			summary += `${theme.sep.dot}${theme.fg("dim", formatDuration(details.totalDurationMs))}`;
-			lines.push(summary);
+			const summaryParts: string[] = [];
+			if (abortedCount > 0) summaryParts.push(theme.fg("error", `${abortedCount} aborted`));
+			if (successCount > 0) summaryParts.push(theme.fg("success", `${successCount} succeeded`));
+			if (mergeFailedCount > 0) summaryParts.push(theme.fg("warning", `${mergeFailedCount} merge failed`));
+			if (failCount > 0) summaryParts.push(theme.fg("error", `${failCount} failed`));
+			summaryParts.push(theme.fg("dim", formatDuration(details.totalDurationMs)));
+			// Wrap the run summary in the theme's bracket glyphs (dim chrome, colored
+			// counts) to match the bash tool's `[Wall: … | Exit: …]` footer.
+			lines.push(
+				theme.fg("dim", theme.format.bracketLeft) +
+					summaryParts.join(theme.fg("dim", theme.sep.dot)) +
+					theme.fg("dim", theme.format.bracketRight),
+			);
 		}
 
 		const state = isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
@@ -1113,7 +1124,10 @@ export function renderResult(
 			const text = fallbackText.trim() ? fallbackText : "No results";
 			return {
 				header,
-				sections: [{ lines: [theme.fg("dim", truncateToWidth(text, width))] }],
+				sections: [
+					...(contextSection ? [contextSection] : []),
+					{ lines: [theme.fg("dim", truncateToWidth(text, width))] },
+				],
 				state,
 				borderColor,
 				width,
@@ -1140,7 +1154,7 @@ export function renderResult(
 		while (lines.length > 0 && lines[0].trim() === "") lines.shift();
 		return {
 			header,
-			sections: lines.length > 0 ? [{ lines }] : [],
+			sections: [...(contextSection ? [contextSection] : []), ...(lines.length > 0 ? [{ lines }] : [])],
 			state,
 			borderColor,
 			width,
