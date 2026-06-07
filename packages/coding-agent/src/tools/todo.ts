@@ -9,8 +9,8 @@ import type { Theme } from "../modes/theme/theme";
 import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-manager";
-import { renderStatusLine, renderTreeList } from "../tui";
-import { PREVIEW_LIMITS } from "./render-utils";
+import { framedBlock, renderStatusLine, renderTreeList } from "../tui";
+import { formatErrorDetail, PREVIEW_LIMITS } from "./render-utils";
 
 // =============================================================================
 // Types
@@ -755,19 +755,17 @@ function formatTodoLine(
 	}
 }
 
-function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
+function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme, indent: string): string[] {
 	const lines: string[] = [];
 	for (const phase of phases) {
 		for (const task of phase.tasks) {
 			if (task.status !== "in_progress" || !task.notes || task.notes.length === 0) continue;
-			const bar = uiTheme.fg("dim", uiTheme.tree.vertical);
-			const title = uiTheme.fg("dim", chalk.italic(`§ notes — ${task.content}`));
 			lines.push("");
-			lines.push(`  ${title}`);
+			lines.push(`${indent}${uiTheme.fg("dim", chalk.italic(`§ notes — ${task.content}`))}`);
 			for (let j = 0; j < task.notes.length; j++) {
-				if (j > 0) lines.push(`  ${bar}`);
+				if (j > 0) lines.push("");
 				for (const noteLine of task.notes[j].split("\n")) {
-					lines.push(`  ${bar} ${uiTheme.fg("dim", noteLine)}`);
+					lines.push(`${indent}  ${uiTheme.fg("dim", noteLine)}`);
 				}
 			}
 		}
@@ -775,25 +773,102 @@ function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
 	return lines;
 }
 
+/**
+ * Phases the latest update touched, plus the active (in_progress) phase.
+ * Returns `null` when there is no usable signal, meaning "render every phase
+ * fully" — this preserves the legacy view and the manual-expand path.
+ */
+function computeTouchedPhases(
+	args: TodoRenderArgs | undefined,
+	phases: TodoPhase[],
+	completedTasks: TodoCompletionTransition[],
+): Set<string> | null {
+	const touched = new Set<string>();
+	// The phase holding the in_progress task is where attention sits after the
+	// auto-promotion that follows every completion.
+	for (const phase of phases) {
+		if (phase.tasks.some(task => task.status === "in_progress")) touched.add(phase.name);
+	}
+	// Phases with a task that just transitioned to completed in this update.
+	for (const transition of completedTasks) touched.add(transition.phase);
+	// Phases explicitly named by the ops that ran. `init` replaces the whole
+	// list, so the entire plan is fresh and every phase counts as touched.
+	const ops = Array.isArray(args?.ops) ? args.ops : [];
+	for (const op of ops) {
+		if (!op || typeof op !== "object") continue;
+		if (op.op === "init") {
+			for (const phase of phases) touched.add(phase.name);
+			break;
+		}
+		if (typeof op.phase === "string" && op.phase) {
+			const named = phases.find(phase => phase.name === op.phase);
+			if (named) touched.add(named.name);
+		}
+		if (typeof op.task === "string" && op.task) {
+			const located = findTaskByContent(phases, op.task);
+			if (located) touched.add(located.phase.name);
+		}
+	}
+	return touched.size > 0 ? touched : null;
+}
+
+/** One-line summary for a collapsed (untouched) phase: dim header + progress. */
+function formatPhaseSummary(phase: TodoPhase, oneBasedIndex: number, uiTheme: Theme): string {
+	const total = phase.tasks.length;
+	const done = phase.tasks.filter(task => task.status === "completed").length;
+	const name = uiTheme.fg("dim", chalk.bold(formatPhaseDisplayName(phase.name, oneBasedIndex)));
+	return `${name}${uiTheme.fg("dim", `  ${done}/${total}`)}`;
+}
+
 export const todoToolRenderer = {
-	renderCall(args: TodoRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const ops = args?.ops?.map(entry => {
-			const parts = [entry.op ?? "update"];
-			if (entry.task) parts.push(entry.task);
-			if (entry.phase) parts.push(entry.phase);
-			if (entry.items?.length) parts.push(`${entry.items.length} item${entry.items.length === 1 ? "" : "s"}`);
-			return parts.join(" ");
-		}) ?? ["update"];
-		const text = renderStatusLine({ icon: "pending", title: "Todo", meta: ops }, uiTheme);
-		return new Text(text, 0, 0);
+	renderCall(args: TodoRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
+		// `args` here is the raw partially-parsed JSON from the streaming
+		// tool-call delta and may not satisfy `TodoRenderArgs` at runtime:
+		// `parseStreamingJson` can hand back `{ ops: "[" }` mid-delta, or
+		// entries that are `null` / strings before fields stream. Guard
+		// against non-array `ops` and non-object entries so a malformed
+		// delta never breaks the TUI render loop (#2005).
+		const opsList = Array.isArray(args?.ops) ? args.ops : [];
+		const ops =
+			opsList.length === 0
+				? ["update"]
+				: opsList.map(entry => {
+						const e = entry && typeof entry === "object" ? entry : ({} as NonNullable<typeof entry>);
+						const parts = [e.op ?? "update"];
+						if (e.task) parts.push(e.task);
+						if (e.phase) parts.push(e.phase);
+						if (Array.isArray(e.items) && e.items.length) {
+							parts.push(`${e.items.length} item${e.items.length === 1 ? "" : "s"}`);
+						}
+						return parts.join(" ");
+					});
+		// No body worth boxing while the call streams — a lone status line reads
+		// cleaner than an empty frame. The container renders it without chrome.
+		const header = renderStatusLine(
+			{ icon: "pending", spinnerFrame: options?.spinnerFrame, title: "Todo", meta: ops },
+			uiTheme,
+		);
+		return new Text(header, 0, 0);
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: TodoToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: TodoToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		_args?: TodoRenderArgs,
+		args?: TodoRenderArgs,
 	): Component {
+		if (result.isError) {
+			const errorText = result.content?.find(content => content.type === "text")?.text ?? "Todo operation failed";
+			const header = renderStatusLine({ icon: "error", title: "Todo" }, uiTheme);
+			return framedBlock(uiTheme, width => ({
+				header,
+				sections: [{ lines: formatErrorDetail(errorText, uiTheme).split("\n") }],
+				state: "error",
+				borderColor: "error",
+				width,
+			}));
+		}
+
 		const phases = (result.details?.phases ?? []).filter(phase => phase.tasks.length > 0);
 		const completedTasks = result.details?.completedTasks ?? [];
 		const completionKeysByPhase = new Map<string, Set<string>>();
@@ -809,48 +884,52 @@ export const todoToolRenderer = {
 		const header = renderStatusLine({ icon: "success", title: "Todo", meta: [`${allTasks.length} tasks`] }, uiTheme);
 		if (allTasks.length === 0) {
 			const fallback = result.content?.find(content => content.type === "text")?.text ?? "No todos";
-			return new Text(`${header}\n${uiTheme.fg("dim", fallback)}`, 0, 0);
+			return new Text(`${header}\n  ${uiTheme.fg("dim", fallback)}`, 0, 0);
 		}
 
-		let cachedKey: string | undefined;
-		let cachedLines: string[] | undefined;
-		return {
-			invalidate(): void {
-				cachedKey = undefined;
-				cachedLines = undefined;
-			},
-			render(width: number): string[] {
-				const { expanded, spinnerFrame } = options;
-				const key = `${expanded ? 1 : 0}:${spinnerFrame ?? -1}:${width}`;
-				if (cachedKey === key && cachedLines) return cachedLines;
-
-				const lines: string[] = [header];
-				for (let p = 0; p < phases.length; p++) {
-					const phase = phases[p];
-					if (phases.length > 1) {
-						lines.push(uiTheme.fg("accent", chalk.bold(`  ${formatPhaseDisplayName(phase.name, p + 1)}`)));
-					}
-					const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
-					const treeLines = renderTreeList(
-						{
-							items: phase.tasks,
-							expanded,
-							maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-							itemType: "todo",
-							renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
-						},
-						uiTheme,
-					);
-					for (const line of treeLines) {
-						lines.push(`  ${line}`);
-					}
+		return framedBlock(uiTheme, width => {
+			const { expanded, spinnerFrame } = options;
+			const multiPhase = phases.length > 1;
+			const indent = multiPhase ? "  " : "";
+			// Collapse phases this update didn't touch down to a one-line summary so
+			// a single task flip doesn't redraw every phase's full task list. The
+			// manual expand toggle (and the no-signal fallback) still shows all.
+			const touched = expanded || !multiPhase ? null : computeTouchedPhases(args, phases, completedTasks);
+			const bodyLines: string[] = [];
+			for (let p = 0; p < phases.length; p++) {
+				const phase = phases[p];
+				if (touched && !touched.has(phase.name)) {
+					bodyLines.push(formatPhaseSummary(phase, p + 1, uiTheme));
+					continue;
 				}
-				lines.push(...renderNoteAttachments(phases, uiTheme));
-				cachedKey = key;
-				cachedLines = lines;
-				return lines;
-			},
-		};
+				if (multiPhase) {
+					bodyLines.push(uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1))));
+				}
+				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
+				const treeLines = renderTreeList(
+					{
+						items: phase.tasks,
+						expanded,
+						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
+						itemType: "todo",
+						renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
+					},
+					uiTheme,
+				);
+				for (const line of treeLines) {
+					bodyLines.push(`${indent}${line}`);
+				}
+			}
+			bodyLines.push(...renderNoteAttachments(phases, uiTheme, indent));
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: options.isPartial ? "pending" : "success",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 	mergeCallAndResult: true,
 };

@@ -1,6 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { fileHyperlink, isHyperlinkEnabled, tryResolveInternalUrlSync } from "@oh-my-pi/pi-coding-agent/tui/hyperlink";
+import {
+	fileHyperlink,
+	isHyperlinkEnabled,
+	tryResolveInternalUrlSync,
+	uriHyperlink,
+	urlHyperlink,
+} from "@oh-my-pi/pi-coding-agent/tui/hyperlink";
 import * as terminalCaps from "@oh-my-pi/pi-tui";
 
 // OSC 8 sequence markers
@@ -165,6 +171,34 @@ describe("fileHyperlink", () => {
 		const result = fileHyperlink("/Users/foo/bar.ts", colored);
 		expect(result).toContain(colored);
 		expect(isHyperlinked(result)).toBe(true);
+	});
+});
+
+describe("uriHyperlink", () => {
+	it("wraps arbitrary URI targets when hyperlinks are enabled", () => {
+		setHyperlinkMode("always");
+		const result = uriHyperlink("local://handoff.md", "handoff");
+		expect(isHyperlinked(result)).toBe(true);
+		expect(extractLinkUri(result)).toBe("local://handoff.md");
+	});
+
+	it("leaves text plain for URI targets containing control bytes", () => {
+		setHyperlinkMode("always");
+		expect(uriHyperlink("https://example.com/\x07bad", "bad")).toBe("bad");
+	});
+});
+
+describe("urlHyperlink", () => {
+	it("wraps HTTP URLs and normalizes www hosts", () => {
+		setHyperlinkMode("always");
+		const result = urlHyperlink("www.example.com/path", "example");
+		expect(isHyperlinked(result)).toBe(true);
+		expect(extractLinkUri(result)).toBe("https://www.example.com/path");
+	});
+
+	it("does not wrap non-HTTP URL schemes", () => {
+		setHyperlinkMode("always");
+		expect(urlHyperlink("ftp://example.com/file", "file")).toBe("file");
 	});
 });
 

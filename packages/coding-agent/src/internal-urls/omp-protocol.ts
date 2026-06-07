@@ -64,9 +64,15 @@ export class OmpProtocolHandler implements ProtocolHandler {
 			throw new Error("Path traversal (..) is not allowed in omp:// URLs");
 		}
 
-		const content = EMBEDDED_DOCS[normalized];
+		const docPath =
+			normalized === "docs" ? "" : normalized.startsWith("docs/") ? normalized.slice("docs/".length) : normalized;
+		if (!docPath) {
+			return this.#listDocs(url);
+		}
+
+		const content = EMBEDDED_DOCS[docPath];
 		if (content === undefined) {
-			const lookup = normalized.replace(/\.md$/, "");
+			const lookup = docPath.replace(/\.md$/, "");
 			const suggestions = EMBEDDED_DOC_FILENAMES.filter(
 				f => f.includes(lookup) || lookup.includes(f.replace(/\.md$/, "")),
 			).slice(0, 5);

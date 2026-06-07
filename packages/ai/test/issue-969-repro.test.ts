@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effort, getSupportedEfforts } from "../src/model-thinking";
+import { Effort } from "../src/effort";
+import { getSupportedEfforts } from "../src/model-thinking";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import type { Context, Model } from "../src/types";
 

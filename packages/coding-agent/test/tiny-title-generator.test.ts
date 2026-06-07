@@ -48,6 +48,7 @@ function createRegistry(model: Model<Api>) {
 	return {
 		getAvailable: () => [model],
 		getApiKey: async () => "test-key",
+		resolver: vi.fn(() => async () => "test-key"),
 	} as never;
 }
 

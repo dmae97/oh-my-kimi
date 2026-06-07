@@ -134,7 +134,7 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	stop(): void {
-		this.#engineWrite("\x1b[?2004l");
+		this.#engineWrite("\x1b[?2004l\x1b[?5522l");
 		this.#inputHandler = undefined;
 		this.#resizeHandler = undefined;
 	}
@@ -219,12 +219,12 @@ export class VirtualTerminal implements Terminal {
 
 	// --- Test-only helpers ---------------------------------------------------
 
-	/** Wait for TUI's throttled render pipeline to settle (matches the 16ms frame budget). */
+	/** Wait for TUI's throttled render pipeline to settle (matches the ~33ms frame budget). */
 	async waitForRender(): Promise<void> {
 		const nextTick = Promise.withResolvers<void>();
 		process.nextTick(nextTick.resolve);
 		await nextTick.promise;
-		await Bun.sleep(20);
+		await Bun.sleep(40);
 		await this.flush();
 	}
 
@@ -468,7 +468,7 @@ export class VirtualTerminal implements Terminal {
 				text += " ";
 			} else {
 				text +=
-					cell.grapheme_len > 0 ? this.#term.getGraphemeString(row, col) : String.fromCodePoint(cell.codepoint);
+					cell.grapheme_len > 0 ? this.#term.getGraphemeString(row, col) : this.#safeCodepointText(cell.codepoint);
 			}
 		}
 		return text.replace(/\s+$/u, "");
@@ -490,12 +490,24 @@ export class VirtualTerminal implements Terminal {
 				text +=
 					cell.grapheme_len > 0
 						? this.#term.getScrollbackGraphemeString(offset, col)
-						: String.fromCodePoint(cell.codepoint);
+						: this.#safeCodepointText(cell.codepoint);
 			}
 		}
 		text = text.replace(/\s+$/u, "");
 		this.#historyTextCache[offset] = text;
 		return text;
+	}
+
+	#safeCodepointText(codepoint: number): string {
+		if (
+			!Number.isInteger(codepoint) ||
+			codepoint <= 0 ||
+			codepoint > 0x10ffff ||
+			(codepoint >= 0xd800 && codepoint <= 0xdfff)
+		) {
+			return "";
+		}
+		return String.fromCodePoint(codepoint);
 	}
 
 	#isDefaultBg(cell: GhosttyCell): boolean {

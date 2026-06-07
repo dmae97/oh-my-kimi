@@ -1,5 +1,5 @@
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Box, Container, Spacer } from "@oh-my-pi/pi-tui";
+import { Box, Container } from "@oh-my-pi/pi-tui";
 import type { HookMessageRenderer } from "../../extensibility/hooks/types";
 import { theme } from "../../modes/theme/theme";
 import type { HookMessage } from "../../session/messages";
@@ -22,8 +22,6 @@ export class HookMessageComponent extends Container {
 		private readonly customRenderer?: HookMessageRenderer,
 	) {
 		super();
-
-		this.addChild(new Spacer(1));
 
 		// Create box with purple background (used for default rendering)
 		this.#box = new Box(1, 1, t => theme.bg("customMessageBg", t));

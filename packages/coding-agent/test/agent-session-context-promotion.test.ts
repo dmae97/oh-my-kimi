@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
@@ -15,19 +15,26 @@ describe("AgentSession context promotion", () => {
 	let modelRegistry: ModelRegistry;
 	let authStorage: AuthStorage;
 
-	beforeEach(async () => {
+	beforeAll(async () => {
+		// ModelRegistry eagerly loads the immutable bundled model catalog in its
+		// constructor (~100ms). The catalog and auth fixture never change between
+		// tests here (tests only read models and add benign extra runtime keys),
+		// so build them once instead of paying ~950ms across the 9 cases.
 		tempDir = TempDir.createSync("@pi-context-promotion-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("openai-codex", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
+	afterAll(() => {
+		authStorage.close();
+		tempDir.removeSync();
+	});
+
 	afterEach(async () => {
 		if (session) {
 			await session.dispose();
 		}
-		authStorage.close();
-		tempDir.removeSync();
 	});
 
 	function createOverflowMessage(
@@ -111,6 +118,17 @@ describe("AgentSession context promotion", () => {
 			await Bun.sleep(10);
 		}
 		throw new Error("Timed out waiting for condition");
+	}
+
+	// Deterministically drain the fire-and-forget `agent_end` handler that
+	// `emitExternalEvent` dispatches. The handler's terminal maintenance work
+	// (`#checkCompaction`) is microtask-based on the no-promotion paths, so a
+	// single macrotask turn fully flushes it; `waitForIdle` then settles any
+	// tracked continuation. Used by the negative tests, which assert that *no*
+	// promotion happened and therefore need the handler to have actually run.
+	async function settle(): Promise<void> {
+		await new Promise(resolve => setTimeout(resolve, 0));
+		await session.waitForIdle();
 	}
 
 	it("promotes to a larger-context model on overflow and clears codex websocket session state", async () => {
@@ -390,7 +408,7 @@ describe("AgentSession context promotion", () => {
 		session.agent.emitExternalEvent({ type: "message_end", message: overflowMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowMessage] });
 
-		await Bun.sleep(30);
+		await settle();
 
 		expect(session.model?.provider).toBe(sparkModel.provider);
 		expect(session.model?.id).toBe(sparkModel.id);
@@ -472,7 +490,7 @@ describe("AgentSession context promotion", () => {
 		session.agent.emitExternalEvent({ type: "message_end", message: staleIncomplete });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [staleIncomplete] });
 
-		await Bun.sleep(30);
+		await settle();
 
 		expect(session.model?.provider).toBe(codexModel.provider);
 		expect(session.model?.id).toBe(codexModel.id);

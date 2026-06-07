@@ -23,10 +23,10 @@ const snapshots = new InMemorySnapshotStore();
 const before = `const greeting = "hi";\nexport { greeting };\n`;
 await fs.writeText("hello.ts", before);
 
-const tag = snapshots.recordContiguous("hello.ts", 1, before.split("\n"), { fullText: before });
+const tag = snapshots.record("hello.ts", before);
 const patcher = new Patcher({ fs, snapshots });
-const patch = Patch.parse(String.raw`¶hello.ts#${tag}
-@@ 1..1 @@
+const patch = Patch.parse(String.raw`[hello.ts#${tag}]
+replace 1..1:
 +const greeting = "hello";`);
 const result = await patcher.apply(patch);
 
@@ -39,19 +39,19 @@ console.log(await fs.readText("hello.ts"));
 See [`src/prompt.md`](./src/prompt.md) for the user-facing description and
 [`src/grammar.lark`](./src/grammar.lark) for the formal grammar.
 
-Each file section starts with `¶PATH#TAG`. The tag is a 3-hex opaque
-pointer into the `SnapshotStore` that minted it; it is not content-derived
-and is not meaningful outside that store. The patcher protects against
-stale anchors by resolving the tag, verifying the recorded snapshot lines
-against live file content, and refusing or attempting session-aware
-recovery on mismatch.
+Each file section starts with `[PATH#TAG]`. The tag is a 4-hex
+content hash of the full normalized file text recorded by the
+`SnapshotStore`, and it is not meaningful outside that store. The patcher
+protects against stale anchors by resolving the tag, verifying the live file
+still matches the recorded content hash, and refusing or attempting
+session-aware recovery on mismatch.
 
 Inside a section:
-- `@@ A..B @@` — open a hunk on lines A..B (use `@@ A,A @@` for a single line; bare `@@ A @@` is also accepted).
-- `@@ BOF @@` / `@@ EOF @@` — virtual hunks at the beginning/end of file.
+- `replace A..B:` — replace lines A..B with following `+TEXT` body rows.
+- `replace block A:` — replace the syntactic block beginning on line A.
+- `delete A..B` / `delete block A` — delete concrete lines or a resolved block.
+- `insert before A:` / `insert after A:` / `insert head:` / `insert tail:` — insert following body rows.
 - `+TEXT` — literal body row (use `+` alone for a blank line).
-- `&A..B` — repeat original file lines A..B inline (`&A` for one line).
-- Empty body — delete the selected range.
 
 ## Abstractions
 
@@ -67,9 +67,10 @@ text-document protocol, a Git tree, anything.
 
 ### `SnapshotStore`
 
-Required. Hashline tags are opaque store pointers, so `Patcher` must receive
-the store that minted them. Recovery replays edits against the cached pre-edit
-snapshot and 3-way-merges onto current content when the live file diverged.
+Required. Hashline tags are full-file content hashes recorded per path, so
+`Patcher` must receive the store that observed them. Recovery replays edits
+against the cached pre-edit snapshot and 3-way-merges onto current content
+when the live file diverged.
 
 ### `Patcher`
 

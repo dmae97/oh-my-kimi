@@ -183,6 +183,20 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).toContain("Search file contents with a regex across files");
 	});
 
+	it("expands omp://docs to grep embedded documentation files", async () => {
+		const session = createSession();
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "Read files, directories, archives",
+			paths: ["omp://docs"],
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("# omp://tools/read.md");
+		expect(text).toContain("Read files, directories, archives");
+	});
+
 	it("throws when internal URL has no sourcePath", async () => {
 		const session = createSession();
 		const tool = new SearchTool(session);
@@ -237,7 +251,7 @@ describe("SearchTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("needle");
 		// No hashline section headers or numbered editable lines for immutable sources.
-		expect(text).not.toMatch(/^¶.*#[0-9A-F]{4}$/m);
+		expect(text).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
 		expect(text).not.toMatch(/^\*?\s*\d+:/m);
 	});
 
@@ -277,7 +291,7 @@ describe("SearchTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("needle");
 		// Mutable local:// sources keep a hashline section header plus numbered match lines.
-		expect(text).toMatch(/^¶.*#[0-9A-F]{4}$/m);
+		expect(text).toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
 		expect(text).toMatch(/^\*\d+:.*needle/m);
 	});
 

@@ -29,6 +29,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
 import {
+	type BlobPutOptions,
 	type BlobPutResult,
 	BlobStore,
 	externalizeImageData,
@@ -336,6 +337,7 @@ export type ReadonlySessionManager = Pick<
 	| "getTree"
 	| "getUsageStatistics"
 	| "putBlob"
+	| "putBlobSync"
 >;
 
 function createSessionId(): string {
@@ -1219,7 +1221,7 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 				if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
 					if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
 						changed = true;
-						const blobRef = await externalizeImageData(blobStore, item.data);
+						const blobRef = await externalizeImageData(blobStore, item.data, item.mimeType);
 						return { ...item, data: blobRef };
 					}
 				}
@@ -1313,13 +1315,15 @@ function truncateForPersistenceSync(obj: unknown, blobStore: BlobStore, key?: st
 		const result: unknown[] = new Array(obj.length);
 		for (let i = 0; i < obj.length; i++) {
 			const item = obj[i];
-			if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
-				if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
-					changed = true;
-					const blobRef = externalizeImageDataSync(blobStore, item.data);
-					result[i] = { ...item, data: blobRef };
-					continue;
-				}
+			if (
+				key === TEXT_CONTENT_KEY &&
+				isImageBlock(item) &&
+				!isBlobRef(item.data) &&
+				item.data.length >= BLOB_EXTERNALIZE_THRESHOLD
+			) {
+				changed = true;
+				result[i] = { ...item, data: externalizeImageDataSync(blobStore, item.data, item.mimeType) };
+				continue;
 			}
 			const newItem = truncateForPersistenceSync(item, blobStore, key);
 			if (newItem !== item) changed = true;
@@ -1963,6 +1967,7 @@ export class SessionManager {
 	#inMemoryArtifacts: Map<string, string> | null = null;
 	#inMemoryArtifactCounter = 0;
 	readonly #blobStore: BlobStore;
+	#suppressBreadcrumb = false;
 
 	private constructor(
 		private cwd: string,
@@ -1977,9 +1982,19 @@ export class SessionManager {
 		// Note: call _initSession() or _initSessionFile() after construction
 	}
 
+	#maybeWriteBreadcrumb(cwd: string, sessionFile: string): void {
+		if (this.#suppressBreadcrumb) return;
+		writeTerminalBreadcrumb(cwd, sessionFile);
+	}
+
 	/** Puts a binary blob into the blob store and returns the blob reference */
-	async putBlob(data: Buffer): Promise<BlobPutResult> {
-		return this.#blobStore.put(data);
+	async putBlob(data: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
+		return this.#blobStore.put(data, options);
+	}
+
+	/** Synchronous variant of {@link putBlob} for rebuild-only render paths. */
+	putBlobSync(data: Buffer, options?: BlobPutOptions): BlobPutResult {
+		return this.#blobStore.putSync(data, options);
 	}
 
 	captureState(): SessionManagerStateSnapshot {
@@ -2018,7 +2033,7 @@ export class SessionManager {
 		this.#adoptedArtifactManager = null;
 		this.#buildIndex();
 		if (this.#sessionFile) {
-			writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+			this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 		}
 	}
 
@@ -2038,7 +2053,7 @@ export class SessionManager {
 		this.#persistError = undefined;
 		this.#persistErrorReported = false;
 		this.#sessionFile = path.resolve(sessionFile);
-		writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+		this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 		this.#fileEntries = await loadEntriesFromFile(this.#sessionFile, this.storage);
 		if (this.#fileEntries.length > 0) {
 			const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
@@ -2055,7 +2070,7 @@ export class SessionManager {
 			if (headerCwd && headerCwd !== this.cwd) {
 				this.cwd = headerCwd;
 				this.sessionDir = path.resolve(this.#sessionFile, "..");
-				writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+				this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 			}
 
 			this.#needsFullRewriteOnNextPersist = migrateToCurrentVersion(this.#fileEntries);
@@ -2236,7 +2251,7 @@ export class SessionManager {
 
 		// Update terminal breadcrumb
 		if (this.#sessionFile) {
-			writeTerminalBreadcrumb(resolvedCwd, this.#sessionFile);
+			this.#maybeWriteBreadcrumb(resolvedCwd, this.#sessionFile);
 		}
 	}
 
@@ -2271,7 +2286,7 @@ export class SessionManager {
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 			this.#sessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${this.#sessionId}.jsonl`);
-			writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+			this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 		}
 		return this.#sessionFile;
 	}
@@ -3420,9 +3435,11 @@ export class SessionManager {
 		cwd: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
+		options?: { suppressBreadcrumb?: boolean },
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
+		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		const forkEntries = structuredClone(await loadEntriesFromFile(sourcePath, storage)) as FileEntry[];
 		migrateToCurrentVersion(forkEntries);
 		await resolveBlobRefsInEntries(forkEntries, manager.#blobStore);

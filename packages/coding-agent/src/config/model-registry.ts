@@ -1,27 +1,19 @@
 import * as path from "node:path";
+import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { readModelCache } from "@oh-my-pi/pi-ai/model-cache";
+import { createModelManager, type ModelManagerOptions, type ModelRefreshStrategy } from "@oh-my-pi/pi-ai/model-manager";
+import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
+import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-ai/models";
 import {
-	type Api,
-	type AssistantMessageEventStream,
-	type Context,
-	createModelManager,
-	enrichModelThinking,
-	getBundledModels,
-	getBundledProviders,
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
-	type Model,
-	type ModelManagerOptions,
-	type ModelRefreshStrategy,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-	readModelCache,
-	registerCustomApi,
-	type SimpleStreamOptions,
-	type ThinkingConfig,
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
-	unregisterCustomApis,
-} from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-ai/provider-models";
+import type { Api, Context, Model, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
@@ -37,6 +29,45 @@ const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 // issue #1528: `write` payloads >~5KB on deepseek-v4-pro surfaced as
 // "socket connection was closed unexpectedly").
 const DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
+
+const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
+const OLLAMA_HOST_DEFAULT_PORT = "11434";
+
+function normalizeOllamaHostEnv(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) return undefined;
+	const candidate = trimmed.includes("://")
+		? trimmed
+		: trimmed.startsWith("//")
+			? `http:${trimmed}`
+			: trimmed.startsWith(":")
+				? `http://127.0.0.1${trimmed}`
+				: `http://${trimmed}`;
+	try {
+		const parsed = new URL(candidate);
+		if (!parsed.hostname || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+			return undefined;
+		}
+		if (!parsed.port && parsed.protocol === "http:") {
+			parsed.port = OLLAMA_HOST_DEFAULT_PORT;
+		}
+		return `${parsed.protocol}//${parsed.host}`;
+	} catch {
+		return undefined;
+	}
+}
+
+function getImplicitOllamaBaseUrl(): string {
+	const baseUrl = Bun.env.OLLAMA_BASE_URL?.trim();
+	return baseUrl || normalizeOllamaHostEnv(Bun.env.OLLAMA_HOST) || DEFAULT_OLLAMA_BASE_URL;
+}
+
+function getOllamaContextLengthOverride(): number | undefined {
+	const value = Bun.env.OLLAMA_CONTEXT_LENGTH?.trim();
+	if (!value) return undefined;
+	const parsed = Number(value);
+	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 // Anthropic-safe variant of the discovery cap. The Anthropic stream converter
 // in `packages/ai/src/providers/anthropic.ts` derives the request limit as
@@ -64,12 +95,14 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 	...SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
 ];
 
+import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
+import { type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { type ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCanonicalModelIndex,
@@ -547,6 +580,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 	if (override.input !== undefined) result.input = override.input as ("text" | "image")[];
 	if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
 	if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
+	if (override.omitMaxOutputTokens !== undefined) result.omitMaxOutputTokens = override.omitMaxOutputTokens;
 	if (override.contextPromotionTarget !== undefined) result.contextPromotionTarget = override.contextPromotionTarget;
 	if (override.premiumMultiplier !== undefined) result.premiumMultiplier = override.premiumMultiplier;
 	if (override.cost) {
@@ -575,6 +609,7 @@ interface CustomModelDefinitionLike {
 	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow?: number;
 	maxTokens?: number;
+	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
 	compat?: Model<Api>["compat"];
 	contextPromotionTarget?: string;
@@ -597,6 +632,7 @@ type CustomModelOverlay = {
 	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow?: number;
 	maxTokens?: number;
+	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
 	compat?: Model<Api>["compat"];
 	contextPromotionTarget?: string;
@@ -667,6 +703,7 @@ function buildCustomModelOverlay(
 		cost: modelDef.cost,
 		contextWindow: modelDef.contextWindow,
 		maxTokens: modelDef.maxTokens,
+		omitMaxOutputTokens: modelDef.omitMaxOutputTokens,
 		headers: mergeCustomModelHeaders(providerHeaders, modelDef.headers, authHeader, providerApiKey),
 		compat: mergeCompat(providerCompat, modelDef.compat),
 		contextPromotionTarget: modelDef.contextPromotionTarget,
@@ -823,6 +860,7 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 			resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : undefined),
 		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : undefined),
 		headers: resolvedModel.headers,
+		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
 		compat: mergeCompat(reference?.compat, resolvedModel.compat),
 		contextPromotionTarget: resolvedModel.contextPromotionTarget,
 		premiumMultiplier: resolvedModel.premiumMultiplier,
@@ -1124,6 +1162,7 @@ export class ModelRegistry {
 					cost: customModel.cost ?? existingModel.cost,
 					contextWindow: customModel.contextWindow ?? existingModel.contextWindow,
 					maxTokens: customModel.maxTokens ?? existingModel.maxTokens,
+					omitMaxOutputTokens: customModel.omitMaxOutputTokens ?? existingModel.omitMaxOutputTokens,
 					// Same-id custom definitions replace bundled transport behavior. Provider-level
 					// headers/compat were already folded into customModel during parsing; do not
 					// re-merge bundled transport metadata here.
@@ -1214,7 +1253,18 @@ export class ModelRegistry {
 			return models;
 		}
 
-		return models.map(model => (model.api === "openai-completions" ? { ...model, api: "openai-responses" } : model));
+		const contextLengthOverride = getOllamaContextLengthOverride();
+		return models.map(model => {
+			const normalized = model.api === "openai-completions" ? { ...model, api: "openai-responses" as const } : model;
+			if (contextLengthOverride === undefined) {
+				return normalized;
+			}
+			return {
+				...normalized,
+				contextWindow: contextLengthOverride,
+				maxTokens: Math.min(contextLengthOverride, DISCOVERY_DEFAULT_MAX_TOKENS),
+			};
+		});
 	}
 
 	#addImplicitDiscoverableProviders(configuredProviders: Set<string>): void {
@@ -1223,7 +1273,7 @@ export class ModelRegistry {
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
-				baseUrl: Bun.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+				baseUrl: getImplicitOllamaBaseUrl(),
 				discovery: { type: "ollama" },
 				optional: true,
 			});
@@ -1987,12 +2037,12 @@ export class ModelRegistry {
 		}
 	}
 	#normalizeOllamaBaseUrl(baseUrl?: string): string {
-		const raw = baseUrl || "http://127.0.0.1:11434";
+		const raw = baseUrl || DEFAULT_OLLAMA_BASE_URL;
 		try {
 			const parsed = new URL(raw);
 			return `${parsed.protocol}//${parsed.host}`;
 		} catch {
-			return "http://127.0.0.1:11434";
+			return DEFAULT_OLLAMA_BASE_URL;
 		}
 	}
 
@@ -2317,12 +2367,33 @@ export class ModelRegistry {
 
 	/**
 	 * Get API key for a provider (e.g., "openai").
+	 *
+	 * `options.forceRefresh` powers step (b) of the auth-retry policy — it
+	 * re-mints the session-sticky OAuth token even when the cached copy still
+	 * looks valid. `options.signal` is threaded into any broker-bound refresh.
 	 */
-	async getApiKeyForProvider(provider: string, sessionId?: string, baseUrl?: string): Promise<string | undefined> {
+	async getApiKeyForProvider(
+		provider: string,
+		sessionId?: string,
+		options?: { baseUrl?: string; forceRefresh?: boolean; signal?: AbortSignal },
+	): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
-		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
+		return this.authStorage.getApiKey(provider, sessionId, {
+			baseUrl: options?.baseUrl,
+			forceRefresh: options?.forceRefresh,
+			signal: options?.signal,
+		});
+	}
+
+	/**
+	 * Build an {@link ApiKeyResolver} for this provider, implementing the
+	 * central a/b/c auth-retry policy. Callers that need the initial key for
+	 * a guard can call `resolveApiKeyOnce(resolver)`.
+	 */
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver {
+		return createApiKeyResolver(this, provider, options);
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
@@ -2552,6 +2623,14 @@ export class ModelRegistry {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Clear all cooldown suppressions recorded via {@link suppressSelector}.
+	 * Used to reset retry-fallback cooldown state without a full {@link refresh}.
+	 */
+	clearSuppressedSelectors(): void {
+		this.#suppressedSelectors.clear();
 	}
 }
 

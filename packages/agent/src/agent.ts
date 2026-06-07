@@ -3,6 +3,7 @@
  */
 import { isPromise } from "node:util/types";
 import {
+	type ApiKeyResolveContext,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type CursorExecHandlers,
@@ -21,7 +22,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { agentLoop, agentLoopContinue } from "./agent-loop";
+import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type {
@@ -42,6 +43,12 @@ import { EventLoopKeepalive } from "./utils/yield";
  */
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+}
+
+const ANTHROPIC_OUTPUT_BLOCKED_PREFIX = "Output blocked by conten";
+
+function isAnthropicOutputBlockedError(message: string): boolean {
+	return message.includes(ANTHROPIC_OUTPUT_BLOCKED_PREFIX);
 }
 
 function refreshToolChoiceForActiveTools(
@@ -127,6 +134,11 @@ export interface AgentOptions {
 	 */
 	sessionId?: string;
 	/**
+	 * Optional prompt cache key forwarded to LLM providers.
+	 * When omitted, providers may fall back to sessionId.
+	 */
+	promptCacheKey?: string;
+	/**
 	 * Shared provider state map for session-scoped transport/session caches.
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
@@ -135,7 +147,7 @@ export interface AgentOptions {
 	 * Resolves an API key dynamically for each LLM call.
 	 * Useful for expiring tokens (e.g., GitHub Copilot OAuth).
 	 */
-	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
 
 	/**
 	 * Inspect or replace provider payloads before they are sent.
@@ -277,6 +289,7 @@ export class Agent {
 	#interruptMode: "immediate" | "wait";
 	#maxToolCallsPerTurn?: number;
 	#sessionId?: string;
+	#promptCacheKey?: string;
 	#metadata?: Record<string, unknown>;
 	#metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	#providerSessionState?: Map<string, ProviderSessionState>;
@@ -313,7 +326,7 @@ export class Agent {
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
 
 	streamFn: StreamFn;
-	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
 	/**
 	 * Hook invoked after tool arguments are validated and before execution.
 	 * Reassign at any time to swap the implementation (e.g. on extension reload).
@@ -338,6 +351,7 @@ export class Agent {
 		this.#maxToolCallsPerTurn = opts.maxToolCallsPerTurn;
 		this.streamFn = opts.streamFn || streamSimple;
 		this.#sessionId = opts.sessionId;
+		this.#promptCacheKey = opts.promptCacheKey;
 		this.#providerSessionState = opts.providerSessionState;
 		this.#thinkingBudgets = opts.thinkingBudgets;
 		this.#temperature = opts.temperature;
@@ -382,6 +396,20 @@ export class Agent {
 	 */
 	set sessionId(value: string | undefined) {
 		this.#sessionId = value;
+	}
+
+	/**
+	 * Get the prompt cache key forwarded to providers.
+	 */
+	get promptCacheKey(): string | undefined {
+		return this.#promptCacheKey;
+	}
+
+	/**
+	 * Set the prompt cache key forwarded to providers.
+	 */
+	set promptCacheKey(value: string | undefined) {
+		this.#promptCacheKey = value;
 	}
 
 	/**
@@ -762,8 +790,8 @@ export class Agent {
 		this.#state.messages.length = 0;
 	}
 
-	abort() {
-		this.#abortController?.abort();
+	abort(reason?: unknown) {
+		this.#abortController?.abort(reason);
 	}
 
 	waitForIdle(): Promise<void> {
@@ -930,6 +958,7 @@ export class Agent {
 			interruptMode: this.#interruptMode,
 			maxToolCallsPerTurn: this.#maxToolCallsPerTurn,
 			sessionId: this.#sessionId,
+			promptCacheKey: this.#promptCacheKey,
 			metadata: this.#metadataResolver ? undefined : this.#metadata,
 			metadataResolver: this.#metadataResolver,
 			providerSessionState: this.#providerSessionState,
@@ -1046,29 +1075,54 @@ export class Agent {
 					}
 				}
 			}
-		} catch (err: any) {
-			const errorMsg: AgentMessage = {
-				role: "assistant",
-				content: [{ type: "text", text: "" }],
-				api: model.api,
-				provider: model.provider,
-				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				stopReason: this.#abortController?.signal.aborted ? "aborted" : "error",
-				errorMessage: err?.message || String(err),
-				timestamp: Date.now(),
-			} as AgentMessage;
+		} catch (err) {
+			const stoppedForAbort = this.#abortController?.signal.aborted === true;
+			const errorMessage = stoppedForAbort
+				? abortReasonText(this.#abortController?.signal)
+				: err instanceof Error
+					? err.message
+					: String(err);
+			const shouldEmitVisibleOutputBlockedError = !stoppedForAbort && isAnthropicOutputBlockedError(errorMessage);
+			const assistantPartial = partial?.role === "assistant" ? partial : undefined;
+			const hadAssistantStart = assistantPartial !== undefined;
+			const errorMsg: AssistantMessage =
+				shouldEmitVisibleOutputBlockedError && assistantPartial
+					? { ...assistantPartial, stopReason: "error", errorMessage }
+					: {
+							role: "assistant",
+							content: [{ type: "text", text: "" }],
+							api: model.api,
+							provider: model.provider,
+							model: model.id,
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+							},
+							stopReason: stoppedForAbort ? "aborted" : "error",
+							errorMessage,
+							timestamp: Date.now(),
+						};
 
-			this.appendMessage(errorMsg);
-			this.#state.error = err?.message || String(err);
-			this.#emit({ type: "agent_end", messages: [errorMsg] });
+			if (shouldEmitVisibleOutputBlockedError) {
+				if (!hadAssistantStart) {
+					this.#state.streamMessage = errorMsg;
+					this.#emit({ type: "message_start", message: errorMsg });
+				}
+				this.#state.streamMessage = null;
+				this.appendMessage(errorMsg);
+				this.#state.error = errorMessage;
+				this.#emit({ type: "message_end", message: errorMsg });
+				this.#emit({ type: "turn_end", message: errorMsg, toolResults: [] });
+				this.#emit({ type: "agent_end", messages: [errorMsg] });
+			} else {
+				this.appendMessage(errorMsg);
+				this.#state.error = errorMessage;
+				this.#emit({ type: "agent_end", messages: [errorMsg] });
+			}
 		} finally {
 			this.#state.isStreaming = false;
 			this.#state.streamMessage = null;

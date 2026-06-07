@@ -16,22 +16,14 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import {
-	type Component,
-	Container,
-	Markdown,
-	type MarkdownTheme,
-	renderInlineMarkdown,
-	TERMINAL,
-	Text,
-} from "@oh-my-pi/pi-tui";
+import { type Component, Markdown, type MarkdownTheme, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { getMarkdownTheme, type Theme, theme } from "../modes/theme/theme";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
-import { renderStatusLine } from "../tui";
+import { framedBlock, renderStatusLine } from "../tui";
 import type { ToolSession } from ".";
 import { formatErrorMessage, formatMeta, formatTitle } from "./render-utils";
 import { ToolAbortError } from "./tool-errors";
@@ -626,23 +618,14 @@ interface AskRenderArgs {
 	}>;
 }
 
-/** Render custom input as a single block with continuation lines (not one entry per line) */
-function renderCustomInput(
-	uiTheme: Theme,
-	prefix: string,
-	customInput: string,
-	isLastEntry: boolean,
-	includeLeadingNewline = true,
-): string {
+/** Render a custom free-text answer as a status line plus indented continuation rows. */
+function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 	const lines = customInput.split("\n");
-	const branch = isLastEntry ? uiTheme.tree.last : uiTheme.tree.branch;
-	const firstLine = lines[0] ?? "";
-	let text = `${includeLeadingNewline ? "\n" : ""}${prefix}${uiTheme.fg("dim", branch)} ${uiTheme.styledSymbol("status.success", "success")} ${uiTheme.fg("toolOutput", firstLine)}`;
-	const continuationIndent = isLastEntry ? "   " : `${uiTheme.fg("dim", uiTheme.tree.vertical)}  `;
-	for (let i = 1; i < lines.length; i++) {
-		text += `\n${prefix}${continuationIndent}   ${uiTheme.fg("toolOutput", lines[i])}`;
-	}
-	return text;
+	const out: string[] = [
+		` ${uiTheme.styledSymbol("status.success", "success")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`,
+	];
+	for (let i = 1; i < lines.length; i++) out.push(`   ${uiTheme.fg("toolOutput", lines[i])}`);
+	return out;
 }
 
 /**
@@ -654,25 +637,38 @@ function optionMarker(uiTheme: Theme, multi: boolean | undefined, selected: bool
 	return selected ? uiTheme.radio.selected : uiTheme.radio.unselected;
 }
 
-/**
- * Render the answered option list for a question: every offered option with its
- * selection marker filled in, plus any custom free-text answer. This keeps the
- * result visually identical to the question form (`renderCall`) so the answer
- * reads in place rather than as a detached summary block.
- *
- * `linePrefix` is the indent that precedes each entry's tree branch — a single
- * leading space for top-level (single-question) entries, or the question's
- * vertical continuation for nested (multi-question) entries.
- */
-function renderAnswerOptions(
+/** Render the offered options for a question form as flat marker bullets (no tree guides). */
+function renderQuestionOptionLines(
 	uiTheme: Theme,
 	mdTheme: MarkdownTheme,
-	linePrefix: string,
+	options: AskRenderOption[],
+	multi: boolean | undefined,
+): string[] {
+	const out: string[] = [];
+	for (const opt of options) {
+		const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
+		out.push(` ${uiTheme.fg("dim", optionMarker(uiTheme, multi, false))} ${optLabel}`);
+		if (opt.description?.trim()) {
+			const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
+			out.push(`   ${uiTheme.fg("dim", "↳")} ${description}`);
+		}
+	}
+	return out;
+}
+
+/**
+ * Render the answered option list for a question: every offered option with its
+ * selection marker filled in, plus any custom free-text answer. Flat marker
+ * bullets — the frame is the container, so no tree guides are drawn.
+ */
+function renderAnswerOptionLines(
+	uiTheme: Theme,
+	mdTheme: MarkdownTheme,
 	options: string[] | undefined,
 	selectedOptions: string[] | undefined,
 	multi: boolean | undefined,
 	customInput: string | undefined,
-): string {
+): string[] {
 	const selected = new Set(selectedOptions ?? []);
 	// Prefer the full recorded option set; fall back to the selected labels when
 	// details omit the options array.
@@ -680,26 +676,21 @@ function renderAnswerOptions(
 
 	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
 	if (selected.size === 0 && customInput === undefined) {
-		return `${linePrefix}${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`;
+		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
 	}
 
-	let text = "";
-	for (let i = 0; i < list.length; i++) {
-		const label = list[i];
+	const out: string[] = [];
+	for (const label of list) {
 		const isSelected = selected.has(label);
-		const isLastEntry = i === list.length - 1 && customInput === undefined;
-		const branch = isLastEntry ? uiTheme.tree.last : uiTheme.tree.branch;
 		const marker = optionMarker(uiTheme, multi, isSelected);
 		const markerStyled = isSelected ? uiTheme.fg("success", marker) : uiTheme.fg("dim", marker);
 		const labelStyled = renderInlineMarkdown(label, mdTheme, t =>
 			isSelected ? uiTheme.fg("toolOutput", t) : uiTheme.fg("muted", t),
 		);
-		text += `${text ? "\n" : ""}${linePrefix}${uiTheme.fg("dim", branch)} ${markerStyled} ${labelStyled}`;
+		out.push(` ${markerStyled} ${labelStyled}`);
 	}
-	if (customInput !== undefined) {
-		text += renderCustomInput(uiTheme, linePrefix, customInput, true, text.length > 0);
-	}
-	return text;
+	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
+	return out;
 }
 
 export const askToolRenderer = {
@@ -708,80 +699,58 @@ export const askToolRenderer = {
 		const label = formatTitle("Ask", uiTheme);
 		const mdTheme = getMarkdownTheme();
 		const accentStyle = { color: (t: string) => uiTheme.fg("accent", t) };
+		const md = (text: string, width: number) =>
+			new Markdown(text, 1, 0, mdTheme, accentStyle).render(Math.max(1, width - 3 + 1));
 
-		// Multi-part questions
+		// Multi-part questions: one divider-labelled section per question.
 		if (args.questions && args.questions.length > 0) {
-			const container = new Container();
-			container.addChild(new Text(`${label} ${uiTheme.fg("muted", `${args.questions.length} questions`)}`, 0, 0));
-
-			for (let i = 0; i < args.questions.length; i++) {
-				const q = args.questions[i];
-				const isLastQ = i === args.questions.length - 1;
-				const qBranch = isLastQ ? uiTheme.tree.last : uiTheme.tree.branch;
-				const continuation = isLastQ ? " " : uiTheme.tree.vertical;
-
-				const meta: string[] = [];
-				if (q.multi) meta.push("multi");
-				if (q.options?.length) meta.push(`options:${q.options.length}`);
-				const metaStr = meta.length > 0 ? uiTheme.fg("dim", ` · ${meta.join(" · ")}`) : "";
-
-				container.addChild(
-					new Text(` ${uiTheme.fg("dim", qBranch)} ${uiTheme.fg("dim", `[${q.id}]`)}${metaStr}`, 0, 0),
-				);
-				container.addChild(new Markdown(q.question, 3, 0, mdTheme, accentStyle));
-
-				if (q.options?.length) {
-					let optText = "";
-					for (let j = 0; j < q.options.length; j++) {
-						const opt = q.options[j];
-						const isLastOpt = j === q.options.length - 1;
-						const optBranch = isLastOpt ? uiTheme.tree.last : uiTheme.tree.branch;
-						const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-						optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optBranch)} ${uiTheme.fg("dim", optionMarker(uiTheme, q.multi, false))} ${optLabel}`;
-						if (opt.description?.trim()) {
-							const optContinuation = isLastOpt ? " " : uiTheme.tree.vertical;
-							const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t =>
-								uiTheme.fg("dim", t),
-							);
-							optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", optContinuation)}   ${uiTheme.fg("dim", "↳")} ${description}`;
-						}
-					}
-					container.addChild(new Text(optText, 0, 0));
-				}
-			}
-			return container;
+			const questions = args.questions;
+			const header = `${label} ${uiTheme.fg("muted", `${questions.length} questions`)}`;
+			return framedBlock(uiTheme, width => {
+				const sections = questions.map(q => {
+					const meta: string[] = [];
+					if (q.multi) meta.push("multi");
+					if (q.options?.length) meta.push(`options:${q.options.length}`);
+					const metaStr = meta.length > 0 ? uiTheme.fg("dim", ` · ${meta.join(" · ")}`) : "";
+					const lines = md(q.question, width);
+					if (q.options?.length) lines.push(...renderQuestionOptionLines(uiTheme, mdTheme, q.options, q.multi));
+					return { label: `${uiTheme.fg("dim", `[${q.id}]`)}${metaStr}`, lines };
+				});
+				return { header, sections, state: "pending", borderColor: "borderMuted", width };
+			});
 		}
 
 		// Single question
 		if (!args.question) {
-			return new Text(formatErrorMessage("No question provided", uiTheme), 0, 0);
+			const errorLine = formatErrorMessage("No question provided", uiTheme);
+			return framedBlock(uiTheme, width => ({
+				header: errorLine,
+				sections: [],
+				state: "error",
+				borderColor: "error",
+				width,
+			}));
 		}
 
-		const container = new Container();
+		const question = args.question;
 		const meta: string[] = [];
 		if (args.multi) meta.push("multi");
 		if (args.options?.length) meta.push(`options:${args.options.length}`);
-		container.addChild(new Text(`${label}${formatMeta(meta, uiTheme)}`, 0, 0));
-		container.addChild(new Markdown(args.question, 1, 0, mdTheme, accentStyle));
-
-		if (args.options?.length) {
-			let optText = "";
-			for (let i = 0; i < args.options.length; i++) {
-				const opt = args.options[i];
-				const isLast = i === args.options.length - 1;
-				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
-				const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-				optText += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("dim", optionMarker(uiTheme, args.multi, false))} ${optLabel}`;
-				if (opt.description?.trim()) {
-					const continuation = isLast ? " " : uiTheme.tree.vertical;
-					const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
-					optText += `\n ${uiTheme.fg("dim", continuation)}   ${uiTheme.fg("dim", "↳")} ${description}`;
-				}
-			}
-			container.addChild(new Text(optText, 0, 0));
-		}
-
-		return container;
+		const header = `${label}${formatMeta(meta, uiTheme)}`;
+		const questionOptions = args.options;
+		const multi = args.multi;
+		return framedBlock(uiTheme, width => {
+			const bodyLines = md(question, width);
+			if (questionOptions?.length)
+				bodyLines.push(...renderQuestionOptionLines(uiTheme, mdTheme, questionOptions, multi));
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: "pending",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 
 	renderResult(
@@ -792,56 +761,47 @@ export const askToolRenderer = {
 		const { details } = result;
 		const mdTheme = getMarkdownTheme();
 		const accentStyle = { color: (t: string) => uiTheme.fg("accent", t) };
+		const md = (text: string, width: number) =>
+			new Markdown(text, 1, 0, mdTheme, accentStyle).render(Math.max(1, width - 3 + 1));
 
 		if (!details) {
 			const txt = result.content[0];
 			const fallback = txt?.type === "text" && txt.text ? txt.text : "";
 			const header = renderStatusLine({ icon: "warning", title: "Ask" }, uiTheme);
-			return new Text(`${header}\n${uiTheme.fg("dim", fallback)}`, 0, 0);
+			const body = fallback ? `\n${uiTheme.fg("dim", fallback)}` : "";
+			return new Text(`${header}${body}`, 0, 0);
 		}
 
-		// Multi-part results
+		// Multi-part results: one divider-labelled section per question.
 		if (details.results && details.results.length > 0) {
-			const hasAnySelection = details.results.some(
+			const results = details.results;
+			const hasAnySelection = results.some(
 				r => r.customInput !== undefined || (r.selectedOptions && r.selectedOptions.length > 0),
 			);
 			const header = renderStatusLine(
 				{
 					icon: hasAnySelection ? "success" : "warning",
 					title: "Ask",
-					meta: [`${details.results.length} questions`],
+					meta: [`${results.length} questions`],
 				},
 				uiTheme,
 			);
-			const container = new Container();
-			container.addChild(new Text(header, 0, 0));
-
-			for (let i = 0; i < details.results.length; i++) {
-				const r = details.results[i];
-				const isLastQuestion = i === details.results.length - 1;
-				const qBranch = isLastQuestion ? uiTheme.tree.last : uiTheme.tree.branch;
-				const continuation = isLastQuestion ? " " : uiTheme.tree.vertical;
-				const linePrefix = ` ${uiTheme.fg("dim", continuation)}   `;
-
-				container.addChild(new Text(` ${uiTheme.fg("dim", qBranch)} ${uiTheme.fg("dim", `[${r.id}]`)}`, 0, 0));
-				container.addChild(new Markdown(r.question, 3, 0, mdTheme, accentStyle));
-				container.addChild(
-					new Text(
-						renderAnswerOptions(
-							uiTheme,
-							mdTheme,
-							linePrefix,
-							r.options,
-							r.selectedOptions,
-							r.multi,
-							r.customInput,
-						),
-						0,
-						0,
-					),
-				);
-			}
-			return container;
+			return framedBlock(uiTheme, width => {
+				const sections = results.map(r => {
+					const lines = md(r.question, width);
+					lines.push(
+						...renderAnswerOptionLines(uiTheme, mdTheme, r.options, r.selectedOptions, r.multi, r.customInput),
+					);
+					return { label: uiTheme.fg("dim", `[${r.id}]`), lines };
+				});
+				return {
+					header,
+					sections,
+					state: hasAnySelection ? "success" : "warning",
+					borderColor: "borderMuted",
+					width,
+				};
+			});
 		}
 
 		// Single question result
@@ -851,29 +811,24 @@ export const askToolRenderer = {
 			return new Text(fallback, 0, 0);
 		}
 
+		const question = details.question;
 		const hasSelection =
 			details.customInput !== undefined || (details.selectedOptions && details.selectedOptions.length > 0);
 		const header = renderStatusLine({ icon: hasSelection ? "success" : "warning", title: "Ask" }, uiTheme);
-		const container = new Container();
-		container.addChild(new Text(header, 0, 0));
-		container.addChild(new Markdown(details.question, 1, 0, mdTheme, accentStyle));
-
-		container.addChild(
-			new Text(
-				renderAnswerOptions(
-					uiTheme,
-					mdTheme,
-					" ",
-					details.options,
-					details.selectedOptions,
-					details.multi,
-					details.customInput,
-				),
-				0,
-				0,
-			),
-		);
-
-		return container;
+		const dOptions = details.options;
+		const dSelected = details.selectedOptions;
+		const dMulti = details.multi;
+		const dCustom = details.customInput;
+		return framedBlock(uiTheme, width => {
+			const bodyLines = md(question, width);
+			bodyLines.push(...renderAnswerOptionLines(uiTheme, mdTheme, dOptions, dSelected, dMulti, dCustom));
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: hasSelection ? "success" : "warning",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 };

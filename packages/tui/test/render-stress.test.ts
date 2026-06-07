@@ -1,4 +1,7 @@
 import { describe, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Subprocess } from "bun";
 import {
 	buildScenarios,
@@ -23,7 +26,7 @@ const SUBPROCESS_ENTRY = `${import.meta.dir}/render-stress-subprocess.ts`;
 // compiling Ghostty WASM) and is far too slow/heavy for CI. Run it locally only.
 const SKIP_IN_CI = Boolean(Bun.env.CI);
 
-type StressSubprocess = Subprocess<Blob, "pipe", "pipe">;
+type StressSubprocess = Subprocess<"ignore", "ignore", "inherit">;
 
 // Every spawned stress subprocess, tracked process-wide. Each scenario child
 // busy-loops in Ghostty WASM without yielding to its JS event loop, so a SIGTERM
@@ -132,21 +135,34 @@ async function runScenariosInSubprocesses(scenarios: readonly Scenario[]): Promi
 	if (firstError !== undefined) throw firstError;
 }
 
+let ipcCounter = 0;
+
 async function runScenarioInSubprocess(scenario: Scenario): Promise<void> {
-	const proc = Bun.spawn([process.execPath, SUBPROCESS_ENTRY], {
-		stdin: new Blob([JSON.stringify(scenario)]),
-		stdout: "pipe",
-		stderr: "pipe",
+	// `bun test`'s spawned-child stdio pipes do not deliver data on this runtime:
+	// a child's piped stdout/stderr reads back empty and a `Blob` stdin arrives
+	// empty, so the scenario JSON and its result travel through temp files rather
+	// than pipes. Each scenario still runs in its own process for full isolation;
+	// only the transport changed. stderr stays inherited so a hard crash (no
+	// result file written) still surfaces its diagnostics.
+	const base = path.join(os.tmpdir(), `omp-tui-stress-ipc-${process.pid}-${ipcCounter++}`);
+	const inputPath = `${base}.in.json`;
+	const outputPath = `${base}.out.json`;
+	await Bun.write(inputPath, JSON.stringify(scenario));
+	const proc = Bun.spawn([process.execPath, SUBPROCESS_ENTRY, inputPath, outputPath], {
+		stdin: "ignore",
+		stdout: "ignore",
+		stderr: "inherit",
 	});
 	liveSubprocesses.add(proc);
-	const stdoutPromise = new Response(proc.stdout).text();
-	const stderrPromise = new Response(proc.stderr).text();
 	const completed = (async (): Promise<StressScenarioResult> => {
-		const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
-		return parseScenarioResult(stdout, stderr, scenario, exitCode);
+		const exitCode = await proc.exited;
+		const output = await Bun.file(outputPath)
+			.text()
+			.catch(() => "");
+		return parseScenarioResult(output, "", scenario, exitCode);
 	})();
 	void completed.catch(() => {});
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: Timer | undefined;
 	const timedOut = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => {
 			proc.kill("SIGKILL");
@@ -163,6 +179,8 @@ async function runScenarioInSubprocess(scenario: Scenario): Promise<void> {
 	} finally {
 		if (timer !== undefined) clearTimeout(timer);
 		liveSubprocesses.delete(proc);
+		fs.rmSync(inputPath, { force: true });
+		fs.rmSync(outputPath, { force: true });
 	}
 }
 

@@ -6,7 +6,7 @@
  * Requests per-result summaries via `contents.summary` and synthesizes
  * them into a combined `answer` string on the SearchResponse.
  */
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import { settings } from "../../../config/settings";
 import { callExaTool, findApiKey, isSearchResponse } from "../../../exa/mcp-client";
 
@@ -228,11 +228,19 @@ async function callExaMcpSearch(params: ExaSearchParams): Promise<ExaSearchRespo
 
 /** Execute Exa web search */
 export async function searchExa(params: ExaSearchParams): Promise<SearchResponse> {
+	// AuthStorage-backed key takes precedence (existing behavior); probe it once
+	// so the env-key and keyless-MCP fallbacks below stay intact, then drive the
+	// authStorage path through the central force-refresh/rotate retry policy.
 	const storedKey = params.authStorage
 		? await params.authStorage.getApiKey("exa", params.sessionId, { signal: params.signal })
 		: undefined;
-	const apiKey = storedKey ?? getEnvApiKey("exa");
-	const response = apiKey ? await callExaSearch(apiKey, params) : await callExaMcpSearch(params);
+	const keyOrResolver: ApiKey | undefined =
+		storedKey && params.authStorage
+			? params.authStorage.resolver("exa", { sessionId: params.sessionId })
+			: getEnvApiKey("exa");
+	const response = keyOrResolver
+		? await withAuth(keyOrResolver, key => callExaSearch(key, params), { signal: params.signal })
+		: await callExaMcpSearch(params);
 
 	// Convert to unified SearchResponse
 	const sources: SearchSource[] = [];

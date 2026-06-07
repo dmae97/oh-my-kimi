@@ -13,11 +13,11 @@ import type { SSHHostInfo } from "../ssh/connection-manager";
 import { ensureHostInfo, getHostInfoForHost } from "../ssh/connection-manager";
 import { executeSSH } from "../ssh/ssh-executor";
 import { renderStatusLine } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
-import { replaceTabs } from "./render-utils";
+import { capPreviewLines, replaceTabs } from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -244,16 +244,22 @@ export const sshToolRenderer = {
 		const header = renderStatusLine({ icon: "pending", title: "SSH", description: `[${host}]` }, uiTheme);
 		const cmdLines = formatSshCommandLines(command, uiTheme);
 		const outputBlock = new CachedOutputBlock();
-		return {
+		return markFramedBlockComponent({
 			render: (width: number): string[] =>
 				outputBlock.render(
-					{ header, state: "pending", sections: [{ lines: cmdLines }], width, animate: true },
+					{
+						header,
+						state: "pending",
+						sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: _options.expanded }) }],
+						width,
+						animate: true,
+					},
 					uiTheme,
 				),
 			invalidate: () => {
 				outputBlock.invalidate();
 			},
-		};
+		});
 	},
 
 	renderResult(
@@ -273,7 +279,7 @@ export const sshToolRenderer = {
 		const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
 		const outputBlock = new CachedOutputBlock();
 
-		return {
+		return markFramedBlockComponent({
 			render: (width: number): string[] => {
 				// REACTIVE: read mutable options at render time
 				const { expanded, renderContext } = options;
@@ -319,7 +325,14 @@ export const sshToolRenderer = {
 					{
 						header,
 						state: "success",
-						sections: [{ lines: cmdLines }, { label: uiTheme.fg("toolTitle", "Output"), lines: outputLines }],
+						sections: [
+							{
+								lines: options.isPartial
+									? capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded })
+									: cmdLines,
+							},
+							{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
+						],
 						width,
 					},
 					uiTheme,
@@ -328,7 +341,7 @@ export const sshToolRenderer = {
 			invalidate: () => {
 				outputBlock.invalidate();
 			},
-		};
+		});
 	},
 	mergeCallAndResult: true,
 };

@@ -23,11 +23,7 @@
  * `sdk-trace-base@2.7` exports cleanly on Bun.
  */
 import { logger, postmortem } from "@oh-my-pi/pi-utils";
-import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { resourceFromAttributes } from "@opentelemetry/resources";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import type * as TraceNode from "@opentelemetry/sdk-trace-node";
 
 /**
  * Periodic flush interval. A long-lived `omp` process (the ACP server is
@@ -36,7 +32,8 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
  */
 const FLUSH_INTERVAL_MS = 30_000;
 
-let provider: NodeTracerProvider | undefined;
+let provider: TraceNode.NodeTracerProvider | undefined;
+let initPromise: Promise<void> | undefined;
 
 /**
  * Whether {@link initTelemetryExport} registered a real provider. The CLI uses
@@ -53,8 +50,10 @@ export function isTelemetryExportEnabled(): boolean {
  * the OTEL kill-switches are engaged), so it is safe to call unconditionally at
  * startup.
  */
-export function initTelemetryExport(): void {
+export async function initTelemetryExport(): Promise<void> {
 	if (provider) return;
+	if (initPromise) return initPromise;
+
 	// The OTEL env contract parses booleans and enum lists case-insensitively, so
 	// OTEL_SDK_DISABLED=TRUE and OTEL_TRACES_EXPORTER=None must also disable export.
 	if (process.env.OTEL_SDK_DISABLED?.trim().toLowerCase() === "true") return;
@@ -76,6 +75,25 @@ export function initTelemetryExport(): void {
 		);
 		return;
 	}
+
+	initPromise = registerProvider();
+	return initPromise;
+}
+
+async function registerProvider(): Promise<void> {
+	const [
+		{ AsyncLocalStorageContextManager },
+		{ OTLPTraceExporter },
+		{ resourceFromAttributes },
+		{ BatchSpanProcessor },
+		{ NodeTracerProvider },
+	] = await Promise.all([
+		import("@opentelemetry/context-async-hooks"),
+		import("@opentelemetry/exporter-trace-otlp-proto"),
+		import("@opentelemetry/resources"),
+		import("@opentelemetry/sdk-trace-base"),
+		import("@opentelemetry/sdk-trace-node"),
+	]);
 
 	// The exporter reads endpoint/headers/timeout from OTEL_EXPORTER_OTLP_* itself,
 	// so there is nothing to thread through here.

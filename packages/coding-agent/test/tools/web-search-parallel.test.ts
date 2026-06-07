@@ -30,6 +30,12 @@ describe("Parallel web search", () => {
 		hasAuth() {
 			return Boolean(process.env.PARALLEL_API_KEY);
 		},
+		resolver(_provider: string) {
+			return async () => process.env.PARALLEL_API_KEY ?? undefined;
+		},
+		async rotateSessionCredential() {
+			return false;
+		},
 	} as unknown as AuthStorage;
 
 	let capturedRequestBody: unknown;

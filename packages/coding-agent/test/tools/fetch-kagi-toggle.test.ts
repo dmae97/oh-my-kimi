@@ -34,7 +34,7 @@ describe("read tool URL selector shorthands", () => {
 		fs.rmSync(testDir, { recursive: true, force: true });
 	});
 
-	const createSession = (): ToolSession => {
+	const createSession = (settingsOverrides: Partial<Record<SettingPath, unknown>> = {}): ToolSession => {
 		const sessionFile = path.join(testDir, "session.jsonl");
 		const artifactsDir = sessionFile.slice(0, -6);
 		let nextArtifactId = 0;
@@ -53,6 +53,7 @@ describe("read tool URL selector shorthands", () => {
 			},
 			settings: Settings.isolated({
 				"fetch.enabled": true,
+				...settingsOverrides,
 			}),
 		};
 	};
@@ -575,9 +576,9 @@ describe("read tool URL handling", () => {
 		void missingSystemPython;
 		void hook;
 	});
-	it("prefers Parallel extract before other HTML renderers when configured", async () => {
+	it("prefers Parallel extract first when providers.fetch is set to parallel", async () => {
 		process.env.PARALLEL_API_KEY = "test-parallel-key";
-		const session = createSession();
+		const session = createSession({ "providers.fetch": "parallel" });
 		const tool = new ReadTool(session);
 		const pageUrl = "https://example.com/parallel-page";
 		const pageHtml = "<html><body><main><h1>Parallel Page</h1></main></body></html>";

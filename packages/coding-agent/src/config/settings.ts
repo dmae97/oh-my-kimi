@@ -240,11 +240,13 @@ export class Settings {
 		return promise.then(
 			instance => {
 				globalInstance = instance;
+				clearBoundSettingsMethods();
 				globalInstancePromise = Promise.resolve(instance);
 				return instance;
 			},
 			error => {
 				globalInstance = null;
+				clearBoundSettingsMethods();
 				throw error;
 			},
 		);
@@ -712,6 +714,17 @@ export class Settings {
 			}
 		}
 
+		// providers.parallelFetch (boolean) replaced by the providers.fetch reader
+		// priority enum. The new default ("auto") supersedes both old values —
+		// Parallel is now a deep fallback in the auto chain rather than the first
+		// choice — so drop the legacy key (flat and nested) and let the enum
+		// default apply.
+		const providersObj = raw.providers as Record<string, unknown> | undefined;
+		if (providersObj && "parallelFetch" in providersObj) {
+			delete providersObj.parallelFetch;
+		}
+		delete raw["providers.parallelFetch"];
+
 		// Map legacy `memories.enabled` boolean to the explicit `memory.backend`
 		// enum if the latter hasn't been set yet. Idempotent: subsequent
 		// migrations are no-ops once memory.backend is materialised.
@@ -907,6 +920,9 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			for (const cb of appendOnlyModeCallbacks) cb(value);
 		}
 	},
+	"hindsight.bankId": () => fireHindsightScopeChanged(),
+	"hindsight.bankIdPrefix": () => fireHindsightScopeChanged(),
+	"hindsight.scoping": () => fireHindsightScopeChanged(),
 };
 /** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
 const appendOnlyModeCallbacks = new Set<(value: string) => void>();
@@ -923,12 +939,54 @@ export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void
 	};
 }
 
+/** Callbacks fired when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
+const hindsightScopeCallbacks = new Set<() => void>();
+
+function fireHindsightScopeChanged(): void {
+	// Snapshot the callback set before invoking — a callback's body is allowed
+	// to subscribe a NEW callback (the Hindsight backend re-registers the
+	// fresh state's listener on every rebuild). Iterating the live Set would
+	// re-invoke those just-added callbacks within the same fire, which spins
+	// in place: subscribe → invoke → subscribe → invoke → …
+	for (const cb of [...hindsightScopeCallbacks]) {
+		try {
+			cb();
+		} catch (err) {
+			logger.warn("Settings: hindsight scope hook failed", { error: String(err) });
+		}
+	}
+}
+
+/**
+ * Subscribe to changes in the Hindsight bank-scoping settings. Lets the
+ * Hindsight backend rebuild the active `HindsightSessionState` when the
+ * operator switches `hindsight.bankId`, `hindsight.bankIdPrefix`, or
+ * `hindsight.scoping` mid-session so subsequent retain/recall calls land in
+ * the new bank instead of the one selected at session start.
+ *
+ * Returns an unsubscribe function. The callback receives no arguments — the
+ * caller is expected to re-read the relevant settings via `Settings.get`.
+ */
+export function onHindsightScopeChanged(cb: () => void): () => void {
+	hindsightScopeCallbacks.add(cb);
+	return () => {
+		hindsightScopeCallbacks.delete(cb);
+	};
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Global Singleton
 // ═══════════════════════════════════════════════════════════════════════════
 
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
+let boundSettingsInstance: Settings | null = null;
+let boundSettingsMethods = new Map<PropertyKey, unknown>();
+
+function clearBoundSettingsMethods(): void {
+	boundSettingsInstance = null;
+	boundSettingsMethods = new Map<PropertyKey, unknown>();
+}
 
 export function isSettingsInitialized(): boolean {
 	return globalInstance !== null;
@@ -941,6 +999,7 @@ export function isSettingsInitialized(): boolean {
 export function resetSettingsForTest(): void {
 	globalInstance = null;
 	globalInstancePromise = null;
+	clearBoundSettingsMethods();
 }
 
 /**
@@ -952,9 +1011,17 @@ export const settings = new Proxy({} as Settings, {
 		if (!globalInstance) {
 			throw new Error("Settings not initialized. Call Settings.init() first.");
 		}
-		const value = (globalInstance as unknown as Record<string | symbol, unknown>)[prop];
+		if (boundSettingsInstance !== globalInstance) {
+			clearBoundSettingsMethods();
+			boundSettingsInstance = globalInstance;
+		}
+		const value = (globalInstance as unknown as Record<PropertyKey, unknown>)[prop];
 		if (typeof value === "function") {
-			return value.bind(globalInstance);
+			const cached = boundSettingsMethods.get(prop);
+			if (cached) return cached;
+			const bound = value.bind(globalInstance);
+			boundSettingsMethods.set(prop, bound);
+			return bound;
 		}
 		return value;
 	},

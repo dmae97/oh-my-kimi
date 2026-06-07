@@ -80,6 +80,10 @@ describe("issue #956: interactive /mcp test", () => {
 		const disconnectServer = vi.spyOn(mcpClient, "disconnectServer").mockResolvedValue();
 		const controller = new MCPCommandController({
 			chatContainer: { addChild },
+			present: (content: unknown) => {
+				for (const item of Array.isArray(content) ? content : [content]) addChild(item);
+				requestRender();
+			},
 			ui: { requestRender },
 			editor: {},
 			showError,

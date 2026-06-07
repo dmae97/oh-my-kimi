@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	type Agent,
@@ -62,7 +63,7 @@ import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
-import { type PlanApprovalDetails, renameApprovedPlanFile, resolvePlanTitle } from "../../plan-mode/approved-plan";
+import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
 import {
@@ -1425,24 +1426,16 @@ export class AcpAgent implements Agent {
 				if (!state?.enabled) {
 					throw new ToolError("Plan mode is not active.");
 				}
-				const planFilePath = state.planFilePath;
-				const planContent = await this.#readAcpPlanFile(session, planFilePath);
-				if (planContent === null) {
-					throw new ToolError(
-						`Plan file not found at ${planFilePath}. Write the finalized plan to ${planFilePath} before requesting approval.`,
-					);
-				}
-				const normalized = resolvePlanTitle({
+				const { planFilePath, planContent, title } = await resolveApprovedPlan({
 					suppliedTitle: extra?.title,
-					planContent,
-					planFilePath,
+					statePlanFilePath: state.planFilePath,
+					readPlan: url => this.#readAcpPlanFile(session, url),
+					listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
 				});
-				const finalPlanFilePath = `local://${normalized.fileName}`;
-				const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, normalized.title, planContent);
+				const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, title, planContent);
 				const details: PlanApprovalDetails = {
 					planFilePath,
-					finalPlanFilePath,
-					title: normalized.title,
+					title,
 					planExists: true,
 				};
 				if (!approved) {
@@ -1458,16 +1451,10 @@ export class AcpAgent implements Agent {
 						details,
 					};
 				}
-				// Approved. Rename plan to its titled filename, set the plan
-				// reference so the next turn injects the plan content as
-				// context, then exit plan mode so the agent regains full tools.
-				await renameApprovedPlanFile({
-					planFilePath,
-					finalPlanFilePath,
-					getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
-					getSessionId: () => session.sessionManager.getSessionId(),
-				});
-				session.setPlanReferencePath(finalPlanFilePath);
+				// Approved. Set the plan reference so the next turn injects the plan
+				// content as context (the file keeps its agent-chosen name — no
+				// rename), then exit plan mode so the agent regains full tools.
+				session.setPlanReferencePath(planFilePath);
 				session.setStandingResolveHandler?.(null);
 				session.setPlanModeState(undefined);
 				try {
@@ -1486,7 +1473,7 @@ export class AcpAgent implements Agent {
 					content: [
 						{
 							type: "text" as const,
-							text: `Plan approved at ${finalPlanFilePath}. Plan mode exited; proceed with the implementation.`,
+							text: `Plan approved at ${planFilePath}. Plan mode exited; proceed with the implementation.`,
 						},
 					],
 					details,
@@ -1515,6 +1502,26 @@ export class AcpAgent implements Agent {
 				return null;
 			}
 			throw error;
+		}
+	}
+
+	/** `local://` URLs of plan files in the session-local root, newest first —
+	 *  the `resolveApprovedPlan` fallback for a dropped `extra.title`. */
+	async #listAcpLocalPlanFiles(session: AgentSession): Promise<string[]> {
+		const localRoot = this.#resolveAcpPlanFilePath(session, "local://");
+		try {
+			const entries = await fs.readdir(localRoot, { withFileTypes: true });
+			const plans = await Promise.all(
+				entries
+					.filter(entry => entry.isFile() && /plan\.md$/i.test(entry.name))
+					.map(async entry => {
+						const stat = await fs.stat(path.join(localRoot, entry.name)).catch(() => null);
+						return { url: `local://${entry.name}`, mtime: stat?.mtimeMs ?? 0 };
+					}),
+			);
+			return plans.sort((a, b) => b.mtime - a.mtime).map(plan => plan.url);
+		} catch {
+			return [];
 		}
 	}
 

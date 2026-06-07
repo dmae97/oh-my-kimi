@@ -28,8 +28,6 @@ describe.skipIf(SKIP)("handleNvd", () => {
 		expect(result?.content).toContain("Log4j");
 		expect(result?.content).toContain("CVSS");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches CVE-2014-0160 (Heartbleed)", async () => {
@@ -38,7 +36,6 @@ describe.skipIf(SKIP)("handleNvd", () => {
 		expect(result?.method).toBe("nvd");
 		expect(result?.content).toContain("CVE-2014-0160");
 		expect(result?.content).toContain("OpenSSL");
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("handles lowercase CVE IDs", async () => {
@@ -72,8 +69,6 @@ describe.skipIf(SKIP)("handleOsv", () => {
 		expect(result?.content).toContain("GHSA-jfh8-c2jp-5v3q");
 		expect(result?.content).toContain("log4j");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches CVE-2021-44228 via OSV", async () => {
@@ -81,7 +76,6 @@ describe.skipIf(SKIP)("handleOsv", () => {
 		expect(result).not.toBeNull();
 		expect(result?.method).toBe("osv");
 		expect(result?.content).toContain("CVE-2021-44228");
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches PYSEC vulnerability", async () => {

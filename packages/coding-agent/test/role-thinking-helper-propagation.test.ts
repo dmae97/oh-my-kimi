@@ -43,6 +43,7 @@ describe("role thinking helper propagation", () => {
 		const registry = {
 			getAvailable: () => [model],
 			getApiKey: async () => "test-key",
+			resolver: vi.fn(() => async () => "test-key"),
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",
@@ -66,6 +67,7 @@ describe("role thinking helper propagation", () => {
 		const registry = {
 			getAvailable: () => [model],
 			getApiKey: async () => "test-key",
+			resolver: vi.fn(() => async () => "test-key"),
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",

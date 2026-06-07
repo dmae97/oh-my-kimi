@@ -106,4 +106,71 @@ describe("KeybindingsManager.create", () => {
 			await fs.rm(agentDir, { recursive: true, force: true });
 		}
 	});
+
+	it("defaults model selection to Alt+M and display reset to Ctrl+L", () => {
+		const manager = KeybindingsManager.inMemory();
+
+		expect(manager.getKeys("app.model.select")).toEqual(["alt+m"]);
+		expect(manager.getKeys("app.display.reset")).toEqual(["ctrl+l"]);
+	});
+
+	it("keeps the Ctrl+L display reset default when an old model remap still claims Ctrl+L", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.model.select": "ctrl+l",
+		});
+
+		expect(manager.getKeys("app.model.select")).toEqual(["ctrl+l"]);
+		expect(manager.getKeys("app.display.reset")).toEqual(["ctrl+l"]);
+		expect(manager.getEffectiveConfig()["app.display.reset"]).toBe("ctrl+l");
+	});
+
+	it("keeps Ctrl+L when the user explicitly assigns it to display reset", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.display.reset": "ctrl+l",
+		});
+
+		expect(manager.getKeys("app.display.reset")).toEqual(["ctrl+l"]);
+	});
+
+	it("defaults the follow-up shortcut to both Ctrl+Q and Ctrl+Enter (#1903)", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
+
+		try {
+			const manager = KeybindingsManager.create(agentDir);
+
+			// Both chords must be registered so Windows Terminal users (which swallow
+			// Ctrl+Enter at the terminal layer) get a working follow-up binding out
+			// of the box, without breaking users on Kitty/iTerm2/WezTerm/Ghostty.
+			expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q", "ctrl+enter"]);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("removes the Ctrl+Q follow-up default when a user remap already claims it (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.plan.toggle": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.plan.toggle")).toEqual(["ctrl+q"]);
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+enter"]);
+		expect(manager.getDisplayString("app.message.followUp")).toBe("Ctrl+Enter");
+		expect(manager.getEffectiveConfig()["app.message.followUp"]).toBe("ctrl+enter");
+	});
+
+	it("keeps the Ctrl+Q follow-up default when only an unknown config key claims it (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"unknown.action": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q", "ctrl+enter"]);
+	});
+
+	it("keeps Ctrl+Q when the user explicitly assigns it to follow-up (#1903)", () => {
+		const manager = KeybindingsManager.inMemory({
+			"app.message.followUp": "ctrl+q",
+		});
+
+		expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+q"]);
+	});
 });

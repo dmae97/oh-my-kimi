@@ -2,9 +2,9 @@
  * Edit tool renderer and LSP batching helpers.
  */
 
-import { HL_FILE_PREFIX } from "@oh-my-pi/hashline";
+import { HL_FILE_PREFIX, HL_FILE_SUFFIX } from "@oh-my-pi/hashline";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { FileDiagnosticsResult } from "../lsp";
@@ -16,7 +16,6 @@ import {
 	formatDiffStats,
 	formatExpandHint,
 	formatStatusIcon,
-	formatTitle,
 	getDiffStats,
 	getLspBatchRequest,
 	type LspBatchRequest,
@@ -25,7 +24,7 @@ import {
 	shortenPath,
 	truncateDiffByHunk,
 } from "../tools/render-utils";
-import { fileHyperlink, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import { fileHyperlink, framedBlock, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { EditMode } from "../utils/edit-mode";
 import type { DiffError, DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
@@ -179,11 +178,6 @@ function countEditFiles(edits: EditRenderEntry[]): number {
 	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
-function countLines(text: string): number {
-	if (!text) return 0;
-	return text.split("\n").length;
-}
-
 function getOperationTitle(op: Operation | undefined): string {
 	return op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
 }
@@ -191,10 +185,14 @@ function getOperationTitle(op: Operation | undefined): string {
 function formatEditPathDisplay(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number },
+	options?: { rename?: string; firstChangedLine?: number; linkPath?: string; renameLinkPath?: string },
 ): string {
+	// `rawPath`/`rename` are shown (cwd-relative) but the OSC 8 link targets the
+	// absolute path when known — a relative `rawPath` would yield a `file:///rel`
+	// URI that resolves against filesystem root instead of cwd.
+	const linkTarget = options?.linkPath || rawPath;
 	let pathDisplay = rawPath
-		? fileHyperlink(rawPath, uiTheme.fg("accent", shortenPath(rawPath)))
+		? fileHyperlink(linkTarget, uiTheme.fg("accent", shortenPath(rawPath)))
 		: uiTheme.fg("toolOutput", "…");
 
 	if (options?.firstChangedLine) {
@@ -202,7 +200,8 @@ function formatEditPathDisplay(
 	}
 
 	if (options?.rename) {
-		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(options.rename, uiTheme.fg("accent", shortenPath(options.rename)))}`;
+		const renameTarget = options.renameLinkPath || options.rename;
+		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(renameTarget, uiTheme.fg("accent", shortenPath(options.rename)))}`;
 	}
 
 	return pathDisplay;
@@ -211,7 +210,7 @@ function formatEditPathDisplay(
 function formatEditDescription(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number },
+	options?: { rename?: string; firstChangedLine?: number; linkPath?: string; renameLinkPath?: string },
 ): { language: string; description: string } {
 	const language = getLanguageFromPath(rawPath) ?? "text";
 	const icon = uiTheme.fg("muted", uiTheme.getLangIcon(language));
@@ -233,19 +232,22 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 	return preview.trimEnd();
 }
 
-function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, label = "streaming"): string {
+function formatStreamingDiff(
+	diff: string,
+	rawPath: string,
+	uiTheme: Theme,
+	expanded: boolean,
+	label = "streaming",
+): string {
 	if (!diff) return "";
-	// "Cursor" tail window: pin the last EDIT_STREAMING_PREVIEW_LINES rows to the
-	// bottom of the diff so freshly streamed changes stay on screen, and accept
-	// the trailing rows "from the back" once the diff outgrows the window. The
-	// whole-file diff is recomputed on every streamed chunk and its Myers
-	// alignment is not monotonic in payload length, so a hunk-aware window that
-	// kept whole change segments gained and lost rows tick to tick — the box
-	// stuttered, and the earlier high-water fix traded that for a half-empty
-	// rectangle. A strict fixed-height window keeps the box steady and always
-	// full of real diff context instead of blank padding.
+	// Collapsed uses a "Cursor" tail window: pin the last
+	// EDIT_STREAMING_PREVIEW_LINES rows to the bottom so freshly streamed changes
+	// stay on screen. The whole-file diff is recomputed on every streamed chunk
+	// and its Myers alignment is not monotonic in payload length, so a hunk-aware
+	// window stutters as rows move between hunks. Expanded deliberately lifts that
+	// cap for the approval-time full view.
 	const allLines = diff.replace(/\n+$/u, "").split("\n");
-	const hiddenLines = Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
+	const hiddenLines = expanded ? 0 : Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
 	const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
 	let text = "\n\n";
 	if (hiddenLines > 0) {
@@ -256,19 +258,11 @@ function formatStreamingDiff(diff: string, rawPath: string, uiTheme: Theme, labe
 		text += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
 	}
 	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
-	text += uiTheme.fg("dim", `\n(${label})`);
+	if (!expanded || label !== "preview") text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
 }
 
-function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
-	const icon = uiTheme.getLangIcon(language);
-	if (lineCount !== null) {
-		return uiTheme.fg("dim", `${icon} ${lineCount} lines`);
-	}
-	return uiTheme.fg("dim", `${icon}`);
-}
-
-function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme): string {
+function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme, expanded: boolean): string {
 	const parts: string[] = [];
 	for (const preview of previews) {
 		if (!preview.diff && !preview.error) continue;
@@ -278,7 +272,7 @@ function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: T
 			continue;
 		}
 		if (preview.diff) {
-			parts.push(`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, "preview")}`);
+			parts.push(`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, expanded, "preview")}`);
 		}
 	}
 	return parts.join("");
@@ -289,16 +283,17 @@ function getCallPreview(
 	rawPath: string,
 	uiTheme: Theme,
 	renderContext: EditRenderContext | undefined,
+	expanded: boolean,
 ): string {
 	const multi = renderContext?.perFileDiffPreview;
 	if (multi && multi.length > 1 && multi.some(p => p.diff || p.error)) {
-		return formatMultiFileStreamingDiff(multi, uiTheme);
+		return formatMultiFileStreamingDiff(multi, uiTheme, expanded);
 	}
 	if (args.previewDiff) {
-		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, "preview");
+		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, expanded, "preview");
 	}
 	if (args.diff && args.op) {
-		return formatStreamingDiff(args.diff, rawPath, uiTheme);
+		return formatStreamingDiff(args.diff, rawPath, uiTheme, expanded);
 	}
 	if (args.diff) {
 		return renderPlainTextPreview(args.diff, uiTheme, rawPath);
@@ -328,12 +323,12 @@ function normalizeHashlineInputPreviewPath(rawPath: string): string {
 }
 
 function parseHashlineInputPreviewHeader(line: string): string | null {
-	if (!line.startsWith(HL_FILE_PREFIX)) return null;
-	// Mirror hashline/input.ts: strip every leading file marker so canonical
-	// `¶ PATH` headers and stray `¶¶ PATH` / `¶¶¶PATH` runs render clean paths.
-	let prefixEnd = 0;
-	while (prefixEnd < line.length && line[prefixEnd] === HL_FILE_PREFIX) prefixEnd++;
-	const body = line.slice(prefixEnd).trim();
+	const trimmed = line.trimEnd();
+	if (!trimmed.startsWith(HL_FILE_PREFIX)) return null;
+	// Keep streaming previews tolerant while the closing bracket is still
+	// being generated; the parser enforces the final `[path#TAG]` shape.
+	const bodyEnd = trimmed.endsWith(HL_FILE_SUFFIX) ? trimmed.length - HL_FILE_SUFFIX.length : trimmed.length;
+	const body = trimmed.slice(HL_FILE_PREFIX.length, bodyEnd).trim();
 	const previewPath = normalizeHashlineInputPreviewPath(body);
 	return previewPath.length > 0 ? previewPath : null;
 }
@@ -383,6 +378,13 @@ function getApplyPatchRenderSummary(
 	}
 }
 
+function formatDiffStatsSuffix(diff: string, uiTheme: Theme): string {
+	const { added, removed, hunks } = getDiffStats(diff);
+	const stats = formatDiffStats(added, removed, hunks, uiTheme);
+	if (!stats) return "";
+	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
+}
+
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -390,15 +392,6 @@ function renderDiffSection(
 	uiTheme: Theme,
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
 ): string {
-	let text = "";
-	const diffStats = getDiffStats(diff);
-	text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${formatDiffStats(
-		diffStats.added,
-		diffStats.removed,
-		diffStats.hunks,
-		uiTheme,
-	)}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
-
 	const {
 		text: truncatedDiff,
 		hiddenHunks,
@@ -407,7 +400,7 @@ function renderDiffSection(
 		? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
 		: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
 
-	text += `\n\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
+	let text = `\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
 	if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
 		const remainder: string[] = [];
 		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
@@ -470,23 +463,31 @@ export const editToolRenderer = {
 		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
 		const op = editArgs.op || firstEdit?.op || firstApplyPatchEntry?.op;
 		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
-		const spinner =
-			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
-		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
-		// Show file count hint for multi-file edits
 		let fileCount = hashlineInputSummary?.entries.length ?? applyPatchSummary?.entries.length ?? 0;
 		if (Array.isArray(editArgs.edits)) {
 			fileCount = countEditFiles(editArgs.edits);
 		}
-		if (fileCount > 1) {
-			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
-		}
-		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext);
-		if (applyPatchSummary?.error) {
-			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), CALL_TEXT_PREVIEW_WIDTH))}`;
-		}
-
-		return new Text(text, 0, 0);
+		return framedBlock(uiTheme, width => {
+			let header = renderStatusLine(
+				{ icon: "pending", spinnerFrame: options?.spinnerFrame, title: getOperationTitle(op), description },
+				uiTheme,
+			);
+			if (fileCount > 1) header += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
+			let body = getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded);
+			if (applyPatchSummary?.error) {
+				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 2)))}`;
+			}
+			const bodyLines = body ? body.split("\n") : [];
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: applyPatchSummary?.error ? "error" : "pending",
+				borderColor: applyPatchSummary?.error ? "error" : "borderMuted",
+				width,
+				contentPaddingLeft: 0,
+			};
+		});
 	},
 
 	renderResult(
@@ -528,11 +529,6 @@ function renderSingleFileResult(
 		"";
 	const op = args?.op || firstEdit?.op || details?.op;
 	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
-	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
-
-	const editTextSource = args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch;
-	const metadataLineCount = editTextSource ? countLines(editTextSource) : null;
-	const metadataLine = op !== "delete" ? `\n${formatMetadataLine(metadataLineCount, language, uiTheme)}` : "";
 
 	const displayErrorText = isError && details && "displayErrorText" in details ? details.displayErrorText : undefined;
 	const errorText = isError
@@ -541,61 +537,57 @@ function renderSingleFileResult(
 			(result.content?.find(c => c.type === "text")?.text ?? "")
 		: "";
 
-	let cached: RenderCache | undefined;
+	return framedBlock(uiTheme, width => {
+		const { expanded, renderContext } = options;
+		const editDiffPreview = renderContext?.editDiffPreview;
+		const renderDiffFn = renderContext?.renderDiff ?? ((t: string) => t);
 
-	return {
-		render(width) {
-			const { expanded, renderContext } = options;
-			const editDiffPreview = renderContext?.editDiffPreview;
-			const renderDiffFn = renderContext?.renderDiff ?? ((t: string) => t);
-			const key = new Hasher().bool(expanded).u32(width).digest();
-			if (cached?.key === key) return cached.lines;
+		const firstChangedLine =
+			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
+			(details && !isError ? details.firstChangedLine : undefined);
+		const linkPath = details && "path" in details ? details.path : undefined;
+		const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine, linkPath });
 
-			const firstChangedLine =
-				(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
-				(details && !isError ? details.firstChangedLine : undefined);
-			const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine });
+		// Change stats ride inline on the header bar next to the path.
+		const previewDiff = editDiffPreview && !("error" in editDiffPreview) ? editDiffPreview.diff : undefined;
+		const headerDiff = isError ? undefined : details?.diff || previewDiff;
+		const statsSuffix = headerDiff ? formatDiffStatsSuffix(headerDiff, uiTheme) : "";
+		const header =
+			renderStatusLine({ icon: isError ? "error" : "success", title: getOperationTitle(op), description }, uiTheme) +
+			statsSuffix;
 
-			const header = renderStatusLine(
-				{
-					icon: isError ? "error" : "success",
-					title: getOperationTitle(op),
-					description,
-				},
-				uiTheme,
+		let body = "";
+		if (isError) {
+			if (errorText) body = uiTheme.fg("error", replaceTabs(errorText, rawPath));
+		} else if (details?.diff) {
+			body = renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
+		} else if (editDiffPreview) {
+			if ("error" in editDiffPreview) body = uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath));
+			else if (editDiffPreview.diff)
+				body = renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
+		}
+		if (details?.diagnostics) {
+			body += formatDiagnostics(details.diagnostics, expanded, uiTheme, (fp: string) =>
+				uiTheme.getLangIcon(getLanguageFromPath(fp)),
 			);
-			let text = header;
-			text += metadataLine;
+		}
 
-			if (isError) {
-				if (errorText) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(errorText, rawPath))}`;
-				}
-			} else if (details?.diff) {
-				text += renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
-			} else if (editDiffPreview) {
-				if ("error" in editDiffPreview) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath))}`;
-				} else if (editDiffPreview.diff) {
-					text += renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
-				}
-			}
+		// Diff lines self-wrap with a continuation gutter; pre-wrap to the frame's
+		// inner width so renderOutputBlock's generic wrap is a no-op. Edit frames
+		// use a flush left border because code-frame gutters already provide padding.
+		const innerWidth = Math.max(1, width - 2);
+		const bodyLines = body.length > 0 ? body.split("\n").flatMap(line => wrapEditRendererLine(line, innerWidth)) : [];
+		while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 
-			if (details?.diagnostics) {
-				text += formatDiagnostics(details.diagnostics, expanded, uiTheme, (fp: string) =>
-					uiTheme.getLangIcon(getLanguageFromPath(fp)),
-				);
-			}
-
-			const lines =
-				width > 0 ? text.split("\n").flatMap(line => wrapEditRendererLine(line, width)) : text.split("\n");
-			cached = { key, lines };
-			return lines;
-		},
-		invalidate() {
-			cached = undefined;
-		},
-	};
+		return {
+			header,
+			sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+			state: isError ? "error" : options.isPartial ? "pending" : "success",
+			borderColor: isError ? "error" : "borderMuted",
+			width,
+			contentPaddingLeft: 0,
+		};
+	});
 }
 
 function renderMultiFileResult(
@@ -650,7 +642,7 @@ function renderMultiFileResult(
 		},
 		invalidate() {
 			cached = undefined;
-			for (const c of fileComponents) c.invalidate();
+			for (const c of fileComponents) c.invalidate?.();
 		},
 	};
 }

@@ -8,7 +8,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -53,11 +53,41 @@ describe("editToolRenderer", () => {
 		expect(rendered).toContain("packages/coding-agent/src/edit/renderer.ts");
 	});
 
+	it("lifts the streaming diff tail window when expanded", async () => {
+		const uiTheme = await getUiTheme();
+		const diff = Array.from({ length: 20 }, (_, index) =>
+			index === 0 ? "-head-line-1" : `+tail-line-${index + 1}`,
+		).join("\n");
+		const renderPreview = (expanded: boolean): string =>
+			Bun.stripANSI(
+				editToolRenderer
+					.renderCall(
+						{ file_path: "/tmp/preview.ts", previewDiff: diff },
+						{ expanded, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "replace" } },
+						uiTheme,
+					)
+					.render(200)
+					.join("\n"),
+			);
+
+		const collapsed = renderPreview(false);
+		expect(collapsed).toContain("tail-line-20");
+		expect(collapsed).not.toContain("head-line-1");
+		expect(collapsed).toContain("more lines above");
+		expect(collapsed).toContain("(preview)");
+
+		const expanded = renderPreview(true);
+		expect(expanded).toContain("head-line-1");
+		expect(expanded).toContain("tail-line-20");
+		expect(expanded).not.toContain("more lines above");
+		expect(expanded).not.toContain("(preview)");
+	});
+
 	it("uses hashline input headers for streaming call path without apply_patch errors", async () => {
 		const uiTheme = await getUiTheme();
 		const component = editToolRenderer.renderCall(
 			{
-				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF:\n|// preview",
+				input: "[packages/coding-agent/src/edit/renderer.ts]\ninsert tail:\n+// preview",
 			},
 			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -75,9 +105,12 @@ describe("editToolRenderer", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			{
-				input: ["*** Begin Patch", "¶crates/pi-natives/src/shell.rs", "EOF:", "|pub fn streaming_preview() {"].join(
-					"\n",
-				),
+				input: [
+					"*** Begin Patch",
+					"[crates/pi-natives/src/shell.rs]",
+					"insert tail:",
+					"+pub fn streaming_preview() {",
+				].join("\n"),
 			},
 			{},
 			hashlineTool,
@@ -86,8 +119,8 @@ describe("editToolRenderer", () => {
 
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("crates/pi-natives/src/shell.rs");
-		expect(rendered).not.toContain("EOF:");
-		expect(rendered).not.toContain("|pub fn streaming_preview() {");
+		expect(rendered).not.toContain("insert tail:");
+		expect(rendered).not.toContain("+pub fn streaming_preview() {");
 		expect(rendered).not.toContain("*** Begin Patch");
 	});
 
@@ -95,7 +128,7 @@ describe("editToolRenderer", () => {
 		const uiTheme = await getUiTheme();
 		const compactComponent = editToolRenderer.renderCall(
 			{
-				input: "¶foo bar.ts\nBOF:\n|// preview",
+				input: "[foo bar.ts]\ninsert head:\n+// preview",
 			},
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -103,7 +136,7 @@ describe("editToolRenderer", () => {
 
 		const quotedComponent = editToolRenderer.renderCall(
 			{
-				input: "¶'baz qux.ts'\nBOF:\n|// preview",
+				input: "['baz qux.ts']\ninsert head:\n+// preview",
 			},
 			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
@@ -115,33 +148,33 @@ describe("editToolRenderer", () => {
 		expect(quotedRendered).toContain("baz qux.ts");
 	});
 
-	it("strips canonical `¶` and longer `¶` runs from hashline input headers", async () => {
+	it("strips bracket delimiters from hashline input headers", async () => {
 		const uiTheme = await getUiTheme();
 
-		// Canonical `¶PATH` form — the parser strips the marker and the
+		// Canonical `[PATH]` form — the parser strips the delimiters and the
 		// renderer keeps the title clean.
 		const canonical = editToolRenderer.renderCall(
 			{
-				input: "¶packages/coding-agent/src/slash-commands/builtin-registry.ts\nBOF:\n|// preview",
+				input: "[packages/coding-agent/src/slash-commands/builtin-registry.ts]\ninsert head:\n+// preview",
 			},
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
 		);
 
-		// Even longer runs should still produce the clean path.
-		const triple = editToolRenderer.renderCall(
-			{ input: "¶¶¶a/b/c.ts\nBOF:\n|// preview" },
+		// While streaming, the closing bracket may not have arrived yet.
+		const partial = editToolRenderer.renderCall(
+			{ input: "[a/b/c.ts\ninsert head:\n+// preview" },
 			{ expanded: true, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "hashline" } },
 			uiTheme,
 		);
 
 		const canonicalRendered = Bun.stripANSI(canonical.render(160).join("\n"));
-		const tripleRendered = Bun.stripANSI(triple.render(160).join("\n"));
+		const partialRendered = Bun.stripANSI(partial.render(160).join("\n"));
 
 		expect(canonicalRendered).toContain("packages/coding-agent/src/slash-commands/builtin-registry.ts");
-		expect(canonicalRendered).not.toMatch(/¶packages\/coding-agent/);
-		expect(tripleRendered).toContain("a/b/c.ts");
-		expect(tripleRendered).not.toMatch(/¶+a\/b\/c\.ts/);
+		expect(canonicalRendered).not.toMatch(/\[packages\/coding-agent/);
+		expect(partialRendered).toContain("a/b/c.ts");
+		expect(partialRendered).not.toMatch(/\[a\/b\/c\.ts/);
 	});
 
 	it("uses hashline input headers for completed single-file result path", async () => {
@@ -157,7 +190,7 @@ describe("editToolRenderer", () => {
 			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
 			uiTheme,
 			{
-				input: "¶packages/coding-agent/src/edit/renderer.ts\nEOF:\n|// preview",
+				input: "[packages/coding-agent/src/edit/renderer.ts]\ninsert tail:\n+// preview",
 			},
 		);
 
@@ -182,7 +215,7 @@ describe("editToolRenderer", () => {
 			// The trailing payload line carries no newline — the common shape for a
 			// single-line edit. The streaming pass trims that in-flight line, so the
 			// preview only becomes computable once args are marked complete.
-			const input = `¶memory.ts#${tag}\nreplace 2..2:\n+export const b = 22;`;
+			const input = `[memory.ts#${tag}]\nreplace 2..2:\n+export const b = 22;`;
 			const component = new ToolExecutionComponent("edit", { input }, { snapshots }, hashlineTool, uiStub, tmpDir);
 
 			component.setArgsComplete();
@@ -208,7 +241,7 @@ describe("editToolRenderer", () => {
 
 			const snapshots = new InMemorySnapshotStore();
 			const tag = snapshots.record(filePath, content);
-			const input = `¶memory.ts#${tag}\nreplace 2..2:\n+export const b = 22;\n`;
+			const input = `[memory.ts#${tag}]\nreplace 2..2:\n+export const b = 22;\n`;
 			const component = new ToolExecutionComponent(
 				"edit",
 				{ __partialJson: input },
@@ -270,5 +303,51 @@ describe("editToolRenderer", () => {
 
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("plain streamed text");
+	});
+
+	it("renders change stats inline on the result header with no separate metadata or stats row", async () => {
+		const uiTheme = await getUiTheme();
+		const diff = [" 115│ ctx", "-116│ old", "+117│ new one", "+118│ new two"].join("\n");
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated demo.go" }],
+				details: { diff, op: "update" },
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "demo.go" },
+		);
+
+		const lines = Bun.stripANSI(component.render(160).join("\n")).split("\n");
+		// Stats ride on the header line next to the path…
+		expect(lines[0]).toContain("demo.go");
+		expect(lines[0]).toContain("+2");
+		expect(lines[0]).toContain("-1");
+		expect(lines[0]).toContain("1 hunk");
+		// …only there (no standalone stats row), and the diff starts immediately
+		// below the header (no blank line, no lone lang-icon metadata row).
+		expect(lines[1]).toContain("115│ ctx");
+		expect(lines.filter(line => line.includes("hunk"))).toHaveLength(1);
+	});
+
+	it("renders completed edit gutters without inherited frame padding", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated demo.ts" }],
+				details: {
+					diff: "+1│const renamedIdentifier = computeValueFromSomeVeryLongInputName();",
+					op: "update",
+				},
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "demo.ts" },
+		);
+
+		const lines = component.render(48).map(line => Bun.stripANSI(line));
+		expect(lines.every(line => visibleWidth(line) === 48)).toBe(true);
+		expect(lines[1]).toStartWith("│+1│");
+		expect(lines[1]).not.toStartWith("│ +1│");
 	});
 });

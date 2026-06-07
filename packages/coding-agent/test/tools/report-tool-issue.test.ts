@@ -1,7 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { __resetAutoQaFlushStateForTests, flushGrievances } from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
+import {
+	__resetAutoQaFlushStateForTests,
+	flushGrievances,
+	isAutoQaEnabled,
+} from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 
@@ -57,11 +61,23 @@ function pushSettings(overrides: Record<string, unknown> = {}): Settings {
 	});
 }
 
+let originalPiAutoQa: string | undefined;
+
+function restoreAutoQaEnv(): void {
+	if (originalPiAutoQa === undefined) {
+		delete Bun.env.PI_AUTO_QA;
+		return;
+	}
+	Bun.env.PI_AUTO_QA = originalPiAutoQa;
+}
+
 describe("flushGrievances", () => {
 	let db: Database;
 
 	beforeEach(() => {
 		__resetAutoQaFlushStateForTests();
+		originalPiAutoQa = Bun.env.PI_AUTO_QA;
+		delete Bun.env.PI_AUTO_QA;
 		vi.spyOn(piUtils, "getInstallId").mockReturnValue("11111111-2222-3333-4444-555555555555");
 		db = openTempDb();
 	});
@@ -69,7 +85,20 @@ describe("flushGrievances", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		__resetAutoQaFlushStateForTests();
+		restoreAutoQaEnv();
 		db.close();
+	});
+
+	it("lets PI_AUTO_QA=false disable auto QA when the setting is enabled", () => {
+		Bun.env.PI_AUTO_QA = "0";
+
+		expect(isAutoQaEnabled(Settings.isolated({ "dev.autoqa": true }))).toBe(false);
+	});
+
+	it("lets PI_AUTO_QA=true enable auto QA when the setting is disabled", () => {
+		Bun.env.PI_AUTO_QA = "1";
+
+		expect(isAutoQaEnabled(Settings.isolated({ "dev.autoqa": false }))).toBe(true);
 	});
 
 	it("skips network when consent is missing and leaves rows intact", async () => {

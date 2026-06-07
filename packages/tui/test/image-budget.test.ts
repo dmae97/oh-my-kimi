@@ -259,7 +259,7 @@ describe("Image budget + Unicode placeholders", () => {
 		originalCellDims = { ...getCellDimensions() };
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
-		setKittyGraphics({ unicodePlaceholders: true, transmissionMedium: "direct" });
+		setKittyGraphics({ unicodePlaceholders: true });
 	});
 
 	afterEach(() => {
@@ -331,8 +331,10 @@ describe("TUI inline-image budget", () => {
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
 		monotonicNow = 0;
+		// Advance one full 30fps frame (>1000/30ms) per tick so the render
+		// throttle computes a zero delay and every requestRender flushes inline.
 		vi.spyOn(performance, "now").mockImplementation(() => {
-			monotonicNow += 20;
+			monotonicNow += 40;
 			return monotonicNow;
 		});
 	});
@@ -348,7 +350,7 @@ describe("TUI inline-image budget", () => {
 			const tick = Promise.withResolvers<void>();
 			process.nextTick(tick.resolve);
 			await tick.promise;
-			await Bun.sleep(1);
+			await Bun.sleep(40);
 			await term.flush();
 		}
 	}
@@ -461,6 +463,18 @@ describe("ImageBudget transmit tracking", () => {
 		budget.enqueueTransmit(1, "TX1-dup"); // already transmitted => no-op
 		expect([...budget.takeTransmits()]).toEqual(["TX1"]);
 		expect([...budget.takeTransmits()]).toEqual([]);
+	});
+
+	it("purges all transmitted ids for terminal-session cleanup", () => {
+		const budget = new ImageBudget(3, () => {});
+		budget.enqueueTransmit(1, "TX1");
+		budget.enqueueTransmit(2, "TX2");
+		expect(budget.shouldTransmit(1)).toBe(false);
+
+		expect([...budget.takeAllTransmittedIds()]).toEqual([1, 2]);
+		expect([...budget.takeTransmits()]).toEqual([]);
+		expect(budget.shouldTransmit(1)).toBe(true);
+		expect([...budget.takeAllTransmittedIds()]).toEqual([]);
 	});
 
 	it("re-transmits an image after a purge frees its data", () => {

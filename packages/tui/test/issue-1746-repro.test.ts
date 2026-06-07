@@ -49,7 +49,7 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	const nextTick = Promise.withResolvers<void>();
 	process.nextTick(nextTick.resolve);
 	await nextTick.promise;
-	await Bun.sleep(20);
+	await Bun.sleep(40);
 	await term.flush();
 }
 
@@ -197,13 +197,13 @@ describe("issue #1746: scrolled reader in a non-WT ConPTY host (Tabby)", () => {
 					expect(term.getBufferPosition().viewportY).toBe(scrolled.viewportY);
 					expect(term.getViewport()).toEqual(visibleBefore);
 
-					// The deferred rewrite reconciles at an explicit checkpoint
-					// (prompt submit passes allowUnknownViewport: true). A destructive
-					// replay is acceptable there: the Enter keystroke has already
-					// snapped the host viewport to the bottom.
-					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(true);
+					// Unknown viewport checkpoints no longer replay destructively: the
+					// prompt keystroke is not proof that the host scrollback viewport is
+					// at the tail on ConPTY/Tabby. Dirty history stays deferred until the
+					// renderer gets a positive at-tail probe.
+					expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 					await settle(term);
-					expect(eraseScrollbackCount(writes)).toBe(1);
+					expect(eraseScrollbackCount(writes)).toBe(0);
 				} finally {
 					tui.stop();
 				}

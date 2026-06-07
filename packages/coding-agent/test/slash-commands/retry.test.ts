@@ -16,7 +16,6 @@ function createRuntime(didRetry: boolean) {
 				editor: { setText } as unknown as InteractiveModeContext["editor"],
 				showStatus,
 			} as unknown as InteractiveModeContext,
-			handleBackgroundCommand: () => {},
 		},
 	};
 }

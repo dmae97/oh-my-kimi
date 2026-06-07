@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { type Api, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
+
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
@@ -149,7 +150,10 @@ export async function generateSessionTitle(
 	// tiny title model can't reliably decline trivial input, so this happens
 	// deterministically before any model is invoked; the caller retries on the
 	// next user message while the session stays unnamed.
-	if (isLowSignalTitleInput(firstMessage)) return null;
+	if (isLowSignalTitleInput(firstMessage)) {
+		logger.debug("title-generator: skipped low-signal input", { sessionId, reason: "low-signal" });
+		return null;
+	}
 
 	const tinyModel = settings.get("providers.tinyModel");
 	if (tinyModel === ONLINE_TINY_TITLE_MODEL_KEY) {
@@ -159,7 +163,14 @@ export async function generateSessionTitle(
 	const onlineAbortController = new AbortController();
 	const localTitle = tinyTitleClient.generate(tinyModel, firstMessage).then(
 		title => title || null,
-		() => null,
+		err => {
+			logger.warn("title-generator: local model error", {
+				sessionId,
+				model: tinyModel,
+				error: err instanceof Error ? err.message : String(err),
+			});
+			return null;
+		},
 	);
 	const startOnline = (): Promise<string | null> =>
 		generateTitleOnline(
@@ -188,49 +199,48 @@ export async function generateTitleOnline(
 ): Promise<string | null> {
 	const model = getTitleModel(registry, settings, currentModel);
 	if (!model) {
-		logger.debug("title-generator: no title model found");
+		logger.warn("title-generator: no title model found", { sessionId, reason: "no-title-model" });
 		return null;
 	}
 
 	const userMessage = formatTitleUserMessage(firstMessage);
-
-	const apiKey = await registry.getApiKey(model, sessionId);
-	if (!apiKey) {
-		logger.debug("title-generator: no API key for smol model", {
-			provider: model.provider,
-			id: model.id,
-		});
-		return null;
-	}
-	// Resolve metadata after getApiKey so the session-sticky credential for this
-	// request is already recorded; metadataResolver can then return the correct
-	// account_uuid rather than the snapshot-at-call-site value.
-	const metadata = metadataResolver?.(model.provider);
-
-	// Title generation is a 3-6 word task, but some reasoning backends ignore
-	// disableReasoning. Keep the normal cheap budget for non-reasoning models
-	// while reserving enough output room for reasoning models to still emit
-	// the forced tool call after any unavoidable thinking tokens.
-	const maxTokens = model.reasoning ? Math.max(TITLE_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : TITLE_MAX_TOKENS;
-	const request = {
-		model: `${model.provider}/${model.id}`,
-		systemPrompt: TITLE_SYSTEM_PROMPT,
-		userMessage,
-		maxTokens,
+	const modelName = `${model.provider}/${model.id}`;
+	const modelContext = {
+		sessionId,
+		provider: model.provider,
+		id: model.id,
+		model: modelName,
 	};
-	logger.debug("title-generator: request", request);
+	logger.debug("title-generator: start", modelContext);
 
 	try {
+		const apiKey = await registry.getApiKey(model, sessionId);
+		if (!apiKey) {
+			logger.warn("title-generator: no API key", { ...modelContext, reason: "missing-api-key" });
+			return null;
+		}
+		// Resolve metadata after getApiKey so the session-sticky credential for this
+		// request is already recorded; metadataResolver can then return the correct
+		// account_uuid rather than the snapshot-at-call-site value.
+		const metadata = metadataResolver?.(model.provider);
+
+		// Title generation is a 3-6 word task, but some reasoning backends ignore
+		// disableReasoning. Keep the normal cheap budget for non-reasoning models
+		// while reserving enough output room for reasoning models to still emit
+		// the forced tool call after any unavoidable thinking tokens.
+		const maxTokens = model.reasoning ? Math.max(TITLE_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : TITLE_MAX_TOKENS;
+		logger.debug("title-generator: request", { ...modelContext, maxTokens });
+
 		const response = await completeSimple(
 			model,
 			{
-				systemPrompt: [request.systemPrompt],
-				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
+				systemPrompt: [TITLE_SYSTEM_PROMPT],
+				messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				tools: [setTitleTool],
 			},
 			{
-				apiKey,
-				maxTokens: request.maxTokens,
+				apiKey: registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl }),
+				maxTokens,
 				disableReasoning: true,
 				toolChoice: { type: "tool", name: SET_TITLE_TOOL_NAME },
 				metadata,
@@ -239,8 +249,9 @@ export async function generateTitleOnline(
 		);
 
 		if (response.stopReason === "error") {
-			logger.debug("title-generator: response error", {
-				model: request.model,
+			logger.warn("title-generator: response error", {
+				...modelContext,
+				reason: "provider-response-error",
 				stopReason: response.stopReason,
 				errorMessage: response.errorMessage,
 			});
@@ -249,8 +260,18 @@ export async function generateTitleOnline(
 
 		const title = normalizeGeneratedTitle(extractGeneratedTitle(response.content));
 
-		logger.debug("title-generator: response", {
-			model: request.model,
+		if (!title) {
+			logger.debug("title-generator: no title returned", {
+				...modelContext,
+				reason: "model-returned-none",
+				usage: response.usage,
+				stopReason: response.stopReason,
+			});
+			return null;
+		}
+
+		logger.debug("title-generator: success", {
+			...modelContext,
 			title,
 			usage: response.usage,
 			stopReason: response.stopReason,
@@ -258,8 +279,9 @@ export async function generateTitleOnline(
 
 		return title;
 	} catch (err) {
-		logger.debug("title-generator: error", {
-			model: request.model,
+		logger.warn("title-generator: error", {
+			...modelContext,
+			reason: "exception",
 			error: err instanceof Error ? err.message : String(err),
 		});
 		return null;

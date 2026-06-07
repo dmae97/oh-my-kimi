@@ -14,7 +14,9 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 	});
 
 	it("falls back to native renderer when jina hangs until aborted", async () => {
-		const settings = Settings.isolated({ "providers.parallelFetch": false });
+		// Force jina first so the stall path is actually exercised before the
+		// native fallback runs.
+		const settings = Settings.isolated({ "providers.fetch": "jina" });
 		// Substantive HTML so the native converter produces >100 chars and
 		// `isLowQualityOutput` does not reject it.
 		const paragraphs = Array.from(
@@ -45,9 +47,12 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		});
 
 		const started = Date.now();
-		// `timeout: 2` keeps the overall budget tight — the test must complete
-		// within ~2s even though Jina would otherwise hang for the full budget.
-		const result = await renderHtmlToText("https://example.com/article", html, 2, settings, undefined, null);
+		// Tight 300ms reader-mode budget. Jina would otherwise hang forever, but
+		// the remote sub-budget (min(timeout*1000, REMOTE_READER_MAX_MS)) aborts
+		// the stalled request so the local native renderer still runs. Kept small
+		// so the test exercises the same abort path without burning real
+		// wall-clock time waiting out the stall.
+		const result = await renderHtmlToText("https://example.com/article", html, 0.3, settings, undefined, null);
 		const elapsedMs = Date.now() - started;
 
 		expect(result.ok).toBe(true);
@@ -56,14 +61,14 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		// If trafilatura or lynx happened to succeed first, that's also a valid
 		// non-aborted outcome.
 		expect(["native", "trafilatura", "lynx"]).toContain(result.method);
-		// Must finish well before the overall budget elapses: the remote
-		// sub-budget caps Jina at min(timeout, REMOTE_READER_MAX_MS), so the
-		// remaining ~1s of the 2s budget is enough for the native renderer.
-		expect(elapsedMs).toBeLessThan(2_500);
+		// Must finish shortly after the 300ms budget aborts the stalled Jina
+		// request — never anywhere near an unbounded hang. The generous bound
+		// absorbs scheduler jitter under full-suite parallelism.
+		expect(elapsedMs).toBeLessThan(1_500);
 	});
 
 	it("re-throws when the user signal is aborted, not when Jina sub-budget expires", async () => {
-		const settings = Settings.isolated({ "providers.parallelFetch": false });
+		const settings = Settings.isolated({ "providers.fetch": "jina" });
 		const html = "<html><body><p>short</p></body></html>";
 
 		using _hook = hookFetch((_input, init, _next) => {

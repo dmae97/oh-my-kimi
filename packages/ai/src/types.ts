@@ -1,4 +1,5 @@
 import type { ZodType, z } from "zod/v4";
+import type { ApiKey } from "./auth-retry";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
@@ -151,7 +152,7 @@ export type KnownProvider =
 	| "lm-studio";
 export type Provider = KnownProvider | string;
 
-import type { Effort } from "./model-thinking";
+import type { Effort } from "./effort";
 
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };
@@ -298,12 +299,6 @@ export interface StreamOptions {
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
-	/**
-	 * Called when a provider returns 401 before any replay-unsafe assistant
-	 * event has been emitted. Returning a different key retries the provider
-	 * request once.
-	 */
-	onAuthError?: (provider: string, apiKey: string, error: unknown) => Promise<string | undefined>;
 	cacheRetention?: CacheRetention;
 	/**
 	 * Additional headers to include in provider requests.
@@ -415,7 +410,15 @@ export interface StreamOptions {
 }
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
-export interface SimpleStreamOptions extends StreamOptions {
+export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
+	/**
+	 * API key for the request: either a static bearer string, or an
+	 * {@link ApiKeyResolver} that mints/rotates the key across the central
+	 * a/b/c auth-retry policy. `streamSimple`/`completeSimple` resolve a
+	 * resolver to a string before per-provider dispatch, so providers only
+	 * ever see the resolved {@link StreamOptions.apiKey} string.
+	 */
+	apiKey?: ApiKey;
 	reasoning?: Effort;
 	/**
 	 * Force-disable reasoning for the request even when the model supports it.
@@ -905,6 +908,18 @@ export interface Model<TApi extends Api = any> {
 	premiumMultiplier?: number;
 	contextWindow: number;
 	maxTokens: number;
+	/**
+	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /
+	 * `max_tokens` / `max_completion_tokens` (Completions) from the outbound
+	 * request and let the upstream API decide the per-response cap. `maxTokens`
+	 * is still used locally for budgeting (compaction, context promotion); only
+	 * the wire field is suppressed.
+	 *
+	 * Use this for proxies (notably Ollama) that forward to a backend whose true
+	 * output limit OMP cannot discover — sending the wrong value triggers 400s
+	 * from the upstream provider.
+	 */
+	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
 	/**
 	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes

@@ -32,21 +32,34 @@ describe("IdleTimeout", () => {
 		expect((idle.signal.reason as DOMException).name).toBe("TimeoutError");
 	});
 
-	it("re-arms on every bump and only fires after activity stops", async () => {
-		using idle = new IdleTimeout(150);
-		// Bump well past a single window; each bump must push the deadline forward
-		// so the watchdog never trips while activity continues.
-		for (let i = 0; i < 6; i++) {
-			await Bun.sleep(40);
-			idle.bump();
-		}
+	it("ignores elapsed time while paused and resumes with a fresh window", async () => {
+		using idle = new IdleTimeout(80);
+		idle.pause();
+		await Bun.sleep(160);
 		expect(idle.signal.aborted).toBe(false);
 
-		// Activity stopped — the watchdog should now fire within roughly one window.
-		const fired = await abortedWithin(idle.signal, 800);
+		idle.resume();
+		const firedEarly = await abortedWithin(idle.signal, 30);
+		expect(firedEarly).toBe(false);
+		const fired = await abortedWithin(idle.signal, 500);
 		expect(fired).toBe(true);
 	});
 
+	it("reference-counts overlapping pauses", async () => {
+		using idle = new IdleTimeout(60);
+		idle.pause();
+		idle.pause();
+		await Bun.sleep(120);
+		expect(idle.signal.aborted).toBe(false);
+
+		idle.resume();
+		await Bun.sleep(90);
+		expect(idle.signal.aborted).toBe(false);
+
+		idle.resume();
+		const fired = await abortedWithin(idle.signal, 500);
+		expect(fired).toBe(true);
+	});
 	it("never fires after dispose()", async () => {
 		const idle = new IdleTimeout(30);
 		idle.dispose();
@@ -55,12 +68,13 @@ describe("IdleTimeout", () => {
 		expect(idle.signal.aborted).toBe(false);
 	});
 
-	it("ignores bump() after the watchdog has already fired", async () => {
+	it("ignores pause/resume after the watchdog has already fired", async () => {
 		using idle = new IdleTimeout(30);
 		await abortedWithin(idle.signal, 500);
 		expect(idle.signal.aborted).toBe(true);
 		// Late activity must not un-abort or rearm a settled watchdog.
-		idle.bump();
+		idle.pause();
+		idle.resume();
 		expect(idle.signal.aborted).toBe(true);
 	});
 });

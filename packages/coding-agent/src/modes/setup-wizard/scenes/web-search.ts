@@ -19,7 +19,8 @@ type Availability = "checking" | boolean;
 /**
  * "Web search" panel: picks the provider the web_search tool should prefer and
  * reports whether the highlighted provider is ready to use given current
- * credentials (env keys or OAuth sign-ins from the Sign in tab).
+ * credentials (env keys or OAuth sign-ins from the Sign in tab) or an
+ * unauthenticated fallback.
  */
 export class WebSearchTab implements SetupTab {
 	readonly id = "web-search";
@@ -91,7 +92,7 @@ export class WebSearchTab implements SetupTab {
 			let ready = false;
 			try {
 				const provider = await getSearchProvider(id);
-				ready = await provider.isAvailable(this.host.ctx.session.modelRegistry.authStorage);
+				ready = await provider.isExplicitlyAvailable(this.host.ctx.session.modelRegistry.authStorage);
 			} catch {
 				ready = false;
 			}

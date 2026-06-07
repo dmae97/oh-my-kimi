@@ -10,6 +10,7 @@
  * Capabilities:
  * - context-files: copilot-instructions.md in .github/
  * - instructions: *.instructions.md in .github/instructions/ with applyTo frontmatter
+ * - skills: <name>/SKILL.md in .github/skills/ (GitHub Agent Skills layout)
  */
 import * as path from "node:path";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
@@ -17,9 +18,10 @@ import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { readFile } from "../capability/fs";
 import { type Instruction, instructionCapability } from "../capability/instruction";
+import { type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 
-import { calculateDepth, createSourceMeta, getProjectPath, loadFilesFromDir } from "./helpers";
+import { calculateDepth, createSourceMeta, getProjectPath, loadFilesFromDir, scanSkillsFromDir } from "./helpers";
 
 const PROVIDER_ID = "github";
 const DISPLAY_NAME = "GitHub Copilot";
@@ -98,6 +100,32 @@ function transformInstruction(name: string, content: string, filePath: string, s
 }
 
 // =============================================================================
+// Skills
+// =============================================================================
+
+/**
+ * Load skills from `.github/skills/<name>/SKILL.md`.
+ *
+ * GitHub documents this layout for Copilot Agent Skills and matches the
+ * non-recursive shape `scanSkillsFromDir` already expects. `requireDescription`
+ * is on to match the Agent Skills spec (name + description are mandatory) and
+ * the sibling `native`/`omp-plugins` providers.
+ *
+ * @see https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/add-skills
+ */
+async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
+	const skillsDir = getProjectPath(ctx, "github", "skills");
+	if (!skillsDir) return { items: [], warnings: [] };
+
+	return scanSkillsFromDir(ctx, {
+		dir: skillsDir,
+		providerId: PROVIDER_ID,
+		level: "project",
+		requireDescription: true,
+	});
+}
+
+// =============================================================================
 // Provider Registration
 // =============================================================================
 
@@ -115,4 +143,12 @@ registerProvider(instructionCapability.id, {
 	description: "Load *.instructions.md from .github/instructions/ with applyTo frontmatter",
 	priority: PRIORITY,
 	load: loadInstructions,
+});
+
+registerProvider<Skill>(skillCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load skills from .github/skills/*/SKILL.md",
+	priority: PRIORITY,
+	load: loadSkills,
 });

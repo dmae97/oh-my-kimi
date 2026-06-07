@@ -1,4 +1,6 @@
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
@@ -8,13 +10,14 @@ import { $which, ptree, truncate } from "@oh-my-pi/pi-utils";
 import { parseHTML } from "linkedom";
 import { LRUCache } from "lru-cache/raw";
 import type { Settings } from "../config/settings";
+import { readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { type Theme, theme } from "../modes/theme/theme";
 import type { ToolSession } from "../sdk";
 import type { AgentStorage } from "../session/agent-storage";
 import { DEFAULT_MAX_BYTES, truncateHead } from "../session/streaming-output";
-import { renderStatusLine } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { renderStatusLine, urlHyperlink } from "../tui";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -22,10 +25,12 @@ import { specialHandlers } from "../web/scrapers";
 import type { RenderResult } from "../web/scrapers/types";
 import { finalizeOutput, loadPage, looksLikeHtml, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
+import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "./archive-reader";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
 import { type LineRange, parseLineRanges } from "./path-utils";
-import { formatExpandHint, getDomain, replaceTabs } from "./render-utils";
+import { formatBytes, formatExpandHint, getDomain, replaceTabs } from "./render-utils";
+import { listTables, looksLikeSqlite, renderTableList } from "./sqlite-reader";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -46,8 +51,6 @@ const CONVERTIBLE_MIMES = new Set([
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	"application/rtf",
 	"application/epub+zip",
-	"application/x-ipynb+json",
-	"application/zip",
 	"image/png",
 	"image/jpeg",
 	"image/gif",
@@ -67,7 +70,6 @@ const CONVERTIBLE_EXTENSIONS = new Set([
 	".xlsx",
 	".rtf",
 	".epub",
-	".ipynb",
 	".png",
 	".jpg",
 	".jpeg",
@@ -77,6 +79,27 @@ const CONVERTIBLE_EXTENSIONS = new Set([
 	".wav",
 	".ogg",
 ]);
+
+const NOTEBOOK_MIMES = new Set(["application/x-ipynb+json"]);
+const NOTEBOOK_EXTENSIONS = new Set([".ipynb"]);
+
+const SQLITE_MIMES = new Set([
+	"application/vnd.sqlite3",
+	"application/x-sqlite3",
+	"application/sqlite3",
+	"application/sqlite",
+]);
+const SQLITE_EXTENSIONS = new Set([".sqlite", ".sqlite3", ".db", ".db3"]);
+
+const ARCHIVE_MIMES = new Set([
+	"application/zip",
+	"application/x-zip-compressed",
+	"application/x-tar",
+	"application/tar",
+	"application/gzip",
+	"application/x-gzip",
+]);
+const ARCHIVE_EXTENSIONS = new Set([".zip", ".tar", ".tar.gz", ".tgz", ".gz"]);
 
 const IMAGE_MIME_BY_EXTENSION = new Map<string, string>([
 	[".png", "image/png"],
@@ -261,6 +284,12 @@ function normalizeMime(contentType: string): string {
 	return contentType.split(";")[0].trim().toLowerCase();
 }
 
+function getFilenameExtensionHint(filename: string): string {
+	const lower = filename.toLowerCase();
+	if (lower.endsWith(".tar.gz")) return ".tar.gz";
+	return path.extname(filename).toLowerCase();
+}
+
 /**
  * Get extension from URL or Content-Disposition
  */
@@ -269,7 +298,7 @@ function getExtensionHint(url: string, contentDisposition?: string): string {
 	if (contentDisposition) {
 		const match = contentDisposition.match(/filename[*]?=["']?([^"';\n]+)/i);
 		if (match) {
-			const ext = path.extname(match[1]).toLowerCase();
+			const ext = getFilenameExtensionHint(match[1]);
 			if (ext) return ext;
 		}
 	}
@@ -277,7 +306,7 @@ function getExtensionHint(url: string, contentDisposition?: string): string {
 	// Fall back to URL path
 	try {
 		const pathname = new URL(url).pathname;
-		const ext = path.extname(pathname).toLowerCase();
+		const ext = getFilenameExtensionHint(pathname);
 		if (ext) return ext;
 	} catch {}
 
@@ -581,14 +610,25 @@ function parseFeedToMarkdown(content: string, maxItems = 10): string {
  */
 const REMOTE_READER_MAX_MS = 10_000;
 
+/** Reader backends for {@link renderHtmlToText}, in default priority order. */
+export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina";
+
+const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = ["native", "trafilatura", "lynx", "parallel", "jina"];
+
 /**
- * Render HTML to markdown using Parallel, jina, trafilatura, lynx, then the
- * in-process native converter. The overall `timeout` budget bounds the call,
- * but remote reader requests are additionally capped at `REMOTE_READER_MAX_MS`
- * so that a hung remote endpoint cannot prevent local fallbacks from running.
- * Only a real `userSignal` cancellation aborts the chain — remote per-attempt
- * timeouts and the overall reader-mode timeout still allow later renderers
- * (especially the purely-local native converter) to be tried.
+ * Render HTML to markdown by trying reader backends in priority order: native
+ * (in-process), trafilatura, lynx, Parallel, then Jina. The `providers.fetch`
+ * setting picks the order — `auto` uses the default above; any specific backend
+ * is tried first, then the remaining backends as fallbacks. Every backend's
+ * output must clear the same quality gate (>100 non-whitespace chars and not
+ * {@link isLowQualityOutput}) before it is accepted, otherwise the next backend
+ * is tried.
+ *
+ * The overall `timeout` budget bounds the whole call; remote backends (Parallel,
+ * Jina) are additionally capped at `REMOTE_READER_MAX_MS` so a hung endpoint
+ * cannot starve later renderers — especially the purely-local native converter,
+ * which always works on already-loaded HTML. Only a real `userSignal`
+ * cancellation aborts the chain (#1449).
  */
 export async function renderHtmlToText(
 	url: string,
@@ -607,92 +647,74 @@ export async function renderHtmlToText(
 		signal: overallSignal,
 	};
 	const remoteBudgetMs = Math.min(timeout * 1000, REMOTE_READER_MAX_MS);
+	// Per-attempt budget for remote endpoints so one stall cannot consume the
+	// whole reader-mode budget and starve the local fallbacks.
+	const remoteSignal = () => ptree.combineSignals(userSignal, remoteBudgetMs);
 
-	// Try Parallel extract first when credentials are configured
-	if (settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
-		try {
+	const runners: Record<FetchProvider, () => Promise<string | null>> = {
+		// Purely local, no network/subprocess: still works on already-loaded HTML
+		// even after remote/subprocess attempts are aborted by the budget.
+		native: () => htmlToMarkdown(html, { cleanContent: true }),
+		trafilatura: async () => {
+			const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
+			if (!trafilatura) return null;
+			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
+			return result.ok ? result.stdout : null;
+		},
+		lynx: async () => {
+			if (!hasCommand("lynx")) return null;
+			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
+			return result.ok ? result.stdout : null;
+		},
+		parallel: async () => {
+			if (!findParallelApiKey(storage)) return null;
 			const parallelResult = await extractWithParallel(
 				[url],
-				{
-					objective: "Extract the main content",
-					excerpts: true,
-					fullContent: false,
-					signal: ptree.combineSignals(userSignal, remoteBudgetMs),
-				},
+				{ objective: "Extract the main content", excerpts: true, fullContent: false, signal: remoteSignal() },
 				storage,
 			);
 			const firstDocument = parallelResult.results[0];
-			if (firstDocument) {
-				const content = getParallelExtractContent(firstDocument);
-				if (content.trim().length > 100 && !isLowQualityOutput(content)) {
-					return { content, ok: true, method: "parallel" };
-				}
+			return firstDocument ? getParallelExtractContent(firstDocument) : null;
+		},
+		jina: async () => {
+			const response = await fetch(`https://r.jina.ai/${url}`, {
+				headers: { Accept: "text/markdown" },
+				signal: remoteSignal(),
+			});
+			return response.ok ? await response.text() : null;
+		},
+	};
+
+	const preference = settings.get("providers.fetch");
+	const order: readonly FetchProvider[] =
+		preference === "auto"
+			? FETCH_PROVIDER_ORDER
+			: [preference, ...FETCH_PROVIDER_ORDER.filter(method => method !== preference)];
+
+	// Highest-priority output that is substantial but fails the low-quality gate.
+	// Surfaced (ok: true) only when no backend clears the gate, so the caller's
+	// targeted fallbacks (llms.txt / document extraction) still run and we beat
+	// returning the unrendered raw HTML.
+	let lowQuality: { content: string; method: FetchProvider } | null = null;
+
+	for (const method of order) {
+		// Honour real user cancellation between attempts; remote per-attempt and
+		// overall-budget timeouts still fall through to later (local) renderers.
+		userSignal?.throwIfAborted();
+		try {
+			const content = await runners[method]();
+			if (!content || content.trim().length <= 100) continue;
+			if (!isLowQualityOutput(content)) {
+				return { content, ok: true, method };
 			}
+			lowQuality ??= { content, method };
 		} catch {
-			// Parallel extract failed or stalled; honour real cancellation only.
 			userSignal?.throwIfAborted();
 		}
 	}
 
-	// Try jina reader API with its own sub-budget so a stall cannot starve
-	// later fallbacks (#1449).
-	try {
-		const jinaUrl = `https://r.jina.ai/${url}`;
-		const response = await fetch(jinaUrl, {
-			headers: { Accept: "text/markdown" },
-			signal: ptree.combineSignals(userSignal, remoteBudgetMs),
-		});
-		if (response.ok) {
-			const content = await response.text();
-			if (content.trim().length > 100 && !isLowQualityOutput(content)) {
-				return { content, ok: true, method: "jina" };
-			}
-		}
-	} catch {
-		// Jina failed or stalled; honour real cancellation only.
-		userSignal?.throwIfAborted();
-	}
-
-	// Try trafilatura (auto-install via uv/pip)
-	try {
-		const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
-		if (trafilatura) {
-			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
-			if (result.ok && result.stdout.trim().length > 100) {
-				return { content: result.stdout, ok: true, method: "trafilatura" };
-			}
-		}
-	} catch {
-		// trafilatura unavailable or stalled; continue to next method.
-		userSignal?.throwIfAborted();
-	}
-
-	// Try lynx (can't auto-install, system package)
-	try {
-		const lynx = hasCommand("lynx");
-		if (lynx) {
-			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
-			if (result.ok) {
-				return { content: result.stdout, ok: true, method: "lynx" };
-			}
-		}
-	} catch {
-		// lynx failed or stalled; continue to native converter.
-		userSignal?.throwIfAborted();
-	}
-
-	// Fall back to native converter (purely local, no network/subprocess).
-	// Always attempted: even if remote renderers and subprocesses were aborted
-	// by the overall reader-mode timeout, this still works on already-loaded
-	// HTML (#1449).
-	try {
-		const content = await htmlToMarkdown(html, { cleanContent: true });
-		if (content.trim().length > 100 && !isLowQualityOutput(content)) {
-			return { content, ok: true, method: "native" };
-		}
-	} catch {
-		// Native converter failed; nothing else to try.
-		userSignal?.throwIfAborted();
+	if (lowQuality) {
+		return { content: lowQuality.content, ok: true, method: lowQuality.method };
 	}
 	return { content: "", ok: false, method: "none" };
 }
@@ -744,6 +766,254 @@ interface FetchImagePayload {
 type FetchRenderResult = RenderResult & {
 	image?: FetchImagePayload;
 };
+
+const BINARY_SAMPLE_CHARS = 4096;
+const URL_ARCHIVE_LIST_LIMIT = 500;
+const URL_SQLITE_LIST_LIMIT = 500;
+
+function sampleLooksBinary(text: string): boolean {
+	const limit = Math.min(text.length, BINARY_SAMPLE_CHARS);
+	if (limit === 0) return false;
+
+	let replacementCount = 0;
+	for (let index = 0; index < limit; index++) {
+		const code = text.charCodeAt(index);
+		if (code === 0) return true;
+		if (code === 0xfffd) replacementCount++;
+	}
+
+	return replacementCount >= 3 && replacementCount / limit > 0.01;
+}
+
+function isNotebookHint(mime: string, extensionHint: string): boolean {
+	return NOTEBOOK_MIMES.has(mime) || NOTEBOOK_EXTENSIONS.has(extensionHint);
+}
+
+function isSqliteHint(mime: string, extensionHint: string): boolean {
+	return SQLITE_MIMES.has(mime) || SQLITE_EXTENSIONS.has(extensionHint);
+}
+
+function isArchiveHint(mime: string, extensionHint: string): boolean {
+	return ARCHIVE_MIMES.has(mime) || ARCHIVE_EXTENSIONS.has(extensionHint);
+}
+
+function getArchiveFormatHint(mime: string, extensionHint: string): ArchiveFormat | undefined {
+	if (extensionHint === ".zip" || mime === "application/zip" || mime === "application/x-zip-compressed") {
+		return "zip";
+	}
+	if (extensionHint === ".tar" || mime === "application/x-tar" || mime === "application/tar") {
+		return "tar";
+	}
+	if (
+		extensionHint === ".tar.gz" ||
+		extensionHint === ".tgz" ||
+		extensionHint === ".gz" ||
+		mime === "application/gzip" ||
+		mime === "application/x-gzip"
+	) {
+		return "tar.gz";
+	}
+	return undefined;
+}
+
+function formatErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function binaryContentType(mime: string): string {
+	return mime || "application/octet-stream";
+}
+
+function buildBinaryNotice(finalUrl: string, mime: string, byteLength?: number): string {
+	const size = byteLength === undefined ? "unknown size" : formatBytes(byteLength);
+	return `[Binary content: ${binaryContentType(mime)}, ${size}] ${finalUrl}`;
+}
+
+function buildBinaryPayloadResult(
+	url: string,
+	finalUrl: string,
+	mime: string,
+	method: string,
+	content: string,
+	fetchedAt: string,
+	notes: string[],
+): FetchRenderResult {
+	const output = finalizeOutput(content);
+	return {
+		url,
+		finalUrl,
+		contentType: binaryContentType(mime),
+		method,
+		content: output.content,
+		fetchedAt,
+		truncated: output.truncated,
+		notes,
+	};
+}
+
+async function withTempBinaryFile<T>(
+	prefix: string,
+	extension: string,
+	bytes: Uint8Array,
+	readTempFile: (tempPath: string) => Promise<T>,
+): Promise<T> {
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+	const tempPath = path.join(tempDir, `payload${extension}`);
+	try {
+		await Bun.write(tempPath, bytes);
+		return await readTempFile(tempPath);
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+}
+
+async function renderNotebookPayload(bytes: Uint8Array, displayUrl: string): Promise<string> {
+	return withTempBinaryFile("omp-url-notebook-", ".ipynb", bytes, tempPath =>
+		readEditableNotebookText(tempPath, displayUrl),
+	);
+}
+
+async function renderSqlitePayload(bytes: Uint8Array): Promise<string> {
+	return withTempBinaryFile("omp-url-sqlite-", ".sqlite", bytes, async tempPath => {
+		let db: Database | null = null;
+		try {
+			db = new Database(tempPath, { readonly: true, strict: true });
+			db.run("PRAGMA busy_timeout = 3000");
+			const listLimit = applyListLimit(listTables(db), { limit: URL_SQLITE_LIST_LIMIT });
+			return renderTableList(listLimit.items);
+		} finally {
+			db?.close();
+		}
+	});
+}
+
+async function tryRenderBinaryPayload(
+	url: string,
+	finalUrl: string,
+	mime: string,
+	extHint: string,
+	rawContent: string,
+	timeout: number,
+	signal: AbortSignal | undefined,
+	fetchedAt: string,
+	notes: readonly string[],
+): Promise<FetchRenderResult | null> {
+	const hasNotebookHint = isNotebookHint(mime, extHint);
+	const hasSqliteHint = isSqliteHint(mime, extHint);
+	const hasArchiveHint = isArchiveHint(mime, extHint);
+	const rawLooksBinary = sampleLooksBinary(rawContent);
+	if (!hasNotebookHint && !hasSqliteHint && !hasArchiveHint && !rawLooksBinary) {
+		return null;
+	}
+
+	const resultNotes = [...notes];
+	const binary = await fetchBinary(finalUrl, timeout, signal);
+	if (!binary.ok) {
+		resultNotes.push(binary.error ? `Binary fetch failed: ${binary.error}` : "Binary fetch failed");
+		return buildBinaryPayloadResult(
+			url,
+			finalUrl,
+			mime,
+			"binary",
+			buildBinaryNotice(finalUrl, mime),
+			fetchedAt,
+			resultNotes,
+		);
+	}
+
+	const binaryExtHint = getExtensionHint(finalUrl, binary.contentDisposition) || extHint;
+	if (isNotebookHint(mime, binaryExtHint)) {
+		try {
+			return buildBinaryPayloadResult(
+				url,
+				finalUrl,
+				mime,
+				"notebook",
+				await renderNotebookPayload(binary.buffer, finalUrl),
+				fetchedAt,
+				resultNotes,
+			);
+		} catch (error) {
+			resultNotes.push(`Notebook rendering failed: ${formatErrorMessage(error)}`);
+			return buildBinaryPayloadResult(
+				url,
+				finalUrl,
+				mime,
+				"binary",
+				buildBinaryNotice(finalUrl, mime, binary.buffer.byteLength),
+				fetchedAt,
+				resultNotes,
+			);
+		}
+	}
+
+	if (isSqliteHint(mime, binaryExtHint) || looksLikeSqlite(binary.buffer)) {
+		try {
+			return buildBinaryPayloadResult(
+				url,
+				finalUrl,
+				mime,
+				"sqlite",
+				await renderSqlitePayload(binary.buffer),
+				fetchedAt,
+				resultNotes,
+			);
+		} catch (error) {
+			resultNotes.push(`SQLite rendering failed: ${formatErrorMessage(error)}`);
+			return buildBinaryPayloadResult(
+				url,
+				finalUrl,
+				mime,
+				"binary",
+				buildBinaryNotice(finalUrl, mime, binary.buffer.byteLength),
+				fetchedAt,
+				resultNotes,
+			);
+		}
+	}
+
+	const hintedArchiveFormat = getArchiveFormatHint(mime, binaryExtHint);
+	const shouldArchiveSniff = hintedArchiveFormat !== undefined || !isConvertible(mime, binaryExtHint);
+	const archiveFormat = hintedArchiveFormat ?? (shouldArchiveSniff ? sniffArchiveFormat(binary.buffer) : undefined);
+	if (archiveFormat) {
+		try {
+			return buildBinaryPayloadResult(
+				url,
+				finalUrl,
+				mime,
+				"archive",
+				await listArchiveRoot(binary.buffer, archiveFormat, { limit: URL_ARCHIVE_LIST_LIMIT }),
+				fetchedAt,
+				resultNotes,
+			);
+		} catch (error) {
+			resultNotes.push(`Archive rendering failed: ${formatErrorMessage(error)}`);
+			return buildBinaryPayloadResult(
+				url,
+				finalUrl,
+				mime,
+				"binary",
+				buildBinaryNotice(finalUrl, mime, binary.buffer.byteLength),
+				fetchedAt,
+				resultNotes,
+			);
+		}
+	}
+
+	if (rawLooksBinary) {
+		return buildBinaryPayloadResult(
+			url,
+			finalUrl,
+			mime,
+			"binary",
+			buildBinaryNotice(finalUrl, mime, binary.buffer.byteLength),
+			fetchedAt,
+			resultNotes,
+		);
+	}
+
+	return null;
+}
 
 // =============================================================================
 // Unified Special Handler Dispatch
@@ -991,6 +1261,19 @@ async function renderUrl(
 		}
 	}
 
+	const binaryPayloadResult = await tryRenderBinaryPayload(
+		url,
+		finalUrl,
+		mime,
+		extHint,
+		rawContent,
+		timeout,
+		signal,
+		fetchedAt,
+		notes,
+	);
+	if (binaryPayloadResult) return binaryPayloadResult;
+
 	// Step 4: Handle non-HTML text content
 	const isHtml = mime.includes("html") || mime.includes("xhtml");
 	const isJson = mime.includes("json");
@@ -999,7 +1282,7 @@ async function renderUrl(
 	const isFeed = mime.includes("rss") || mime.includes("atom") || mime.includes("feed");
 
 	// Raw mode skips every text-shaping branch below (JSON pretty-print, feed-to-markdown,
-	// HTML extraction) and returns the response body verbatim. The image/markit branches
+	// HTML extraction) and returns the response body verbatim. Binary-oriented branches
 	// above already ran because raw isn't useful for binary payloads.
 	if (raw) {
 		const output = finalizeOutput(rawContent);
@@ -1141,10 +1424,27 @@ async function renderUrl(
 			throw new ToolAbortError();
 		}
 
-		// 5E: Render HTML with lynx or html2text
+		// 5E: Render HTML via the reader-backend chain (native/trafilatura/lynx/parallel/jina)
 		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal, storage);
 		if (!htmlResult.ok) {
-			notes.push("html rendering failed (lynx/html2text unavailable)");
+			notes.push("html rendering failed (no reader backend produced usable output)");
+
+			const llmResult = await tryLlmEndpoints(finalUrl, timeout, signal);
+			if (llmResult) {
+				notes.push(`Used llms.txt fallback: ${llmResult.endpoint}`);
+				const output = finalizeOutput(llmResult.content);
+				return {
+					url,
+					finalUrl,
+					contentType: "text/plain",
+					method: "llms.txt",
+					content: output.content,
+					fetchedAt,
+					truncated: output.truncated,
+					notes,
+				};
+			}
+
 			const output = finalizeOutput(rawContent);
 			return {
 				url,
@@ -1437,6 +1737,27 @@ function countNonEmptyLines(text: string): number {
 	return text.split("\n").filter(l => l.trim()).length;
 }
 
+function readUrlLinkTarget(input: string): string {
+	try {
+		return parseReadUrlTarget(input)?.path ?? input;
+	} catch {
+		return input;
+	}
+}
+
+function formatReadUrlDescription(input: string): string {
+	const target = readUrlLinkTarget(input);
+	const displayUrl = target.match(/^www\./i) ? `https://${target}` : target;
+	const domain = getDomain(displayUrl);
+	const urlPath = truncate(displayUrl.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
+	const label = `${domain}${urlPath ? ` ${urlPath}` : ""}`.trim();
+	return urlHyperlink(target, label);
+}
+
+function formatReadUrlMetadataValue(url: string, uiTheme: Theme): string {
+	return urlHyperlink(url, uiTheme.fg("mdLinkUrl", url));
+}
+
 /** Render URL read call (URL preview) */
 export function renderReadUrlCall(
 	args: { path?: string; url?: string; raw?: boolean },
@@ -1444,9 +1765,7 @@ export function renderReadUrlCall(
 	uiTheme: Theme = theme,
 ): Component {
 	const url = args.path ?? args.url ?? "";
-	const domain = getDomain(url);
-	const path = truncate(url.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
-	const description = `${domain}${path ? ` ${path}` : ""}`.trim();
+	const description = formatReadUrlDescription(url);
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");
 	const text = renderStatusLine({ icon: "pending", title: "Read", description, meta }, uiTheme);
@@ -1465,19 +1784,18 @@ export function renderReadUrlResult(
 		const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
 		const errorText = (rawErrorText || "No response data").replace(/^Error:\s*/, "");
 		const urlText = details?.finalUrl ?? details?.url ?? "";
-		const description = urlText ? `${getDomain(urlText)}${urlText.replace(/^https?:\/\/[^/]+/, "")}` : undefined;
+		const description = urlText ? formatReadUrlDescription(urlText) : undefined;
 		const header = renderStatusLine({ icon: "error", title: "Read", description }, uiTheme);
 		const errorLines = errorText.split("\n").map(line => uiTheme.fg("error", replaceTabs(line)));
 		const outputBlock = new CachedOutputBlock();
-		return {
+		return markFramedBlockComponent({
 			render: (width: number) =>
 				outputBlock.render({ header, state: "error", sections: [{ lines: errorLines }], width }, uiTheme),
 			invalidate: () => outputBlock.invalidate(),
-		};
+		});
 	}
 
-	const domain = getDomain(details.finalUrl);
-	const path = truncate(details.finalUrl.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
+	const description = formatReadUrlDescription(details.finalUrl);
 	const hasRedirect = details.url !== details.finalUrl;
 	const hasNotes = details.notes.length > 0;
 	const truncation = details.meta?.truncation;
@@ -1487,7 +1805,7 @@ export function renderReadUrlResult(
 		{
 			icon: truncated ? "warning" : "success",
 			title: "Read",
-			description: `${domain}${path ? ` ${path}` : ""}`,
+			description,
 		},
 		uiTheme,
 	);
@@ -1505,7 +1823,9 @@ export function renderReadUrlResult(
 		`${uiTheme.fg("muted", "Method:")} ${details.method}`,
 	];
 	if (hasRedirect) {
-		metadataLines.push(`${uiTheme.fg("muted", "Final URL:")} ${uiTheme.fg("mdLinkUrl", details.finalUrl)}`);
+		metadataLines.push(
+			`${uiTheme.fg("muted", "Final URL:")} ${formatReadUrlMetadataValue(details.finalUrl, uiTheme)}`,
+		);
 	}
 	const lineLabel = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
 	metadataLines.push(`${uiTheme.fg("muted", "Lines:")} ${lineLabel}`);
@@ -1522,7 +1842,7 @@ export function renderReadUrlResult(
 	let lastExpanded: boolean | undefined;
 	let contentPreviewLines: string[] | undefined;
 
-	return {
+	return markFramedBlockComponent({
 		render: (width: number) => {
 			const { expanded } = options;
 
@@ -1562,5 +1882,5 @@ export function renderReadUrlResult(
 			contentPreviewLines = undefined;
 			lastExpanded = undefined;
 		},
-	};
+	});
 }

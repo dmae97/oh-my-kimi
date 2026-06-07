@@ -2,9 +2,8 @@ import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
 import { $env, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
-import { encodeKittyTempFileProbe, getKittyGraphics, kittyTempFileAllowed, setKittyGraphics } from "./kitty-graphics";
 import { StdinBuffer } from "./stdin-buffer";
-import { ImageProtocol, NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
+import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
@@ -35,9 +34,12 @@ export function emergencyTerminalRestore(): void {
 			// Blind restore only if we know a terminal was started but lost track of it
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
-				"\x1b[?2004l" + // Disable bracketed paste
+				"\x1b[?2026l" + // End synchronized output
+					"\x1b[?7h" + // Restore autowrap
+					"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
 					"\x1b[?2048l" + // Disable in-band resize notifications
+					"\x1b[?5522l" + // Disable enhanced paste notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?25h", // Show cursor
@@ -128,6 +130,12 @@ export interface Terminal {
 	isNativeViewportAtBottom?(): boolean | undefined;
 
 	/**
+	 * Override the global terminal-profile ED3 risk decision for custom/test
+	 * terminals. `undefined` falls back to the resolved `TERMINAL` profile.
+	 */
+	hasEagerEraseScrollbackRisk?(): boolean | undefined;
+
+	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
@@ -151,11 +159,9 @@ type Da1SentinelOwner =
 	| { kind: "keyboard" }
 	| { kind: "osc11" }
 	| { kind: "privateMode"; mode: number }
-	| { kind: "kittyGraphicsProbe"; id: number }
 	| { kind: "osc99Probe"; id: string };
 
 let nextOsc99ProbeId = 1;
-let nextKittyGraphicsProbeId = 1;
 
 function parseOsc99KeyValues(section: string): Map<string, string> {
 	const values = new Map<string, string>();
@@ -173,6 +179,7 @@ export class ProcessTerminal implements Terminal {
 	#wasRaw = false;
 	#inputHandler?: (data: string) => void;
 	#resizeHandler?: () => void;
+	#stdoutResizeListener?: () => void;
 	#kittyProtocolActive = false;
 	#modifyOtherKeysActive = false;
 	#modifyOtherKeysTimeout?: Timer;
@@ -189,8 +196,6 @@ export class ProcessTerminal implements Terminal {
 	#osc99PendingId: string | undefined;
 	#osc99ResponseBuffer = "";
 	#osc99Capabilities = new Map<string, string>();
-	#kittyGraphicsPendingId: number | undefined;
-	#kittyGraphicsProbeCleanup: (() => void) | undefined;
 	#privateCsiResponseBuffer = "";
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
 	/** Resolved DECRQM support per private mode (mode → supported). */
@@ -239,8 +244,14 @@ export class ProcessTerminal implements Terminal {
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
 
-		// Set up resize handler immediately
-		process.stdout.on("resize", this.#resizeHandler);
+		// Set up resize handler immediately. The OS refreshes process.stdout
+		// dimensions before firing `resize`, so it is authoritative for geometry:
+		// reconcile any stale cached DEC 2048 report before notifying the renderer.
+		this.#stdoutResizeListener = () => {
+			this.#reconcileInBandGeometryOnResize();
+			this.#resizeHandler?.();
+		};
+		process.stdout.on("resize", this.#stdoutResizeListener);
 
 		// Refresh terminal dimensions - they may be stale after suspend/resume
 		// (SIGWINCH is lost while process is stopped). Unix only.
@@ -269,11 +280,6 @@ export class ProcessTerminal implements Terminal {
 		// same DA1 sentinel FIFO as OSC 11/DECRQM so unsupported terminals resolve
 		// without leaking probe bytes to application input.
 		this.#queryOsc99Support();
-
-		// Probe Kitty temp-file (`t=t`) graphics transmission support. Rides the
-		// same DA1 sentinel FIFO; promotes the transmission medium to temp-file
-		// only on an explicit `OK`, so unsupported terminals stay on direct base64.
-		this.#queryKittyGraphicsTempFile();
 
 		// Subscribe to Mode 2031 appearance change notifications.
 		// When the terminal reports a change, we re-query OSC 11 to get the
@@ -493,9 +499,6 @@ export class ProcessTerminal implements Terminal {
 						this.#resolveOsc99Support(owner.id, false);
 						break;
 					}
-					case "kittyGraphicsProbe":
-						this.#resolveKittyGraphicsTempFile(owner.id, false);
-						break;
 				}
 				return;
 			}
@@ -558,21 +561,6 @@ export class ProcessTerminal implements Terminal {
 					this.#osc99ResponseBuffer = "";
 					this.#handleOsc99CapabilityResponse(meta!, payload!);
 					return;
-				}
-			}
-
-			// Kitty graphics temp-file probe reply: ESC _ G i=<id>;OK ESC \. The
-			// owner remains in the FIFO and is drained by its DA1 sentinel (no-op
-			// once resolved here).
-			if (this.#kittyGraphicsPendingId !== undefined && sequence.startsWith("\x1b_G")) {
-				const graphicsMatch = sequence.match(/^\x1b_G([^;]*);([\s\S]*?)\x1b\\$/u);
-				if (graphicsMatch) {
-					const idMatch = graphicsMatch[1]!.match(/(?:^|,)i=(\d+)(?:,|$)/);
-					const replyId = idMatch ? parseInt(idMatch[1]!, 10) : undefined;
-					if (replyId === this.#kittyGraphicsPendingId) {
-						this.#resolveKittyGraphicsTempFile(replyId, graphicsMatch[2]!.trim() === "OK");
-						return;
-					}
 				}
 			}
 
@@ -671,37 +659,6 @@ export class ProcessTerminal implements Terminal {
 		setOsc99Supported(supported);
 	}
 
-	#shouldQueryKittyGraphicsTempFile(): boolean {
-		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return false;
-		// Honor the remote/explicit env gate, and skip when temp-file is already on.
-		if (!kittyTempFileAllowed() || getKittyGraphics().transmissionMedium === "temp-file") return false;
-		return !isBunTestRuntime() || $env.PI_TUI_KITTY_GRAPHICS_PROBE === "1";
-	}
-
-	#queryKittyGraphicsTempFile(): void {
-		this.#clearKittyGraphicsProbe();
-		if (this.#dead || !this.#shouldQueryKittyGraphicsTempFile()) return;
-
-		const id = nextKittyGraphicsProbeId++;
-		const probe = encodeKittyTempFileProbe(id);
-		if (!probe) return;
-		this.#kittyGraphicsPendingId = id;
-		this.#kittyGraphicsProbeCleanup = probe.cleanup;
-		this.#da1SentinelOwners.push({ kind: "kittyGraphicsProbe", id });
-		this.#safeWrite(`${probe.sequence}\x1b[c`);
-	}
-
-	#resolveKittyGraphicsTempFile(id: number, supported: boolean): void {
-		if (this.#kittyGraphicsPendingId !== id) return;
-		if (supported) setKittyGraphics({ transmissionMedium: "temp-file" });
-		this.#clearKittyGraphicsProbe();
-	}
-
-	#clearKittyGraphicsProbe(): void {
-		this.#kittyGraphicsPendingId = undefined;
-		this.#kittyGraphicsProbeCleanup?.();
-		this.#kittyGraphicsProbeCleanup = undefined;
-	}
 	/**
 	 * Parse an OSC 11 background color response and compute BT.601 luminance.
 	 * Handles 1-, 2-, 3-, and 4-digit XParseColor hex components.
@@ -845,6 +802,31 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
+	/**
+	 * Reconcile cached in-band geometry with the OS on an OS-level resize.
+	 *
+	 * SIGWINCH (POSIX) and ConPTY (Windows) refresh `process.stdout.columns`/
+	 * `rows` before the `resize` event fires, so they are authoritative for the
+	 * new cell geometry. A cached DEC 2048 report can be stale: the matching
+	 * post-resize report may be dropped (split across stdin reads past the flush
+	 * window) or carry `:`-subparameters the parser skips, leaving the getters
+	 * pinned to the old size — which freezes the rendered width because the
+	 * renderer reflows against {@link columns}/{@link rows}, not the live OS
+	 * value. Drop a cached dimension that disagrees with the live OS value; the
+	 * terminal's next valid in-band report re-seeds pixel sizing.
+	 */
+	#reconcileInBandGeometryOnResize(): void {
+		if (!this.#inBandResizeActive) return;
+		const osColumns = process.stdout.columns;
+		const osRows = process.stdout.rows;
+		if (this.#reportedColumns !== undefined && osColumns > 0 && this.#reportedColumns !== osColumns) {
+			this.#reportedColumns = undefined;
+		}
+		if (this.#reportedRows !== undefined && osRows > 0 && this.#reportedRows !== osRows) {
+			this.#reportedRows = undefined;
+		}
+	}
+
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
 		if (this.#kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
@@ -897,8 +879,13 @@ export class ProcessTerminal implements Terminal {
 			this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 
+		// Leave paint-time terminal modes even if the process exits between the
+		// begin/end halves of a frame. Safe no-ops on terminals that ignored them.
+		this.#safeWrite("\x1b[?2026l\x1b[?7h");
+
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");
+		this.#safeWrite("\x1b[?5522l");
 
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
@@ -921,7 +908,6 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99ResponseBuffer = "";
 		this.#osc99Capabilities.clear();
 		setOsc99Supported(false);
-		this.#clearKittyGraphicsProbe();
 		this.#privateCsiResponseBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
@@ -958,10 +944,11 @@ export class ProcessTerminal implements Terminal {
 		}
 		this.#inputHandler = undefined;
 		this.#appearance = undefined;
-		if (this.#resizeHandler) {
-			process.stdout.removeListener("resize", this.#resizeHandler);
-			this.#resizeHandler = undefined;
+		if (this.#stdoutResizeListener) {
+			process.stdout.removeListener("resize", this.#stdoutResizeListener);
+			this.#stdoutResizeListener = undefined;
 		}
+		this.#resizeHandler = undefined;
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition

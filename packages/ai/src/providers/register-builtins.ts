@@ -21,7 +21,13 @@ import type {
 } from "../types";
 import { type AbortSourceTracker, createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream as EventStreamImpl } from "../utils/event-stream";
-import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
+import {
+	getOpenAIStreamFirstEventTimeoutMs,
+	getOpenAIStreamIdleTimeoutMs,
+	getStreamFirstEventTimeoutMs,
+	getStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import type { BedrockOptions } from "./amazon-bedrock";
 import type { AnthropicOptions } from "./anthropic";
 import type { AzureOpenAIResponsesOptions } from "./azure-openai-responses";
@@ -167,11 +173,10 @@ function hasFinalResult(
 }
 
 /**
- * Per-provider default overrides for the lazy stream watchdogs. These widen the
- * floor used when neither caller option nor env var pins a value. The env vars
- * (`PI_STREAM_FIRST_EVENT_TIMEOUT_MS`, `PI_STREAM_IDLE_TIMEOUT_MS`) still take
- * precedence; `StreamOptions.streamFirstEventTimeoutMs` / `streamIdleTimeoutMs`
- * still trump everything.
+ * floor used when neither caller option nor env var pins a value. Generic env
+ * vars (`PI_STREAM_FIRST_EVENT_TIMEOUT_MS`, `PI_STREAM_IDLE_TIMEOUT_MS`) still
+ * take precedence unless a provider opts into OpenAI-family idle flooring for
+ * local backends that users historically tuned with `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`.
  */
 interface LazyStreamLimits {
 	defaultFirstEventTimeoutMs?: number;
@@ -181,6 +186,12 @@ interface LazyStreamLimits {
 	 * stream timeouts. Keep the lazy loader from racing it with generic errors.
 	 */
 	providerHandlesStreamTimeouts?: boolean;
+	/**
+	 * Apply OpenAI-family idle timeout precedence in the lazy wrapper. Used by
+	 * local backends whose users historically tune slow prompt-processing gaps
+	 * with `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`.
+	 */
+	openAIIdleEnvFloorsFirstEvent?: boolean;
 }
 /**
  * Cloud Code Assist (google-gemini-cli / google-antigravity) routinely takes
@@ -199,6 +210,10 @@ const PROVIDER_HANDLED_STREAM_TIMEOUTS: LazyStreamLimits = {
 	providerHandlesStreamTimeouts: true,
 };
 
+const OPENAI_IDLE_FLOORED_LAZY_STREAM_LIMITS: LazyStreamLimits = {
+	openAIIdleEnvFloorsFirstEvent: true,
+};
+
 function forwardStream<TApi extends Api>(
 	target: EventStreamImpl,
 	source: AsyncIterable<AssistantMessageEvent>,
@@ -212,13 +227,19 @@ function forwardStream<TApi extends Api>(
 			const providerHandlesStreamTimeouts = limits?.providerHandlesStreamTimeouts === true;
 			const idleTimeoutMs = providerHandlesStreamTimeouts
 				? undefined
-				: (options.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs(limits?.defaultIdleTimeoutMs));
+				: (options.streamIdleTimeoutMs ??
+					(limits?.openAIIdleEnvFloorsFirstEvent
+						? getOpenAIStreamIdleTimeoutMs(limits.defaultIdleTimeoutMs)
+						: getStreamIdleTimeoutMs(limits?.defaultIdleTimeoutMs)));
+			const firstItemTimeoutMs = providerHandlesStreamTimeouts
+				? 0
+				: (options.streamFirstEventTimeoutMs ??
+					(limits?.openAIIdleEnvFloorsFirstEvent
+						? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, limits.defaultFirstEventTimeoutMs)
+						: getStreamFirstEventTimeoutMs(idleTimeoutMs, limits?.defaultFirstEventTimeoutMs)));
 			const watchedSource = iterateWithIdleTimeout(source, {
 				idleTimeoutMs,
-				firstItemTimeoutMs: providerHandlesStreamTimeouts
-					? 0
-					: (options.streamFirstEventTimeoutMs ??
-						getStreamFirstEventTimeoutMs(idleTimeoutMs, limits?.defaultFirstEventTimeoutMs)),
+				firstItemTimeoutMs,
 				errorMessage: LAZY_STREAM_IDLE_TIMEOUT_ERROR,
 				firstItemErrorMessage: LAZY_STREAM_FIRST_EVENT_TIMEOUT_ERROR,
 				onIdle: () => abortTracker.abortLocally(new Error(LAZY_STREAM_IDLE_TIMEOUT_ERROR)),
@@ -431,6 +452,6 @@ export const streamOpenAIResponses = createLazyStream(
 	PROVIDER_HANDLED_STREAM_TIMEOUTS,
 );
 export const streamCursor = createLazyStream(loadCursorProviderModule);
-export const streamOllama = createLazyStream(loadOllamaProviderModule);
+export const streamOllama = createLazyStream(loadOllamaProviderModule, OPENAI_IDLE_FLOORED_LAZY_STREAM_LIMITS);
 
 export const streamBedrock = createLazyStream(loadBedrockProviderModule);

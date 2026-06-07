@@ -1,12 +1,12 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import {
-	encodeKittyTempFileTransmit,
+	detectKittyUnicodePlaceholdersSupport,
 	getKittyGraphics,
-	isPngBase64,
 	KITTY_PLACEHOLDER,
 	kittyPlaceholdersFit,
 	renderKittyPlaceholderLines,
+	setKittyGraphics,
 } from "./kitty-graphics";
 
 export enum ImageProtocol {
@@ -23,7 +23,31 @@ export enum NotifyProtocol {
 
 export type TerminalId = "kitty" | "ghostty" | "wezterm" | "iterm2" | "vscode" | "alacritty" | "base" | "trueColor";
 
-const SIXEL_DCS_START_REGEX = /\x1bP(?:[0-9;]*)q/u;
+function hasNeedleBefore(line: string, needle: string, limit: number): boolean {
+	const index = line.indexOf(needle);
+	return index !== -1 && index + needle.length <= limit;
+}
+
+function hasSixelDcsStart(line: string): boolean {
+	const limit = Math.min(line.length, 128);
+	let from = 0;
+	for (;;) {
+		const start = line.indexOf("\x1bP", from);
+		if (start === -1 || start + 3 > limit) return false;
+		let i = start + 2;
+		while (i < limit) {
+			const code = line.charCodeAt(i);
+			if ((code >= 0x30 && code <= 0x39) || code === 0x3b) {
+				i++;
+				continue;
+			}
+			break;
+		}
+		if (i < limit && line.charCodeAt(i) === 0x71) return true;
+		from = start + 2;
+	}
+}
+
 /** Terminal capability details used for rendering and protocol selection. */
 export class TerminalInfo {
 	constructor(
@@ -39,13 +63,31 @@ export class TerminalInfo {
 		public readonly textSizing: boolean = false,
 	) {}
 
+	/**
+	 * Whether a prompt-submit keystroke scrolls this host to its tail, so the
+	 * native-scrollback reconciliation checkpoint may ED3-rebuild even when the
+	 * viewport position is unprobeable. Assigned by the TERMINAL builder from
+	 * {@link detectSubmitPinsViewportToTail}; readonly but tests opt in via the
+	 * {@link setTerminalSubmitPinsViewportToTail} mutable-cast setter.
+	 */
+	readonly submitPinsViewportToTail: boolean = false;
+
+	/**
+	 * Mutable clone for the {@link TERMINAL} singleton: copies every field and
+	 * keeps the prototype methods, so the builder and runtime setters flip
+	 * runtime-resolved {@link RuntimeTerminal} capabilities in place instead of
+	 * reconstructing positional constructor args.
+	 */
+	clone(): RuntimeTerminal {
+		return Object.assign(Object.create(TerminalInfo.prototype), this) as RuntimeTerminal;
+	}
+
 	isImageLine(line: string): boolean {
 		if (!this.imageProtocol) return false;
 		if (this.imageProtocol === ImageProtocol.Sixel) {
-			return SIXEL_DCS_START_REGEX.test(line.slice(0, 128));
+			return hasSixelDcsStart(line);
 		}
-		const head = line.slice(0, 64);
-		return head.includes(this.imageProtocol) || head.includes(KITTY_PLACEHOLDER);
+		return hasNeedleBefore(line, this.imageProtocol, 64) || hasNeedleBefore(line, KITTY_PLACEHOLDER, 64);
 	}
 
 	formatNotification(message: string | TerminalNotification): string {
@@ -116,33 +158,44 @@ export function isWindowsTerminalPreviewSixelSupported(
 }
 
 /**
- * Whether eager live-frame native scrollback rebuilds are unsafe when the
- * terminal viewport position is unobservable.
+ * Whether live-frame native scrollback rebuilds are unsafe when the terminal
+ * viewport position is unobservable.
  *
- * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). On the
- * terminals below, ED3 can disturb a reader parked in native scrollback during
- * streaming: kitty/ghostty/alacritty/VTE clamp the scroll offset back to the
- * active tail when saved lines are erased. WezTerm, macOS Terminal.app, and
- * iTerm2 expose scrollback-only clears via ED3/terminfo E3; that still
- * invalidates a reader's scrollback position during live streaming.
+ * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). Many
+ * terminals either clamp a scrolled reader back to the active tail or erase host
+ * scrollback when ED3 lands. The important property is not the brand name — it
+ * is that an unknown viewport position cannot be proven safe. Environment
+ * markers are therefore only used to prove *risk* or a strongly-known profile;
+ * unknown POSIX/remote/multiplexer shapes default to risky for passive renders.
  *
- * Windows Terminal erases its host scrollback on ED3 and repositions the
- * viewport against the shortened buffer, so a scrolled-up reader is yanked.
- * Native win32 is excluded here because the renderer guards it with dedicated
- * platform checks (the viewport position is never observable on Windows — see
- * `Terminal.isNativeViewportAtBottom`); a `WT_SESSION` sighting on any other
- * platform means the outer host is Windows Terminal fronting a WSL distro (WT
- * propagates the variable into the Linux environment), where the same ED3
- * yank applies. See #1610.
- *
- * Pure helper for tests and `TERMINAL` trait construction. See #1682 and #1719.
+ * Native win32 is excluded here because the renderer has dedicated ConPTY
+ * deferral paths; a `WT_SESSION` sighting on POSIX means Windows Terminal is the
+ * outer host fronting WSL, where the same ED3 yank applies. See #1610/#1682/#1799.
  */
 export function detectTerminalEagerEraseScrollbackRisk(
 	env: NodeJS.ProcessEnv = Bun.env,
 	platform: NodeJS.Platform = process.platform,
 ): boolean {
 	if (platform === "win32") return false;
+
+	const term = env.TERM?.toLowerCase() ?? "";
+	const termProgram = env.TERM_PROGRAM?.toLowerCase() ?? "";
+	const colorTerm = env.COLORTERM?.toLowerCase() ?? "";
+
+	if (env.PI_TUI_ED3_SAFE === "1") return false;
 	if (env.WT_SESSION) return true;
+	if (
+		env.SSH_CONNECTION ||
+		env.SSH_CLIENT ||
+		env.SSH_TTY ||
+		env.TMUX ||
+		env.STY ||
+		env.ZELLIJ ||
+		term.startsWith("tmux") ||
+		term.startsWith("screen")
+	) {
+		return true;
+	}
 	if (
 		env.WEZTERM_PANE ||
 		env.KITTY_WINDOW_ID ||
@@ -153,15 +206,147 @@ export function detectTerminalEagerEraseScrollbackRisk(
 	) {
 		return true;
 	}
-	switch (env.TERM_PROGRAM?.toLowerCase()) {
+	switch (termProgram) {
 		case "alacritty":
 		case "apple_terminal":
 		case "ghostty":
+		case "gnome-terminal":
 		case "iterm.app":
+		case "kgx":
 		case "kitty":
+		case "ptyxis":
 		case "wezterm":
+		case "xfce4-terminal":
 			return true;
 		default:
+			break;
+	}
+	if (platform === "linux" && (colorTerm === "truecolor" || colorTerm === "24bit")) return true;
+	// Unknown POSIX terminals have no scroll-position oracle. Treat them as risky
+	// for passive ED3 until a positive terminal-specific integration proves safe.
+	return true;
+}
+
+/**
+ * Whether a prompt-submit keystroke scrolls this terminal to its tail, making the
+ * native-scrollback reconciliation checkpoint (`refreshNativeScrollbackIfDirty`)
+ * safe to ED3-rebuild even when the viewport position cannot be probed.
+ *
+ * True only for recognized genuine *local* terminals where typing into the prompt
+ * brings the host viewport to the bottom. False — the checkpoint keeps deferring
+ * until a positive at-tail probe — for hosts whose scrollback a keystroke does not
+ * move: Windows consoles/ConPTY, Windows Terminal (incl. WSL), SSH, multiplexers,
+ * and unrecognized profiles. This is the per-terminal counterpart to the blanket
+ * block from #1610/#1682/#1746: those hosts genuinely cannot treat a submit as
+ * proof of at-tail, but genuine local terminals can.
+ */
+export function detectSubmitPinsViewportToTail(
+	env: NodeJS.ProcessEnv = Bun.env,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (env.PI_TUI_ED3_SAFE === "1") return true;
+	if (platform === "win32") return false;
+	if (env.WT_SESSION) return false;
+	if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return false;
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
+		return false;
+	}
+	if (
+		env.WEZTERM_PANE ||
+		env.KITTY_WINDOW_ID ||
+		env.GHOSTTY_RESOURCES_DIR ||
+		env.ALACRITTY_WINDOW_ID ||
+		env.ITERM_SESSION_ID ||
+		env.VTE_VERSION
+	) {
+		return true;
+	}
+	switch (env.TERM_PROGRAM?.toLowerCase() ?? "") {
+		case "alacritty":
+		case "apple_terminal":
+		case "ghostty":
+		case "gnome-terminal":
+		case "iterm.app":
+		case "kgx":
+		case "kitty":
+		case "ptyxis":
+		case "wezterm":
+		case "xfce4-terminal":
+			return true;
+		default:
+			return false;
+	}
+}
+
+/**
+ * Resolve an explicit user override for DEC 2026 synchronized output. Returns
+ * `false` for an opt-out, `true` for a force-on, or `null` when the user has
+ * expressed no preference. Shared by the static default and the runtime DECRQM
+ * probe so both honor the same precedence — an opt-out beats a force-on.
+ */
+export function synchronizedOutputUserOverride(env: NodeJS.ProcessEnv = Bun.env): boolean | null {
+	if (env.PI_NO_SYNC_OUTPUT || env.PI_TUI_SYNC_OUTPUT === "0") return false;
+	if (env.PI_FORCE_SYNC_OUTPUT === "1" || env.PI_TUI_SYNC_OUTPUT === "1") return true;
+	return null;
+}
+
+/**
+ * Whether `TERM_FEATURES` advertises DEC 2026 synchronized output via the `Sy`
+ * capability token. `TERM_FEATURES` is a run of capitalized two-letter codes
+ * (e.g. `…Sy…`), so a case-sensitive substring match is unambiguous: `Sy`
+ * cannot straddle a code boundary because those are always lowercase→uppercase.
+ */
+function advertisesSynchronizedOutput(termFeatures: string | undefined): boolean {
+	return termFeatures?.includes("Sy") ?? false;
+}
+
+/**
+ * Whether DEC 2026 synchronized-output wrappers should be enabled by default.
+ *
+ * Policy (highest precedence first):
+ *   1. Explicit user override (`PI_NO_SYNC_OUTPUT`/`PI_TUI_SYNC_OUTPUT=0` off,
+ *      `PI_FORCE_SYNC_OUTPUT=1`/`PI_TUI_SYNC_OUTPUT=1` on).
+ *   2. Positive `TERM_FEATURES` advertisement (`Sy`) — survives SSH/mux wrapping.
+ *   3. Windows Terminal (1.24+) via `WT_SESSION`, on native win32 and the
+ *      WSL/SSH-fronted host alike.
+ *   4. Known direct terminals with confirmed support. SSH does *not* disable —
+ *      DEC 2026 passes through SSH when the outer terminal honors it.
+ *   5. Everything else starts off, including risky multiplexers; the runtime
+ *      DECRQM probe upgrades any of them when the terminal actually reports
+ *      `?2026` supported (current zellij, tmux master, foot, contour, mintty…).
+ */
+export function shouldEnableSynchronizedOutputByDefault(
+	env: NodeJS.ProcessEnv = Bun.env,
+	terminalId: TerminalId = TERMINAL_ID,
+): boolean {
+	const override = synchronizedOutputUserOverride(env);
+	if (override !== null) return override;
+
+	if (advertisesSynchronizedOutput(env.TERM_FEATURES)) return true;
+	if (env.WT_SESSION) return true;
+
+	// Risky multiplexers start off even when an inner terminal id leaks through:
+	// older tmux/screen synchronized-output handling is flaky and a mux may not
+	// pass DEC 2026 to the outer host. The DECRQM probe re-enables sync when the
+	// mux reports `?2026` supported.
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
+		return false;
+	}
+
+	switch (terminalId) {
+		case "kitty":
+		case "ghostty":
+		case "wezterm":
+		case "iterm2":
+		case "alacritty":
+		case "vscode":
+			return true;
+		default:
+			// VTE family, GNU screen, Apple Terminal, legacy native console host
+			// (no WT_SESSION), and bare/unknown xterm profiles stay off until the
+			// DECRQM probe proves support.
 			return false;
 	}
 }
@@ -259,54 +444,38 @@ export const TERMINAL_ID: TerminalId = (() => {
 	return "base";
 })();
 
-/** Clone a {@link TerminalInfo} with selected fields overridden, preserving the rest. */
-function withTerminalOverrides(
-	base: TerminalInfo,
-	overrides: {
-		imageProtocol?: ImageProtocol | null;
-		hyperlinks?: boolean;
-		eagerEraseScrollbackRisk?: boolean;
-		deccara?: boolean;
-		supportsScreenToScrollback?: boolean;
-	},
-): TerminalInfo {
-	return new TerminalInfo(
-		base.id,
-		overrides.imageProtocol !== undefined ? overrides.imageProtocol : base.imageProtocol,
-		base.trueColor,
-		overrides.hyperlinks !== undefined ? overrides.hyperlinks : base.hyperlinks,
-		base.notifyProtocol,
-		overrides.eagerEraseScrollbackRisk !== undefined
-			? overrides.eagerEraseScrollbackRisk
-			: base.eagerEraseScrollbackRisk,
-		overrides.deccara !== undefined ? overrides.deccara : base.deccara,
-		overrides.supportsScreenToScrollback !== undefined
-			? overrides.supportsScreenToScrollback
-			: base.supportsScreenToScrollback,
-	);
+/**
+ * The process-wide {@link TERMINAL} singleton: a {@link TerminalInfo} whose
+ * post-construction capabilities — the image protocol and the probe-driven
+ * flags — are writable, so the runtime setters and tests mutate them directly
+ * instead of through an unsound cast. Every other field stays readonly.
+ */
+export interface RuntimeTerminal extends TerminalInfo {
+	imageProtocol: ImageProtocol | null;
+	hyperlinks: boolean;
+	eagerEraseScrollbackRisk: boolean;
+	deccara: boolean;
+	supportsScreenToScrollback: boolean;
+	textSizing: boolean;
+	submitPinsViewportToTail: boolean;
 }
 
-export const TERMINAL = (() => {
-	let resolved = getTerminalInfo(TERMINAL_ID);
-	const eagerEraseScrollbackRisk = detectTerminalEagerEraseScrollbackRisk(Bun.env, process.platform);
-	if (resolved.eagerEraseScrollbackRisk !== eagerEraseScrollbackRisk) {
-		resolved = withTerminalOverrides(resolved, { eagerEraseScrollbackRisk });
-	}
+export const TERMINAL: RuntimeTerminal = (() => {
+	const resolved = getTerminalInfo(TERMINAL_ID).clone();
+	resolved.eagerEraseScrollbackRisk = detectTerminalEagerEraseScrollbackRisk(Bun.env, process.platform);
 
 	const forcedImageProtocol = getForcedImageProtocol();
 	if (forcedImageProtocol !== undefined) {
-		resolved = withTerminalOverrides(resolved, { imageProtocol: forcedImageProtocol });
+		resolved.imageProtocol = forcedImageProtocol;
 	} else if (!resolved.imageProtocol) {
 		const fallbackImageProtocol = getFallbackImageProtocol(resolved.id);
-		if (fallbackImageProtocol) {
-			resolved = withTerminalOverrides(resolved, { imageProtocol: fallbackImageProtocol });
-		}
+		if (fallbackImageProtocol) resolved.imageProtocol = fallbackImageProtocol;
 	}
 	// tmux and screen multiplexers do not reliably forward OSC 8 hyperlinks
 	// to the outer terminal, so force them off regardless of detected terminal.
 	const term = Bun.env.TERM?.toLowerCase() ?? "";
 	if (resolved.hyperlinks && (Bun.env.TMUX || term.startsWith("tmux") || term.startsWith("screen"))) {
-		resolved = withTerminalOverrides(resolved, { hyperlinks: false });
+		resolved.hyperlinks = false;
 	}
 	// DECCARA rectangular-SGR background fills. The static per-terminal capability
 	// lives on KNOWN_TERMINALS; here we fold in runtime context — multiplexer and
@@ -314,25 +483,26 @@ export const TERMINAL = (() => {
 	// off inside the test runtime so the xterm.js-backed virtual terminal (which
 	// ignores DECCARA) exercises the padded-string fallback. Integration tests opt
 	// in explicitly through setTerminalDeccara.
-	const deccara = detectRectangularSgrSupport(resolved.id, Bun.env) && !isBunTestRuntime();
-	if (resolved.deccara !== deccara) {
-		resolved = withTerminalOverrides(resolved, { deccara });
-	}
+	resolved.deccara = detectRectangularSgrSupport(resolved.id, Bun.env) && !isBunTestRuntime();
+	// A genuine local terminal scrolls to its tail on the submit keystroke, so the
+	// reconciliation checkpoint may ED3-rebuild on an unprobeable viewport there.
+	// Forced off under the test runtime (like deccara) so checkpoint tests stay
+	// deterministic and opt in through setTerminalSubmitPinsViewportToTail.
+	resolved.submitPinsViewportToTail = detectSubmitPinsViewportToTail(Bun.env, process.platform) && !isBunTestRuntime();
 	return resolved;
 })();
 
-type MutableTerminalInfo = {
-	imageProtocol: ImageProtocol | null;
-	deccara: boolean;
-	supportsScreenToScrollback: boolean;
-	textSizing: boolean;
-};
+// Seed Kitty Unicode placeholder support from the resolved terminal id. Only
+// kitty/ghostty are known to honor `U=1` placement; other Kitty-protocol paths
+// (wezterm, tmux/screen fallback) treat the placeholder cells as literal PUA
+// glyphs, which is the "ASCII artifact + laggy scrolling" reported in #1877.
+setKittyGraphics({ unicodePlaceholders: detectKittyUnicodePlaceholdersSupport(TERMINAL.id, Bun.env) });
 
 /**
  * Override terminal image protocol at runtime after capability probes complete.
  */
 export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): void {
-	(TERMINAL as unknown as MutableTerminalInfo).imageProtocol = imageProtocol;
+	TERMINAL.imageProtocol = imageProtocol;
 }
 
 /**
@@ -341,12 +511,17 @@ export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): v
  * resolved once at import and force-disabled under the test runtime.
  */
 export function setTerminalDeccara(enabled: boolean): void {
-	(TERMINAL as unknown as MutableTerminalInfo).deccara = enabled;
+	TERMINAL.deccara = enabled;
 }
 
 /** Override screen-to-scrollback clear support for targeted renderer tests. */
 export function setTerminalScreenToScrollback(enabled: boolean): void {
-	(TERMINAL as unknown as MutableTerminalInfo).supportsScreenToScrollback = enabled;
+	TERMINAL.supportsScreenToScrollback = enabled;
+}
+
+/** Override submit-pins-viewport-to-tail for checkpoint reconciliation tests. */
+export function setTerminalSubmitPinsViewportToTail(enabled: boolean): void {
+	TERMINAL.submitPinsViewportToTail = enabled;
 }
 
 /**
@@ -355,7 +530,7 @@ export function setTerminalScreenToScrollback(enabled: boolean): void {
  * capability); tests flip it directly to exercise the scaled-heading path.
  */
 export function setTerminalTextSizing(enabled: boolean): void {
-	(TERMINAL as unknown as MutableTerminalInfo).textSizing = enabled;
+	TERMINAL.textSizing = enabled;
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {
@@ -708,16 +883,11 @@ export function renderImage(
 		if (options.imageId != null) {
 			const placementId = options.placementId ?? options.imageId;
 			const graphics = getKittyGraphics();
-			// Transmit-once (keyed by id). Prefer a local temp file for PNGs when the
-			// medium has been promoted; otherwise send in-band base64. Repaints reuse
-			// the stored image, so the transmit is only emitted when requested.
+			// Transmit-once (keyed by id). Repaints reuse the stored image, so the
+			// transmit is only emitted when requested.
 			let transmit: string | undefined;
 			if (options.includeTransmit) {
-				const tempFile =
-					graphics.transmissionMedium === "temp-file" && isPngBase64(base64Data)
-						? encodeKittyTempFileTransmit(base64Data, options.imageId)
-						: null;
-				transmit = tempFile ?? encodeKittyTransmit(base64Data, options.imageId);
+				transmit = encodeKittyTransmit(base64Data, options.imageId);
 			}
 			// Unicode placeholders render the image as real text cells (which survive
 			// horizontal slicing, reflow and overlaps) instead of a cursor-positioned

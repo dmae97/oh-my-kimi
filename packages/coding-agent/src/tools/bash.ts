@@ -10,7 +10,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { AsyncJobManager } from "../async";
 import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -21,7 +20,7 @@ import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
@@ -32,7 +31,7 @@ import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
-import { formatToolWorkingDirectory, replaceTabs } from "./render-utils";
+import { capPreviewLines, formatToolWorkingDirectory, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
@@ -288,6 +287,35 @@ function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
+const RAW_OUTPUT_ARTIFACT_PREFIX = "[raw output: artifact://";
+const RAW_OUTPUT_ARTIFACT_SUFFIX = "]";
+
+function stripRawOutputArtifactNotice(text: string): { text: string; artifactId?: string } {
+	const trimmed = text.trimEnd();
+	const lineStart = trimmed.lastIndexOf("\n");
+	const candidateStart = lineStart === -1 ? 0 : lineStart + 1;
+	if (
+		!trimmed.startsWith(RAW_OUTPUT_ARTIFACT_PREFIX, candidateStart) ||
+		!trimmed.endsWith(RAW_OUTPUT_ARTIFACT_SUFFIX)
+	) {
+		return { text };
+	}
+
+	const idStart = candidateStart + RAW_OUTPUT_ARTIFACT_PREFIX.length;
+	const idEnd = trimmed.length - RAW_OUTPUT_ARTIFACT_SUFFIX.length;
+	if (idStart === idEnd) return { text };
+	for (let i = idStart; i < idEnd; i++) {
+		const code = trimmed.charCodeAt(i);
+		if (code < 48 || code > 57) return { text };
+	}
+
+	const artifactId = trimmed.slice(idStart, idEnd);
+	return {
+		text: trimmed.slice(0, lineStart === -1 ? 0 : lineStart).trimEnd(),
+		artifactId,
+	};
+}
+
 /**
  * Strip the trailing occurrence of `notice` (plus a single surrounding newline
  * on each side) so the TUI can echo the value via a styled footer label
@@ -489,7 +517,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>;
 		startBackgrounded: boolean;
 	}): ManagedBashJobHandle {
-		const manager = AsyncJobManager.instance();
+		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			throw new ToolError("Background job manager unavailable for this session.");
 		}
@@ -716,7 +744,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (timeoutClampNotice) pendingNotices.push(timeoutClampNotice);
 
 		if (asyncRequested) {
-			if (!AsyncJobManager.instance()) {
+			if (!this.session.asyncJobManager) {
 				throw new ToolError("Async job manager unavailable for this session.");
 			}
 			const job = this.#startManagedBashJob({
@@ -737,7 +765,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 		}
 
-		const autoBgManager = AsyncJobManager.instance();
+		const autoBgManager = this.session.asyncJobManager;
 		if (this.#autoBackgroundEnabled && !pty && autoBgManager) {
 			const autoBackgroundWaitMs = this.#resolveAutoBackgroundWaitMs(timeoutMs);
 			const startBackgrounded = autoBackgroundWaitMs === 0;
@@ -1029,6 +1057,7 @@ export interface ShellRendererConfig<TArgs> {
 	resolveCommand?: (args: TArgs | undefined) => string | undefined;
 	resolveCwd?: (args: TArgs | undefined) => string | undefined;
 	resolveEnv?: (args: TArgs | undefined) => Record<string, string> | undefined;
+	showHeader?: boolean;
 }
 
 function getPartialJson<TArgs>(args: TArgs | undefined): string | undefined {
@@ -1080,20 +1109,28 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	return {
 		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const renderArgs = toBashRenderArgs(args, config);
-			const title = config.resolveTitle(args, options);
 			const cmdLines = formatBashCommandLines(renderArgs, uiTheme);
-			const header = renderStatusLine({ icon: "pending", title }, uiTheme);
+			const header =
+				config.showHeader === false
+					? undefined
+					: renderStatusLine({ icon: "pending", title: config.resolveTitle(args, options) }, uiTheme);
 			const outputBlock = new CachedOutputBlock();
-			return {
+			return markFramedBlockComponent({
 				render: (width: number): string[] =>
 					outputBlock.render(
-						{ header, state: "pending", sections: [{ lines: cmdLines }], width, animate: true },
+						{
+							header,
+							state: "pending",
+							sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
+							width,
+							animate: true,
+						},
 						uiTheme,
 					),
 				invalidate: () => {
 					outputBlock.invalidate();
 				},
-			};
+			});
 		},
 
 		renderResult(
@@ -1110,12 +1147,14 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const cmdLines = args ? formatBashCommandLines(renderArgs, uiTheme) : undefined;
 			const isError = result.isError === true;
 			const icon = options.isPartial ? "pending" : isError ? "error" : "success";
-			const title = config.resolveTitle(args, options);
-			const header = renderStatusLine({ icon, title }, uiTheme);
+			const header =
+				config.showHeader === false
+					? undefined
+					: renderStatusLine({ icon, title: config.resolveTitle(args, options) }, uiTheme);
 			const details = result.details;
 			const outputBlock = new CachedOutputBlock();
 
-			return {
+			return markFramedBlockComponent({
 				render: (width: number): string[] => {
 					// REACTIVE: read mutable options at render time
 					const { renderContext } = options;
@@ -1128,7 +1167,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 					const strippedOutput = stripOutputNotice(rawOutput, details?.meta);
 					const withoutExit = stripExitCodeNotice(strippedOutput, details?.exitCode);
-					const output = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
+					const withoutWall = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
+					const rawOutputArtifact = stripRawOutputArtifactNotice(withoutWall);
+					const output = rawOutputArtifact.text;
 					const displayOutput = output.trimEnd();
 					const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 
@@ -1146,6 +1187,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
 								: `Timeout: ${timeoutSeconds}s`,
 						);
+					}
+					if (rawOutputArtifact.artifactId) {
+						statsParts.push(`Artifact: ${rawOutputArtifact.artifactId}`);
 					}
 					if (isError && typeof details?.exitCode === "number") {
 						statsParts.push(`Exit: ${details.exitCode}`);
@@ -1202,11 +1246,19 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							header,
 							state: options.isPartial ? "pending" : isError ? "error" : "success",
 							sections: [
-								{ lines: cmdLines ?? [] },
+								{
+									lines: options.isPartial
+										? capPreviewLines(cmdLines ?? [], uiTheme, { expanded })
+										: (cmdLines ?? []),
+								},
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
-							animate: options.isPartial && shimmerEnabled(),
+							// Don't animate once the command has been backgrounded: the block
+							// gets committed to scrollback and finalizes later via the async
+							// update path, so a mid-sweep frame would freeze a stray dark
+							// border segment.
+							animate: options.isPartial && shimmerEnabled() && details?.async?.state !== "running",
 						},
 						uiTheme,
 					);
@@ -1214,7 +1266,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 				invalidate: () => {
 					outputBlock.invalidate();
 				},
-			};
+			});
 		},
 		mergeCallAndResult: true,
 		inline: true,
@@ -1226,4 +1278,5 @@ export const bashToolRenderer = createShellRenderer<BashRenderArgs>({
 	resolveCommand: args => args?.command,
 	resolveCwd: args => args?.cwd,
 	resolveEnv: args => args?.env,
+	showHeader: false,
 });

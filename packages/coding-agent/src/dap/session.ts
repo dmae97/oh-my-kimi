@@ -259,6 +259,7 @@ export class DapSessionManager {
 			session.needsConfigurationDone = session.capabilities.supportsConfigurationDoneRequest === true;
 			const launchArguments: DapLaunchArguments = {
 				...options.adapter.launchDefaults,
+				...(options.extraLaunchArguments ?? {}),
 				program: options.program,
 				cwd: options.cwd,
 				args: options.args,

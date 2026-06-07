@@ -28,7 +28,6 @@ function createRuntimeHarness(options?: {
 				handleSessionCommand,
 				handleSessionDeleteCommand,
 			} as InteractiveModeContext,
-			handleBackgroundCommand: () => {},
 		},
 	};
 }

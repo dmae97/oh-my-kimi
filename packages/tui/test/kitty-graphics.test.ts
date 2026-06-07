@@ -1,23 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import { visibleWidth } from "@oh-my-pi/pi-natives";
 import {
+	detectKittyUnicodePlaceholdersSupport,
 	encodeKittyPlaceholderGrid,
-	encodeKittyTempFileProbe,
-	encodeKittyTempFileTransmit,
 	encodeKittyVirtualPlacement,
 	getKittyGraphics,
-	isPngBase64,
 	KITTY_PLACEHOLDER,
 	KITTY_PLACEHOLDER_MAX_CELLS,
 	kittyPlaceholdersFit,
-	kittyTempFileAllowed,
 	renderKittyPlaceholderLines,
 	setKittyGraphics,
 } from "@oh-my-pi/pi-tui/kitty-graphics";
-
-const ONE_PIXEL_PNG =
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 const ORIGINAL = { ...getKittyGraphics() };
 
@@ -79,80 +72,50 @@ describe("kitty Unicode placeholder encoding", () => {
 	});
 });
 
-describe("kitty temp-file transmission", () => {
-	it("isPngBase64 recognizes PNG payloads only", () => {
-		expect(isPngBase64(ONE_PIXEL_PNG)).toBe(true);
-		expect(isPngBase64("/9j/4AAQSkZJRgABAQ")).toBe(false); // JPEG magic
-		expect(isPngBase64("")).toBe(false);
-	});
-
-	it("encodeKittyTempFileTransmit writes the bytes to a magic-named file and sends its path", () => {
-		const seq = encodeKittyTempFileTransmit(ONE_PIXEL_PNG, 12);
-		expect(seq).not.toBeNull();
-		const match = seq!.match(/^\x1b_Ga=t,f=100,t=t,S=(\d+),q=2,i=12;([^\x1b]+)\x1b\\$/);
-		expect(match).not.toBeNull();
-		const [, sizeRaw, encodedPath] = match!;
-		const filePath = Buffer.from(encodedPath!, "base64").toString("utf8");
-		// Kitty only deletes temp files whose path contains this substring.
-		expect(filePath).toContain("tty-graphics-protocol");
-		try {
-			const written = fs.readFileSync(filePath);
-			expect(written.equals(Buffer.from(ONE_PIXEL_PNG, "base64"))).toBe(true);
-			expect(Number(sizeRaw)).toBe(written.length);
-		} finally {
-			fs.rmSync(filePath, { force: true });
-		}
-	});
-
-	it("encodeKittyTempFileProbe builds an a=q,t=t query and cleans up its file", () => {
-		const probe = encodeKittyTempFileProbe(99);
-		expect(probe).not.toBeNull();
-		expect(probe!.sequence).toContain("\x1b_Ga=q,t=t,f=100,");
-		expect(probe!.sequence).toContain("i=99;");
-		const encodedPath = probe!.sequence.match(/;([^\x1b]+)\x1b\\$/)?.[1];
-		const filePath = Buffer.from(encodedPath!, "base64").toString("utf8");
-		expect(fs.existsSync(filePath)).toBe(true);
-		probe!.cleanup();
-		expect(fs.existsSync(filePath)).toBe(false);
+describe("kitty graphics feature state", () => {
+	it("getKittyGraphics/setKittyGraphics round-trips overrides", () => {
+		setKittyGraphics({ unicodePlaceholders: false });
+		expect(getKittyGraphics()).toEqual({ unicodePlaceholders: false });
+		setKittyGraphics({ unicodePlaceholders: true });
+		expect(getKittyGraphics().unicodePlaceholders).toBe(true);
 	});
 });
 
-describe("kitty graphics feature state", () => {
-	it("getKittyGraphics/setKittyGraphics round-trips overrides", () => {
-		setKittyGraphics({ unicodePlaceholders: false, transmissionMedium: "temp-file" });
-		expect(getKittyGraphics()).toEqual({ unicodePlaceholders: false, transmissionMedium: "temp-file" });
-		setKittyGraphics({ unicodePlaceholders: true });
-		expect(getKittyGraphics().unicodePlaceholders).toBe(true);
-		expect(getKittyGraphics().transmissionMedium).toBe("temp-file");
+describe("detectKittyUnicodePlaceholdersSupport", () => {
+	function env(extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
+		return extra as NodeJS.ProcessEnv;
+	}
+
+	it("enables for kitty and ghostty by default (the only terminals that render U=1 placement)", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", env())).toBe(true);
+		expect(detectKittyUnicodePlaceholdersSupport("ghostty", env())).toBe(true);
 	});
 
-	it("kittyTempFileAllowed honors env force/off and the remote-session guard", () => {
-		const keys = ["PI_KITTY_IMAGE_TRANSMISSION", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"];
-		const saved: Record<string, string | undefined> = {};
-		for (const k of keys) saved[k] = Bun.env[k];
-		const restore = () => {
-			for (const k of keys) {
-				const v = saved[k];
-				if (v === undefined) delete Bun.env[k];
-				else Bun.env[k] = v;
-			}
-		};
-		try {
-			for (const k of keys) delete Bun.env[k];
-			// Auto + local session: allowed.
-			expect(kittyTempFileAllowed()).toBe(true);
-			// Auto + SSH session: not allowed.
-			Bun.env.SSH_CONNECTION = "1.2.3.4 5 6.7.8.9 22";
-			expect(kittyTempFileAllowed()).toBe(false);
-			// Explicit force overrides the remote guard.
-			Bun.env.PI_KITTY_IMAGE_TRANSMISSION = "temp-file";
-			expect(kittyTempFileAllowed()).toBe(true);
-			// Explicit off wins even on a local session.
-			delete Bun.env.SSH_CONNECTION;
-			Bun.env.PI_KITTY_IMAGE_TRANSMISSION = "direct";
-			expect(kittyTempFileAllowed()).toBe(false);
-		} finally {
-			restore();
-		}
+	it("disables for wezterm and other Kitty-protocol paths that treat placeholders as literal PUA glyphs (#1877)", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("wezterm", env())).toBe(false);
+		// Tmux/screen fallback: base terminal id with Kitty protocol forced on by
+		// `getFallbackImageProtocol`. The outer terminal need not understand U=1.
+		expect(detectKittyUnicodePlaceholdersSupport("base", env())).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("iterm2", env())).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("alacritty", env())).toBe(false);
+	});
+
+	it("honors PI_NO_KITTY_PLACEHOLDERS=1 as a hard off override on supporting terminals", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", env({ PI_NO_KITTY_PLACEHOLDERS: "1" }))).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("ghostty", env({ PI_NO_KITTY_PLACEHOLDERS: "true" }))).toBe(false);
+	});
+
+	it("honors PI_KITTY_PLACEHOLDERS=1 as opt-in on otherwise-unsupported terminals", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("wezterm", env({ PI_KITTY_PLACEHOLDERS: "1" }))).toBe(true);
+	});
+
+	it("PI_NO_KITTY_PLACEHOLDERS beats PI_KITTY_PLACEHOLDERS when both are set", () => {
+		const both = env({ PI_NO_KITTY_PLACEHOLDERS: "1", PI_KITTY_PLACEHOLDERS: "1" });
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", both)).toBe(false);
+	});
+
+	it("PI_KITTY_PLACEHOLDERS=0 forces off on a default-on terminal", () => {
+		expect(detectKittyUnicodePlaceholdersSupport("kitty", env({ PI_KITTY_PLACEHOLDERS: "0" }))).toBe(false);
+		expect(detectKittyUnicodePlaceholdersSupport("ghostty", env({ PI_KITTY_PLACEHOLDERS: "off" }))).toBe(false);
 	});
 });

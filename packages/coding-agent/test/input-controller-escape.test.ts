@@ -1,6 +1,7 @@
 import { describe, expect, it, type Mock, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
 type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
@@ -34,10 +35,12 @@ type FakeEditor = {
 function createSubmission(input: {
 	text: string;
 	images?: InteractiveModeContext["pendingImages"];
+	imageLinks?: InteractiveModeContext["pendingImageLinks"];
 }): SubmittedUserInput {
 	return {
 		text: input.text,
 		images: input.images,
+		imageLinks: input.imageLinks,
 		cancelled: false,
 		started: false,
 	};
@@ -80,10 +83,16 @@ function createContext(): {
 	const hasActiveBtw = vi.fn(() => false);
 	const handleOmfgEscape = vi.fn(() => true);
 	const hasActiveOmfg = vi.fn(() => false);
-	const startPendingSubmission = vi.fn((input: { text: string; images?: InteractiveModeContext["pendingImages"] }) => {
-		ensureLoadingAnimation();
-		return createSubmission(input);
-	});
+	const startPendingSubmission = vi.fn(
+		(input: {
+			text: string;
+			images?: InteractiveModeContext["pendingImages"];
+			imageLinks?: InteractiveModeContext["pendingImageLinks"];
+		}) => {
+			ensureLoadingAnimation();
+			return createSubmission(input);
+		},
+	);
 	const editor: FakeEditor = {
 		setText(text: string) {
 			editorText = text;
@@ -104,7 +113,11 @@ function createContext(): {
 
 	ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender } as unknown as InteractiveModeContext["ui"],
+		ui: {
+			requestRender,
+			addInputListener: vi.fn(),
+			addStartListener: vi.fn(),
+		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -132,6 +145,7 @@ function createContext(): {
 			getKeys: () => [],
 		} as unknown as InteractiveModeContext["keybindings"],
 		pendingImages: [],
+		pendingImageLinks: [],
 		isBashMode: false,
 		isPythonMode: false,
 		optimisticUserMessageSignature: undefined,
@@ -197,7 +211,11 @@ describe("InputController escape behavior", () => {
 		controller.setupEditorSubmitHandler();
 		await editor.onSubmit?.("hello");
 
-		expect(spies.startPendingSubmission).toHaveBeenCalledWith({ text: "hello", images: undefined });
+		expect(spies.startPendingSubmission).toHaveBeenCalledWith({
+			text: "hello",
+			images: undefined,
+			imageLinks: undefined,
+		});
 		expect(spies.onInputCallback).toHaveBeenCalledWith(submission);
 
 		editor.onEscape?.();
@@ -232,6 +250,9 @@ describe("InputController escape behavior", () => {
 		expect(spies.cancelPendingSubmission).toHaveBeenCalledTimes(1);
 		expect(spies.clearQueue).toHaveBeenCalledTimes(1);
 		expect(spies.abort).toHaveBeenCalledTimes(1);
+		// The Esc interrupt threads a user-facing reason so the aborted turn and its
+		// synthetic tool results read as a deliberate interrupt, not "Request was aborted".
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
 	});
 
 	it("prefers aborting bash before aborting an overlapping stream", () => {

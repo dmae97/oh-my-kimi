@@ -71,6 +71,62 @@ describe("openai-codex request transformer", () => {
 	});
 });
 
+describe("openai-codex orphan tool-call repair", () => {
+	it("synthesizes a function_call_output for a function_call with no result", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.1-codex",
+			input: [
+				{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+				{ type: "function_call", call_id: "call_orphan", name: "read", arguments: "{}" },
+				{ type: "message", role: "user", content: [{ type: "input_text", text: "next" }] },
+			],
+		};
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		const input = transformed.input || [];
+
+		const callIndex = input.findIndex(item => item.type === "function_call" && item.call_id === "call_orphan");
+		expect(callIndex).toBeGreaterThanOrEqual(0);
+		// The synthesized output sits immediately after the orphan call.
+		const output = input[callIndex + 1];
+		expect(output?.type).toBe("function_call_output");
+		expect(output?.call_id).toBe("call_orphan");
+		expect(typeof output?.output).toBe("string");
+		expect(output?.output as string).toMatch(/interrupted/i);
+	});
+
+	it("leaves a paired function_call untouched", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.1-codex",
+			input: [
+				{ type: "function_call", call_id: "call_paired", name: "read", arguments: "{}" },
+				{ type: "function_call_output", call_id: "call_paired", output: "real result" },
+			],
+		};
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		const input = transformed.input || [];
+
+		const outputs = input.filter(item => item.type === "function_call_output" && item.call_id === "call_paired");
+		expect(outputs).toHaveLength(1);
+		expect(outputs[0]?.output).toBe("real result");
+	});
+
+	it("synthesizes a custom_tool_call_output for an orphan custom_tool_call", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.1-codex",
+			input: [{ type: "custom_tool_call", call_id: "call_custom", name: "apply_patch" }],
+		};
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		const input = transformed.input || [];
+
+		const output = input.find(item => item.type === "custom_tool_call_output" && item.call_id === "call_custom");
+		expect(output).toBeDefined();
+		expect(output?.output as string).toMatch(/interrupted/i);
+	});
+});
+
 describe("openai-codex reasoning effort validation", () => {
 	it("rejects gpt-5.1 xhigh when metadata does not list it", async () => {
 		const body: RequestBody = { model: "gpt-5.1", input: [] };

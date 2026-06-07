@@ -1,6 +1,6 @@
 /**
- * Kitty graphics: Unicode placeholder placement (`U=1` + U+10EEEE) and temp-file
- * (`t=t`) image transmission, with runtime feature state and env overrides.
+ * Kitty graphics: Unicode placeholder placement (`U=1` + U+10EEEE), with
+ * runtime feature state and env overrides.
  *
  * Unicode placeholders let a transmitted image be displayed by writing ordinary
  * text cells — the placeholder char U+10EEEE plus row/column combining
@@ -14,10 +14,6 @@
  * dependency stays one-way (capabilities → kitty-graphics) and no import cycle
  * forms. Protocol gating (`imageProtocol === Kitty`) lives in the caller.
  */
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { $env, $flag, logger } from "@oh-my-pi/pi-utils";
 
 /** Kitty Unicode placeholder base character (U+10EEEE, Plane 16 PUA). */
 export const KITTY_PLACEHOLDER = "\u{10eeee}";
@@ -55,31 +51,41 @@ const ROWCOLUMN_DIACRITICS: readonly number[] = [
 /** Largest row/column index expressible with the diacritic table (one cell each). */
 export const KITTY_PLACEHOLDER_MAX_CELLS = ROWCOLUMN_DIACRITICS.length;
 
-/** A minimal opaque 1x1 PNG (base64) used for the temp-file support probe. */
-const PROBE_PNG_BASE64 =
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-
-export type KittyTransmissionMedium = "direct" | "temp-file";
-
 export interface KittyGraphicsFeatures {
 	/** Display images via Unicode placeholders instead of direct `a=p` placement. */
 	unicodePlaceholders: boolean;
-	/** How image data reaches the terminal: in-band base64 or a temp file. */
-	transmissionMedium: KittyTransmissionMedium;
 }
 
-/** Explicit transmission medium from `PI_KITTY_IMAGE_TRANSMISSION`, else "auto". */
-function transmissionOverride(): KittyTransmissionMedium | "auto" {
-	const raw = $env.PI_KITTY_IMAGE_TRANSMISSION?.trim().toLowerCase();
-	if (raw === "temp-file") return "temp-file";
-	if (raw === "direct") return "direct";
-	return "auto";
+/**
+ * Whether the detected terminal renders Kitty Unicode placeholders (`U=1` +
+ * U+10EEEE with row/column diacritics).
+ *
+ * Only `kitty` (the protocol's origin) and `ghostty` ship a working
+ * implementation; WezTerm advertises Kitty graphics but treats placeholder
+ * cells as literal PUA glyphs (see wezterm/wezterm#986, "placeholder support"
+ * still unchecked), and the tmux/screen fallback can land on any outer
+ * terminal. Enabling placeholders on those paths emits a `columns × rows`
+ * grid of U+10EEEE per image per frame; the cells render as boxed fallback
+ * glyphs and re-emit on every repaint, which is exactly the
+ * "stuck/laggy scrolling + ASCII artifact" symptom reported in #1877.
+ *
+ * `PI_NO_KITTY_PLACEHOLDERS=1` forces off (e.g. for tmux passthrough to a
+ * non-supporting outer terminal); `PI_KITTY_PLACEHOLDERS=1` forces on (e.g.
+ * for a wezterm nightly that has merged placeholder support).
+ */
+export function detectKittyUnicodePlaceholdersSupport(terminalId: string, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	const offRaw = env.PI_NO_KITTY_PLACEHOLDERS?.trim().toLowerCase();
+	if (offRaw === "1" || offRaw === "true" || offRaw === "on" || offRaw === "yes" || offRaw === "y") return false;
+	const force = env.PI_KITTY_PLACEHOLDERS?.trim().toLowerCase();
+	if (force === "1" || force === "true" || force === "on" || force === "yes" || force === "y") return true;
+	if (force === "0" || force === "false" || force === "off" || force === "no" || force === "n") return false;
+	return terminalId === "kitty" || terminalId === "ghostty";
 }
 
 let features: KittyGraphicsFeatures = {
-	unicodePlaceholders: !$flag("PI_NO_KITTY_PLACEHOLDERS"),
-	// Start direct; a successful probe (or explicit `temp-file` override) promotes.
-	transmissionMedium: transmissionOverride() === "temp-file" ? "temp-file" : "direct",
+	// Off until `terminal-capabilities` seeds it from the detected terminal id —
+	// the default-on path corrupts wezterm and tmux-passthrough sessions.
+	unicodePlaceholders: false,
 };
 
 export function getKittyGraphics(): Readonly<KittyGraphicsFeatures> {
@@ -90,27 +96,9 @@ export function setKittyGraphics(partial: Partial<KittyGraphicsFeatures>): void 
 	features = { ...features, ...partial };
 }
 
-/**
- * Whether temp-file transmission may be promoted at runtime: forced via env,
- * disabled via env, otherwise auto (local sessions only — a temp file written
- * locally is not readable by a terminal on the far side of an SSH link).
- */
-export function kittyTempFileAllowed(): boolean {
-	const override = transmissionOverride();
-	if (override === "temp-file") return true;
-	if (override === "direct") return false;
-	// Auto: local sessions only — a temp file written here is not on the SSH peer.
-	return !$env.SSH_CONNECTION && !$env.SSH_CLIENT && !$env.SSH_TTY;
-}
-
 /** Whether a `columns`×`rows` placeholder grid fits within the diacritic table. */
 export function kittyPlaceholdersFit(columns: number, rows: number): boolean {
 	return columns >= 1 && rows >= 1 && columns <= KITTY_PLACEHOLDER_MAX_CELLS && rows <= KITTY_PLACEHOLDER_MAX_CELLS;
-}
-
-/** True when the base64 payload is a PNG (kitty `f=100` / temp-file path only). */
-export function isPngBase64(base64Data: string): boolean {
-	return base64Data.startsWith("iVBORw0KGgo");
 }
 
 function diacritic(index: number): string {
@@ -180,63 +168,4 @@ export function renderKittyPlaceholderLines(opts: {
 		grid[0] = encodeKittyVirtualPlacement(opts) + grid[0];
 	}
 	return grid;
-}
-
-/**
- * Path for a temp-file transmission. Kitty deletes a `t=t` file after reading it
- * **only** when the path contains the substring `tty-graphics-protocol`, so it is
- * embedded in the filename to keep the temp dir self-cleaning.
- */
-function tempGraphicsPath(tag: string): string {
-	return path.join(os.tmpdir(), `tty-graphics-protocol-${tag}-${process.pid}-${Date.now()}.png`);
-}
-
-/**
- * Transmit a PNG via a temp file (`t=t`): decode the base64 to bytes once, write
- * them to a temp file, and send the base64-encoded file path as payload. Returns
- * the APC string, or `null` on any failure (caller falls back to direct base64).
- *
- * Synchronous filesystem writes are mandated by the synchronous render pipeline
- * (`Image.render` → `renderImage` are sync); there is no async seam here.
- */
-export function encodeKittyTempFileTransmit(base64Png: string, imageId: number): string | null {
-	try {
-		const bytes = Buffer.from(base64Png, "base64");
-		if (bytes.length === 0) return null;
-		const file = tempGraphicsPath(`i${imageId}`);
-		fs.writeFileSync(file, bytes);
-		const encodedPath = Buffer.from(file, "utf8").toString("base64");
-		return `\x1b_Ga=t,f=100,t=t,S=${bytes.length},q=2,i=${imageId};${encodedPath}\x1b\\`;
-	} catch (err) {
-		logger.debug("Kitty temp-file transmit failed; using direct base64", { err: String(err) });
-		return null;
-	}
-}
-
-/**
- * Encode a temp-file support probe: write a tiny PNG to a temp file and ask the
- * terminal to query it (`a=q,t=t`). A conforming terminal replies
- * `ESC _ G i=<probeId>;OK ESC \`. Returns the query APC plus a `cleanup` that
- * removes the probe file (best-effort; kitty self-deletes the magic-named file).
- * Returns `null` if the temp file cannot be written.
- */
-export function encodeKittyTempFileProbe(probeId: number): { sequence: string; cleanup: () => void } | null {
-	try {
-		const bytes = Buffer.from(PROBE_PNG_BASE64, "base64");
-		const file = tempGraphicsPath(`probe${probeId}`);
-		fs.writeFileSync(file, bytes);
-		const encodedPath = Buffer.from(file, "utf8").toString("base64");
-		const sequence = `\x1b_Ga=q,t=t,f=100,S=${bytes.length},q=2,i=${probeId};${encodedPath}\x1b\\`;
-		const cleanup = () => {
-			try {
-				fs.rmSync(file, { force: true });
-			} catch {
-				// Best effort; kitty deletes tty-graphics-protocol files itself.
-			}
-		};
-		return { sequence, cleanup };
-	} catch (err) {
-		logger.debug("Kitty temp-file probe setup failed", { err: String(err) });
-		return null;
-	}
 }

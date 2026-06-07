@@ -1495,6 +1495,11 @@ export class Editor implements Component, Focusable {
 		this.#insertTextAtCursor(text);
 	}
 
+	/** Apply terminal paste semantics to text from non-bracketed paste transports. */
+	pasteText(text: string): void {
+		this.#handlePaste(text);
+	}
+
 	// All the editor methods from before...
 	#insertCharacter(char: string): void {
 		this.#exitHistoryForEditing();

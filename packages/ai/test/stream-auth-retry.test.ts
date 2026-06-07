@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import type { ApiKeyResolveContext } from "@oh-my-pi/pi-ai";
 import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@oh-my-pi/pi-ai/types";
@@ -25,9 +26,9 @@ function assistant(content: string[] = []): AssistantMessage {
 		api: API,
 		provider: "test-provider",
 		model: "test-model",
-		usage: usage(),
+		timestamp: 1,
 		stopReason: "stop",
-		timestamp: Date.now(),
+		usage: usage(),
 	};
 }
 
@@ -39,19 +40,21 @@ function authError(): Error & { status: number } {
 	return Object.assign(new Error("401 authentication_error"), { status: 401 });
 }
 
+function usageLimitError(): Error & { status: number } {
+	return Object.assign(new Error("You have hit your ChatGPT usage limit (pro plan). Try again in ~158 min."), {
+		status: 429,
+	});
+}
+
 function model(): Model<Api> {
 	return {
 		id: "test-model",
-		name: "test-model",
+		name: "Test Model",
 		api: API,
 		provider: "test-provider",
-		baseUrl: "mock://",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1024,
-		maxTokens: 1024,
-	};
+		contextWindow: 1000,
+		maxTokens: 100,
+	} as Model<Api>;
 }
 
 const context: Context = {
@@ -59,61 +62,64 @@ const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 1 }],
 };
 
-describe("streamSimple auth retry", () => {
+/** Records the static key each inner attempt actually received. */
+function pushKey(keys: unknown[], options?: SimpleStreamOptions): void {
+	keys.push(options?.apiKey);
+}
+
+function ok(stream: AssistantMessageEventStream): void {
+	const message = assistant(["ok"]);
+	stream.push({ type: "start", partial: message });
+	stream.push({ type: "done", reason: "stop", message });
+}
+
+describe("streamSimple resolver auth retry", () => {
 	afterEach(() => {
 		unregisterCustomApis(SOURCE_ID);
 	});
 
-	it("retries once with a fresh key when 401 happens before the first event", async () => {
-		const keys: Array<string | undefined> = [];
-		let authCalls = 0;
+	it("retries with a refreshed key when a 401 is thrown before the first event", async () => {
+		const keys: unknown[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
 		registerCustomApi(
 			API,
 			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
-				keys.push(options?.apiKey);
+				pushKey(keys, options);
 				const stream = new AssistantMessageEventStream();
-				queueMicrotask(() => {
-					if (keys.length === 1) {
-						stream.fail(authError());
-						return;
-					}
-					const message = assistant(["ok"]);
-					stream.push({ type: "start", partial: message });
-					stream.push({ type: "done", reason: "stop", message });
-				});
+				queueMicrotask(() => (keys.length === 1 ? stream.fail(authError()) : ok(stream)));
 				return stream;
 			},
 			SOURCE_ID,
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async (provider, oldKey, error) => {
-				authCalls += 1;
-				expect(provider).toBe("test-provider");
-				expect(oldKey).toBe("old-key");
-				expect((error as { status?: number }).status).toBe(401);
-				return "new-key";
+			apiKey: async ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? "old-key" : ctx.lastChance ? "switch-key" : "refresh-key";
 			},
 		});
-
 		for await (const _event of stream) {
 			// drain
 		}
 
 		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
-		expect(keys).toEqual(["old-key", "new-key"]);
-		expect(authCalls).toBe(1);
+		// Initial resolve, then step (b) refresh-same — the switch step is never reached.
+		expect(keys).toEqual(["old-key", "refresh-key"]);
+		expect(keys.every(key => typeof key === "string")).toBe(true);
+		expect(contexts.map(ctx => ({ lastChance: ctx.lastChance, hasError: ctx.error !== undefined }))).toEqual([
+			{ lastChance: false, hasError: false },
+			{ lastChance: false, hasError: true },
+		]);
+		expect((contexts[1]?.error as { status?: number }).status).toBe(401);
 	});
 
-	it("retries when a provider emits start then a 401 error event before content", async () => {
-		const keys: Array<string | undefined> = [];
+	it("buffers the start event and retries on a 401 error event before content", async () => {
+		const keys: unknown[] = [];
 		const eventTypes: string[] = [];
-		let authCalls = 0;
 		registerCustomApi(
 			API,
 			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
-				keys.push(options?.apiKey);
+				pushKey(keys, options);
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					if (keys.length === 1) {
@@ -127,9 +133,7 @@ describe("streamSimple auth retry", () => {
 						});
 						return;
 					}
-					const message = assistant(["ok"]);
-					stream.push({ type: "start", partial: message });
-					stream.push({ type: "done", reason: "stop", message });
+					ok(stream);
 				});
 				return stream;
 			},
@@ -137,28 +141,59 @@ describe("streamSimple auth retry", () => {
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async (provider, oldKey, error) => {
-				authCalls += 1;
-				expect(provider).toBe("test-provider");
-				expect(oldKey).toBe("old-key");
-				expect((error as { status?: number }).status).toBe(401);
-				return "new-key";
-			},
+			apiKey: async ctx => (ctx.error === undefined ? "old-key" : "new-key"),
 		});
-
 		for await (const event of stream) {
 			eventTypes.push(event.type);
 		}
 
 		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
 		expect(keys).toEqual(["old-key", "new-key"]);
+		// The buffered `start` of the failed attempt must not leak — the user
+		// sees exactly one clean start/done pair.
 		expect(eventTypes).toEqual(["start", "done"]);
-		expect(authCalls).toBe(1);
+	});
+
+	it("retries on a 401 carried only via errorStatus", async () => {
+		const keys: unknown[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				pushKey(keys, options);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (keys.length === 1) {
+						stream.push({ type: "start", partial: assistant() });
+						stream.push({
+							type: "error",
+							reason: "error",
+							error: assistantError(
+								'{"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+								401,
+							),
+						});
+						return;
+					}
+					ok(stream);
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: async ctx => (ctx.error === undefined ? "old-key" : "new-key"),
+		});
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "new-key"]);
 	});
 
 	it("does not retry after replay-unsafe content has been emitted", async () => {
-		let authCalls = 0;
+		let retryResolves = 0;
 		const failure = authError();
 		registerCustomApi(
 			API,
@@ -175,10 +210,9 @@ describe("streamSimple auth retry", () => {
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async () => {
-				authCalls += 1;
-				return "new-key";
+			apiKey: async ctx => {
+				if (ctx.error !== undefined) retryResolves += 1;
+				return ctx.error === undefined ? "old-key" : "new-key";
 			},
 		});
 
@@ -192,94 +226,79 @@ describe("streamSimple auth retry", () => {
 		}
 
 		expect(caught).toBe(failure);
-		expect(authCalls).toBe(0);
+		// The resolver is never asked for a retry key once a replay-unsafe event shipped.
+		expect(retryResolves).toBe(0);
 	});
 
-	it("retries on 401 carried via errorStatus when the message has no parseable status", async () => {
-		const keys: Array<string | undefined> = [];
-		let authCalls = 0;
+	it("escalates refresh-same then switch in order (2-retry ordering)", async () => {
+		const keys: unknown[] = [];
 		registerCustomApi(
 			API,
 			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
-				keys.push(options?.apiKey);
+				pushKey(keys, options);
 				const stream = new AssistantMessageEventStream();
-				queueMicrotask(() => {
-					if (keys.length === 1) {
-						stream.push({ type: "start", partial: assistant() });
-						stream.push({
-							type: "error",
-							reason: "error",
-							// Realistic Anthropic SDK shape: message begins with `<status> <body>`
-							// and the regex fallback in extractHttpStatusFromError cannot find 401
-							// inside the JSON body. Only `errorStatus` carries the signal.
-							error: assistantError(
-								'{"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
-								401,
-							),
-						});
-						return;
-					}
-					const message = assistant(["ok"]);
-					stream.push({ type: "start", partial: message });
-					stream.push({ type: "done", reason: "stop", message });
-				});
+				queueMicrotask(() => (options?.apiKey === "switch-key" ? ok(stream) : stream.fail(authError())));
 				return stream;
 			},
 			SOURCE_ID,
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async () => {
-				authCalls += 1;
-				return "new-key";
-			},
+			apiKey: async ctx => (ctx.error === undefined ? "old-key" : ctx.lastChance ? "switch-key" : "refresh-key"),
 		});
-
 		for await (const _event of stream) {
 			// drain
 		}
 
 		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
-		expect(keys).toEqual(["old-key", "new-key"]);
-		expect(authCalls).toBe(1);
+		expect(keys).toEqual(["old-key", "refresh-key", "switch-key"]);
 	});
 
-	it("retries on a thrown usage_limit_reached error before any event has been emitted", async () => {
-		const keys: Array<string | undefined> = [];
-		const errors: unknown[] = [];
+	it("skips the refresh-same step when the resolver returns an unchanged key", async () => {
+		const keys: unknown[] = [];
 		registerCustomApi(
 			API,
 			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
-				keys.push(options?.apiKey);
+				pushKey(keys, options);
 				const stream = new AssistantMessageEventStream();
-				queueMicrotask(() => {
-					if (keys.length === 1) {
-						stream.fail(
-							Object.assign(
-								new Error("You have hit your ChatGPT usage limit (pro plan). Try again in ~158 min."),
-								{ status: 429 },
-							),
-						);
-						return;
-					}
-					const message = assistant(["ok"]);
-					stream.push({ type: "start", partial: message });
-					stream.push({ type: "done", reason: "stop", message });
-				});
+				queueMicrotask(() => (options?.apiKey === "switch-key" ? ok(stream) : stream.fail(authError())));
 				return stream;
 			},
 			SOURCE_ID,
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async (_provider, _oldKey, error) => {
-				errors.push(error);
-				return "new-key";
+			// refresh-same yields the same failing key → that attempt is skipped.
+			apiKey: async ctx => (ctx.error === undefined ? "old-key" : ctx.lastChance ? "switch-key" : "old-key"),
+		});
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "switch-key"]);
+	});
+
+	it("retries a thrown usage-limit error and passes the cause to the resolver", async () => {
+		const keys: unknown[] = [];
+		const errors: unknown[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				pushKey(keys, options);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => (keys.length === 1 ? stream.fail(usageLimitError()) : ok(stream)));
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: async ctx => {
+				if (ctx.error !== undefined) errors.push(ctx.error);
+				return ctx.error === undefined ? "old-key" : "new-key";
 			},
 		});
-
 		for await (const _event of stream) {
 			// drain
 		}
@@ -287,18 +306,17 @@ describe("streamSimple auth retry", () => {
 		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
 		expect(keys).toEqual(["old-key", "new-key"]);
 		expect(errors).toHaveLength(1);
-		// The error surfaced to onAuthError carries the original 429 status so
-		// the gateway's refresh hook can branch on it.
+		// The cause carries the original 429 so the resolver can branch usage-limit vs 401.
 		expect((errors[0] as { status?: number }).status).toBe(429);
 		expect((errors[0] as Error).message).toMatch(/usage limit/i);
 	});
 
-	it("retries when a provider emits a usage_limit_reached error event before content", async () => {
-		const keys: Array<string | undefined> = [];
+	it("retries a usage-limit error event before content", async () => {
+		const keys: unknown[] = [];
 		registerCustomApi(
 			API,
 			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
-				keys.push(options?.apiKey);
+				pushKey(keys, options);
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					if (keys.length === 1) {
@@ -306,16 +324,11 @@ describe("streamSimple auth retry", () => {
 						stream.push({
 							type: "error",
 							reason: "error",
-							// errorStatus deliberately omitted: matches how the codex
-							// provider serializes the message-only path that used to
-							// 502 in the gateway.
 							error: assistantError("You have hit your ChatGPT usage limit (pro plan). Try again in ~158 min."),
 						});
 						return;
 					}
-					const message = assistant(["ok"]);
-					stream.push({ type: "start", partial: message });
-					stream.push({ type: "done", reason: "stop", message });
+					ok(stream);
 				});
 				return stream;
 			},
@@ -323,10 +336,8 @@ describe("streamSimple auth retry", () => {
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async () => "new-key",
+			apiKey: async ctx => (ctx.error === undefined ? "old-key" : "new-key"),
 		});
-
 		for await (const _event of stream) {
 			// drain
 		}
@@ -335,13 +346,13 @@ describe("streamSimple auth retry", () => {
 		expect(keys).toEqual(["old-key", "new-key"]);
 	});
 
-	it("surfaces the original usage_limit error when the retry callback declines", async () => {
-		const keys: Array<string | undefined> = [];
-		const original = Object.assign(new Error("You have hit your ChatGPT usage limit (pro plan)."), { status: 429 });
+	it("surfaces the original error when the resolver declines every retry", async () => {
+		const keys: unknown[] = [];
+		const original = usageLimitError();
 		registerCustomApi(
 			API,
 			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
-				keys.push(options?.apiKey);
+				pushKey(keys, options);
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => stream.fail(original));
 				return stream;
@@ -349,12 +360,9 @@ describe("streamSimple auth retry", () => {
 			SOURCE_ID,
 		);
 
-		// Callback returns undefined → no sibling credential to rotate to.
-		// The original failure must reach the caller untouched so the client
-		// can decide what to do (back off, surface to user, …).
 		const stream = streamSimple(model(), context, {
-			apiKey: "old-key",
-			onAuthError: async () => undefined,
+			// Decline all retries: no sibling credential to rotate to.
+			apiKey: async ctx => (ctx.error === undefined ? "old-key" : undefined),
 		});
 
 		let caught: unknown;
@@ -367,8 +375,32 @@ describe("streamSimple auth retry", () => {
 		}
 
 		expect(caught).toBe(original);
-		// Single attempt — the inner stream is only re-invoked when a new key
-		// is provided.
 		expect(keys).toEqual(["old-key"]);
+	});
+
+	it("fails the stream when the initial resolve yields no key", async () => {
+		let attempts = 0;
+		registerCustomApi(
+			API,
+			() => {
+				attempts += 1;
+				return new AssistantMessageEventStream();
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, { apiKey: async () => undefined });
+
+		let caught: unknown;
+		try {
+			for await (const _event of stream) {
+				// drain
+			}
+		} catch (error) {
+			caught = error;
+		}
+
+		expect((caught as Error).message).toMatch(/No API key for provider/);
+		expect(attempts).toBe(0);
 	});
 });

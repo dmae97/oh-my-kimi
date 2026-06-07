@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import { defaultEditorTheme } from "../../tui/test/test-themes";
-import { CustomEditor } from "../src/modes/components/custom-editor";
+import { CustomEditor, extractBracketedImagePastePath } from "../src/modes/components/custom-editor";
 
 function ctrl(key: string): string {
 	return String.fromCharCode(key.toLowerCase().charCodeAt(0) & 31);
@@ -17,6 +17,23 @@ describe("CustomEditor literal question mark input", () => {
 		editor.handleInput("?");
 
 		expect(editor.getText()).toBe("?");
+	});
+});
+
+describe("CustomEditor bracketed image path paste", () => {
+	it("routes a single pasted image path to the image-path handler", () => {
+		const editor = createEditor();
+		const paths: string[] = [];
+		editor.onPasteImagePath = path => paths.push(path);
+
+		editor.handleInput("\x1b[200~/tmp/screenshot.png\x1b[201~");
+
+		expect(paths).toEqual(["/tmp/screenshot.png"]);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("leaves ordinary bracketed paste text on the editor path", () => {
+		expect(extractBracketedImagePastePath("\x1b[200~not an image.txt\x1b[201~")).toBeUndefined();
 	});
 });
 
@@ -45,6 +62,39 @@ describe("CustomEditor temporary model selector keybinding", () => {
 		editor.setActionKeys("app.model.selectTemporary", []);
 		editor.handleInput("\x1bp");
 		expect(onSelectModelTemporary).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("CustomEditor model selector and display reset keybindings", () => {
+	it("uses Alt+M for the model selector and Ctrl+L for display reset by default", () => {
+		const editor = createEditor();
+		const onSelectModel = vi.fn();
+		const onDisplayReset = vi.fn();
+		editor.onSelectModel = onSelectModel;
+		editor.onDisplayReset = onDisplayReset;
+
+		editor.handleInput("\x1bm");
+		expect(onSelectModel).toHaveBeenCalledTimes(1);
+		expect(onDisplayReset).not.toHaveBeenCalled();
+
+		editor.handleInput(ctrl("l"));
+		expect(onSelectModel).toHaveBeenCalledTimes(1);
+		expect(onDisplayReset).toHaveBeenCalledTimes(1);
+	});
+
+	it("lets display reset win when an old model remap also uses Ctrl+L", () => {
+		const editor = createEditor();
+		const onSelectModel = vi.fn();
+		const onDisplayReset = vi.fn();
+		editor.onSelectModel = onSelectModel;
+		editor.onDisplayReset = onDisplayReset;
+		editor.setActionKeys("app.model.select", ["ctrl+l"]);
+		editor.setActionKeys("app.display.reset", ["ctrl+l"]);
+
+		editor.handleInput(ctrl("l"));
+
+		expect(onDisplayReset).toHaveBeenCalledTimes(1);
+		expect(onSelectModel).not.toHaveBeenCalled();
 	});
 });
 

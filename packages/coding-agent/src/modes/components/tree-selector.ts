@@ -6,6 +6,7 @@ import {
 	fuzzyMatch,
 	Input,
 	matchesKey,
+	ScrollView,
 	Spacer,
 	Text,
 	TruncatedText,
@@ -441,8 +442,35 @@ class TreeList implements Component {
 		const lines: string[] = [];
 
 		if (this.#filteredNodes.length === 0) {
-			lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
-			lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.#getFilterLabel()}`), width));
+			// Three empty-state shapes:
+			//  - flatNodes empty               → no entries at all (truly fresh session).
+			//  - search query rejects everything → tell the user the search is the cause.
+			//  - filter mode rejects everything  → tell the user the filter is the cause and
+			//    how to widen it. Otherwise fresh sessions whose only persisted entries are
+			//    `model_change` + `thinking_level_change` (both hidden by the default filter)
+			//    read as "broken /tree" — see #1909.
+			if (this.#flatNodes.length === 0) {
+				lines.push(truncateToWidth(theme.fg("muted", "  No entries found"), width));
+				lines.push(truncateToWidth(theme.fg("muted", `  (0/0)${this.#getFilterLabel()}`), width));
+			} else if (this.#searchQuery.length > 0) {
+				lines.push(truncateToWidth(theme.fg("muted", `  No entries match search "${this.#searchQuery}"`), width));
+				lines.push(truncateToWidth(theme.fg("muted", "  Press Backspace to clear the search"), width));
+				lines.push(
+					truncateToWidth(theme.fg("muted", `  (0/${this.#flatNodes.length})${this.#getFilterLabel()}`), width),
+				);
+			} else {
+				const filterLabel = this.#getFilterLabel().trim() || "[default]";
+				lines.push(
+					truncateToWidth(
+						theme.fg("muted", `  ${this.#flatNodes.length} entries hidden by the current filter ${filterLabel}`),
+						width,
+					),
+				);
+				lines.push(truncateToWidth(theme.fg("muted", "  Press Alt+A to show all, Alt+D for default"), width));
+				lines.push(
+					truncateToWidth(theme.fg("muted", `  (0/${this.#flatNodes.length})${this.#getFilterLabel()}`), width),
+				);
+			}
 			return lines;
 		}
 
@@ -464,6 +492,10 @@ class TreeList implements Component {
 		const OVERHEAD_COLS = 4; // cursor (2) + a touch of breathing room
 		const contentReserve = Math.max(MIN_CONTENT_COLS, Math.floor(width / 2));
 		const maxIndentLevels = Math.max(1, Math.floor((width - contentReserve - OVERHEAD_COLS) / 3));
+
+		const overflow = this.#filteredNodes.length > this.maxVisibleLines;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const rows: string[] = [];
 
 		for (let i = startIndex; i < endIndex; i++) {
 			const flatNode = this.#filteredNodes[i];
@@ -533,15 +565,22 @@ class TreeList implements Component {
 			if (isSelected) {
 				line = theme.bg("selectedBg", line);
 			}
-			lines.push(truncateToWidth(line, width));
+			rows.push(truncateToWidth(line, rowWidth));
 		}
 
-		lines.push(
-			truncateToWidth(
-				theme.fg("muted", `  (${this.#selectedIndex + 1}/${this.#filteredNodes.length})${this.#getFilterLabel()}`),
-				width,
-			),
-		);
+		const sv = new ScrollView(rows, {
+			height: rows.length,
+			scrollbar: "auto",
+			totalRows: this.#filteredNodes.length,
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(startIndex);
+		lines.push(...sv.render(width));
+
+		const filterLabel = this.#getFilterLabel();
+		if (filterLabel) {
+			lines.push(truncateToWidth(theme.fg("muted", `  ${filterLabel.trim()}`), width));
+		}
 
 		return lines;
 	}

@@ -4,6 +4,7 @@ description: Researches external libraries and APIs by reading source code. Retu
 tools: read, search, find, bash, lsp, web_search, ast_grep
 model: pi/smol
 thinking-level: minimal
+read-summarize: false
 output:
   properties:
     answer:

@@ -1,6 +1,8 @@
 import { Editor, type KeyId, matchesKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
+import { imageReferenceHyperlink, renderImageReferences } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
+import { theme } from "../theme/theme";
 
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
@@ -8,6 +10,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.clear"
 	| "app.exit"
 	| "app.suspend"
+	| "app.display.reset"
 	| "app.thinking.cycle"
 	| "app.model.cycleForward"
 	| "app.model.cycleBackward"
@@ -28,10 +31,11 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.clear": ["ctrl+c"],
 	"app.exit": ["ctrl+d"],
 	"app.suspend": ["ctrl+z"],
+	"app.display.reset": ["ctrl+l"],
 	"app.thinking.cycle": ["shift+tab"],
 	"app.model.cycleForward": ["ctrl+p"],
 	"app.model.cycleBackward": ["shift+ctrl+p"],
-	"app.model.select": ["ctrl+l"],
+	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["alt+p"],
 	"app.tools.expand": ["ctrl+o"],
 	"app.thinking.toggle": ["ctrl+t"],
@@ -43,16 +47,42 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
 };
 
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+const BRACKETED_IMAGE_PATH_REGEX = /\.(?:png|jpe?g|gif|webp)$/i;
+
+export function extractBracketedImagePastePath(data: string): string | undefined {
+	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
+	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
+	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
+
+	const pasted = data.slice(BRACKETED_PASTE_START.length, endIndex).trim();
+	if (!pasted || /[\r\n]/.test(pasted)) return undefined;
+	if (!BRACKETED_IMAGE_PATH_REGEX.test(pasted)) return undefined;
+	return pasted;
+}
+
 /**
  * Custom editor that handles configurable app-level shortcuts for coding-agent.
  */
 export class CustomEditor extends Editor {
+	imageLinks?: readonly (string | undefined)[];
+
 	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflow" keywords as the user types
-	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. */
-	decorateText = (text: string): string => highlightMagicKeywords(text);
+	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. Also make
+	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists. */
+	decorateText = (text: string): string =>
+		renderImageReferences(text, {
+			renderText: value => highlightMagicKeywords(value),
+			renderReference: (value, index) =>
+				imageReferenceHyperlink(value, index, this.imageLinks, label =>
+					theme.fg("accent", `\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m`),
+				),
+		});
 	onEscape?: () => void;
 	onClear?: () => void;
 	onExit?: () => void;
+	onDisplayReset?: () => void;
 	onCycleThinkingLevel?: () => void;
 	onCycleModelForward?: () => void;
 	onCycleModelBackward?: () => void;
@@ -67,6 +97,8 @@ export class CustomEditor extends Editor {
 	onCopyPrompt?: () => void;
 	/** Called when the configured image-paste shortcut is pressed. */
 	onPasteImage?: () => Promise<boolean>;
+	/** Called when a bracketed paste contains exactly one image-file path. */
+	onPasteImagePath?: (path: string) => void;
 	/** Called when the configured raw text-paste shortcut is pressed. */
 	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
@@ -122,6 +154,12 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
+		const pastedImagePath = extractBracketedImagePastePath(data);
+		if (pastedImagePath && this.onPasteImagePath) {
+			this.onPasteImagePath(pastedImagePath);
+			return;
+		}
+
 		// Intercept configured image paste (async - fires and handles result)
 		if (this.#matchesAction(data, "app.clipboard.pasteImage") && this.onPasteImage) {
 			void this.onPasteImage();
@@ -143,6 +181,12 @@ export class CustomEditor extends Editor {
 		// Intercept configured temporary model selector shortcut
 		if (this.#matchesAction(data, "app.model.selectTemporary") && this.onSelectModelTemporary) {
 			this.onSelectModelTemporary();
+			return;
+		}
+
+		// Intercept configured display reset shortcut
+		if (this.#matchesAction(data, "app.display.reset") && this.onDisplayReset) {
+			this.onDisplayReset();
 			return;
 		}
 

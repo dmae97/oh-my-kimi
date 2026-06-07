@@ -4,7 +4,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
 type RuntimeHarness = {
-	runtime: { ctx: InteractiveModeContext; handleBackgroundCommand: () => void };
+	runtime: { ctx: InteractiveModeContext };
 	getStatus: () => string | undefined;
 	getWarning: () => string | undefined;
 	getSelectorMode: () => "login" | "logout" | undefined;
@@ -36,7 +36,6 @@ const createRuntimeHarness = (manualInput: OAuthManualInputManager): RuntimeHarn
 	return {
 		runtime: {
 			ctx,
-			handleBackgroundCommand: () => {},
 		},
 		getStatus: () => statusMessage,
 		getWarning: () => warningMessage,

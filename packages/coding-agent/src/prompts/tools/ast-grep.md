@@ -18,7 +18,7 @@ Performs structural code search using AST matching via native ast-grep.
 
 <output>
 - Grouped matches with file path, byte range, line/column ranges, metavariable captures
-- Match lines are numbered under a file snapshot tag header in hashline mode: `¶src/foo.ts#0a`, `*42:content` for the matched line, ` 43:content` for context
+- Match lines are numbered under a file snapshot tag header in hashline mode: `[src/foo.ts#1A2B]`, `*42:content` for the matched line, ` 43:content` for context
 - Summary counts (`totalMatches`, `filesWithMatches`, `filesSearched`) and parse issues when present
 </output>
 

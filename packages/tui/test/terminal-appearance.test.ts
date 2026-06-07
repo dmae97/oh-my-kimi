@@ -1,14 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { getKittyGraphics, type KittyGraphicsFeatures, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	type CellDimensions,
 	getCellDimensions,
 	getTerminalInfo,
-	ImageProtocol,
 	setCellDimensions,
-	setTerminalImageProtocol,
-	TERMINAL,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -583,6 +579,30 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
+	it("tracks OS geometry on resize when the post-resize in-band report is missed", () => {
+		// Real terminals always fire SIGWINCH (process.stdout dims refresh first),
+		// but the matching DEC 2048 report can be dropped or arrive malformed. The
+		// getters must not stay pinned to the stale cached report, or the renderer
+		// reflows at the old width and content never resizes.
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+		process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
+		expect(terminal.columns).toBe(100);
+		expect(terminal.rows).toBe(30);
+
+		// OS resize: stdout dims update + 'resize' fires, no new in-band report.
+		Object.defineProperty(process.stdout, "columns", { value: 160, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		process.stdout.emit("resize");
+
+		expect(resizeCount()).toBe(1);
+		expect(terminal.columns).toBe(160);
+		expect(terminal.rows).toBe(40);
+		terminal.stop();
+	});
+
 	it("reassembles a DECRPM reply split across stdin reads", () => {
 		vi.useFakeTimers();
 		const { terminal, reports } = setup();
@@ -590,70 +610,6 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		vi.advanceTimersByTime(50);
 		process.stdin.emit("data", "$y");
 		expect(reports).toContainEqual({ mode: 2048, supported: true });
-		terminal.stop();
-	});
-});
-
-describe("ProcessTerminal Kitty graphics temp-file probe", () => {
-	const originalProtocol = TERMINAL.imageProtocol;
-	let originalGraphics: KittyGraphicsFeatures;
-
-	beforeEach(() => {
-		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
-		originalGraphics = { ...getKittyGraphics() };
-		Bun.env.PI_TUI_KITTY_GRAPHICS_PROBE = "1";
-		setTerminalImageProtocol(ImageProtocol.Kitty);
-		setKittyGraphics({ transmissionMedium: "direct" });
-	});
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
-		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
-		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
-		delete Bun.env.PI_TUI_KITTY_GRAPHICS_PROBE;
-		setTerminalImageProtocol(originalProtocol);
-		setKittyGraphics(originalGraphics);
-	});
-
-	function startProbed() {
-		const writes: string[] = [];
-		vi.spyOn(process, "kill").mockReturnValue(true);
-		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
-		vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
-		vi.spyOn(process.stdin, "setEncoding").mockImplementation(() => process.stdin);
-		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
-			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
-			return true;
-		});
-		const terminal = new ProcessTerminal();
-		terminal.start(
-			() => {},
-			() => {},
-		);
-		return { terminal, writes };
-	}
-
-	it("emits an a=q,t=t probe and promotes to temp-file transmission on OK", () => {
-		const { terminal, writes } = startProbed();
-		const probe = writes.find(w => w.includes("\x1b_Ga=q,t=t"));
-		expect(probe).toBeDefined();
-		const id = probe?.match(/i=(\d+)/)?.[1];
-		expect(id).toBeDefined();
-		expect(getKittyGraphics().transmissionMedium).toBe("direct");
-		process.stdin.emit("data", `\x1b_Gi=${id};OK\x1b\\`);
-		expect(getKittyGraphics().transmissionMedium).toBe("temp-file");
-		terminal.stop();
-	});
-
-	it("stays on direct transmission when the probe reports an error", () => {
-		const { terminal, writes } = startProbed();
-		const id = writes.find(w => w.includes("\x1b_Ga=q,t=t"))?.match(/i=(\d+)/)?.[1];
-		expect(id).toBeDefined();
-		process.stdin.emit("data", `\x1b_Gi=${id};ENOTSUP:bad\x1b\\`);
-		expect(getKittyGraphics().transmissionMedium).toBe("direct");
 		terminal.stop();
 	});
 });

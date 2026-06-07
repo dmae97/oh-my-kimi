@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [15.10.1] - 2026-06-07
+
+### Added
+
+- Added optional `promptCacheKey` support to `AgentOptions` and `Agent` via a new `promptCacheKey` property so providers can receive a caller-provided prompt cache key
+- Added optional `ApiKeyResolveContext` parameter to `getApiKey` in `AgentOptions` and `AgentLoopConfig` so key resolvers can receive retry context
+
+### Changed
+
+- Enabled streaming API calls to re-resolve credentials through the `getApiKey` callback when retries occur after authentication-related errors
+- `Agent.abort(reason?)` now forwards `reason` to the underlying `AbortController`, and the synthesized aborted assistant message carries that reason on `errorMessage` (string or non-`AbortError` `Error` message) instead of always defaulting to `"Request was aborted"`. Bare `abort()` is unchanged.
+
+### Fixed
+
+- Fixed handling of short-lived API keys so that expired tokens are retried with a refreshed value during 401/usage-limit failures
+- Ensured fallback API key resolution uses the initially configured static `apiKey` when `getApiKey` is present
+- Wrapped oneshot LLM completions (`instrumentedCompleteSimple`: handoff, compaction/branch summaries) in an `EventLoopKeepalive`. These run outside the agent `#runLoop`, so without the keepalive Bun's event loop stopped servicing timers while parked on the completion promise — freezing host spinners (e.g. the `/handoff` loader) until an unrelated terminal resize poked the loop into rendering again.
+
+## [15.9.5] - 2026-06-05
+
+### Fixed
+
+- Surfaced Anthropic stream failures whose message starts with `Output blocked by conten` as normal assistant error lifecycle events, so interactive clients render content-filter blocks instead of silently dropping the streaming bubble at `agent_end`.
+
 ## [15.8.3] - 2026-06-03
 ### Added
 

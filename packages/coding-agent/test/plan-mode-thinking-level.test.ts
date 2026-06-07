@@ -6,7 +6,7 @@
  * calls resolveModelRoleValue() but only returns .model, dropping the thinking level.
  * #applyPlanModeModel() therefore has no thinking level to apply.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -22,7 +22,7 @@ describe("plan mode thinking level", () => {
 	let modelRegistry: ModelRegistry;
 	let authStorage: AuthStorage;
 
-	beforeEach(async () => {
+	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-plan-thinking-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
@@ -33,6 +33,9 @@ describe("plan mode thinking level", () => {
 		if (session) {
 			await session.dispose();
 		}
+	});
+
+	afterAll(() => {
 		authStorage.close();
 		tempDir.removeSync();
 	});

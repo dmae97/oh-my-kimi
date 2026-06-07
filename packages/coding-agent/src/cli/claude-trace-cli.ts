@@ -380,6 +380,18 @@ function isMessagesRequest(message: ParsedHttpMessage): boolean {
 	return pathNameFromRequestTarget(message.path ?? "") === "/v1/messages";
 }
 
+// Claude Code fires a background warmup/classification call on its small fast
+// model (a haiku variant, ANTHROPIC_SMALL_FAST_MODEL) before sending the user's
+// real message. Skip it so the capture lands on the actual prompt.
+function isBackgroundModelRequest(message: ParsedHttpMessage): boolean {
+	try {
+		const parsed = JSON.parse(decodeBody(message.headers, message.body)) as { model?: unknown };
+		return typeof parsed.model === "string" && parsed.model.toLowerCase().includes("haiku");
+	} catch {
+		return false;
+	}
+}
+
 function decodeBody(headers: readonly HeaderEntry[], body: Buffer): string {
 	const encoding = headerValue(headers, "content-encoding")?.toLowerCase().trim();
 	try {
@@ -636,7 +648,7 @@ export class ClaudeMessagesProxy {
 			upstreamTls.write(data);
 			const messages = requestParser.push(data);
 			for (const message of messages) {
-				if (!isMessagesRequest(message)) {
+				if (!isMessagesRequest(message) || isBackgroundModelRequest(message)) {
 					responseQueue.push(null);
 					continue;
 				}

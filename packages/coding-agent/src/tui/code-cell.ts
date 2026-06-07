@@ -25,6 +25,12 @@ export interface CodeCellOptions {
 	output?: string;
 	outputMaxLines?: number;
 	codeMaxLines?: number;
+	/**
+	 * Show the LAST `codeMaxLines` rows (the live streaming edge) instead of the
+	 * first, with a "… N earlier lines" marker on top. Lets a pending preview
+	 * follow code as it is written while staying bounded. Ignored when `expanded`.
+	 */
+	codeTail?: boolean;
 	expanded?: boolean;
 	/** Animate the cell border with a sweeping segment while pending/running. */
 	animate?: boolean;
@@ -102,13 +108,22 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 	const normalizedCode = replaceTabs(code ?? "");
 	const rawCodeLines = sanitizeTerminalLines(normalizedCode);
 	const maxCodeLines = expanded ? rawCodeLines.length : Math.min(rawCodeLines.length, codeMaxLines);
-	const visibleCode = rawCodeLines.slice(0, maxCodeLines).join("\n");
-	const codeLines = highlightCode(visibleCode, language);
 	const hiddenCodeLines = rawCodeLines.length - maxCodeLines;
+	const tail = options.codeTail === true && !expanded && hiddenCodeLines > 0;
+	const startIndex = tail ? rawCodeLines.length - maxCodeLines : 0;
+	const visibleCode = rawCodeLines.slice(startIndex, startIndex + maxCodeLines).join("\n");
+	const codeLines = highlightCode(visibleCode, language);
 	if (hiddenCodeLines > 0) {
 		const hint = formatExpandHint(theme, expanded, hiddenCodeLines > 0);
-		const moreLine = `${formatMoreItems(hiddenCodeLines, "line")}${hint ? ` ${hint}` : ""}`;
-		codeLines.push(theme.fg("dim", moreLine));
+		if (tail) {
+			// Earlier rows scrolled above the live tail window — mark them on top so
+			// the newest streamed line stays pinned to the bottom of the box.
+			const earlier = `… ${hiddenCodeLines} earlier line${hiddenCodeLines === 1 ? "" : "s"}${hint ? ` ${hint}` : ""}`;
+			codeLines.unshift(theme.fg("dim", earlier));
+		} else {
+			const moreLine = `${formatMoreItems(hiddenCodeLines, "line")}${hint ? ` ${hint}` : ""}`;
+			codeLines.push(theme.fg("dim", moreLine));
+		}
 	}
 
 	const outputLines: string[] = [];

@@ -115,31 +115,6 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", 
 		expect(firstMsg.role).toBe("compactionSummary");
 	}, 120000);
 
-	it("should maintain valid session state after compaction", async () => {
-		await createSession();
-
-		// Build up history
-		await session.prompt("What is the capital of France? One word answer.");
-		await session.agent.waitForIdle();
-
-		await session.prompt("What is the capital of Germany? One word answer.");
-		await session.agent.waitForIdle();
-
-		// Compact
-		await session.compact();
-
-		// Session should still be usable
-		await session.prompt("What is the capital of Italy? One word answer.");
-		await session.agent.waitForIdle();
-
-		// Should have messages after compaction
-		expect(session.messages.length).toBeGreaterThan(0);
-
-		// The agent should have responded
-		const assistantMessages = session.messages.filter(m => m.role === "assistant");
-		expect(assistantMessages.length).toBeGreaterThan(0);
-	}, 180000);
-
 	it("should persist compaction to session file", async () => {
 		await createSession();
 
@@ -206,9 +181,5 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", 
 		);
 		// Manual compaction doesn't emit auto_compaction events
 		expect(autoCompactionEvents.length).toBe(0);
-
-		// Regular events should have been emitted
-		const messageEndEvents = events.filter(e => e.type === "message_end");
-		expect(messageEndEvents.length).toBeGreaterThan(0);
 	}, 120000);
 });

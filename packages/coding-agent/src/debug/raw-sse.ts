@@ -1,4 +1,12 @@
-import { type Component, matchesKey, padding, replaceTabs, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	matchesKey,
+	padding,
+	replaceTabs,
+	ScrollView,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "../modes/theme/theme";
 import { copyToClipboard } from "../utils/clipboard";
@@ -146,14 +154,20 @@ export class RawSseViewerComponent implements Component {
 		const innerWidth = Math.max(1, this.#lastRenderWidth - 2);
 		const bodyHeight = this.#bodyHeight();
 		const rawLines = this.#renderRawLines(innerWidth);
-		const body = rawLines.slice(this.#scrollOffset, this.#scrollOffset + bodyHeight);
-		while (body.length < bodyHeight) body.push("");
+		const sv = new ScrollView(rawLines.slice(this.#scrollOffset, this.#scrollOffset + bodyHeight), {
+			height: bodyHeight,
+			scrollbar: "auto",
+			totalRows: rawLines.length,
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(this.#scrollOffset);
+		const bodyRows = sv.render(innerWidth);
 
 		return [
 			this.#frameTop(innerWidth),
 			this.#frameLine(this.#summaryText(), innerWidth),
 			this.#frameSeparator(innerWidth),
-			...body.map(line => this.#frameLine(line, innerWidth)),
+			...bodyRows.map(line => this.#frameLine(line, innerWidth)),
 			this.#frameLine(this.#statusText(), innerWidth),
 			this.#frameBottom(innerWidth),
 		];

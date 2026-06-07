@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -86,8 +86,15 @@ async function createHistoryStorage(prompts: string[]): Promise<HistoryStorage> 
 	tempDirs.push(dir);
 	HistoryStorage.resetInstance();
 	const storage = HistoryStorage.open(path.join(dir, "history.db"));
-	for (const prompt of prompts) {
-		await storage.add(prompt);
+	// add() batches writes behind a 100ms AsyncDrain timer. Drive that timer with
+	// fake timers so the flush is instant instead of waiting real wall-clock time.
+	vi.useFakeTimers();
+	try {
+		const writes = prompts.map(prompt => storage.add(prompt));
+		vi.advanceTimersByTime(100);
+		await Promise.all(writes);
+	} finally {
+		vi.useRealTimers();
 	}
 	return storage;
 }

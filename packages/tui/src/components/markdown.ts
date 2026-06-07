@@ -58,7 +58,8 @@ markdownParser.setOptions({
 // (Rust FFI) work for content/layout combinations already seen this session.
 
 const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
-const renderCache = new LRUCache<string, string[]>({ max: RENDER_CACHE_MAX });
+const EMPTY_RENDER_LINES: readonly string[] = [];
+const renderCache = new LRUCache<string, readonly string[]>({ max: RENDER_CACHE_MAX });
 
 /** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
 export function clearRenderCache(): void {
@@ -288,10 +289,11 @@ export class Markdown implements Component {
 	/** Number of spaces used to indent code block content. */
 	#codeBlockIndent: number;
 
-	// Cache for rendered output
+	// Cache for rendered output. Cached arrays are internal snapshots; render()
+	// returns caller-owned arrays because several renderers append surrounding rows.
 	#cachedText?: string;
 	#cachedWidth?: number;
-	#cachedLines?: string[];
+	#cachedLines?: readonly string[];
 
 	constructor(
 		text: string,
@@ -324,7 +326,7 @@ export class Markdown implements Component {
 		// L1: per-instance cache — fastest path for repeated renders of the same
 		// instance at the same width (e.g. resize debounce, repeated redraws).
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
-			return this.#cachedLines;
+			return this.#cachedLines.slice();
 		}
 
 		// Calculate available width for content (subtract horizontal padding)
@@ -332,12 +334,10 @@ export class Markdown implements Component {
 
 		// Don't render anything if there's no actual text
 		if (!this.#text || this.#text.trim() === "") {
-			const result: string[] = [];
-			// Update per-instance cache
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
-			this.#cachedLines = result;
-			return result;
+			this.#cachedLines = EMPTY_RENDER_LINES;
+			return [];
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
@@ -364,7 +364,7 @@ export class Markdown implements Component {
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
 			this.#cachedLines = cached;
-			return cached;
+			return cached.slice();
 		}
 
 		// Parse markdown to HTML-like tokens
@@ -445,14 +445,16 @@ export class Markdown implements Component {
 		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
 		const result = rawResult.length > 0 ? rawResult : [""];
 
-		// Update L1 per-instance cache
+		// Update caches with a private snapshot. The returned array remains owned by
+		// the caller, so push/splice by tool renderers cannot poison future redraws.
+		const cachedLines = result.slice();
 		this.#cachedText = this.#text;
 		this.#cachedWidth = width;
-		this.#cachedLines = result;
+		this.#cachedLines = cachedLines;
 
 		// Update L2 module-level LRU so future instances with the same key skip
 		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		renderCache.set(cacheKey, result);
+		renderCache.set(cacheKey, cachedLines);
 
 		return result;
 	}

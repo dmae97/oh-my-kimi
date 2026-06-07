@@ -406,7 +406,7 @@
 					}
 				},
 				"spinnerFrames": {
-					"description": "Override the spinner frames. Use a flat array to set both `status` and `activity`, or an object to override each independently. Frames are advanced ~12.5fps for status spinners and ~60fps for activity spinners.",
+					"description": "Override the spinner frames. Use a flat array to set both `status` and `activity`, or an object to override each independently. Frames are advanced ~12.5fps for status spinners and ~30fps for activity spinners.",
 					"oneOf": [
 						{
 							"type": "array",

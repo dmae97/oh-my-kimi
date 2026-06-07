@@ -47,6 +47,47 @@ function createOllamaCloudModel(id: string): Model {
 		maxTokens: 8192,
 	};
 }
+function createContextTestModel(id: string, contextWindow: number): Model {
+	return {
+		id,
+		name: id,
+		api: "ollama-chat",
+		baseUrl: "https://example.com",
+		reasoning: false,
+		provider: "test",
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens: 1024,
+	};
+}
+
+function createScopedSelector(
+	models: Model[],
+	settings: Settings,
+	onSelect: (model: Model) => void,
+	options?: { temporaryOnly?: boolean; currentContextTokens?: number },
+): ModelSelectorComponent {
+	const modelRegistry = {
+		getAll: () => models,
+		getDiscoverableProviders: () => [],
+		getCanonicalModels: () => [],
+		resolveCanonicalModel: () => undefined,
+	} as unknown as ModelRegistry;
+	const ui = {
+		requestRender: vi.fn(),
+	} as unknown as TUI;
+	return new ModelSelectorComponent(
+		ui,
+		undefined,
+		settings,
+		modelRegistry,
+		models.map(model => ({ model })),
+		model => onSelect(model),
+		() => {},
+		options,
+	);
+}
 let testTheme = await getThemeByName("dark");
 
 function installTestTheme(): void {
@@ -94,6 +135,48 @@ describe("ModelSelector role badge thinking display", () => {
 		const menuRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(menuRendered).toContain("Set as custom-fast");
 		expect(menuRendered).toContain("Set as SMOL (Quick)");
+	});
+
+	test("dims and disables models below the current context size", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const small = createContextTestModel("a-small", 4096);
+		const large = createContextTestModel("b-large", 128_000);
+		const selected: string[] = [];
+		const selector = createScopedSelector([small, large], settings, model => selected.push(model.id), {
+			temporaryOnly: true,
+			currentContextTokens: 6000,
+		});
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("a-small");
+		expect(rendered).toContain("context>4.1k");
+
+		selector.handleInput("\n");
+		expect(selected).toEqual(["b-large"]);
+	});
+
+	test("does not open the model menu when every candidate is disabled", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const small = createContextTestModel("only-small", 4096);
+		const onSelect = vi.fn();
+		const selector = createScopedSelector([small], settings, onSelect, {
+			currentContextTokens: 6000,
+		});
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("only-small");
+		expect(rendered).toContain("current context 6k > 4.1k limit");
+
+		selector.handleInput("\n");
+		const afterEnter = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(afterEnter).not.toContain("Action for");
+		expect(onSelect).not.toHaveBeenCalled();
 	});
 
 	test("refreshes Ollama Cloud using provider id instead of tab label", async () => {

@@ -13,7 +13,6 @@ function createRuntime() {
 				editor: { setText } as unknown as InteractiveModeContext["editor"],
 				handleBtwCommand,
 			} as unknown as InteractiveModeContext,
-			handleBackgroundCommand: () => {},
 		},
 	};
 }

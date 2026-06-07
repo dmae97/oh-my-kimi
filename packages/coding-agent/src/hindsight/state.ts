@@ -1,6 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
-import { type BankScope, ensureBankMission } from "./bank";
+import { type BankScope, ensureBankExists } from "./bank";
 import type { HindsightApi, MemoryItemInput } from "./client";
 import type { HindsightConfig } from "./config";
 import {
@@ -45,12 +45,12 @@ export interface HindsightSessionStateOptions {
 	recallTagsMatch?: "any" | "all" | "any_strict" | "all_strict";
 	config: HindsightConfig;
 	session: AgentSession;
-	missionsSet: Set<string>;
+	banksSet: Set<string>;
 	lastRetainedTurn?: number;
 	hasRecalledForFirstTurn?: boolean;
 	/**
 	 * When set, this entry is a subagent alias that reuses the parent's bank,
-	 * scope, config, client, and missionsSet. Aliases skip auto-recall and
+	 * scope, config, client, and banksSet. Aliases skip auto-recall and
 	 * auto-retain — those run on the parent only — but the recall/retain/reflect
 	 * tools resolve via the alias so they persist to the same bank as the parent.
 	 */
@@ -148,7 +148,7 @@ export class HindsightRetainQueue {
 		}
 
 		try {
-			await ensureBankMission(state.client, state.bankId, state.config, state.missionsSet);
+			await ensureBankExists(state.client, state.bankId, state.config, state.banksSet);
 			const batch: MemoryItemInput[] = items.map(item => ({
 				content: item.content,
 				context: item.context ?? state.config.retainContext,
@@ -198,7 +198,7 @@ export class HindsightSessionState {
 	recallTagsMatch?: "any" | "all" | "any_strict" | "all_strict";
 	config: HindsightConfig;
 	session: AgentSession;
-	missionsSet: Set<string>;
+	banksSet: Set<string>;
 	lastRetainedTurn: number;
 	hasRecalledForFirstTurn: boolean;
 	lastRecallSnippet?: string;
@@ -213,6 +213,12 @@ export class HindsightSessionState {
 	 */
 	mentalModelsLoadPromise?: Promise<void>;
 	unsubscribe?: () => void;
+	/**
+	 * Releases the `onHindsightScopeChanged` subscription that drives live
+	 * rebuilds when `hindsight.bankId` / `bankIdPrefix` / `scoping` change.
+	 * Only set on primary states; aliases inherit the parent's subscription.
+	 */
+	unsubscribeScope?: () => void;
 	/** Alias states delegate persistence config to a primary parent state. */
 	aliasOf?: HindsightSessionState;
 	readonly retainQueue: HindsightRetainQueue;
@@ -226,7 +232,7 @@ export class HindsightSessionState {
 		this.recallTagsMatch = options.recallTagsMatch;
 		this.config = options.config;
 		this.session = options.session;
-		this.missionsSet = options.missionsSet;
+		this.banksSet = options.banksSet;
 		this.lastRetainedTurn = options.lastRetainedTurn ?? 0;
 		this.hasRecalledForFirstTurn = options.hasRecalledForFirstTurn ?? false;
 		this.aliasOf = options.aliasOf;
@@ -291,7 +297,7 @@ export class HindsightSessionState {
 		const { transcript } = prepareRetentionTranscript(target, true);
 		if (!transcript) return;
 
-		await ensureBankMission(this.client, this.bankId, this.config, this.missionsSet);
+		await ensureBankExists(this.client, this.bankId, this.config, this.banksSet);
 		await this.client.retain(this.bankId, transcript, {
 			documentId,
 			context: this.config.retainContext,
@@ -398,6 +404,12 @@ export class HindsightSessionState {
 	async runMentalModelLoad(scope: BankScope): Promise<void> {
 		if (!this.config.mentalModelsEnabled) return;
 
+		// Create/ensure the bank BEFORE the first mental-model POST so we don't
+		// land `createMentalModel` against a bank the server has never seen —
+		// that surfaces as a FK / 404 on Hindsight's side. `ensureBankExists`
+		// is idempotent (PUT) and skips after the first call via `banksSet`.
+		await ensureBankExists(this.client, this.bankId, this.config, this.banksSet);
+
 		// Seeding is opt-in (`hindsight.mentalModelAutoSeed`). Default behaviour is
 		// read-only: we surface whatever models the operator has curated on the
 		// bank, but we do NOT POST to create new ones unless they explicitly
@@ -456,6 +468,8 @@ export class HindsightSessionState {
 	dispose(): void {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
+		this.unsubscribeScope?.();
+		this.unsubscribeScope = undefined;
 		this.retainQueue.dispose();
 	}
 

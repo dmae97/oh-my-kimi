@@ -111,6 +111,11 @@ describe("computeEssentialBuiltinNames", () => {
 });
 
 describe("tools.discoveryMode settings schema", () => {
+	it("defaults to auto discovery mode", () => {
+		const settings = Settings.isolated({});
+		expect(settings.get("tools.discoveryMode")).toBe("auto");
+	});
+
 	it("back-compat: mcp.discoveryMode still accepted", () => {
 		const settings = Settings.isolated({ "mcp.discoveryMode": true });
 		expect(settings.get("mcp.discoveryMode")).toBe(true);

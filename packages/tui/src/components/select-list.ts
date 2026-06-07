@@ -4,6 +4,7 @@ import { extractPrintableText } from "../keys";
 import type { SymbolTheme } from "../symbols";
 import type { Component } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
+import { ScrollView } from "./scroll-view";
 
 const DEFAULT_PRIMARY_COLUMN_WIDTH = 32;
 const PRIMARY_COLUMN_GAP = 2;
@@ -104,17 +105,29 @@ export class SelectList implements Component {
 		const endIndex = Math.min(startIndex + this.maxVisible, this.#filteredItems.length);
 
 		// Render visible items
+		const overflow = this.#filteredItems.length > this.maxVisible;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.#filteredItems[i];
 			if (!item) continue;
 
 			const isSelected = i === this.#selectedIndex;
 			const descriptionText = item.description ? sanitizeSingleLine(item.description) : undefined;
-			lines.push(this.#renderItem(item, isSelected, width, descriptionText, primaryColumnWidth));
+			rows.push(this.#renderItem(item, isSelected, rowWidth, descriptionText, primaryColumnWidth));
 		}
 
-		// Add scroll/search status when needed
-		if (startIndex > 0 || endIndex < this.#filteredItems.length || showSearchStatus) {
+		const sv = new ScrollView(rows, {
+			height: rows.length,
+			scrollbar: "auto",
+			totalRows: this.#filteredItems.length,
+			theme: { track: t => this.theme.scrollInfo(t), thumb: t => this.theme.selectedPrefix(t) },
+		});
+		sv.setScrollOffset(startIndex);
+		lines.push(...sv.render(width));
+
+		// Add search status when relevant (scrollbar now indicates overflow)
+		if (showSearchStatus) {
 			lines.push(this.#renderStatusLine(width));
 		}
 
@@ -247,15 +260,8 @@ export class SelectList implements Component {
 	}
 
 	#renderStatusLine(width: number): string {
-		const selectedCount = this.#filteredItems.length === 0 ? 0 : this.#selectedIndex + 1;
-		const filteredCount = this.#filteredItems.length;
-		const count =
-			this.#filterQuery.trim() && filteredCount !== this.items.length
-				? `${selectedCount}/${filteredCount} of ${this.items.length}`
-				: `${selectedCount}/${filteredCount}`;
 		const query = sanitizeSingleLine(this.#filterQuery);
-		const searchSuffix = this.#shouldRenderSearchStatus() ? (query ? `  Search: ${query}` : "  Type to search") : "";
-		const statusText = `  (${count})${searchSuffix}`;
+		const statusText = query ? `  Search: ${query}` : "  Type to search";
 		return this.theme.scrollInfo(truncateToWidth(statusText, Math.max(1, width - 2), Ellipsis.Omit));
 	}
 

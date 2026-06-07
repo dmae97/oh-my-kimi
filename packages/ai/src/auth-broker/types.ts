@@ -117,6 +117,9 @@ export const DEFAULT_REFRESH_SKEW_MS = 5 * 60_000;
 /** Default broker refresh-loop cadence. */
 export const DEFAULT_REFRESH_INTERVAL_MS = 60_000;
 
+/** Default freshness window for the encrypted local broker snapshot cache. */
+export const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 60 * 60_000;
+
 /** Keepalive cadence for `GET /v1/snapshot/stream` SSE comments. */
 export const DEFAULT_STREAM_KEEPALIVE_MS = 20_000;
 
