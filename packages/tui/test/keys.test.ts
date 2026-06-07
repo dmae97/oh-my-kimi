@@ -77,6 +77,19 @@ describe("matchesKey", () => {
 		expect(matchesKey("\x1b[57400;133u", "1")).toBe(false);
 		setKittyProtocolActive(false);
 	});
+
+	it("recognises super+alt+backspace from Ghostty's default Option+Backspace wire (#2064)", () => {
+		setKittyProtocolActive(true);
+		// Modifier 11 (wire) = 10 (mask) = super(8)|alt(2). Ghostty's keyboard
+		// inspector on macOS reports `ESC [127;11u` for Option+Backspace without
+		// any user-defined keybind.
+		expect(matchesKey("\x1b[127;11u", "super+alt+backspace")).toBe(true);
+		expect(matchesKey("\x1b[127;11u", "alt+super+backspace")).toBe(true);
+		// Plain alt+backspace must NOT consume this — the modifier truly is super|alt.
+		expect(matchesKey("\x1b[127;11u", "alt+backspace")).toBe(false);
+		expect(matchesKey("\x1b[127;11u", "backspace")).toBe(false);
+		setKittyProtocolActive(false);
+	});
 });
 
 describe("parseKey", () => {
@@ -132,7 +145,9 @@ describe("parseKey", () => {
 
 	it("ignores Kitty sequences with unsupported modifiers", () => {
 		setKittyProtocolActive(true);
-		expect(parseKey("\x1b[99;9u")).toBeUndefined();
+		// Hyper (16) and meta (32) bits aren't surfaced because nothing binds them.
+		expect(parseKey("\x1b[99;17u")).toBeUndefined(); // hyper-only
+		expect(parseKey("\x1b[99;33u")).toBeUndefined(); // meta-only
 		setKittyProtocolActive(false);
 	});
 });
