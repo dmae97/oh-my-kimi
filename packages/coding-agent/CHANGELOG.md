@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed the directory grouping for `find`, `search`, `ast_grep`, `ast_edit`, and `lsp` diagnostics from a single flat `# dir/` heading per immediate directory to a multi-level tree that folds the common path prefix into one heading. Previously every group repeated the full directory path — so results rooted outside cwd printed the absolute prefix (e.g. `/Users/me/proj/`) on every heading and nested directories were never collapsed. Now a single-child directory chain folds into one heading (`# packages/pkg/src/`, including an absolute root for out-of-cwd results), subdirectories nest one `#` deeper (`## nested/` → `### child.ts`), and each directory's own files are listed before its subdirectories. TUI hyperlink reconstruction tracks the nested directory stack across the whole output so file and code-frame links keep resolving to the correct absolute paths.
+
+### Fixed
+
+- Fixed duplicate file entries in grouped outputs for `find`, `search`, `ast_grep`, `ast_edit`, and `lsp` diagnostics when the same path appeared multiple times
+- Fixed search, grep, and edit output rendering so repeated directory group blank-line boundaries no longer break nested path/link reconstruction
 
 ## [15.10.0] - 2026-06-06
 

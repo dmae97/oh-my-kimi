@@ -16,7 +16,7 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
-import { formatGroupedFiles } from "./grouped-file-output";
+import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
 import { isInternalUrlPath, resolveToolSearchScope } from "./path-utils";
 import {
@@ -30,7 +30,6 @@ import {
 	formatParseErrors,
 	formatParseErrorsCountLabel,
 	PREVIEW_LIMITS,
-	splitGroupsByBlankLine,
 } from "./render-utils";
 import { queueResolveHandler } from "./resolve";
 import { ToolError } from "./tool-errors";
@@ -516,10 +515,30 @@ export const astEditToolRenderer = {
 		const description = rewriteCount === 1 ? args?.ops?.[0]?.pat : undefined;
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
-		const allGroups = splitGroupsByBlankLine(textContent.split("\n"));
-		const changeGroups = allGroups.filter(
-			group => !group[0]?.startsWith("Safety cap reached") && !group[0]?.startsWith("Parse issues:"),
-		);
+		const allLines = textContent.split("\n");
+		// Resolve hyperlinks over the whole output so nested directory headers
+		// reconstruct across the blank-line groups the tree list collapses by.
+		const contexts = classifyGroupedLines(allLines, details?.searchPath);
+		const styledLines = allLines.map((line, index) => {
+			const ctx = contexts[index]!;
+			if (ctx.kind === "dir") {
+				const styled = uiTheme.fg("accent", line);
+				return ctx.headerPath ? fileHyperlink(ctx.headerPath, styled) : styled;
+			}
+			if (ctx.kind === "file") {
+				const styled = uiTheme.fg(ctx.depth === 1 ? "accent" : "dim", line);
+				return ctx.headerPath ? fileHyperlink(ctx.headerPath, styled) : styled;
+			}
+			if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
+			if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
+			return uiTheme.fg("toolOutput", line);
+		});
+		const changeGroups = groupLineIndicesByBlank(allLines)
+			.filter(indices => {
+				const first = allLines[indices[0]!]!;
+				return !first.startsWith("Safety cap reached") && !first.startsWith("Parse issues:");
+			})
+			.map(indices => indices.map(index => styledLines[index]!));
 
 		const badge = { label: "proposed", color: "warning" as const };
 		const header = renderStatusLine(
@@ -539,7 +558,6 @@ export const astEditToolRenderer = {
 		return createCachedComponent(
 			() => options.expanded,
 			width => {
-				const searchBase = details?.searchPath;
 				const changeLines = renderTreeList(
 					{
 						items: changeGroups,
@@ -547,43 +565,7 @@ export const astEditToolRenderer = {
 						maxCollapsed: changeGroups.length,
 						maxCollapsedLines: COLLAPSED_CHANGE_LIMIT,
 						itemType: "change",
-						renderItem: group => {
-							let contextDir = searchBase ?? "";
-							return group.map(line => {
-								if (line.startsWith("## ")) {
-									// Strip ` (3 replacements)` and `#hash` suffixes from formatGroupedFiles.
-									const fileName = line
-										.slice(3)
-										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "")
-										.replace(/#[0-9a-f]+$/, "");
-									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-									const styled = uiTheme.fg("dim", line);
-									return absPath ? fileHyperlink(absPath, styled) : styled;
-								}
-								if (line.startsWith("# ")) {
-									const raw = line
-										.slice(2)
-										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "");
-									const isDirectory = raw.endsWith("/");
-									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
-									if (isDirectory) {
-										if (searchBase) {
-											contextDir = name === "." ? searchBase : path.join(searchBase, name);
-										}
-										return uiTheme.fg("accent", line);
-									}
-									// Root-level file with optional `#hash` and ` (3 replacements)` suffixes.
-									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-									const styled = uiTheme.fg("accent", line);
-									return absPath ? fileHyperlink(absPath, styled) : styled;
-								}
-								if (line.startsWith("+")) return uiTheme.fg("toolDiffAdded", line);
-								if (line.startsWith("-")) return uiTheme.fg("toolDiffRemoved", line);
-								return uiTheme.fg("toolOutput", line);
-							});
-						},
+						renderItem: group => group,
 					},
 					uiTheme,
 				);

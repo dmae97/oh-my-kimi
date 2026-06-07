@@ -14,7 +14,7 @@ import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWi
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
-import { formatGroupedFiles } from "./grouped-file-output";
+import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import type { OutputMeta } from "./output-meta";
 import { resolveToolSearchScope } from "./path-utils";
@@ -29,7 +29,6 @@ import {
 	formatParseErrors,
 	formatParseErrorsCountLabel,
 	PREVIEW_LIMITS,
-	splitGroupsByBlankLine,
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -386,10 +385,29 @@ export const astGrepToolRenderer = {
 		);
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
-		const allGroups = splitGroupsByBlankLine(textContent.split("\n"));
-		const matchGroups = allGroups.filter(
-			group => !group[0]?.startsWith("Result limit reached") && !group[0]?.startsWith("Parse issues:"),
-		);
+		const allLines = textContent.split("\n");
+		// Resolve hyperlinks over the whole output so nested directory headers
+		// reconstruct across the blank-line groups the tree list collapses by.
+		const contexts = classifyGroupedLines(allLines, details?.searchPath);
+		const styledLines = allLines.map((line, index) => {
+			const ctx = contexts[index]!;
+			if (ctx.kind === "dir") {
+				const styled = uiTheme.fg("accent", line);
+				return ctx.headerPath ? fileHyperlink(ctx.headerPath, styled) : styled;
+			}
+			if (ctx.kind === "file") {
+				const styled = uiTheme.fg(ctx.depth === 1 ? "accent" : "dim", line);
+				return ctx.headerPath ? fileHyperlink(ctx.headerPath, styled) : styled;
+			}
+			if (line.startsWith("  meta:")) return uiTheme.fg("dim", line);
+			return uiTheme.fg("toolOutput", line);
+		});
+		const matchGroups = groupLineIndicesByBlank(allLines)
+			.filter(indices => {
+				const first = allLines[indices[0]!]!;
+				return !first.startsWith("Result limit reached") && !first.startsWith("Parse issues:");
+			})
+			.map(indices => indices.map(index => styledLines[index]!));
 
 		const extraLines: string[] = [];
 		if (limitReached) {
@@ -404,7 +422,6 @@ export const astGrepToolRenderer = {
 		return createCachedComponent(
 			() => options.expanded,
 			width => {
-				const searchBase = details?.searchPath;
 				const matchLines = renderTreeList(
 					{
 						items: matchGroups,
@@ -412,41 +429,7 @@ export const astGrepToolRenderer = {
 						maxCollapsed: matchGroups.length,
 						maxCollapsedLines: COLLAPSED_MATCH_LIMIT,
 						itemType: "match",
-						renderItem: group => {
-							let contextDir = searchBase ?? "";
-							return group.map(line => {
-								if (line.startsWith("## ")) {
-									const fileName = line
-										.slice(3)
-										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "")
-										.replace(/#[0-9a-f]+$/, "");
-									const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-									const styled = uiTheme.fg("dim", line);
-									return absPath ? fileHyperlink(absPath, styled) : styled;
-								}
-								if (line.startsWith("# ")) {
-									const raw = line
-										.slice(2)
-										.trimEnd()
-										.replace(/\s+\([^)]*\)\s*$/, "");
-									const isDirectory = raw.endsWith("/");
-									const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
-									if (isDirectory) {
-										if (searchBase) {
-											contextDir = name === "." ? searchBase : path.join(searchBase, name);
-										}
-										return uiTheme.fg("accent", line);
-									}
-									// Root-level file (single # without trailing slash) from formatGroupedFiles.
-									const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-									const styled = uiTheme.fg("accent", line);
-									return absPath ? fileHyperlink(absPath, styled) : styled;
-								}
-								if (line.startsWith("  meta:")) return uiTheme.fg("dim", line);
-								return uiTheme.fg("toolOutput", line);
-							});
-						},
+						renderItem: group => group,
 					},
 					uiTheme,
 				);

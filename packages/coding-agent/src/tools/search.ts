@@ -36,7 +36,7 @@ import {
 	parseArchivePathCandidates,
 } from "./archive-reader";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
-import { formatGroupedFiles } from "./grouped-file-output";
+import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
 import type { OutputMeta } from "./output-meta";
 import {
@@ -61,7 +61,6 @@ import {
 	formatMoreItems,
 	PREVIEW_LIMITS,
 	replaceTabs,
-	splitGroupsByBlankLine,
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -287,7 +286,6 @@ interface IndexedContentLines {
 	starts: number[];
 }
 
-const INTERNAL_URL_DISPLAY_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const OMP_ROOT_URL_RE = /^omp:\/\/(?:\/?|docs\/?)$/i;
 
 function normalizeSearchLine(line: string): string {
@@ -1210,69 +1208,48 @@ function isSearchMatchLine(line: string): boolean {
 }
 
 function isSearchHeaderLine(line: string): boolean {
-	return line.startsWith("# ") || line.startsWith("## ");
+	return /^#+ /.test(line);
 }
 
-function renderSearchDisplayGroup(
-	group: string[],
+const URL_HEADER_PREFIX_RE = /^#+\s+/;
+
+function renderSearchDisplayLines(
+	lines: readonly string[],
 	searchBase: string | undefined,
 	uiTheme: Theme,
 ): RenderedSearchLine[] {
-	// Track directory/file context within a group so headers and code-frame
-	// lines link to the backing file, with line-specific links for matches.
-	let contextDir = searchBase ?? "";
-	const hasFileHeader = group.some(line => line.startsWith("# "));
-	let currentFilePath: string | undefined = hasFileHeader ? undefined : searchBase;
-	return group.map(line => {
-		if (line.startsWith("## ")) {
-			// Strip optional ` (suffix)` and `#hash` before resolving.
-			const fileName = line
-				.slice(3)
-				.trimEnd()
-				.replace(/\s+\([^)]*\)\s*$/, "")
-				.replace(/#[0-9a-f]+$/, "");
-			const absPath = contextDir && fileName ? path.join(contextDir, fileName) : undefined;
-			currentFilePath = absPath;
-			const styled = uiTheme.fg("dim", line);
-			return { raw: line, styled: absPath ? fileHyperlink(absPath, styled) : styled };
+	const contexts = classifyGroupedLines(lines, searchBase);
+	// `classifyGroupedLines` can't resolve internal URLs (TUI-only), so track the
+	// resolved URL target here and use it for the body lines that follow.
+	let urlFile: string | undefined;
+	return lines.map((line, index) => {
+		const ctx = contexts[index]!;
+		if (ctx.kind === "dir") {
+			urlFile = undefined;
+			const styled = uiTheme.fg("accent", line);
+			return { raw: line, styled: ctx.headerPath ? fileHyperlink(ctx.headerPath, styled) : styled };
 		}
-		if (line.startsWith("# ")) {
-			const raw = line
-				.slice(2)
-				.trimEnd()
-				.replace(/\s+\([^)]*\)\s*$/, "");
-			if (INTERNAL_URL_DISPLAY_RE.test(raw)) {
-				contextDir = "";
-				const styled = uiTheme.fg("accent", line);
-				const linked = linkUrlLikeSearchHeader(raw, styled);
-				currentFilePath = linked.absPath;
+		if (ctx.kind === "file") {
+			if (ctx.isUrl) {
+				const raw = line
+					.replace(URL_HEADER_PREFIX_RE, "")
+					.trimEnd()
+					.replace(/\s+\([^)]*\)\s*$/, "");
+				const linked = linkUrlLikeSearchHeader(raw, uiTheme.fg("accent", line));
+				urlFile = linked.absPath;
 				return { raw: line, styled: linked.line };
 			}
-			const isDirectory = raw.endsWith("/");
-			const name = isDirectory ? raw.replace(/\/$/, "") : raw.replace(/#[0-9a-f]+$/, "");
-			if (isDirectory) {
-				const absPath = searchBase ? (name === "." ? searchBase : path.join(searchBase, name)) : undefined;
-				if (absPath) {
-					contextDir = absPath;
-				}
-				currentFilePath = undefined;
-				const styled = uiTheme.fg("accent", line);
-				return { raw: line, styled: absPath ? fileHyperlink(absPath, styled) : styled };
-			}
-			// Root-level file emitted by formatGroupedFiles when the directory is `.`.
-			const absPath = searchBase && name ? path.join(searchBase, name) : undefined;
-			currentFilePath = absPath;
-			const styled = uiTheme.fg("accent", line);
-			return { raw: line, styled: absPath ? fileHyperlink(absPath, styled) : styled };
+			urlFile = undefined;
+			// Root-level files keep the bright accent; nested file headers are dimmed.
+			const styled = uiTheme.fg(ctx.depth === 1 ? "accent" : "dim", line);
+			return { raw: line, styled: ctx.headerPath ? fileHyperlink(ctx.headerPath, styled) : styled };
 		}
 		const styled = uiTheme.fg("toolOutput", line);
 		const lineNumber = parseSearchDisplayLineNumber(line);
+		const filePath = ctx.filePath ?? urlFile;
 		return {
 			raw: line,
-			styled:
-				currentFilePath && lineNumber !== undefined
-					? fileHyperlink(currentFilePath, styled, { line: lineNumber })
-					: styled,
+			styled: filePath && lineNumber !== undefined ? fileHyperlink(filePath, styled, { line: lineNumber }) : styled,
 		};
 	});
 }
@@ -1288,19 +1265,15 @@ function countPreviewMatches(lines: readonly RenderedSearchLine[], hasMarkedMatc
 }
 
 function renderBudgetedSearchGroups(
-	groups: string[][],
+	groups: RenderedSearchLine[][],
 	maxLines: number,
 	matchCount: number,
-	searchBase: string | undefined,
 	uiTheme: Theme,
 	compact: boolean,
 ): string[] {
 	if (maxLines <= 0) return [];
 	const renderedGroups = groups
-		.map(group => {
-			const rendered = renderSearchDisplayGroup(group, searchBase, uiTheme);
-			return compact ? compactSearchPreviewGroup(rendered) : rendered;
-		})
+		.map(group => (compact ? compactSearchPreviewGroup(group) : group))
 		.filter(group => group.length > 0);
 	if (renderedGroups.length === 0) return [];
 
@@ -1451,7 +1424,11 @@ export const searchToolRenderer = {
 		);
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
-		const matchGroups = splitGroupsByBlankLine(textContent.split("\n"));
+		const allLines = textContent.split("\n");
+		// Resolve hyperlinks once over the whole output so a nested directory stack
+		// reconstructs correctly across blank-line group boundaries.
+		const renderedLines = renderSearchDisplayLines(allLines, details?.searchPath, uiTheme);
+		const matchGroups = groupLineIndicesByBlank(allLines).map(indices => indices.map(i => renderedLines[i]!));
 
 		const extraLines: string[] = [];
 		if (missingNote) extraLines.push(missingNote);
@@ -1463,15 +1440,7 @@ export const searchToolRenderer = {
 					(options.expanded ? EXPANDED_TEXT_LIMIT : COLLAPSED_TEXT_LIMIT) - extraLines.length,
 					0,
 				);
-				const searchBase = details?.searchPath;
-				const matchLines = renderBudgetedSearchGroups(
-					matchGroups,
-					budget,
-					matchCount,
-					searchBase,
-					uiTheme,
-					!options.expanded,
-				);
+				const matchLines = renderBudgetedSearchGroups(matchGroups, budget, matchCount, uiTheme, !options.expanded);
 				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
 		);

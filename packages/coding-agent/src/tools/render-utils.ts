@@ -737,36 +737,6 @@ export function capParseErrors(
 // =============================================================================
 
 /**
- * Group `rawLines` by blank-line separators, mirroring the historical search /
- * ast-grep / ast-edit renderer behavior: if any blank line is present, splits on
- * runs of blank lines; otherwise collapses non-empty lines into a single group.
- */
-export function splitGroupsByBlankLine(rawLines: string[]): string[][] {
-	const hasSeparators = rawLines.some(line => line.trim().length === 0);
-	const groups: string[][] = [];
-	if (hasSeparators) {
-		let current: string[] = [];
-		for (const line of rawLines) {
-			if (line.trim().length === 0) {
-				if (current.length > 0) {
-					groups.push(current);
-					current = [];
-				}
-				continue;
-			}
-			current.push(line);
-		}
-		if (current.length > 0) groups.push(current);
-	} else {
-		const nonEmpty = rawLines.filter(line => line.trim().length > 0);
-		if (nonEmpty.length > 0) {
-			groups.push(nonEmpty);
-		}
-	}
-	return groups;
-}
-
-/**
  * Standard width+expand keyed render cache used by every search-style tool
  * renderer. `compute` re-runs only when the cache key changes; the returned
  * Component is the canonical `{ render, invalidate }` pair.
