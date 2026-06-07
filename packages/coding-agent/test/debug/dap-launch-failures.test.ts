@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../../src/config/settings";
+import * as dapModule from "../../src/dap";
 import { DapClient } from "../../src/dap/client";
 import { DapSessionManager } from "../../src/dap/session";
 import type { DapCapabilities, DapClientState, DapEventMessage, DapResolvedAdapter } from "../../src/dap/types";
@@ -340,7 +341,6 @@ describe("DAP launch failure handling", () => {
 
 describe("DebugTool launch validation", () => {
 	it("rejects directory programs when the selected adapter cannot debug a directory", async () => {
-		const dapModule = await import("../../src/dap");
 		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(TEST_ADAPTER);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-program-"));
@@ -367,7 +367,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("allows directory programs when the selected adapter accepts them (dlv on a Go package)", async () => {
-		const dapModule = await import("../../src/dap");
 		const dlvAdapter: DapResolvedAdapter = {
 			...TEST_ADAPTER,
 			name: "dlv",
@@ -412,7 +411,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("prefers directory-capable dlv over native adapters for extensionless Go package directories", async () => {
-		const dapModule = await import("../../src/dap");
 		const sessionLaunchSpy = spyOn(dapModule.dapSessionManager, "launch").mockImplementation(async opts => {
 			throw Object.assign(new Error("captured launch"), { capturedOptions: opts });
 		});
@@ -449,7 +447,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("dlv launch with a compiled binary switches mode from debug to exec", async () => {
-		const dapModule = await import("../../src/dap");
 		const dlvAdapter: DapResolvedAdapter = {
 			...TEST_ADAPTER,
 			name: "dlv",
@@ -490,7 +487,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("throws targeted 'python not found in PATH' when adapter:'debugpy' is unresolvable for launch", async () => {
-		const dapModule = await import("../../src/dap");
 		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(null);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-debugpy-"));
@@ -517,7 +513,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("throws targeted 'python not found in PATH' when adapter:'debugpy' is unresolvable for attach", async () => {
-		const dapModule = await import("../../src/dap");
 		const attachSpy = spyOn(dapModule, "selectAttachAdapter").mockReturnValue(null);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-debugpy-attach-"));
@@ -543,7 +538,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("falls back to the generic 'No debugger adapter' error when adapter is unspecified", async () => {
-		const dapModule = await import("../../src/dap");
 		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(null);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-noadapter-"));
