@@ -7,6 +7,8 @@ const PASTE_EVENT_NAME_BASE64 = Buffer.from("Paste event", "utf8").toString("bas
 
 const IMAGE_MIME_PRIORITY = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
 const TEXT_MIME_TYPE = "text/plain";
+/** Kitty's "give me the list of available MIME types" sentinel — see `TARGETS_MIME` in `kitty/clipboard.py`. */
+const MIME_LISTING_TARGET = ".";
 
 type PasteReadKind = "image" | "text";
 
@@ -144,6 +146,24 @@ export class EnhancedPasteController {
 		if (!mimeType) return;
 
 		if (state.phase === "listing") {
+			// Kitty (as of writing) implements the "list available MIME types"
+			// response shape by sending a single DATA packet with `mime="."` and
+			// the available types packed into the payload as a whitespace-
+			// separated list (see `fulfill_read_request` in
+			// kovidgoyal/kitty:kitty/clipboard.py). The 5522-mode ancillary
+			// spec instead encodes each type as its own DATA packet with an
+			// empty payload. Support both — fall through to the per-packet
+			// form when the dot sentinel has no payload, or when the packet
+			// already names a concrete MIME type.
+			if (mimeType === MIME_LISTING_TARGET) {
+				if (!packet.payload) return;
+				const listing = decodeBase64Utf8(packet.payload);
+				if (!listing) return;
+				for (const candidate of listing.split(/\s+/)) {
+					if (candidate && candidate !== MIME_LISTING_TARGET) state.mimes.push(candidate);
+				}
+				return;
+			}
 			state.mimes.push(mimeType);
 			return;
 		}
@@ -192,11 +212,12 @@ export class EnhancedPasteController {
 			chunks: [],
 		};
 
-		const metadata = [`type=read`, `mime=${Buffer.from(selected.mimeType, "utf8").toString("base64")}`];
+		const encodedMime = Buffer.from(selected.mimeType, "utf8").toString("base64");
+		const metadata = ["type=read"];
 		if (state.loc) metadata.push(`loc=${state.loc}`);
 		if (state.pw) {
 			metadata.push(`pw=${state.pw}`, `name=${PASTE_EVENT_NAME_BASE64}`);
 		}
-		this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")}${OSC_TERMINATOR_ST}`);
+		this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")};${encodedMime}${OSC_TERMINATOR_ST}`);
 	}
 }

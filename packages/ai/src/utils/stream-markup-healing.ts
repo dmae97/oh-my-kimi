@@ -600,12 +600,17 @@ export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): bo
 	);
 }
 
+/** Cheap model/provider gate for MiniMax plain thinking tag leaks. */
+export function modelMayLeakThinkingTags(provider: string, modelId: string): boolean {
+	return /minimax/i.test(provider) || /minimax/i.test(modelId);
+}
+
 export function getStreamMarkupHealingPattern(
 	provider: string,
 	modelId: string,
 	options?: { readonly parseThinkingTags?: boolean },
 ): StreamMarkupHealingPattern | undefined {
-	if (options?.parseThinkingTags) return "thinking";
+	if (options?.parseThinkingTags || modelMayLeakThinkingTags(provider, modelId)) return "thinking";
 	if (modelMayLeakKimiToolCalls(provider, modelId)) return "kimi";
 	if (modelMayLeakDsmlToolCalls(provider, modelId)) return "dsml";
 	return undefined;

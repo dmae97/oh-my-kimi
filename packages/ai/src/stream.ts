@@ -209,8 +209,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	tavily: "TAVILY_API_KEY",
 	parallel: "PARALLEL_API_KEY",
 	kagi: "KAGI_API_KEY",
-	// GitHub Copilot uses GitHub personal access token
-	"github-copilot": () => $pickenv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
+	"github-copilot": "COPILOT_GITHUB_TOKEN",
 	// Foundry mode optionally switches Anthropic auth to enterprise gateway credentials.
 	anthropic: () =>
 		isFoundryEnabled()

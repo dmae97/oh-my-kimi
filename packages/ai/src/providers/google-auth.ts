@@ -212,9 +212,7 @@ async function resolveAccessTokenUncached(
 			);
 			const targetPrincipal = targetPrincipalMatch?.groups?.target;
 			if (!targetPrincipal) {
-				throw new RangeError(
-					`Cannot extract target principal from ${creds.service_account_impersonation_url}`,
-				);
+				throw new RangeError(`Cannot extract target principal from ${creds.service_account_impersonation_url}`);
 			}
 
 			const sourceToken =
@@ -222,15 +220,22 @@ async function resolveAccessTokenUncached(
 					? await exchangeJwtForToken(creds.source_credentials, signal, fetchImpl)
 					: await exchangeRefreshToken(creds.source_credentials, signal, fetchImpl);
 
-			const response = await fetchImpl(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${targetPrincipal}:generateAccessToken`, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${sourceToken.access_token}`,
+			const response = await fetchImpl(
+				`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${targetPrincipal}:generateAccessToken`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${sourceToken.access_token}`,
+					},
+					body: JSON.stringify({
+						delegates: creds.delegates ?? [],
+						scope: [CLOUD_PLATFORM_SCOPE],
+						lifetime: "3600s",
+					}),
+					signal,
 				},
-				body: JSON.stringify({ delegates: creds.delegates ?? [], scope: [CLOUD_PLATFORM_SCOPE], lifetime: "3600s" }),
-				signal,
-			});
+			);
 			if (!response.ok) {
 				const detail = await response.text().catch(() => "");
 				throw new Error(`Google Impersonation token exchange failed (${response.status}): ${detail}`);
