@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import * as git from "../src/utils/git";
 
-describe("git reftable support", () => {
+const gitInitHelp = await $`git init -h`.quiet().nothrow().text();
+const supportsReftable = gitInitHelp.includes("--ref-format");
+
+describe.skipIf(!supportsReftable)("git reftable support", () => {
 	let testRepoDir: string;
 
 	beforeEach(async () => {
-		testRepoDir = path.join(import.meta.dir, `tmp-reftable-test-${Date.now()}`);
-		await fs.mkdir(testRepoDir, { recursive: true });
+		testRepoDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-reftable-"));
 	});
 
 	afterEach(async () => {
@@ -18,15 +21,8 @@ describe("git reftable support", () => {
 
 	test("resolves references in a reftable repository", async () => {
 		// Initialize the repository with reftable format
-		const initResult = await $`git init --ref-format=reftable --initial-branch=main`
-			.cwd(testRepoDir)
-			.quiet()
-			.nothrow();
-		if (initResult.exitCode !== 0) {
-			// If the installed git doesn't support --ref-format=reftable, skip the test
-			console.warn("Skipping reftable test: Git does not support --ref-format=reftable");
-			return;
-		}
+		const initResult = await $`git init --ref-format=reftable --initial-branch=main`.cwd(testRepoDir).quiet();
+		expect(initResult.exitCode).toBe(0);
 
 		// Configure basic user details so we can commit
 		await $`git config user.name "Test User"`.cwd(testRepoDir).quiet();
@@ -66,21 +62,73 @@ describe("git reftable support", () => {
 		// Test HEAD resolution (object shape)
 		const headState = await git.head.resolve(testRepoDir);
 		expect(headState).not.toBeNull();
-		expect(headState?.kind).toBe("ref");
-		expect((headState as any).branchName).toBe("feature-branch");
-		expect(headState?.commit).toBe(headSha);
+		if (headState?.kind !== "ref") throw new Error("expected ref head");
+		expect(headState.branchName).toBe("feature-branch");
+		expect(headState.commit).toBe(headSha);
 
 		// Test HEAD resolution sync
 		const headStateSync = git.head.resolveSync(testRepoDir);
 		expect(headStateSync).not.toBeNull();
-		expect(headStateSync?.kind).toBe("ref");
-		expect((headStateSync as any).branchName).toBe("feature-branch");
-		expect(headStateSync?.commit).toBe(headSha);
+		if (headStateSync?.kind !== "ref") throw new Error("expected ref head sync");
+		expect(headStateSync.branchName).toBe("feature-branch");
+		expect(headStateSync.commit).toBe(headSha);
 
 		// Test exists check
 		const mainExists = await git.ref.exists(testRepoDir, "refs/heads/main");
 		const nonexistentExists = await git.ref.exists(testRepoDir, "refs/heads/nonexistent");
 		expect(mainExists).toBe(true);
 		expect(nonexistentExists).toBe(false);
+	});
+
+	test("handles git config trailing comments correctly", async () => {
+		// Initialize the repository with reftable format
+		const initResult = await $`git init --ref-format=reftable --initial-branch=main`.cwd(testRepoDir).quiet();
+		expect(initResult.exitCode).toBe(0);
+
+		const repository = await git.repo.resolve(testRepoDir);
+		expect(repository).not.toBeNull();
+		if (!repository) return;
+		expect(await git.repo.isReftable(repository)).toBe(true);
+
+		// Now let's manually write to .git/config with comments and test
+		const configPath = path.join(repository.commonDir, "config");
+		const baseConfig = await fs.readFile(configPath, "utf8");
+
+		// Test trailing semicolon comment
+		const newConfigWithSemicolon = baseConfig.replace(
+			"refstorage = reftable",
+			"refstorage = reftable ; trailing comment",
+		);
+		await fs.writeFile(configPath, newConfigWithSemicolon);
+
+		const repository2 = await git.repo.resolve(testRepoDir);
+		expect(repository2).not.toBeNull();
+		if (repository2) {
+			expect(await git.repo.isReftable(repository2)).toBe(true);
+			expect(git.repo.isReftableSync(repository2)).toBe(true);
+		}
+
+		// Test trailing hash comment
+		const newConfigWithHash = baseConfig.replace("refstorage = reftable", "refstorage = reftable # trailing hash");
+		await fs.writeFile(configPath, newConfigWithHash);
+
+		const repository3 = await git.repo.resolve(testRepoDir);
+		expect(repository3).not.toBeNull();
+		if (repository3) {
+			expect(await git.repo.isReftable(repository3)).toBe(true);
+			expect(git.repo.isReftableSync(repository3)).toBe(true);
+		}
+
+		// Test double-quoted value containing semicolon (not a comment)
+		const newConfigWithQuotes = baseConfig.replace("refstorage = reftable", 'refstorage = "reftable ; not comment"');
+		await fs.writeFile(configPath, newConfigWithQuotes);
+
+		const repository4 = await git.repo.resolve(testRepoDir);
+		expect(repository4).not.toBeNull();
+		if (repository4) {
+			// This value would be "reftable ; not comment", which shouldn't match "reftable"
+			expect(await git.repo.isReftable(repository4)).toBe(false);
+			expect(git.repo.isReftableSync(repository4)).toBe(false);
+		}
 	});
 });

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
@@ -238,11 +239,15 @@ export class StatusLineComponent implements Component {
 			this.#gitWatcher = null;
 		}
 
-		const gitHeadPath = git.repo.resolveSync(getProjectDir())?.headPath ?? null;
-		if (!gitHeadPath) return;
+		const repository = git.repo.resolveSync(getProjectDir());
+		if (!repository) return;
+
+		const watchPath = git.repo.isReftableSync(repository)
+			? path.join(repository.commonDir, "reftable", "tables.list")
+			: repository.headPath;
 
 		try {
-			this.#gitWatcher = fs.watch(gitHeadPath, () => {
+			this.#gitWatcher = fs.watch(watchPath, () => {
 				this.#invalidateGitCaches();
 				if (this.#onBranchChange) {
 					this.#onBranchChange();

@@ -27,6 +27,7 @@ export interface GitRepository {
 	gitEntryPath: string;
 	headPath: string;
 	repoRoot: string;
+	isReftable?: boolean;
 }
 
 export interface GitStatusSummary {
@@ -560,8 +561,6 @@ function parsePackedRefs(content: string | null, targetRef: string): string | nu
 	return null;
 }
 
-const reftableCache = new Map<string, boolean>();
-
 function parseGitConfigHasReftable(content: string): boolean {
 	let inExtensions = false;
 	for (const line of content.split("\n")) {
@@ -570,12 +569,35 @@ function parseGitConfigHasReftable(content: string): boolean {
 			const section = trimmed.slice(1, -1).trim().toLowerCase();
 			inExtensions = section === "extensions";
 		} else if (inExtensions) {
-			const parts = trimmed.split("=");
-			if (parts.length >= 2) {
-				const key = parts[0].trim().toLowerCase();
-				const value = parts.slice(1).join("=").trim().toLowerCase();
-				if (key === "refstorage" && value === "reftable") {
-					return true;
+			const eqIndex = trimmed.indexOf("=");
+			if (eqIndex !== -1) {
+				const key = trimmed.slice(0, eqIndex).trim().toLowerCase();
+				const value = trimmed.slice(eqIndex + 1).trim();
+				if (key === "refstorage") {
+					// Strip trailing comments per git-config(5)
+					let cleanValue = "";
+					let inQuotes = false;
+					for (let i = 0; i < value.length; i++) {
+						const char = value[i];
+						if (char === '"') {
+							inQuotes = !inQuotes;
+							cleanValue += char;
+						} else if (!inQuotes && (char === ";" || char === "#")) {
+							if (i === 0 || /\s/.test(value[i - 1])) {
+								break;
+							}
+							cleanValue += char;
+						} else {
+							cleanValue += char;
+						}
+					}
+					cleanValue = cleanValue.trim().toLowerCase();
+					if (cleanValue.startsWith('"') && cleanValue.endsWith('"')) {
+						cleanValue = cleanValue.slice(1, -1).trim();
+					}
+					if (cleanValue === "reftable") {
+						return true;
+					}
 				}
 			}
 		}
@@ -584,28 +606,36 @@ function parseGitConfigHasReftable(content: string): boolean {
 }
 
 function isReftableRepoSync(repository: GitRepository): boolean {
-	const cached = reftableCache.get(repository.commonDir);
-	if (cached !== undefined) return cached;
+	if (repository.isReftable !== undefined) return repository.isReftable;
 	const configPath = path.join(repository.commonDir, "config");
 	const content = readOptionalTextSync(configPath);
-	const hasReftable = content ? parseGitConfigHasReftable(content) : false;
-	reftableCache.set(repository.commonDir, hasReftable);
-	return hasReftable;
+	repository.isReftable = content ? parseGitConfigHasReftable(content) : false;
+	return repository.isReftable;
 }
 
 async function isReftableRepo(repository: GitRepository): Promise<boolean> {
-	const cached = reftableCache.get(repository.commonDir);
-	if (cached !== undefined) return cached;
+	if (repository.isReftable !== undefined) return repository.isReftable;
 	const configPath = path.join(repository.commonDir, "config");
 	const content = await readOptionalText(configPath);
-	const hasReftable = content ? parseGitConfigHasReftable(content) : false;
-	reftableCache.set(repository.commonDir, hasReftable);
-	return hasReftable;
+	repository.isReftable = content ? parseGitConfigHasReftable(content) : false;
+	return repository.isReftable;
 }
 
-async function resolveHeadStateReftable(repository: GitRepository): Promise<GitHeadState | null> {
-	const symResult = await git(repository.repoRoot, ["symbolic-ref", "HEAD"], { readOnly: true }).catch(() => null);
-	const revResult = await git(repository.repoRoot, ["rev-parse", "HEAD"], { readOnly: true }).catch(() => null);
+async function resolveHeadStateReftable(repository: GitRepository, signal?: AbortSignal): Promise<GitHeadState | null> {
+	throwIfAborted(signal);
+	const symResult = await git(repository.repoRoot, ["symbolic-ref", "HEAD"], { readOnly: true, signal }).catch(err => {
+		if (signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))) {
+			throw err;
+		}
+		return null;
+	});
+	throwIfAborted(signal);
+	const revResult = await git(repository.repoRoot, ["rev-parse", "HEAD"], { readOnly: true, signal }).catch(err => {
+		if (signal?.aborted || (err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))) {
+			throw err;
+		}
+		return null;
+	});
 	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
 
 	if (symResult && symResult.exitCode === 0) {
@@ -707,15 +737,35 @@ function readRefSync(repository: GitRepository, targetRef: string): string | nul
 	return null;
 }
 
-async function readRef(repository: GitRepository, targetRef: string): Promise<string | null> {
+async function readRef(repository: GitRepository, targetRef: string, signal?: AbortSignal): Promise<string | null> {
 	if (await isReftableRepo(repository)) {
-		const symResult = await git(repository.repoRoot, ["symbolic-ref", targetRef], { readOnly: true }).catch(
-			() => null,
+		throwIfAborted(signal);
+		const symResult = await git(repository.repoRoot, ["symbolic-ref", targetRef], { readOnly: true, signal }).catch(
+			err => {
+				if (
+					signal?.aborted ||
+					(err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))
+				) {
+					throw err;
+				}
+				return null;
+			},
 		);
 		if (symResult && symResult.exitCode === 0) {
 			return `${HEAD_REF_PREFIX} ${symResult.stdout.trim()}`;
 		}
-		const revResult = await git(repository.repoRoot, ["rev-parse", targetRef], { readOnly: true }).catch(() => null);
+		throwIfAborted(signal);
+		const revResult = await git(repository.repoRoot, ["rev-parse", targetRef], { readOnly: true, signal }).catch(
+			err => {
+				if (
+					signal?.aborted ||
+					(err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))
+				) {
+					throw err;
+				}
+				return null;
+			},
+		);
 		if (revResult && revResult.exitCode === 0) {
 			return revResult.stdout.trim() || null;
 		}
@@ -1146,7 +1196,7 @@ export const branch = {
 		const repository = await resolveRepository(cwd);
 		if (repository) {
 			for (const refPath of DEFAULT_BRANCH_REFS) {
-				const target = await readRef(repository, refPath);
+				const target = await readRef(repository, refPath, signal);
 				const branchName = parseDefaultBranchRef(refPath, target);
 				if (branchName) return branchName;
 			}
@@ -1244,7 +1294,7 @@ export const ref = {
 	async exists(cwd: string, refName: string, signal?: AbortSignal): Promise<boolean> {
 		if (refName === "HEAD") return (await head.sha(cwd, signal)) !== null;
 		const repository = await resolveRepository(cwd);
-		if (repository && refName.startsWith("refs/")) return (await readRef(repository, refName)) !== null;
+		if (repository && refName.startsWith("refs/")) return (await readRef(repository, refName, signal)) !== null;
 		const result = await git(cwd, ["show-ref", "--verify", "--quiet", refName], { readOnly: true, signal });
 		return result.exitCode === 0;
 	},
@@ -1253,7 +1303,7 @@ export const ref = {
 	async resolve(cwd: string, refName: string, signal?: AbortSignal): Promise<string | null> {
 		if (refName === "HEAD") return head.sha(cwd, signal);
 		const repository = await resolveRepository(cwd);
-		if (repository && refName.startsWith("refs/")) return readRef(repository, refName);
+		if (repository && refName.startsWith("refs/")) return readRef(repository, refName, signal);
 		const result = await git(cwd, ["rev-parse", refName], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
 		return result.stdout.trim() || null;
@@ -1546,11 +1596,11 @@ export const ls = {
 
 export const head = {
 	/** Full HEAD state (branch, commit, repo info). */
-	async resolve(cwd: string): Promise<GitHeadState | null> {
+	async resolve(cwd: string, signal?: AbortSignal): Promise<GitHeadState | null> {
 		const repository = await resolveRepository(cwd);
 		if (!repository) return null;
 		if (await isReftableRepo(repository)) {
-			return resolveHeadStateReftable(repository);
+			return resolveHeadStateReftable(repository, signal);
 		}
 		const content = await readOptionalText(repository.headPath);
 		if (content === null) return null;
@@ -1571,7 +1621,7 @@ export const head = {
 
 	/** Current HEAD commit SHA. */
 	async sha(cwd: string, signal?: AbortSignal): Promise<string | null> {
-		const headState = await head.resolve(cwd);
+		const headState = await head.resolve(cwd, signal);
 		if (headState?.commit) return headState.commit;
 		const result = await git(cwd, ["rev-parse", "HEAD"], { readOnly: true, signal });
 		if (result.exitCode !== 0) return null;
@@ -1626,11 +1676,21 @@ export const repo = {
 	resolve(cwd: string): Promise<GitRepository | null> {
 		return resolveRepository(cwd);
 	},
+
+	/** Check if the repository uses the reftable reference storage format (sync). */
+	isReftableSync(repository: GitRepository): boolean {
+		return isReftableRepoSync(repository);
+	},
+
+	/** Check if the repository uses the reftable reference storage format. */
+	isReftable(repository: GitRepository): Promise<boolean> {
+		return isReftableRepo(repository);
+	},
 };
 
 // Helper used during head resolution — defined here to reference `head` namespace.
-async function resolveHead(cwd: string): Promise<GitHeadState | null> {
-	return head.resolve(cwd);
+async function resolveHead(cwd: string, signal?: AbortSignal): Promise<GitHeadState | null> {
+	return head.resolve(cwd, signal);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
