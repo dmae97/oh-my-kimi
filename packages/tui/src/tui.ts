@@ -2631,24 +2631,26 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 	): void {
 		this.#fullRedrawCount += 1;
-		const naturalViewportTop = Math.max(0, lines.length - height);
-		// Anti-duplication clamp. Never repaint rows that are byte-identical to what
-		// is already committed to native scrollback above the viewport — a second
-		// copy in the active grid duplicates them once the user scrolls up (the
-		// "transcript stacked on itself" / home-screen-reappears bug). The committed
-		// prefix is `#scrollbackHighWater` rows; the new frame still matches it up to
-		// the first changed row, so the genuinely committed-AND-unchanged prefix is
-		// `min(firstChanged, #scrollbackHighWater)`. Anchor at/below that. When the
-		// change starts inside the committed region (content diverged at/above it,
-		// e.g. a tool rewrite or a full transcript reset) the bound collapses and we
-		// paint the bottom-anchored live tail as before (#previousLines is still the
-		// pre-commit frame here, so this prefix diff is against the old frame).
-		let firstChanged = 0;
-		const commonLen = Math.min(lines.length, this.#previousLines.length);
-		while (firstChanged < commonLen && lines[firstChanged] === this.#previousLines[firstChanged]) {
-			firstChanged++;
-		}
-		const viewportTop = Math.max(naturalViewportTop, Math.min(firstChanged, this.#scrollbackHighWater));
+		// A viewport repaint is a strictly in-place rewrite of the live window: it
+		// homes to the screen top and writes exactly `height` rows, so it must stay
+		// bottom-anchored at `lines.length - height`. Anchoring anywhere else pushes
+		// the live tail off the screen bottom (blank rows below the content) AND — far
+		// worse — persists the off-tail anchor into `#viewportTopRow` via `#commit`.
+		// A later frame then reads that inflated `prevViewportTop`, mis-classifies an
+		// ordinary tail change as an offscreen edit (`diff.firstChanged <
+		// prevViewportTop`), and re-routes into an append/scroll path that re-commits
+		// the same frame into native scrollback every tick — the self-driven "options
+		// drawn again and again" spam.
+		//
+		// This repaint cannot un-commit rows already in native scrollback (no safe ED3
+		// on ED3-risk hosts), so a shrink that re-exposes a committed prefix leaves a
+		// stale copy above the viewport. That is the accepted deferred state: the live
+		// window stays correct here, `#nativeScrollbackDirty` stays set, and the next
+		// at-tail checkpoint (`refreshNativeScrollbackIfDirty`) reconciles history with
+		// a clean clear+replay. Hiding the live tail to paper over the stale history —
+		// the previous "anti-duplication clamp" — traded a transient, off-screen
+		// history artifact for a broken live viewport, which is the worse defect.
+		const viewportTop = Math.max(0, lines.length - height);
 		// Each visible screen row, bottom-anchored, blank past content.
 		const visible: string[] = new Array(height);
 		for (let screenRow = 0; screenRow < height; screenRow++) {
