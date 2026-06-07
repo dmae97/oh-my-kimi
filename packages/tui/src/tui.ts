@@ -421,7 +421,7 @@ export class Container implements Component {
  */
 type RenderIntent =
 	| { kind: "noop" }
-	| { kind: "initial" }
+	| { kind: "initial"; clearScrollback: boolean }
 	| { kind: "sessionReplace" }
 	| { kind: "historyRebuild" }
 	| { kind: "overlayRebuild" }
@@ -1750,6 +1750,7 @@ export class TUI extends Container {
 				if (
 					this.#eagerNativeScrollbackRebuild &&
 					eagerEraseScrollbackRisk &&
+					!intent.clearScrollback &&
 					!allowUnknownViewportMutation &&
 					liveRegionStart !== undefined &&
 					liveRegionStart < lines.length &&
@@ -1765,14 +1766,12 @@ export class TUI extends Container {
 						this.#nativeScrollbackCommitSafeEnd,
 					);
 				} else {
-					// Start from a clean terminal: clear native scrollback too (off a
-					// multiplexer, where ED3 is a no-op and would only duplicate the pane
-					// history). Prior shell content is intentionally not preserved.
 					this.#emitFullPaint(lines, width, height, cursorPos, {
 						clearViewport: true,
-						clearScrollback: !isMultiplexerSession(),
+						clearScrollback: intent.clearScrollback && !isMultiplexerSession(),
 					});
 				}
+				this.#clearScrollbackOnNextRender = false;
 				this.#hasEverRendered = true;
 				return;
 			}
@@ -1878,17 +1877,13 @@ export class TUI extends Container {
 		liveRegionStart: number | undefined,
 		commitSafeEnd: number | undefined,
 	): RenderIntent {
-		// A forced scrollback wipe can be queued before start()'s initial paint runs
-		// (cold `omp --resume` does this while replacing the welcome frame with the
-		// restored transcript). Honor it before the normal initial-preserve path so
-		// the first committed frame is the clean session replay, not a deferred wipe
-		// that waits for the user's first keystroke.
-		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
+		// Initial paint after start(): preserve prior shell scrollback by default,
+		// but honor callers that are replacing terminal history before any frame is
+		// committed. This keeps the first visible commit clean instead of appending
+		// a tall transcript once and wiping on the next render.
+		if (!this.#hasEverRendered) return { kind: "initial", clearScrollback: this.#clearScrollbackOnNextRender };
 
-		// Initial paint after start(): clear the viewport AND prior shell scrollback
-		// so the session starts from a clean terminal. (We intentionally do not
-		// preserve pre-omp shell history — see the `initial` emit below.)
-		if (!this.#hasEverRendered) return { kind: "initial" };
+		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
 		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;
 		const eagerEraseScrollbackRisk = this.#hasEagerEraseScrollbackRisk();

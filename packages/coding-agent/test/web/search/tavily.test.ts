@@ -57,6 +57,7 @@ describe("Tavily searchTavily request shape (integration)", () => {
 		async getApiKey() {
 			return process.env.TAVILY_API_KEY ?? undefined;
 		},
+		resolver: vi.fn(() => async () => process.env.TAVILY_API_KEY ?? undefined),
 		hasAuth() {
 			return Boolean(process.env.TAVILY_API_KEY);
 		},

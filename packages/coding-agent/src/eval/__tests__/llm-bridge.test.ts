@@ -57,6 +57,7 @@ function makeSession(opts: SessionOptions = {}): ToolSession {
 	const modelRegistry = {
 		getAvailable: () => opts.available ?? [SMOL, DEFAULT, SLOW],
 		getApiKey: async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
+		resolver: vi.fn(() => async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey)),
 	} as unknown as ModelRegistry;
 	return {
 		settings,

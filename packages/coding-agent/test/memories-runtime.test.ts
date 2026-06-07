@@ -46,6 +46,7 @@ function createModelRegistry(model: Model): any {
 		find: vi.fn(() => model),
 		getAll: vi.fn(() => [model]),
 		getApiKey: vi.fn(async () => "test-api-key"),
+		resolver: vi.fn(() => async () => "test-api-key"),
 	};
 }
 
