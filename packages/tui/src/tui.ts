@@ -3098,7 +3098,11 @@ export class TUI extends Container {
 						: intent.kind === "deferredTailRepaint"
 							? `${intent.kind}(row=${intent.row})`
 							: intent.kind;
-		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height})\n`;
+		const state =
+			`shw=${this.#scrollbackHighWater}, max=${this.#maxLinesRendered}, vpTop=${this.#viewportTopRow}, ` +
+			`dirty=${this.#nativeScrollbackDirty}, eager=${this.#eagerNativeScrollbackRebuild}, ` +
+			`lrStart=${this.#nativeScrollbackLiveRegionStart}, commitSafeEnd=${this.#nativeScrollbackCommitSafeEnd}`;
+		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height}, ${state})\n`;
 		fs.appendFileSync(getDebugLogPath(), msg);
 	}
 

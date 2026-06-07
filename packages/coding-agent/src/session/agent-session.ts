@@ -5166,6 +5166,19 @@ export class AgentSession {
 	}
 
 	/**
+	 * Abort active work, then immediately resume the agent so queued steer/follow-up
+	 * messages drain instead of waiting for another natural turn boundary.
+	 */
+	async interruptAndFlushQueuedMessages(options?: { reason?: string }): Promise<void> {
+		if (!this.agent.hasQueuedMessages()) return;
+		await this.abort({ reason: options?.reason });
+		if (!this.agent.hasQueuedMessages()) return;
+		if (this.isCompacting || this.isGeneratingHandoff) return;
+		await this.#maybeRestoreRetryFallbackPrimary();
+		await this.agent.continue();
+	}
+
+	/**
 	 * Start a new session, optionally with initial messages and parent tracking.
 	 * Clears all messages and starts a new session.
 	 * Listeners are preserved and will continue receiving events.

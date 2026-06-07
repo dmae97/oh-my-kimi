@@ -264,11 +264,22 @@ export class InputController {
 			text = text.trim();
 			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
 
-			// Empty submit while streaming with queued messages: flush queues immediately
-			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
-				// Abort current stream and let queued messages be processed
-				await this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
-				return;
+			// Empty submit while streaming with queued steering: interrupt now and
+			// immediately resume so the visible `Steer:` entry is sent without
+			// waiting for the current tool/model boundary.
+			if (!text && this.ctx.session.isStreaming) {
+				const queuedMessages = this.ctx.session.getQueuedMessages();
+				if (queuedMessages.steering.length > 0) {
+					await this.ctx.session.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+					this.ctx.updatePendingMessagesDisplay();
+					this.ctx.ui.requestRender();
+					return;
+				}
+				if (this.ctx.session.queuedMessageCount > 0) {
+					// Preserve the existing empty-submit flush for non-steer queues.
+					await this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+					return;
+				}
 			}
 
 			if (!text) return;
