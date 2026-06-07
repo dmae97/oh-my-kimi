@@ -259,7 +259,7 @@ describe("Image budget + Unicode placeholders", () => {
 		originalCellDims = { ...getCellDimensions() };
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
-		setKittyGraphics({ unicodePlaceholders: true, transmissionMedium: "direct" });
+		setKittyGraphics({ unicodePlaceholders: true });
 	});
 
 	afterEach(() => {

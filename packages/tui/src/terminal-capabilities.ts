@@ -2,9 +2,7 @@ import { encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import {
 	detectKittyUnicodePlaceholdersSupport,
-	encodeKittyTempFileTransmit,
 	getKittyGraphics,
-	isPngBase64,
 	KITTY_PLACEHOLDER,
 	kittyPlaceholdersFit,
 	renderKittyPlaceholderLines,
@@ -807,16 +805,11 @@ export function renderImage(
 		if (options.imageId != null) {
 			const placementId = options.placementId ?? options.imageId;
 			const graphics = getKittyGraphics();
-			// Transmit-once (keyed by id). Prefer a local temp file for PNGs when the
-			// medium has been promoted; otherwise send in-band base64. Repaints reuse
-			// the stored image, so the transmit is only emitted when requested.
+			// Transmit-once (keyed by id). Repaints reuse the stored image, so the
+			// transmit is only emitted when requested.
 			let transmit: string | undefined;
 			if (options.includeTransmit) {
-				const tempFile =
-					graphics.transmissionMedium === "temp-file" && isPngBase64(base64Data)
-						? encodeKittyTempFileTransmit(base64Data, options.imageId)
-						: null;
-				transmit = tempFile ?? encodeKittyTransmit(base64Data, options.imageId);
+				transmit = encodeKittyTransmit(base64Data, options.imageId);
 			}
 			// Unicode placeholders render the image as real text cells (which survive
 			// horizontal slicing, reflow and overlaps) instead of a cursor-positioned
