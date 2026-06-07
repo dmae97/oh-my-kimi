@@ -1476,6 +1476,12 @@ export function convertMessages(
 ): ChatCompletionMessageParam[] {
 	const params: ChatCompletionMessageParam[] = [];
 
+	const maxNormalizedToolCallIdLength = compat.requiresMistralToolIds
+		? 9
+		: model.provider === "openai"
+			? 40
+			: undefined;
+	const duplicateToolCallIdSuffixPrefix = compat.requiresMistralToolIds ? "dup" : undefined;
 	const normalizeToolCallId = (id: string): string => {
 		if (compat.requiresMistralToolIds) return normalizeMistralToolId(id, true);
 
@@ -1492,7 +1498,13 @@ export function convertMessages(
 		if (model.provider === "openai") return id.length > 40 ? id.slice(0, 40) : id;
 		return id;
 	};
-	const transformedMessages = transformMessages(context.messages, model, id => normalizeToolCallId(id));
+	const transformedMessages = transformMessages(
+		context.messages,
+		model,
+		id => normalizeToolCallId(id),
+		maxNormalizedToolCallIdLength,
+		duplicateToolCallIdSuffixPrefix,
+	);
 
 	const remappedToolCallIds = new Map<string, string[]>();
 	let generatedToolCallIdCounter = 0;
