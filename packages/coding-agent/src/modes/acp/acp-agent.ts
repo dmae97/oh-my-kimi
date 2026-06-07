@@ -1608,6 +1608,15 @@ export class AcpAgent implements Agent {
 			});
 		}
 
+		const acpBuiltinNames = new Set(ACP_BUILTIN_SLASH_COMMANDS.map(c => c.name));
+		for (const command of session.extensionRunner?.getRegisteredCommands(acpBuiltinNames) ?? []) {
+			appendCommand({
+				name: command.name,
+				description: command.description ?? "(extension command)",
+				input: { hint: "arguments" },
+			});
+		}
+
 		for (const command of await loadSlashCommands({ cwd: session.sessionManager.getCwd() })) {
 			appendCommand({
 				name: command.name,
