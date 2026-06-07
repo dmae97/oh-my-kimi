@@ -1036,9 +1036,16 @@ export class TUI extends Container {
 			return false;
 		}
 		const nativeViewportAtBottom = this.#readNativeViewportAtBottom();
-		if (!this.#canReplayNativeScrollbackAtCheckpoint(nativeViewportAtBottom)) {
-			return false;
-		}
+		// The checkpoint fires at a prompt submit — a bottom-pinning user action. On a
+		// genuine local terminal the submit keystroke scrolls the host to its tail, so
+		// an unprobeable viewport is safely at-bottom and the ED3 replay will not yank
+		// a scrolled reader (the same explicit-user-action reasoning the resize rebuild
+		// uses). Hosts whose scrollback a keystroke does not move — Windows
+		// console/Terminal, SSH, multiplexers, unknown profiles — stay gated on a
+		// positive at-tail probe (#1610/#1682/#1746); a known-scrolled viewport always
+		// defers regardless of terminal.
+		if (nativeViewportAtBottom === false) return false;
+		if (nativeViewportAtBottom === undefined && !TERMINAL.submitPinsViewportToTail) return false;
 		this.#prepareForcedRender(true, false);
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
