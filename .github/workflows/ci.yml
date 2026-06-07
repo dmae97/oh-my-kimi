@@ -16,6 +16,9 @@ concurrency:
    group: ${{ github.workflow }}-${{ github.ref }}
    cancel-in-progress: true
 
+env:
+   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
    # scripts/release.ts pushes the version-bump commit and its `v*` tag
    # atomically (`git push --atomic origin main refs/tags/v*`), so a release
