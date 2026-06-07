@@ -213,18 +213,37 @@ async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Pr
 
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
-	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
+	// Keep TUI's ~33ms render throttle deterministic without sleeping a real frame per render.
 
 	beforeEach(() => {
 		monotonicNow = 0;
 		vi.spyOn(performance, "now").mockImplementation(() => {
-			monotonicNow += 20;
+			monotonicNow += 40;
 			return monotonicNow;
 		});
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("coalesces non-force render requests to 30fps", () => {
+		const delays: number[] = [];
+		const renderScheduler = {
+			now: () => 0,
+			scheduleImmediate: (callback: () => void) => callback(),
+			scheduleRender: (_callback: () => void, delayMs: number) => {
+				delays.push(delayMs);
+				return { cancel: () => {} };
+			},
+		};
+		const tui = new TUI(new VirtualTerminal(20, 4), true, { renderScheduler });
+
+		tui.requestRender();
+
+		expect(delays).toHaveLength(1);
+		expect(delays[0]!).toBeCloseTo(1000 / 30, 5);
+		tui.stop();
 	});
 
 	describe("cursor + differential stability", () => {
@@ -1119,7 +1138,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("keeps appended rows contiguous when a height grow coincides with new content", async () => {
 			// A terminal resize fires requestRender(), and streamed content fires
-			// its own requestRender(); the 16ms throttle coalesces them into a
+			// its own requestRender(); the ~33ms throttle coalesces them into a
 			// single frame that is both taller and longer. The diff/append-tail
 			// emitters position scrolled rows against the previous viewport top and
 			// hardware cursor row, both invalidated by the reflow — so the appended
@@ -1474,7 +1493,7 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						// SIGWINCH (height shrink) and a streamed token arrive inside the
-						// same 16ms frame budget. The TUI's own resize handler schedules a
+						// same ~33ms frame budget. The TUI's own resize handler schedules a
 						// non-forced render; the append rides along.
 						lines.push("line-40 streamed");
 						component.setLines(lines);
@@ -1784,7 +1803,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const collapsedLines = [
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -1835,7 +1854,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -1880,7 +1899,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -3209,6 +3228,86 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
+	describe("fullscreen overlay alt-screen", () => {
+		it("enters the alt buffer on show, leaves it on hide, and emits no ED3 while modal", async () => {
+			const term = new VirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL-0", "MODAL-1"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				// Borrowed the alternate screen buffer …
+				expect(modalWrites).toContain("\x1b[?1049h");
+				// … enabled mouse tracking for click/scroll support …
+				expect(modalWrites).toContain("\x1b[?1000h");
+				expect(modalWrites).toContain("\x1b[?1006h");
+				// … and never erased scrollback (ED3) or otherwise touched the transcript.
+				expect(modalWrites).not.toContain("\x1b[3J");
+				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeTrue();
+
+				const hideFrom = writes.length;
+				handle.hide();
+				await settle(term);
+
+				const hideWrites = writes.slice(hideFrom).join("");
+				expect(hideWrites).toContain("\x1b[?1049l");
+				// Mouse tracking is disabled again so the rest of the app keeps native
+				// terminal selection.
+				expect(hideWrites).toContain("\x1b[?1000l");
+				// Transcript is back on the normal screen after leaving the alt buffer.
+				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
+				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("leaves native scrollback untouched across the modal lifetime", async () => {
+			const term = new VirtualTerminal(40, 6, 200);
+			const tui = new TUI(term);
+			// Base transcript overflows the viewport, so rows land in scrollback.
+			tui.addChild(new MutableLinesComponent(rows("base-", 24)));
+
+			try {
+				tui.start();
+				await settle(term);
+				const scrollbackBefore = term.getScrollBuffer().map(line => line.trimEnd());
+
+				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+				handle.hide();
+				await settle(term);
+
+				// The modal borrowed/returned the alt buffer without rewriting the
+				// normal screen's scrollback — the transcript a reader scrolled up to
+				// see is identical before and after.
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(scrollbackBefore);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	describe("stress scenarios", () => {
 		it("rapid content mutations converge to final expected screen", async () => {
 			const term = new VirtualTerminal(30, 8);
@@ -4101,7 +4200,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				];
 				component.setLines(frameB);
 				tui.requestRender();
-				await settle(term);
+				await term.waitForRender();
 				expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
 
 				// Frame C: a visible chip collapses (a shrink whose first change lands in
@@ -4127,7 +4226,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				];
 				component.setLines(frameC);
 				tui.requestRender();
-				await settle(term);
+				await term.waitForRender();
 				expect(visible(term)).toEqual(["chip-0", "chip-1", "chip-2", "loader", "todos", "editor"]);
 			} finally {
 				tui.stop();

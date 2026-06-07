@@ -615,7 +615,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("plan-approval standing handler renames the plan and exits plan mode on apply", async () => {
+	it("plan-approval standing handler approves the agent-named plan and exits plan mode on apply", async () => {
 		const harness = await createHarness();
 		Settings.instance.set("plan.enabled", true);
 
@@ -625,7 +625,9 @@ describe("ACP agent", () => {
 
 		const artifactsDir = session.sessionManager.getArtifactsDir();
 		expect(artifactsDir).not.toBeNull();
-		const planPath = path.join(artifactsDir!, "local", "PLAN.md");
+		// The agent writes to its chosen `local://<slug>-plan.md` and resolves with
+		// the matching slug — the file is never renamed.
+		const planPath = path.join(artifactsDir!, "local", "words-counter-plan.md");
 		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
 
 		const updatesBefore = harness.updates.length;
@@ -636,21 +638,20 @@ describe("ACP agent", () => {
 			extra: { title: "words-counter" },
 		})) as {
 			content: Array<{ type: string; text: string }>;
-			details: { sourceToolName: string; sourceResultDetails: { finalPlanFilePath: string; title: string } };
+			details: { sourceToolName: string; sourceResultDetails: { planFilePath: string; title: string } };
 		};
 
 		// Plan-approval payload is shaped for `event-controller` / ACP renderers.
 		expect(result.details.sourceToolName).toBe("plan_approval");
 		expect(result.details.sourceResultDetails.title).toBe("words-counter");
-		expect(result.details.sourceResultDetails.finalPlanFilePath).toBe("local://words-counter.md");
+		expect(result.details.sourceResultDetails.planFilePath).toBe("local://words-counter-plan.md");
 		expect(result.content[0]?.text).toMatch(/Plan approved/);
-		// Plan file is renamed and the source path no longer exists.
-		expect(await Bun.file(path.join(artifactsDir!, "local", "words-counter.md")).exists()).toBe(true);
-		expect(await Bun.file(planPath).exists()).toBe(false);
+		// Plan file keeps its agent-chosen name — no rename.
+		expect(await Bun.file(planPath).exists()).toBe(true);
 		// Mode + handler are cleared; the agent regains write tools next turn.
 		expect(session.planModeState).toBeUndefined();
 		expect(session.standingResolveHandler).toBeUndefined();
-		expect(session.planReferencePath).toBe("local://words-counter.md");
+		expect(session.planReferencePath).toBe("local://words-counter-plan.md");
 		const approvalUpdates = harness.updates.slice(updatesBefore);
 		// Mode-change notifications reached the client so Zed's UI and config
 		// selector both reflect the approval-driven exit.

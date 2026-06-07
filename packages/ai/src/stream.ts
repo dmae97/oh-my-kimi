@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
+import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
 import type { Effort } from "./effort";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
@@ -443,12 +444,15 @@ export function streamSimple<TApi extends Api>(
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const requestOptions = withRequestDebugFetch(options);
-	const retryApiKey = requestOptions?.onAuthError
-		? (requestOptions.apiKey ?? getEnvApiKey(model.provider))
-		: undefined;
-	if (retryApiKey) {
+	const apiKeyResolver = isApiKeyResolver(requestOptions?.apiKey) ? requestOptions.apiKey : undefined;
+	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();
-		const onAuthError = requestOptions!.onAuthError!;
+		const signal = requestOptions?.signal;
+		// One inner attempt against a resolved string key. When
+		// `captureAuthFailure` is set, a retryable auth error that arrives before
+		// any replay-unsafe event is buffered and returned (so the caller can
+		// retry with a fresh key) instead of surfaced. The terminal attempt
+		// clears the flag and emits whatever it gets.
 		const runAttempt = async (apiKey: string, captureAuthFailure: boolean): Promise<AuthRetryFailure | undefined> => {
 			const bufferedEvents: AssistantMessageEvent[] = [];
 			let emittedReplayUnsafeEvent = false;
@@ -458,7 +462,7 @@ export function streamSimple<TApi extends Api>(
 			};
 
 			try {
-				const inner = streamSimple(model, context, { ...requestOptions, apiKey, onAuthError: undefined });
+				const inner = streamSimple(model, context, { ...requestOptions, apiKey });
 				for await (const event of inner) {
 					if (!emittedReplayUnsafeEvent && event.type === "start") {
 						bufferedEvents.push(event);
@@ -510,19 +514,32 @@ export function streamSimple<TApi extends Api>(
 		};
 
 		void (async () => {
-			const failure = await runAttempt(retryApiKey, true);
-			if (!failure) return;
-			let nextKey: string | undefined;
+			let lastKey: string | undefined;
 			try {
-				nextKey = await onAuthError(model.provider, retryApiKey, failure.error);
+				lastKey = (await apiKeyResolver({ lastChance: false, error: undefined, signal })) || undefined;
 			} catch {
-				nextKey = undefined;
+				lastKey = undefined;
 			}
-			if (!nextKey || nextKey === retryApiKey) {
-				emitFailure(failure);
+			if (lastKey === undefined) {
+				outer.fail(new Error(`No API key for provider: ${model.provider}`));
 				return;
 			}
-			await runAttempt(nextKey, false);
+			let failure = await runAttempt(lastKey, true);
+			if (!failure) return;
+			// a/b/c policy: refresh the same account (lastChance=false), then
+			// switch to a sibling (lastChance=true). A step is skipped when the
+			// resolver yields the same key it just tried or `undefined`; the
+			// final step's attempt clears the capture flag so it emits directly.
+			for (let step = 0; step < AUTH_RETRY_STEPS.length; step++) {
+				const nextKey = await resolveRetryKey(apiKeyResolver, AUTH_RETRY_STEPS[step]!, failure.error, signal);
+				if (nextKey === undefined || nextKey === lastKey) continue;
+				lastKey = nextKey;
+				const isLastStep = step === AUTH_RETRY_STEPS.length - 1;
+				const next = await runAttempt(nextKey, !isLastStep);
+				if (!next) return;
+				failure = next;
+			}
+			emitFailure(failure);
 		})();
 		return outer;
 	}
@@ -553,7 +570,10 @@ export function streamSimple<TApi extends Api>(
 		return stream(model, context, providerOptions);
 	}
 
-	const apiKey = requestOptions?.apiKey || getEnvApiKey(model.provider);
+	// The resolver form is handled by the wrapper above; only a static string
+	// key reaches this point.
+	const apiKey =
+		(typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) || getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
@@ -724,7 +744,7 @@ function mapOptionsForApi<TApi extends Api>(
 		repetitionPenalty: options?.repetitionPenalty,
 		maxTokens: options?.maxTokens ?? model.maxTokens,
 		signal: options?.signal,
-		apiKey: apiKey || options?.apiKey,
+		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),
 		cacheRetention: options?.cacheRetention,
 		headers: options?.headers,
 		initiatorOverride: options?.initiatorOverride,

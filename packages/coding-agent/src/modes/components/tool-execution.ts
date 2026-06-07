@@ -37,26 +37,6 @@ import { isFramedBlockComponent, renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
-function ensureInvalidate(component: unknown): Component {
-	const c = component as { render: Component["render"]; invalidate?: () => void };
-	if (!c.invalidate) {
-		c.invalidate = () => {};
-	}
-	return c as Component;
-}
-
-function addBoxChild(box: Box, component: unknown): boolean {
-	const child = ensureInvalidate(component);
-	box.addChild(child);
-	return isFramedBlockComponent(child);
-}
-
-function setBoxPaddingForFramedBlock(box: Box, hasFramedBlock: boolean): void {
-	const padding = hasFramedBlock ? 0 : 1;
-	box.setPaddingX(padding);
-	box.setPaddingY(padding);
-}
-
 /**
  * Drop trailing removal/hunk-header lines that appear in a streaming diff
  * before the matching `+added` lines have arrived. Without this, a partial
@@ -153,12 +133,12 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
-/** Drive pending-tool redraws at ~60fps so the animated border sweep is smooth.
- * The TUI already throttles at its 16ms `MIN_RENDER_INTERVAL_MS`, so this is the
- * natural upper bound and static frames diff to a no-op redraw at ~zero cost. */
-const SPINNER_RENDER_INTERVAL_MS = 16;
+/** Drive pending-tool redraws at 30fps so the animated border sweep stays
+ * smooth without spending twice the frame budget. The TUI throttles at the same
+ * cadence, and static frames diff to a no-op redraw at ~zero cost. */
+const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
 /** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
- * 60fps render cadence (mirrors `Loader`). */
+ * render cadence (mirrors `Loader`). */
 const SPINNER_GLYPH_ADVANCE_MS = 80;
 
 // Stable per-instance counter so each tool execution's inline images get a
@@ -245,11 +225,13 @@ export class ToolExecutionComponent extends Container {
 		this.#cwd = cwd;
 		this.#args = args;
 
-		this.addChild(new Spacer(1));
-
-		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins
-		this.#contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
-		this.#contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
+		// paddingY is 1 so background-tinted blocks (custom/extension tools and the
+		// generic fallback) get top/bottom breathing room. TranscriptContainer
+		// strips PLAIN-blank edges, so framed/minimal blocks (no bg set) drop these
+		// lines and keep their tight spacing — only tinted lines survive.
+		this.#contentBox = new Box(0, 1);
+		this.#contentText = new Text("", 1, 1);
 
 		// Use Box for custom tools or built-in tools that have renderers
 		const hasRenderer = toolName in toolRenderers;
@@ -439,26 +421,43 @@ export class ToolExecutionComponent extends Container {
 	#updateSpinnerAnimation(): void {
 		// Spinner for: task tool with partial result, or edit/write while args streaming
 		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
-		const isBackgroundAsyncTask =
-			this.#toolName === "task" &&
+		const isBackgroundAsyncRunning =
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
+		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		// Sweep the border of bash/eval execution blocks while they're pending.
+		// Sweep the border of bash/eval execution blocks while they're pending — but
+		// not once they've been backgrounded: a backgrounded job's block gets
+		// committed to scrollback and finalizes later via the async update path, so a
+		// mid-sweep frame would freeze a stray dark "bar" segment into the border.
 		const isPendingExecBlock =
-			this.#isPartial && shimmerEnabled() && (this.#toolName === "bash" || this.#toolName === "eval");
+			this.#isPartial &&
+			shimmerEnabled() &&
+			(this.#toolName === "bash" || this.#toolName === "eval") &&
+			!isBackgroundAsyncRunning;
 		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
 		if (needsSpinner && !this.#spinnerInterval) {
-			this.#lastSpinnerAdvanceAt = performance.now();
+			const now = performance.now();
+			const frameCount = theme.spinnerFrames.length;
+			this.#lastSpinnerAdvanceAt = now;
+			if (frameCount > 0 && this.#spinnerFrame === undefined) {
+				this.#spinnerFrame = 0;
+				this.#renderState.spinnerFrame = 0;
+			}
 			this.#spinnerInterval = setInterval(() => {
 				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
-				// Redraw at ~60fps for a smooth border sweep, but only step the spinner
-				// glyph at its classic ~12.5fps cadence. The TUI throttles renders at
-				// 16ms and the differ drops no-op redraws, so the extra ticks are free.
-				if (frameCount > 0 && now - this.#lastSpinnerAdvanceAt >= SPINNER_GLYPH_ADVANCE_MS) {
-					this.#spinnerFrame = ((this.#spinnerFrame ?? -1) + 1) % frameCount;
-					this.#renderState.spinnerFrame = this.#spinnerFrame;
-					this.#lastSpinnerAdvanceAt = now;
+				// Redraw at 30fps for a smooth border sweep, but keep the spinner
+				// glyph phase-locked to its classic ~12.5fps cadence. Advancing the
+				// anchor by elapsed frames instead of resetting to `now` avoids the
+				// 30fps timer quantizing the glyph down to one step every three ticks.
+				if (frameCount > 0) {
+					const elapsed = now - this.#lastSpinnerAdvanceAt;
+					if (elapsed >= SPINNER_GLYPH_ADVANCE_MS) {
+						const steps = Math.floor(elapsed / SPINNER_GLYPH_ADVANCE_MS);
+						this.#spinnerFrame = ((this.#spinnerFrame ?? 0) + steps) % frameCount;
+						this.#renderState.spinnerFrame = this.#spinnerFrame;
+						this.#lastSpinnerAdvanceAt += steps * SPINNER_GLYPH_ADVANCE_MS;
+					}
 				}
 				this.#ui.requestRender();
 			}, SPINNER_RENDER_INTERVAL_MS);
@@ -607,27 +606,24 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#updateDisplay(): void {
-		// Set background based on state
-		const bgFn = this.#isPartial
-			? (text: string) => theme.bg("toolPendingBg", text)
-			: this.#result?.isError
-				? (text: string) => theme.bg("toolErrorBg", text)
-				: (text: string) => theme.bg("toolSuccessBg", text);
-
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
 		this.#renderState.spinnerFrame = this.#spinnerFrame;
+
+		// Non-self-framing tools (custom/extension renderers and the generic
+		// fallback) get a padded, state-tinted block — built-ins that draw their
+		// own frame opt out below via the framed-component mark.
+		const stateBgKey = this.#isPartial ? "toolPendingBg" : this.#result?.isError ? "toolErrorBg" : "toolSuccessBg";
+		const stateBgFn = (t: string) => theme.bg(stateBgKey, t);
 
 		// Check for custom tool rendering
 		if (this.#tool && (this.#tool.renderCall || this.#tool.renderResult)) {
 			const tool = this.#tool;
 			const mergeCallAndResult = Boolean((tool as { mergeCallAndResult?: boolean }).mergeCallAndResult);
 			// Custom tools use Box for flexible component rendering
-			const inline = Boolean((tool as { inline?: boolean }).inline);
-			this.#contentBox.setBgFn(inline ? undefined : bgFn);
+			this.#contentBox.setBgFn(undefined);
 			this.#contentBox.clear();
-			let contentBoxHasFramedBlock = false;
 			// Mirror the built-in renderer branch so custom renderers (notably the
 			// task tool, whose live instance routes through here) receive the same
 			// render context — e.g. the `hasResult` flag that suppresses the task
@@ -643,18 +639,15 @@ export class ToolExecutionComponent extends Container {
 				if (tool.renderCall) {
 					try {
 						const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
-						if (callComponent) {
-							contentBoxHasFramedBlock =
-								addBoxChild(this.#contentBox, callComponent) || contentBoxHasFramedBlock;
-						}
+						if (callComponent) this.#contentBox.addChild(callComponent as Component);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to default on error
-						addBoxChild(this.#contentBox, new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+						this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 					}
 				} else {
 					// No custom renderCall, show tool name
-					addBoxChild(this.#contentBox, new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+					this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 				}
 			}
 
@@ -677,25 +670,27 @@ export class ToolExecutionComponent extends Container {
 						theme,
 						this.#args,
 					);
-					if (resultComponent) {
-						contentBoxHasFramedBlock = addBoxChild(this.#contentBox, resultComponent) || contentBoxHasFramedBlock;
-					}
+					if (resultComponent) this.#contentBox.addChild(resultComponent);
 				} catch (err) {
 					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 					// Fall back to showing raw output on error
 					const output = this.#getTextOutput();
 					if (output) {
-						addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+						this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 					}
 				}
 			} else if (this.#result) {
 				// Has result but no custom renderResult
 				const output = this.#getTextOutput();
 				if (output) {
-					addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+					this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 				}
 			}
-			setBoxPaddingForFramedBlock(this.#contentBox, contentBoxHasFramedBlock);
+			// Custom tools that draw their own frame (task) render flush; plain
+			// extension renderers get the padded, state-tinted block back.
+			const customFramed = this.#contentBox.children.some(isFramedBlockComponent);
+			this.#contentBox.setPaddingX(customFramed ? 0 : 1);
+			this.#contentBox.setBgFn(customFramed ? undefined : stateBgFn);
 		} else if (this.#toolName in toolRenderers) {
 			// Built-in tools with renderers
 			const renderer = toolRenderers[this.#toolName];
@@ -714,7 +709,6 @@ export class ToolExecutionComponent extends Container {
 				// Multi-file: render each file as its own Box (identical to separate tool calls)
 				this.#contentBox.setBgFn(undefined);
 				this.#contentBox.clear();
-				this.#contentBox.setPaddingX(1);
 
 				const renderContext = this.#buildRenderContext();
 				this.#renderState.renderContext = renderContext;
@@ -726,20 +720,14 @@ export class ToolExecutionComponent extends Container {
 						this.#multiFileBoxes.push(spacer);
 						this.addChild(spacer);
 					}
-					const fileBgFn = fileResult.isError
-						? (text: string) => theme.bg("toolErrorBg", text)
-						: (text: string) => theme.bg("toolSuccessBg", text);
-					const fileBox = new Box(1, 1, fileBgFn);
+					const fileBox = new Box(0, 0);
 					try {
 						const resultComponent = renderer.renderResult(
 							{ content: [], details: fileResult, isError: fileResult.isError },
 							this.#renderState,
 							theme,
 						);
-						if (resultComponent) {
-							const fileBoxHasFramedBlock = addBoxChild(fileBox, resultComponent);
-							setBoxPaddingForFramedBlock(fileBox, fileBoxHasFramedBlock);
-						}
+						if (resultComponent) fileBox.addChild(resultComponent);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 					}
@@ -756,7 +744,7 @@ export class ToolExecutionComponent extends Container {
 					const pendingSpacer = new Spacer(1);
 					this.#multiFileBoxes.push(pendingSpacer);
 					this.addChild(pendingSpacer);
-					const pendingBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+					const pendingBox = new Box(0, 0);
 					const pendingText = renderStatusLine(
 						{
 							icon: "pending",
@@ -772,9 +760,8 @@ export class ToolExecutionComponent extends Container {
 			} else {
 				// Single-file or no result: standard rendering
 				// Inline renderers skip background styling
-				this.#contentBox.setBgFn(renderer.inline ? undefined : bgFn);
+				this.#contentBox.setBgFn(undefined);
 				this.#contentBox.clear();
-				let contentBoxHasFramedBlock = false;
 
 				const renderContext = this.#buildRenderContext();
 				this.#renderState.renderContext = renderContext;
@@ -784,14 +771,11 @@ export class ToolExecutionComponent extends Container {
 					// Render call component
 					try {
 						const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
-						if (callComponent) {
-							contentBoxHasFramedBlock =
-								addBoxChild(this.#contentBox, callComponent) || contentBoxHasFramedBlock;
-						}
+						if (callComponent) this.#contentBox.addChild(callComponent);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to default on error
-						addBoxChild(this.#contentBox, new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
+						this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 					}
 				}
 
@@ -808,24 +792,20 @@ export class ToolExecutionComponent extends Container {
 							theme,
 							this.#getCallArgsForRender(),
 						);
-						if (resultComponent) {
-							contentBoxHasFramedBlock =
-								addBoxChild(this.#contentBox, resultComponent) || contentBoxHasFramedBlock;
-						}
+						if (resultComponent) this.#contentBox.addChild(resultComponent);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to showing raw output on error
 						const output = this.#getTextOutput();
 						if (output) {
-							addBoxChild(this.#contentBox, new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
+							this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 						}
 					}
 				}
-				setBoxPaddingForFramedBlock(this.#contentBox, contentBoxHasFramedBlock);
 			}
 		} else {
 			// Other built-in tools: use Text directly with caching
-			this.#contentText.setCustomBgFn(bgFn);
+			this.#contentText.setCustomBgFn(stateBgFn);
 			this.#contentText.setText(this.#formatToolExecution());
 		}
 

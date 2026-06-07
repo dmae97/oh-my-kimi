@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [15.10.1] - 2026-06-07
+
+### Breaking Changes
+
+- Removed the `onAuthError` option from stream request options and shifted auth retry handling to resolver-based `apiKey` behavior, requiring callers using custom auth-retry hooks to migrate
+
+### Added
+
+- Added `ApiKeyResolver` and `ApiKey` auth helpers, including `isApiKeyResolver`, `isAuthRetryableError`, `resolveApiKeyOnce`, and `withAuth`, and exported them from the package root
+- Added support for a function-valued `apiKey` in `SimpleStreamOptions` so a single stream request can refresh or rotate credentials during retry
+- Added `forceRefresh` credential option to `AuthStorage.getApiKey` and `rotateSessionCredential` support for session-level credential rotation after auth failures
+- Added `AuthStorage.resolver(provider, options)` method that builds an `ApiKeyResolver` implementing the a/b/c auth-retry policy directly on the storage instance
+
+### Changed
+
+- Changed gateway and stream auth flows to share the a/b/c retry policy, refreshing the same session credential first and then switching to a sibling credential on repeated auth failures
+
+### Fixed
+
+- Fixed streaming auth retries to handle `401` and usage-limit errors before replay-unsafe content is emitted, including failures surfaced only via `errorStatus`
+- Fixed tool argument validation to coerce singleton non-string values into arrays when the schema expects an array, preventing Anthropic-compatible models that emit `todo.ops` as an object from getting stuck in repeated validation-error loops. ([#2026](https://github.com/can1357/oh-my-pi/issues/2026))
+- Fixed streaming retries to buffer and suppress partial `start` events from failed auth attempts so only clean retried events are delivered
+- Fixed the HTTP 400 raw-request dumper (`appendRawHttpRequestDumpFor400`) littering the real `~/.omp/logs/http-400-requests` directory during tests. Provider suites exercise the 400 error path with mocked `fetch` responses, which the dumper could not distinguish from genuine failures; it now skips persistence under the Bun test runner (`isBunTestRuntime()`).
+- Fixed Anthropic Opus requests unnecessarily forcing `tool_choice.disable_parallel_tool_use`, allowing Claude Opus to use the provider's default parallel tool-calling behavior again.
+- Fixed parallel `function_call` items losing arguments against llama.cpp's OpenAI Responses endpoint (`/v1/responses`), where every call but the last finalized with `{}` and the agent rejected them with `path: Invalid input: expected string, received undefined`. llama.cpp's `to_json_oaicompat_resp` emits `output_item.added` with only `item.call_id` (no `item.id`, no `output_index`) while the matching `function_call_arguments.delta` carries `item_id: "fc_<call_id>"`. `processResponsesStream` now registers function-call and custom-tool-call items under `item.call_id` as a secondary lookup key (alongside `item.id`/`output_index`) so identifier-deviant hosts route deltas and done events to the right block. ([#2015](https://github.com/can1357/oh-my-pi/issues/2015))
+- Fixed `PI_REQ_DEBUG` response recording truncating the captured body when a streamed response was cancelled mid-flight. The response tee in `wrapResponse` could call `FileRequestDebugResponseLog.close()` from both the `cancel` callback and the resumed `pull` (which observes `done` once the source reader is cancelled); the second caller saw the handle already nulled and returned before the first caller's pending write flushed, so the `.res.log` lost the already-buffered chunk. `close()` now memoizes its flush-and-close promise so every caller awaits the same completion.
+
 ## [15.10.0] - 2026-06-06
 
 ### Added

@@ -1345,6 +1345,11 @@ function buildParams(
 
 	if (compat.extraBody) {
 		Object.assign(params, compat.extraBody);
+		if (model.provider === "fireworks" && params.reasoning_effort !== undefined) {
+			// Fireworks rejects simultaneous DeepSeek-style `thinking` toggles and
+			// OpenAI-style `reasoning_effort`; the effort field carries the user's level.
+			delete params.thinking;
+		}
 	}
 
 	return { params, toolStrictMode };

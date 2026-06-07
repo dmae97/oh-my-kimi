@@ -47,6 +47,21 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
 };
 
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+const BRACKETED_IMAGE_PATH_REGEX = /\.(?:png|jpe?g|gif|webp)$/i;
+
+export function extractBracketedImagePastePath(data: string): string | undefined {
+	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
+	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
+	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
+
+	const pasted = data.slice(BRACKETED_PASTE_START.length, endIndex).trim();
+	if (!pasted || /[\r\n]/.test(pasted)) return undefined;
+	if (!BRACKETED_IMAGE_PATH_REGEX.test(pasted)) return undefined;
+	return pasted;
+}
+
 /**
  * Custom editor that handles configurable app-level shortcuts for coding-agent.
  */
@@ -82,6 +97,8 @@ export class CustomEditor extends Editor {
 	onCopyPrompt?: () => void;
 	/** Called when the configured image-paste shortcut is pressed. */
 	onPasteImage?: () => Promise<boolean>;
+	/** Called when a bracketed paste contains exactly one image-file path. */
+	onPasteImagePath?: (path: string) => void;
 	/** Called when the configured raw text-paste shortcut is pressed. */
 	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
@@ -134,6 +151,12 @@ export class CustomEditor extends Editor {
 		if (parsed && (parsed.modifier & 64) !== 0 && this.onCapsLock) {
 			// Caps Lock is modifier bit 64
 			this.onCapsLock();
+			return;
+		}
+
+		const pastedImagePath = extractBracketedImagePastePath(data);
+		if (pastedImagePath && this.onPasteImagePath) {
+			this.onPasteImagePath(pastedImagePath);
 			return;
 		}
 

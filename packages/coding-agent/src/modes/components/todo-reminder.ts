@@ -16,8 +16,6 @@ export class TodoReminderComponent extends Container {
 	) {
 		super();
 
-		this.addChild(new Spacer(1));
-
 		this.#box = new Box(1, 1, t => theme.inverse(theme.fg("warning", t)));
 		this.addChild(this.#box);
 

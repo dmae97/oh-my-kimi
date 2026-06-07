@@ -21,12 +21,14 @@ type FakeEditor = {
 	onExternalEditor?: () => void;
 	onDequeue?: () => void;
 	onChange?: (text: string) => void;
+	onSubmit?: (text: string) => Promise<void>;
 	setText(text: string): void;
 	getText(): string;
 	addToHistory(text: string): void;
 	setActionKeys(action: string, keys: string[]): void;
 	setCustomKeyHandler(key: string, handler: () => void): void;
 	clearCustomKeyHandlers(): void;
+	pasteText(text: string): void;
 };
 
 async function createContext() {
@@ -46,7 +48,14 @@ async function createContext() {
 	});
 	const resetDisplay = vi.fn();
 	const showModelSelector = vi.fn();
+	const requestRender = vi.fn();
+	const addInputListener = vi.fn();
+	const addStartListener = vi.fn();
+	const terminalWrite = vi.fn();
 	const prompt = vi.fn(async () => {});
+	const abort = vi.fn(async () => {});
+	const interruptAndFlushQueuedMessages = vi.fn(async () => {});
+	const getQueuedMessages = vi.fn(() => ({ steering: [] as string[], followUp: [] as string[] }));
 	const updatePendingMessagesDisplay = vi.fn();
 	const editor: FakeEditor = {
 		setText(text: string) {
@@ -56,13 +65,22 @@ async function createContext() {
 			return editorText;
 		},
 		addToHistory: vi.fn(),
+		pasteText(text: string) {
+			editorText += text;
+		},
 		setActionKeys,
 		setCustomKeyHandler,
 		clearCustomKeyHandlers,
 	};
 	const ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender: vi.fn(), resetDisplay } as unknown as InteractiveModeContext["ui"],
+		ui: {
+			requestRender,
+			resetDisplay,
+			addInputListener,
+			addStartListener,
+			terminal: { write: terminalWrite },
+		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -76,6 +94,10 @@ async function createContext() {
 			isEvalRunning: false,
 			extensionRunner: undefined,
 			prompt,
+			queuedMessageCount: 0,
+			getQueuedMessages,
+			abort,
+			interruptAndFlushQueuedMessages,
 		} as unknown as InteractiveModeContext["session"],
 		keybindings: {
 			getKeys(action: string) {
@@ -138,6 +160,10 @@ async function createContext() {
 			showModelSelector,
 			prompt,
 			updatePendingMessagesDisplay,
+			requestRender,
+			abort,
+			interruptAndFlushQueuedMessages,
+			getQueuedMessages,
 			resetDisplay,
 		},
 	};
@@ -165,6 +191,24 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("empty Enter interrupts and sends a queued steering message", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const session = ctx.session as unknown as { isStreaming: boolean; queuedMessageCount: number };
+		session.isStreaming = true;
+		session.queuedMessageCount = 1;
+		spies.getQueuedMessages.mockReturnValue({ steering: ["Send this now"], followUp: [] });
+		const controller = new InputController(ctx);
+
+		controller.setupEditorSubmitHandler();
+		await editor.onSubmit?.("");
+
+		expect(spies.interruptAndFlushQueuedMessages).toHaveBeenCalledWith({ reason: "Interrupted by user" });
+		expect(spies.abort).not.toHaveBeenCalled();
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+		expect(spies.requestRender).toHaveBeenCalledTimes(1);
+		expect(spies.prompt).not.toHaveBeenCalled();
 	});
 
 	it("marks streaming follow-up submissions as local", async () => {

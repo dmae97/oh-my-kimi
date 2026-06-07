@@ -354,6 +354,21 @@ describe("Agent", () => {
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
 	});
 
+	it("forwards distinct provider session id and prompt cache key to the stream", async () => {
+		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
+		const agent = new Agent({
+			initialState: { model: mock.model, messages: [] },
+			streamFn: mock.stream,
+			sessionId: "provider-lineage",
+			promptCacheKey: "parent-cache",
+		});
+
+		await agent.prompt("run");
+
+		expect(mock.calls[0]?.options?.sessionId).toBe("provider-lineage");
+		expect(mock.calls[0]?.options?.promptCacheKey).toBe("parent-cache");
+	});
+
 	it("returns static metadata via the plain setter", () => {
 		const agent = new Agent();
 		expect(agent.metadata).toBeUndefined();

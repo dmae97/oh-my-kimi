@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { getProjectDir, logger, prompt } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
@@ -145,10 +145,10 @@ async function generateAnalysis(input: {
 	contextFiles: Array<{ path: string; content: string }>;
 	userContext?: string;
 	primaryModel: Model<Api>;
-	primaryApiKey: string;
+	primaryApiKey: ApiKey;
 	primaryThinkingLevel?: ThinkingLevel;
 	smolModel: Model<Api>;
-	smolApiKey: string;
+	smolApiKey: ApiKey;
 	smolThinkingLevel?: ThinkingLevel;
 	commitSettings: {
 		mapReduceEnabled: boolean;
@@ -206,7 +206,7 @@ async function generateSummaryWithRetry(input: {
 	analysis: ConventionalAnalysis;
 	stat: string;
 	model: Model<Api>;
-	apiKey: string;
+	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
 	userContext?: string;
 }): Promise<{ summary: string }> {

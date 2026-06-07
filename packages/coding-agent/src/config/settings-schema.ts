@@ -660,6 +660,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.smoothStreaming": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			label: "Smooth Streaming",
+			description: "Reveal assistant text smoothly while streamed chunks arrive",
+		},
+	},
+
 	"display.showTokenUsage": {
 		type: "boolean",
 		default: false,

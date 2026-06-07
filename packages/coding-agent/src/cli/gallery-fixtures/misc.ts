@@ -218,4 +218,33 @@ export const miscFixtures: Record<string, GalleryFixture> = {
 			},
 		},
 	},
+
+	// Built-in tool with no dedicated renderer — exercises the generic fallback
+	// (`#formatToolExecution`) path so its padded, state-tinted block is QA'd.
+	report_tool_issue: {
+		label: "Report Tool Issue",
+		streamingArgs: { tool: "lsp" },
+		args: {
+			tool: "lsp",
+			report: "Rename returned no edit for an exported symbol that has 12 references",
+		},
+		result: { content: [{ type: "text", text: "Noted, thanks!" }] },
+		errorResult: {
+			content: [{ type: "text", text: "Could not record the report: issue tracker unreachable" }],
+			isError: true,
+		},
+	},
+
+	// Stand-in for a custom/extension tool that ships no renderer — same generic
+	// fallback path most MCP/extension tools take.
+	custom: {
+		label: "Custom Tool",
+		streamingArgs: { query: "weather" },
+		args: { query: "weather in Tokyo", units: "metric" },
+		result: { content: [{ type: "text", text: "Tokyo: 22°C, partly cloudy, humidity 64%." }] },
+		errorResult: {
+			content: [{ type: "text", text: "Upstream provider returned 503 Service Unavailable" }],
+			isError: true,
+		},
+	},
 };

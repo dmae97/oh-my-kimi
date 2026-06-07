@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { extractHttpStatusFromError, getLogsDir } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, getLogsDir, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import { isCopilotTransientModelError } from "./retry.js";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
 
@@ -31,7 +31,9 @@ export async function appendRawHttpRequestDumpFor400(
 	error: unknown,
 	dump: RawHttpRequestDump | undefined,
 ): Promise<string> {
-	if (!dump || extractHttpStatusFromError(error) !== 400) {
+	// Never persist dumps under the test runner: providers exercise the 400 path
+	// with mocked fetch responses, which would otherwise litter the real ~/.omp logs.
+	if (!dump || isBunTestRuntime() || extractHttpStatusFromError(error) !== 400) {
 		return message;
 	}
 

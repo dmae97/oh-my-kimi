@@ -149,7 +149,10 @@ export function streamPiNative<TApi extends Api>(
 		try {
 			const url = resolveStreamUrl(model as Model<Api>);
 			const fetchImpl = options?.fetch ?? globalThis.fetch;
-			const headers = buildHeaders(model as Model<Api>, options?.apiKey);
+			const headers = buildHeaders(
+				model as Model<Api>,
+				typeof options?.apiKey === "string" ? options.apiKey : undefined,
+			);
 			const body = JSON.stringify({
 				modelId: model.id,
 				context,

@@ -119,7 +119,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 			tmpDir,
 		);
 		// Await the actual diff recompute rather than racing the spinner's render
-		// ticks. The streaming spinner calls requestRender every ~16ms, so on a
+		// ticks. The streaming spinner calls requestRender every ~33ms, so on a
 		// slow box a tick — not the (file-read + whole-file Myers) compute — would
 		// resolve the wait and let us sample a stale, mid-abort preview. That is the
 		// CI flake that collapsed Math.min(...steady) to 4. whenPreviewSettled()

@@ -10,8 +10,9 @@ import * as path from "node:path";
 import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Ellipsis } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { getKeybindings, replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { pluralize } from "@oh-my-pi/pi-utils";
+import { formatKeyHints, type KeyId } from "../config/keybindings";
 import { settings } from "../config/settings";
 import type { Theme } from "../modes/theme/theme";
 import { Hasher } from "../tui/utils";
@@ -75,8 +76,16 @@ export const TRUNCATE_LENGTHS = {
 	SHORT: 40,
 } as const;
 
-/** Standard expand hint text */
-export const EXPAND_HINT = "(Ctrl+O for more)";
+/** Keybinding action that toggles tool-output expansion. */
+const EXPAND_ACTION = "app.tools.expand";
+/** Fallback key when no binding is resolvable (e.g. outside an interactive session). */
+const DEFAULT_EXPAND_KEY: KeyId = "ctrl+o";
+
+/** Human-readable key currently bound to tool-output expansion, e.g. `Ctrl+O`. */
+export function expandKeyHint(): string {
+	const keys = getKeybindings().getKeys(EXPAND_ACTION);
+	return formatKeyHints(keys.length > 0 ? keys : [DEFAULT_EXPAND_KEY]);
+}
 
 // =============================================================================
 // Text Truncation Utilities
@@ -150,7 +159,7 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 export function formatExpandHint(theme: Theme, expanded?: boolean, hasMore?: boolean): string {
 	if (expanded) return "";
 	if (hasMore === false) return "";
-	return theme.fg("dim", wrapBrackets(EXPAND_HINT, theme));
+	return theme.fg("dim", wrapBrackets(`${expandKeyHint()}: Expand`, theme));
 }
 
 /**
@@ -737,36 +746,6 @@ export function capParseErrors(
 // =============================================================================
 
 /**
- * Group `rawLines` by blank-line separators, mirroring the historical search /
- * ast-grep / ast-edit renderer behavior: if any blank line is present, splits on
- * runs of blank lines; otherwise collapses non-empty lines into a single group.
- */
-export function splitGroupsByBlankLine(rawLines: string[]): string[][] {
-	const hasSeparators = rawLines.some(line => line.trim().length === 0);
-	const groups: string[][] = [];
-	if (hasSeparators) {
-		let current: string[] = [];
-		for (const line of rawLines) {
-			if (line.trim().length === 0) {
-				if (current.length > 0) {
-					groups.push(current);
-					current = [];
-				}
-				continue;
-			}
-			current.push(line);
-		}
-		if (current.length > 0) groups.push(current);
-	} else {
-		const nonEmpty = rawLines.filter(line => line.trim().length > 0);
-		if (nonEmpty.length > 0) {
-			groups.push(nonEmpty);
-		}
-	}
-	return groups;
-}
-
-/**
  * Standard width+expand keyed render cache used by every search-style tool
  * renderer. `compute` re-runs only when the cache key changes; the returned
  * Component is the canonical `{ render, invalidate }` pair.
@@ -774,6 +753,7 @@ export function splitGroupsByBlankLine(rawLines: string[]): string[][] {
 export function createCachedComponent(
 	getExpanded: () => boolean,
 	compute: (width: number, expanded: boolean) => string[],
+	options: { paddingX?: number } = {},
 ): Component {
 	let cached: { key: bigint; lines: string[] } | undefined;
 	return {
@@ -781,9 +761,13 @@ export function createCachedComponent(
 			const expanded = getExpanded();
 			const key = new Hasher().bool(expanded).u32(width).digest();
 			if (cached?.key === key) return cached.lines;
-			const lines = compute(width, expanded);
-			cached = { key, lines };
-			return lines;
+			const paddingX = Math.max(0, options.paddingX ?? 0);
+			const innerWidth = Math.max(1, width - paddingX * 2);
+			const lines = compute(innerWidth, expanded);
+			const pad = paddingX === 0 ? "" : " ".repeat(paddingX);
+			const paddedLines = paddingX === 0 ? lines : lines.map(line => `${pad}${line}${pad}`);
+			cached = { key, lines: paddedLines };
+			return paddedLines;
 		},
 		invalidate() {
 			cached = undefined;

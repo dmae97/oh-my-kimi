@@ -1,7 +1,7 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import { type Component, Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
@@ -17,9 +17,10 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
+import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
+import { StreamingRevealController } from "./streaming-reveal";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -44,7 +45,13 @@ type AgentSessionEventHandlers = {
 
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
-	#lastThinkingCount = 0;
+	// Count of visible assistant content blocks (rendered non-empty text/thinking)
+	// already seen in the current streaming message. A newly appearing one breaks
+	// the read run: the rendered reasoning/answer is a visual separator, so reads
+	// after it start a fresh group. Empty/absent thinking — common when a model
+	// emits one read per completion — does not break it, so a run of consecutive
+	// reads collapses into one group even across completion boundaries.
+	#lastVisibleBlockCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
@@ -60,9 +67,15 @@ export class EventController {
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
+	#streamingReveal: StreamingRevealController;
 	#handlers: AgentSessionEventHandlers;
 
 	constructor(private ctx: InteractiveModeContext) {
+		this.#streamingReveal = new StreamingRevealController({
+			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
+			getHideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),
 			agent_end: e => this.#handleAgentEnd(e),
@@ -95,6 +108,7 @@ export class EventController {
 	}
 
 	dispose(): void {
+		this.#streamingReveal.stop();
 		this.#cancelIdleCompaction();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -103,12 +117,12 @@ export class EventController {
 	}
 
 	#resetReadGroup(): void {
+		this.#lastReadGroup?.finalize();
 		this.#lastReadGroup = undefined;
 	}
 
 	#getReadGroup(): ReadToolGroupComponent {
 		if (!this.#lastReadGroup) {
-			this.ctx.chatContainer.addChild(new Text("", 0, 0));
 			const group = new ReadToolGroupComponent({
 				showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
 			});
@@ -209,6 +223,7 @@ export class EventController {
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
+		this.#resetReadGroup();
 		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
 		// Restore the previous turn's inline error in the transcript before dropping
@@ -299,9 +314,8 @@ export class EventController {
 			this.ctx.addMessageToChat(event.message);
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
-			this.#lastThinkingCount = 0;
 			this.#assistantMessageStreaming = true;
-			this.#resetReadGroup();
+			this.#lastVisibleBlockCount = 0;
 			this.ctx.streamingComponent = new AssistantMessageComponent(
 				undefined,
 				this.ctx.hideThinkingBlock,
@@ -311,7 +325,7 @@ export class EventController {
 			);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
-			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+			this.#streamingReveal.begin(this.ctx.streamingComponent, this.ctx.streamingMessage);
 			this.ctx.ui.requestRender();
 		}
 	}
@@ -355,16 +369,17 @@ export class EventController {
 	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
-			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+			this.#streamingReveal.setTarget(this.ctx.streamingMessage);
 
-			const thinkingCount = this.ctx.streamingMessage.content.filter(
-				content => content.type === "thinking" && content.thinking.trim(),
+			const visibleBlockCount = this.ctx.streamingMessage.content.filter(
+				content =>
+					(content.type === "text" && content.text.trim().length > 0) ||
+					(content.type === "thinking" && content.thinking.trim().length > 0),
 			).length;
-			if (thinkingCount > this.#lastThinkingCount) {
+			if (visibleBlockCount > this.#lastVisibleBlockCount) {
 				this.#resetReadGroup();
-				this.#lastThinkingCount = thinkingCount;
+				this.#lastVisibleBlockCount = visibleBlockCount;
 			}
-
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
 				if (content.name === "read") {
@@ -397,7 +412,6 @@ export class EventController {
 						: content.arguments;
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resetReadGroup();
-					this.ctx.chatContainer.addChild(new Text("", 0, 0));
 					const tool = this.ctx.session.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
 						content.name,
@@ -456,21 +470,20 @@ export class EventController {
 		}
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
+			this.#streamingReveal.stop();
 			let errorMessage: string | undefined;
 			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
 			const ttsrSilenced = aborted && this.ctx.session.isTtsrAbortPending;
 			if (aborted && !silentlyAborted && !ttsrSilenced) {
-				// Real user-cancel / network / provider abort: surface the standard
-				// operator-facing label. AgentSession.#handleAgentEvent already stamped
-				// SILENT_ABORT_MARKER for the plan-compact transition before this
-				// controller ran, so reaching this branch implies the abort was NOT a
-				// silent internal transition.
-				const retryAttempt = this.ctx.session.retryAttempt;
-				errorMessage =
-					retryAttempt > 0
-						? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-						: "Operation aborted";
+				// Resolve the operator-facing label: a user-interrupt (Esc) abort
+				// carries USER_INTERRUPT_LABEL on errorMessage (threaded through the
+				// AbortController), which is preserved verbatim; any other abort with
+				// no threaded reason falls back to the retry-aware generic label.
+				// AgentSession.#handleAgentEvent already stamped SILENT_ABORT_MARKER for
+				// the plan-compact transition before this controller ran, so reaching
+				// this branch implies the abort was NOT a silent internal transition.
+				errorMessage = resolveAbortLabel(this.ctx.streamingMessage.errorMessage, this.ctx.session.retryAttempt);
 				this.ctx.streamingMessage.errorMessage = errorMessage;
 			}
 			if (silentlyAborted || ttsrSilenced) {
@@ -663,6 +676,7 @@ export class EventController {
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		this.#agentTurnActive = false;
 		this.#assistantMessageStreaming = false;
+		this.#streamingReveal.stop();
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
@@ -689,6 +703,7 @@ export class EventController {
 		);
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
+		this.#resetReadGroup();
 		this.#lastAssistantComponent = undefined;
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
@@ -832,14 +847,12 @@ export class EventController {
 	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
 		const component = new TtsrNotificationComponent(event.rules);
 		component.setExpanded(this.ctx.toolOutputExpanded);
-		this.ctx.chatContainer.addChild(component);
-		this.ctx.ui.requestRender();
+		this.ctx.present(component);
 	}
 
 	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
 		const component = new TodoReminderComponent(event.todos, event.attempt, event.maxAttempts);
-		this.ctx.chatContainer.addChild(component);
-		this.ctx.ui.requestRender();
+		this.ctx.present(component);
 	}
 
 	async #handleTodoAutoClear(_event: Extract<AgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {
@@ -892,7 +905,6 @@ export class EventController {
 	}
 
 	sendCompletionNotification(): void {
-		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
 
@@ -910,16 +922,5 @@ export class EventController {
 			type: "completion",
 			actions: "focus",
 		});
-	}
-
-	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "agent_end") {
-			return;
-		}
-		if (this.ctx.session.queuedMessageCount > 0 || this.ctx.session.isStreaming) {
-			return;
-		}
-		this.sendCompletionNotification();
-		await this.ctx.shutdown();
 	}
 }

@@ -275,6 +275,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly renderResult = renderResult;
+	// Suppress the streaming call preview once a (partial or final) result exists
+	// so the task renders as ONE block that transitions in place — not a pending
+	// call frame stacked above the result frame. Mirrors `taskToolRenderer`.
+	readonly mergeCallAndResult = true;
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
 

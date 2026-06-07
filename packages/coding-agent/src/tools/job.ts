@@ -396,7 +396,7 @@ export const jobToolRenderer = {
 	inline: true,
 
 	renderCall(args: JobRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const text = renderStatusLine({ icon: "pending", title: "Job", description: describeTarget(args) }, uiTheme);
+		const text = renderStatusLine({ icon: "pending", title: describeTarget(args) || "Job" }, uiTheme);
 		return new Text(text, 0, 0);
 	},
 
@@ -410,7 +410,7 @@ export const jobToolRenderer = {
 
 		if (jobs.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
-			const header = renderStatusLine({ icon: "warning", title: "Job", description: describeTarget(args) }, uiTheme);
+			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
 		}
 
@@ -433,8 +433,7 @@ export const jobToolRenderer = {
 			{
 				icon: headerIcon,
 				spinnerFrame: counts.running > 0 ? options.spinnerFrame : undefined,
-				title: "Job",
-				description,
+				title: description,
 				meta,
 			},
 			uiTheme,

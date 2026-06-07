@@ -1,16 +1,20 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getThemeByName, initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
+import { getThemeByName, initTheme, type Theme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	dedupeParseErrors,
+	expandKeyHint,
 	formatCodeFrameLine,
 	formatDiagnostics,
 	formatErrorMessage,
+	formatExpandHint,
 	formatParseErrors,
 	formatScreenshot,
 	truncateDiffByHunk,
 } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
+import { getKeybindings, setKeybindings, type KeybindingsManager as TuiKeybindingsManager } from "@oh-my-pi/pi-tui";
 
 describe("parse error formatting", () => {
 	it("deduplicates parse errors while preserving order", () => {
@@ -280,5 +284,41 @@ describe("formatErrorMessage (F4 sanitization)", () => {
 	it("falls back to 'Unknown error' for empty/missing input", () => {
 		const out = formatErrorMessage(undefined, theme);
 		expect(out).toContain("Unknown error");
+	});
+});
+
+describe("formatExpandHint / expandKeyHint", () => {
+	// Plain stub: `fg` is a passthrough and brackets are literal `[`/`]`, so the
+	// rendered hint is deterministic regardless of the active theme's bracket glyphs.
+	const plainTheme = {
+		fg: (_color: unknown, text: string) => text,
+		format: { bracketLeft: "[", bracketRight: "]" },
+	} as unknown as Theme;
+
+	let previous: TuiKeybindingsManager;
+	beforeEach(() => {
+		previous = getKeybindings();
+	});
+	afterEach(() => {
+		setKeybindings(previous);
+	});
+
+	it("reports the default tool-output expand key", () => {
+		setKeybindings(KeybindingsManager.inMemory());
+		expect(expandKeyHint()).toBe("Ctrl+O");
+		// Single bracket pair from the theme, no double-wrapping around the key.
+		expect(formatExpandHint(plainTheme, false, true)).toBe("[Ctrl+O: Expand]");
+	});
+
+	it("tracks a user remap of the expand binding", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "app.tools.expand": "alt+e" }));
+		expect(expandKeyHint()).toBe("Alt+E");
+		expect(formatExpandHint(plainTheme, false, true)).toBe("[Alt+E: Expand]");
+	});
+
+	it("renders nothing when expanded or there is no more content", () => {
+		setKeybindings(KeybindingsManager.inMemory());
+		expect(formatExpandHint(plainTheme, true, true)).toBe("");
+		expect(formatExpandHint(plainTheme, false, false)).toBe("");
 	});
 });

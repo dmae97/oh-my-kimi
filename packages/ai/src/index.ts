@@ -3,6 +3,7 @@ export * from "./api-registry";
 export * from "./auth-broker";
 export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } from "./auth-gateway/server";
 export * from "./auth-gateway/types";
+export * from "./auth-retry";
 export * from "./auth-storage";
 export * from "./effort";
 export * from "./model-cache";

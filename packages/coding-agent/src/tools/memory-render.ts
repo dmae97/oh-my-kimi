@@ -4,7 +4,10 @@
  *
  * These keep the transcript terse — one status line plus, for `retain`, one
  * `Remember: …` line per stored item — instead of the generic JSON arg tree,
- * which exploded multi-line memory blobs into an unreadable wall.
+ * which exploded multi-line memory blobs into an unreadable wall. The tool
+ * container is a transparent passthrough, so these renderers stay frameless:
+ * a status line with a couple of dim bullets reads far cleaner than boxing a
+ * one-line memory note.
  */
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";

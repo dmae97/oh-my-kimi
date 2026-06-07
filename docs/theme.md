@@ -85,7 +85,7 @@ If omitted, export code derives defaults from resolved theme colors.
 
 - `symbols.preset` sets a theme-level default symbol set.
 - `symbols.overrides` can override individual `SymbolKey` values.
-- `symbols.spinnerFrames` overrides the loading spinner frames. Accepts either a flat `string[]` (applied to both spinner types) or an object `{ "status"?: string[], "activity"?: string[] }` to override each type independently. Any type not specified falls back to the symbol preset's default frames. `status` drives the ~12.5fps spinner used by loaders and tool-execution indicators; `activity` drives the ~60fps spinner used by markdown progress bars and similar high-frequency UI.
+- `symbols.spinnerFrames` overrides the loading spinner frames. Accepts either a flat `string[]` (applied to both spinner types) or an object `{ "status"?: string[], "activity"?: string[] }` to override each type independently. Any type not specified falls back to the symbol preset's default frames. `status` drives the ~12.5fps spinner used by loaders and tool-execution indicators; `activity` drives the ~30fps spinner used by markdown progress bars and similar high-frequency UI.
 
 Runtime precedence:
 

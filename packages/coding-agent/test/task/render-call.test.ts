@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { TaskParams } from "@oh-my-pi/pi-coding-agent/task";
+import type { TaskParams, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
 
 describe("task renderer: streaming call preview", () => {
@@ -25,6 +25,35 @@ describe("task renderer: streaming call preview", () => {
 		return Bun.stripANSI(component.render(160).join("\n"));
 	}
 
+	function renderCompleted(args: TaskParams): string {
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			totalDurationMs: 12,
+			results: [
+				{
+					index: 0,
+					id: "Only",
+					agent: args.agent,
+					agentSource: "bundled",
+					task: "Render the shared context",
+					exitCode: 0,
+					output: "Done.",
+					stderr: "",
+					truncated: false,
+					durationMs: 12,
+					tokens: 1,
+				},
+			],
+		};
+		const component = taskToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "1 agent completed." }], details },
+			{ expanded: false, isPartial: false },
+			theme,
+			args,
+		);
+		return Bun.stripANSI(component.render(160).join("\n"));
+	}
+
 	// The preview must surface each agent's id + ui description so the user can
 	// see which agents are being dispatched, not a bare "N agents" count.
 	it("lists each task's id and description instead of only a count", () => {
@@ -41,8 +70,9 @@ describe("task renderer: streaming call preview", () => {
 		expect(out).toContain("Audit the auth module");
 		expect(out).toContain("ReviewDb");
 		expect(out).toContain("Audit the db layer");
-		// Count is kept as a compact header, but the old flat "N agents" line is gone.
-		expect(out).toContain("Tasks (2)");
+		// The per-task list stands on its own — neither the redundant "Tasks (N)"
+		// section label nor the old flat "N agents" line is drawn.
+		expect(out).not.toContain("Tasks (");
 		expect(out).not.toContain("2 agents");
 	});
 
@@ -61,7 +91,7 @@ describe("task renderer: streaming call preview", () => {
 		expect(out).toContain("Second");
 		// Missing-id slot falls back to a positional placeholder rather than crashing.
 		expect(out).toContain("#3");
-		expect(out).toContain("Tasks (3)");
+		expect(out).not.toContain("Tasks (");
 	});
 
 	it("caps the collapsed list and reports the overflow as agents", () => {
@@ -84,7 +114,7 @@ describe("task renderer: streaming call preview", () => {
 		expect(expanded).not.toContain("more agents");
 	});
 
-	it("keeps the isolation flag as the final child after the task list", () => {
+	it("surfaces the isolation flag in the header bar", () => {
 		const args: TaskParams = {
 			agent: "task",
 			isolated: true,
@@ -94,15 +124,33 @@ describe("task renderer: streaming call preview", () => {
 		const lines = out.split("\n");
 
 		expect(out).toContain("Only");
-		expect(out).toContain("Isolated");
-		// Isolation flag is rendered last, after every task entry.
-		expect(lines.at(-1)).toContain("Isolated");
+		// Isolation is surfaced as header meta in the frame's top bar (first line),
+		// not as a trailing child row under the task list.
+		expect(lines[0]).toContain("isolated");
 	});
 
-	// Once the tool produces a result, `renderResult` draws each agent as a
-	// progress/result line. The call preview must drop its own per-agent list
-	// so the non-streaming path doesn't render every task twice.
-	it("suppresses the per-task preview list once a result snapshot exists", () => {
+	it("renders shared context as markdown in call and result frames", () => {
+		const args: TaskParams = {
+			agent: "task",
+			context: ["# Goal", "Fix **rendering**.", "", "# Constraints", "- Keep `task` visible"].join("\n"),
+			tasks: [{ id: "Only", description: "Single task", assignment: "..." }],
+		};
+
+		for (const out of [render(args), renderCompleted(args)]) {
+			expect(out).toContain("Goal");
+			expect(out).toContain("Fix rendering.");
+			expect(out).toContain("Constraints");
+			expect(out).toContain("Keep task visible");
+			expect(out).not.toContain("# Goal");
+			expect(out).not.toContain("# Constraints");
+		}
+	});
+
+	// Once the tool produces a result, the container suppresses the call entirely
+	// via `mergeCallAndResult` and `renderResult` draws each agent. As a safety
+	// net, `renderCall` also drops its duplicate per-task preview when a result
+	// snapshot is present, so the two never stack.
+	it("drops the per-task preview list once a result snapshot exists", () => {
 		const args: TaskParams = {
 			agent: "reviewer",
 			tasks: [
@@ -117,9 +165,8 @@ describe("task renderer: streaming call preview", () => {
 		);
 		const out = Bun.stripANSI(component.render(160).join("\n"));
 
-		// Header stays as a section label, but the duplicated agent rows are gone.
-		expect(out).toContain("Tasks (2)");
 		expect(out).not.toContain("Audit the auth module");
 		expect(out).not.toContain("Audit the db layer");
+		expect(out).not.toContain("Tasks (");
 	});
 });

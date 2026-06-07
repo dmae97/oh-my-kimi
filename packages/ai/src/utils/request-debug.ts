@@ -170,6 +170,7 @@ class FileRequestDebugSession implements RequestDebugSession {
 class FileRequestDebugResponseLog implements RequestDebugResponseLog {
 	#handle: fs.FileHandle | undefined;
 	#pending: Promise<void> = Promise.resolve();
+	#closed: Promise<void> | undefined;
 
 	constructor(handle: fs.FileHandle) {
 		this.#handle = handle;
@@ -184,15 +185,19 @@ class FileRequestDebugResponseLog implements RequestDebugResponseLog {
 		});
 	}
 
-	async close(): Promise<void> {
+	close(): Promise<void> {
+		if (this.#closed) return this.#closed;
 		const handle = this.#handle;
-		if (!handle) return;
+		if (!handle) return Promise.resolve();
 		this.#handle = undefined;
-		try {
-			await this.#pending;
-		} finally {
-			await handle.close();
-		}
+		this.#closed = (async () => {
+			try {
+				await this.#pending;
+			} finally {
+				await handle.close();
+			}
+		})();
+		return this.#closed;
 	}
 }
 

@@ -71,15 +71,13 @@ export interface SlashCommandRuntime {
 
 /**
  * Runtime visible to TUI-only handlers (`handleTui`). Carries the interactive
- * mode context plus the background-detach hook. Intentionally narrower than
- * `SlashCommandRuntime` so existing callers can keep building it from just
- * `{ ctx, handleBackgroundCommand }`; when the TUI dispatcher needs to invoke
- * a `handle` (no `handleTui` override), it synthesizes a `SlashCommandRuntime`
- * from `ctx`.
+ * mode context. Intentionally narrower than `SlashCommandRuntime` so existing
+ * callers can keep building it from just `{ ctx }`; when the TUI dispatcher
+ * needs to invoke a `handle` (no `handleTui` override), it synthesizes a
+ * `SlashCommandRuntime` from `ctx`.
  */
 export interface TuiSlashCommandRuntime {
 	ctx: InteractiveModeContext;
-	handleBackgroundCommand: () => void;
 }
 
 /** Unified slash-command spec consumed by both TUI and ACP dispatchers. */

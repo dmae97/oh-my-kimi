@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import analysisSystemPrompt from "../../commit/prompts/analysis-system.md" with { type: "text" };
@@ -14,7 +14,7 @@ const ConventionalAnalysisTool = createConventionalAnalysisTool(
 
 export interface ConventionalAnalysisInput {
 	model: Model<Api>;
-	apiKey: string;
+	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
 	contextFiles?: Array<{ path: string; content: string }>;
 	userContext?: string;

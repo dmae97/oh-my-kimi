@@ -4,7 +4,7 @@
  * Calls Z.AI's remote MCP server (`webSearchPrime`) and adapts results into
  * the unified SearchResponse shape used by the web search tool.
  */
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import { asRecord, asString } from "../../../web/scrapers/utils";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -278,12 +278,14 @@ function toSources(results: ZaiSearchResult[]): SearchSource[] {
 
 /** Execute Z.AI web search via remote MCP endpoint. */
 export async function searchZai(params: ZaiSearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
-	if (!apiKey) {
-		throw new Error("Z.AI credentials not found. Set ZAI_API_KEY or login with 'omp /login zai'.");
-	}
+	const keyOrResolver: ApiKey = params.authStorage.resolver("zai", {
+		sessionId: params.sessionId,
+	});
 
-	const rawResult = await callZaiSearch(apiKey, params);
+	const rawResult = await withAuth(keyOrResolver, key => callZaiSearch(key, params), {
+		signal: params.signal,
+		missingKeyMessage: "Z.AI credentials not found. Set ZAI_API_KEY or login with 'omp /login zai'.",
+	});
 	const payload = parseSearchPayload(rawResult);
 	let sources = toSources(payload.results);
 

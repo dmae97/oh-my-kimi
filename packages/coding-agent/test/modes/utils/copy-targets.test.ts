@@ -6,6 +6,7 @@ import {
 	type CopyTarget,
 	extractCodeBlocks,
 	extractLastCommand,
+	extractQuoteBlocks,
 } from "@oh-my-pi/pi-coding-agent/modes/utils/copy-targets";
 
 function source(overrides: Partial<CopySource>): CopySource {
@@ -42,6 +43,23 @@ describe("extractCodeBlocks", () => {
 		const blocks = extractCodeBlocks("```\nplain\n```\n\n```py\nprint(1)\n```");
 		expect(blocks.map(b => b.lang)).toEqual(["", "py"]);
 		expect(blocks.map(b => b.code)).toEqual(["plain", "print(1)"]);
+	});
+});
+
+describe("extractQuoteBlocks", () => {
+	it("collects a `>`-prefixed run and strips the marker plus one space", () => {
+		const text = "intro\n> line one\n> line two\ntail";
+		expect(extractQuoteBlocks(text)).toEqual([{ text: "line one\nline two" }]);
+	});
+
+	it("keeps bare `>` separator lines as blank lines and splits on plain text", () => {
+		const text = "> first\n>\n> second\n\nbreak\n> later";
+		expect(extractQuoteBlocks(text).map(b => b.text)).toEqual(["first\n\nsecond", "later"]);
+	});
+
+	it("does not treat `>` lines inside a fenced code block as a quote", () => {
+		const text = "> real quote\n```\n> not a quote\n```";
+		expect(extractQuoteBlocks(text)).toEqual([{ text: "real quote" }]);
 	});
 });
 
@@ -108,6 +126,37 @@ describe("buildCopyTargets", () => {
 		const msg = byId(targets, "msg:1");
 		expect(msg?.content).toBe("Just one\n```js\nfoo();\n```");
 		expect(msg?.children?.map(c => c.label)).toEqual(["Block 1"]);
+	});
+
+	it("drills a quoted message into a de-prefixed quote child", () => {
+		const text = "Copy-paste to the other agent:\n\n> relay this\n> across agents";
+		const targets = buildCopyTargets(source({ messages: [assistantText(text)] as unknown as AgentMessage[] }));
+		const msg = byId(targets, "msg:1");
+		// The message node still copies the full markdown (with markers).
+		expect(msg?.content).toBe(text);
+		expect(msg?.hint).toBe("4 lines · 1 quote");
+		const quote = msg?.children?.find(c => c.id === "msg:1:quote:0");
+		expect(quote?.label).toBe("Quote 1");
+		// The drilled child copies the un-prefixed quote, ready to paste onward.
+		expect(quote?.content).toBe("relay this\nacross agents");
+		expect(quote?.language).toBeUndefined();
+		expect(quote?.copyMessage).toBe("Copied quote block 1 to clipboard");
+	});
+
+	it("interleaves code and quote children in document order with combined nodes", () => {
+		const text = "intro\n```ts\na;\n```\n> q one\n```py\nb\n```\n> q two";
+		const targets = buildCopyTargets(source({ messages: [assistantText(text)] as unknown as AgentMessage[] }));
+		const msg = byId(targets, "msg:1");
+		expect(msg?.children?.map(c => c.id)).toEqual([
+			"msg:1:code:0",
+			"msg:1:quote:0",
+			"msg:1:code:1",
+			"msg:1:quote:1",
+			"msg:1:all",
+			"msg:1:all-quotes",
+		]);
+		expect(msg?.hint).toBe("9 lines · 2 code · 2 quote");
+		expect(msg?.children?.find(c => c.id === "msg:1:all-quotes")?.content).toBe("q one\n\nq two");
 	});
 
 	it("skips tool-only assistant turns and non-assistant messages", () => {

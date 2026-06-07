@@ -2,9 +2,8 @@ import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
 import { $env, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
-import { encodeKittyTempFileProbe, getKittyGraphics, kittyTempFileAllowed, setKittyGraphics } from "./kitty-graphics";
 import { StdinBuffer } from "./stdin-buffer";
-import { ImageProtocol, NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
+import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
@@ -40,6 +39,7 @@ export function emergencyTerminalRestore(): void {
 					"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
 					"\x1b[?2048l" + // Disable in-band resize notifications
+					"\x1b[?5522l" + // Disable enhanced paste notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?25h", // Show cursor
@@ -159,11 +159,9 @@ type Da1SentinelOwner =
 	| { kind: "keyboard" }
 	| { kind: "osc11" }
 	| { kind: "privateMode"; mode: number }
-	| { kind: "kittyGraphicsProbe"; id: number }
 	| { kind: "osc99Probe"; id: string };
 
 let nextOsc99ProbeId = 1;
-let nextKittyGraphicsProbeId = 1;
 
 function parseOsc99KeyValues(section: string): Map<string, string> {
 	const values = new Map<string, string>();
@@ -198,8 +196,6 @@ export class ProcessTerminal implements Terminal {
 	#osc99PendingId: string | undefined;
 	#osc99ResponseBuffer = "";
 	#osc99Capabilities = new Map<string, string>();
-	#kittyGraphicsPendingId: number | undefined;
-	#kittyGraphicsProbeCleanup: (() => void) | undefined;
 	#privateCsiResponseBuffer = "";
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
 	/** Resolved DECRQM support per private mode (mode → supported). */
@@ -284,11 +280,6 @@ export class ProcessTerminal implements Terminal {
 		// same DA1 sentinel FIFO as OSC 11/DECRQM so unsupported terminals resolve
 		// without leaking probe bytes to application input.
 		this.#queryOsc99Support();
-
-		// Probe Kitty temp-file (`t=t`) graphics transmission support. Rides the
-		// same DA1 sentinel FIFO; promotes the transmission medium to temp-file
-		// only on an explicit `OK`, so unsupported terminals stay on direct base64.
-		this.#queryKittyGraphicsTempFile();
 
 		// Subscribe to Mode 2031 appearance change notifications.
 		// When the terminal reports a change, we re-query OSC 11 to get the
@@ -508,9 +499,6 @@ export class ProcessTerminal implements Terminal {
 						this.#resolveOsc99Support(owner.id, false);
 						break;
 					}
-					case "kittyGraphicsProbe":
-						this.#resolveKittyGraphicsTempFile(owner.id, false);
-						break;
 				}
 				return;
 			}
@@ -573,21 +561,6 @@ export class ProcessTerminal implements Terminal {
 					this.#osc99ResponseBuffer = "";
 					this.#handleOsc99CapabilityResponse(meta!, payload!);
 					return;
-				}
-			}
-
-			// Kitty graphics temp-file probe reply: ESC _ G i=<id>;OK ESC \. The
-			// owner remains in the FIFO and is drained by its DA1 sentinel (no-op
-			// once resolved here).
-			if (this.#kittyGraphicsPendingId !== undefined && sequence.startsWith("\x1b_G")) {
-				const graphicsMatch = sequence.match(/^\x1b_G([^;]*);([\s\S]*?)\x1b\\$/u);
-				if (graphicsMatch) {
-					const idMatch = graphicsMatch[1]!.match(/(?:^|,)i=(\d+)(?:,|$)/);
-					const replyId = idMatch ? parseInt(idMatch[1]!, 10) : undefined;
-					if (replyId === this.#kittyGraphicsPendingId) {
-						this.#resolveKittyGraphicsTempFile(replyId, graphicsMatch[2]!.trim() === "OK");
-						return;
-					}
 				}
 			}
 
@@ -686,37 +659,6 @@ export class ProcessTerminal implements Terminal {
 		setOsc99Supported(supported);
 	}
 
-	#shouldQueryKittyGraphicsTempFile(): boolean {
-		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return false;
-		// Honor the remote/explicit env gate, and skip when temp-file is already on.
-		if (!kittyTempFileAllowed() || getKittyGraphics().transmissionMedium === "temp-file") return false;
-		return !isBunTestRuntime() || $env.PI_TUI_KITTY_GRAPHICS_PROBE === "1";
-	}
-
-	#queryKittyGraphicsTempFile(): void {
-		this.#clearKittyGraphicsProbe();
-		if (this.#dead || !this.#shouldQueryKittyGraphicsTempFile()) return;
-
-		const id = nextKittyGraphicsProbeId++;
-		const probe = encodeKittyTempFileProbe(id);
-		if (!probe) return;
-		this.#kittyGraphicsPendingId = id;
-		this.#kittyGraphicsProbeCleanup = probe.cleanup;
-		this.#da1SentinelOwners.push({ kind: "kittyGraphicsProbe", id });
-		this.#safeWrite(`${probe.sequence}\x1b[c`);
-	}
-
-	#resolveKittyGraphicsTempFile(id: number, supported: boolean): void {
-		if (this.#kittyGraphicsPendingId !== id) return;
-		if (supported) setKittyGraphics({ transmissionMedium: "temp-file" });
-		this.#clearKittyGraphicsProbe();
-	}
-
-	#clearKittyGraphicsProbe(): void {
-		this.#kittyGraphicsPendingId = undefined;
-		this.#kittyGraphicsProbeCleanup?.();
-		this.#kittyGraphicsProbeCleanup = undefined;
-	}
 	/**
 	 * Parse an OSC 11 background color response and compute BT.601 luminance.
 	 * Handles 1-, 2-, 3-, and 4-digit XParseColor hex components.
@@ -943,6 +885,7 @@ export class ProcessTerminal implements Terminal {
 
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");
+		this.#safeWrite("\x1b[?5522l");
 
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
@@ -965,7 +908,6 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99ResponseBuffer = "";
 		this.#osc99Capabilities.clear();
 		setOsc99Supported(false);
-		this.#clearKittyGraphicsProbe();
 		this.#privateCsiResponseBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];

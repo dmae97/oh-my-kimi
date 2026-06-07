@@ -30,7 +30,7 @@ function createPlanHarness(opts: { planModeEnabled: boolean; confirmExit: boolea
 	} as unknown as InteractiveModeContext;
 
 	return {
-		runtime: { ctx, handleBackgroundCommand: () => {} },
+		runtime: { ctx },
 		state,
 		addToHistory,
 		setText,
@@ -53,7 +53,7 @@ function createGoalHarness(opts: { goalModeEnabled: boolean; dropOnCall: boolean
 	} as unknown as InteractiveModeContext;
 
 	return {
-		runtime: { ctx, handleBackgroundCommand: () => {} },
+		runtime: { ctx },
 		state,
 		addToHistory,
 		setText,

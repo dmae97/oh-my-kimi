@@ -18,6 +18,7 @@
  *   POST /v1/responses                     → OpenAI Responses in/out
  */
 import { extractRetryHint, logger } from "@oh-my-pi/pi-utils";
+import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
 import { Effort } from "../effort";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
@@ -340,6 +341,60 @@ async function refreshGatewayApiKeyAfterAuthError(
 	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
 }
 
+/**
+ * Build the {@link ApiKeyResolver} handed to `streamSimple` for a gateway
+ * request. Drives the central a/b/c auth-retry policy server-side:
+ *
+ * - initial resolve → the credential already resolved for this request.
+ * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential
+ *   (a peer/broker may have rotated its token out from under our cached copy).
+ * - step (c) `lastChance` → {@link refreshGatewayApiKeyAfterAuthError} switches
+ *   to a sibling (usage-limit block vs credential invalidation by error class).
+ *
+ * `lastKey` tracks the most recent bearer so the switch step invalidates the
+ * credential that actually failed.
+ */
+function buildGatewayApiKeyResolver(
+	storage: AuthStorage,
+	model: Model<Api>,
+	sessionId: string,
+	initialKey: string,
+	requestSignal: AbortSignal,
+	format: string,
+	peer: string,
+): ApiKeyResolver {
+	let lastKey = initialKey;
+	return async ({ lastChance, error, signal }) => {
+		const sig = signal ?? requestSignal;
+		if (error === undefined) {
+			lastKey = initialKey;
+			return initialKey;
+		}
+		if (!lastChance) {
+			const refreshed = await storage.getApiKey(model.provider, sessionId, {
+				modelId: model.id,
+				signal: sig,
+				forceRefresh: true,
+			});
+			lastKey = refreshed ?? lastKey;
+			return refreshed;
+		}
+		const next = await refreshGatewayApiKeyAfterAuthError(
+			storage,
+			model,
+			sessionId,
+			model.provider,
+			lastKey,
+			error,
+			sig,
+			format,
+			peer,
+		);
+		lastKey = next ?? lastKey;
+		return next;
+	};
+}
+
 function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
 }
@@ -447,19 +502,15 @@ async function handleFormatEndpoint(
 	}
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
-	streamOpts.apiKey = apiKey;
-	streamOpts.onAuthError = (provider, oldKey, error) =>
-		refreshGatewayApiKeyAfterAuthError(
-			bootOpts.storage,
-			model,
-			sessionId,
-			provider,
-			oldKey,
-			error,
-			controller.signal,
-			route.label,
-			peer,
-		);
+	streamOpts.apiKey = buildGatewayApiKeyResolver(
+		bootOpts.storage,
+		model,
+		sessionId,
+		apiKey,
+		controller.signal,
+		route.label,
+		peer,
+	);
 
 	logger.info("auth-gateway request", {
 		format: route.label,
@@ -604,18 +655,15 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	// only inject server-controlled fields. The codex temperature/topP strip
 	// matches `buildStreamOptions` — Codex rejects them with a 400.
 	const streamOpts: SimpleStreamOptions = { ...parsed.options, apiKey, signal: controller.signal };
-	streamOpts.onAuthError = (provider, oldKey, error) =>
-		refreshGatewayApiKeyAfterAuthError(
-			bootOpts.storage,
-			model,
-			sessionId,
-			provider,
-			oldKey,
-			error,
-			controller.signal,
-			"pi-native",
-			peer,
-		);
+	streamOpts.apiKey = buildGatewayApiKeyResolver(
+		bootOpts.storage,
+		model,
+		sessionId,
+		apiKey,
+		controller.signal,
+		"pi-native",
+		peer,
+	);
 	if (model.api === "openai-codex-responses") {
 		delete streamOpts.temperature;
 		delete streamOpts.topP;

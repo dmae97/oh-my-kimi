@@ -39,6 +39,26 @@ function isBlockAppendOnly(child: Component): boolean {
 	return fn ? fn.call(child) : false;
 }
 
+// A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
+// separation padding (a `Spacer`, or a no-background `paddingY` row) as opposed
+// to a background-colored padding row, whose escape sequences contain `\S` and
+// are therefore preserved as part of a block's visual design.
+const NON_WHITESPACE = /\S/;
+function isPlainBlank(line: string): boolean {
+	return !NON_WHITESPACE.test(line);
+}
+
+// Strip leading/trailing plain-blank rows so each block contributes only its
+// visible body; the container owns the gaps between blocks. Returns the input
+// array unchanged when there is nothing to trim (no allocation on the hot path).
+function stripPlainBlankEdges(lines: string[]): string[] {
+	let start = 0;
+	let end = lines.length;
+	while (start < end && isPlainBlank(lines[start]!)) start++;
+	while (end > start && isPlainBlank(lines[end - 1]!)) end--;
+	return start === 0 && end === lines.length ? lines : lines.slice(start, end);
+}
+
 /**
  * Transcript container that freezes the rendered output of every block except
  * the bottom-most (live) one on terminals where committed native scrollback is
@@ -118,9 +138,13 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
-		if (!TERMINAL.eagerEraseScrollbackRisk) return super.render(width);
 
+		// Freezing/snapshotting only applies on ED3-risk terminals; elsewhere every
+		// block renders live. Inter-block spacing applies on BOTH paths so the gap
+		// between blocks is identical regardless of terminal.
+		const risk = TERMINAL.eagerEraseScrollbackRisk;
 		const count = this.children.length;
+
 		// The live region spans from the earliest still-mutating block through the
 		// bottom. A block that has not finalized must stay repaintable: out-of-band
 		// inserts (TTSR/todo cards) can append a finalized block *below* a tool that
@@ -137,45 +161,81 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		// recompute them so they freeze at their final content. Everything below
 		// the lower of the two cutoffs was already frozen last frame and replays.
 		const replayCutoff = Math.min(liveStartIndex, this.#prevLiveStartIndex);
-		this.#prevLiveStartIndex = liveStartIndex;
+		if (risk) this.#prevLiveStartIndex = liveStartIndex;
 
 		const lines: string[] = [];
 		// Tracks whether we are still inside the leading run of append-only live
-		// blocks. The first non-append-only live block (or a finalized block below
-		// the live region's start, which cannot happen for a leading run) closes it.
+		// blocks. The first non-append-only live block closes it.
 		let commitSafeOpen = true;
+		// The live-region start is recorded at the first visible row at/after the
+		// cutoff; empty leading blocks (or a separator) must not claim it early.
+		let liveRecorded = false;
 		for (let i = 0; i < count; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
-			if (i >= liveStartIndex) {
-				if (i === liveStartIndex) this.#nativeScrollbackLiveRegionStart = lines.length;
-			} else {
+
+			// Resolve this child's contribution — its visible body with plain-blank
+			// top/bottom edges stripped (the container owns inter-block gaps). On
+			// ED3-risk terminals a frozen, scrolled-off block replays its snapshot
+			// instead of recomputing; a stale generation (post-thaw) or width
+			// mismatch (resize) recomputes, as does a block still live last frame.
+			let contribution: string[] | undefined;
+			if (risk && i < liveStartIndex && i < replayCutoff) {
 				const snapshot = child[kSnapshot];
-				// Replay a frozen block's last live render. A stale generation
-				// (post-thaw) or width mismatch (resize, explicit rebuild) recomputes
-				// instead, as does a block that was still live last frame (i >= cutoff).
-				if (i < replayCutoff && snapshot && snapshot.generation === this.#generation && snapshot.width === width) {
-					lines.push(...snapshot.lines);
-					continue;
+				if (snapshot && snapshot.generation === this.#generation && snapshot.width === width) {
+					contribution = snapshot.lines;
 				}
 			}
-			const rendered = child.render(width);
+			if (contribution === undefined) {
+				const rendered = child.render(width);
+				contribution = stripPlainBlankEdges(rendered);
+				// Cache every block's latest contribution. While a block is in the
+				// live region this keeps its snapshot current; on the frame it crosses
+				// out, the recompute above refreshes it before it freezes.
+				if (risk) child[kSnapshot] = { width, lines: contribution, generation: this.#generation };
+			}
+
+			// Empty (or stripped-to-nothing) children contribute nothing and never
+			// affect spacing or the live-region offsets.
+			if (contribution.length === 0) continue;
+
+			// Every block is separated from preceding visible content by exactly one
+			// blank row — skipped when it opens the transcript or the prior row is
+			// already a plain blank (a fragment's own trailing pad), never doubling.
+			const sep = lines.length > 0 && !isPlainBlank(lines[lines.length - 1]!) ? 1 : 0;
+
+			// The separator before the first live block stays in the committed prefix
+			// (it is deterministic and never changes once the prior block is frozen),
+			// so the live region begins at the block's first content row.
+			if (risk && !liveRecorded && i >= liveStartIndex) {
+				this.#nativeScrollbackLiveRegionStart = lines.length + sep;
+				liveRecorded = true;
+			}
+
+			if (sep) lines.push("");
+			for (let j = 0; j < contribution.length; j++) lines.push(contribution[j]!);
+
 			// Extend the commit-safe boundary through each leading append-only live
-			// block. `lines.length` here is this block's start offset; the boundary
-			// runs to the end of its rendered rows. The first volatile live block
-			// closes the run so its mutable rows stay deferred.
-			if (i >= liveStartIndex && commitSafeOpen) {
+			// block. The first volatile live block closes the run so its mutable
+			// rows stay deferred.
+			if (risk && i >= liveStartIndex && commitSafeOpen) {
 				if (isBlockAppendOnly(child)) {
-					this.#nativeScrollbackCommitSafeEnd = lines.length + rendered.length;
+					this.#nativeScrollbackCommitSafeEnd = lines.length;
 				} else {
 					commitSafeOpen = false;
 				}
 			}
-			// Cache every block's latest render. While a block is in the live region
-			// this keeps its snapshot current; on the frame it crosses out, the
-			// recompute above refreshes it to the final state before it freezes.
-			child[kSnapshot] = { width, lines: rendered, generation: this.#generation };
-			lines.push(...rendered);
 		}
 		return lines;
 	}
 }
+
+/**
+ * Groups a run of sibling rows (an IRC card's header + body, a file-mention
+ * list, a bordered command/version panel) into a single transcript child so the
+ * container spaces it as one block — one blank line above, none injected between
+ * its rows. Without this wrapper the rows would be top-level children and the
+ * container would put a blank line between each (and inside any border box).
+ * It is a plain {@link Container}; the named subclass documents intent and makes
+ * every manual block grouping greppable.
+ */
+export class TranscriptBlock extends Container {}

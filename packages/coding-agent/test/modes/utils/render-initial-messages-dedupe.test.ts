@@ -65,6 +65,7 @@ function makeCtx(sessionManager?: Pick<SessionManager, "buildSessionContext" | "
 		renderSessionContext: renderSessionContextSpy,
 		showStatus: vi.fn(),
 		ui: { requestRender: vi.fn() },
+		resetTranscript: () => ctx.chatContainer.clear(),
 	} as unknown as InteractiveModeContext;
 
 	return { ctx, buildSessionContextSpy, renderSessionContextSpy };

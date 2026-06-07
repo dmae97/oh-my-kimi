@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "../../../src/config/settings";
 import { AssistantMessageComponent } from "../../../src/modes/components/assistant-message";
 import { TranscriptContainer } from "../../../src/modes/components/transcript-container";
 import { initTheme } from "../../../src/modes/theme/theme";
+import { USER_INTERRUPT_LABEL } from "../../../src/session/messages";
 
 // Models a transcript block that re-lays-out (tool preview collapsing, assistant
 // message finalizing, late async result) after it has scrolled past the live
@@ -107,16 +108,16 @@ describe("TranscriptContainer", () => {
 		// A newer block makes `a` non-live; it now replays its last live render.
 		const b = new MutableBlock(["b1"]);
 		container.addChild(b);
-		expect(container.render(40)).toEqual(["a2", "b1"]);
+		expect(container.render(40)).toEqual(["a2", "", "b1"]);
 
 		// A post-freeze mutation of `a` (its collapse/re-layout) is NOT reflected —
 		// the committed rows stay stable so no stale duplicate enters scrollback.
 		a.set(["a3-collapsed"]);
-		expect(container.render(40)).toEqual(["a2", "b1"]);
+		expect(container.render(40)).toEqual(["a2", "", "b1"]);
 
 		// The live block still updates freely.
 		b.set(["b2"]);
-		expect(container.render(40)).toEqual(["a2", "b2"]);
+		expect(container.render(40)).toEqual(["a2", "", "b2"]);
 	});
 
 	it("reports the live block start for native scrollback pinning (ED3-risk)", () => {
@@ -127,12 +128,12 @@ describe("TranscriptContainer", () => {
 		container.addChild(a);
 		container.addChild(b);
 
-		expect(container.render(40)).toEqual(["a1", "a2", "b1"]);
-		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		expect(container.render(40)).toEqual(["a1", "a2", "", "b1"]);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(3);
 
 		b.set(["b1", "b2"]);
-		expect(container.render(40)).toEqual(["a1", "a2", "b1", "b2"]);
-		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		expect(container.render(40)).toEqual(["a1", "a2", "", "b1", "b2"]);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(3);
 	});
 
 	it("seals the prior block at its final content when finalize+append coalesce (ED3-risk)", () => {
@@ -151,11 +152,11 @@ describe("TranscriptContainer", () => {
 
 		// The transition frame must seal `a` at its final content, not the stale
 		// mid-stream snapshot ("Nat") it last rendered while live.
-		expect(container.render(40)).toEqual(["Natives built, now...", "b1"]);
+		expect(container.render(40)).toEqual(["Natives built, now...", "", "b1"]);
 
 		// Once sealed, a later re-layout of `a` stays frozen until the next thaw.
 		a.set(["a-collapsed"]);
-		expect(container.render(40)).toEqual(["Natives built, now...", "b1"]);
+		expect(container.render(40)).toEqual(["Natives built, now...", "", "b1"]);
 	});
 
 	it("thaw() reconciles frozen blocks to their current state", () => {
@@ -167,10 +168,10 @@ describe("TranscriptContainer", () => {
 		container.addChild(b);
 		container.render(40);
 		a.set(["a-final"]);
-		expect(container.render(40)).toEqual(["a1", "b1"]); // frozen
+		expect(container.render(40)).toEqual(["a1", "", "b1"]); // frozen
 
 		container.thaw();
-		expect(container.render(40)).toEqual(["a-final", "b1"]); // reconciled
+		expect(container.render(40)).toEqual(["a-final", "", "b1"]); // reconciled
 	});
 
 	it("invalidate() retires frozen snapshots so resetDisplay reflects current state", () => {
@@ -186,10 +187,10 @@ describe("TranscriptContainer", () => {
 		container.addChild(b);
 		container.render(40);
 		a.set(["a-expanded-1", "a-expanded-2"]);
-		expect(container.render(40)).toEqual(["a-collapsed", "b1"]); // frozen
+		expect(container.render(40)).toEqual(["a-collapsed", "", "b1"]); // frozen
 
 		container.invalidate();
-		expect(container.render(40)).toEqual(["a-expanded-1", "a-expanded-2", "b1"]);
+		expect(container.render(40)).toEqual(["a-expanded-1", "a-expanded-2", "", "b1"]);
 	});
 
 	it("recomputes a frozen block on a width change", () => {
@@ -201,9 +202,9 @@ describe("TranscriptContainer", () => {
 		container.addChild(b);
 		container.render(40);
 		a.set(["a-reflowed"]);
-		expect(container.render(40)).toEqual(["a1", "b1"]); // frozen at width 40
+		expect(container.render(40)).toEqual(["a1", "", "b1"]); // frozen at width 40
 		// A resize is an explicit rebuild that reconciles history, so recompute.
-		expect(container.render(80)).toEqual(["a-reflowed", "b1"]);
+		expect(container.render(80)).toEqual(["a-reflowed", "", "b1"]);
 	});
 
 	it("renders every block live on terminals that can rebuild history", () => {
@@ -217,7 +218,7 @@ describe("TranscriptContainer", () => {
 		// No freezing: a non-live block's mutation is reflected (the renderer can
 		// rebuild committed history on these terminals).
 		a.set(["a-updated"]);
-		expect(container.render(40)).toEqual(["a-updated", "b1"]);
+		expect(container.render(40)).toEqual(["a-updated", "", "b1"]);
 	});
 
 	it("keeps an unfinalized block live when a finalized block is appended below it (ED3-risk)", () => {
@@ -232,7 +233,7 @@ describe("TranscriptContainer", () => {
 		// tool while it is still streaming. The tool must NOT freeze here.
 		const card = new MutableBlock(["rule card"]);
 		container.addChild(card);
-		expect(container.render(40)).toEqual(["write (streaming)", "rule card"]);
+		expect(container.render(40)).toEqual(["write (streaming)", "", "rule card"]);
 		// The live region begins at the unfinalized tool, not the bottom card.
 		expect(container.getNativeScrollbackLiveRegionStart()).toBe(0);
 
@@ -240,11 +241,11 @@ describe("TranscriptContainer", () => {
 		// tool was kept live, its final content is reflected — the bug was it
 		// freezing on the streaming preview and never showing the result.
 		tool.finalize(["✔ write: 4 lines"]);
-		expect(container.render(40)).toEqual(["✔ write: 4 lines", "rule card"]);
+		expect(container.render(40)).toEqual(["✔ write: 4 lines", "", "rule card"]);
 
 		// Now finalized, it freezes: a later re-layout stays put until the next thaw.
 		tool.set(["collapsed"]);
-		expect(container.render(40)).toEqual(["✔ write: 4 lines", "rule card"]);
+		expect(container.render(40)).toEqual(["✔ write: 4 lines", "", "rule card"]);
 	});
 
 	it("keeps a streaming assistant live so an abort label can land after status rows below it (ED3-risk)", () => {
@@ -270,14 +271,14 @@ describe("TranscriptContainer", () => {
 			makeAssistantMessage({
 				content: [{ type: "text", text: "The config file write went through despite the interruption." }],
 				stopReason: "aborted",
-				errorMessage: "Operation aborted",
+				errorMessage: USER_INTERRUPT_LABEL,
 			}),
 		);
 		assistant.markTranscriptBlockFinalized();
 
 		const rendered = plain(container.render(80));
 		expect(rendered).toContain("The config file write went through despite the interruption.");
-		expect(rendered).toContain("Operation aborted");
+		expect(rendered).toContain(USER_INTERRUPT_LABEL);
 		expect(rendered).toContain("Copied raw SSE stream");
 		expect(container.getNativeScrollbackLiveRegionStart()).not.toBe(0);
 	});
@@ -291,18 +292,86 @@ describe("TranscriptContainer", () => {
 		container.addChild(sealed);
 		container.addChild(pending);
 		container.addChild(card);
-		expect(container.render(40)).toEqual(["done", "pending", "card"]);
+		expect(container.render(40)).toEqual(["done", "", "pending", "", "card"]);
 		// Live region starts at the pending block (offset 1), so the already-sealed
 		// leading block can commit while pending + card stay repaintable.
-		expect(container.getNativeScrollbackLiveRegionStart()).toBe(1);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
 
 		// The leading sealed block freezes; its re-layout is not reflected.
 		sealed.set(["done-collapsed"]);
-		expect(container.render(40)).toEqual(["done", "pending", "card"]);
+		expect(container.render(40)).toEqual(["done", "", "pending", "", "card"]);
 
 		// The pending block updates freely while live.
 		pending.finalize(["pending-final"]);
-		expect(container.render(40)).toEqual(["done", "pending-final", "card"]);
-		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		expect(container.render(40)).toEqual(["done", "", "pending-final", "", "card"]);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(4);
+	});
+});
+
+describe("TranscriptContainer spacing", () => {
+	it("inserts exactly one blank line between consecutive blocks", () => {
+		riskFlag.eagerEraseScrollbackRisk = false;
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["a"]));
+		container.addChild(new MutableBlock(["b"]));
+		container.addChild(new MutableBlock(["c"]));
+		// One separator between each block; none above the first.
+		expect(container.render(40)).toEqual(["a", "", "b", "", "c"]);
+	});
+
+	it("strips a block's plain-blank top/bottom padding", () => {
+		riskFlag.eagerEraseScrollbackRisk = false;
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["a"]));
+		// Leading Spacer rows + a trailing paddingY row collapse to just the body.
+		container.addChild(new MutableBlock(["", "   ", "body", ""]));
+		expect(container.render(40)).toEqual(["a", "", "body"]);
+	});
+
+	it("preserves background-colored padding rows (block-internal design)", () => {
+		riskFlag.eagerEraseScrollbackRisk = false;
+		const bgPad = "\x1b[48;2;0;0;0m   \x1b[0m";
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["a"]));
+		// The ANSI-bearing padding row is not "plain blank", so it survives stripping.
+		container.addChild(new MutableBlock([bgPad, "x", bgPad]));
+		expect(container.render(40)).toEqual(["a", "", bgPad, "x", bgPad]);
+	});
+
+	it("does not double the gap when a block carries its own trailing blank", () => {
+		riskFlag.eagerEraseScrollbackRisk = false;
+		const container = new TranscriptContainer();
+		// The trailing blank is stripped, so only the container's separator remains.
+		container.addChild(new MutableBlock(["note", ""]));
+		container.addChild(new MutableBlock(["b"]));
+		expect(container.render(40)).toEqual(["note", "", "b"]);
+	});
+
+	it("does not inject separators within a single block's rows", () => {
+		riskFlag.eagerEraseScrollbackRisk = false;
+		const container = new TranscriptContainer();
+		// An IRC card / file-mention list wrapped as one block stays tight inside.
+		container.addChild(new MutableBlock(["header", "  body1", "  body2"]));
+		expect(container.render(40)).toEqual(["header", "  body1", "  body2"]);
+	});
+
+	it("drops a blank-only block without leaving a stray gap", () => {
+		riskFlag.eagerEraseScrollbackRisk = false;
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["a"]));
+		container.addChild(new MutableBlock(["", "  "]));
+		container.addChild(new MutableBlock(["b"]));
+		expect(container.render(40)).toEqual(["a", "", "b"]);
+	});
+
+	it("counts the separator into the committed prefix below the live region (ED3-risk)", () => {
+		riskFlag.eagerEraseScrollbackRisk = true;
+		const container = new TranscriptContainer();
+		// A finalized block, then a still-live block below it.
+		container.addChild(new MutableBlock(["a1", "a2"]));
+		container.addChild(new StreamingBlock(["b"]));
+		// Separator sits at index 2; the live block's content begins at index 3.
+		expect(container.render(40)).toEqual(["a1", "a2", "", "b"]);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(3);
 	});
 });

@@ -153,9 +153,10 @@ export function formatDiagnostic(diagnostic: Diagnostic, filePath: string): stri
 const DIAG_PATH_RE = /^(.+?):(\d+:\d+\s+.*)$/;
 
 /**
- * Reformat pre-formatted diagnostic messages into grep-style directory/file groups.
+ * Reformat pre-formatted diagnostic messages into a multi-level, prefix-folded
+ * directory/file grouping (see `formatGroupedFiles`).
  * Input:  ["path:line:col [sev] msg", ...]
- * Output: "# dir/\n## file.ts\n  line:col [sev] msg"
+ * Output: "# pkg/src/\n## file.ts\n  line:col [sev] msg"
  *
  * Messages that don't match the expected format are appended ungrouped at the end.
  */

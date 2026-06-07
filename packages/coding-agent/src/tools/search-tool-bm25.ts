@@ -16,9 +16,9 @@ import {
 	searchDiscoverableTools,
 	summarizeDiscoverableTools,
 } from "../tool-discovery/tool-index";
-import { renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import { framedBlock, renderStatusLine, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
-import { formatCount, replaceTabs, TRUNCATE_LENGTHS } from "./render-utils";
+import { formatCount, formatExpandHint, formatMoreItems, replaceTabs, TRUNCATE_LENGTHS } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
 const DEFAULT_LIMIT = 8;
@@ -171,6 +171,25 @@ function renderMatchLines(match: SearchToolBm25Match, theme: Theme): string[] {
 	return lines;
 }
 
+function renderMatchBullets(tools: SearchToolBm25Match[], expanded: boolean, theme: Theme): string[] {
+	const shown = expanded ? tools.length : Math.min(tools.length, COLLAPSED_MATCH_LIMIT);
+	const bullet = theme.fg("dim", theme.format.bullet);
+	const lines: string[] = [];
+	for (let i = 0; i < shown; i++) {
+		const itemLines = renderMatchLines(tools[i]!, theme);
+		lines.push(`${bullet} ${itemLines[0]}`);
+		for (let j = 1; j < itemLines.length; j++) {
+			lines.push(`  ${itemLines[j]}`);
+		}
+	}
+	const remaining = tools.length - shown;
+	if (remaining > 0) {
+		const hint = formatExpandHint(theme, expanded, true);
+		lines.push(`${theme.fg("muted", formatMoreItems(remaining, "tool"))}${hint ? ` ${hint}` : ""}`);
+	}
+	return lines;
+}
+
 function renderFallbackResult(text: string, theme: Theme): Component {
 	const header = renderStatusLine({ icon: "warning", title: TOOL_DISCOVERY_TITLE }, theme);
 	const bodyLines = (text || "Tool discovery completed")
@@ -271,14 +290,11 @@ export const searchToolBm25Renderer = {
 	renderCall(args: SearchToolBm25Params, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const query = typeof args.query === "string" ? replaceTabs(args.query.trim()) : "";
 		const meta = args.limit ? [`limit:${args.limit}`] : [];
-		return new Text(
-			renderStatusLine(
-				{ icon: "pending", title: TOOL_DISCOVERY_TITLE, description: query || "(empty query)", meta },
-				uiTheme,
-			),
-			0,
-			0,
+		const header = renderStatusLine(
+			{ icon: "pending", title: TOOL_DISCOVERY_TITLE, description: query || "(empty query)", meta },
+			uiTheme,
 		);
+		return new Text(header, 0, 0);
 	},
 
 	renderResult(
@@ -305,7 +321,9 @@ export const searchToolBm25Renderer = {
 		const safeQuery = replaceTabs(details.query);
 		const header = renderStatusLine(
 			{
-				icon: details.tools.length > 0 ? "success" : "warning",
+				...(details.tools.length > 0
+					? { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }
+					: { icon: "warning" as const }),
 				title: TOOL_DISCOVERY_TITLE,
 				description: truncateToWidth(safeQuery, MATCH_LABEL_LEN),
 				meta,
@@ -318,19 +336,14 @@ export const searchToolBm25Renderer = {
 			return new Text(`${header}\n${uiTheme.fg("muted", emptyMessage)}`, 0, 0);
 		}
 
-		const lines = [header];
-		const treeLines = renderTreeList(
-			{
-				items: details.tools,
-				expanded: options.expanded,
-				maxCollapsed: COLLAPSED_MATCH_LIMIT,
-				itemType: "tool",
-				renderItem: match => renderMatchLines(match, uiTheme),
-			},
-			uiTheme,
-		);
-		lines.push(...treeLines);
-		return new Text(lines.join("\n"), 0, 0);
+		return framedBlock(uiTheme, width => ({
+			header,
+			sections: [{ lines: renderMatchBullets(details.tools, options.expanded ?? false, uiTheme) }],
+			state: "success",
+			borderColor: "borderMuted",
+			applyBg: false,
+			width,
+		}));
 	},
 
 	mergeCallAndResult: true,
