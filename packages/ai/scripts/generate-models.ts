@@ -30,6 +30,7 @@ import {
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
 	isFireworksKimiK2ModelId,
+	stripFireworksDeepSeekThinkingToggle,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
 	UNK_CONTEXT_WINDOW,
@@ -243,6 +244,18 @@ function applyFireworksKimiMaxTokensCap(models: readonly Model[]): Model[] {
 	});
 }
 
+/**
+ * Fireworks' DeepSeek V4 endpoint accepts the user's effort through
+ * `reasoning_effort` and rejects the DeepSeek-native binary `thinking` toggle
+ * when both are present. Strip stale reference metadata from generated fallbacks.
+ */
+function applyFireworksDeepSeekReasoningShape(models: readonly Model[]): Model[] {
+	return models.map(model => {
+		if (model.provider !== "fireworks" || model.api !== "openai-completions") return model;
+		return stripFireworksDeepSeekThinkingToggle(model, model.id);
+	});
+}
+
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
@@ -416,6 +429,7 @@ async function generateModels() {
 	allModels = applyPremiumMultiplierOverrides(allModels);
 	allModels = applyCodexPricingFallback(allModels);
 	allModels = applyFireworksKimiMaxTokensCap(allModels);
+	allModels = applyFireworksDeepSeekReasoningShape(allModels);
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
 

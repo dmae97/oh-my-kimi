@@ -971,6 +971,29 @@ export function clampFireworksKimiMaxTokens(modelId: string, candidate: number):
 	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
 }
 
+/**
+ * Fireworks DeepSeek V4 accepts effort via `reasoning_effort` but rejects the
+ * DeepSeek-native binary `thinking` toggle when both are present.
+ */
+export function stripFireworksDeepSeekThinkingToggle(
+	model: Model<"openai-completions">,
+	publicModelId: string,
+): Model<"openai-completions"> {
+	if (!publicModelId.startsWith("deepseek-v4")) return model;
+	const compat = model.compat;
+	if (!compat?.extraBody || !("thinking" in compat.extraBody)) return model;
+
+	const extraBody = { ...compat.extraBody };
+	delete extraBody.thinking;
+	if (Object.keys(extraBody).length > 0) {
+		return { ...model, compat: { ...compat, extraBody } };
+	}
+
+	const nextCompat = { ...compat };
+	delete nextCompat.extraBody;
+	return { ...model, compat: nextCompat };
+}
+
 export interface FireworksModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -1040,7 +1063,10 @@ export function fireworksModelManagerOptions(
 					mapModel: (entry, defaults) => {
 						const publicModelId = toFireworksPublicModelId(defaults.id);
 						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
-						const model = mapWithBundledReference(entry, defaults, reference);
+						const model = stripFireworksDeepSeekThinkingToggle(
+							mapWithBundledReference(entry, defaults, reference),
+							publicModelId,
+						);
 						return {
 							...model,
 							id: publicModelId,
