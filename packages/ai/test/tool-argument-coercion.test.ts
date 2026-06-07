@@ -131,6 +131,24 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ values: [7] });
 	});
 
+	it("does not wrap singleton values for array expectations from failed union branches", () => {
+		const entry = z.object({ id: z.number() });
+		const tool: Tool = {
+			name: "union_shape",
+			description: "",
+			parameters: z.union([z.array(entry), entry]),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-union-shape",
+			name: "union_shape",
+			arguments: { id: "1" },
+		});
+
+		expect(result).toEqual({ id: 1 });
+	});
+
 	it("parses JSON objects in string values when schema expects object", () => {
 		const tool: Tool = {
 			name: "t4",
