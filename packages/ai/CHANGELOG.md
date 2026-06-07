@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed the `onAuthError` option from stream request options and shifted auth retry handling to resolver-based `apiKey` behavior, requiring callers using custom auth-retry hooks to migrate
@@ -21,6 +22,8 @@
 - Fixed streaming auth retries to handle `401` and usage-limit errors before replay-unsafe content is emitted, including failures surfaced only via `errorStatus`
 - Fixed streaming retries to buffer and suppress partial `start` events from failed auth attempts so only clean retried events are delivered
 - Fixed the HTTP 400 raw-request dumper (`appendRawHttpRequestDumpFor400`) littering the real `~/.omp/logs/http-400-requests` directory during tests. Provider suites exercise the 400 error path with mocked `fetch` responses, which the dumper could not distinguish from genuine failures; it now skips persistence under the Bun test runner (`isBunTestRuntime()`).
+- Fixed Anthropic Opus requests unnecessarily forcing `tool_choice.disable_parallel_tool_use`, allowing Claude Opus to use the provider's default parallel tool-calling behavior again.
+- Fixed parallel `function_call` items losing arguments against llama.cpp's OpenAI Responses endpoint (`/v1/responses`), where every call but the last finalized with `{}` and the agent rejected them with `path: Invalid input: expected string, received undefined`. llama.cpp's `to_json_oaicompat_resp` emits `output_item.added` with only `item.call_id` (no `item.id`, no `output_index`) while the matching `function_call_arguments.delta` carries `item_id: "fc_<call_id>"`. `processResponsesStream` now registers function-call and custom-tool-call items under `item.call_id` as a secondary lookup key (alongside `item.id`/`output_index`) so identifier-deviant hosts route deltas and done events to the right block. ([#2015](https://github.com/can1357/oh-my-pi/issues/2015))
 
 ## [15.10.0] - 2026-06-06
 
@@ -37,7 +40,6 @@
 - Fixed Cloud Code Assist (Antigravity / Gemini CLI) rejecting the `github` tool with HTTP 400 when the `pr` parameter schema contained `anyOf: [string, array]`. The CCA mixed-type combiner collapse picked the first non-null type (`string`) but indiscriminately copied type-specific keys from variant branches — `items` from the array variant leaked onto the string-typed result, producing `{type: "string", items: {...}}` which Google's API rejects as invalid. The collapse now filters merged variant fields against the winning type's allowed key set. ([#2002](https://github.com/can1357/oh-my-pi/pull/2002))
 - Fixed OpenAI Responses-family providers (Codex, OpenAI Responses, Azure Responses) rejecting requests with `400 No tool output found for function call …` after the user branched/navigated the session tree to a node that ends on a tool call (the tool-result child is dropped from the reconstructed history) or after a turn was aborted/crashed between the call streaming and its result persisting. The converters now synthesize a placeholder `function_call_output`/`custom_tool_call_output` immediately after any unpaired `function_call`/`custom_tool_call`, symmetric to the existing orphan-output repair, so the model still sees the call and can recover instead of the whole request 400ing.
 - Fixed Anthropic-compatible reasoning endpoints losing prior-turn reasoning on continuation requests when they emit unsigned `thinking` blocks. `convertAnthropicMessages` treated unknown endpoints as signature-enforcing and demoted unsigned reasoning to `type: "text"`, which destabilized tool-call argument serialization on the next turn — the upstream symptom behind the `args?.ops?.map is not a function` crash reported against the `todo` tool. Official `api.anthropic.com` keeps the conservative text fallback; non-official `anthropic-messages` reasoning models now replay unsigned reasoning as native `type: "thinking"` ([#2005](https://github.com/can1357/oh-my-pi/issues/2005)).
-- Fixed parallel `function_call` items losing arguments against llama.cpp's OpenAI Responses endpoint (`/v1/responses`), where every call but the last finalized with `{}` and the agent rejected them with `path: Invalid input: expected string, received undefined`. llama.cpp's `to_json_oaicompat_resp` emits `output_item.added` with only `item.call_id` (no `item.id`, no `output_index`) while the matching `function_call_arguments.delta` carries `item_id: "fc_<call_id>"`. `processResponsesStream` now registers function-call and custom-tool-call items under `item.call_id` as a secondary lookup key (alongside `item.id`/`output_index`) so identifier-deviant hosts route deltas and done events to the right block. ([#2015](https://github.com/can1357/oh-my-pi/issues/2015))
 
 ## [15.9.67] - 2026-06-06
 
