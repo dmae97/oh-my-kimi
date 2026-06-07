@@ -1058,6 +1058,72 @@ export async function resolveAllowedModels(
 	return available.filter(model => allowed.has(`${model.provider}/${model.id}`));
 }
 
+/**
+ * Synchronous subset of {@link resolveAllowedModels} for contexts where async is unavailable
+ * (e.g. the ACP model-list advertisement). Handles the patterns that cover real-world configs:
+ *
+ * - Exact `provider/modelId` selectors
+ * - Canonical ids (expanded via `getCanonicalVariants`)
+ * - Bare model ids (matched across all available providers)
+ * - Optional `:thinkingLevel` suffix on any of the above is stripped before matching
+ *
+ * Glob patterns (`*`, `?`, `[`) require async resolution; when any pattern contains a glob
+ * the full unfiltered list is returned so the UI is never accidentally empty.
+ *
+ * Returns the unfiltered list when no pattern resolves to any model, mirroring the
+ * "no usable model" guard in {@link resolveAllowedModels} but leaning toward showing
+ * more rather than nothing in a UI context.
+ */
+export function filterAvailableModelsByEnabledPatterns(
+	available: Model<Api>[],
+	patterns: readonly string[],
+	registry: Pick<ModelRegistry, "getCanonicalVariants">,
+): Model<Api>[] {
+	if (patterns.length === 0) return available;
+
+	const allowed = new Set<string>();
+	for (const pattern of patterns) {
+		// Glob patterns need the async resolveModelScope path; return all rather than
+		// accidentally hiding models.
+		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
+			return available;
+		}
+
+		// Strip optional thinking-level suffix (e.g. "claude-sonnet-4-6:high").
+		const colonIdx = pattern.lastIndexOf(":");
+		const basePattern = colonIdx !== -1 ? pattern.slice(0, colonIdx) : pattern;
+
+		// Explicit provider/modelId — resolve directly via the existing reference matcher.
+		if (basePattern.includes("/")) {
+			const match = findExactModelReferenceMatch(basePattern, available);
+			if (match) {
+				allowed.add(`${match.provider}/${match.id}`);
+			}
+			continue;
+		}
+
+		// Canonical id — expand to all available concrete variants.
+		const variants = registry.getCanonicalVariants(basePattern, { availableOnly: true, candidates: available });
+		if (variants.length > 0) {
+			for (const { model } of variants) {
+				allowed.add(`${model.provider}/${model.id}`);
+			}
+			continue;
+		}
+
+		// Bare model id — match across all available providers.
+		for (const m of available) {
+			if (m.id === basePattern) {
+				allowed.add(`${m.provider}/${m.id}`);
+			}
+		}
+	}
+
+	if (allowed.size === 0) return available;
+	return available.filter(m => allowed.has(`${m.provider}/${m.id}`));
+}
+
+
 export interface ResolveCliModelResult {
 	model: Model<Api> | undefined;
 	selector?: string;
