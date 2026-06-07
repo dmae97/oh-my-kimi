@@ -149,6 +149,52 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ id: 1 });
 	});
 
+	it("does not wrap singleton values for JSON Schema anyOf array branches", () => {
+		const tool: Tool = {
+			name: "json_schema_union",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					target: {
+						anyOf: [
+							{
+								type: "array",
+								items: {
+									type: "object",
+									properties: { a: { type: "boolean" } },
+									required: ["a"],
+									additionalProperties: false,
+								},
+							},
+							{
+								type: "object",
+								properties: { a: { type: "boolean" } },
+								required: ["a"],
+								additionalProperties: false,
+							},
+						],
+					},
+				},
+				required: ["target"],
+				additionalProperties: false,
+			},
+		};
+
+		// The bug would silently coerce `{ a: "true" }` into `[{ a: true }]` by
+		// wrapping the object to satisfy the failed `anyOf` array branch and
+		// then coercing the inner string into a boolean. Branch tracking keeps
+		// the wrap from firing so the wrong shape never makes it through.
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-jsonschema-union",
+				name: "json_schema_union",
+				arguments: { target: { a: "true" } },
+			}),
+		).toThrow("Validation failed");
+	});
+
 	it("parses JSON objects in string values when schema expects object", () => {
 		const tool: Tool = {
 			name: "t4",

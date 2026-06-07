@@ -914,19 +914,20 @@ function preserveUnknownRootFields(input: unknown, parsed: unknown): unknown {
 
 function flattenJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue>): FlatIssue[] {
 	return issues.map(issue => {
+		const unionBranch = issue.fromUnionBranch === true;
 		if (issue.keyword === "additionalProperties") {
 			return {
 				keyword: "unrecognized",
 				instancePath: pathToPointer(issue.path),
 				expectedTypes: [],
-				unionBranch: false,
+				unionBranch,
 			};
 		}
 		return {
 			keyword: issue.keyword === "type" ? "type" : "other",
 			instancePath: pathToPointer(issue.path),
 			expectedTypes: issue.expectedTypes ?? [],
-			unionBranch: false,
+			unionBranch,
 		};
 	});
 }
