@@ -9,6 +9,15 @@ export interface CodeBlock {
 	code: string;
 }
 
+/** A blockquote block: a maximal run of `>`-prefixed lines from markdown. */
+export interface QuoteBlock {
+	/** Block body with each line's `>` marker (and one optional space) removed. */
+	text: string;
+}
+
+/** A drillable block within an assistant message, in document order. */
+export type MessageBlock = ({ kind: "code" } & CodeBlock) | ({ kind: "quote" } & QuoteBlock);
+
 /** A runnable command found in the transcript. */
 export interface LastCommand {
 	kind: "bash" | "eval";
@@ -23,7 +32,7 @@ export interface LastCommand {
  * `children` to drill into.
  */
 export interface CopyTarget {
-	/** Stable identifier (e.g. "msg:1", "msg:1:code:0", "msg:1:all", "cmd:1"). */
+	/** Stable id (e.g. "msg:1", "msg:1:code:0", "msg:1:quote:0", "msg:1:all", "cmd:1"). */
 	id: string;
 	label: string;
 	/** Dim annotation: line/block counts, language, or tool name. */
@@ -49,15 +58,70 @@ export interface CopySource {
 /** Cap on how many recent assistant messages the picker lists. */
 const MAX_MESSAGES = 50;
 
-const CODE_BLOCK_RE = /^```([^\n]*)\n([\s\S]*?)^```/gm;
+const OPEN_FENCE_RE = /^```([^\n]*)$/;
+const CLOSE_FENCE_RE = /^```/;
+const QUOTE_LINE_RE = /^>(.*)$/;
+
+/**
+ * Split assistant markdown into drillable blocks — fenced code and `>`-quoted
+ * runs — in document order. Fences mask their bodies, so a `>` line inside a
+ * code block is never mistaken for a quote. An unclosed fence is treated as
+ * ordinary text, matching the fenced-block grammar.
+ */
+export function extractBlocks(text: string): MessageBlock[] {
+	const blocks: MessageBlock[] = [];
+	const lines = text.split("\n");
+	let quote: string[] | undefined;
+	const flushQuote = () => {
+		if (quote) {
+			blocks.push({ kind: "quote", text: quote.join("\n") });
+			quote = undefined;
+		}
+	};
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
+		const open = OPEN_FENCE_RE.exec(line);
+		if (open) {
+			let close = -1;
+			for (let k = i + 1; k < lines.length; k++) {
+				if (CLOSE_FENCE_RE.test(lines[k]!)) {
+					close = k;
+					break;
+				}
+			}
+			if (close !== -1) {
+				flushQuote();
+				blocks.push({ kind: "code", lang: open[1].trim(), code: lines.slice(i + 1, close).join("\n") });
+				i = close;
+				continue;
+			}
+		}
+
+		const quoted = QUOTE_LINE_RE.exec(line);
+		if (quoted) {
+			// Strip the `>` marker plus one optional following space.
+			(quote ??= []).push(quoted[1].startsWith(" ") ? quoted[1].slice(1) : quoted[1]);
+		} else {
+			flushQuote();
+		}
+	}
+	flushQuote();
+	return blocks;
+}
 
 /** Extract fenced code blocks from assistant markdown, in document order. */
 export function extractCodeBlocks(text: string): CodeBlock[] {
-	const blocks: CodeBlock[] = [];
-	for (const match of text.matchAll(CODE_BLOCK_RE)) {
-		blocks.push({ lang: match[1].trim(), code: match[2].replace(/\n$/, "") });
-	}
-	return blocks;
+	return extractBlocks(text)
+		.filter((b): b is { kind: "code" } & CodeBlock => b.kind === "code")
+		.map(b => ({ lang: b.lang, code: b.code }));
+}
+
+/** Extract `>`-quoted blocks from assistant markdown, in document order. */
+export function extractQuoteBlocks(text: string): QuoteBlock[] {
+	return extractBlocks(text)
+		.filter((b): b is { kind: "quote" } & QuoteBlock => b.kind === "quote")
+		.map(b => ({ text: b.text }));
 }
 
 function extractEvalCode(args: unknown): { code: string; language: string } | undefined {
@@ -136,42 +200,83 @@ function firstLine(text: string): string {
 	return text.trim().replace(/\s+/g, " ");
 }
 
-/** Build the target node for one assistant message: a leaf when it has no code
- * blocks, otherwise a group exposing the full message, each block, and "all". */
+/** "<n> lines · <c> code · <q> quote" — omitting block kinds that are absent. */
+function blockSummaryHint(text: string, codeCount: number, quoteCount: number): string {
+	const parts = [pluralLines(text)];
+	if (codeCount > 0) parts.push(`${codeCount} code`);
+	if (quoteCount > 0) parts.push(`${quoteCount} quote`);
+	return parts.join(" · ");
+}
+
+/** Build the target node for one assistant message: a leaf when it has no
+ * drillable blocks, otherwise a group exposing the full message plus each
+ * fenced code block and `>`-quoted block (de-prefixed) as a child target. */
 function messageTarget(text: string, rank: number): CopyTarget {
 	const id = `msg:${rank}`;
 	const label = firstLine(text);
-	const blocks = extractCodeBlocks(text);
-	const hint = blocks.length > 0 ? `${pluralLines(text)} · ${blocks.length} code` : pluralLines(text);
+	const blocks = extractBlocks(text);
 	const messageCopy = rank === 1 ? "Copied last message to clipboard" : "Copied message to clipboard";
 
 	if (blocks.length === 0) {
-		return { id, label, hint, preview: text, content: text, copyMessage: messageCopy };
+		return { id, label, hint: pluralLines(text), preview: text, content: text, copyMessage: messageCopy };
 	}
 
-	// The message node itself copies the full message; its code blocks are
-	// child copy targets you can expand into.
-	const children: CopyTarget[] = blocks.map((block, j) => ({
-		id: `${id}:code:${j}`,
-		label: `Block ${j + 1}`,
-		hint: blockHint(block),
-		preview: block.code,
-		language: block.lang || undefined,
-		content: block.code,
-		copyMessage: `Copied code block ${j + 1} to clipboard`,
-	}));
-	if (blocks.length > 1) {
-		const combined = blocks.map(b => b.code).join("\n\n");
+	// The message node itself copies the full message; each block is a child
+	// copy target you can drill into, kept in document order.
+	const children: CopyTarget[] = [];
+	const codeBlocks: CodeBlock[] = [];
+	const quoteBlocks: QuoteBlock[] = [];
+	for (const block of blocks) {
+		if (block.kind === "code") {
+			const j = codeBlocks.length;
+			codeBlocks.push(block);
+			children.push({
+				id: `${id}:code:${j}`,
+				label: `Block ${j + 1}`,
+				hint: blockHint(block),
+				preview: block.code,
+				language: block.lang || undefined,
+				content: block.code,
+				copyMessage: `Copied code block ${j + 1} to clipboard`,
+			});
+		} else {
+			const j = quoteBlocks.length;
+			quoteBlocks.push(block);
+			children.push({
+				id: `${id}:quote:${j}`,
+				label: `Quote ${j + 1}`,
+				hint: pluralLines(block.text),
+				preview: block.text,
+				content: block.text,
+				copyMessage: `Copied quote block ${j + 1} to clipboard`,
+			});
+		}
+	}
+
+	if (codeBlocks.length > 1) {
+		const combined = codeBlocks.map(b => b.code).join("\n\n");
 		children.push({
 			id: `${id}:all`,
-			label: `All ${blocks.length} blocks`,
+			label: `All ${codeBlocks.length} blocks`,
 			hint: pluralLines(combined),
 			preview: combined,
 			content: combined,
-			copyMessage: `Copied ${blocks.length} code blocks to clipboard`,
+			copyMessage: `Copied ${codeBlocks.length} code blocks to clipboard`,
+		});
+	}
+	if (quoteBlocks.length > 1) {
+		const combined = quoteBlocks.map(b => b.text).join("\n\n");
+		children.push({
+			id: `${id}:all-quotes`,
+			label: `All ${quoteBlocks.length} quotes`,
+			hint: pluralLines(combined),
+			preview: combined,
+			content: combined,
+			copyMessage: `Copied ${quoteBlocks.length} quote blocks to clipboard`,
 		});
 	}
 
+	const hint = blockSummaryHint(text, codeBlocks.length, quoteBlocks.length);
 	return { id, label, hint, preview: text, content: text, copyMessage: messageCopy, children };
 }
 

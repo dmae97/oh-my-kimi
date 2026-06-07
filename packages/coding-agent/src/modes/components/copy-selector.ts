@@ -10,6 +10,7 @@ import {
 	matchesSelectUp,
 } from "../utils/keybinding-matchers";
 import { keyHint, rawKeyHint } from "./keybinding-hints";
+import { bottomBorder, divider, row, topBorder } from "./overlay-box";
 
 /** Minimum rows reserved for the tree even on short terminals. */
 const MIN_TREE_ROWS = 3;
@@ -32,49 +33,6 @@ interface FlatNode {
 	ancestorHasNext: boolean[];
 }
 
-/** Pad or truncate a (possibly ANSI-styled) string to exactly `width` columns. */
-function fit(text: string, width: number): string {
-	if (width <= 0) return "";
-	const w = visibleWidth(text);
-	if (w === width) return text;
-	if (w < width) return text + padding(width - w);
-	const cut = truncateToWidth(text, width);
-	const cw = visibleWidth(cut);
-	return cw < width ? cut + padding(width - cw) : cut;
-}
-
-function paint(s: string): string {
-	return theme.fg("border", s);
-}
-
-function topBorder(width: number, title: string): string {
-	const box = theme.boxSharp;
-	const inner = Math.max(0, width - 2);
-	if (!title) return paint(box.topLeft + box.horizontal.repeat(inner) + box.topRight);
-	const shown = truncateToWidth(` ${title} `, Math.max(0, inner - 2));
-	const fillWidth = Math.max(0, inner - 1 - visibleWidth(shown));
-	return (
-		paint(box.topLeft + box.horizontal) +
-		theme.bold(theme.fg("accent", shown)) +
-		paint(box.horizontal.repeat(fillWidth) + box.topRight)
-	);
-}
-
-function divider(width: number): string {
-	const box = theme.boxSharp;
-	return paint(box.teeRight + box.horizontal.repeat(Math.max(0, width - 2)) + box.teeLeft);
-}
-
-function bottomBorder(width: number): string {
-	const box = theme.boxSharp;
-	return paint(box.bottomLeft + box.horizontal.repeat(Math.max(0, width - 2)) + box.bottomRight);
-}
-
-/** Wrap pre-styled content in vertical borders with single-column insets. */
-function row(content: string, width: number): string {
-	const box = theme.boxSharp;
-	return `${paint(box.vertical)} ${fit(content, Math.max(0, width - 4))} ${paint(box.vertical)}`;
-}
 
 /** Render one tree connector as exactly three cells (e.g. "├─ ", "└─ ", "|--"). */
 function connectorCells(symbol: string): string {
