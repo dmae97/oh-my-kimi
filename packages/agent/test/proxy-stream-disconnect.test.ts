@@ -54,8 +54,9 @@ async function collectEvents(
 	while (Date.now() < deadline) {
 		const { promise: timeoutPromise, resolve: timeoutResolve } =
 			Promise.withResolvers<IteratorResult<AssistantMessageEvent>>();
-		setTimeout(() => timeoutResolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>), timeoutMs);
+		const timer = setTimeout(() => timeoutResolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>), timeoutMs);
 		const result = await Promise.race([iterator.next(), timeoutPromise]);
+		clearTimeout(timer);
 		if (result.done) break;
 		events.push(result.value);
 	}
@@ -82,10 +83,12 @@ describe("streamProxy — server disconnect without terminal event", () => {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
 		});
-
 		const collected = await collectEvents(stream);
-		const hasError = collected.some((e) => e.type === "error");
-		expect(hasError).toBe(true);
+		const errorEvent = collected.find((e) => e.type === "error");
+		expect(errorEvent).toBeDefined();
+		if (errorEvent && errorEvent.type === "error") {
+			expect(errorEvent.reason).toBe("error");
+		}
 	});
 
 	it("resolves stream.result() with stopReason='error' when server disconnects mid-stream", async () => {
@@ -168,5 +171,34 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		const result = await stream.result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.length).toBeGreaterThan(0);
+	});
+
+	it("completes with error event when server sends an 'error' terminal event", async () => {
+		const events: ProxyAssistantMessageEvent[] = [
+			{ type: "start" },
+			{ type: "text_start", contentIndex: 0 },
+			{ type: "text_delta", contentIndex: 0, delta: "Hel" },
+			{
+				type: "error",
+				reason: "error",
+				errorMessage: "rate_limit_exceeded",
+				usage: { ...baseUsage },
+			},
+		];
+		const body = buildSseBody(events);
+
+		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
+		});
+
+		const collected = await collectEvents(stream);
+		expect(collected.some((e) => e.type === "error")).toBe(true);
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("rate_limit_exceeded");
 	});
 });
