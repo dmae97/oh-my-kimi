@@ -131,4 +131,47 @@ describe.skipIf(!supportsReftable)("git reftable support", () => {
 			expect(git.repo.isReftableSync(repository4)).toBe(false);
 		}
 	});
+
+	test("resolves references in a reftable worktree", async () => {
+		// Initialize the repository with reftable format
+		const initResult = await $`git init --ref-format=reftable --initial-branch=main`.cwd(testRepoDir).quiet();
+		expect(initResult.exitCode).toBe(0);
+
+		// Configure basic user details so we can commit
+		await $`git config user.name "Test User"`.cwd(testRepoDir).quiet();
+		await $`git config user.email "test@example.com"`.cwd(testRepoDir).quiet();
+
+		// Create a file and commit it
+		await fs.writeFile(path.join(testRepoDir, "file.txt"), "hello world");
+		await $`git add file.txt`.cwd(testRepoDir).quiet();
+		await $`git commit -m "initial commit"`.cwd(testRepoDir).quiet();
+
+		// Create a linked worktree
+		const worktreeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-reftable-wt-"));
+		try {
+			await $`git worktree add ${worktreeDir} -b wt-branch`.cwd(testRepoDir).quiet();
+
+			// Resolve the repository for the worktree
+			const repository = await git.repo.resolve(worktreeDir);
+			expect(repository).not.toBeNull();
+			if (!repository) return;
+
+			expect(repository.gitDir).not.toBe(repository.commonDir);
+			expect(await git.repo.isReftable(repository)).toBe(true);
+
+			// Check current branch on worktree
+			const currentBranch = await git.branch.current(worktreeDir);
+			expect(currentBranch).toBe("wt-branch");
+
+			// Check that HEAD resolves correctly in the worktree
+			const headState = await git.head.resolve(worktreeDir);
+			expect(headState).not.toBeNull();
+			if (headState?.kind !== "ref") throw new Error("expected ref head in worktree");
+			expect(headState.branchName).toBe("wt-branch");
+		} finally {
+			// Clean up the worktree
+			await $`git worktree remove ${worktreeDir} -f`.cwd(testRepoDir).quiet().nothrow();
+			await fs.rm(worktreeDir, { recursive: true, force: true }).catch(() => {});
+		}
+	});
 });

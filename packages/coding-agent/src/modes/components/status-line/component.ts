@@ -243,7 +243,7 @@ export class StatusLineComponent implements Component {
 		if (!repository) return;
 
 		const watchPath = git.repo.isReftableSync(repository)
-			? path.join(repository.commonDir, "reftable", "tables.list")
+			? path.join(repository.gitDir, "reftable", "tables.list")
 			: repository.headPath;
 
 		try {
