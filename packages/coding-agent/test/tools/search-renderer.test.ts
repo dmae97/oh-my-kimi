@@ -52,7 +52,7 @@ describe("searchToolRenderer", () => {
 			},
 		);
 		const renderedLines = sanitizeText(collapsed.render(200).join("\n")).split("\n");
-		const bodyLines = renderedLines.slice(1, -1);
+		const bodyLines = renderedLines.slice(1);
 
 		expect(renderedLines[0]).toContain("truncated");
 		expect(bodyLines).toHaveLength(6);
@@ -93,7 +93,7 @@ describe("searchToolRenderer", () => {
 			{ pattern: "Flag" },
 		);
 		const renderedLines = sanitizeText(collapsed.render(240).join("\n")).split("\n");
-		const bodyLines = renderedLines.slice(1, -1);
+		const bodyLines = renderedLines.slice(1);
 
 		expect(bodyLines).toHaveLength(6);
 		expect(bodyLines.some(line => line.includes("const firstFlag = true;"))).toBe(true);

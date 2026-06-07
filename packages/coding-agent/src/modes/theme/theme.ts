@@ -95,6 +95,7 @@ export type SymbolKey =
 	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
+	| "icon.search"
 	| "icon.scratchFolder"
 	| "icon.file"
 	| "icon.git"
@@ -264,6 +265,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
+	"icon.search": "🔍",
 	"icon.scratchFolder": "🗑",
 	"icon.file": "📄",
 	"icon.git": "⎇",
@@ -488,6 +490,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.loop": "\uf021",
 	// pick:  | alt:  
 	"icon.folder": "\uf115",
+	"icon.search": "\uf002",
 	// pick:  | alt:
 	"icon.scratchFolder": "\uf014",
 	// pick:  | alt:  
@@ -701,6 +704,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
+	"icon.search": "[/]",
 	"icon.scratchFolder": "[T]",
 	"icon.file": "[F]",
 	"icon.git": "git:",

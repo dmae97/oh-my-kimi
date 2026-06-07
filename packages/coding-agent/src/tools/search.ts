@@ -1365,7 +1365,12 @@ export const searchToolRenderer = {
 			const lines = textContent.split("\n").filter(line => line.trim() !== "");
 			const description = args?.pattern ?? undefined;
 			const header = renderStatusLine(
-				{ icon: "success", title: "Search", description, meta: [formatCount("item", lines.length)] },
+				{
+					iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")),
+					title: "Search",
+					description,
+					meta: [formatCount("item", lines.length)],
+				},
 				uiTheme,
 			);
 			return createCachedComponent(
@@ -1419,7 +1424,14 @@ export const searchToolRenderer = {
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const description = args?.pattern ?? undefined;
 		const header = renderStatusLine(
-			{ icon: truncated ? "warning" : "success", title: "Search", description, meta },
+			{
+				...(truncated
+					? { icon: "warning" as const }
+					: { iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")) }),
+				title: "Search",
+				description,
+				meta,
+			},
 			uiTheme,
 		);
 

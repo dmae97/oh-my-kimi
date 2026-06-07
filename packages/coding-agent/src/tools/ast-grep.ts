@@ -380,7 +380,14 @@ export const astGrepToolRenderer = {
 		if (limitReached) meta.push(uiTheme.fg("warning", "limit reached"));
 		const description = args?.pat;
 		const header = renderStatusLine(
-			{ icon: limitReached ? "warning" : "success", title: "AST Grep", description, meta },
+			{
+				...(limitReached
+					? { icon: "warning" as const }
+					: { iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")) }),
+				title: "AST Grep",
+				description,
+				meta,
+			},
 			uiTheme,
 		);
 
