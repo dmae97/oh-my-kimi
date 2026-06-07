@@ -34,7 +34,7 @@ describe("EnhancedPasteController", () => {
 		controller.handleInput(packet("type=read:status=DONE"));
 
 		const pasteEventName = Buffer.from("Paste event", "utf8").toString("base64");
-		expect(writes.at(-1)).toBe(`${OSC}type=read:mime=${imageMime}:pw=${password}:name=${pasteEventName}${ST}`);
+		expect(writes.at(-1)).toBe(`${OSC}type=read:pw=${password}:name=${pasteEventName};${imageMime}${ST}`);
 
 		controller.handleInput(packet("type=read:status=OK"));
 		controller.handleInput(
@@ -68,15 +68,13 @@ describe("EnhancedPasteController", () => {
 
 		const textMime = Buffer.from("text/plain", "utf8").toString("base64");
 		const password = Buffer.from("secret456", "utf8").toString("base64");
+		const pasteEventName = Buffer.from("Paste event", "utf8").toString("base64");
 		expect(controller.handleInput("plain text")).toBe(false);
 		controller.handleInput(packet(`type=read:status=OK:loc=primary:pw=${password}`));
 		controller.handleInput(packet(`type=read:status=DATA:mime=${textMime}`));
 		controller.handleInput(packet("type=read:status=DONE"));
 
-		expect(writes).toHaveLength(1);
-		expect(writes[0]).toContain(`mime=${textMime}`);
-		expect(writes[0]).toContain("loc=primary");
-		expect(writes[0]).toContain(`pw=${password}`);
+		expect(writes).toEqual([`${OSC}type=read:loc=primary:pw=${password}:name=${pasteEventName};${textMime}${ST}`]);
 
 		controller.handleInput(packet("type=read:status=OK"));
 		controller.handleInput(
@@ -136,9 +134,7 @@ describe("EnhancedPasteController", () => {
 		);
 		controller.handleInput(packet(`type=read:status=DONE:pw=${password}`));
 
-		expect(writes.at(-1)).toBe(
-			`${OSC}type=read:mime=${textMime}:pw=${password}:name=${pasteEventName}${ST}`,
-		);
+		expect(writes.at(-1)).toBe(`${OSC}type=read:pw=${password}:name=${pasteEventName};${textMime}${ST}`);
 
 		controller.handleInput(packet("type=read:status=OK"));
 		controller.handleInput(
@@ -175,6 +171,6 @@ describe("EnhancedPasteController", () => {
 		);
 		controller.handleInput(packet("type=read:status=DONE"));
 
-		expect(writes.at(-1)).toContain(`mime=${imageMime}`);
+		expect(writes.at(-1)).toBe(`${OSC}type=read;${imageMime}${ST}`);
 	});
 });

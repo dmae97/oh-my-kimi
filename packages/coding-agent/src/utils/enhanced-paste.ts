@@ -212,11 +212,12 @@ export class EnhancedPasteController {
 			chunks: [],
 		};
 
-		const metadata = [`type=read`, `mime=${Buffer.from(selected.mimeType, "utf8").toString("base64")}`];
+		const encodedMime = Buffer.from(selected.mimeType, "utf8").toString("base64");
+		const metadata = ["type=read"];
 		if (state.loc) metadata.push(`loc=${state.loc}`);
 		if (state.pw) {
 			metadata.push(`pw=${state.pw}`, `name=${PASTE_EVENT_NAME_BASE64}`);
 		}
-		this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")}${OSC_TERMINATOR_ST}`);
+		this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")};${encodedMime}${OSC_TERMINATOR_ST}`);
 	}
 }
