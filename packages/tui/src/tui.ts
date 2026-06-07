@@ -2849,7 +2849,7 @@ export class TUI extends Container {
 		const boundedAppendTo = Math.max(0, Math.min(appendTo, naturalViewportTop, lines.length));
 		const boundedAppendFrom = Math.max(0, Math.min(appendFrom, boundedAppendTo));
 
-		if (boundedAppendFrom === boundedAppendTo) {
+		if (boundedAppendFrom === boundedAppendTo && viewportTop === prevViewportTop) {
 			let firstChangedScreenRow = -1;
 			let lastChangedScreenRow = -1;
 			for (let screenRow = 0; screenRow < height; screenRow++) {

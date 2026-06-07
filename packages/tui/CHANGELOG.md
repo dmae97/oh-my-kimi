@@ -32,6 +32,7 @@
 - Fixed fullscreen overlay alt-frame rendering to reuse the current line-preparation path instead of calling removed fitting helpers.
 - Reduced TUI render-path line fitting by deferring overlay base-frame fitting until an overlay rebuild and by reusing already-fitted lines in emitters.
 - Reduced live-region pinned repaint output by diffing unchanged viewport rows when no sealed rows are being committed to native scrollback.
+- Fixed no-append live-region pinned repaints to re-anchor the hardware cursor when the logical viewport shifts.
 - Fixed keybinding matching so printable uppercase input preserves `Shift` for bindings such as `shift+a`.
 - Optimized terminal image-line detection and Thai/Lao AM normalization checks to avoid hot-path regex scans and substring allocations.
 - Fixed `Markdown.render()` cache hits returning the cache's mutable backing array, which let callers that append extra rows corrupt cached Markdown and duplicate those rows on every redraw.
