@@ -845,11 +845,18 @@ function writeTerminalBreadcrumb(cwd: string, sessionFile: string): void {
 	Bun.write(breadcrumbFile, content).catch(() => {});
 }
 
+interface TerminalBreadcrumb {
+	cwd: string;
+	sessionFile: string;
+}
+
 /**
- * Read the terminal breadcrumb for the current terminal, scoped to a cwd.
- * Returns the session file path if it exists and matches the cwd, null otherwise.
+ * Read the raw terminal breadcrumb for the current terminal.
+ * Returns the recorded cwd + session file (verified to exist) regardless of
+ * whether the recorded cwd still matches the current one. Callers decide how
+ * to interpret a cwd mismatch (e.g. a moved/renamed worktree).
  */
-async function readTerminalBreadcrumb(cwd: string): Promise<string | null> {
+async function readTerminalBreadcrumbEntry(): Promise<TerminalBreadcrumb | null> {
 	const terminalId = getTerminalId();
 	if (!terminalId) return null;
 
@@ -862,12 +869,9 @@ async function readTerminalBreadcrumb(cwd: string): Promise<string | null> {
 		const breadcrumbCwd = lines[0];
 		const sessionFile = lines[1];
 
-		// Only return if cwd matches (user might have cd'd)
-		if (path.resolve(breadcrumbCwd) !== path.resolve(cwd)) return null;
-
 		// Verify the session file still exists
 		const stat = fs.statSync(sessionFile, { throwIfNoEntry: false });
-		if (stat?.isFile()) return sessionFile;
+		if (stat?.isFile()) return { cwd: breadcrumbCwd, sessionFile };
 	} catch (err) {
 		if (!isEnoent(err)) logger.debug("Terminal breadcrumb read failed", { err });
 		// Breadcrumb doesn't exist or is corrupt — fall through
@@ -2163,19 +2167,24 @@ export class SessionManager {
 	/**
 	 * Move the session to a new working directory.
 	 * Moves session files and artifacts on disk, updates all internal references,
-	 * and rewrites the session header with the new cwd.
+	 * and rewrites the session header with the new cwd. When provided,
+	 * `targetSessionDir` is used instead of deriving the default directory for
+	 * the new cwd (for `--continue --session-dir` / `--resume --session-dir`).
 	 */
-	async moveTo(newCwd: string): Promise<void> {
+	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
 		const resolvedCwd = path.resolve(newCwd);
-		if (resolvedCwd === this.cwd) return;
+		if (resolvedCwd === this.cwd && (!targetSessionDir || path.resolve(targetSessionDir) === this.sessionDir)) return;
 
 		const managedSessionsRoot = resolveManagedSessionRoot(this.sessionDir, this.cwd);
-		const newSessionDir = managedSessionsRoot
-			? computeDefaultSessionDir(resolvedCwd, this.storage, managedSessionsRoot)
-			: computeDefaultSessionDir(resolvedCwd, this.storage);
+		const newSessionDir = targetSessionDir
+			? path.resolve(targetSessionDir)
+			: managedSessionsRoot
+				? computeDefaultSessionDir(resolvedCwd, this.storage, managedSessionsRoot)
+				: computeDefaultSessionDir(resolvedCwd, this.storage);
 		let hadSessionFile = false;
 
 		if (this.persist && this.#sessionFile) {
+			this.storage.ensureDirSync(newSessionDir);
 			// Close the persist writer before moving files
 			await this.#closePersistWriter();
 			this.#persistChain = Promise.resolve();
@@ -2186,25 +2195,29 @@ export class SessionManager {
 			const newSessionFile = path.join(newSessionDir, path.basename(oldSessionFile));
 			const oldArtifactDir = oldSessionFile.slice(0, -6); // strip .jsonl
 			const newArtifactDir = newSessionFile.slice(0, -6);
+			const sameSessionFile = path.resolve(oldSessionFile) === path.resolve(newSessionFile);
+			const sameArtifactDir = path.resolve(oldArtifactDir) === path.resolve(newArtifactDir);
 			hadSessionFile = this.storage.existsSync(oldSessionFile);
 			let movedSessionFile = false;
 			let movedArtifactDir = false;
 
 			try {
 				// Guard: session file may not exist yet (no assistant messages persisted)
-				if (hadSessionFile) {
+				if (hadSessionFile && !sameSessionFile) {
 					await fs.promises.rename(oldSessionFile, newSessionFile);
 					movedSessionFile = true;
 				}
 
-				try {
-					const stat = await fs.promises.stat(oldArtifactDir);
-					if (stat.isDirectory()) {
-						await fs.promises.rename(oldArtifactDir, newArtifactDir);
-						movedArtifactDir = true;
+				if (!sameArtifactDir) {
+					try {
+						const stat = await fs.promises.stat(oldArtifactDir);
+						if (stat.isDirectory()) {
+							await fs.promises.rename(oldArtifactDir, newArtifactDir);
+							movedArtifactDir = true;
+						}
+					} catch (err) {
+						if (!isEnoent(err)) throw err;
 					}
-				} catch (err) {
-					if (!isEnoent(err)) throw err;
 				}
 			} catch (err) {
 				if (movedArtifactDir) {
@@ -3491,8 +3504,49 @@ export class SessionManager {
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		// Prefer terminal-scoped breadcrumb (handles concurrent sessions correctly)
-		const terminalSession = await readTerminalBreadcrumb(cwd);
-		const mostRecent = terminalSession ?? (await findMostRecentSession(dir, storage));
+		const breadcrumb = await readTerminalBreadcrumbEntry();
+		const breadcrumbCwd = breadcrumb ? path.resolve(breadcrumb.cwd) : undefined;
+		const resolvedCwd = path.resolve(cwd);
+		let mostRecent: string | null | undefined;
+		if (breadcrumb && breadcrumbCwd !== resolvedCwd) {
+			// The terminal's last session was started in a different cwd. If that cwd no
+			// longer exists (e.g. `git worktree move`/dir rename) and the new location has
+			// no sessions of its own, re-root the session here instead of silently starting
+			// fresh — otherwise the relocated session would be unreachable via --continue.
+			// When an explicit sessionDir is reused across the move, the stale breadcrumb
+			// file itself may be the most recent entry there; don't count it as a
+			// current-directory session. If that shared dir also contains an older session
+			// that already belongs to the current cwd, prefer that local session instead
+			// of re-rooting the stale breadcrumb over it.
+			const resolvedBreadcrumbCwd = breadcrumbCwd ?? path.resolve(breadcrumb.cwd);
+			mostRecent = await findMostRecentSession(dir, storage);
+			const sourceCwdGone = !fs.existsSync(resolvedBreadcrumbCwd);
+			const breadcrumbSessionFile = path.resolve(breadcrumb.sessionFile);
+			const mostRecentIsBreadcrumb =
+				mostRecent !== null && mostRecent !== undefined && path.resolve(mostRecent) === breadcrumbSessionFile;
+			let hasCurrentCwdSession = false;
+			if (sourceCwdGone && mostRecentIsBreadcrumb) {
+				const currentCwdSession = (await SessionManager.list(cwd, dir, storage)).find(
+					session =>
+						path.resolve(session.path) !== breadcrumbSessionFile &&
+						session.cwd !== undefined &&
+						path.resolve(session.cwd) === resolvedCwd,
+				);
+				if (currentCwdSession) {
+					mostRecent = currentCwdSession.path;
+					hasCurrentCwdSession = true;
+				}
+			}
+			const relocated = sourceCwdGone && (mostRecent === null || (mostRecentIsBreadcrumb && !hasCurrentCwdSession));
+			if (relocated) {
+				process.stderr.write(`Re-rooting moved session from ${resolvedBreadcrumbCwd} to ${resolvedCwd}.\n`);
+				const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage);
+				await manager.moveTo(cwd, sessionDir);
+				return manager;
+			}
+		}
+		const terminalSession = breadcrumb && breadcrumbCwd === resolvedCwd ? breadcrumb.sessionFile : null;
+		if (mostRecent === undefined) mostRecent = terminalSession ?? (await findMostRecentSession(dir, storage));
 		const manager = new SessionManager(cwd, dir, true, storage);
 		if (mostRecent) {
 			await manager.#initSessionFile(mostRecent);

@@ -17,6 +17,10 @@
 
 - Fixed MCP tools hanging in non-yolo modes by declaring `approval = "write"` on `MCPTool` and `DeferredMCPTool`, and propagating the `approval` property through `customToolToDefinition()` in `sdk.ts`
 
+### Fixed
+
+- Fixed session resumption after a working directory is moved/renamed (e.g. `git worktree move`): `--continue` now re-roots the terminal's last session into the new directory when its original directory no longer exists, instead of silently starting a fresh empty session; cross-project `--resume <id>` offers to move (re-root) the session rather than only forking a duplicate copy when the source directory is gone
+
 ## [15.10.1] - 2026-06-07
 
 ### Added

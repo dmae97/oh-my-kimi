@@ -2,8 +2,16 @@
  * Regression: declining the cross-project fork prompt during `--resume <id>`
  * must exit cleanly, while non-interactive resume still fails instead of
  * silently succeeding. See #1668.
+ *
+ * Also covers the moved/renamed-worktree path: when the matched session's
+ * recorded directory no longer exists, `--resume <id>` offers to *move*
+ * (re-root) the session rather than fork a duplicate.
  */
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
@@ -37,20 +45,27 @@ function buildGlobalMatch(cwd: string): { session: SessionInfo; scope: "global" 
 	};
 }
 
+const stubSettings = { get: () => undefined } as unknown as Settings;
+
 describe("createSessionManager — cross-project --resume cancellation (#1668)", () => {
-	afterEach(() => {
+	// An existing directory so the match is treated as a genuinely different
+	// project (fork path), not a moved/renamed worktree (move path).
+	let existingProject: string;
+
+	beforeEach(async () => {
+		existingProject = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-xproj-"));
+	});
+
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		await fsp.rm(existingProject, { recursive: true, force: true });
 	});
 
 	it("returns undefined when an interactive user declines the fork prompt instead of throwing", async () => {
-		const sessionCwd = "/some/other/project";
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(sessionCwd));
-
-		const args = buildArgs("019e84ed");
-		const stubSettings = { get: () => undefined } as unknown as Settings;
+		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
 
 		const result = await createSessionManager(
-			args,
+			buildArgs("019e84ed"),
 			"/current/project",
 			stubSettings,
 			async () => "declined" as const,
@@ -61,15 +76,52 @@ describe("createSessionManager — cross-project --resume cancellation (#1668)",
 
 	it("throws when the cross-project fork prompt is unavailable in non-interactive mode", async () => {
 		expect(process.stdin.isTTY).toBeFalsy();
+		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
 
-		const sessionCwd = "/some/other/project";
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(sessionCwd));
+		await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
+			`Session "019e84ed" is in another project (${existingProject}); run interactively to fork it into the current project.`,
+		);
+	});
+});
 
-		const args = buildArgs("019e84ed");
-		const stubSettings = { get: () => undefined } as unknown as Settings;
+describe("createSessionManager — cross-project --resume relocation (moved worktree)", () => {
+	let missingRoot: string;
+	let missingProject: string;
 
-		await expect(createSessionManager(args, "/current/project", stubSettings)).rejects.toThrow(
-			'Session "019e84ed" is in another project (/some/other/project); run interactively to fork it into the current project.',
+	beforeEach(async () => {
+		missingRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-moved-xproj-"));
+		missingProject = path.join(missingRoot, "worktree-gone");
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await fsp.rm(missingRoot, { recursive: true, force: true });
+	});
+
+	it("offers move (not fork) and returns undefined when the user declines", async () => {
+		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
+		expect(fs.existsSync(missingProject)).toBe(false);
+
+		const forkPrompt = vi.fn(async () => "accepted" as const);
+		const result = await createSessionManager(
+			buildArgs("019e84ed"),
+			"/current/project",
+			stubSettings,
+			forkPrompt,
+			async () => "declined" as const,
+		);
+
+		expect(result).toBeUndefined();
+		// The fork prompt must NOT be used for a relocated (gone-dir) session.
+		expect(forkPrompt).not.toHaveBeenCalled();
+	});
+
+	it("throws the move-specific error when unavailable in non-interactive mode", async () => {
+		expect(process.stdin.isTTY).toBeFalsy();
+		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
+
+		await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
+			`Session "019e84ed" belongs to a directory that no longer exists (${missingProject}); run interactively to move it into the current project.`,
 		);
 	});
 });
