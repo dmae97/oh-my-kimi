@@ -22,6 +22,7 @@ import {
 	type DapFunctionBreakpointRecord,
 	type DapInstructionBreakpointRecord,
 	type DapModule,
+	type DapResolvedAdapter,
 	type DapScope,
 	type DapSessionSummary,
 	type DapSource,
@@ -30,6 +31,8 @@ import {
 	type DapVariable,
 	dapSessionManager,
 	getAvailableAdapters,
+	type LaunchProgramKind,
+	resolveLaunchOverrides,
 	selectAttachAdapter,
 	selectLaunchAdapter,
 } from "../dap";
@@ -489,16 +492,23 @@ function getConfiguredAdapters(cwd: string): string {
 	const adapters = getAvailableAdapters(cwd).map(adapter => adapter.name);
 	return adapters.length > 0 ? adapters.join(", ") : "none";
 }
-async function validateLaunchProgram(program: string, cwd: string): Promise<void> {
-	let isDirectory: boolean;
+
+async function classifyLaunchProgram(program: string): Promise<LaunchProgramKind> {
 	try {
-		isDirectory = (await fs.stat(program)).isDirectory();
+		return (await fs.stat(program)).isDirectory() ? "directory" : "file";
 	} catch (error) {
-		if (isEnoent(error)) return;
+		if (isEnoent(error)) return "missing";
 		throw error;
 	}
-	if (!isDirectory) return;
+}
 
+function validateLaunchProgram(
+	program: string,
+	cwd: string,
+	programKind: LaunchProgramKind,
+	adapter: DapResolvedAdapter,
+): void {
+	if (programKind !== "directory" || adapter.acceptsDirectoryProgram) return;
 	const displayPath = formatPathRelativeToCwd(program, cwd, { trailingSlash: true });
 	throw new ToolError(
 		`launch program resolves to a directory: ${displayPath}. Pass an executable file path, or for Python use adapter "debugpy" with program set to the .py file.`,
@@ -676,8 +686,8 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				}
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
 				const program = resolveToCwd(params.program, commandCwd);
-				await validateLaunchProgram(program, commandCwd);
-				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter);
+				const programKind = await classifyLaunchProgram(program);
+				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter, programKind);
 				if (!adapter) {
 					if (params.adapter === "debugpy") {
 						throw new ToolError("adapter 'debugpy' is not available: python not found in PATH");
@@ -686,8 +696,10 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 						`No debugger adapter available. Installed adapters: ${getConfiguredAdapters(commandCwd)}`,
 					);
 				}
+				validateLaunchProgram(program, commandCwd, programKind, adapter);
+				const extraLaunchArguments = resolveLaunchOverrides(adapter, program, programKind);
 				const snapshot = await dapSessionManager.launch(
-					{ adapter, program, args: params.args, cwd: commandCwd },
+					{ adapter, program, args: params.args, cwd: commandCwd, extraLaunchArguments },
 					combinedSignal,
 					timeoutSec * 1000,
 				);

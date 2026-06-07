@@ -488,6 +488,10 @@ export interface DapAdapterConfig {
 	 *  On Linux, connects via a unix domain socket.
 	 *  On macOS, the adapter dials into a local TCP listener (--client-addr). */
 	connectMode?: "stdio" | "socket";
+	/** When true, the adapter accepts a directory as the launch `program`
+	 *  (e.g. dlv treats it as a Go package path). When false/undefined, the
+	 *  debug tool rejects directory programs upfront. */
+	acceptsDirectoryProgram?: boolean;
 }
 
 export interface DapResolvedAdapter {
@@ -501,6 +505,7 @@ export interface DapResolvedAdapter {
 	launchDefaults: Record<string, unknown>;
 	attachDefaults: Record<string, unknown>;
 	connectMode: "stdio" | "socket";
+	acceptsDirectoryProgram: boolean;
 }
 
 export interface DapBreakpointRecord {
@@ -589,6 +594,11 @@ export interface DapLaunchSessionOptions {
 	program: string;
 	args?: string[];
 	cwd: string;
+	/** Per-launch overrides merged over `adapter.launchDefaults`. Used to
+	 *  inject adapter-specific values that depend on the resolved program
+	 *  (e.g. dlv's `mode` switches between `debug` and `exec` based on
+	 *  whether `program` is a Go package path or a compiled binary). */
+	extraLaunchArguments?: Record<string, unknown>;
 }
 
 export interface DapAttachSessionOptions {
