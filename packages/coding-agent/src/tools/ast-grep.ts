@@ -117,6 +117,9 @@ export interface AstGrepToolDetails {
 	/** Absolute base directory used during search. Used by the renderer to resolve
 	 * display-relative paths to absolute paths for OSC 8 hyperlinks. */
 	searchPath?: string;
+	/** Session cwd at search time. Display header/match paths are cwd-relative, so
+	 * the renderer resolves them against this; `searchPath` is the scope target. */
+	cwd?: string;
 }
 
 export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolDetails> {
@@ -206,6 +209,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				...(cappedParseErrors.length > 0 ? { parseErrors: cappedParseErrors, parseErrorsTotal } : {}),
 				scopePath,
 				searchPath: resolvedSearchPath,
+				cwd: this.session.cwd,
 				files: fileList,
 				fileMatches: [],
 			};
@@ -395,7 +399,7 @@ export const astGrepToolRenderer = {
 		const allLines = textContent.split("\n");
 		// Resolve hyperlinks over the whole output so nested directory headers
 		// reconstruct across the blank-line groups the tree list collapses by.
-		const contexts = classifyGroupedLines(allLines, details?.searchPath);
+		const contexts = classifyGroupedLines(allLines, details?.cwd ?? details?.searchPath, details?.searchPath);
 		const styledLines = allLines.map((line, index) => {
 			const ctx = contexts[index]!;
 			if (ctx.kind === "dir") {

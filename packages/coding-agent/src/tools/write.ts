@@ -18,7 +18,7 @@ import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
-import { framedBlock, renderStatusLine } from "../tui";
+import { fileHyperlink, framedBlock, renderStatusLine } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { truncateForPrompt } from "./approval";
 import { parseArchivePathCandidates } from "./archive-reader";
@@ -77,6 +77,9 @@ export interface WriteToolDetails {
 	meta?: OutputMeta;
 	/** Set when the file was auto-chmod'd because content begins with a `#!` shebang. */
 	madeExecutable?: boolean;
+	/** Absolute filesystem path the write resolved to. Used by the renderer to wrap
+	 * the (possibly cwd-relative) header path in an OSC 8 `file://` hyperlink. */
+	resolvedPath?: string;
 }
 
 /**
@@ -416,7 +419,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}`;
 		return {
 			content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${outputPath}` }],
-			details: {},
+			details: { resolvedPath: resolvedArchivePath.absolutePath },
 		};
 	}
 
@@ -532,7 +535,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			}
 
 			invalidateFsScanAfterWrite(resolvedSqlitePath.absolutePath);
-			return toolResult<WriteToolDetails>({}).text(resultText).sourcePath(resolvedSqlitePath.absolutePath).done();
+			return toolResult<WriteToolDetails>({ resolvedPath: resolvedSqlitePath.absolutePath })
+				.text(resultText)
+				.sourcePath(resolvedSqlitePath.absolutePath)
+				.done();
 		} catch (error) {
 			if (isEnoent(error)) {
 				throw new ToolError(`SQLite database '${displayPath}' not found`);
@@ -593,12 +599,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		if (!diagnostics) {
 			return {
 				content: [{ type: "text", text: resultText }],
-				details: {},
+				details: { resolvedPath: absolutePath },
 			};
 		}
 		return {
 			content: [{ type: "text", text: resultText }],
 			details: {
+				resolvedPath: absolutePath,
 				diagnostics,
 				meta: outputMeta()
 					.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
@@ -871,7 +878,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				if (stripped) {
 					resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 				}
-				return { content: [{ type: "text", text: resultText }], details: {} };
+				return {
+					content: [{ type: "text", text: resultText }],
+					details: { resolvedPath: absolutePath },
+				};
 			}
 
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
@@ -888,13 +898,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (!diagnostics) {
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: { madeExecutable: madeExecutable || undefined },
+					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
 				};
 			}
 
 			return {
 				content: [{ type: "text", text: resultText }],
 				details: {
+					resolvedPath: absolutePath,
 					diagnostics,
 					madeExecutable: madeExecutable || undefined,
 					meta: outputMeta()
@@ -1050,7 +1061,12 @@ export const writeToolRenderer = {
 		const fileContent = args?.content || "";
 		const lang = getLanguageFromPath(rawPath);
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
-		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		// The header shows the cwd-relative path but links to the absolute path the
+		// write resolved to (args.path may be relative, which would yield a broken
+		// `file://` URI). Falls back to plain text when the result lacks a path.
+		const linkTarget = result.details?.resolvedPath;
+		const styledPath = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		const pathDisplay = filePath && linkTarget ? fileHyperlink(linkTarget, styledPath) : styledPath;
 
 		if (result.isError) {
 			const errorText = result.content?.find(c => c.type === "text")?.text ?? "";

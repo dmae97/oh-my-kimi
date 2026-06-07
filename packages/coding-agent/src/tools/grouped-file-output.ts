@@ -237,12 +237,23 @@ function resolveGroupedPath(parent: string | undefined, name: string): string | 
  * each header and body line can be linked back to its absolute filesystem path.
  * Reconstruction is stack-based (not per-blank-group) so nested directory headers
  * resolve correctly across the whole output.
+ *
+ * `headerBase` is the directory the displayed (folded) header paths are relative
+ * to — for grep/ast tools that is the session cwd, since display paths are
+ * formatted relative to cwd regardless of the (sub)directory the search was
+ * scoped to. `fileScope` is the initial owning file for body lines that appear
+ * before any header (single-file scopes have no `#` headers); it defaults to
+ * `headerBase` and should be passed the scoped file's absolute path.
  */
-export function classifyGroupedLines(lines: readonly string[], searchBase: string | undefined): GroupedLineContext[] {
+export function classifyGroupedLines(
+	lines: readonly string[],
+	headerBase: string | undefined,
+	fileScope: string | undefined = headerBase,
+): GroupedLineContext[] {
 	const result: GroupedLineContext[] = [];
 	const dirAtDepth = new Map<number, string>();
-	// Body lines before any header (single-file scopes) link to the search root.
-	let currentFile = searchBase;
+	// Body lines before any header (single-file scopes) link to the scoped file.
+	let currentFile = fileScope;
 
 	const clearDeeper = (depth: number) => {
 		for (const key of dirAtDepth.keys()) {
@@ -264,7 +275,7 @@ export function classifyGroupedLines(lines: readonly string[], searchBase: strin
 			result.push({ kind: "file", depth, isUrl: true });
 			continue;
 		}
-		const parent = depth > 1 ? dirAtDepth.get(depth - 1) : searchBase;
+		const parent = depth > 1 ? dirAtDepth.get(depth - 1) : headerBase;
 		if (rest.endsWith("/")) {
 			const name = rest.slice(0, -1).replace(HEADER_SUFFIX_RE, "");
 			const abs = resolveGroupedPath(parent, name);

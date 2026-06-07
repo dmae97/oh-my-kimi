@@ -621,6 +621,10 @@ export interface SearchToolDetails {
 	/** Absolute base directory used during search. Used by the renderer to resolve
 	 * display-relative paths to absolute paths for OSC 8 hyperlinks. */
 	searchPath?: string;
+	/** Session cwd at search time. The renderer resolves the display-relative
+	 * (cwd-relative) header/match paths against this for OSC 8 hyperlinks;
+	 * `searchPath` is the scope label target, not the display-path base. */
+	cwd?: string;
 	/** User-supplied paths whose base directory was missing on disk. The tool
 	 * skipped these and continued with the surviving entries; surfaced as a
 	 * non-fatal warning in the renderer and in the model-facing text. */
@@ -1003,6 +1007,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					const details: SearchToolDetails = {
 						scopePath,
 						searchPath,
+						cwd: this.session.cwd,
 						matchCount: 0,
 						fileCount: 0,
 						files: [],
@@ -1129,6 +1134,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const details: SearchToolDetails = {
 					scopePath,
 					searchPath,
+					cwd: this.session.cwd,
 					matchCount: selectedMatches.length,
 					fileCount: fileList.length,
 					files: fileList,
@@ -1215,10 +1221,11 @@ const URL_HEADER_PREFIX_RE = /^#+\s+/;
 
 function renderSearchDisplayLines(
 	lines: readonly string[],
-	searchBase: string | undefined,
+	headerBase: string | undefined,
+	fileScope: string | undefined,
 	uiTheme: Theme,
 ): RenderedSearchLine[] {
-	const contexts = classifyGroupedLines(lines, searchBase);
+	const contexts = classifyGroupedLines(lines, headerBase, fileScope);
 	// `classifyGroupedLines` can't resolve internal URLs (TUI-only), so track the
 	// resolved URL target here and use it for the body lines that follow.
 	let urlFile: string | undefined;
@@ -1439,7 +1446,15 @@ export const searchToolRenderer = {
 		const allLines = textContent.split("\n");
 		// Resolve hyperlinks once over the whole output so a nested directory stack
 		// reconstructs correctly across blank-line group boundaries.
-		const renderedLines = renderSearchDisplayLines(allLines, details?.searchPath, uiTheme);
+		// Header/match display paths are cwd-relative, so resolve them against cwd
+		// (falling back to searchPath for legacy results that predate `cwd`); the
+		// scoped file's absolute path seeds body lines in single-file searches.
+		const renderedLines = renderSearchDisplayLines(
+			allLines,
+			details?.cwd ?? details?.searchPath,
+			details?.searchPath,
+			uiTheme,
+		);
 		const matchGroups = groupLineIndicesByBlank(allLines).map(indices => indices.map(i => renderedLines[i]!));
 
 		const extraLines: string[] = [];

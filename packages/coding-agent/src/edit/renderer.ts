@@ -185,10 +185,14 @@ function getOperationTitle(op: Operation | undefined): string {
 function formatEditPathDisplay(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number },
+	options?: { rename?: string; firstChangedLine?: number; linkPath?: string; renameLinkPath?: string },
 ): string {
+	// `rawPath`/`rename` are shown (cwd-relative) but the OSC 8 link targets the
+	// absolute path when known — a relative `rawPath` would yield a `file:///rel`
+	// URI that resolves against filesystem root instead of cwd.
+	const linkTarget = options?.linkPath || rawPath;
 	let pathDisplay = rawPath
-		? fileHyperlink(rawPath, uiTheme.fg("accent", shortenPath(rawPath)))
+		? fileHyperlink(linkTarget, uiTheme.fg("accent", shortenPath(rawPath)))
 		: uiTheme.fg("toolOutput", "…");
 
 	if (options?.firstChangedLine) {
@@ -196,7 +200,8 @@ function formatEditPathDisplay(
 	}
 
 	if (options?.rename) {
-		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(options.rename, uiTheme.fg("accent", shortenPath(options.rename)))}`;
+		const renameTarget = options.renameLinkPath || options.rename;
+		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(renameTarget, uiTheme.fg("accent", shortenPath(options.rename)))}`;
 	}
 
 	return pathDisplay;
@@ -205,7 +210,7 @@ function formatEditPathDisplay(
 function formatEditDescription(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number },
+	options?: { rename?: string; firstChangedLine?: number; linkPath?: string; renameLinkPath?: string },
 ): { language: string; description: string } {
 	const language = getLanguageFromPath(rawPath) ?? "text";
 	const icon = uiTheme.fg("muted", uiTheme.getLangIcon(language));
@@ -539,7 +544,8 @@ function renderSingleFileResult(
 		const firstChangedLine =
 			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
 			(details && !isError ? details.firstChangedLine : undefined);
-		const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine });
+		const linkPath = details && "path" in details ? details.path : undefined;
+		const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine, linkPath });
 
 		// Change stats ride inline on the header bar next to the path.
 		const previewDiff = editDiffPreview && !("error" in editDiffPreview) ? editDiffPreview.diff : undefined;

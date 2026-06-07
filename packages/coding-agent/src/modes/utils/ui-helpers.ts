@@ -74,9 +74,6 @@ export class UiHelpers {
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
 	showStatus(message: string, options?: { dim?: boolean }): void {
-		if (this.ctx.isBackgrounded) {
-			return;
-		}
 		const children = this.ctx.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
@@ -534,9 +531,6 @@ export class UiHelpers {
 	}
 
 	clearEditor(): void {
-		if (this.ctx.isBackgrounded) {
-			return;
-		}
 		this.ctx.editor.setText("");
 		this.ctx.pendingImages = [];
 		this.ctx.pendingImageLinks = [];
@@ -545,18 +539,10 @@ export class UiHelpers {
 	}
 
 	showError(errorMessage: string): void {
-		if (this.ctx.isBackgrounded) {
-			process.stderr.write(`Error: ${errorMessage}\n`);
-			return;
-		}
 		this.ctx.present([new Spacer(1), new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0)]);
 	}
 
 	showWarning(warningMessage: string): void {
-		if (this.ctx.isBackgrounded) {
-			process.stderr.write(`Warning: ${warningMessage}\n`);
-			return;
-		}
 		this.ctx.present([new Spacer(1), new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0)]);
 	}
 
