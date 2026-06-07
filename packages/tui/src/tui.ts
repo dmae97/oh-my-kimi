@@ -47,9 +47,9 @@ const SEGMENT_RESET = "\x1b[0m";
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
 const ERASE_LINE = "\x1b[2K";
 const ERASE_TO_END_OF_LINE = "\x1b[K";
-// Bound the raw code-unit span handed to native width/truncation. A terminal
-// row can only display `width` cells, so oversized component rows should not
-// force proportional JS/native copies while deciding what the viewport shows.
+// Keep the common short-row path out of native width/truncation. Longer rows
+// are fit by visible cells, not source code units, so zero-width-heavy prefixes
+// cannot hide visible suffix text that still belongs in the viewport.
 const LINE_FIT_MIN_SOURCE_CODE_UNITS = 4096;
 const LINE_FIT_MAX_SOURCE_CODE_UNITS = 65536;
 const LINE_FIT_SOURCE_WIDTH_MULTIPLIER = 64;
@@ -2515,75 +2515,7 @@ export class TUI extends Container {
 		);
 		if (raw.length <= maxSourceLength) return raw;
 
-		const chunks: string[] = [];
-		let emitted = 0;
-		for (let i = 0; i < raw.length && emitted < maxSourceLength; ) {
-			if (raw.charCodeAt(i) === 0x1b) {
-				const end = this.#ansiSequenceEnd(raw, i);
-				if (end === -1) break;
-				const sequenceLength = end - i;
-				if (this.#ansiSequenceHasVisiblePayload(raw, i)) {
-					// OSC 66 text-sizing spans carry their visible cells inside the
-					// OSC payload. Always include the whole sequence — splitting it
-					// would corrupt the terminator — and let the next loop iteration
-					// terminate on the budget overflow.
-					chunks.push(raw.slice(i, end));
-					emitted += sequenceLength;
-					i = end;
-					continue;
-				}
-				if (emitted > 0 && sequenceLength <= maxSourceLength - emitted) {
-					chunks.push(raw.slice(i, end));
-					emitted += sequenceLength;
-				}
-				i = end;
-				continue;
-			}
-
-			const start = i;
-			const end = Math.min(raw.length, start + maxSourceLength - emitted);
-			while (i < end && raw.charCodeAt(i) !== 0x1b) i++;
-			if (i === start) break;
-			chunks.push(raw.slice(start, i));
-			emitted += i - start;
-		}
-
-		return chunks.join("") + SEGMENT_RESET;
-	}
-
-	#ansiSequenceEnd(line: string, start: number): number {
-		const next = line.charCodeAt(start + 1);
-		if (next === 0x5b) {
-			let i = start + 2;
-			while (i < line.length) {
-				const final = line.charCodeAt(i);
-				if (final >= 0x40 && final <= 0x7e) return i + 1;
-				i++;
-			}
-			return -1;
-		}
-		if (next === 0x5d) {
-			let i = start + 2;
-			while (i < line.length) {
-				const osc = line.charCodeAt(i);
-				if (osc === 0x07) return i + 1;
-				if (osc === 0x1b && line.charCodeAt(i + 1) === 0x5c) return i + 2;
-				i++;
-			}
-			return -1;
-		}
-		return start + 2 <= line.length ? start + 2 : -1;
-	}
-
-	#ansiSequenceHasVisiblePayload(line: string, start: number): boolean {
-		// OSC 66 (`\x1b]66;META;TEXT\x1b\\`) carries its visible cells inside the
-		// payload, mirroring the special case in {@link #ansiAsciiLineWidth}.
-		return (
-			line.charCodeAt(start + 1) === 0x5d &&
-			line.charCodeAt(start + 2) === 0x36 &&
-			line.charCodeAt(start + 3) === 0x36 &&
-			line.charCodeAt(start + 4) === 0x3b
-		);
+		return truncateToWidth(raw, safeWidth, Ellipsis.Omit) + SEGMENT_RESET;
 	}
 
 	#ansiAsciiLineWidth(line: string, maxWidth: number): number | undefined {
