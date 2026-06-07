@@ -560,7 +560,142 @@ function parsePackedRefs(content: string | null, targetRef: string): string | nu
 	return null;
 }
 
+const reftableCache = new Map<string, boolean>();
+
+function parseGitConfigHasReftable(content: string): boolean {
+	let inExtensions = false;
+	for (const line of content.split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+			const section = trimmed.slice(1, -1).trim().toLowerCase();
+			inExtensions = section === "extensions";
+		} else if (inExtensions) {
+			const parts = trimmed.split("=");
+			if (parts.length >= 2) {
+				const key = parts[0].trim().toLowerCase();
+				const value = parts.slice(1).join("=").trim().toLowerCase();
+				if (key === "refstorage" && value === "reftable") {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+function isReftableRepoSync(repository: GitRepository): boolean {
+	const cached = reftableCache.get(repository.commonDir);
+	if (cached !== undefined) return cached;
+	const configPath = path.join(repository.commonDir, "config");
+	const content = readOptionalTextSync(configPath);
+	const hasReftable = content ? parseGitConfigHasReftable(content) : false;
+	reftableCache.set(repository.commonDir, hasReftable);
+	return hasReftable;
+}
+
+async function isReftableRepo(repository: GitRepository): Promise<boolean> {
+	const cached = reftableCache.get(repository.commonDir);
+	if (cached !== undefined) return cached;
+	const configPath = path.join(repository.commonDir, "config");
+	const content = await readOptionalText(configPath);
+	const hasReftable = content ? parseGitConfigHasReftable(content) : false;
+	reftableCache.set(repository.commonDir, hasReftable);
+	return hasReftable;
+}
+
+async function resolveHeadStateReftable(repository: GitRepository): Promise<GitHeadState | null> {
+	const symResult = await git(repository.repoRoot, ["symbolic-ref", "HEAD"], { readOnly: true }).catch(() => null);
+	const revResult = await git(repository.repoRoot, ["rev-parse", "HEAD"], { readOnly: true }).catch(() => null);
+	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
+
+	if (symResult && symResult.exitCode === 0) {
+		const ref = symResult.stdout.trim();
+		const branchName = ref.startsWith(LOCAL_BRANCH_PREFIX) ? ref.slice(LOCAL_BRANCH_PREFIX.length) : null;
+		return {
+			...repository,
+			kind: "ref",
+			ref,
+			branchName,
+			commit,
+			headContent: `${HEAD_REF_PREFIX} ${ref}`,
+		};
+	}
+
+	return {
+		...repository,
+		kind: "detached",
+		commit,
+		headContent: commit || "",
+	};
+}
+
+function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState | null {
+	ensureAvailable();
+	const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", "HEAD"]));
+	const symResult = Bun.spawnSync(["git", ...symArgs], {
+		cwd: repository.repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+
+	const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "HEAD"]));
+	const revResult = Bun.spawnSync(["git", ...revArgs], {
+		cwd: repository.repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+	const commit = revResult.exitCode === 0 ? new TextDecoder().decode(revResult.stdout).trim() || null : null;
+
+	if (symResult.exitCode === 0) {
+		const ref = new TextDecoder().decode(symResult.stdout).trim();
+		const branchName = ref.startsWith(LOCAL_BRANCH_PREFIX) ? ref.slice(LOCAL_BRANCH_PREFIX.length) : null;
+		return {
+			...repository,
+			kind: "ref",
+			ref,
+			branchName,
+			commit,
+			headContent: `${HEAD_REF_PREFIX} ${ref}`,
+		};
+	}
+
+	return {
+		...repository,
+		kind: "detached",
+		commit,
+		headContent: commit || "",
+	};
+}
+
 function readRefSync(repository: GitRepository, targetRef: string): string | null {
+	if (isReftableRepoSync(repository)) {
+		ensureAvailable();
+		const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", targetRef]));
+		const symResult = Bun.spawnSync(["git", ...symArgs], {
+			cwd: repository.repoRoot,
+			stdout: "pipe",
+			stderr: "pipe",
+			windowsHide: true,
+		});
+		if (symResult.exitCode === 0) {
+			const stdoutText = new TextDecoder().decode(symResult.stdout).trim();
+			return `${HEAD_REF_PREFIX} ${stdoutText}`;
+		}
+		const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", targetRef]));
+		const revResult = Bun.spawnSync(["git", ...revArgs], {
+			cwd: repository.repoRoot,
+			stdout: "pipe",
+			stderr: "pipe",
+			windowsHide: true,
+		});
+		if (revResult.exitCode === 0) {
+			return new TextDecoder().decode(revResult.stdout).trim() || null;
+		}
+		return null;
+	}
+
 	for (const dir of getRefLookupDirs(repository)) {
 		const value = normalizeRefValue(readOptionalTextSync(path.join(dir, targetRef)));
 		if (value) return value;
@@ -573,6 +708,20 @@ function readRefSync(repository: GitRepository, targetRef: string): string | nul
 }
 
 async function readRef(repository: GitRepository, targetRef: string): Promise<string | null> {
+	if (await isReftableRepo(repository)) {
+		const symResult = await git(repository.repoRoot, ["symbolic-ref", targetRef], { readOnly: true }).catch(
+			() => null,
+		);
+		if (symResult && symResult.exitCode === 0) {
+			return `${HEAD_REF_PREFIX} ${symResult.stdout.trim()}`;
+		}
+		const revResult = await git(repository.repoRoot, ["rev-parse", targetRef], { readOnly: true }).catch(() => null);
+		if (revResult && revResult.exitCode === 0) {
+			return revResult.stdout.trim() || null;
+		}
+		return null;
+	}
+
 	for (const dir of getRefLookupDirs(repository)) {
 		const value = normalizeRefValue(await readOptionalText(path.join(dir, targetRef)));
 		if (value) return value;
@@ -1400,6 +1549,9 @@ export const head = {
 	async resolve(cwd: string): Promise<GitHeadState | null> {
 		const repository = await resolveRepository(cwd);
 		if (!repository) return null;
+		if (await isReftableRepo(repository)) {
+			return resolveHeadStateReftable(repository);
+		}
 		const content = await readOptionalText(repository.headPath);
 		if (content === null) return null;
 		return parseHeadState(repository, content);
@@ -1409,6 +1561,9 @@ export const head = {
 	resolveSync(cwd: string): GitHeadState | null {
 		const repository = resolveRepositorySync(cwd);
 		if (!repository) return null;
+		if (isReftableRepoSync(repository)) {
+			return resolveHeadStateReftableSync(repository);
+		}
 		const content = readOptionalTextSync(repository.headPath);
 		if (content === null) return null;
 		return parseHeadStateSync(repository, content);
