@@ -10,8 +10,9 @@ import * as path from "node:path";
 import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Ellipsis } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { getKeybindings, replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { pluralize } from "@oh-my-pi/pi-utils";
+import { formatKeyHints, type KeyId } from "../config/keybindings";
 import { settings } from "../config/settings";
 import type { Theme } from "../modes/theme/theme";
 import { Hasher } from "../tui/utils";
@@ -75,8 +76,16 @@ export const TRUNCATE_LENGTHS = {
 	SHORT: 40,
 } as const;
 
-/** Standard expand hint text */
-export const EXPAND_HINT = "(Ctrl+O for more)";
+/** Keybinding action that toggles tool-output expansion. */
+const EXPAND_ACTION = "app.tools.expand";
+/** Fallback key when no binding is resolvable (e.g. outside an interactive session). */
+const DEFAULT_EXPAND_KEY: KeyId = "ctrl+o";
+
+/** Human-readable key currently bound to tool-output expansion, e.g. `Ctrl+O`. */
+export function expandKeyHint(): string {
+	const keys = getKeybindings().getKeys(EXPAND_ACTION);
+	return formatKeyHints(keys.length > 0 ? keys : [DEFAULT_EXPAND_KEY]);
+}
 
 // =============================================================================
 // Text Truncation Utilities
@@ -150,7 +159,7 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 export function formatExpandHint(theme: Theme, expanded?: boolean, hasMore?: boolean): string {
 	if (expanded) return "";
 	if (hasMore === false) return "";
-	return theme.fg("dim", wrapBrackets(EXPAND_HINT, theme));
+	return theme.fg("dim", wrapBrackets(`${expandKeyHint()}: Expand`, theme));
 }
 
 /**

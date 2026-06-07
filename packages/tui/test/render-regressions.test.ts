@@ -1784,7 +1784,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const collapsedLines = [
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -1835,7 +1835,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -1880,7 +1880,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
