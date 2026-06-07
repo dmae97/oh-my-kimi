@@ -197,15 +197,14 @@ export interface RenderRequestOptions {
 	/** Clear terminal scrollback for intentional transcript replacement. */
 	clearScrollback?: boolean;
 	/**
-	 * Bypass the unknown-Windows-viewport deferral for this render so the
-	 * caller's intentional live UI mutation reaches the terminal even when
-	 * `Terminal#isNativeViewportAtBottom()` cannot answer.
+	 * Allow a transient live-viewport repaint when the terminal cannot report
+	 * whether its native viewport is at the tail.
 	 *
-	 * Use only for renders driven by direct user interaction (autocomplete
-	 * updates, IME, etc.). Any background/offscreen transcript change that
-	 * coalesces into the same frame WILL also bypass the deferral and reach
-	 * native scrollback — that is the trade-off, and the reason ordinary
-	 * `requestRender()` calls must continue to omit this flag.
+	 * This is **not** a settled transcript commit and must not be used for tool
+	 * completion, session replay, or other background/offscreen rewrites. On
+	 * ED3-risk terminals it may deliberately choose a viewport repaint/deferred
+	 * shrink without clearing native scrollback so autocomplete, IME, and focused
+	 * editor chrome stay responsive without yanking a scrolled reader.
 	 */
 	allowUnknownViewportMutation?: boolean;
 }
@@ -1046,7 +1045,7 @@ export class TUI extends Container {
 		// defers regardless of terminal.
 		if (nativeViewportAtBottom === false) return false;
 		if (nativeViewportAtBottom === undefined && !TERMINAL.submitPinsViewportToTail) return false;
-		this.#prepareForcedRender(true, false);
+		this.#prepareForcedRender(true);
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
 		this.#doRender();
@@ -1070,7 +1069,7 @@ export class TUI extends Container {
 	resetDisplay(): void {
 		if (this.#stopped) return;
 		this.invalidate();
-		this.#prepareForcedRender(!isMultiplexerSession(), true);
+		this.#prepareForcedRender(!isMultiplexerSession());
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
@@ -1081,7 +1080,7 @@ export class TUI extends Container {
 		const allowUnknownViewportMutation = options?.allowUnknownViewportMutation === true;
 		this.#allowUnknownViewportMutationOnNextRender ||= allowUnknownViewportMutation;
 		if (force) {
-			this.#prepareForcedRender(options?.clearScrollback === true, allowUnknownViewportMutation);
+			this.#prepareForcedRender(options?.clearScrollback === true);
 			this.#renderRequested = true;
 			this.#renderScheduler.scheduleImmediate(() => {
 				if (this.#stopped || !this.#renderRequested) {
@@ -1098,7 +1097,7 @@ export class TUI extends Container {
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 	}
 
-	#prepareForcedRender(clearScrollback: boolean, _allowUnknownViewportMutation: boolean): void {
+	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =
 			(this.#previousWidth > 0 && this.#previousWidth !== this.terminal.columns) ||
 			(this.#previousHeight > 0 && this.#previousHeight !== this.terminal.rows);
@@ -2352,15 +2351,14 @@ export class TUI extends Container {
 	 * the native viewport) is safe to emit *during ordinary rendering*. POSIX
 	 * terminals cannot report whether the user has scrolled up
 	 * (`isNativeViewportAtBottom()` is `undefined`), so an unknown position is
-	 * treated as unsafe: defer to a non-destructive viewport repaint and keep
-	 * scrollback dirty until a later render has a positive at-tail proof. A prompt
-	 * submit is no longer treated as proof for unobservable host scrollback.
-	 * this, every offscreen transcript edit while streaming wiped scrollback and
-	 * yanked a scrolled-up reader out of their current context.
-	 * `allowUnknownViewportMutation` (autocomplete/IME) opts directly
-	 * user-driven POSIX frames back into the rebuild. Native Windows and Windows
-	 * Terminal still cannot trust an unknown probe during live rendering — ConPTY
-	 * may be fronting host scrollback we cannot observe — so they keep deferring.
+	 * treated as unsafe by default: defer to a non-destructive viewport repaint and
+	 * keep scrollback dirty until a later checkpoint/positive at-tail proof.
+	 *
+	 * `allowUnknownViewportMutation` is the narrow exception for direct
+	 * input chrome (autocomplete/IME/editor wrapping): those frames may repaint or,
+	 * on non-Windows hosts, rebuild live UI while the user action pins the prompt
+	 * to the tail. Settled transcript commits should not use this flag; they must
+	 * request an explicit clear+replay instead.
 	 */
 	#canRebuildNativeScrollbackLive(
 		nativeViewportAtBottom: boolean | undefined,
@@ -2640,7 +2638,24 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 	): void {
 		this.#fullRedrawCount += 1;
-		const viewportTop = Math.max(0, lines.length - height);
+		const naturalViewportTop = Math.max(0, lines.length - height);
+		// Anti-duplication clamp. Never repaint rows that are byte-identical to what
+		// is already committed to native scrollback above the viewport — a second
+		// copy in the active grid duplicates them once the user scrolls up (the
+		// "transcript stacked on itself" / home-screen-reappears bug). The committed
+		// prefix is `#scrollbackHighWater` rows; the new frame still matches it up to
+		// the first changed row, so the genuinely committed-AND-unchanged prefix is
+		// `min(firstChanged, #scrollbackHighWater)`. Anchor at/below that. When the
+		// change starts inside the committed region (content diverged at/above it,
+		// e.g. a tool rewrite or a full transcript reset) the bound collapses and we
+		// paint the bottom-anchored live tail as before (#previousLines is still the
+		// pre-commit frame here, so this prefix diff is against the old frame).
+		let firstChanged = 0;
+		const commonLen = Math.min(lines.length, this.#previousLines.length);
+		while (firstChanged < commonLen && lines[firstChanged] === this.#previousLines[firstChanged]) {
+			firstChanged++;
+		}
+		const viewportTop = Math.max(naturalViewportTop, Math.min(firstChanged, this.#scrollbackHighWater));
 		// Each visible screen row, bottom-anchored, blank past content.
 		const visible: string[] = new Array(height);
 		for (let screenRow = 0; screenRow < height; screenRow++) {
