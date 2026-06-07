@@ -126,12 +126,19 @@ function sortAdaptersForLaunch(program: string, cwd: string, adapters: DapResolv
 	return rootAware.map(entry => entry.adapter);
 }
 
-export function selectLaunchAdapter(program: string, cwd: string, adapterName?: string): DapResolvedAdapter | null {
+export function selectLaunchAdapter(
+	program: string,
+	cwd: string,
+	adapterName?: string,
+	programKind: LaunchProgramKind = "file",
+): DapResolvedAdapter | null {
 	if (adapterName) {
 		return resolveAdapter(adapterName, cwd);
 	}
 	const matches = getMatchingAdapters(program, cwd);
-	const sorted = sortAdaptersForLaunch(program, cwd, matches);
+	const candidates =
+		programKind === "directory" ? matches.filter(adapter => adapter.acceptsDirectoryProgram) : matches;
+	const sorted = sortAdaptersForLaunch(program, cwd, candidates.length > 0 ? candidates : matches);
 	return sorted[0] ?? null;
 }
 

@@ -411,6 +411,43 @@ describe("DebugTool launch validation", () => {
 		}
 	});
 
+	it("prefers directory-capable dlv over native adapters for extensionless Go package directories", async () => {
+		const dapModule = await import("../../src/dap");
+		const sessionLaunchSpy = spyOn(dapModule.dapSessionManager, "launch").mockImplementation(async opts => {
+			throw Object.assign(new Error("captured launch"), { capturedOptions: opts });
+		});
+		try {
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-dlv-mixed-roots-"));
+			try {
+				await fs.writeFile(path.join(cwd, "go.mod"), "module hello\n\ngo 1.22\n");
+				await fs.writeFile(path.join(cwd, "Makefile"), "all:\n\tgo build ./...\n");
+				await fs.mkdir(path.join(cwd, "bin"));
+				await fs.writeFile(path.join(cwd, "bin", "dlv"), "");
+				await fs.writeFile(path.join(cwd, "bin", "gdb"), "");
+				await fs.mkdir(path.join(cwd, "cmd", "hello"), { recursive: true });
+				const session: ToolSession = {
+					cwd,
+					hasUI: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					settings: Settings.isolated({ "debug.enabled": true }),
+				};
+				const tool = new DebugTool(session);
+
+				await expect(tool.execute("call", { action: "launch", program: "cmd/hello" })).rejects.toThrow(
+					/captured launch/,
+				);
+				const [opts] = sessionLaunchSpy.mock.calls[0]!;
+				expect(opts.adapter.name).toBe("dlv");
+				expect(opts.extraLaunchArguments).toEqual({ mode: "debug" });
+			} finally {
+				await fs.rm(cwd, { recursive: true, force: true });
+			}
+		} finally {
+			sessionLaunchSpy.mockRestore();
+		}
+	});
+
 	it("dlv launch with a compiled binary switches mode from debug to exec", async () => {
 		const dapModule = await import("../../src/dap");
 		const dlvAdapter: DapResolvedAdapter = {

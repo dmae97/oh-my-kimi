@@ -687,7 +687,7 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
 				const program = resolveToCwd(params.program, commandCwd);
 				const programKind = await classifyLaunchProgram(program);
-				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter);
+				const adapter = selectLaunchAdapter(program, commandCwd, params.adapter, programKind);
 				if (!adapter) {
 					if (params.adapter === "debugpy") {
 						throw new ToolError("adapter 'debugpy' is not available: python not found in PATH");
