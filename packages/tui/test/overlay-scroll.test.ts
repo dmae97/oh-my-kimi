@@ -131,7 +131,7 @@ describe("TUI overlays", () => {
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
 	});
 
-	it("clears stale viewport content on launch without clearing shell scrollback", async () => {
+	it("clears stale viewport content on launch", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 		await flushRender(term);
@@ -143,7 +143,34 @@ describe("TUI overlays", () => {
 			await flushRender(term);
 
 			expect(term.getViewport().join("\n").includes("shell-")).toBeFalsy();
-			expect(term.getScrollBuffer().join("\n").includes("shell-0")).toBeTruthy();
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("can clear saved native scrollback on the first paint", async () => {
+		const term = new VirtualTerminal(40, 4);
+		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
+		await flushRender(term);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		(term as unknown as { write: (s: string) => void }).write = (data: string) => {
+			writes.push(data);
+			realWrite(data);
+		};
+
+		const tui = new TUI(term);
+		tui.addChild(new MutableContentComponent(buildRows(8)));
+		try {
+			tui.start({ clearScrollback: true });
+			await flushRender(term);
+
+			const output = writes.join("");
+			const scrollback = term.getScrollBuffer().join("\n");
+			expect(output).toContain("\x1b[3J");
+			expect(scrollback.includes("shell-")).toBeFalsy();
+			expect(scrollback.includes("row-0")).toBeTruthy();
+			expect(scrollback.includes("row-7")).toBeTruthy();
 		} finally {
 			tui.stop();
 		}

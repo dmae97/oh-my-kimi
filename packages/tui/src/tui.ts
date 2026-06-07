@@ -92,6 +92,11 @@ export interface TUIOptions {
 	renderScheduler?: RenderScheduler;
 }
 
+export interface TUIStartOptions {
+	/** Clear saved native scrollback before the first paint. */
+	clearScrollback?: boolean;
+}
+
 const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
 	now: () => performance.now(),
 	scheduleImmediate: callback => {
@@ -785,7 +790,7 @@ export class TUI extends Container {
 		for (const overlay of this.overlayStack) overlay.component.invalidate?.();
 	}
 
-	start(): void {
+	start(options?: TUIStartOptions): void {
 		this.#stopped = false;
 		// A DECRQM report for mode 2026 is authoritative: enable synchronized
 		// output when the terminal reports support (upgrading conservatively
@@ -818,7 +823,7 @@ export class TUI extends Container {
 		this.terminal.hideCursor();
 		this.#querySixelSupport();
 		this.#queryCellSize();
-		this.requestRender(true);
+		this.requestRender(true, { clearScrollback: options?.clearScrollback === true });
 	}
 
 	addStartListener(listener: StartListener): () => void {
@@ -1701,9 +1706,13 @@ export class TUI extends Container {
 				// multiplexer needs — and the `liveRegionPinned` planner above
 				// keeps the actively-mutating live tail out of pane history while
 				// committing only the sealed prefix (issue #1974).
+				// Do not lower #scrollbackHighWater here. The viewport repaint below
+				// avoids committing new transient rows, but rows committed by earlier
+				// full/diff paints are still physically present in native scrollback and
+				// must remain in the shrink/de-dup accounting until an ED3 checkpoint
+				// clears them.
 				this.#markNativeScrollbackDirty();
 				this.#streamingHighWater = Math.max(this.#streamingHighWater, lines.length);
-				this.#scrollbackHighWater = 0;
 				lines = lines.slice(-height);
 				intent = { kind: "viewportRepaint" };
 			} else {
@@ -1756,7 +1765,13 @@ export class TUI extends Container {
 						this.#nativeScrollbackCommitSafeEnd,
 					);
 				} else {
-					this.#emitFullPaint(lines, width, height, cursorPos, { clearViewport: true, clearScrollback: false });
+					// Start from a clean terminal: clear native scrollback too (off a
+					// multiplexer, where ED3 is a no-op and would only duplicate the pane
+					// history). Prior shell content is intentionally not preserved.
+					this.#emitFullPaint(lines, width, height, cursorPos, {
+						clearViewport: true,
+						clearScrollback: !isMultiplexerSession(),
+					});
 				}
 				this.#hasEverRendered = true;
 				return;
@@ -1870,9 +1885,9 @@ export class TUI extends Container {
 		// that waits for the user's first keystroke.
 		if (this.#clearScrollbackOnNextRender) return { kind: "sessionReplace" };
 
-		// Initial paint after start(): scrollback must keep its prior shell
-		// content, but the viewport must be cleared so stale rows do not bleed
-		// into the new UI.
+		// Initial paint after start(): clear the viewport AND prior shell scrollback
+		// so the session starts from a clean terminal. (We intentionally do not
+		// preserve pre-omp shell history — see the `initial` emit below.)
 		if (!this.#hasEverRendered) return { kind: "initial" };
 
 		const forceViewportRepaint = this.#forceViewportRepaintOnNextRender;

@@ -600,8 +600,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Load initial todos
 		await this.#loadTodoList();
 
-		// Start the UI
-		this.ui.start();
+		// Start the UI. Cold `omp` launch opts into clearing on the first paint so
+		// the initial welcome frame does not append over the previous run's scrollback.
+		this.ui.start({ clearScrollback: options.clearInitialTerminalHistory === true });
 		pushTerminalTitle();
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.updateEditorBorderColor();

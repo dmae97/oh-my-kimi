@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- Fixed cold `omp` launch to clear native terminal history on the first paint, avoiding a once-per-launch duplicate welcome/transcript copy before the normal session replay.
 - Fixed plan approval resolution so `resolve` with `action: "apply"` can still find the plan file when `extra.title` is missing or stale by falling back to the current plan path and most-recent local plan artifacts
 - Fixed the search-family tool magnifier glyph (`find`, `search`, `ast_grep`, `search_tool_bm25`) to use the `accent` title color instead of `success` green, so the icon matches the tool title in the status header instead of standing out
 - Fixed TTSR stream interrupts to pass the matched rule name through the abort reason, so aborted in-flight tool placeholders say why they were stopped instead of `Request was aborted`.
