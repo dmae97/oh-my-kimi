@@ -283,6 +283,11 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
 const EMPTY_STOP_MAX_RETRIES = 3;
+const NON_WHITESPACE_RE = /\S/;
+
+function hasNonWhitespace(value: string): boolean {
+	return NON_WHITESPACE_RE.test(value);
+}
 
 export interface AsyncJobSnapshot {
 	running: AsyncJobSnapshotItem[];
@@ -6558,25 +6563,26 @@ export class AgentSession {
 	}
 
 	#isEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
-		const { stopReason } = assistantMessage;
-		if (stopReason !== "stop" && stopReason !== "toolUse") return false;
-
-		// Single pass over content; the three flags cover every emptiness rule below.
-		let hasText = false;
-		let hasThinking = false;
-		let hasToolCall = false;
-		for (const content of assistantMessage.content) {
-			if (content.type === "text") hasText ||= content.text.trim().length > 0;
-			else if (content.type === "thinking") hasThinking ||= content.thinking.trim().length > 0;
-			else if (content.type === "toolCall") hasToolCall = true;
+		switch (assistantMessage.stopReason) {
+			case "stop":
+				for (const content of assistantMessage.content) {
+					if (content.type === "toolCall") return false;
+					if (content.type === "text" && hasNonWhitespace(content.text)) return false;
+					if (content.type === "thinking" && hasNonWhitespace(content.thinking)) return false;
+				}
+				return true;
+			case "toolUse":
+				// An orphaned toolUse stop (no tool_use block) corrupts Anthropic history:
+				// a later tool_result has nothing to anchor to. Thinking alone cannot anchor
+				// a tool_result, so it does not rescue a toolUse stop here.
+				for (const content of assistantMessage.content) {
+					if (content.type === "toolCall") return false;
+					if (content.type === "text" && hasNonWhitespace(content.text)) return false;
+				}
+				return true;
+			default:
+				return false;
 		}
-
-		// An orphaned toolUse stop (no tool_use block) corrupts Anthropic history:
-		// a later tool_result has nothing to anchor to. Thinking alone cannot anchor
-		// a tool_result, so it does not rescue a toolUse stop here.
-		if (stopReason === "toolUse") return !hasText && !hasToolCall;
-		// A plain stop is empty only when it carries no usable content at all.
-		return !hasText && !hasThinking && !hasToolCall;
 	}
 
 	#emptyStopRetryReminder(): string {
