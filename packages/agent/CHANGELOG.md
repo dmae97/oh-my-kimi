@@ -16,6 +16,7 @@
 
 - Fixed handling of short-lived API keys so that expired tokens are retried with a refreshed value during 401/usage-limit failures
 - Ensured fallback API key resolution uses the initially configured static `apiKey` when `getApiKey` is present
+- Wrapped oneshot LLM completions (`instrumentedCompleteSimple`: handoff, compaction/branch summaries) in an `EventLoopKeepalive`. These run outside the agent `#runLoop`, so without the keepalive Bun's event loop stopped servicing timers while parked on the completion promise — freezing host spinners (e.g. the `/handoff` loader) until an unrelated terminal resize poked the loop into rendering again.
 
 ## [15.9.5] - 2026-06-05
 

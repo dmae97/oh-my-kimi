@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { Chalk } from "chalk";
-import { Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
+import { clearRenderCache, Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
 import { setTerminalTextSizing, TERMINAL } from "../src/terminal-capabilities.js";
 import { type Component, TUI } from "../src/tui.js";
 import { visibleWidth } from "../src/utils.js";
@@ -1239,6 +1239,29 @@ describe("Module-level LRU render cache", () => {
 
 		// Output must be byte-identical — cache is transparent to callers.
 		expect(lines2).toEqual(lines1);
+	});
+
+	it("returns caller-owned arrays from L1 and L2 cache hits", () => {
+		clearRenderCache();
+		const text = "Cache mutability sentinel";
+		const width = 80;
+		const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
+
+		const first = markdown.render(width);
+		const expected = [...first];
+		first.push("mutated first render");
+
+		const l1Hit = markdown.render(width);
+		expect(l1Hit).toEqual(expected);
+		l1Hit.push("mutated L1 hit");
+		expect(markdown.render(width)).toEqual(expected);
+
+		const l2Markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
+		const l2Hit = l2Markdown.render(width);
+		expect(l2Hit).toEqual(expected);
+		l2Hit.push("mutated L2 hit");
+		expect(l2Markdown.render(width)).toEqual(expected);
+		expect(new Markdown(text, 0, 0, defaultMarkdownTheme).render(width)).toEqual(expected);
 	});
 });
 
