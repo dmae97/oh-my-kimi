@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Fixed
 
 - Fixed the working spinner appearing to ignore Esc for 2-3 seconds when an interrupt lands mid-tool. Esc fires the abort synchronously, but the agent loop only stops the loader at `agent_end`, which it cannot reach until every in-flight tool settles in `executeToolCalls`' `await Promise.allSettled(...)` — and process/subagent/kernel-owning tools tear down gracefully (SIGTERM, 2-3s grace, SIGKILL), so the loader kept showing the unchanged "Working…/<intent>" line and read as a dropped keypress. The loader now switches to "Interrupting…" the instant Esc requests the abort and freezes intent-driven label updates until the turn unwinds (`EventController.notifyInterrupting`), so the interrupt is acknowledged immediately even while teardown completes.
@@ -13,10 +14,9 @@
 - Fixed follow-up shortcut submission of builtin slash commands so `/goal set ...` applies goal mode instead of queueing as plain text.
 - Fixed Ctrl+Z crashing the agent on Windows with `TypeError: Unknown signal: SIGTSTP`. `InputController.handleCtrlZ` called `process.kill(0, "SIGTSTP")` unconditionally, but `SIGTSTP` is POSIX job-control and Bun/Node on Windows rejects the signal name from the JS side; the throw propagated out of the TUI input dispatcher as an uncaught exception. The handler now no-ops with a "Suspend (Ctrl+Z) is not supported on this platform" status on Windows, and on POSIX wraps `process.kill` in a try/catch that detaches the registered SIGCONT resume hook and re-`start()`s the TUI on failure so a rejected signal can never leave the UI stranded with a leaked listener ([#2036](https://github.com/can1357/oh-my-pi/issues/2036)).
 - Fixed a relative `--cwd` target (e.g. `omp --cwd repo` launched from `/tmp`) leaking the raw relative string into the session config. `applyStartupCwd` chdired into the resolved directory via `setProjectDir` but left `parsed.cwd` as `"repo"`, so `buildSessionOptions` (which prefers `parsed.cwd` over `getProjectDir()`) handed downstream settings/discovery/session creation a value that re-resolved against the new process cwd (`/tmp/repo/repo`) or persisted a relative session cwd. `parsed.cwd` is now re-synced to the resolved absolute project dir after the chdir.
-
-### Fixed
-
 - Fixed the `--cwd` launch flag so it is parsed and can override the startup directory instead of always falling back to the current process directory or home auto-switch target.
+- Fixed session auto-retry for generic `upstream_error: Upstream request failed` gateway failures.
+- Stripped read-output line-number prefixes (`N:`) from auto-piped bare body rows in the hashline edit parser, so pasting `3:text` without a `+` prefix no longer injects `3:` as literal content. Uses single-pass stripping to avoid corrupting content whose own text starts with `digits:` ([#1492](https://github.com/can1357/oh-my-pi/issues/1492)).
 
 ## [15.10.1] - 2026-06-07
 
@@ -65,8 +65,6 @@
 - Removed the `/background` (and `/bg`) slash command and the background-mode subsystem it was the sole entry point for — `InteractiveMode.isBackgrounded`, `createBackgroundUiContext`, `handleBackgroundEvent`, and every `isBackgrounded` guard across the input/event/extension-UI controllers and UI helpers. The command suspended the whole process group via `SIGTSTP` (a leftover testing shortcut) instead of detaching the running agent, which is not the expected workflow — use terminal panes or a multiplexer instead.
 
 ### Fixed
-
-- Fixed session auto-retry for generic `upstream_error: Upstream request failed` gateway failures.
 
 - Fixed inline `find` and `search` result blocks to align with grouped `read` output and render their success headers with the normal tool-title color instead of accent blue.
 
@@ -150,7 +148,6 @@
 - Fixed collapsed search result previews that could show only "… N more matches" when the first grouped section exceeded the preview budget. Collapsed search output now compacts to match rows, fills the budget with visible hits before the summary, and keeps truncation details out of the bottom user-visible notice.
 - Fixed the expanded search result view dumping every match when all hits live in one file. A single file's matches collapse into one blank-line group, and the expanded tree list ignored the line budget, so a hot file whose matches span its whole length rendered every row (e.g. lines 374–2858). Expanded search output is now bounded by a larger-than-collapsed budget (`EXPANDED_LINES × 2`), keeps surrounding context rows, and appends a `… N more matches` summary when truncated.
 - Fixed boolean environment flag overrides that were ORed with settings, so `PI_INTENT_TRACING=0`, `PI_AUTO_QA=0`, and per-backend eval flags now take precedence when present while falling back to config when unset.
-- Stripped read-output line-number prefixes (`N:`) from auto-piped bare body rows in the hashline edit parser, so pasting `3:text` without a `+` prefix no longer injects `3:` as literal content. Uses single-pass stripping to avoid corrupting content whose own text starts with `digits:` ([#1492](https://github.com/can1357/oh-my-pi/issues/1492)).
 - Fixed custom-rendered tools that set `mergeCallAndResult` (e.g. `lsp`) rendering a redundant tool-name line above the framed result once a result arrived. `ToolExecutionComponent`'s custom-tool branch now emits the fallback label only when the tool has no `renderCall` and the call is not suppressed by an existing result, matching the built-in renderer branch.
 - Fixed the `write` tool result rendering with a green success checkmark even when the write failed. `writeToolRenderer.renderResult` now branches on `result.isError`, rendering the error status icon plus the failure message instead of the success header and content preview.
 - Fixed Perplexity OAuth/cookie web search returning a refusal answer ("I don't currently have access to the web-search tools in this turn") despite returning real sources. `callPerplexityOAuth` was prepending the API-style `web-search` system prompt to the query (`query_str = systemPrompt + "\n\n" + query`), but the consumer `www.perplexity.ai/rest/sse/perplexity_ask` endpoint has no system-message slot and reads the prepended instruction as a meta-prompt, making the model decline. The OAuth/cookie path now sends the bare query; the API-key path still passes the system prompt as a proper `system` message.
