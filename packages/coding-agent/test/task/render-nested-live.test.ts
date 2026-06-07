@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
@@ -12,6 +12,10 @@ describe("task renderer: nested live rendering", () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		setThemeInstance(theme!);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	afterAll(() => {
@@ -231,7 +235,7 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).toContain("Harden the auth stack before the cut.");
 	});
 
-	it("renders a static result header while the body keeps the progress spinner", async () => {
+	it("renders a static result header while the body shimmers the running task name", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
@@ -239,24 +243,28 @@ describe("task renderer: nested live rendering", () => {
 			totalDurationMs: 0,
 			progress: [makeRunningProgress({ id: "Probe", description: "Investigate padding" })],
 		};
-		const renderFrame = (frame: number): string[] => {
+		let now = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const renderAt = (timeMs: number): string[] => {
+			now = timeMs;
 			const component = taskToolRenderer.renderResult(
 				{ content: [{ type: "text", text: "Running 1 agents..." }], details },
-				{ expanded: false, isPartial: true, spinnerFrame: frame },
+				{ expanded: false, isPartial: true, spinnerFrame: 0 },
 				theme,
 			);
-			return Bun.stripANSI(component.render(160).join("\n")).split("\n");
+			return component.render(160).join("\n").split("\n");
 		};
-		const f0 = renderFrame(0);
-		const f1 = renderFrame(1);
-		const header0 = f0.find(l => l.includes("Task"))!;
-		const header1 = f1.find(l => l.includes("Task"))!;
-		const body0 = f0.find(l => l.includes("Probe"))!;
-		const body1 = f1.find(l => l.includes("Probe"))!;
-		// Header is static across spinner frames — no clock ticking beside "Task".
+		const f0 = renderAt(0);
+		const f1 = renderAt(700);
+		const header0 = f0.find(l => Bun.stripANSI(l).includes("Task"))!;
+		const header1 = f1.find(l => Bun.stripANSI(l).includes("Task"))!;
+		const body0 = f0.find(l => Bun.stripANSI(l).includes("Probe"))!;
+		const body1 = f1.find(l => Bun.stripANSI(l).includes("Probe"))!;
+		// Header is static — no clock ticking beside "Task".
 		expect(header0).toBe(header1);
-		// The per-agent body line still advances its spinner, conveying progress.
+		// The per-agent body line still animates via the shimmered task name.
 		expect(body0).not.toBe(body1);
+		expect(Bun.stripANSI(body1)).toContain("• Probe: Investigate padding");
 	});
 
 	it("wraps the completed run summary in bracket glyphs, dropping the Total: label", async () => {
