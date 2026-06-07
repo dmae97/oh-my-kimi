@@ -18,7 +18,10 @@ describe("git reftable support", () => {
 
 	test("resolves references in a reftable repository", async () => {
 		// Initialize the repository with reftable format
-		const initResult = await $`git init --ref-format=reftable`.cwd(testRepoDir).quiet().nothrow();
+		const initResult = await $`git init --ref-format=reftable --initial-branch=main`
+			.cwd(testRepoDir)
+			.quiet()
+			.nothrow();
 		if (initResult.exitCode !== 0) {
 			// If the installed git doesn't support --ref-format=reftable, skip the test
 			console.warn("Skipping reftable test: Git does not support --ref-format=reftable");
