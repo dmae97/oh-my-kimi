@@ -33,7 +33,7 @@ import {
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { type ToolRenderer, toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
-import { renderStatusLine } from "../../tui";
+import { isFramedBlockComponent, renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
@@ -226,9 +226,12 @@ export class ToolExecutionComponent extends Container {
 		this.#args = args;
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
-		// paddingY is 0: the transcript owns inter-block spacing (see TranscriptContainer).
-		this.#contentBox = new Box(0, 0);
-		this.#contentText = new Text("", 1, 0);
+		// paddingY is 1 so background-tinted blocks (custom/extension tools and the
+		// generic fallback) get top/bottom breathing room. TranscriptContainer
+		// strips PLAIN-blank edges, so framed/minimal blocks (no bg set) drop these
+		// lines and keep their tight spacing — only tinted lines survive.
+		this.#contentBox = new Box(0, 1);
+		this.#contentText = new Text("", 1, 1);
 
 		// Use Box for custom tools or built-in tools that have renderers
 		const hasRenderer = toolName in toolRenderers;
@@ -591,6 +594,12 @@ export class ToolExecutionComponent extends Container {
 		this.#renderState.isPartial = this.#isPartial;
 		this.#renderState.spinnerFrame = this.#spinnerFrame;
 
+		// Non-self-framing tools (custom/extension renderers and the generic
+		// fallback) get a padded, state-tinted block — built-ins that draw their
+		// own frame opt out below via the framed-component mark.
+		const stateBgKey = this.#isPartial ? "toolPendingBg" : this.#result?.isError ? "toolErrorBg" : "toolSuccessBg";
+		const stateBgFn = (t: string) => theme.bg(stateBgKey, t);
+
 		// Check for custom tool rendering
 		if (this.#tool && (this.#tool.renderCall || this.#tool.renderResult)) {
 			const tool = this.#tool;
@@ -660,6 +669,11 @@ export class ToolExecutionComponent extends Container {
 					this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 				}
 			}
+			// Custom tools that draw their own frame (task) render flush; plain
+			// extension renderers get the padded, state-tinted block back.
+			const customFramed = this.#contentBox.children.some(isFramedBlockComponent);
+			this.#contentBox.setPaddingX(customFramed ? 0 : 1);
+			this.#contentBox.setBgFn(customFramed ? undefined : stateBgFn);
 		} else if (this.#toolName in toolRenderers) {
 			// Built-in tools with renderers
 			const renderer = toolRenderers[this.#toolName];
@@ -774,6 +788,7 @@ export class ToolExecutionComponent extends Container {
 			}
 		} else {
 			// Other built-in tools: use Text directly with caching
+			this.#contentText.setCustomBgFn(stateBgFn);
 			this.#contentText.setText(this.#formatToolExecution());
 		}
 

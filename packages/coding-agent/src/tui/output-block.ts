@@ -305,8 +305,11 @@ export class CachedOutputBlock {
  */
 export function framedBlock(theme: Theme, build: (width: number) => OutputBlockOptions): Component {
 	const block = new CachedOutputBlock();
-	return {
+	// Marked so the tool-execution container treats it as self-framing (renders
+	// flush, no extra padding/background) the same way `markFramedBlockComponent`
+	// blocks are treated.
+	return markFramedBlockComponent({
 		render: (width: number): string[] => block.render(build(width), theme),
 		invalidate: () => block.invalidate(),
-	};
+	});
 }
