@@ -1,4 +1,4 @@
-import { type KeyId, matchesKey, parseKey } from "./keys";
+import { type KeyId, parseKey } from "./keys";
 
 /**
  * Global keybinding registry.
@@ -164,6 +164,44 @@ const SHIFTED_SYMBOL_KEYS = new Set<string>([
 	"~",
 ]);
 
+const MODIFIER_ORDER = ["ctrl", "shift", "alt", "super"] as const;
+
+function canonicalKeyId(key: string): string {
+	let remaining = key.toLowerCase();
+	const modifiers: string[] = [];
+	let foundModifier = true;
+
+	while (foundModifier) {
+		foundModifier = false;
+		for (const modifier of MODIFIER_ORDER) {
+			const prefix = `${modifier}+`;
+			if (remaining.startsWith(prefix)) {
+				modifiers.push(modifier);
+				remaining = remaining.slice(prefix.length);
+				foundModifier = true;
+				break;
+			}
+		}
+	}
+	const base = remaining === "esc" ? "escape" : remaining === "return" ? "enter" : remaining;
+
+	if (modifiers.length === 0) return base;
+	modifiers.sort(
+		(left, right) =>
+			MODIFIER_ORDER.indexOf(left as (typeof MODIFIER_ORDER)[number]) -
+			MODIFIER_ORDER.indexOf(right as (typeof MODIFIER_ORDER)[number]),
+	);
+	return `${modifiers.join("+")}+${base}`;
+}
+
+function addKeyAliases(keys: Set<string>, key: KeyId): void {
+	const canonical = canonicalKeyId(key);
+	keys.add(canonical);
+	if (SHIFTED_SYMBOL_KEYS.has(canonical)) {
+		keys.add(`shift+${canonical}`);
+	}
+}
+
 const normalizeKeyId = (key: KeyId): KeyId => key.toLowerCase() as KeyId;
 
 function normalizeKeys(keys: KeyId | KeyId[] | undefined): KeyId[] {
@@ -185,6 +223,7 @@ export class KeybindingsManager {
 	#definitions: KeybindingDefinitions;
 	#userBindings: KeybindingsConfig;
 	#keysById = new Map<Keybinding, KeyId[]>();
+	#matchKeysById = new Map<Keybinding, Set<string>>();
 	#conflicts: KeybindingConflict[] = [];
 
 	constructor(definitions: KeybindingDefinitions, userBindings: KeybindingsConfig = {}) {
@@ -195,6 +234,7 @@ export class KeybindingsManager {
 
 	#rebuild(): void {
 		this.#keysById.clear();
+		this.#matchKeysById.clear();
 		this.#conflicts = [];
 
 		const userClaims = new Map<KeyId, Set<Keybinding>>();
@@ -217,21 +257,19 @@ export class KeybindingsManager {
 			const userKeys = this.#userBindings[id];
 			const keys = userKeys === undefined ? normalizeKeys(definition.defaultKeys) : normalizeKeys(userKeys);
 			this.#keysById.set(id as Keybinding, keys);
+			const matchKeys = new Set<string>();
+			for (const key of keys) {
+				addKeyAliases(matchKeys, key);
+			}
+			this.#matchKeysById.set(id as Keybinding, matchKeys);
 		}
 	}
 
 	matches(data: string, keybinding: Keybinding): boolean {
-		const keys = this.#keysById.get(keybinding) ?? [];
-		for (const key of keys) {
-			if (matchesKey(data, key)) return true;
-		}
-
-		// Handle shifted symbol keys (e.g., shift+- produces _ on US layout)
 		const parsed = parseKey(data);
-		if (!parsed?.startsWith("shift+")) return false;
-		const keyName = parsed.slice("shift+".length);
-		if (!SHIFTED_SYMBOL_KEYS.has(keyName)) return false;
-		return keys.includes(keyName as KeyId);
+		if (parsed === undefined) return false;
+		const matchKeys = this.#matchKeysById.get(keybinding);
+		return matchKeys?.has(canonicalKeyId(parsed)) ?? false;
 	}
 
 	getKeys(keybinding: Keybinding): KeyId[] {

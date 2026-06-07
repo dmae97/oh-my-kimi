@@ -20,11 +20,19 @@
 
 ### Changed
 
+- Changed static `Loader` messages to repaint only at the spinner's 80 ms cadence; time-dependent message colorizers can opt into 16 ms redraws with `animated: true`.
+- Changed keybinding matching to precompute canonical key sets so each input sequence is parsed once per binding check instead of once per candidate key.
 - Made `Component.invalidate()` optional so leaf components without render caches no longer need no-op invalidation hooks.
 - `TERMINAL` is now a `RuntimeTerminal` whose post-construction capabilities (image protocol and the probe-driven flags) are writable, replacing the `as unknown as MutableTerminalInfo` cast pattern and the positional `withTerminalOverrides` rebuild with a prototype-preserving `clone()`.
 
 ### Fixed
 
+- Fixed `Loader` text updates to skip identical messages and preserve the rendered `Text` cache instead of invalidating it every timer tick.
+
+- Fixed fullscreen overlay alt-frame rendering to reuse the current line-preparation path instead of calling removed fitting helpers.
+- Reduced TUI render-path line fitting by deferring overlay base-frame fitting until an overlay rebuild and by reusing already-fitted lines in emitters.
+- Reduced live-region pinned repaint output by diffing unchanged viewport rows when no sealed rows are being committed to native scrollback.
+- Optimized terminal image-line detection and Thai/Lao AM normalization checks to avoid hot-path regex scans and substring allocations.
 - Fixed `Markdown.render()` cache hits returning the cache's mutable backing array, which let callers that append extra rows corrupt cached Markdown and duplicate those rows on every redraw.
 - Fixed first-paint full replays for callers that intentionally replace terminal history by allowing `TUI.start({ clearScrollback: true })`, so they do not briefly append an entire initial frame before the first clean replay.
 - Fixed ED3-risk streaming cap accounting to preserve the native scrollback high-water mark for rows that were already physically committed before transient frames were viewport-capped.

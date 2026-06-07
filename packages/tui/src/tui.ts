@@ -39,10 +39,10 @@ import {
 
 const SEGMENT_RESET = "\x1b[0m";
 /**
- * Per-line terminator written at the end of every non-image line. Closes both
+ * Per-line terminator written after every non-image content row. It closes both
  * SGR state and any in-flight OSC 8 hyperlink so styles/links cannot bleed
- * across lines in scrollback. Applied by {@link TUI.#applyLineResets} before
- * diffing so `#previousLines` mirrors what was actually written.
+ * across lines in scrollback. Kept out of the diff/width cache because reset
+ * bytes are deterministic write framing, not content.
  */
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
 const ERASE_LINE = "\x1b[2K";
@@ -433,6 +433,12 @@ type RenderIntent =
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
 
+interface PreparedLine {
+	raw: string;
+	width: number;
+	line: string;
+}
+
 /**
  * TUI - Main class for managing terminal UI with differential rendering
  */
@@ -451,7 +457,7 @@ export class TUI extends Container {
 	#renderTimer: RenderTimer | undefined;
 	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
-	static readonly #MIN_RENDER_INTERVAL_MS = 16;
+	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	#viewportTopRow = 0; // Content row currently mapped to screen row 0
@@ -524,6 +530,11 @@ export class TUI extends Container {
 	#altPreviousLines: string[] = [];
 	#altEnterWidth = 0;
 	#altEnterHeight = 0;
+
+	// Last-frame line preparation cache. Entries store normalized, width-fitted
+	// content rows without the per-line terminal terminator; terminators are
+	// appended only at write time so width checks stay on content, not reset bytes.
+	#preparedLineCache: PreparedLine[] = [];
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -808,7 +819,7 @@ export class TUI extends Container {
 				// Repaint immediately rather than via the throttled path: a resize must
 				// clear and replay at the fresh geometry before the terminal's reflow
 				// settles into a state a throttled frame would race. Forced render skips
-				// the 16ms coalescing window, matching resetDisplay()'s prompt repaint.
+				// the 30fps coalescing window, matching resetDisplay()'s prompt repaint.
 				this.#resizeEventPending = true;
 				this.requestRender(true);
 			},
@@ -1528,24 +1539,9 @@ export class TUI extends Container {
 		return cursor;
 	}
 
-	/**
-	 * Append the per-line terminator ({@link LINE_TERMINATOR}) to every
-	 * non-image line and normalize for terminal rendering. Mutates the input
-	 * array in place so downstream diffing/storage sees exactly the bytes
-	 * written to the terminal — without this, the diff cache disagrees with
-	 * emitted output and OSC 8 hyperlink state can leak across lines.
-	 */
-	#applyLineResets(lines: string[]): string[] {
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			if (TERMINAL.isImageLine(line)) continue;
-			const normalized = normalizeTerminalOutput(line);
-			// Only close OSC 8 hyperlinks when the line actually opened one;
-			// emitting `\x1b]8;;\x07` on every line just feeds the terminal's OSC
-			// parser for no reason (measurable cost in xterm.js parse loop).
-			lines[i] = normalized + (normalized.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
-		}
-		return lines;
+	#terminalLine(line: string): string {
+		if (TERMINAL.isImageLine(line)) return line;
+		return line + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
 	}
 
 	/**
@@ -1608,11 +1604,7 @@ export class TUI extends Container {
 		const overlayVisibilityReduced = this.#overlayVisibilityReduced(visibleOverlayComponents);
 		let lines = visibleOverlayComponents.length > 0 ? this.#compositeOverlays(baseLines, width, height) : baseLines;
 		const cursorPos = this.#extractCursorPosition(lines, height);
-		lines = this.#fitLinesToWidth(this.#applyLineResets(lines), width);
-		if (lines !== baseLines) {
-			this.#extractCursorPosition(baseLines, height);
-			baseLines = this.#fitLinesToWidth(this.#applyLineResets(baseLines), width);
-		}
+		lines = this.#prepareLines(lines, width, true);
 
 		// 2. Capture transition + pre-render state before any emitter runs.
 		const prevViewportTop = this.#viewportTopRow;
@@ -1793,6 +1785,8 @@ export class TUI extends Container {
 				return;
 			case "overlayRebuild":
 				this.#clearNativeScrollbackDirty();
+				this.#extractCursorPosition(baseLines, height);
+				baseLines = this.#prepareLines(baseLines, width, false);
 				this.#emitFullPaint(baseLines, width, height, null, {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
@@ -1814,7 +1808,7 @@ export class TUI extends Container {
 				return;
 			case "viewportRepaint":
 				if (intent.appendFrom !== undefined) {
-					this.#emitAppendTail(lines, intent.appendFrom, height, width, prevViewportTop, prevHardwareCursorRow);
+					this.#emitAppendTail(lines, intent.appendFrom, height, prevViewportTop, prevHardwareCursorRow);
 				}
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
 				return;
@@ -2460,31 +2454,98 @@ export class TUI extends Container {
 		if (lines.length >= paddedLength) return lines;
 		return [...lines, ...new Array<string>(paddedLength - lines.length).fill("")];
 	}
-	/**
-	 * Truncate a line to the visible viewport width. Image lines are left
-	 * alone, narrow lines pass through unchanged. Truncation re-appends the
-	 * per-line terminator so SGR/OSC 8 state does not leak across rows when
-	 * `truncateToWidth` drops the trailing bytes appended by
-	 * {@link #applyLineResets}.
-	 */
-	#fitLinesToWidth(lines: string[], width: number): string[] {
+	#prepareLines(lines: string[], width: number, useCache: boolean): string[] {
+		const prepared: string[] = new Array(lines.length);
+		const previous = useCache ? this.#preparedLineCache : [];
+		const nextCache: PreparedLine[] | undefined = useCache ? new Array(lines.length) : undefined;
 		for (let i = 0; i < lines.length; i++) {
-			lines[i] = this.#fitLineToWidth(lines[i], width);
+			const raw = lines[i]!;
+			const cached = previous[i];
+			if (cached && cached.raw === raw && cached.width === width) {
+				prepared[i] = cached.line;
+				if (nextCache) nextCache[i] = cached;
+				continue;
+			}
+			const entry = this.#prepareLine(raw, width);
+			prepared[i] = entry.line;
+			if (nextCache) nextCache[i] = entry;
 		}
-		return lines;
+		if (nextCache) this.#preparedLineCache = nextCache;
+		return prepared;
 	}
 
-	#fitLineToWidth(line: string, width: number): string {
-		if (TERMINAL.isImageLine(line)) return line;
-		if (visibleWidth(line) <= width) return line;
-		const truncated = truncateToWidth(line, width, Ellipsis.Omit);
-		return truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+	#prepareLine(raw: string, width: number): PreparedLine {
+		if (TERMINAL.isImageLine(raw)) {
+			return { raw, width, line: raw };
+		}
+		const normalized = normalizeTerminalOutput(raw);
+		const asciiWidth = this.#ansiAsciiLineWidth(normalized, width);
+		if ((asciiWidth ?? visibleWidth(normalized)) <= width) {
+			return { raw, width, line: normalized };
+		}
+		const line = truncateToWidth(normalized, width, Ellipsis.Omit);
+		return { raw, width, line };
+	}
+
+	#ansiAsciiLineWidth(line: string, maxWidth: number): number | undefined {
+		let col = 0;
+		for (let i = 0; i < line.length; ) {
+			const code = line.charCodeAt(i);
+			if (code === 0x1b) {
+				const next = line.charCodeAt(i + 1);
+				if (next === 0x5b) {
+					let j = i + 2;
+					while (j < line.length) {
+						const final = line.charCodeAt(j);
+						if (final >= 0x40 && final <= 0x7e) break;
+						j++;
+					}
+					if (j >= line.length) return undefined;
+					i = j + 1;
+					continue;
+				}
+				if (next === 0x5d) {
+					// OSC 66 text-sizing spans carry visible payload inside the OSC.
+					// Fall back to visibleWidth() so scaled cells stay exact.
+					if (
+						line.charCodeAt(i + 2) === 0x36 &&
+						line.charCodeAt(i + 3) === 0x36 &&
+						line.charCodeAt(i + 4) === 0x3b
+					) {
+						return undefined;
+					}
+					let j = i + 2;
+					while (j < line.length) {
+						const osc = line.charCodeAt(j);
+						if (osc === 0x07) {
+							i = j + 1;
+							break;
+						}
+						if (osc === 0x1b && line.charCodeAt(j + 1) === 0x5c) {
+							i = j + 2;
+							break;
+						}
+						j++;
+					}
+					if (j >= line.length) return undefined;
+					continue;
+				}
+				return undefined;
+			}
+			if (code < 0x20 || code > 0x7e) return undefined;
+			col++;
+			if (col > maxWidth) return col;
+			i++;
+		}
+		return col;
 	}
 
 	#lineRewriteSequence(line: string, width: number): string {
-		const fitted = this.#fitLineToWidth(line, width);
-		if (TERMINAL.isImageLine(fitted)) return ERASE_LINE + fitted;
-		return visibleWidth(fitted) >= width ? fitted : fitted + ERASE_TO_END_OF_LINE;
+		if (TERMINAL.isImageLine(line)) return ERASE_LINE + line;
+		const terminalLine = this.#terminalLine(line);
+		const asciiWidth = this.#ansiAsciiLineWidth(line, width);
+		const lineWidth = asciiWidth ?? visibleWidth(line);
+		return lineWidth >= width ? terminalLine : terminalLine + ERASE_TO_END_OF_LINE;
 	}
 
 	/**
@@ -2550,7 +2611,7 @@ export class TUI extends Container {
 		if (this.#deccaraFillsEnabled() && visibleStart < lines.length) {
 			const visible: string[] = new Array(lines.length - visibleStart);
 			for (let k = 0; k < visible.length; k++) {
-				visible[k] = this.#fitLineToWidth(lines[visibleStart + k], width);
+				visible[k] = lines[visibleStart + k] ?? "";
 			}
 			const plan = planDeccaraFills(visible, width);
 			visibleTexts = plan.texts;
@@ -2558,8 +2619,9 @@ export class TUI extends Container {
 		}
 		for (let i = 0; i < lines.length; i++) {
 			if (i > 0) buffer += "\r\n";
-			buffer +=
-				visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : this.#fitLineToWidth(lines[i], width);
+			buffer += this.#terminalLine(
+				visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (lines[i] ?? ""),
+			);
 		}
 		buffer += fillSequence;
 		const finalRow = Math.max(0, lines.length - 1);
@@ -2608,12 +2670,12 @@ export class TUI extends Container {
 		let wroteLine = false;
 		for (let i = 0; i < appendTo; i++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[i] ?? "", width);
+			buffer += this.#terminalLine(lines[i] ?? "");
 			wroteLine = true;
 		}
 		for (let screenRow = 0; screenRow < height; screenRow++) {
 			if (wroteLine) buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
+			buffer += this.#terminalLine(lines[viewportTop + screenRow] ?? "");
 			wroteLine = true;
 		}
 
@@ -2664,7 +2726,7 @@ export class TUI extends Container {
 		// Each visible screen row, bottom-anchored, blank past content.
 		const visible: string[] = new Array(height);
 		for (let screenRow = 0; screenRow < height; screenRow++) {
-			visible[screenRow] = this.#fitLineToWidth(lines[viewportTop + screenRow] ?? "", width);
+			visible[screenRow] = lines[viewportTop + screenRow] ?? "";
 		}
 		const { texts, sequence } = this.#deccaraFillsEnabled()
 			? planDeccaraFills(visible, width)
@@ -2723,7 +2785,7 @@ export class TUI extends Container {
 		const base: string[] = new Array(Math.max(0, height)).fill("");
 		let lines = this.#compositeOverlays(base, width, height);
 		this.#extractCursorPosition(lines, height);
-		lines = this.#fitLinesToWidth(this.#applyLineResets(lines), width);
+		lines = this.#prepareLines(lines, width, false);
 		this.#emitAltFrame(lines, width, height);
 	}
 
@@ -2735,7 +2797,7 @@ export class TUI extends Container {
 	 */
 	#emitAltFrame(lines: string[], width: number, height: number): void {
 		const fitted: string[] = new Array(height);
-		for (let r = 0; r < height; r++) fitted[r] = this.#fitLineToWidth(lines[r] ?? "", width);
+		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
 		// Skip an identical repaint (the modal is mostly static between keystrokes).
 		if (this.#altPreviousLines.length === height) {
 			let same = true;
@@ -2786,6 +2848,42 @@ export class TUI extends Container {
 		const viewportTop = Math.max(0, Math.min(renderViewportTop, lines.length));
 		const boundedAppendTo = Math.max(0, Math.min(appendTo, naturalViewportTop, lines.length));
 		const boundedAppendFrom = Math.max(0, Math.min(appendFrom, boundedAppendTo));
+
+		if (boundedAppendFrom === boundedAppendTo) {
+			let firstChangedScreenRow = -1;
+			let lastChangedScreenRow = -1;
+			for (let screenRow = 0; screenRow < height; screenRow++) {
+				const nextLine = lines[viewportTop + screenRow] ?? "";
+				const previousLine = this.#previousLines[prevViewportTop + screenRow] ?? "";
+				if (nextLine === previousLine) continue;
+				if (firstChangedScreenRow === -1) firstChangedScreenRow = screenRow;
+				lastChangedScreenRow = screenRow;
+			}
+
+			let buffer = this.#paintBeginSequence;
+			let cursorFromRow = prevHardwareCursorRow;
+			if (firstChangedScreenRow !== -1) {
+				const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
+				const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
+				const rowDelta = firstChangedScreenRow - currentScreenRow;
+				if (rowDelta > 0) buffer += `\x1b[${rowDelta}B`;
+				else if (rowDelta < 0) buffer += `\x1b[${-rowDelta}A`;
+				buffer += "\r";
+				for (let screenRow = firstChangedScreenRow; screenRow <= lastChangedScreenRow; screenRow++) {
+					if (screenRow > firstChangedScreenRow) buffer += "\r\n";
+					buffer += this.#lineRewriteSequence(lines[viewportTop + screenRow] ?? "", width);
+				}
+				cursorFromRow = viewportTop + lastChangedScreenRow;
+			}
+			const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, cursorFromRow);
+			buffer += seq;
+			buffer += this.#paintEndSequence;
+			this.terminal.write(buffer);
+
+			this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
+			this.#commit(lines, width, height, viewportTop, toRow);
+			return;
+		}
 
 		// Position at the top visible row with a relative move. Terminals clamp the
 		// hardware cursor to the viewport on resize, so clamp our tracking to match
@@ -2839,7 +2937,6 @@ export class TUI extends Container {
 		lines: string[],
 		start: number,
 		height: number,
-		width: number,
 		prevViewportTop: number,
 		prevHardwareCursorRow: number,
 	): void {
@@ -2854,7 +2951,7 @@ export class TUI extends Container {
 		if (moveToBottom > 0) buffer += `\x1b[${moveToBottom}B`;
 		for (let i = start; i < lines.length; i++) {
 			buffer += "\r\n";
-			buffer += this.#fitLineToWidth(lines[i], width);
+			buffer += this.#terminalLine(lines[i] ?? "");
 		}
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
@@ -3039,7 +3136,7 @@ export class TUI extends Container {
 		) {
 			const slice: string[] = new Array(renderEnd - fillStart + 1);
 			for (let i = fillStart; i <= renderEnd; i++) {
-				slice[i - fillStart] = this.#fitLineToWidth(lines[i], width);
+				slice[i - fillStart] = lines[i] ?? "";
 			}
 			const plan = planDeccaraFills(slice, width, fillStart - fillViewportTop);
 			fillTexts = plan.texts;

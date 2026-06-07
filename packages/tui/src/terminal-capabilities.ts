@@ -23,7 +23,31 @@ export enum NotifyProtocol {
 
 export type TerminalId = "kitty" | "ghostty" | "wezterm" | "iterm2" | "vscode" | "alacritty" | "base" | "trueColor";
 
-const SIXEL_DCS_START_REGEX = /\x1bP(?:[0-9;]*)q/u;
+function hasNeedleBefore(line: string, needle: string, limit: number): boolean {
+	const index = line.indexOf(needle);
+	return index !== -1 && index + needle.length <= limit;
+}
+
+function hasSixelDcsStart(line: string): boolean {
+	const limit = Math.min(line.length, 128);
+	let from = 0;
+	for (;;) {
+		const start = line.indexOf("\x1bP", from);
+		if (start === -1 || start + 3 > limit) return false;
+		let i = start + 2;
+		while (i < limit) {
+			const code = line.charCodeAt(i);
+			if ((code >= 0x30 && code <= 0x39) || code === 0x3b) {
+				i++;
+				continue;
+			}
+			break;
+		}
+		if (i < limit && line.charCodeAt(i) === 0x71) return true;
+		from = start + 2;
+	}
+}
+
 /** Terminal capability details used for rendering and protocol selection. */
 export class TerminalInfo {
 	constructor(
@@ -61,10 +85,9 @@ export class TerminalInfo {
 	isImageLine(line: string): boolean {
 		if (!this.imageProtocol) return false;
 		if (this.imageProtocol === ImageProtocol.Sixel) {
-			return SIXEL_DCS_START_REGEX.test(line.slice(0, 128));
+			return hasSixelDcsStart(line);
 		}
-		const head = line.slice(0, 64);
-		return head.includes(this.imageProtocol) || head.includes(KITTY_PLACEHOLDER);
+		return hasNeedleBefore(line, this.imageProtocol, 64) || hasNeedleBefore(line, KITTY_PLACEHOLDER, 64);
 	}
 
 	formatNotification(message: string | TerminalNotification): string {
