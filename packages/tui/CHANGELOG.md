@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded TUI line fitting for oversized raw rows so ANSI-heavy subagent output cannot grow render buffers independently of the viewport ([#2045](https://github.com/can1357/oh-my-pi/issues/2045)).
+
 ## [15.10.1] - 2026-06-07
 ### Breaking Changes
 

@@ -47,6 +47,12 @@ const SEGMENT_RESET = "\x1b[0m";
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
 const ERASE_LINE = "\x1b[2K";
 const ERASE_TO_END_OF_LINE = "\x1b[K";
+// Bound the raw code-unit span handed to native width/truncation. A terminal
+// row can only display `width` cells, so oversized component rows should not
+// force proportional JS/native copies while deciding what the viewport shows.
+const LINE_FIT_MIN_SOURCE_CODE_UNITS = 4096;
+const LINE_FIT_MAX_SOURCE_CODE_UNITS = 65536;
+const LINE_FIT_SOURCE_WIDTH_MULTIPLIER = 64;
 // Hide the hardware cursor before each paint/move write. Ghostty-style bar
 // cursors can otherwise leave visual afterimages while the TUI repaints the
 // row under a visible cursor. Paint writes also disable terminal autowrap:
@@ -2478,13 +2484,24 @@ export class TUI extends Container {
 		if (TERMINAL.isImageLine(raw)) {
 			return { raw, width, line: raw };
 		}
-		const normalized = normalizeTerminalOutput(raw);
+		const source = this.#lineFitSource(raw, width);
+		const normalized = normalizeTerminalOutput(source);
 		const asciiWidth = this.#ansiAsciiLineWidth(normalized, width);
 		if ((asciiWidth ?? visibleWidth(normalized)) <= width) {
 			return { raw, width, line: normalized };
 		}
 		const line = truncateToWidth(normalized, width, Ellipsis.Omit);
 		return { raw, width, line };
+	}
+
+	#lineFitSource(raw: string, width: number): string {
+		const safeWidth = Number.isFinite(width) ? Math.max(1, Math.trunc(width)) : 1;
+		const maxSourceLength = Math.min(
+			LINE_FIT_MAX_SOURCE_CODE_UNITS,
+			Math.max(LINE_FIT_MIN_SOURCE_CODE_UNITS, safeWidth * LINE_FIT_SOURCE_WIDTH_MULTIPLIER),
+		);
+		if (raw.length <= maxSourceLength) return raw;
+		return raw.slice(0, maxSourceLength) + SEGMENT_RESET;
 	}
 
 	#ansiAsciiLineWidth(line: string, maxWidth: number): number | undefined {
