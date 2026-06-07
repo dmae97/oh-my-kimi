@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, type NativeScrollbackLiveRegion, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, type NativeScrollbackLiveRegion, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1974
@@ -67,6 +67,28 @@ class StreamingLiveRegion implements Component, NativeScrollbackLiveRegion {
 
 	getNativeScrollbackCommitSafeEnd(): number | undefined {
 		return this.#lines.length;
+	}
+}
+
+class VolatileLiveRegion implements Component, NativeScrollbackLiveRegion {
+	#lines: string[];
+
+	constructor(lines: string[]) {
+		this.#lines = [...lines];
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return this.#lines.map(line => line.slice(0, width));
+	}
+
+	setLines(lines: string[]): void {
+		this.#lines = [...lines];
+	}
+
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		return 0;
 	}
 }
 
@@ -302,6 +324,39 @@ describe("issue #1974: tmux scrollback rendering", () => {
 					await term.flush();
 				}
 			});
+		});
+	});
+
+	it("keeps the cursor anchored when a no-append live repaint shifts the viewport", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(20, 5, 1_000);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term, true);
+			const stream = new VolatileLiveRegion([]);
+			tui.addChild(stream);
+
+			try {
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await settle(term);
+
+				stream.setLines(["same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
+				tui.requestRender();
+				await settle(term);
+				expect(term.getCursor()).toEqual({ row: 3, col: 4 });
+
+				stream.setLines(["same", "same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(strip(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
+				expect(term.getCursor()).toEqual({ row: 3, col: 4 });
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
 		});
 	});
 });

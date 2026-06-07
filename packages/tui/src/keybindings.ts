@@ -166,24 +166,44 @@ const SHIFTED_SYMBOL_KEYS = new Set<string>([
 
 const MODIFIER_ORDER = ["ctrl", "shift", "alt", "super"] as const;
 
+function startsWithModifier(key: string, offset: number, modifier: string): boolean {
+	if (key.length <= offset + modifier.length || key.charCodeAt(offset + modifier.length) !== 43) return false;
+	for (let i = 0; i < modifier.length; i++) {
+		const actual = key.charCodeAt(offset + i);
+		const expected = modifier.charCodeAt(i);
+		if (actual !== expected && actual !== expected - 32) return false;
+	}
+	return true;
+}
+
+function isAsciiUppercaseLetter(key: string): boolean {
+	if (key.length !== 1) return false;
+	const code = key.charCodeAt(0);
+	return code >= 65 && code <= 90;
+}
+
 function canonicalKeyId(key: string): string {
-	let remaining = key.toLowerCase();
+	let offset = 0;
 	const modifiers: string[] = [];
 	let foundModifier = true;
 
 	while (foundModifier) {
 		foundModifier = false;
 		for (const modifier of MODIFIER_ORDER) {
-			const prefix = `${modifier}+`;
-			if (remaining.startsWith(prefix)) {
+			if (startsWithModifier(key, offset, modifier)) {
 				modifiers.push(modifier);
-				remaining = remaining.slice(prefix.length);
+				offset += modifier.length + 1;
 				foundModifier = true;
 				break;
 			}
 		}
 	}
-	const base = remaining === "esc" ? "escape" : remaining === "return" ? "enter" : remaining;
+	const rawBase = key.slice(offset);
+	const lowerBase = rawBase.toLowerCase();
+	const base = lowerBase === "esc" ? "escape" : lowerBase === "return" ? "enter" : lowerBase;
+	if (isAsciiUppercaseLetter(rawBase) && !modifiers.includes("shift")) {
+		modifiers.push("shift");
+	}
 
 	if (modifiers.length === 0) return base;
 	modifiers.sort(
