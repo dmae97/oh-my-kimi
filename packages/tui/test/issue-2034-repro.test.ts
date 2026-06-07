@@ -104,14 +104,24 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		});
 	});
 
-	describe("ProcessTerminal#write on win32", () => {
+	describe("ProcessTerminal#write platform gate", () => {
 		const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 		const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		const originalWslDistro = Bun.env.WSL_DISTRO_NAME;
+		const originalWslInterop = Bun.env.WSL_INTEROP;
+
+		function setEnv(key: string, value: string | undefined): void {
+			if (value === undefined) delete Bun.env[key];
+			else Bun.env[key] = value;
+		}
 
 		beforeEach(() => {
 			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+			// Clear WSL markers by default; tests opt in.
+			setEnv("WSL_DISTRO_NAME", undefined);
+			setEnv("WSL_INTEROP", undefined);
 		});
 
 		afterEach(() => {
@@ -121,6 +131,8 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			else Reflect.deleteProperty(process.stdin, "isTTY");
 			if (stdoutIsTtyDescriptor) Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 			else Reflect.deleteProperty(process.stdout, "isTTY");
+			setEnv("WSL_DISTRO_NAME", originalWslDistro);
+			setEnv("WSL_INTEROP", originalWslInterop);
 		});
 
 		function captureStdoutWrites(): string[] {
@@ -148,7 +160,25 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			expect(conptyChunks.join("")).toBe(payload);
 		});
 
-		it("keeps the single-write fast path on non-win32 platforms", () => {
+		it("splits >8 KiB writes inside WSL because stdout still crosses ConPTY at wslhost", () => {
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			setEnv("WSL_DISTRO_NAME", "Ubuntu");
+			setEnv("WSL_INTEROP", "/run/WSL/123_interop");
+			const writes = captureStdoutWrites();
+			const terminal = new ProcessTerminal();
+			const payload = buildFullPaint(2000, 60);
+
+			terminal.write(payload);
+
+			const conptyChunks = writes.filter(w => w.length > 0);
+			expect(conptyChunks.length).toBeGreaterThan(1);
+			for (const chunk of conptyChunks) {
+				expect(chunk.length).toBeLessThanOrEqual(8 * 1024);
+			}
+			expect(conptyChunks.join("")).toBe(payload);
+		});
+
+		it("keeps the single-write fast path on non-ConPTY platforms (clean linux, darwin)", () => {
 			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();

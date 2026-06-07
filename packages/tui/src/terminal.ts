@@ -1034,9 +1034,13 @@ export class ProcessTerminal implements Terminal {
 			// ~32-64 KB: the host UI's scroll position stays parked at wherever
 			// the write began, even though every byte landed in scrollback. Split
 			// large paints into newline-aligned chunks so each underlying
-			// `WriteFile` stays well below the threshold. Non-win32 PTYs do not
-			// share the bug, so they keep the single-write fast path. See #2034.
-			if (process.platform === "win32" && data.length > MAX_CONPTY_WRITE_CHUNK) {
+			// `WriteFile` stays well below the threshold. The gate also covers
+			// WSL — `process.platform === "linux"` there, but stdout still
+			// crosses into ConPTY at the `wslhost` boundary, so the same per-
+			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
+			// path. See #2034.
+			const conptyHosted = process.platform === "win32" || isWindowsSubsystemForLinux();
+			if (conptyHosted && data.length > MAX_CONPTY_WRITE_CHUNK) {
 				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK)) {
 					process.stdout.write(chunk);
 				}
