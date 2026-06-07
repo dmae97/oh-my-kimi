@@ -106,4 +106,75 @@ describe("EnhancedPasteController", () => {
 
 		expect(statuses).toEqual(["Clipboard paste has no supported text or image data"]);
 	});
+
+	it("decodes Kitty's dot-listing DATA payload to discover plain-text and request it", () => {
+		const writes: string[] = [];
+		const pastedText: string[] = [];
+		const controller = new EnhancedPasteController({
+			write: data => writes.push(data),
+			pasteText: text => pastedText.push(text),
+			pasteImage: () => {
+				throw new Error("unexpected image paste");
+			},
+			showStatus: message => pastedText.push(`status:${message}`),
+		});
+
+		const dot = Buffer.from(".", "utf8").toString("base64");
+		const textMime = Buffer.from("text/plain", "utf8").toString("base64");
+		const password = Buffer.from("secret-token-123", "utf8").toString("base64");
+		const pasteEventName = Buffer.from("Paste event", "utf8").toString("base64");
+
+		// Kitty bundles the available MIME types into a single DATA packet
+		// whose `mime` field is the literal `.` and whose payload carries a
+		// whitespace-separated, base64-encoded list (e.g. "text/plain\n").
+		controller.handleInput(packet(`type=read:status=OK:pw=${password}`));
+		controller.handleInput(
+			packet(
+				`type=read:status=DATA:mime=${dot}:pw=${password}`,
+				Buffer.from("text/plain\n", "utf8").toString("base64"),
+			),
+		);
+		controller.handleInput(packet(`type=read:status=DONE:pw=${password}`));
+
+		expect(writes.at(-1)).toBe(
+			`${OSC}type=read:mime=${textMime}:pw=${password}:name=${pasteEventName}${ST}`,
+		);
+
+		controller.handleInput(packet("type=read:status=OK"));
+		controller.handleInput(
+			packet(`type=read:status=DATA:mime=${textMime}`, Buffer.from("hello", "utf8").toString("base64")),
+		);
+		controller.handleInput(
+			packet(`type=read:status=DATA:mime=${textMime}`, Buffer.from(" world", "utf8").toString("base64")),
+		);
+		controller.handleInput(packet("type=read:status=DONE"));
+
+		expect(pastedText).toEqual(["hello world"]);
+	});
+
+	it("prefers images when Kitty's dot-listing payload advertises multiple MIME types", () => {
+		const writes: string[] = [];
+		const controller = new EnhancedPasteController({
+			write: data => writes.push(data),
+			pasteText: () => {
+				throw new Error("unexpected text paste");
+			},
+			pasteImage: () => {},
+			showStatus: () => {},
+		});
+
+		const dot = Buffer.from(".", "utf8").toString("base64");
+		const imageMime = Buffer.from("image/png", "utf8").toString("base64");
+
+		controller.handleInput(packet("type=read:status=OK"));
+		controller.handleInput(
+			packet(
+				`type=read:status=DATA:mime=${dot}`,
+				Buffer.from("text/plain image/png text/html\n", "utf8").toString("base64"),
+			),
+		);
+		controller.handleInput(packet("type=read:status=DONE"));
+
+		expect(writes.at(-1)).toContain(`mime=${imageMime}`);
+	});
 });
