@@ -44,10 +44,19 @@ function makeCtx(fetchImpl?: typeof fetch): UsageFetchContext {
 
 function makeApiModel(
 	displayName: string,
-	quota: { remainingFraction?: number; resetTime?: string; tier?: string; windowId?: string },
+	quota: {
+		remainingFraction?: number;
+		resetTime?: string;
+		tier?: string;
+		windowId?: string;
+		apiProvider?: string;
+		modelProvider?: string;
+	},
 ) {
 	return {
 		displayName,
+		apiProvider: quota.apiProvider,
+		modelProvider: quota.modelProvider,
 		quotaInfo: {
 			remainingFraction: quota.remainingFraction,
 			resetTime: quota.resetTime,
@@ -104,7 +113,7 @@ describe("antigravity usage provider", () => {
 		expect(report!.limits.length).toBe(1);
 	});
 
-	it("preserves reset time from an entry even when bar data comes from another", async () => {
+	it("treats reset-only quota entries as exhausted and preserves reset time", async () => {
 		const now = Date.now();
 		const resetTime = new Date(now + 4 * 3600_000).toISOString();
 		const payload = {
@@ -118,9 +127,42 @@ describe("antigravity usage provider", () => {
 			makeCtx(fakeFetch(payload)),
 		);
 		expect(report!.limits.length).toBe(1);
-		expect(report!.limits[0]!.amount.remainingFraction).toBe(0.3);
+		expect(report!.limits[0]!.amount.remainingFraction).toBe(0);
+		expect(report!.limits[0]!.amount.usedFraction).toBe(1);
+		expect(report!.limits[0]!.status).toBe("exhausted");
 		expect(report!.limits[0]!.window).toBeDefined();
 		expect(report!.limits[0]!.window!.resetsAt).toBeGreaterThan(now);
+	});
+
+	it("separates Google and Anthropic backend counters", async () => {
+		const now = Date.now();
+		const resetTime = new Date(now + 4 * 3600_000).toISOString();
+		const payload = {
+			models: {
+				claude: makeApiModel("Claude", {
+					remainingFraction: 1,
+					modelProvider: "MODEL_PROVIDER_ANTHROPIC",
+					apiProvider: "API_PROVIDER_ANTHROPIC_VERTEX",
+				}),
+				gemini: makeApiModel("Gemini", {
+					remainingFraction: undefined,
+					resetTime,
+					modelProvider: "MODEL_PROVIDER_GOOGLE",
+					apiProvider: "API_PROVIDER_GOOGLE_GEMINI",
+				}),
+			},
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fakeFetch(payload)),
+		);
+		expect(report!.limits.length).toBe(2);
+		const googleLimit = report!.limits.find(limit => limit.label === "Usage (Google)");
+		const anthropicLimit = report!.limits.find(limit => limit.label === "Usage (Anthropic)");
+		expect(googleLimit?.amount.remainingFraction).toBe(0);
+		expect(googleLimit?.status).toBe("exhausted");
+		expect(anthropicLimit?.amount.remainingFraction).toBe(1);
+		expect(anthropicLimit?.status).toBe("ok");
 	});
 
 	it("separates models with different windowIds in the same tier", async () => {
