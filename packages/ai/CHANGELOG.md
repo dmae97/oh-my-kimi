@@ -19,6 +19,7 @@
 ### Fixed
 
 - Fixed streaming auth retries to handle `401` and usage-limit errors before replay-unsafe content is emitted, including failures surfaced only via `errorStatus`
+- Fixed tool argument validation to coerce singleton non-string values into arrays when the schema expects an array, preventing Anthropic-compatible models that emit `todo.ops` as an object from getting stuck in repeated validation-error loops. ([#2026](https://github.com/can1357/oh-my-pi/issues/2026))
 - Fixed streaming retries to buffer and suppress partial `start` events from failed auth attempts so only clean retried events are delivered
 
 ## [15.10.0] - 2026-06-06

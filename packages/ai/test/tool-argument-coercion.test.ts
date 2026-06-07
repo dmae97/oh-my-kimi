@@ -78,6 +78,59 @@ describe("Tool argument coercion", () => {
 		expect(result.paths).toEqual(["src/**/*.ts"]);
 	});
 
+	it("wraps a singleton object in an array when schema expects object array", () => {
+		const tool: Tool = {
+			name: "todo_like",
+			description: "",
+			parameters: z.object({
+				ops: z.array(
+					z.object({
+						op: z.literal("init"),
+						list: z.array(
+							z.object({
+								phase: z.string(),
+								items: z.array(z.string()),
+							}),
+						),
+					}),
+				),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-singleton-object-array",
+			name: "todo_like",
+			arguments: {
+				ops: {
+					op: "init",
+					list: [{ phase: "Repro", items: ["capture"] }],
+				},
+			},
+		});
+
+		expect(result).toEqual({
+			ops: [{ op: "init", list: [{ phase: "Repro", items: ["capture"] }] }],
+		});
+	});
+
+	it("wraps a singleton number in an array when schema expects number array", () => {
+		const tool: Tool = {
+			name: "numeric_list",
+			description: "",
+			parameters: z.object({ values: z.array(z.number()) }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-singleton-number-array",
+			name: "numeric_list",
+			arguments: { values: 7 },
+		});
+
+		expect(result).toEqual({ values: [7] });
+	});
+
 	it("parses JSON objects in string values when schema expects object", () => {
 		const tool: Tool = {
 			name: "t4",

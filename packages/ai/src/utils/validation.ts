@@ -836,12 +836,13 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 		if (issue.expectedTypes.length === 0) continue;
 
 		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
-		if (typeof currentValue !== "string") continue;
-
-		const result = tryParseJsonForTypes(currentValue, issue.expectedTypes);
+		const result =
+			typeof currentValue === "string"
+				? tryParseJsonForTypes(currentValue, issue.expectedTypes)
+				: { value: currentValue, changed: false };
 		const coercedValue = result.changed
 			? result.value
-			: issue.expectedTypes.includes("array")
+			: issue.expectedTypes.includes("array") && currentValue !== undefined && !Array.isArray(currentValue)
 				? [currentValue]
 				: undefined;
 		if (coercedValue === undefined) continue;
