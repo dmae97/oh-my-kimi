@@ -16,6 +16,7 @@ export interface OutputBlockOptions {
 	sections?: Array<{ label?: string; lines: string[] }>;
 	width: number;
 	applyBg?: boolean;
+	contentPaddingLeft?: number;
 	/** Animate the border with a sweeping dark segment (pending/running state). */
 	animate?: boolean;
 	/** Override the state-derived border color. Used for muted "legacy" tool
@@ -95,6 +96,11 @@ type BlockRow =
 	| { kind: "content"; inner: string }
 	| { kind: "sixel"; raw: string };
 
+function normalizeContentPaddingLeft(value: number | undefined): number {
+	if (value === undefined || !Number.isFinite(value)) return 1;
+	return Math.max(0, Math.floor(value));
+}
+
 export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): string[] {
 	const { header, headerMeta, state, sections = [], width, applyBg = true } = options;
 	const h = theme.boxSharp.horizontal;
@@ -125,7 +131,9 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 		};
 	})();
 
-	const contentWidth = Math.max(0, lineWidth - visibleWidth(`${v} `) - visibleWidth(v));
+	const contentPaddingLeft = normalizeContentPaddingLeft(options.contentPaddingLeft);
+	const contentWidth = Math.max(0, lineWidth - visibleWidth(v) - contentPaddingLeft - visibleWidth(v));
+	const contentLeftPadding = contentPaddingLeft > 0 ? padding(contentPaddingLeft) : "";
 
 	// ── Layout pass: collect row descriptors so the border perimeter length is
 	// known before the moving segment is positioned. ──
@@ -234,7 +242,7 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 		return `${leftStr}${fillStr}${rightStr}`;
 	};
 
-	const renderContent = (inner: string): string => `${border(`${v} `)}${inner}${border(v)}`;
+	const renderContent = (inner: string): string => `${border(v)}${contentLeftPadding}${inner}${border(v)}`;
 
 	const lines: string[] = [];
 	for (let r = 0; r < H; r++) {
@@ -278,6 +286,7 @@ export class CachedOutputBlock {
 	#buildKey(options: OutputBlockOptions): bigint {
 		const h = new Hasher();
 		h.u32(options.width);
+		h.u32(normalizeContentPaddingLeft(options.contentPaddingLeft));
 		h.optional(options.header);
 		h.optional(options.headerMeta);
 		h.optional(options.state);

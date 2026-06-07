@@ -475,7 +475,7 @@ export const editToolRenderer = {
 			if (fileCount > 1) header += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
 			let body = getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded);
 			if (applyPatchSummary?.error) {
-				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 3)))}`;
+				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 2)))}`;
 			}
 			const bodyLines = body ? body.split("\n") : [];
 			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
@@ -485,6 +485,7 @@ export const editToolRenderer = {
 				state: applyPatchSummary?.error ? "error" : "pending",
 				borderColor: applyPatchSummary?.error ? "error" : "borderMuted",
 				width,
+				contentPaddingLeft: 0,
 			};
 		});
 	},
@@ -572,8 +573,9 @@ function renderSingleFileResult(
 		}
 
 		// Diff lines self-wrap with a continuation gutter; pre-wrap to the frame's
-		// inner width so renderOutputBlock's generic wrap is a no-op.
-		const innerWidth = Math.max(1, width - 3);
+		// inner width so renderOutputBlock's generic wrap is a no-op. Edit frames
+		// use a flush left border because code-frame gutters already provide padding.
+		const innerWidth = Math.max(1, width - 2);
 		const bodyLines = body.length > 0 ? body.split("\n").flatMap(line => wrapEditRendererLine(line, innerWidth)) : [];
 		while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 
@@ -583,6 +585,7 @@ function renderSingleFileResult(
 			state: isError ? "error" : options.isPartial ? "pending" : "success",
 			borderColor: isError ? "error" : "borderMuted",
 			width,
+			contentPaddingLeft: 0,
 		};
 	});
 }

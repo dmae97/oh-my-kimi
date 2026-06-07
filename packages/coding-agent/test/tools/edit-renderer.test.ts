@@ -8,7 +8,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -328,5 +328,26 @@ describe("editToolRenderer", () => {
 		// below the header (no blank line, no lone lang-icon metadata row).
 		expect(lines[1]).toContain("115│ ctx");
 		expect(lines.filter(line => line.includes("hunk"))).toHaveLength(1);
+	});
+
+	it("renders completed edit gutters without inherited frame padding", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated demo.ts" }],
+				details: {
+					diff: "+1│const renamedIdentifier = computeValueFromSomeVeryLongInputName();",
+					op: "update",
+				},
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "demo.ts" },
+		);
+
+		const lines = component.render(48).map(line => Bun.stripANSI(line));
+		expect(lines.every(line => visibleWidth(line) === 48)).toBe(true);
+		expect(lines[1]).toStartWith("│+1│");
+		expect(lines[1]).not.toStartWith("│ +1│");
 	});
 });
