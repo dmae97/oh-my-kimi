@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 
@@ -19,7 +18,7 @@ import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import { framedBlock, renderStatusLine } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { truncateForPrompt } from "./approval";
 import { parseArchivePathCandidates } from "./archive-reader";
@@ -40,8 +39,6 @@ import {
 	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
-	formatStatusIcon,
-	formatTitle,
 	getLspBatchRequest,
 	replaceTabs,
 	shortenPath,
@@ -961,9 +958,9 @@ function formatStreamingContent(
 	}
 	for (let i = 0; i < highlighted.length; i++) {
 		const lineNum = startIndex + i + 1;
-		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")}│`);
+		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
 		const body = replaceTabs(highlighted[i] ?? "");
-		text += ` ${gutter}${body}\n`;
+		text += `${gutter}${body}\n`;
 	}
 	text += uiTheme.fg("dim", `… (streaming)`);
 	return text;
@@ -987,9 +984,9 @@ function renderContentPreview(
 	let text = "\n\n";
 	for (let i = 0; i < highlighted.length; i++) {
 		const lineNum = i + 1;
-		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")}│`);
+		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
 		const body = replaceTabs(highlighted[i] ?? "");
-		text += ` ${gutter}${body}\n`;
+		text += `${gutter}${body}\n`;
 	}
 	if (!expanded && hidden > 0) {
 		const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
@@ -1006,19 +1003,29 @@ export const writeToolRenderer = {
 		const lang = getLanguageFromPath(rawPath) ?? "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
-		const spinner =
-			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
-
-		let text = `${formatTitle("Write", uiTheme)} ${spinner ? `${spinner} ` : ""}${langIcon} ${pathDisplay}`;
-
-		if (!args.content) {
-			return new Text(text, 0, 0);
-		}
-
-		// Show streaming preview of content — bounded tail while collapsed, full on Ctrl+O.
-		text += formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme);
-
-		return new Text(text, 0, 0);
+		const header = renderStatusLine(
+			{
+				icon: "pending",
+				spinnerFrame: options?.spinnerFrame,
+				title: "Write",
+				description: `${langIcon} ${pathDisplay}`,
+			},
+			uiTheme,
+		);
+		return framedBlock(uiTheme, width => {
+			const body = args.content
+				? formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme)
+				: "";
+			const bodyLines = body ? body.split("\n") : [];
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: "pending",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 
 	// Only the expanded (Ctrl+O) preview is append-only: it renders the whole
@@ -1047,19 +1054,24 @@ export const writeToolRenderer = {
 
 		if (result.isError) {
 			const errorText = result.content?.find(c => c.type === "text")?.text ?? "";
-			const errorHeader = renderStatusLine(
+			const header = renderStatusLine(
 				{ icon: "error", title: "Write", description: `${langIcon} ${pathDisplay}` },
 				uiTheme,
 			);
-			return new Text(`${errorHeader}\n${formatErrorDetail(errorText, uiTheme)}`, 0, 0);
+			return framedBlock(uiTheme, width => ({
+				header,
+				sections: [{ lines: formatErrorDetail(errorText, uiTheme).split("\n") }],
+				state: "error",
+				borderColor: "error",
+				width,
+			}));
 		}
+
 		const lineCount = countLines(fileContent);
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
 		const execSuffix = result.details?.madeExecutable
 			? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
 			: "";
-
-		// Build header with status icon
 		const header = renderStatusLine(
 			{
 				icon: "success",
@@ -1070,38 +1082,29 @@ export const writeToolRenderer = {
 		);
 		const diagnostics = result.details?.diagnostics;
 
-		let cached: RenderCache | undefined;
-
-		return {
-			render(width: number) {
-				const { expanded } = options;
-				const key = new Hasher().bool(expanded).u32(width).digest();
-				if (cached?.key === key) return cached.lines;
-
-				let text = header;
-				text += renderContentPreview(fileContent, expanded, lang, uiTheme);
-
-				if (diagnostics) {
-					const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
-						uiTheme.getLangIcon(getLanguageFromPath(fp)),
-					);
-					if (diagText.trim()) {
-						const diagLines = diagText.split("\n");
-						const firstNonEmpty = diagLines.findIndex(line => line.trim());
-						if (firstNonEmpty >= 0) {
-							text += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
-						}
-					}
+		return framedBlock(uiTheme, width => {
+			const { expanded } = options;
+			let body = renderContentPreview(fileContent, expanded, lang, uiTheme);
+			if (diagnostics) {
+				const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
+					uiTheme.getLangIcon(getLanguageFromPath(fp)),
+				);
+				if (diagText.trim()) {
+					const diagLines = diagText.split("\n");
+					const firstNonEmpty = diagLines.findIndex(line => line.trim());
+					if (firstNonEmpty >= 0) body += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
 				}
-
-				const lines = text.split("\n").map(l => truncateToWidth(l, width, Ellipsis.Omit));
-				cached = { key, lines };
-				return lines;
-			},
-			invalidate() {
-				cached = undefined;
-			},
-		};
+			}
+			const bodyLines = body.split("\n");
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: "success",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 	mergeCallAndResult: true,
 };

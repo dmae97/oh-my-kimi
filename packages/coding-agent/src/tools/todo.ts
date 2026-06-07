@@ -9,8 +9,8 @@ import type { Theme } from "../modes/theme/theme";
 import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-manager";
-import { renderStatusLine, renderTreeList } from "../tui";
-import { PREVIEW_LIMITS } from "./render-utils";
+import { framedBlock, renderStatusLine } from "../tui";
+import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS } from "./render-utils";
 
 // =============================================================================
 // Types
@@ -755,19 +755,17 @@ function formatTodoLine(
 	}
 }
 
-function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
+function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme, indent: string): string[] {
 	const lines: string[] = [];
 	for (const phase of phases) {
 		for (const task of phase.tasks) {
 			if (task.status !== "in_progress" || !task.notes || task.notes.length === 0) continue;
-			const bar = uiTheme.fg("dim", uiTheme.tree.vertical);
-			const title = uiTheme.fg("dim", chalk.italic(`§ notes — ${task.content}`));
 			lines.push("");
-			lines.push(`  ${title}`);
+			lines.push(`${indent}${uiTheme.fg("dim", chalk.italic(`§ notes — ${task.content}`))}`);
 			for (let j = 0; j < task.notes.length; j++) {
-				if (j > 0) lines.push(`  ${bar}`);
+				if (j > 0) lines.push("");
 				for (const noteLine of task.notes[j].split("\n")) {
-					lines.push(`  ${bar} ${uiTheme.fg("dim", noteLine)}`);
+					lines.push(`${indent}  ${uiTheme.fg("dim", noteLine)}`);
 				}
 			}
 		}
@@ -776,7 +774,7 @@ function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme): string[] {
 }
 
 export const todoToolRenderer = {
-	renderCall(args: TodoRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: TodoRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		// `args` here is the raw partially-parsed JSON from the streaming
 		// tool-call delta and may not satisfy `TodoRenderArgs` at runtime:
 		// `parseStreamingJson` can hand back `{ ops: "[" }` mid-delta, or
@@ -797,16 +795,33 @@ export const todoToolRenderer = {
 						}
 						return parts.join(" ");
 					});
-		const text = renderStatusLine({ icon: "pending", title: "Todo", meta: ops }, uiTheme);
-		return new Text(text, 0, 0);
+		// No body worth boxing while the call streams — a lone status line reads
+		// cleaner than an empty frame. The container renders it without chrome.
+		const header = renderStatusLine(
+			{ icon: "pending", spinnerFrame: options?.spinnerFrame, title: "Todo", meta: ops },
+			uiTheme,
+		);
+		return new Text(header, 0, 0);
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: TodoToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: TodoToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
 		_args?: TodoRenderArgs,
 	): Component {
+		if (result.isError) {
+			const errorText = result.content?.find(content => content.type === "text")?.text ?? "Todo operation failed";
+			const header = renderStatusLine({ icon: "error", title: "Todo" }, uiTheme);
+			return framedBlock(uiTheme, width => ({
+				header,
+				sections: [{ lines: formatErrorDetail(errorText, uiTheme).split("\n") }],
+				state: "error",
+				borderColor: "error",
+				width,
+			}));
+		}
+
 		const phases = (result.details?.phases ?? []).filter(phase => phase.tasks.length > 0);
 		const completedTasks = result.details?.completedTasks ?? [];
 		const completionKeysByPhase = new Map<string, Set<string>>();
@@ -822,48 +837,42 @@ export const todoToolRenderer = {
 		const header = renderStatusLine({ icon: "success", title: "Todo", meta: [`${allTasks.length} tasks`] }, uiTheme);
 		if (allTasks.length === 0) {
 			const fallback = result.content?.find(content => content.type === "text")?.text ?? "No todos";
-			return new Text(`${header}\n${uiTheme.fg("dim", fallback)}`, 0, 0);
+			return new Text(`${header}\n  ${uiTheme.fg("dim", fallback)}`, 0, 0);
 		}
 
-		let cachedKey: string | undefined;
-		let cachedLines: string[] | undefined;
-		return {
-			invalidate(): void {
-				cachedKey = undefined;
-				cachedLines = undefined;
-			},
-			render(width: number): string[] {
-				const { expanded, spinnerFrame } = options;
-				const key = `${expanded ? 1 : 0}:${spinnerFrame ?? -1}:${width}`;
-				if (cachedKey === key && cachedLines) return cachedLines;
-
-				const lines: string[] = [header];
-				for (let p = 0; p < phases.length; p++) {
-					const phase = phases[p];
-					if (phases.length > 1) {
-						lines.push(uiTheme.fg("accent", chalk.bold(`  ${formatPhaseDisplayName(phase.name, p + 1)}`)));
-					}
-					const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
-					const treeLines = renderTreeList(
-						{
-							items: phase.tasks,
-							expanded,
-							maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-							itemType: "todo",
-							renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
-						},
-						uiTheme,
-					);
-					for (const line of treeLines) {
-						lines.push(`  ${line}`);
-					}
+		return framedBlock(uiTheme, width => {
+			const { expanded, spinnerFrame } = options;
+			const multiPhase = phases.length > 1;
+			const indent = multiPhase ? "  " : "";
+			const bodyLines: string[] = [];
+			for (let p = 0; p < phases.length; p++) {
+				const phase = phases[p];
+				if (multiPhase) {
+					if (p > 0) bodyLines.push("");
+					bodyLines.push(uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1))));
 				}
-				lines.push(...renderNoteAttachments(phases, uiTheme));
-				cachedKey = key;
-				cachedLines = lines;
-				return lines;
-			},
-		};
+				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
+				const maxItems = expanded
+					? phase.tasks.length
+					: Math.min(phase.tasks.length, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+				for (let i = 0; i < maxItems; i++) {
+					bodyLines.push(`${indent}${formatTodoLine(phase.tasks[i], uiTheme, "", completionKeys, spinnerFrame)}`);
+				}
+				const remaining = phase.tasks.length - maxItems;
+				if (!expanded && remaining > 0) {
+					bodyLines.push(`${indent}${uiTheme.fg("muted", formatMoreItems(remaining, "todo"))}`);
+				}
+			}
+			bodyLines.push(...renderNoteAttachments(phases, uiTheme, indent));
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: options.isPartial ? "pending" : "success",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 	mergeCallAndResult: true,
 };
