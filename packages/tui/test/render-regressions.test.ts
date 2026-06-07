@@ -1469,6 +1469,40 @@ describe("TUI terminal-state regressions", () => {
 			});
 		});
 
+		it("tmux: offscreen shrink preserving the visible tail emits no repaint bytes", async () => {
+			await withEnvPatch({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
+				const term = new UnknownViewportTerminal(40, 4, 10_000);
+				const tui = new TUI(term);
+				const component = new MutableLinesComponent([
+					"old-0",
+					"remove-me",
+					"old-2",
+					"old-3",
+					"tail-0",
+					"tail-1",
+					"tail-2",
+					"tail-3",
+				]);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await settle(term);
+					expect(visible(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
+
+					const writes = captureWrites(term);
+					component.setLines(["old-0", "old-2", "old-3", "tail-0", "tail-1", "tail-2", "tail-3"]);
+					tui.requestRender();
+					await settle(term);
+
+					expect(visible(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
+					expect(writes).toEqual([]);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+
 		// Root cause family: the dirty/replay machinery assumes native scrollback
 		// can be cleared and rebuilt, which is never true inside a multiplexer —
 		// tmux owns pane history, reflows it on resize itself, and a "replay" can
