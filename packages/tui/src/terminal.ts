@@ -10,6 +10,58 @@ const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 
 /**
+ * Maximum bytes per `process.stdout.write` call on Windows.
+ *
+ * Windows ConPTY ties viewport tracking to per-`WriteFile` boundaries: when a
+ * single write exceeds ~32-64 KB, the pseudo-console stops following the
+ * cursor and the host UI's viewport stays parked at whatever scroll position
+ * the write started from. The visible symptom is that a full-paint of a long
+ * session (resume, history rebuild, large permission dialog) shows only the
+ * first ~30 lines until any focus event forces the host to re-query the
+ * cursor. The data is delivered correctly — it's purely a viewport-sync bug.
+ *
+ * 8 KiB is well below the 32 KiB threshold reported on Windows Terminal and
+ * leaves headroom for the other ConPTY hosts (Tabby, Hyper, VS Code) where
+ * the exact limit is undocumented. The cost is a handful of extra syscalls
+ * per full paint — invisible compared to the cost of the paint itself.
+ */
+const MAX_CONPTY_WRITE_CHUNK = 8 * 1024;
+
+/**
+ * Split `data` into chunks no larger than `maxChunkSize`, preferring a line
+ * boundary (`\n`) as the cut point so escape sequences (which never contain
+ * `\n`) stay intact. The TUI's full-paint buffers are line-structured
+ * (`buffer += "\r\n"` between rows), so a newline almost always exists within
+ * the window. The fallback for a buffer with no newline in range is a hard
+ * cut at `maxChunkSize`: the ConPTY viewport bug from a single oversized
+ * write is strictly worse than a one-frame escape-sequence glitch on a buffer
+ * the renderer effectively never produces.
+ *
+ * Exported for unit testing of the chunking contract; `#safeWrite` is the
+ * sole production caller.
+ */
+export function chunkForConPTY(data: string, maxChunkSize: number = MAX_CONPTY_WRITE_CHUNK): string[] {
+	if (data.length <= maxChunkSize) return [data];
+	const chunks: string[] = [];
+	let pos = 0;
+	while (pos < data.length) {
+		const remaining = data.length - pos;
+		if (remaining <= maxChunkSize) {
+			chunks.push(data.slice(pos));
+			break;
+		}
+		const windowEnd = pos + maxChunkSize;
+		// Prefer the last newline inside the window so escape sequences stay
+		// intact within their chunk; hard-cut at `windowEnd` otherwise.
+		const nl = data.lastIndexOf("\n", windowEnd - 1);
+		const cut = nl >= pos ? nl + 1 : windowEnd;
+		chunks.push(data.slice(pos, cut));
+		pos = cut;
+	}
+	return chunks;
+}
+
+/**
  * Minimal terminal interface for TUI
  */
 
@@ -504,10 +556,19 @@ export class ProcessTerminal implements Terminal {
 			}
 
 			const match = sequence.match(kittyResponsePattern);
-			if (match && !this.#modifyOtherKeysActive) {
+			if (match) {
 				if (this.#modifyOtherKeysTimeout) {
 					clearTimeout(this.#modifyOtherKeysTimeout);
 					this.#modifyOtherKeysTimeout = undefined;
+				}
+				// A DA1 sentinel that beat the kitty reply may have already
+				// engaged the modifyOtherKeys fallback (terminals such as
+				// Superset/xterm-on-Electron answer DA1 before `\x1b[?u`).
+				// Kitty is strictly preferred — undo the fallback so the two
+				// modes do not stack. See #2042.
+				if (this.#modifyOtherKeysActive) {
+					this.#safeWrite("\x1b[>4;0m");
+					this.#modifyOtherKeysActive = false;
 				}
 				// Any reply to `\x1b[?u` means the terminal speaks the kitty keyboard
 				// protocol. The reported flag value is the *current* stack-top — fresh
@@ -978,7 +1039,23 @@ export class ProcessTerminal implements Terminal {
 		// files). They serve no purpose there and would surface as visible noise.
 		if (!process.stdout.isTTY) return;
 		try {
-			process.stdout.write(data);
+			// Windows ConPTY drops viewport tracking when a single write exceeds
+			// ~32-64 KB: the host UI's scroll position stays parked at wherever
+			// the write began, even though every byte landed in scrollback. Split
+			// large paints into newline-aligned chunks so each underlying
+			// `WriteFile` stays well below the threshold. The gate also covers
+			// WSL — `process.platform === "linux"` there, but stdout still
+			// crosses into ConPTY at the `wslhost` boundary, so the same per-
+			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
+			// path. See #2034.
+			const conptyHosted = process.platform === "win32" || isWindowsSubsystemForLinux();
+			if (conptyHosted && data.length > MAX_CONPTY_WRITE_CHUNK) {
+				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK)) {
+					process.stdout.write(chunk);
+				}
+			} else {
+				process.stdout.write(data);
+			}
 		} catch (err) {
 			// Any write failure means terminal is dead - no recovery possible
 			this.#dead = true;
