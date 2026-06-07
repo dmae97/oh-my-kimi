@@ -3,7 +3,7 @@
  */
 import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, padding, TERMINAL, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import type { Theme } from "../modes/theme/theme";
+import type { Theme, ThemeColor } from "../modes/theme/theme";
 import { getSixelLineMask } from "../utils/sixel";
 import type { State } from "./types";
 import type { RenderCache } from "./utils";
@@ -18,6 +18,9 @@ export interface OutputBlockOptions {
 	applyBg?: boolean;
 	/** Animate the border with a sweeping dark segment (pending/running state). */
 	animate?: boolean;
+	/** Override the state-derived border color. Used for muted "legacy" tool
+	 * frames that should not visually compete with framed-output tools. */
+	borderColor?: ThemeColor;
 }
 
 const FRAMED_BLOCK_COMPONENT = Symbol("framedBlockComponent");
@@ -99,14 +102,15 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 	const cap = h.repeat(3);
 	const lineWidth = Math.max(0, width);
 	// Border colors: running/pending use accent, success uses dim (gray), error/warning keep their colors
-	const borderColor: "error" | "warning" | "accent" | "dim" =
-		state === "error"
+	const borderColor: ThemeColor =
+		options.borderColor ??
+		(state === "error"
 			? "error"
 			: state === "warning"
 				? "warning"
 				: state === "running" || state === "pending"
 					? "accent"
-					: "dim";
+					: "dim");
 	const border = (text: string) => theme.fg(borderColor, text);
 	const bgFn = (() => {
 		if (!state || !applyBg) return undefined;
@@ -202,7 +206,12 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 		const rightGlyph = row.rightChar;
 		if (lineWidth <= 0) return border(leftGlyphs) + border(rightGlyph);
 		const labelText = [row.label, row.meta].filter(Boolean).join(theme.sep.dot);
-		const rawLabel = labelText ? ` ${labelText} ` : " ";
+		if (!labelText) {
+			// No header: draw a clean, continuous top/separator bar (no 1-col gap).
+			const fillCount = Math.max(0, lineWidth - visibleWidth(leftGlyphs) - visibleWidth(rightGlyph));
+			return `${border(leftGlyphs)}${border(h.repeat(fillCount))}${border(rightGlyph)}`;
+		}
+		const rawLabel = ` ${labelText} `;
 		const leftWidth = visibleWidth(leftGlyphs);
 		const rightWidth = visibleWidth(rightGlyph);
 		const maxLabelWidth = Math.max(0, lineWidth - leftWidth - rightWidth);
@@ -272,6 +281,7 @@ export class CachedOutputBlock {
 		h.optional(options.header);
 		h.optional(options.headerMeta);
 		h.optional(options.state);
+		h.optional(options.borderColor);
 		h.bool(options.applyBg ?? true);
 		h.bool(options.animate ?? false);
 		if (options.animate) h.u32(borderShimmerTick());
@@ -285,4 +295,18 @@ export class CachedOutputBlock {
 		}
 		return h.digest();
 	}
+}
+
+/**
+ * Build a self-framing tool component backed by a cached output block. The
+ * `build` callback returns the block options for a given width; the cache
+ * dedupes re-renders. Pass `borderColor: "borderMuted"` for the dim "legacy"
+ * look that does not compete with the state-colored framed tools.
+ */
+export function framedBlock(theme: Theme, build: (width: number) => OutputBlockOptions): Component {
+	const block = new CachedOutputBlock();
+	return {
+		render: (width: number): string[] => block.render(build(width), theme),
+		invalidate: () => block.invalidate(),
+	};
 }

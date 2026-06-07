@@ -465,8 +465,7 @@ export const TERMINAL: RuntimeTerminal = (() => {
 	// reconciliation checkpoint may ED3-rebuild on an unprobeable viewport there.
 	// Forced off under the test runtime (like deccara) so checkpoint tests stay
 	// deterministic and opt in through setTerminalSubmitPinsViewportToTail.
-	resolved.submitPinsViewportToTail =
-		detectSubmitPinsViewportToTail(Bun.env, process.platform) && !isBunTestRuntime();
+	resolved.submitPinsViewportToTail = detectSubmitPinsViewportToTail(Bun.env, process.platform) && !isBunTestRuntime();
 	return resolved;
 })();
 

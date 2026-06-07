@@ -129,10 +129,10 @@ export interface Component {
 	wantsKeyRelease?: boolean;
 
 	/**
-	 * Invalidate any cached rendering state.
+	 * Optional hook to invalidate any cached rendering state.
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
-	invalidate(): void;
+	invalidate?(): void;
 
 	/**
 	 * Optional teardown. Called when the component is permanently removed from
