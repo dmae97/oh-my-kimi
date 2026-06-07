@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `super` modifier support to native key parsing/matching and bound `super+alt+backspace` / `super+alt+delete` (and `super+alt+d`) into the word-delete defaults so Ghostty's default macOS Option+Backspace wire (`ESC [127;11u` — kitty modifier 11 = super|alt) deletes a word instead of falling through to single-char delete ([#2064](https://github.com/can1357/oh-my-pi/issues/2064)).
+
 ## [15.10.1] - 2026-06-07
 ### Breaking Changes
 

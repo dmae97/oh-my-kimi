@@ -1109,12 +1109,18 @@ export class Editor implements Component, Focusable {
 		else if (matchesKey(data, "ctrl+w")) {
 			this.#deleteWordBackwards();
 		}
-		// Option/Alt+Backspace - Delete word backwards
-		else if (matchesKey(data, "alt+backspace")) {
+		// Option/Alt+Backspace - Delete word backwards.
+		// Ghostty on macOS reports Option+Backspace as super+alt (kitty mod 11) — see #2064.
+		else if (matchesKey(data, "alt+backspace") || matchesKey(data, "super+alt+backspace")) {
 			this.#deleteWordBackwards();
 		}
-		// Option/Alt+D - Delete word forwards
-		else if (matchesKey(data, "alt+d") || matchesKey(data, "alt+delete")) {
+		// Option/Alt+D and Option+Delete - Delete word forwards. Same Ghostty quirk applies.
+		else if (
+			matchesKey(data, "alt+d") ||
+			matchesKey(data, "alt+delete") ||
+			matchesKey(data, "super+alt+d") ||
+			matchesKey(data, "super+alt+delete")
+		) {
 			this.#deleteWordForwards();
 		}
 		// Ctrl+Y - Yank from kill ring
