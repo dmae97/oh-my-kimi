@@ -84,7 +84,7 @@ describe("task renderer: streaming call preview", () => {
 		expect(expanded).not.toContain("more agents");
 	});
 
-	it("keeps the isolation flag as the final child after the task list", () => {
+	it("surfaces the isolation flag in the header bar", () => {
 		const args: TaskParams = {
 			agent: "task",
 			isolated: true,
@@ -94,15 +94,16 @@ describe("task renderer: streaming call preview", () => {
 		const lines = out.split("\n");
 
 		expect(out).toContain("Only");
-		expect(out).toContain("Isolated");
-		// Isolation flag is rendered last, after every task entry.
-		expect(lines.at(-1)).toContain("Isolated");
+		// Isolation is surfaced as header meta in the frame's top bar (first line),
+		// not as a trailing child row under the task list.
+		expect(lines[0]).toContain("isolated");
 	});
 
-	// Once the tool produces a result, `renderResult` draws each agent as a
-	// progress/result line. The call preview must drop its own per-agent list
-	// so the non-streaming path doesn't render every task twice.
-	it("suppresses the per-task preview list once a result snapshot exists", () => {
+	// Once the tool produces a result, the container suppresses the call entirely
+	// via `mergeCallAndResult` and `renderResult` draws each agent. As a safety
+	// net, `renderCall` also drops its duplicate per-task preview when a result
+	// snapshot is present, so the two never stack.
+	it("drops the per-task preview list once a result snapshot exists", () => {
 		const args: TaskParams = {
 			agent: "reviewer",
 			tasks: [
@@ -117,9 +118,8 @@ describe("task renderer: streaming call preview", () => {
 		);
 		const out = Bun.stripANSI(component.render(160).join("\n"));
 
-		// Header stays as a section label, but the duplicated agent rows are gone.
-		expect(out).toContain("Tasks (2)");
 		expect(out).not.toContain("Audit the auth module");
 		expect(out).not.toContain("Audit the db layer");
+		expect(out).not.toContain("Tasks (");
 	});
 });

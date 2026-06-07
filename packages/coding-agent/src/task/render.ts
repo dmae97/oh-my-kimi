@@ -18,6 +18,7 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	replaceTabs,
+	type ToolUIStatus,
 	truncateToWidth,
 } from "../tools/render-utils";
 import {
@@ -28,7 +29,7 @@ import {
 	type ReportFindingDetails,
 	type SubmitReviewDetails,
 } from "../tools/review";
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine } from "../tui";
+import { framedBlock, renderStatusLine } from "../tui";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
@@ -506,28 +507,20 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
  * preview. The args stream in token by token, so the array grows over time and
  * trailing entries may be partially parsed — every field access is defensive.
  */
-function renderTaskItemLines(
-	tasks: TaskItem[] | undefined,
-	contPrefix: string,
-	expanded: boolean,
-	theme: Theme,
-): string[] {
+function renderTaskItemLines(tasks: TaskItem[] | undefined, expanded: boolean, theme: Theme): string[] {
 	const items = tasks ?? [];
 	if (items.length === 0) return [];
 
-	const branch = theme.fg("dim", theme.tree.branch);
-	const last = theme.fg("dim", theme.tree.last);
+	const bullet = theme.fg("dim", "•");
 	const cap = expanded ? items.length : Math.min(items.length, 12);
 	const truncated = cap < items.length;
 
 	const lines: string[] = [];
 	for (let i = 0; i < cap; i++) {
 		const task = items[i] as Partial<TaskItem> | undefined;
-		const isLastLine = !truncated && i === items.length - 1;
-		const connector = isLastLine ? last : branch;
 		const rawId = task?.id?.trim();
 		const idLabel = rawId ? formatTaskId(rawId) : `#${i + 1}`;
-		let line = `${contPrefix}${connector} ${theme.fg("accent", theme.bold(idLabel))}`;
+		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel))}`;
 		const desc = task?.description?.trim();
 		if (desc) {
 			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
@@ -535,7 +528,7 @@ function renderTaskItemLines(
 		lines.push(line);
 	}
 	if (truncated) {
-		lines.push(`${contPrefix}${last} ${theme.fg("dim", formatMoreItems(items.length - cap, "agent"))}`);
+		lines.push(`${bullet} ${theme.fg("dim", formatMoreItems(items.length - cap, "agent"))}`);
 	}
 	return lines;
 }
@@ -548,44 +541,39 @@ export function renderCall(
 	options: RenderResultOptions & { renderContext?: { hasResult?: boolean } },
 	theme: Theme,
 ): Component {
-	const lines: string[] = [];
-	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme));
-
-	const context = (args.context ?? "").trim();
-	const hasContext = context.length > 0;
-	const branch = theme.fg("dim", theme.tree.branch);
-	const last = theme.fg("dim", theme.tree.last);
-	const vertical = theme.fg("dim", theme.tree.vertical);
 	const showIsolated = "isolated" in args && args.isolated === true;
-	const taskCount = args.tasks?.length ?? 0;
+	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
+	return framedBlock(theme, width => {
+		const context = (args.context ?? "").trim();
+		const taskCount = args.tasks?.length ?? 0;
+		const sections: Array<{ label?: string; lines: string[] }> = [];
 
-	if (hasContext) {
-		lines.push(` ${branch} ${theme.fg("dim", "Context")}`);
-		const contextLines = context.split("\n").map(line => {
-			const content = line ? theme.fg("muted", replaceTabs(line)) : "";
-			return ` ${vertical}  ${content}`;
-		});
-		lines.push(...contextLines);
-	}
+		if (context) {
+			sections.push({
+				lines: context.split("\n").map(line => (line ? theme.fg("muted", replaceTabs(line)) : "")),
+			});
+		}
 
-	// `Tasks` is the last child unless the isolation flag follows it.
-	const tasksIsLast = !showIsolated;
-	const tasksPrefix = tasksIsLast ? last : branch;
-	lines.push(` ${tasksPrefix} ${theme.fg("dim", "Tasks")} ${theme.fg("muted", `(${taskCount})`)}`);
-	const tasksContPrefix = tasksIsLast ? "    " : ` ${vertical}  `;
-	// The per-task preview list only exists to surface dispatched agents while
-	// the call args stream in. Once a result snapshot exists, `renderResult`
-	// draws the same agents as progress/result lines (id + description), so
-	// emitting the preview here would render every task twice.
-	if (!options.renderContext?.hasResult) {
-		lines.push(...renderTaskItemLines(args.tasks, tasksContPrefix, options.expanded, theme));
-	}
+		// The per-task preview list only exists to surface dispatched agents while
+		// the call args stream in. Once a result snapshot exists, `renderResult`
+		// draws the same agents as progress/result lines, so showing the Tasks
+		// section here would just repeat the count the result frame already shows.
+		if (!options.renderContext?.hasResult) {
+			sections.push({
+				label: `Tasks (${taskCount})`,
+				lines: renderTaskItemLines(args.tasks, options.expanded, theme),
+			});
+		}
 
-	if (showIsolated) {
-		lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
-	}
-
-	return new Text(lines.join("\n"), 0, 0);
+		return {
+			header,
+			headerMeta: showIsolated ? "isolated" : undefined,
+			sections,
+			state: "pending",
+			borderColor: "borderMuted",
+			width,
+		};
+	});
 }
 
 /**
@@ -593,14 +581,13 @@ export function renderCall(
  */
 function renderAgentProgress(
 	progress: AgentProgress,
-	isLast: boolean,
+	prefix: string,
+	continuePrefix: string,
 	expanded: boolean,
 	theme: Theme,
 	spinnerFrame?: number,
 ): string[] {
 	const lines: string[] = [];
-	const prefix = isLast ? theme.fg("dim", theme.tree.last) : theme.fg("dim", theme.tree.branch);
-	const continuePrefix = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
 
 	const icon = getStatusIcon(progress.status, theme, spinnerFrame);
 	const iconColor =
@@ -614,7 +601,7 @@ function renderAgentProgress(
 	const description = progress.description?.trim();
 	const displayId = formatTaskId(progress.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
-	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
+	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 
 	// Show retry-blocked badge so the parent immediately sees that a child
 	// is sleeping on a provider 429, not silently progressing. Wins over the
@@ -867,10 +854,14 @@ function renderFindings(
 /**
  * Render final result for a single agent.
  */
-function renderAgentResult(result: SingleResult, isLast: boolean, expanded: boolean, theme: Theme): string[] {
+function renderAgentResult(
+	result: SingleResult,
+	prefix: string,
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+): string[] {
 	const lines: string[] = [];
-	const prefix = isLast ? theme.fg("dim", theme.tree.last) : theme.fg("dim", theme.tree.branch);
-	const continuePrefix = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
 
 	const { warning: missingCompleteWarning, rest: outputWithoutWarning } = extractMissingYieldWarning(result.output);
 	const aborted = result.aborted ?? false;
@@ -899,7 +890,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	const description = result.description?.trim();
 	const displayId = formatTaskId(result.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
-	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)} ${formatBadge(
+	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)} ${formatBadge(
 		statusText,
 		iconColor,
 		theme,
@@ -1049,95 +1040,112 @@ export function renderResult(
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
-		return new Text(theme.fg("dim", truncateToWidth(text, 100)), 0, 0);
+		const header = renderStatusLine({ icon: "success", title: "Task" }, theme);
+		return framedBlock(theme, width => ({
+			header,
+			sections: text ? [{ lines: [theme.fg("dim", truncateToWidth(text, width))] }] : [],
+			state: "success",
+			borderColor: "borderMuted",
+			width,
+		}));
 	}
 
-	let cached: RenderCache | undefined;
+	const hasResults = Boolean(details.results && details.results.length > 0);
+	const aborted = hasResults && details.results.some(r => r.aborted);
+	const failed = hasResults && details.results.some(r => !r.aborted && r.exitCode !== 0);
+	const mergeFailed = hasResults && details.results.some(r => !r.aborted && r.exitCode === 0 && Boolean(r.error));
+	const isError = aborted || failed;
+	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
+	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
+	const header = renderStatusLine(
+		{
+			icon,
+			spinnerFrame: options.spinnerFrame,
+			title: "Task",
+			meta: agentCount > 0 ? [`${agentCount} ${agentCount === 1 ? "agent" : "agents"}`] : undefined,
+		},
+		theme,
+	);
 
-	return {
-		render(width) {
-			const { expanded, isPartial, spinnerFrame } = options;
-			const key = new Hasher()
-				.bool(expanded)
-				.bool(isPartial)
-				.u32(spinnerFrame ?? 0)
-				.u32(width)
-				.digest();
-			if (cached?.key === key) return cached.lines;
+	return framedBlock(theme, width => {
+		const { expanded, isPartial, spinnerFrame } = options;
+		const lines: string[] = [];
 
-			const lines: string[] = [];
+		const shouldRenderProgress =
+			Boolean(details.progress && details.progress.length > 0) && (isPartial || details.results.length === 0);
+		if (shouldRenderProgress && details.progress) {
+			details.progress.forEach(progress => {
+				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame));
+			});
+		} else if (details.results && details.results.length > 0) {
+			details.results.forEach(res => {
+				lines.push(...renderAgentResult(res, "", "  ", expanded, theme));
+			});
 
-			const shouldRenderProgress =
-				Boolean(details.progress && details.progress.length > 0) && (isPartial || details.results.length === 0);
-			if (shouldRenderProgress && details.progress) {
-				details.progress.forEach((progress, i) => {
-					const isLast = i === details.progress!.length - 1;
-					lines.push(...renderAgentProgress(progress, isLast, expanded, theme, spinnerFrame));
-				});
-			} else if (details.results && details.results.length > 0) {
-				details.results.forEach((res, i) => {
-					const isLast = i === details.results.length - 1;
-					lines.push(...renderAgentResult(res, isLast, expanded, theme));
-				});
-
-				const abortedCount = details.results.filter(r => r.aborted).length;
-				const mergeFailedCount = details.results.filter(r => !r.aborted && r.exitCode === 0 && r.error).length;
-				const successCount = details.results.filter(r => !r.aborted && r.exitCode === 0 && !r.error).length;
-				const failCount = details.results.length - successCount - mergeFailedCount - abortedCount;
-				let summary = `${theme.fg("dim", "Total:")} `;
-				if (abortedCount > 0) {
-					summary += theme.fg("error", `${abortedCount} aborted`);
-					if (successCount > 0 || mergeFailedCount > 0 || failCount > 0) summary += theme.sep.dot;
-				}
-				if (successCount > 0) {
-					summary += theme.fg("success", `${successCount} succeeded`);
-					if (mergeFailedCount > 0 || failCount > 0) summary += theme.sep.dot;
-				}
-				if (mergeFailedCount > 0) {
-					summary += theme.fg("warning", `${mergeFailedCount} merge failed`);
-					if (failCount > 0) summary += theme.sep.dot;
-				}
-				if (failCount > 0) {
-					summary += theme.fg("error", `${failCount} failed`);
-				}
-				summary += `${theme.sep.dot}${theme.fg("dim", formatDuration(details.totalDurationMs))}`;
-				lines.push(summary);
+			const abortedCount = details.results.filter(r => r.aborted).length;
+			const mergeFailedCount = details.results.filter(r => !r.aborted && r.exitCode === 0 && r.error).length;
+			const successCount = details.results.filter(r => !r.aborted && r.exitCode === 0 && !r.error).length;
+			const failCount = details.results.length - successCount - mergeFailedCount - abortedCount;
+			let summary = `${theme.fg("dim", "Total:")} `;
+			if (abortedCount > 0) {
+				summary += theme.fg("error", `${abortedCount} aborted`);
+				if (successCount > 0 || mergeFailedCount > 0 || failCount > 0) summary += theme.sep.dot;
 			}
-
-			if (lines.length === 0) {
-				const text = fallbackText.trim() ? fallbackText : "No results";
-				const result = [theme.fg("dim", truncateToWidth(text, width))];
-				cached = { key, lines: result };
-				return result;
+			if (successCount > 0) {
+				summary += theme.fg("success", `${successCount} succeeded`);
+				if (mergeFailedCount > 0 || failCount > 0) summary += theme.sep.dot;
 			}
-
-			if (fallbackText.trim()) {
-				const summaryLines = fallbackText.split("\n");
-				const markerIndex = summaryLines.findIndex(
-					line =>
-						line.includes("<system-notification>") ||
-						line.startsWith("Applied patches:") ||
-						line.startsWith("No changes to apply."),
-				);
-				if (markerIndex >= 0) {
-					const extra = summaryLines.slice(markerIndex);
-					for (const line of extra) {
-						if (!line.trim()) continue;
-						lines.push(theme.fg("dim", line));
-					}
-				}
+			if (mergeFailedCount > 0) {
+				summary += theme.fg("warning", `${mergeFailedCount} merge failed`);
+				if (failCount > 0) summary += theme.sep.dot;
 			}
+			if (failCount > 0) {
+				summary += theme.fg("error", `${failCount} failed`);
+			}
+			summary += `${theme.sep.dot}${theme.fg("dim", formatDuration(details.totalDurationMs))}`;
+			lines.push(summary);
+		}
 
-			const indented = lines.map(line =>
-				line.length > 0 ? truncateToWidth(`   ${line}`, width, Ellipsis.Omit) : "",
+		const state = isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
+		const borderColor = isError ? "error" : "borderMuted";
+
+		if (lines.length === 0) {
+			const text = fallbackText.trim() ? fallbackText : "No results";
+			return {
+				header,
+				sections: [{ lines: [theme.fg("dim", truncateToWidth(text, width))] }],
+				state,
+				borderColor,
+				width,
+			};
+		}
+
+		if (fallbackText.trim()) {
+			const summaryLines = fallbackText.split("\n");
+			const markerIndex = summaryLines.findIndex(
+				line =>
+					line.includes("<system-notification>") ||
+					line.startsWith("Applied patches:") ||
+					line.startsWith("No changes to apply."),
 			);
-			cached = { key, lines: indented };
-			return indented;
-		},
-		invalidate() {
-			cached = undefined;
-		},
-	};
+			if (markerIndex >= 0) {
+				const extra = summaryLines.slice(markerIndex);
+				for (const line of extra) {
+					if (!line.trim()) continue;
+					lines.push(theme.fg("dim", line));
+				}
+			}
+		}
+
+		while (lines.length > 0 && lines[0].trim() === "") lines.shift();
+		return {
+			header,
+			sections: lines.length > 0 ? [{ lines }] : [],
+			state,
+			borderColor,
+			width,
+		};
+	});
 }
 
 function isTaskToolDetails(value: unknown): value is TaskToolDetails {
@@ -1149,13 +1157,23 @@ function isTaskToolDetails(value: unknown): value is TaskToolDetails {
 	);
 }
 
+// Nested subagent snapshots sit one or more levels below the frame border, so
+// they keep tree guides to convey depth (the parent prepends its own continue
+// prefix). Only the top-level agent list drops guides (the frame is its box).
+function nestedMarkers(isLast: boolean, theme: Theme): { prefix: string; continuePrefix: string } {
+	return {
+		prefix: isLast ? theme.fg("dim", theme.tree.last) : theme.fg("dim", theme.tree.branch),
+		continuePrefix: isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `,
+	};
+}
+
 function renderNestedTaskResults(detailsList: TaskToolDetails[], expanded: boolean, theme: Theme): string[] {
 	const lines: string[] = [];
 	for (const details of detailsList) {
 		if (!details.results || details.results.length === 0) continue;
 		details.results.forEach((result, index) => {
-			const isLast = index === details.results.length - 1;
-			lines.push(...renderAgentResult(result, isLast, expanded, theme));
+			const { prefix, continuePrefix } = nestedMarkers(index === details.results.length - 1, theme);
+			lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme));
 		});
 	}
 	return lines;
@@ -1177,16 +1195,16 @@ function renderNestedTaskTree(
 		const hasResults = Boolean(details.results && details.results.length > 0);
 		if (hasResults) {
 			details.results.forEach((result, index) => {
-				const isLast = index === details.results.length - 1;
-				lines.push(...renderAgentResult(result, isLast, expanded, theme));
+				const { prefix, continuePrefix } = nestedMarkers(index === details.results.length - 1, theme);
+				lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme));
 			});
 			continue;
 		}
 		const inflight = details.progress;
 		if (inflight && inflight.length > 0) {
 			inflight.forEach((prog, index) => {
-				const isLast = index === inflight.length - 1;
-				lines.push(...renderAgentProgress(prog, isLast, expanded, theme, spinnerFrame));
+				const { prefix, continuePrefix } = nestedMarkers(index === inflight.length - 1, theme);
+				lines.push(...renderAgentProgress(prog, prefix, continuePrefix, expanded, theme, spinnerFrame));
 			});
 		}
 	}
@@ -1207,4 +1225,5 @@ subprocessToolRegistry.register<TaskToolDetails>("task", {
 export const taskToolRenderer = {
 	renderCall,
 	renderResult,
+	mergeCallAndResult: true,
 };
