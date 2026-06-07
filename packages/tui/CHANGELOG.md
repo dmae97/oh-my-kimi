@@ -6,6 +6,10 @@
 
 - Fixed the kitty keyboard progressive-enhancement probe to honor the `CSI ? <flags> u` reply even when the terminal answers the DA1 sentinel first. Previously the kitty reply was discarded once the DA1-driven `modifyOtherKeys` fallback engaged, so terminals like Superset/xterm-on-Electron stayed on the fallback and delivered Shift+Enter as a bare `\r` ([#2042](https://github.com/can1357/oh-my-pi/issues/2042)).
 
+### Fixed
+
+- Bounded TUI line fitting for oversized raw rows so ANSI-heavy subagent output cannot grow render buffers independently of the viewport ([#2045](https://github.com/can1357/oh-my-pi/issues/2045)).
+
 ## [15.10.1] - 2026-06-07
 ### Breaking Changes
 
