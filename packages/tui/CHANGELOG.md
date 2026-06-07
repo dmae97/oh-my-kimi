@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Fixed `Markdown.render()` cache hits returning the cache's mutable backing array, which let callers that append extra rows corrupt cached Markdown and duplicate those rows on every redraw.
 - Fixed terminal stop and restore cleanup to disable enhanced paste mode so it does not remain enabled after shutdown
 - Removed the per-frame line-fit `Map` cache from the render timer path to avoid forcing JSC rope-string hashing during scheduled viewport repaints.
 - Fixed `visibleWidth()` so terminal column measurements for ANSI and OSC text now match the native truncation/wrapping helpers, including OSC 66 text-sizing spans being counted at their scaled payload width
