@@ -52,6 +52,15 @@ describe("hashline format v4", () => {
 		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
+	it("strips read-output line number prefix from auto-piped bare body rows", () => {
+		const text = "a\nb\nc";
+		// Without this fix, "3:text" becomes literal "3:text" in the file.
+		// With the fix, the "3:" prefix is stripped, yielding just "text".
+		const { edits, warnings } = parsePatch("replace 2..2:\n3:replaced");
+		expect(applyEdits(text, edits).text).toBe("a\nreplaced\nc");
+		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
+	});
+
 	it("validates insert anchors against file bounds", () => {
 		const edits = parsePatch("insert before 4:\n+x").edits;
 		expect(() => applyEdits("a\nb", edits)).toThrow(/Line 4 does not exist/);
