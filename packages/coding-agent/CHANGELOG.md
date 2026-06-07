@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `/tan <work>` slash command to fork the current conversation into a background agent so tangential work can continue asynchronously while your main session stays active
@@ -18,6 +17,8 @@
 
 ### Changed
 
+- Changed plan-mode approval to keep the drafted `local://<slug>-plan.md` file at its original name as the canonical plan path, so approved plans are no longer renamed when leaving plan mode
+- Changed plan-mode write enforcement so only `local://` artifact files are writable during planning, blocking working-tree edits and allowing scratch or draft plan files in the local artifact area
 - Changed the `todo` tool result renderer to stop redrawing every phase's full task list on each update: when a multi-phase list is rendered collapsed (the default, not manually expanded), only phases the latest update touched — the phase holding the in_progress task, any phase with a just-completed task, and phases named by the ops that ran (`init` counts as touching all) — render their tasks; untouched phases collapse to a one-line `N. Name  done/total` summary. When call args are unavailable (e.g. transcript rebuilds) it falls back to the in_progress/completed-transition signals, and the manual expand toggle still shows every task. Also dropped the blank separator line previously inserted between phases.
 - Changed non-agent API operations (title and commit-message generation, image generation, web search, eval `llm()`, auto-thinking classifier, memory consolidation) to use session-aware API key resolution with auth retries via `registry.resolver()` / `authStorage.resolver()`, refreshing the active credential before rotating to another account
 - Changed image generation to wrap every provider fetch branch in `withAuth`, so 401 / usage-limit errors trigger credential force-refresh and rotation for authStorage-backed providers (OpenAI-hosted, antigravity, xai-oauth) while env-only providers (openrouter, gemini) stay single-attempt
@@ -37,6 +38,7 @@
 
 ### Fixed
 
+- Fixed plan approval resolution so `resolve` with `action: "apply"` can still find the plan file when `extra.title` is missing or stale by falling back to the current plan path and most-recent local plan artifacts
 - Fixed TTSR stream interrupts to pass the matched rule name through the abort reason, so aborted in-flight tool placeholders say why they were stopped instead of `Request was aborted`.
 - Fixed URL reads for binary/special payloads to reuse local readers: remote archives list their root entries, SQLite databases show their table overview, notebooks render as editable cells, and unrenderable binary returns a metadata notice instead of decoded byte garbage.
 - Fixed pasted image-file paths that cannot be loaded to fall back to normal text paste with status feedback instead of disappearing.

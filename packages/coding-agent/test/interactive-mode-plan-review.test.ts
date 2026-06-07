@@ -127,7 +127,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://PLAN.md",
 		});
 
 		expect(review.mock.calls[0]?.[0]).toContain("First plan");
@@ -138,7 +137,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://PLAN.md",
 		});
 
 		// Each approval shows the current plan in the overlay, not a stale one.
@@ -173,7 +171,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://PLAN.md",
 		});
 
 		expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("needs detail") }));
@@ -199,7 +196,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://PLAN.md",
 		});
 
 		expect(startSpy).not.toHaveBeenCalled();
@@ -228,7 +224,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://PLAN.md",
 		});
 
 		// The synthetic plan-approved prompt carries the in-overlay edit, not the
@@ -258,7 +253,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://APPROVED.md",
 		});
 
 		expect(selector).toHaveBeenCalledWith(
@@ -336,7 +330,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://APPROVED.md",
 		});
 
 		expect(contextSpy).toHaveBeenCalledWith({ contextWindow: executionModel.contextWindow });
@@ -365,7 +358,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://APPROVED.md",
 		});
 
 		expect(selector.mock.calls[0]?.[3]).toEqual(
@@ -392,7 +384,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://APPROVED.md",
 		});
 
 		expect(selector.mock.calls[0]?.[3]).toEqual(
@@ -420,7 +411,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath: "local://APPROVED.md",
 		});
 
 		expect(selector).toHaveBeenCalledWith(
@@ -434,12 +424,11 @@ describe("InteractiveMode plan review rendering", () => {
 
 	it("approves a plan without clearing the session when keeping context", async () => {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
 		});
-		const resolvedFinalPlanPath = resolveLocalUrlToPath(finalPlanFilePath, {
+		const resolvedFinalPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
 		});
@@ -456,7 +445,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		expect(clear).not.toHaveBeenCalled();
@@ -468,7 +456,6 @@ describe("InteractiveMode plan review rendering", () => {
 
 	it("keeps the existing approve-and-execute path clearing the session", async () => {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -485,7 +472,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		expect(clear).toHaveBeenCalledTimes(1);
@@ -513,7 +499,6 @@ describe("InteractiveMode plan review rendering", () => {
 		session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
 
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -547,7 +532,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		expect(observedSegments).toEqual(["default", "slow"]);
@@ -558,7 +542,6 @@ describe("InteractiveMode plan review rendering", () => {
 
 	it("re-enters plan mode on the approved titled artifact after approve-and-execute", async () => {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -575,23 +558,21 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "APPROVED",
-			finalPlanFilePath,
 		});
 
 		expect(mode.planModeEnabled).toBe(false);
-		expect(session.getPlanReferencePath()).toBe(finalPlanFilePath);
+		expect(session.getPlanReferencePath()).toBe(planFilePath);
 
 		await mode.handlePlanModeCommand();
 		expect(session.getPlanModeState()).toMatchObject({
 			enabled: true,
-			planFilePath: finalPlanFilePath,
+			planFilePath,
 			reentry: true,
 		});
 	});
 
 	it("Approve and compact context: ok outcome dispatches plan-approved after compaction", async () => {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -609,14 +590,13 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		// Compaction was run with the rendered planning-specific custom instruction.
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		const [compactInstruction] = compactSpy.mock.calls[0]!;
 		expect(typeof compactInstruction).toBe("string");
-		expect(compactInstruction as string).toContain(finalPlanFilePath);
+		expect(compactInstruction as string).toContain(planFilePath);
 
 		// Plan-approved synthetic prompt was dispatched.
 		const planApprovedIdx = promptSpy.mock.calls.findIndex(isPlanApprovedCall);
@@ -634,7 +614,6 @@ describe("InteractiveMode plan review rendering", () => {
 		// CompactionOutcome boundary; the underlying executeCompaction → sentinel
 		// classification path is producer-layer and not under T3's contract.)
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -654,7 +633,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		// Operator was told the dispatch was deferred.
@@ -663,7 +641,7 @@ describe("InteractiveMode plan review rendering", () => {
 		);
 		// Plan reference path was recorded so the session knows about the approved
 		// plan at its final destination …
-		expect(setPlanRefSpy).toHaveBeenCalledWith(finalPlanFilePath);
+		expect(setPlanRefSpy).toHaveBeenCalledWith(planFilePath);
 		// … but markPlanReferenceSent was NOT called, so the next operator turn
 		// will inject the reference fresh via #buildPlanReferenceMessage. This is
 		// the load-bearing assertion that the cancel path leaves the executor
@@ -677,7 +655,6 @@ describe("InteractiveMode plan review rendering", () => {
 		// Mock `handleCompactCommand` to surface the "failed" outcome directly.
 		// Failure → approval intent stands → synthetic dispatch fires.
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -695,7 +672,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		// Plan-approved synthetic prompt WAS dispatched despite the failure.
@@ -710,7 +686,6 @@ describe("InteractiveMode plan review rendering", () => {
 		// hit #buildPlanReferenceMessage with the stale plan-mode path. Pin it
 		// before the compaction await.
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -725,7 +700,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const setPlanRefSpy = vi.spyOn(session, "setPlanReferencePath");
 		let planRefSetWhenCompactionRan = false;
 		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
-			planRefSetWhenCompactionRan = setPlanRefSpy.mock.calls.some(call => call[0] === finalPlanFilePath);
+			planRefSetWhenCompactionRan = setPlanRefSpy.mock.calls.some(call => call[0] === planFilePath);
 			return "ok";
 		});
 
@@ -733,7 +708,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		// The contract: by the time handleCompactCommand runs (and flushes the
@@ -763,7 +737,6 @@ describe("InteractiveMode plan review rendering", () => {
 		throwError?: Error,
 	): Promise<void> {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -784,7 +757,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 	}
 
@@ -822,7 +794,6 @@ describe("InteractiveMode plan review rendering", () => {
 
 	it("B5: Approve and execute (no compact) → markPlanCompactAbortPending never called; flag stays false", async () => {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -838,7 +809,6 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "PLAN",
-			finalPlanFilePath,
 		});
 
 		expect(markSpy).not.toHaveBeenCalled();
@@ -847,7 +817,6 @@ describe("InteractiveMode plan review rendering", () => {
 
 	it("re-enters plan mode on the approved titled artifact after approval", async () => {
 		const planFilePath = "local://PLAN.md";
-		const finalPlanFilePath = "local://APPROVED.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
@@ -866,24 +835,22 @@ describe("InteractiveMode plan review rendering", () => {
 			planFilePath,
 			planExists: true,
 			title: "APPROVED",
-			finalPlanFilePath,
 		});
 
 		expect(mode.planModeEnabled).toBe(false);
-		expect(session.getPlanReferencePath()).toBe(finalPlanFilePath);
+		expect(session.getPlanReferencePath()).toBe(planFilePath);
 
 		await mode.handlePlanModeCommand();
 		expect(session.getPlanModeState()).toMatchObject({
 			enabled: true,
-			planFilePath: finalPlanFilePath,
+			planFilePath,
 			reentry: true,
 		});
 
 		await mode.handlePlanApproval({
-			planFilePath: finalPlanFilePath,
+			planFilePath,
 			planExists: true,
 			title: "APPROVED",
-			finalPlanFilePath,
 		});
 
 		expect(selector).toHaveBeenCalledTimes(2);

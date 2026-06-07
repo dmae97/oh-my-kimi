@@ -1,53 +1,71 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, expect, it } from "bun:test";
 import {
 	humanizePlanTitle,
 	normalizePlanTitle,
-	renameApprovedPlanFile,
+	planFileUrlForSlug,
+	resolveApprovedPlan,
 	resolvePlanTitle,
 } from "@oh-my-pi/pi-coding-agent/plan-mode/approved-plan";
 
-describe("renameApprovedPlanFile", () => {
-	let tmpDir: string;
-	let artifactsDir: string;
-
-	beforeEach(async () => {
-		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "approved-plan-"));
-		artifactsDir = path.join(tmpDir, "artifacts");
-		await fs.mkdir(path.join(artifactsDir, "local"), { recursive: true });
+describe("planFileUrlForSlug", () => {
+	it("maps a slug to its local plan URL", () => {
+		expect(planFileUrlForSlug("auth-refactor")).toBe("local://auth-refactor-plan.md");
 	});
+});
 
-	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
-	});
-
-	function options(planFilePath: string, finalPlanFilePath: string) {
-		return {
-			planFilePath,
-			finalPlanFilePath,
-			getArtifactsDir: () => artifactsDir,
-			getSessionId: () => "session-z",
-		};
+describe("resolveApprovedPlan", () => {
+	/** A `readPlan` backed by an in-memory map of `local://` URL → content. */
+	function reader(files: Record<string, string>) {
+		return async (url: string) => (url in files ? files[url] : null);
 	}
 
-	it("fails with actionable error when destination already exists", async () => {
-		await Bun.write(path.join(artifactsDir, "local", "PLAN.md"), "draft");
-		await Bun.write(path.join(artifactsDir, "local", "WP_MIGRATION_PLAN.md"), "existing");
-
-		await expect(renameApprovedPlanFile(options("local://PLAN.md", "local://WP_MIGRATION_PLAN.md"))).rejects.toThrow(
-			"Plan destination already exists at local://WP_MIGRATION_PLAN.md",
-		);
+	it("locates the plan from the supplied title's slug — no rename", async () => {
+		const result = await resolveApprovedPlan({
+			suppliedTitle: "auth-refactor",
+			statePlanFilePath: "local://PLAN.md",
+			readPlan: reader({ "local://auth-refactor-plan.md": "# Auth refactor\n\nbody" }),
+		});
+		expect(result.planFilePath).toBe("local://auth-refactor-plan.md");
+		expect(result.planContent).toContain("body");
+		expect(result.title).toBe("auth-refactor");
 	});
 
-	it("renames PLAN.md to titled artifact path", async () => {
-		await Bun.write(path.join(artifactsDir, "local", "PLAN.md"), "draft body");
+	it("strips a trailing -plan from the supplied title before reconstructing the file", async () => {
+		const result = await resolveApprovedPlan({
+			suppliedTitle: "auth-plan",
+			statePlanFilePath: "local://PLAN.md",
+			readPlan: reader({ "local://auth-plan.md": "# Auth\n\nbody" }),
+		});
+		expect(result.planFilePath).toBe("local://auth-plan.md");
+	});
 
-		await renameApprovedPlanFile(options("local://PLAN.md", "local://WP_MIGRATION_PLAN.md"));
+	it("falls back to the plan-mode state path when the slug file is absent", async () => {
+		const result = await resolveApprovedPlan({
+			suppliedTitle: "mismatch",
+			statePlanFilePath: "local://existing-plan.md",
+			readPlan: reader({ "local://existing-plan.md": "# Existing\n\nbody" }),
+		});
+		expect(result.planFilePath).toBe("local://existing-plan.md");
+	});
 
-		expect(await Bun.file(path.join(artifactsDir, "local", "WP_MIGRATION_PLAN.md")).text()).toBe("draft body");
-		await expect(fs.stat(path.join(artifactsDir, "local", "PLAN.md"))).rejects.toThrow();
+	it("scans listed plan files when the title was dropped and state path is empty", async () => {
+		const result = await resolveApprovedPlan({
+			suppliedTitle: undefined,
+			statePlanFilePath: "local://PLAN.md",
+			readPlan: reader({ "local://discovered-plan.md": "# Discovered\n\nbody" }),
+			listPlanFiles: async () => ["local://discovered-plan.md"],
+		});
+		expect(result.planFilePath).toBe("local://discovered-plan.md");
+	});
+
+	it("throws an actionable error when no plan file exists", async () => {
+		await expect(
+			resolveApprovedPlan({
+				suppliedTitle: "ghost",
+				statePlanFilePath: "local://PLAN.md",
+				readPlan: reader({}),
+			}),
+		).rejects.toThrow("Plan file not found at local://ghost-plan.md");
 	});
 });
 

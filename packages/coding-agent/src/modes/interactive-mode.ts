@@ -65,12 +65,7 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
-import {
-	humanizePlanTitle,
-	type PlanApprovalDetails,
-	renameApprovedPlanFile,
-	resolvePlanTitle,
-} from "../plan-mode/approved-plan";
+import { humanizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
@@ -1528,22 +1523,15 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!state?.enabled) {
 					throw new ToolError("Plan mode is not active.");
 				}
-				const planFilePath = state.planFilePath;
-				const planContent = await this.#readPlanFile(planFilePath);
-				if (planContent === null) {
-					throw new ToolError(
-						`Plan file not found at ${planFilePath}. Write the finalized plan to ${planFilePath} before requesting approval.`,
-					);
-				}
-				const normalized = resolvePlanTitle({
+				const { planFilePath, title } = await resolveApprovedPlan({
 					suppliedTitle: extra?.title,
-					planContent,
-					planFilePath,
+					statePlanFilePath: state.planFilePath,
+					readPlan: url => this.#readPlanFile(url),
+					listPlanFiles: () => this.#listLocalPlanFiles(),
 				});
 				const details: PlanApprovalDetails = {
 					planFilePath,
-					finalPlanFilePath: `local://${normalized.fileName}`,
-					title: normalized.title,
+					title,
 					planExists: true,
 				};
 				return {
@@ -1680,6 +1668,27 @@ export class InteractiveMode implements InteractiveModeContext {
 				return null;
 			}
 			throw error;
+		}
+	}
+
+	/** `local://` URLs of plan files in the session-local root, newest first.
+	 *  A fallback for `resolveApprovedPlan` when the agent dropped `extra.title`,
+	 *  so the plan it wrote is still found by scanning recent `*-plan.md` files. */
+	async #listLocalPlanFiles(): Promise<string[]> {
+		const localRoot = this.#resolvePlanFilePath("local://");
+		try {
+			const entries = await fs.readdir(localRoot, { withFileTypes: true });
+			const plans = await Promise.all(
+				entries
+					.filter(entry => entry.isFile() && /plan\.md$/i.test(entry.name))
+					.map(async name => {
+						const stat = await fs.stat(path.join(localRoot, name.name)).catch(() => null);
+						return { url: `local://${name.name}`, mtime: stat?.mtimeMs ?? 0 };
+					}),
+			);
+			return plans.sort((a, b) => b.mtime - a.mtime).map(plan => plan.url);
+		} catch {
+			return [];
 		}
 	}
 
@@ -1854,19 +1863,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		planContent: string,
 		options: {
 			planFilePath: string;
-			finalPlanFilePath: string;
 			title: string;
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
 			executionModel?: ResolvedRoleModel;
 		},
 	): Promise<void> {
-		await renameApprovedPlanFile({
-			planFilePath: options.planFilePath,
-			finalPlanFilePath: options.finalPlanFilePath,
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
 
 		// Mark the pending abort caused by the plan-mode → compaction transition as
@@ -1885,8 +1887,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!options.preserveContext) {
 				await this.handleClearCommand();
 				// The new session has a fresh local:// root — persist the approved plan there
-				// so `local://<title>.md` resolves correctly in the execution session.
-				const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
+				// so `local://<slug>-plan.md` resolves correctly in the execution session.
+				const newLocalPath = resolveLocalUrlToPath(options.planFilePath, {
 					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 					getSessionId: () => this.sessionManager.getSessionId(),
 				});
@@ -1900,7 +1902,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
 				// abort is honored); failure proceeds best-effort — approval intent stands.
 				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
-					planFilePath: options.finalPlanFilePath,
+					planFilePath: options.planFilePath,
 				});
 				// Pin the plan reference path BEFORE compaction so any user messages
 				// queued during the compaction await (which `handleCompactCommand`
@@ -1908,7 +1910,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// approved plan in `#buildPlanReferenceMessage`. Reassignment after
 				// the try/finally is idempotent and kept for the !compactBeforeExecute
 				// branch.
-				this.session.setPlanReferencePath(options.finalPlanFilePath);
+				this.session.setPlanReferencePath(options.planFilePath);
 				compactOutcome = await this.handleCompactCommand(compactionPrompt);
 			}
 		} finally {
@@ -1924,7 +1926,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
-		this.session.setPlanReferencePath(options.finalPlanFilePath);
+		this.session.setPlanReferencePath(options.planFilePath);
 
 		if (compactOutcome === "cancelled") {
 			// Explicit abort: honor it. `executeCompaction` already surfaced
@@ -1961,7 +1963,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.markPlanReferenceSent();
 		const planModePrompt = prompt.render(planModeApprovedPrompt, {
 			planContent,
-			finalPlanFilePath: options.finalPlanFilePath,
+			planFilePath: options.planFilePath,
 			contextPreserved: options.preserveContext === true,
 		});
 		await this.session.prompt(planModePrompt, { synthetic: true });
@@ -2309,7 +2311,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
-			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
 				// Prefer in-overlay edits (already in memory) over a disk re-read; the
 				// `onPlanEdited` write is fire-and-forget, so reading the file here could
@@ -2332,7 +2333,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					cycle && selectedTierIndex !== cycle.currentIndex ? cycle.models[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
-					finalPlanFilePath,
 					title: details.title,
 					preserveContext: choice !== "Approve and execute",
 					compactBeforeExecute: choice === "Approve and compact context",
