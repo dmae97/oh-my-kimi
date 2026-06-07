@@ -49,7 +49,7 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	const nextTick = Promise.withResolvers<void>();
 	process.nextTick(nextTick.resolve);
 	await nextTick.promise;
-	await Bun.sleep(1);
+	await Bun.sleep(40);
 	await term.flush();
 }
 

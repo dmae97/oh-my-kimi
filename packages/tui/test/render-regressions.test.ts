@@ -213,18 +213,37 @@ async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Pr
 
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
-	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
+	// Keep TUI's ~33ms render throttle deterministic without sleeping a real frame per render.
 
 	beforeEach(() => {
 		monotonicNow = 0;
 		vi.spyOn(performance, "now").mockImplementation(() => {
-			monotonicNow += 20;
+			monotonicNow += 40;
 			return monotonicNow;
 		});
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("coalesces non-force render requests to 30fps", () => {
+		const delays: number[] = [];
+		const renderScheduler = {
+			now: () => 0,
+			scheduleImmediate: (callback: () => void) => callback(),
+			scheduleRender: (_callback: () => void, delayMs: number) => {
+				delays.push(delayMs);
+				return { cancel: () => {} };
+			},
+		};
+		const tui = new TUI(new VirtualTerminal(20, 4), true, { renderScheduler });
+
+		tui.requestRender();
+
+		expect(delays).toHaveLength(1);
+		expect(delays[0]!).toBeCloseTo(1000 / 30, 5);
+		tui.stop();
 	});
 
 	describe("cursor + differential stability", () => {
@@ -1119,7 +1138,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("keeps appended rows contiguous when a height grow coincides with new content", async () => {
 			// A terminal resize fires requestRender(), and streamed content fires
-			// its own requestRender(); the 16ms throttle coalesces them into a
+			// its own requestRender(); the ~33ms throttle coalesces them into a
 			// single frame that is both taller and longer. The diff/append-tail
 			// emitters position scrolled rows against the previous viewport top and
 			// hardware cursor row, both invalidated by the reflow — so the appended
@@ -1474,7 +1493,7 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						// SIGWINCH (height shrink) and a streamed token arrive inside the
-						// same 16ms frame budget. The TUI's own resize handler schedules a
+						// same ~33ms frame budget. The TUI's own resize handler schedules a
 						// non-forced render; the append rides along.
 						lines.push("line-40 streamed");
 						component.setLines(lines);
@@ -4181,7 +4200,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				];
 				component.setLines(frameB);
 				tui.requestRender();
-				await settle(term);
+				await term.waitForRender();
 				expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
 
 				// Frame C: a visible chip collapses (a shrink whose first change lands in
@@ -4207,7 +4226,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				];
 				component.setLines(frameC);
 				tui.requestRender();
-				await settle(term);
+				await term.waitForRender();
 				expect(visible(term)).toEqual(["chip-0", "chip-1", "chip-2", "loader", "todos", "editor"]);
 			} finally {
 				tui.stop();

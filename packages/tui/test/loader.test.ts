@@ -1,10 +1,15 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
-import { Loader } from "@oh-my-pi/pi-tui/components/loader";
+import { Loader, type LoaderMessageColorFn } from "@oh-my-pi/pi-tui/components/loader";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { VirtualTerminal } from "./virtual-terminal";
 
 describe("Loader component", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
 	it("clamps rendered lines to terminal width", async () => {
 		const term = new VirtualTerminal(1, 4);
 		const tui = new TUI(term);
@@ -27,6 +32,19 @@ describe("Loader component", () => {
 
 		loader.stop();
 		tui.stop();
+	});
+
+	it("keeps spinner cadence when animated messages repaint at 30fps", () => {
+		vi.useFakeTimers();
+		const ui = { requestRender: vi.fn() } as unknown as TUI;
+		const colorMessage = ((text: string) => text) as LoaderMessageColorFn & { animated: true };
+		colorMessage.animated = true;
+		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1", "2", "3"]);
+
+		vi.advanceTimersByTime(170);
+
+		expect(loader.render(20).join("\n")).toContain("2 Checking");
+		loader.stop();
 	});
 
 	it("dispose() stops the animation so no further renders are scheduled", async () => {
