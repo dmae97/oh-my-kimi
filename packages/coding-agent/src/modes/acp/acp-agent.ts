@@ -703,7 +703,13 @@ export class AcpAgent implements Agent {
 			return;
 		}
 
-		await record.session.prompt(text, { images });
+		const agentInvoked = await record.session.prompt(text, { images });
+		// Extension and custom-TS commands are handled locally inside session.prompt()
+		// without calling the LLM, so no agent_end event fires and the turn would hang.
+		// Finish it here when the session confirms no agent was invoked.
+		if (!agentInvoked) {
+			this.#finishPrompt(record, { stopReason: "end_turn" });
+		}
 	}
 
 	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
