@@ -16,8 +16,8 @@ import { calculateCost } from "@oh-my-pi/pi-ai/models";
 import { parseStreamingJson } from "@oh-my-pi/pi-ai/utils/json-parse";
 import { readSseJson } from "@oh-my-pi/pi-utils";
 
-// Create stream class matching ProxyMessageEventStream
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+// Stream class matching ProxyMessageEventStream
+export class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
 		super(
 			event => event.type === "done" || event.type === "error",

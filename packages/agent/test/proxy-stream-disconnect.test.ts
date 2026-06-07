@@ -7,9 +7,10 @@
  * event — it must NOT silently complete with default stopReason='stop'.
  */
 import { describe, expect, it } from "bun:test";
-import { streamProxy } from "@oh-my-pi/pi-agent-core/proxy";
+import { streamProxy, ProxyMessageEventStream } from "@oh-my-pi/pi-agent-core/proxy";
 import type { ProxyAssistantMessageEvent } from "@oh-my-pi/pi-agent-core/proxy";
-import type { AssistantMessageEvent, Model } from "@oh-my-pi/pi-ai";
+import type { AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai";
+import { hookFetch } from "@oh-my-pi/pi-utils";
 
 const mockModel: Model = {
 	id: "test-model",
@@ -22,6 +23,10 @@ const mockModel: Model = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 4096,
 	maxTokens: 1024,
+};
+
+const mockContext: Context = {
+	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 };
 
 function buildSseBody(events: ProxyAssistantMessageEvent[]): ReadableStream<Uint8Array> {
@@ -38,23 +43,8 @@ function buildSseBody(events: ProxyAssistantMessageEvent[]): ReadableStream<Uint
 	});
 }
 
-async function withMockFetch<R>(
-	body: ReadableStream<Uint8Array>,
-	status: number,
-	fn: () => Promise<R>,
-): Promise<R> {
-	const originalFetch = globalThis.fetch;
-	globalThis.fetch = async (_input: RequestInfo | URL, _init?: RequestInit) =>
-		new Response(body, { status });
-	try {
-		return await fn();
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
-}
-
 async function collectEvents(
-	stream: ReturnType<typeof streamProxy>,
+	stream: ProxyMessageEventStream,
 	timeoutMs = 2000,
 ): Promise<AssistantMessageEvent[]> {
 	const events: AssistantMessageEvent[] = [];
@@ -62,12 +52,10 @@ async function collectEvents(
 	const deadline = Date.now() + timeoutMs;
 
 	while (Date.now() < deadline) {
-		const result = await Promise.race([
-			iterator.next(),
-			new Promise<IteratorResult<AssistantMessageEvent>>((resolve) =>
-				setTimeout(() => resolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>), timeoutMs),
-			),
-		]);
+		const { promise: timeoutPromise, resolve: timeoutResolve } =
+			Promise.withResolvers<IteratorResult<AssistantMessageEvent>>();
+		setTimeout(() => timeoutResolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>), timeoutMs);
+		const result = await Promise.race([iterator.next(), timeoutPromise]);
 		if (result.done) break;
 		events.push(result.value);
 	}
@@ -88,14 +76,14 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		const events: ProxyAssistantMessageEvent[] = [{ type: "start" }];
 		const body = buildSseBody(events);
 
-		const collected = await withMockFetch(body, 200, async () => {
-			const stream = streamProxy(mockModel, { role: "user", content: "hello", timestamp: Date.now() } as never, {
-				proxyUrl: "http://localhost:0",
-				authToken: "test",
-			});
-			return collectEvents(stream);
+		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
 		});
 
+		const collected = await collectEvents(stream);
 		const hasError = collected.some((e) => e.type === "error");
 		expect(hasError).toBe(true);
 	});
@@ -108,30 +96,49 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		];
 		const body = buildSseBody(events);
 
-		await withMockFetch(body, 200, async () => {
-			const stream = streamProxy(mockModel, { role: "user", content: "hello", timestamp: Date.now() } as never, {
-				proxyUrl: "http://localhost:0",
-				authToken: "test",
-			});
+		using _hook = hookFetch(() => new Response(body, { status: 200 }));
 
-			// Consume iterator so the internal async function runs
-			const collected = await collectEvents(stream);
-			expect(collected.some((e) => e.type === "error")).toBe(true);
-
-			// stream.result() MUST resolve (not hang) with an error message
-			const result = await Promise.race([
-				stream.result().then((r) => ({ resolved: true as const, value: r })),
-				new Promise<{ resolved: false }>((resolve) =>
-					setTimeout(() => resolve({ resolved: false }), 500),
-				),
-			]);
-
-			expect(result.resolved).toBe(true);
-			if (result.resolved) {
-				expect(result.value.stopReason).toBe("error");
-				expect(result.value.errorMessage).toBeTruthy();
-			}
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
 		});
+
+		// Consume iterator so the internal async function runs
+		const collected = await collectEvents(stream);
+		expect(collected.some((e) => e.type === "error")).toBe(true);
+
+		// stream.result() MUST resolve (not hang) with an error message
+		const result = await stream.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBeTruthy();
+	});
+
+	it("handles client-initiated abort with stopReason='aborted'", async () => {
+		const abortController = new AbortController();
+		// Pre-abort before any data arrives
+		abortController.abort();
+
+		const events: ProxyAssistantMessageEvent[] = [{ type: "start" }];
+		const body = buildSseBody(events);
+
+		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
+			signal: abortController.signal,
+		});
+
+		const collected = await collectEvents(stream);
+		// Should get an error event with reason 'aborted'
+		const errorEvent = collected.find((e) => e.type === "error");
+		expect(errorEvent).toBeDefined();
+		if (errorEvent && errorEvent.type === "error") {
+			expect(errorEvent.reason).toBe("aborted");
+		}
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("aborted");
 	});
 
 	it("completes normally when server sends a 'done' event", async () => {
@@ -148,18 +155,18 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		];
 		const body = buildSseBody(events);
 
-		await withMockFetch(body, 200, async () => {
-			const stream = streamProxy(mockModel, { role: "user", content: "hello", timestamp: Date.now() } as never, {
-				proxyUrl: "http://localhost:0",
-				authToken: "test",
-			});
+		using _hook = hookFetch(() => new Response(body, { status: 200 }));
 
-			const collected = await collectEvents(stream);
-			expect(collected.some((e) => e.type === "done")).toBe(true);
-
-			const result = await stream.result();
-			expect(result.stopReason).toBe("stop");
-			expect(result.content.length).toBeGreaterThan(0);
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
 		});
+
+		const collected = await collectEvents(stream);
+		expect(collected.some((e) => e.type === "done")).toBe(true);
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.length).toBeGreaterThan(0);
 	});
 });
