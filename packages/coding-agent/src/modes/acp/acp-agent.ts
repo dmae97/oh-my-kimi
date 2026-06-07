@@ -71,7 +71,11 @@ import {
 	type SessionInfo as StoredSessionInfo,
 	type UsageStatistics,
 } from "../../session/session-manager";
-import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import {
+	ACP_BUILTIN_RESERVED_NAMES,
+	ACP_BUILTIN_SLASH_COMMANDS,
+	executeAcpBuiltinSlashCommand,
+} from "../../slash-commands/acp-builtins";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { runResolveInvocation } from "../../tools/resolve";
@@ -1602,8 +1606,7 @@ export class AcpAgent implements Agent {
 			}
 		}
 
-		const acpBuiltinNames = new Set(ACP_BUILTIN_SLASH_COMMANDS.map(c => c.name));
-		for (const command of session.extensionRunner?.getRegisteredCommands(acpBuiltinNames) ?? []) {
+		for (const command of session.extensionRunner?.getRegisteredCommands(ACP_BUILTIN_RESERVED_NAMES) ?? []) {
 			appendCommand({
 				name: command.name,
 				description: command.description ?? "(extension command)",

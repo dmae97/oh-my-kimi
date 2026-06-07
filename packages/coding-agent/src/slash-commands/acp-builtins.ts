@@ -6,6 +6,19 @@ import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types"
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
 /**
+ * All names (primary + aliases) that are reserved by ACP builtins. Used to
+ * filter out extension commands that would shadow a builtin or its alias at
+ * dispatch time (e.g. `models` is an alias for `/model`, so an extension
+ * registering `models` would appear in the palette but execute the builtin).
+ */
+export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
+	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [
+		c.name,
+		...(c.aliases ?? []),
+	]),
+);
+
+/**
  * Commands advertised to ACP clients. Entries without a text-mode `handle`
  * (e.g. `/quit`, `/login`, dashboards) are filtered out so the client doesn't
  * see commands it cannot drive.
