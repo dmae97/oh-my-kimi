@@ -113,7 +113,11 @@ function createContext(): {
 
 	ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender, addInputListener: vi.fn(), addStartListener: vi.fn() } as unknown as InteractiveModeContext["ui"],
+		ui: {
+			requestRender,
+			addInputListener: vi.fn(),
+			addStartListener: vi.fn(),
+		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,

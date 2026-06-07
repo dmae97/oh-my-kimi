@@ -22,7 +22,9 @@ function lastAssistant(session: AgentSession): AssistantMessage {
 	return message as AssistantMessage;
 }
 
-function resolveInitialApiKey(apiKey: string | ((ctx: ApiKeyResolveContext) => string | Promise<string | undefined> | undefined) | undefined): string {
+function resolveInitialApiKey(
+	apiKey: string | ((ctx: ApiKeyResolveContext) => string | Promise<string | undefined> | undefined) | undefined,
+): string {
 	const resolved = typeof apiKey === "function" ? apiKey({ lastChance: false, error: undefined }) : apiKey;
 	if (typeof resolved !== "string") {
 		throw new Error("Expected API key to be resolved before streaming");

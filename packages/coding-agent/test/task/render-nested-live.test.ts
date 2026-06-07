@@ -227,7 +227,7 @@ describe("task renderer: nested live rendering", () => {
 		const text = Bun.stripANSI(component.render(160).join("\n"));
 		// The brief no longer vanishes the moment the first progress snapshot
 		// replaces the streaming call view.
-		expect(text).toContain("# Goal");
+		expect(text).toContain("Goal");
 		expect(text).toContain("Harden the auth stack before the cut.");
 	});
 

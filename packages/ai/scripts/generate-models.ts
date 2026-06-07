@@ -30,9 +30,9 @@ import {
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
 	isFireworksKimiK2ModelId,
-	stripFireworksDeepSeekThinkingToggle,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
+	stripFireworksDeepSeekThinkingToggle,
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
 } from "../src/provider-models/openai-compat";
