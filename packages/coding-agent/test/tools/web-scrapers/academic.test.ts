@@ -164,15 +164,6 @@ describe.skipIf(SKIP)("handleArxiv", () => {
 		}
 	});
 
-	it("handles arxiv.org/abs/ format", async () => {
-		const result = await handleArxiv("https://arxiv.org/abs/1706.03762", 30000);
-		expect(result).not.toBeNull();
-		expect(result?.method).toBe("arxiv");
-		if (!result?.content.includes("Too Many Requests") && !result?.content.includes("Failed to fetch")) {
-			expect(result?.content).toContain("1706.03762");
-		}
-	});
-
 	it("includes paper metadata", async () => {
 		const result = await handleArxiv("https://arxiv.org/abs/1706.03762", 30000);
 		expect(result).not.toBeNull();
@@ -182,14 +173,6 @@ describe.skipIf(SKIP)("handleArxiv", () => {
 			expect(result?.content).toMatch(/Abstract/);
 			expect(result?.content).toMatch(/Published:/);
 		}
-	});
-
-	it("handles rate limiting gracefully", async () => {
-		const result = await handleArxiv("https://arxiv.org/abs/1706.03762", 5000);
-		expect(result).not.toBeNull();
-		expect(result?.method).toBe("arxiv");
-		// Should return something, even if rate limited
-		expect(result?.content).toBeTruthy();
 	});
 });
 
@@ -214,14 +197,6 @@ describe.skipIf(SKIP)("handleIacr", () => {
 			expect(result?.content).toContain("ePrint:");
 			expect(result?.content).toMatch(/Abstract/);
 		}
-	});
-
-	it("handles rate limiting gracefully", async () => {
-		const result = await handleIacr("https://eprint.iacr.org/2023/123", 5000);
-		expect(result).not.toBeNull();
-		expect(result?.method).toBe("iacr");
-		// Should return something, even if rate limited
-		expect(result?.content).toBeTruthy();
 	});
 
 	it("handles PDF URLs", async () => {

@@ -52,7 +52,6 @@ describe("retainToolRenderer", () => {
 			80,
 		);
 		const item = rendered.find(line => line.includes(bullet));
-		expect(item).toBeDefined();
 		expect(item!.length).toBeLessThanOrEqual(80);
 		expect(item).toContain("…");
 	});

@@ -7,9 +7,11 @@
  *   C1  errorMessage = SILENT_ABORT_MARKER + aborted
  *       → `updateContent` receives a message with `stopReason: "stop"`;
  *         `errorMessage` is NOT overwritten.
- *   C2  errorMessage = undefined + aborted + no TTSR flag
- *       → `streamingMessage.errorMessage` is set to "Operation aborted";
- *         `updateContent` receives the original message ref.
+ *   C2  errorMessage = undefined (no threaded reason) + aborted + no TTSR flag
+ *       → `streamingMessage.errorMessage` is set to the generic "Operation
+ *         aborted"; `updateContent` receives the original message ref.
+ *   C2b errorMessage = USER_INTERRUPT_LABEL (threaded via AbortController) + aborted
+ *       → the threaded reason is preserved verbatim, NOT replaced by the generic.
  *   C3  isTtsrAbortPending = true + aborted
  *       → `updateContent` receives a message with `stopReason: "stop"`;
  *         `errorMessage` is NOT set (TTSR existing behavior unchanged).
@@ -19,7 +21,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
@@ -103,7 +105,7 @@ describe("EventController #handleMessageEnd abort labeling", () => {
 		expect(ctx.streamingMessage).toBeUndefined();
 	});
 
-	it("C2: errorMessage undefined + aborted + no TTSR -> errorMessage='Operation aborted', updateContent receives original ref", async () => {
+	it("C2: errorMessage undefined (no threaded reason) + aborted + no TTSR -> errorMessage='Operation aborted', updateContent receives original ref", async () => {
 		const message = makeAssistantMessage({ stopReason: "aborted", errorMessage: undefined });
 		const { controller, streamingComponent } = createFixture({
 			streamingMessage: message,
@@ -112,7 +114,7 @@ describe("EventController #handleMessageEnd abort labeling", () => {
 
 		await controller.handleEvent({ type: "message_end", message });
 
-		// Operator-facing label was stamped in-place on the streaming message ref.
+		// No threaded reason -> generic operator-facing label stamped in-place.
 		expect(message.errorMessage).toBe("Operation aborted");
 
 		// `updateContent` saw the original streaming message ref (no `{...streamingMessage, stopReason:"stop"}` spread).
@@ -121,6 +123,23 @@ describe("EventController #handleMessageEnd abort labeling", () => {
 		expect(arg).toBe(message);
 		expect(arg.stopReason).toBe("aborted");
 		expect(arg.errorMessage).toBe("Operation aborted");
+	});
+
+	it("C2b: threaded user-interrupt reason on aborted message is preserved, not replaced by the generic label", async () => {
+		const message = makeAssistantMessage({ stopReason: "aborted", errorMessage: USER_INTERRUPT_LABEL });
+		const { controller, streamingComponent } = createFixture({
+			streamingMessage: message,
+			isTtsrAbortPending: false,
+		});
+
+		await controller.handleEvent({ type: "message_end", message });
+
+		// The Esc-interrupt reason rode the AbortController onto errorMessage; the
+		// controller must surface it verbatim instead of overwriting with "Operation aborted".
+		expect(message.errorMessage).toBe(USER_INTERRUPT_LABEL);
+		const arg = streamingComponent.updateContent.mock.calls[0]![0] as AssistantMessage;
+		expect(arg.errorMessage).toBe(USER_INTERRUPT_LABEL);
+		expect(arg.stopReason).toBe("aborted");
 	});
 
 	it("C3: isTtsrAbortPending=true + aborted -> updateContent stopReason='stop', errorMessage NOT set", async () => {

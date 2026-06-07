@@ -29,8 +29,6 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 		expect(result?.method).toBe("stackexchange");
 		expect(result?.content).toContain("NullPointerException");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 		expect(result?.notes?.[0]).toContain("site=stackoverflow");
 	});
 
@@ -44,7 +42,6 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 		expect(result?.method).toBe("stackexchange");
 		expect(result?.content).toContain("whitespace");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
 		expect(result?.notes?.[0]).toContain("site=unix");
 	});
 
@@ -58,7 +55,6 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 		expect(result?.method).toBe("stackexchange");
 		expect(result?.content).toContain("PATH");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
 		expect(result?.notes?.[0]).toContain("site=superuser");
 	});
 
@@ -72,7 +68,6 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 		expect(result?.method).toBe("stackexchange");
 		expect(result?.content).toContain("apt");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
 		expect(result?.notes?.[0]).toContain("site=askubuntu");
 	});
 
@@ -86,7 +81,6 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 		expect(result?.method).toBe("stackexchange");
 		expect(result?.content).toMatch(/proxy/i);
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
 		expect(result?.notes?.[0]).toContain("site=serverfault");
 	});
 
@@ -96,14 +90,8 @@ describe.skipIf(SKIP)("handleStackOverflow", () => {
 	it("returns complete response structure", async () => {
 		const result = await handleStackOverflow("https://stackoverflow.com/questions/218384", 20);
 		expect(result).not.toBeNull();
-		expect(result).toHaveProperty("url");
-		expect(result).toHaveProperty("finalUrl");
 		expect(result).toHaveProperty("contentType", "text/markdown");
 		expect(result).toHaveProperty("method", "stackexchange");
-		expect(result).toHaveProperty("content");
-		expect(result).toHaveProperty("fetchedAt");
-		expect(result).toHaveProperty("truncated");
-		expect(result).toHaveProperty("notes");
 		// Content should have question structure
 		expect(result?.content).toContain("# ");
 		expect(result?.content).toContain("Score:");

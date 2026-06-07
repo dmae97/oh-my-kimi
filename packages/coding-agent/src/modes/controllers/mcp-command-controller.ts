@@ -37,7 +37,9 @@ import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../
 import type { OAuthCredential } from "../../session/auth-storage";
 import { shortenPath } from "../../tools/render-utils";
 import { openPath } from "../../utils/open";
+import { ChatBlock } from "../components/chat-block";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
+import { TranscriptBlock } from "../components/transcript-container";
 import { parseCommandArgs } from "../shared";
 import { theme } from "../theme/theme";
 import type { InteractiveModeContext } from "../types";
@@ -47,6 +49,42 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<T>();
 	const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
 	return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Animated "Connecting to …" transcript block. Owns its spinner interval: it
+ * starts on mount and is cleared on {@link ChatBlock.finish}/dispose, so callers
+ * never juggle `setInterval`/`clearInterval` or `requestRender` by hand.
+ */
+class McpConnectingBlock extends ChatBlock {
+	readonly #text: Text;
+
+	constructor(private readonly serverName: string) {
+		super();
+		this.addChild(new Spacer(1));
+		const frame = theme.spinnerFrames[0] ?? "|";
+		this.#text = new Text(theme.fg("muted", `${frame} Connecting to "${serverName}"...`), 1, 0);
+		this.addChild(this.#text);
+	}
+
+	protected override onMount(): void {
+		const frames = theme.spinnerFrames;
+		let frame = 0;
+		const interval = setInterval(() => {
+			frame++;
+			this.#text.setText(
+				theme.fg("muted", `${frames[frame % frames.length] ?? "|"} Connecting to "${this.serverName}"...`),
+			);
+			this.requestRender();
+		}, 80);
+		this.onCleanup(() => clearInterval(interval));
+	}
+
+	/** Replace the spinner line with a terminal status; pair with {@link finish}. */
+	setStatus(text: string): void {
+		this.#text.setText(text);
+		this.requestRender();
+	}
 }
 
 /**
@@ -547,63 +585,45 @@ export class MCPCommandController {
 				},
 				{
 					onAuth: (info: { url: string; instructions?: string }) => {
-						// Show auth URL prominently in chat
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
-							new Text(theme.fg("accent", "━━━ OAuth Authorization Required ━━━"), 1, 0),
-						);
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
-							new Text(theme.fg("muted", "Preparing browser authorization..."), 1, 0),
-						);
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
+						// Show auth URL prominently in chat as one block
+						const block = new TranscriptBlock();
+						this.ctx.present(block);
+						block.addChild(new Text(theme.fg("accent", "━━━ OAuth Authorization Required ━━━"), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("muted", "Preparing browser authorization..."), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(
 							new Text(
 								theme.fg("muted", "Waiting for authorization... (Press Ctrl+C to cancel, 5 minute timeout)"),
 								1,
 								0,
 							),
 						);
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
-							new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0),
-						);
-						this.ctx.ui.requestRender();
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0));
 						// Try to open browser automatically
 						try {
 							openPath(info.url);
 
 							// Show confirmation that browser should open
-							this.ctx.chatContainer.addChild(new Spacer(1));
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("success", "→ Opening browser automatically..."), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(new Spacer(1));
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(new Text(theme.fg("accent", info.url), 1, 0));
+							block.addChild(new Spacer(1));
+							block.addChild(new Text(theme.fg("success", "→ Opening browser automatically..."), 1, 0));
+							block.addChild(new Spacer(1));
+							block.addChild(new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0));
+							block.addChild(new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0));
+							block.addChild(new Text(theme.fg("accent", info.url), 1, 0));
 							this.ctx.ui.requestRender();
 						} catch (_error) {
 							// Show error if browser doesn't open
-							this.ctx.chatContainer.addChild(new Spacer(1));
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("warning", "→ Could not open browser automatically"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(new Text(theme.fg("accent", info.url), 1, 0));
+							block.addChild(new Spacer(1));
+							block.addChild(new Text(theme.fg("warning", "→ Could not open browser automatically"), 1, 0));
+							block.addChild(new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0));
+							block.addChild(new Text(theme.fg("accent", info.url), 1, 0));
 							this.ctx.ui.requestRender();
 						}
 					},
 					onProgress: (message: string) => {
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(new Text(theme.fg("muted", message), 1, 0));
-						this.ctx.ui.requestRender();
+						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
 				},
 			);
@@ -611,9 +631,10 @@ export class MCPCommandController {
 			// Execute OAuth flow with 5 minute timeout
 			const credentials = await withTimeout(flow.login(), 5 * 60 * 1000, "OAuth flow timed out after 5 minutes");
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("success", "✓ Authorization completed in browser."), 1, 0));
-			this.ctx.ui.requestRender();
+			this.ctx.present([
+				new Spacer(1),
+				new Text(theme.fg("success", "✓ Authorization completed in browser."), 1, 0),
+			]);
 
 			// Generate a unique credential ID
 			const credentialId = `mcp_oauth_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
@@ -766,19 +787,8 @@ export class MCPCommandController {
 	): Promise<"connected" | "connecting" | "disconnected"> {
 		if (!this.ctx.mcpManager) return "disconnected";
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		const frames = theme.spinnerFrames;
-		const initialFrame = frames[0] ?? "|";
-		const statusText = new Text(theme.fg("muted", `${initialFrame} Connecting to "${name}"...`), 1, 0);
-		this.ctx.chatContainer.addChild(statusText);
-		this.ctx.ui.requestRender();
-
-		let frame = 0;
-		const interval = setInterval(() => {
-			statusText.setText(theme.fg("muted", `${frames[frame % frames.length]} Connecting to "${name}"...`));
-			frame++;
-			this.ctx.ui.requestRender();
-		}, 80);
+		const block = new McpConnectingBlock(name);
+		this.ctx.present(block);
 
 		try {
 			try {
@@ -792,20 +802,19 @@ export class MCPCommandController {
 				await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
 			}
 			if (state === "connected") {
-				statusText.setText(theme.fg("success", `✓ Connected to "${name}"`));
+				block.setStatus(theme.fg("success", `✓ Connected to "${name}"`));
 			} else if (state === "connecting") {
-				statusText.setText(theme.fg("muted", `◌ "${name}" is still connecting...`));
+				block.setStatus(theme.fg("muted", `◌ "${name}" is still connecting...`));
 			} else {
-				statusText.setText(
+				block.setStatus(
 					options?.suppressDisconnectedWarning
 						? theme.fg("muted", `◌ Connection check complete for "${name}"`)
 						: theme.fg("warning", `⚠ Could not connect to "${name}" yet`),
 				);
 			}
-			this.ctx.ui.requestRender();
 			return state;
 		} finally {
-			clearInterval(interval);
+			block.finish();
 		}
 	}
 

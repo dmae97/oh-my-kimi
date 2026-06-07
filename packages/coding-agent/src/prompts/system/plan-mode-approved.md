@@ -16,7 +16,7 @@ The plan path is for subagent handoff only. You already have the plan; NEVER rea
 
 The full plan is injected below. You MUST execute it now:
 
-<plan path="{{finalPlanFilePath}}">
+<plan path="{{planFilePath}}">
 {{planContent}}
 </plan>
 

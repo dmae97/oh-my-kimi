@@ -23,7 +23,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { ReadToolDetails } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 
-const HASHLINE_HEADER_LINE = /^¶(\S+)#([0-9A-F]{4})$/m;
+const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/m;
 const COLUMN_CAP = 64;
 const LONG_LINE_LEN = COLUMN_CAP * 3;
 

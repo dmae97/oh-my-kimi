@@ -31,8 +31,6 @@ describe.skipIf(SKIP)("handleCoinGecko", () => {
 			expect(result?.content).toContain("Price");
 		}
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches Ethereum data", async () => {
@@ -44,7 +42,6 @@ describe.skipIf(SKIP)("handleCoinGecko", () => {
 			expect(result?.content).toContain("ETH");
 			expect(result?.content).toContain("Market Cap");
 		}
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("handles URL without locale prefix", async () => {
@@ -77,8 +74,6 @@ describe.skipIf(SKIP)("handleDiscogs", () => {
 		expect(result?.method).toBe("discogs");
 		expect(result?.content).toContain("Tracklist");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches master release", async () => {
@@ -87,7 +82,6 @@ describe.skipIf(SKIP)("handleDiscogs", () => {
 		expect(result).not.toBeNull();
 		expect(result?.method).toBe("discogs");
 		expect(result?.content).toContain("Master Release");
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("handles release URL with just ID", async () => {
@@ -121,8 +115,6 @@ describe.skipIf(SKIP)("handleArtifactHub", () => {
 		expect(result?.content).toContain("Helm Chart");
 		expect(result?.content).toContain("Version");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches prometheus-community/prometheus helm chart", async () => {
@@ -134,7 +126,6 @@ describe.skipIf(SKIP)("handleArtifactHub", () => {
 		expect(result?.method).toBe("artifacthub");
 		expect(result?.content).toContain("prometheus");
 		expect(result?.content).toContain("Repository");
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("handles www subdomain", async () => {

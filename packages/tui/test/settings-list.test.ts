@@ -70,4 +70,41 @@ describe("SettingsList", () => {
 		expect(output).toContain("[changed-value]on");
 		expect(output).not.toContain("[changed-label]Default");
 	});
+
+	it("renders long settings tabs through a scrollbar viewport", () => {
+		const list = new SettingsList(
+			Array.from({ length: 6 }, (_, i) => ({
+				id: `item-${i}`,
+				label: `Item ${i}`,
+				currentValue: `value-${i}`,
+				values: [`value-${i}`],
+			})),
+			3,
+			{
+				...testTheme,
+				label: (text: string, selected: boolean) => (selected ? `[selected]${text}` : text),
+				hint: (text: string) => `[dim]${text}`,
+			},
+			() => {},
+			() => {},
+		);
+
+		const output = list.render(32);
+
+		expect(output.slice(0, 3).join("\n")).toContain("[selected]");
+		expect(output.slice(0, 3).join("\n")).toContain("[dim]");
+		expect(output).not.toContain("(1/6)");
+	});
+
+	it("does not reserve a scrollbar column when all settings fit", () => {
+		const list = new SettingsList(
+			[{ id: "mode", label: "Mode", currentValue: "123456", values: ["123456"] }],
+			3,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		expect(list.render(16)[0]).toBe("→ Mode  123456");
+	});
 });

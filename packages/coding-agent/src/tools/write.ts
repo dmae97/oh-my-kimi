@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 
@@ -19,7 +18,7 @@ import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import { fileHyperlink, framedBlock, renderStatusLine } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { truncateForPrompt } from "./approval";
 import { parseArchivePathCandidates } from "./archive-reader";
@@ -37,10 +36,9 @@ import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
+	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
-	formatStatusIcon,
-	formatTitle,
 	getLspBatchRequest,
 	replaceTabs,
 	shortenPath,
@@ -58,7 +56,7 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const LOOSE_HASHLINE_HEADER_RE = /^\s*¶\S+#[^ \t\r\n]*\s*$/;
+const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 
 let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
 async function loadFflate(): Promise<typeof import("fflate")> {
@@ -79,6 +77,9 @@ export interface WriteToolDetails {
 	meta?: OutputMeta;
 	/** Set when the file was auto-chmod'd because content begins with a `#!` shebang. */
 	madeExecutable?: boolean;
+	/** Absolute filesystem path the write resolved to. Used by the renderer to wrap
+	 * the (possibly cwd-relative) header path in an OSC 8 `file://` hyperlink. */
+	resolvedPath?: string;
 }
 
 /**
@@ -109,7 +110,7 @@ function stripWriteContentWithPotentialLooseHeader(lines: string[]): { text: str
 /**
  * Strip hashline display prefixes from write content.
  *
- * Only active when hashline edit mode is enabled — the model sees `¶PATH#HASH`
+ * Only active when hashline edit mode is enabled — the model sees `[PATH#HASH]`
  * headers plus `LINE:` prefixes in read output and sometimes copies them into write content.
  */
 function stripWriteContent(session: ToolSession, content: string): { text: string; stripped: boolean } {
@@ -122,7 +123,7 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 /**
  * Record a snapshot of the freshly-written `content` for `absolutePath`
  * so subsequent hashline edits address the new file with a current tag,
- * and return the matching `¶displayPath#TAG` header. Returns `undefined`
+ * and return the matching `[displayPath#TAG]` header. Returns `undefined`
  * when the session is not in hashline mode so callers can no-op cheaply.
  *
  * Mirrors the post-commit snapshot recording the hashline patcher performs
@@ -418,7 +419,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}`;
 		return {
 			content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${outputPath}` }],
-			details: {},
+			details: { resolvedPath: resolvedArchivePath.absolutePath },
 		};
 	}
 
@@ -534,7 +535,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			}
 
 			invalidateFsScanAfterWrite(resolvedSqlitePath.absolutePath);
-			return toolResult<WriteToolDetails>({}).text(resultText).sourcePath(resolvedSqlitePath.absolutePath).done();
+			return toolResult<WriteToolDetails>({ resolvedPath: resolvedSqlitePath.absolutePath })
+				.text(resultText)
+				.sourcePath(resolvedSqlitePath.absolutePath)
+				.done();
 		} catch (error) {
 			if (isEnoent(error)) {
 				throw new ToolError(`SQLite database '${displayPath}' not found`);
@@ -595,12 +599,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		if (!diagnostics) {
 			return {
 				content: [{ type: "text", text: resultText }],
-				details: {},
+				details: { resolvedPath: absolutePath },
 			};
 		}
 		return {
 			content: [{ type: "text", text: resultText }],
 			details: {
+				resolvedPath: absolutePath,
 				diagnostics,
 				meta: outputMeta()
 					.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
@@ -770,7 +775,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
-			// Strip hashline display prefixes (¶PATH#HASH + LINE:) if the model copied them from read output
+			// Strip hashline display prefixes ([PATH#HASH] + LINE:) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
 			const internalRouter = InternalUrlRouter.instance();
 			if (internalRouter.canHandle(path)) {
@@ -873,7 +878,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				if (stripped) {
 					resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 				}
-				return { content: [{ type: "text", text: resultText }], details: {} };
+				return {
+					content: [{ type: "text", text: resultText }],
+					details: { resolvedPath: absolutePath },
+				};
 			}
 
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
@@ -890,13 +898,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (!diagnostics) {
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: { madeExecutable: madeExecutable || undefined },
+					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
 				};
 			}
 
 			return {
 				content: [{ type: "text", text: resultText }],
 				details: {
+					resolvedPath: absolutePath,
 					diagnostics,
 					madeExecutable: madeExecutable || undefined,
 					meta: outputMeta()
@@ -935,11 +944,20 @@ function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
-function formatStreamingContent(content: string, language: string | undefined, uiTheme: Theme): string {
+function formatStreamingContent(
+	content: string,
+	expanded: boolean,
+	language: string | undefined,
+	uiTheme: Theme,
+): string {
 	if (!content) return "";
 	const lines = normalizeDisplayText(content).split("\n");
 	const totalLines = lines.length;
-	const startIndex = Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
+	// Collapsed: follow the streaming edge with a bounded tail window so the box
+	// stays short enough not to strand its scrolled-off head above the viewport
+	// while the block is volatile. `Ctrl+O` (expanded) lifts the cap for a
+	// deliberate full view — matching the eval streaming preview.
+	const startIndex = expanded ? 0 : Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
 	const visibleLines = lines.slice(startIndex);
 	const hidden = startIndex;
 	const highlighted = highlightCode(visibleLines.join("\n"), language);
@@ -951,9 +969,9 @@ function formatStreamingContent(content: string, language: string | undefined, u
 	}
 	for (let i = 0; i < highlighted.length; i++) {
 		const lineNum = startIndex + i + 1;
-		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")}│`);
+		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
 		const body = replaceTabs(highlighted[i] ?? "");
-		text += ` ${gutter}${body}\n`;
+		text += `${gutter}${body}\n`;
 	}
 	text += uiTheme.fg("dim", `… (streaming)`);
 	return text;
@@ -977,9 +995,9 @@ function renderContentPreview(
 	let text = "\n\n";
 	for (let i = 0; i < highlighted.length; i++) {
 		const lineNum = i + 1;
-		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")}│`);
+		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
 		const body = replaceTabs(highlighted[i] ?? "");
-		text += ` ${gutter}${body}\n`;
+		text += `${gutter}${body}\n`;
 	}
 	if (!expanded && hidden > 0) {
 		const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
@@ -996,23 +1014,44 @@ export const writeToolRenderer = {
 		const lang = getLanguageFromPath(rawPath) ?? "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
-		const spinner =
-			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
+		const header = renderStatusLine(
+			{
+				icon: "pending",
+				spinnerFrame: options?.spinnerFrame,
+				title: "Write",
+				description: `${langIcon} ${pathDisplay}`,
+			},
+			uiTheme,
+		);
+		return framedBlock(uiTheme, width => {
+			const body = args.content
+				? formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme)
+				: "";
+			const bodyLines = body ? body.split("\n") : [];
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: "pending",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
+	},
 
-		let text = `${formatTitle("Write", uiTheme)} ${spinner ? `${spinner} ` : ""}${langIcon} ${pathDisplay}`;
-
-		if (!args.content) {
-			return new Text(text, 0, 0);
-		}
-
-		// Show streaming preview of content (tail)
-		text += formatStreamingContent(args.content, lang, uiTheme);
-
-		return new Text(text, 0, 0);
+	// Only the expanded (Ctrl+O) preview is append-only: it renders the whole
+	// content top-anchored, so streamed chunks only append rows at the bottom.
+	// The collapsed preview slides a bounded tail window (`formatStreamingContent`
+	// with `WRITE_STREAMING_PREVIEW_LINES`) whose visible rows re-layout as the
+	// window moves — not append-only, but it never overflows the viewport, so its
+	// head is never at risk of being dropped regardless. `write` has no partial
+	// result (content streams as args), so `result` is ignored here.
+	isStreamingPreviewAppendOnly(args: WriteRenderArgs, options: RenderResultOptions, _result?: unknown): boolean {
+		return Boolean(options?.expanded && args.content);
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
@@ -1022,14 +1061,33 @@ export const writeToolRenderer = {
 		const fileContent = args?.content || "";
 		const lang = getLanguageFromPath(rawPath);
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
-		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		// The header shows the cwd-relative path but links to the absolute path the
+		// write resolved to (args.path may be relative, which would yield a broken
+		// `file://` URI). Falls back to plain text when the result lacks a path.
+		const linkTarget = result.details?.resolvedPath;
+		const styledPath = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		const pathDisplay = filePath && linkTarget ? fileHyperlink(linkTarget, styledPath) : styledPath;
+
+		if (result.isError) {
+			const errorText = result.content?.find(c => c.type === "text")?.text ?? "";
+			const header = renderStatusLine(
+				{ icon: "error", title: "Write", description: `${langIcon} ${pathDisplay}` },
+				uiTheme,
+			);
+			return framedBlock(uiTheme, width => ({
+				header,
+				sections: [{ lines: formatErrorDetail(errorText, uiTheme).split("\n") }],
+				state: "error",
+				borderColor: "error",
+				width,
+			}));
+		}
+
 		const lineCount = countLines(fileContent);
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
 		const execSuffix = result.details?.madeExecutable
 			? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
 			: "";
-
-		// Build header with status icon
 		const header = renderStatusLine(
 			{
 				icon: "success",
@@ -1040,38 +1098,29 @@ export const writeToolRenderer = {
 		);
 		const diagnostics = result.details?.diagnostics;
 
-		let cached: RenderCache | undefined;
-
-		return {
-			render(width: number) {
-				const { expanded } = options;
-				const key = new Hasher().bool(expanded).u32(width).digest();
-				if (cached?.key === key) return cached.lines;
-
-				let text = header;
-				text += renderContentPreview(fileContent, expanded, lang, uiTheme);
-
-				if (diagnostics) {
-					const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
-						uiTheme.getLangIcon(getLanguageFromPath(fp)),
-					);
-					if (diagText.trim()) {
-						const diagLines = diagText.split("\n");
-						const firstNonEmpty = diagLines.findIndex(line => line.trim());
-						if (firstNonEmpty >= 0) {
-							text += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
-						}
-					}
+		return framedBlock(uiTheme, width => {
+			const { expanded } = options;
+			let body = renderContentPreview(fileContent, expanded, lang, uiTheme);
+			if (diagnostics) {
+				const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
+					uiTheme.getLangIcon(getLanguageFromPath(fp)),
+				);
+				if (diagText.trim()) {
+					const diagLines = diagText.split("\n");
+					const firstNonEmpty = diagLines.findIndex(line => line.trim());
+					if (firstNonEmpty >= 0) body += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
 				}
-
-				const lines = text.split("\n").map(l => truncateToWidth(l, width, Ellipsis.Omit));
-				cached = { key, lines };
-				return lines;
-			},
-			invalidate() {
-				cached = undefined;
-			},
-		};
+			}
+			const bodyLines = body.split("\n");
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: "success",
+				borderColor: "borderMuted",
+				width,
+			};
+		});
 	},
 	mergeCallAndResult: true,
 };

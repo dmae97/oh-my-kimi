@@ -27,6 +27,34 @@ class MutableLinesComponent implements Component {
 	}
 }
 
+// Models a component that caches its rendered output and only refreshes it when
+// `invalidate()` fires — like a transcript block that freezes a snapshot. A
+// state change behind the cache is invisible until something invalidates it,
+// which is exactly what `resetDisplay()` must do to surface a Ctrl+O expansion.
+class CachedComponent implements Component {
+	#current: string[];
+	#cache: string[] | undefined;
+
+	constructor(lines: string[]) {
+		this.#current = [...lines];
+	}
+
+	setLines(lines: string[]): void {
+		this.#current = [...lines];
+	}
+
+	invalidate(): void {
+		this.#cache = undefined;
+	}
+
+	render(width: number): string[] {
+		if (this.#cache === undefined) {
+			this.#cache = this.#current.map(line => line.slice(0, width));
+		}
+		return this.#cache;
+	}
+}
+
 class WrappingLinesComponent implements Component {
 	#lines: string[];
 
@@ -185,18 +213,37 @@ async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Pr
 
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
-	// Keep TUI's 16ms render throttle deterministic without sleeping a real frame per render.
+	// Keep TUI's ~33ms render throttle deterministic without sleeping a real frame per render.
 
 	beforeEach(() => {
 		monotonicNow = 0;
 		vi.spyOn(performance, "now").mockImplementation(() => {
-			monotonicNow += 20;
+			monotonicNow += 40;
 			return monotonicNow;
 		});
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("coalesces non-force render requests to 30fps", () => {
+		const delays: number[] = [];
+		const renderScheduler = {
+			now: () => 0,
+			scheduleImmediate: (callback: () => void) => callback(),
+			scheduleRender: (_callback: () => void, delayMs: number) => {
+				delays.push(delayMs);
+				return { cancel: () => {} };
+			},
+		};
+		const tui = new TUI(new VirtualTerminal(20, 4), true, { renderScheduler });
+
+		tui.requestRender();
+
+		expect(delays).toHaveLength(1);
+		expect(delays[0]!).toBeCloseTo(1000 / 30, 5);
+		tui.stop();
 	});
 
 	describe("cursor + differential stability", () => {
@@ -243,6 +290,33 @@ describe("TUI terminal-state regressions", () => {
 				expect(after[2]?.trim()).toBe("XXX");
 				expect(after[3]).toBe(before[3]);
 				expect(after[4]).toBe(before[4]);
+			} finally {
+				tui.stop();
+			}
+		});
+		it("rewrites changed rows before clearing suffixes for non-synchronized hosts", async () => {
+			const term = new VirtualTerminal(40, 8);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent([
+				"assistant output already rendered",
+				"tool output already rendered",
+				"todos/status already rendered",
+			]);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const writes = captureWrites(term);
+
+				component.setLines(["assistant output already rendered", "tool", "todos/status already rendered"]);
+				tui.requestRender();
+				await settle(term);
+
+				const paint = writes.at(-1) ?? "";
+				expect(paint).toContain("tool\x1b[0m\x1b[K");
+				expect(paint).not.toContain("\x1b[2Ktool");
+				expect(visible(term)[1]).toBe("tool");
 			} finally {
 				tui.stop();
 			}
@@ -339,6 +413,54 @@ describe("TUI terminal-state regressions", () => {
 					.map(line => line.trimEnd())
 					.filter(line => line === "L0").length;
 				expect(occurrences).toBe(1);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("resetDisplay performs a clean redraw without a geometry change", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new MutableLinesComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const writes = captureWrites(term);
+
+				tui.resetDisplay();
+				await settle(term);
+
+				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
+				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("resetDisplay surfaces a state change hidden behind a component's render cache", async () => {
+			const term = new VirtualTerminal(20, 3);
+			const tui = new TUI(term);
+			const component = new CachedComponent(rows("L", 8));
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+
+				// The component's content changes, but its render stays cached (a
+				// frozen transcript snapshot). resetDisplay() must invalidate it so the
+				// forced replay reflects the new content rather than the stale cache —
+				// the Ctrl+O expansion path depends on this.
+				component.setLines(rows("M", 8));
+				tui.resetDisplay();
+				await settle(term);
+
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("M", 8));
+				expect(visible(term)).toEqual(["M5", "M6", "M7"]);
 			} finally {
 				tui.stop();
 			}
@@ -1016,7 +1138,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("keeps appended rows contiguous when a height grow coincides with new content", async () => {
 			// A terminal resize fires requestRender(), and streamed content fires
-			// its own requestRender(); the 16ms throttle coalesces them into a
+			// its own requestRender(); the ~33ms throttle coalesces them into a
 			// single frame that is both taller and longer. The diff/append-tail
 			// emitters position scrolled rows against the previous viewport top and
 			// hardware cursor row, both invalidated by the reflow — so the appended
@@ -1371,7 +1493,7 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						// SIGWINCH (height shrink) and a streamed token arrive inside the
-						// same 16ms frame budget. The TUI's own resize handler schedules a
+						// same ~33ms frame budget. The TUI's own resize handler schedules a
 						// non-forced render; the append rides along.
 						lines.push("line-40 streamed");
 						component.setLines(lines);
@@ -1681,7 +1803,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const collapsedLines = [
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -1732,7 +1854,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -1777,7 +1899,7 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
 				"frame-top",
-				"code preview … 16 more lines ⟨(Ctrl+O for more)⟩",
+				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
 				"output preview … 106 more lines (ctrl+o to expand)",
 				...rows("json-", 10),
 				"status",
@@ -2095,6 +2217,66 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 			}
+		});
+
+		it("repaints only the active-grid bottom row while unknown viewport mutation is deferred", async () => {
+			const initial = [...rows("line-", 12), "spinner-a"];
+			const updated = ["edited-0", ...rows("line-", 12).slice(1), "spinner-b"];
+
+			await withTerminalRisk(true, async () => {
+				const term = new UnknownViewportTerminal(40, 6);
+				const tui = new TUI(term);
+				const component = new MutableLinesComponent(initial);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await settle(term);
+					const writes = captureWrites(term);
+
+					component.setLines(updated);
+					tui.requestRender();
+					await settle(term);
+
+					const viewport = visible(term).map(line => line.trim());
+					expect(viewport.at(-1)).toBe("spinner-b");
+					expect(term.getScrollBuffer().join("\n")).not.toContain("edited-0");
+					const paint = writes.at(-1) ?? "";
+					expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
+					expect(paint).not.toContain("\x1b[H");
+					expect(paint).not.toContain("\x1b[3J");
+				} finally {
+					tui.stop();
+				}
+
+				const scrolledTerm = new UnknownViewportTerminal(40, 6);
+				const scrolledTui = new TUI(scrolledTerm);
+				const scrolledComponent = new MutableLinesComponent(initial);
+				scrolledTui.addChild(scrolledComponent);
+
+				try {
+					scrolledTui.start();
+					await settle(scrolledTerm);
+					scrolledTerm.scrollLines(-1);
+					const before = scrolledTerm.getBufferPosition();
+					const beforeViewport = visible(scrolledTerm).map(line => line.trim());
+					const writes = captureWrites(scrolledTerm);
+
+					scrolledComponent.setLines(updated);
+					scrolledTui.requestRender();
+					await settle(scrolledTerm);
+
+					expect(scrolledTerm.getBufferPosition()).toEqual(before);
+					expect(visible(scrolledTerm).map(line => line.trim())).toEqual(beforeViewport);
+					expect(scrolledTerm.getScrollBuffer().join("\n")).not.toContain("edited-0");
+					const paint = writes.at(-1) ?? "";
+					expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
+					expect(paint).not.toContain("\x1b[H");
+					expect(paint).not.toContain("\x1b[3J");
+				} finally {
+					scrolledTui.stop();
+				}
+			});
 		});
 		it("rebuilds history when a shrink leaves no real rows above the scrollback boundary", async () => {
 			// Reviewer scenario (#1599): a large completion-style collapse (e.g. a 100-row
@@ -3046,6 +3228,86 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
+	describe("fullscreen overlay alt-screen", () => {
+		it("enters the alt buffer on show, leaves it on hide, and emits no ED3 while modal", async () => {
+			const term = new VirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL-0", "MODAL-1"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				// Borrowed the alternate screen buffer …
+				expect(modalWrites).toContain("\x1b[?1049h");
+				// … enabled mouse tracking for click/scroll support …
+				expect(modalWrites).toContain("\x1b[?1000h");
+				expect(modalWrites).toContain("\x1b[?1006h");
+				// … and never erased scrollback (ED3) or otherwise touched the transcript.
+				expect(modalWrites).not.toContain("\x1b[3J");
+				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeTrue();
+
+				const hideFrom = writes.length;
+				handle.hide();
+				await settle(term);
+
+				const hideWrites = writes.slice(hideFrom).join("");
+				expect(hideWrites).toContain("\x1b[?1049l");
+				// Mouse tracking is disabled again so the rest of the app keeps native
+				// terminal selection.
+				expect(hideWrites).toContain("\x1b[?1000l");
+				// Transcript is back on the normal screen after leaving the alt buffer.
+				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
+				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("leaves native scrollback untouched across the modal lifetime", async () => {
+			const term = new VirtualTerminal(40, 6, 200);
+			const tui = new TUI(term);
+			// Base transcript overflows the viewport, so rows land in scrollback.
+			tui.addChild(new MutableLinesComponent(rows("base-", 24)));
+
+			try {
+				tui.start();
+				await settle(term);
+				const scrollbackBefore = term.getScrollBuffer().map(line => line.trimEnd());
+
+				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+				handle.hide();
+				await settle(term);
+
+				// The modal borrowed/returned the alt buffer without rewriting the
+				// normal screen's scrollback — the transcript a reader scrolled up to
+				// see is identical before and after.
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(scrollbackBefore);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	describe("stress scenarios", () => {
 		it("rapid content mutations converge to final expected screen", async () => {
 			const term = new VirtualTerminal(30, 8);
@@ -3344,8 +3606,8 @@ describe("TUI terminal-state regressions", () => {
 				// Initial paint: only the styled row carries background cells.
 				expect(backgroundRows(term, height)).toEqual([1]);
 
-				// Diff path: rewriting the row below starts with \x1b[2K — with leaked
-				// background, BCE would paint that whole row red.
+				// Diff path: rewriting the row below clears only after the row reset;
+				// with leaked background, BCE would otherwise paint that row red.
 				component.setLines(["plain-0", UNRESET_BG_ROW, "EDITED-2"]);
 				tui.requestRender();
 				await settle(term);
@@ -3377,8 +3639,8 @@ describe("TUI terminal-state regressions", () => {
 				expect(foregroundRows(term, height)).toEqual([1]);
 				expect(underlineRows(term, height)).toEqual([1]);
 
-				// Rewriting the next row starts with an erase; leaked SGR would make
-				// the edited row green/underlined despite containing plain text.
+				// Rewriting the next row clears only after the row reset; leaked SGR
+				// would make the edited row green/underlined despite containing plain text.
 				component.setLines(["plain-0", UNRESET_FG_UNDERLINE_ROW, "EDITED-2"]);
 				tui.requestRender();
 				await settle(term);
@@ -3413,7 +3675,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 
-				// Force a full repaint (viewport rewrite path emits \x1b[2K per row).
+				// Force a full repaint (viewport rewrite path suffix-clears each text row).
 				tui.requestRender(true);
 				await settle(term);
 
@@ -3938,7 +4200,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				];
 				component.setLines(frameB);
 				tui.requestRender();
-				await settle(term);
+				await term.waitForRender();
 				expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
 
 				// Frame C: a visible chip collapses (a shrink whose first change lands in
@@ -3964,12 +4226,29 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				];
 				component.setLines(frameC);
 				tui.requestRender();
-				await settle(term);
+				await term.waitForRender();
 				expect(visible(term)).toEqual(["chip-0", "chip-1", "chip-2", "loader", "todos", "editor"]);
 			} finally {
 				tui.stop();
 			}
 		});
+	});
+
+	it("honors a clear-scrollback replay queued before the initial paint", async () => {
+		const term = new VirtualTerminal(40, 6);
+		const writes = captureWrites(term);
+		const tui = new TUI(term);
+		tui.addChild(new MutableLinesComponent(["resumed-message", "prompt>"]));
+
+		try {
+			tui.start();
+			tui.requestRender(true, { clearScrollback: true });
+			await settle(term);
+
+			expect(writes.join("")).toContain("\x1b[3J");
+		} finally {
+			tui.stop();
+		}
 	});
 
 	// Repro of the drag-resize line-duplication: dragging the terminal smaller

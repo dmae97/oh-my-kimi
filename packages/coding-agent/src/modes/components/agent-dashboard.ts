@@ -27,6 +27,7 @@ import {
 	matchesKey,
 	padding,
 	replaceTabs,
+	ScrollView,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -205,9 +206,12 @@ class AgentListPane implements Component {
 			return lines;
 		}
 
+		const overflow = this.agents.length > this.maxVisible;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
 		const start = this.scrollOffset;
 		const end = Math.min(start + this.maxVisible, this.agents.length);
 
+		const rows: string[] = [];
 		for (let i = start; i < end; i++) {
 			const agent = this.agents[i];
 			const selected = i === this.selectedIndex;
@@ -224,12 +228,17 @@ class AgentListPane implements Component {
 				line = theme.fg("dim", line);
 			}
 
-			lines.push(truncateToWidth(line, width));
+			rows.push(truncateToWidth(line, rowWidth));
 		}
 
-		if (this.agents.length > this.maxVisible) {
-			lines.push(theme.fg("muted", `  (${this.selectedIndex + 1}/${this.agents.length})`));
-		}
+		const sv = new ScrollView(rows, {
+			height: rows.length,
+			scrollbar: "auto",
+			totalRows: this.agents.length,
+			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+		});
+		sv.setScrollOffset(this.scrollOffset);
+		lines.push(...sv.render(width));
 
 		return lines;
 	}

@@ -8,7 +8,7 @@
  */
 
 import { $env, $flag, extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
-import type { Effort } from "../model-thinking";
+import type { Effort } from "../effort";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import type {

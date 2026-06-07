@@ -39,7 +39,10 @@ class AppendOnlyLiveLineList extends LiveLineList {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await Bun.sleep(20);
+	const nextTick = Promise.withResolvers<void>();
+	process.nextTick(nextTick.resolve);
+	await nextTick.promise;
+	await Bun.sleep(40);
 	await term.flush();
 }
 
@@ -366,6 +369,48 @@ describe("streaming scrollback defer", () => {
 
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("keeps committed prefix accounting after a capped streaming frame", async () => {
+		if (process.platform === "win32") return;
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(24, 4);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const sealed = new LineList(rows("base-", 12));
+
+			try {
+				tui.addChild(sealed);
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				tui.setEagerNativeScrollbackRebuild(true);
+
+				// No live-region marker yet: ED3-risk streaming caps this transient
+				// frame to the viewport. The already-committed base-0..base-7 rows
+				// remain physically in native scrollback and must stay accounted.
+				sealed.setLines([...rows("base-", 12), ...rows("transient-", 30)]);
+				tui.requestRender();
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBe(0);
+
+				// A later frame introduces a live region after the same sealed prefix.
+				// If the cap zeroed the high-water mark, liveRegionPinned would append
+				// base-0..base-11 again, duplicating base-0..base-7 in native history.
+				const live = new LiveLineList(rows("live-", 20));
+				sealed.setLines(rows("base-", 12));
+				tui.addChild(live);
+				tui.requestRender();
+				await settle(term);
+
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(term.getScrollBuffer().filter(line => line.startsWith("base-"))).toEqual(rows("base-", 12));
 			} finally {
 				tui.stop();
 			}

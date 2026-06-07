@@ -10,6 +10,7 @@ export * from "./components/image";
 export * from "./components/input";
 export * from "./components/loader";
 export * from "./components/markdown";
+export * from "./components/scroll-view";
 export * from "./components/select-list";
 export * from "./components/settings-list";
 export * from "./components/spacer";
@@ -26,7 +27,7 @@ export * from "./fuzzy";
 export * from "./keybindings";
 // Kitty keyboard protocol helpers
 export * from "./keys";
-// Kitty graphics: Unicode placeholders + temp-file transmission
+// Kitty graphics: Unicode placeholders
 export * from "./kitty-graphics";
 // Mermaid diagram support
 // Input buffering for batch splitting

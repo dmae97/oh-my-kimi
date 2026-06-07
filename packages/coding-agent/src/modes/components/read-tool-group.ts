@@ -81,6 +81,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#text: Text;
 	#expanded = false;
 	#showContentPreview: boolean;
+	// A read group accretes entries across multiple assistant completions for as
+	// long as the run of reads is uninterrupted. While it is the active group it
+	// must stay in the transcript's repaintable live region — its header line
+	// re-layouts from `Read <path>` to `Read (N)` + tree as entries arrive, so a
+	// frozen snapshot taken on a risk terminal would strand the single-entry form
+	// (see TranscriptContainer / NativeScrollbackLiveRegion). The controller calls
+	// `finalize()` once the run breaks so the block can commit to native scrollback.
+	#finalized = false;
 
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
@@ -88,6 +96,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#text = new Text("", 0, 0);
 		this.addChild(this.#text);
 		this.#updateDisplay();
+	}
+
+	isTranscriptBlockFinalized(): boolean {
+		return this.#finalized;
+	}
+
+	finalize(): void {
+		this.#finalized = true;
 	}
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
@@ -181,9 +197,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const total = entriesWithoutPreview.length;
 		for (const [index, entry] of entriesWithoutPreview.entries()) {
 			const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
-			const statusSymbol = this.#formatStatus(entry.status);
+			const statusPrefix = entry.status === "success" ? "" : `${this.#formatStatus(entry.status)} `;
 			const pathDisplay = this.#formatPath(entry);
-			lines.push(`   ${theme.fg("dim", connector)} ${statusSymbol} ${pathDisplay}`.trimEnd());
+			lines.push(`   ${theme.fg("dim", connector)} ${statusPrefix}${pathDisplay}`.trimEnd());
 		}
 
 		this.#text.setText(lines.join("\n"));
@@ -198,7 +214,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	/**
 	 * Add a code-cell content preview below the entry summary.
-	 * When collapsed: shows first COLLAPSED_PREVIEW_LINES lines with "… N more lines (Ctrl+O for more)" hint.
+	 * When collapsed: shows first COLLAPSED_PREVIEW_LINES lines with a "… N more lines ⟨<key>: Expand⟩" hint.
 	 * When expanded: shows full content.
 	 */
 	#addContentPreview(entry: ReadEntry): void {
@@ -254,7 +270,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#formatStatus(status: ReadEntry["status"]): string {
 		if (status === "success") {
-			return theme.fg("success", theme.status.success);
+			return theme.fg("text", theme.status.enabled);
 		}
 		if (status === "warning") {
 			return theme.fg("warning", theme.status.warning);

@@ -1,10 +1,11 @@
 /**
  * Perplexity Web Search Provider
  *
- * Supports three auth modes:
+ * Supports four auth modes:
  * - Cookies (`PERPLEXITY_COOKIES`) via `www.perplexity.ai/rest/sse/perplexity_ask`
  * - OAuth/session bearer via `AuthStorage` and `www.perplexity.ai/rest/sse/perplexity_ask`
  * - API key (`PERPLEXITY_API_KEY`) via `api.perplexity.ai/chat/completions`
+ * - Anonymous via `www.perplexity.ai/rest/sse/perplexity_ask`
  */
 
 import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
@@ -32,6 +33,8 @@ const DEFAULT_NUM_SEARCH_RESULTS = 20;
 const OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const OAUTH_API_VERSION = "2.18";
 const OAUTH_USER_AGENT = "Perplexity/641 CFNetwork/1568 Darwin/25.2.0";
+const ANONYMOUS_USER_AGENT =
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
 type PerplexityAuth =
 	| {
@@ -45,6 +48,9 @@ type PerplexityAuth =
 	| {
 			type: "cookies";
 			cookies: string;
+	  }
+	| {
+			type: "anonymous";
 	  };
 
 interface PerplexityOAuthStreamMarkdownBlock {
@@ -149,6 +155,112 @@ function mergeOAuthEventSnapshot(
 
 	return merged;
 }
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+	return value as Record<string, unknown>;
+}
+
+function parseJson(text: string): unknown | null {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
+	}
+}
+
+function textFromChunks(value: unknown): string | null {
+	if (!Array.isArray(value) || value.length === 0) return null;
+	let text = "";
+	for (const chunk of value) {
+		if (typeof chunk !== "string") return null;
+		text += chunk;
+	}
+	return text.length > 0 ? text : null;
+}
+
+function textFromStructuredAnswer(value: unknown): string | null {
+	if (!Array.isArray(value)) return null;
+	for (const item of value) {
+		const record = asRecord(item);
+		if (!record) continue;
+		const text = record.text;
+		if (typeof text === "string" && text.length > 0) return text;
+		const chunks = textFromChunks(record.chunks);
+		if (chunks) return chunks;
+	}
+	return null;
+}
+
+function answerFromTextPayload(payload: Record<string, unknown>): string | null {
+	const structured = textFromStructuredAnswer(payload.structured_answer);
+	if (structured) return structured;
+	const chunks = textFromChunks(payload.chunks);
+	if (chunks) return chunks;
+	const answer = payload.answer;
+	return typeof answer === "string" && answer.length > 0 ? answer : null;
+}
+
+function parseOAuthTextPayload(text: string): Record<string, unknown> | null {
+	const parsed = parseJson(text);
+	const direct = asRecord(parsed);
+	if (direct) return direct;
+	if (!Array.isArray(parsed)) return null;
+
+	for (const item of parsed) {
+		const step = asRecord(item);
+		const content = asRecord(step?.content);
+		const answer = content?.answer;
+		if (typeof answer !== "string" || answer.length === 0) continue;
+		const payload = asRecord(parseJson(answer));
+		if (payload) return payload;
+	}
+	return null;
+}
+
+function parseOAuthTextAnswer(text: string): string {
+	const payload = parseOAuthTextPayload(text);
+	if (payload) {
+		const answer = answerFromTextPayload(payload);
+		if (answer) return answer;
+	}
+
+	const parsed = parseJson(text);
+	if (!Array.isArray(parsed)) return text;
+	for (const item of parsed) {
+		const step = asRecord(item);
+		const content = asRecord(step?.content);
+		const answer = content?.answer;
+		if (typeof answer === "string" && answer.length > 0) return answer;
+	}
+	return text;
+}
+
+function sourcesFromTextPayload(text: string | undefined): SearchSource[] {
+	if (!text) return [];
+	const payload = parseOAuthTextPayload(text);
+	const webResults = payload?.web_results;
+	if (!Array.isArray(webResults) || webResults.length === 0) return [];
+
+	const sources: SearchSource[] = [];
+	for (const value of webResults) {
+		const result = asRecord(value);
+		if (!result) continue;
+		const url = result.url;
+		if (typeof url !== "string" || url.length === 0) continue;
+		const name = result.name ?? result.title;
+		const snippet = result.snippet;
+		const timestamp = result.timestamp;
+		sources.push({
+			title: typeof name === "string" && name.length > 0 ? name : url,
+			url,
+			snippet: typeof snippet === "string" ? snippet : undefined,
+			publishedDate: typeof timestamp === "string" ? timestamp : undefined,
+			ageSeconds: dateToAgeSeconds(typeof timestamp === "string" ? timestamp : undefined),
+		});
+	}
+	return sources;
+}
 export interface PerplexitySearchParams {
 	signal?: AbortSignal;
 	query: string;
@@ -216,7 +328,7 @@ async function findPerplexityAuth(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-): Promise<PerplexityAuth | null> {
+): Promise<PerplexityAuth> {
 	// 1. PERPLEXITY_COOKIES env var
 	const cookies = $env.PERPLEXITY_COOKIES?.trim();
 	if (cookies) {
@@ -235,7 +347,9 @@ async function findPerplexityAuth(
 	if (apiKey) {
 		return { type: "api_key", token: apiKey };
 	}
-	return null;
+
+	// 4. The consumer ask endpoint currently accepts unauthenticated browser-style requests.
+	return { type: "anonymous" };
 }
 
 /** Call Perplexity API-key endpoint. */
@@ -284,7 +398,7 @@ function buildOAuthSources(event: PerplexityOAuthStreamEvent): SearchSource[] {
 			}));
 	}
 
-	return (event.sources_list ?? [])
+	const sources = (event.sources_list ?? [])
 		.filter(source => typeof source.url === "string" && source.url.length > 0)
 		.map(source => ({
 			title: source.title ?? source.url ?? "",
@@ -293,11 +407,13 @@ function buildOAuthSources(event: PerplexityOAuthStreamEvent): SearchSource[] {
 			publishedDate: source.date,
 			ageSeconds: dateToAgeSeconds(source.date),
 		}));
+	if (sources.length > 0) return sources;
+	return sourcesFromTextPayload(event.text);
 }
 
 function buildOAuthAnswer(event: PerplexityOAuthStreamEvent): string {
 	if (!event.blocks?.length) {
-		return typeof event.text === "string" ? event.text : "";
+		return typeof event.text === "string" ? parseOAuthTextAnswer(event.text) : "";
 	}
 
 	const markdownBlock = event.blocks.find(
@@ -324,51 +440,77 @@ function buildOAuthAnswer(event: PerplexityOAuthStreamEvent): string {
 		}
 	}
 	if (typeof event.text === "string" && event.text.length > 0) {
-		return event.text;
+		return parseOAuthTextAnswer(event.text);
 	}
 	return "";
 }
 
-async function callPerplexityOAuth(
-	auth: { type: "oauth"; token: string } | { type: "cookies"; cookies: string },
+async function callPerplexityAsk(
+	auth: { type: "oauth"; token: string } | { type: "cookies"; cookies: string } | { type: "anonymous" },
 	params: PerplexitySearchParams,
 ): Promise<{ answer: string; sources: SearchSource[]; model?: string; requestId?: string }> {
 	const requestId = crypto.randomUUID();
-	const effectiveQuery = params.system_prompt ? `${params.system_prompt}\n\n${params.query}` : params.query;
+	// The consumer `perplexity_ask` endpoint is itself a research assistant and
+	// has no system-message slot. Prepending the API-style system prompt to the
+	// query makes the model read it as a meta-instruction and refuse with
+	// "I don't have access to web-search tools in this turn", so ask-endpoint
+	// searches send the bare query. (The API-key path still uses system_prompt
+	// as a proper `system` message.)
+	const effectiveQuery = params.query;
+
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+		Accept: "text/event-stream",
+		Origin: "https://www.perplexity.ai",
+		Referer: "https://www.perplexity.ai/",
+		"User-Agent": auth.type === "anonymous" ? ANONYMOUS_USER_AGENT : OAUTH_USER_AGENT,
+		"X-Request-ID": requestId,
+	};
+	if (auth.type === "oauth") {
+		// The ask endpoint authenticates via the next-auth session cookie, NOT a
+		// bearer header — a bearer (even a garbage one) is ignored and the request
+		// silently falls back to the anonymous free `turbo` model regardless of
+		// `model_preference`. The stored OAuth token IS the Perplexity session JWT
+		// (the native app injects the same value as this cookie), so sending it as
+		// the cookie is what unlocks the account's Pro model selection.
+		headers.Cookie = `__Secure-next-auth.session-token=${auth.token}`;
+	} else if (auth.type === "cookies") {
+		headers.Cookie = auth.cookies;
+	}
+	if (auth.type !== "anonymous") {
+		headers["X-App-ApiClient"] = "default";
+		headers["X-App-ApiVersion"] = OAUTH_API_VERSION;
+		headers["X-Perplexity-Request-Reason"] = "submit";
+	}
+
+	const requestParams: Record<string, unknown> = {
+		query_str: effectiveQuery,
+		search_focus: "internet",
+		mode: "copilot",
+		model_preference: "experimental",
+		sources: ["web"],
+		attachments: [],
+		frontend_uuid: crypto.randomUUID(),
+		frontend_context_uuid: crypto.randomUUID(),
+		version: OAUTH_API_VERSION,
+		language: "en-US",
+		timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+		search_recency_filter: params.search_recency_filter ?? null,
+		is_incognito: true,
+		use_schematized_api: true,
+		skip_search_enabled: true,
+	};
+	if (auth.type === "anonymous") {
+		requestParams.send_back_text_in_streaming_api = true;
+		requestParams.source = "default";
+	}
 
 	const response = await fetch(PERPLEXITY_OAUTH_ASK_URL, {
 		method: "POST",
-		headers: {
-			...(auth.type === "cookies" ? { Cookie: auth.cookies } : { Authorization: `Bearer ${auth.token}` }),
-			"Content-Type": "application/json",
-			Accept: "text/event-stream",
-			Origin: "https://www.perplexity.ai",
-			Referer: "https://www.perplexity.ai/",
-			"User-Agent": OAUTH_USER_AGENT,
-			"X-App-ApiClient": "default",
-			"X-App-ApiVersion": OAUTH_API_VERSION,
-			"X-Perplexity-Request-Reason": "submit",
-			"X-Request-ID": requestId,
-		},
+		headers,
 		body: JSON.stringify({
 			query_str: effectiveQuery,
-			params: {
-				query_str: effectiveQuery,
-				search_focus: "internet",
-				mode: "copilot",
-				model_preference: "pplx_pro_upgraded",
-				sources: ["web"],
-				attachments: [],
-				frontend_uuid: crypto.randomUUID(),
-				frontend_context_uuid: crypto.randomUUID(),
-				version: OAUTH_API_VERSION,
-				language: "en-US",
-				timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-				search_recency_filter: params.search_recency_filter ?? null,
-				is_incognito: true,
-				use_schematized_api: true,
-				skip_search_enabled: true,
-			},
+			params: requestParams,
 		}),
 		signal: withHardTimeout(params.signal),
 	});
@@ -379,13 +521,13 @@ async function callPerplexityOAuth(
 		if (classified) throw classified;
 		throw new SearchProviderError(
 			"perplexity",
-			`Perplexity OAuth API error (${response.status}): ${errorText}`,
+			`Perplexity ask API error (${response.status}): ${errorText}`,
 			response.status,
 		);
 	}
 
 	if (!response.body) {
-		throw new SearchProviderError("perplexity", "Perplexity OAuth API returned no response body", 500);
+		throw new SearchProviderError("perplexity", "Perplexity ask API returned no response body", 500);
 	}
 
 	let answer = "";
@@ -397,7 +539,7 @@ async function callPerplexityOAuth(
 	for await (const event of readSseJson<PerplexityOAuthStreamEvent>(response.body, params.signal)) {
 		if (event.error_code) {
 			const message = event.error_message ?? event.error_code;
-			throw new SearchProviderError("perplexity", `Perplexity OAuth stream error: ${message}`, 400);
+			throw new SearchProviderError("perplexity", `Perplexity ask stream error: ${message}`, 400);
 		}
 
 		mergedEvent = mergeOAuthEventSnapshot(mergedEvent, event);
@@ -500,20 +642,17 @@ function applySourceLimit(result: SearchResponse, limit?: number): SearchRespons
 /** Execute Perplexity web search */
 export async function searchPerplexity(params: PerplexitySearchParams): Promise<SearchResponse> {
 	const auth = await findPerplexityAuth(params.authStorage, params.sessionId, params.signal);
-	if (!auth) {
-		throw new Error("Perplexity auth not found. Set PERPLEXITY_COOKIES, PERPLEXITY_API_KEY, or login via OAuth.");
-	}
 
-	if (auth.type === "oauth" || auth.type === "cookies") {
-		const oauthResult = await callPerplexityOAuth(auth, params);
+	if (auth.type !== "api_key") {
+		const askResult = await callPerplexityAsk(auth, params);
 		return applySourceLimit(
 			{
 				provider: "perplexity",
-				answer: oauthResult.answer || undefined,
-				sources: oauthResult.sources,
-				model: oauthResult.model,
-				requestId: oauthResult.requestId,
-				authMode: "oauth",
+				answer: askResult.answer || undefined,
+				sources: askResult.sources,
+				model: askResult.model,
+				requestId: askResult.requestId,
+				authMode: auth.type === "anonymous" ? "anonymous" : "oauth",
 			},
 			params.num_results,
 		);
@@ -560,6 +699,15 @@ export class PerplexityProvider extends SearchProvider {
 
 	isAvailable(authStorage: AuthStorage): boolean {
 		return !!$env.PERPLEXITY_COOKIES?.trim() || authStorage.hasAuth("perplexity") || !!findApiKey();
+	}
+
+	/**
+	 * Perplexity accepts anonymous browser-style ask requests, but keep auto
+	 * provider selection credential-gated so a configured provider keeps priority
+	 * over the anonymous fallback.
+	 */
+	isExplicitlyAvailable(_authStorage: AuthStorage): boolean {
+		return true;
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

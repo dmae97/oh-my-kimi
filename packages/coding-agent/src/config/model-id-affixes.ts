@@ -4,34 +4,49 @@ const MODEL_ID_SEGMENT_PATTERN = /[a-z0-9.:-]+/g;
 const MODEL_FAMILY_PREFIX_PATTERN =
 	/^(claude|gemini|gpt|grok|glm|qwen|deepseek|kimi|mimo|doubao|ernie|gpt-oss|gemma|minimax|step|command|jamba|llama|o[1345])/i;
 
-function hasDigit(value: string): boolean {
-	return /\d/.test(value);
+function normalizeModelIdWhitespace(value: string): string {
+	return value.trim().replace(/\s+/g, " ");
 }
 
+/** Ordering for model-like segments: longest first, ties broken lexicographically. */
 function compareSegmentPreference(left: string, right: string): number {
-	if (left.length !== right.length) {
-		return right.length - left.length;
-	}
-	return left.localeCompare(right);
+	return left.length !== right.length ? right.length - left.length : left.localeCompare(right);
 }
 
 export function getModelLikeIdSegments(modelId: string): string[] {
-	const normalized = normalizeModelIdWhitespace(modelId).toLowerCase();
-	if (!normalized) return [];
-	const segments = (normalized.match(MODEL_ID_SEGMENT_PATTERN) ?? []).filter(
-		segment => MODEL_FAMILY_PREFIX_PATTERN.test(segment) && hasDigit(segment),
-	);
-	const unique = [...new Set(segments)];
-	unique.sort(compareSegmentPreference);
-	return unique;
+	const matches = normalizeModelIdWhitespace(modelId).toLowerCase().match(MODEL_ID_SEGMENT_PATTERN);
+	if (!matches) return [];
+	const segments = new Set<string>();
+	for (const segment of matches) {
+		if (MODEL_FAMILY_PREFIX_PATTERN.test(segment) && /\d/.test(segment)) segments.add(segment);
+	}
+	return [...segments].sort(compareSegmentPreference);
 }
 
 export function getLongestModelLikeIdSegment(modelId: string): string | undefined {
-	return getModelLikeIdSegments(modelId)[0];
+	const matches = normalizeModelIdWhitespace(modelId).toLowerCase().match(MODEL_ID_SEGMENT_PATTERN);
+	if (!matches) return undefined;
+	let best: string | undefined;
+	for (const segment of matches) {
+		if (
+			MODEL_FAMILY_PREFIX_PATTERN.test(segment) &&
+			/\d/.test(segment) &&
+			(best === undefined || compareSegmentPreference(segment, best) < 0)
+		) {
+			best = segment;
+		}
+	}
+	return best;
 }
 
-function normalizeModelIdWhitespace(value: string): string {
-	return value.trim().replace(/\s+/g, " ");
+function hasBracketAffixMarker(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code === 91 || code === 93 || code === 0x3010 || code === 0x3011) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -39,18 +54,20 @@ function normalizeModelIdWhitespace(value: string): string {
  * upstream model id, e.g.
  *   "[Kiro] claude-opus-4-8"                -> "claude-opus-4-8"
  *   "[gcli转] gemini-3.1-pro-preview [假流]" -> "gemini-3.1-pro-preview"
+ *
+ * Candidates are returned most-stripped first: both ends, then leading-only, then trailing-only.
  */
 export function getBracketStrippedModelIdCandidates(modelId: string): string[] {
+	if (!hasBracketAffixMarker(modelId)) return [];
 	const normalized = normalizeModelIdWhitespace(modelId);
 	if (!normalized) return [];
 
-	const candidates = new Set<string>();
-	const withoutLeading = normalizeModelIdWhitespace(normalized.replace(LEADING_BRACKETED_AFFIX_PATTERN, ""));
+	const strippedLeading = normalized.replace(LEADING_BRACKETED_AFFIX_PATTERN, "");
+	const withoutLeading = normalizeModelIdWhitespace(strippedLeading);
 	const withoutTrailing = normalizeModelIdWhitespace(normalized.replace(TRAILING_BRACKETED_AFFIX_PATTERN, ""));
-	const withoutBoth = normalizeModelIdWhitespace(
-		normalized.replace(LEADING_BRACKETED_AFFIX_PATTERN, "").replace(TRAILING_BRACKETED_AFFIX_PATTERN, ""),
-	);
+	const withoutBoth = normalizeModelIdWhitespace(strippedLeading.replace(TRAILING_BRACKETED_AFFIX_PATTERN, ""));
 
+	const candidates = new Set<string>();
 	for (const candidate of [withoutBoth, withoutLeading, withoutTrailing]) {
 		if (candidate && candidate !== normalized) {
 			candidates.add(candidate);

@@ -49,6 +49,15 @@ describe("setup wizard scene selection", () => {
 		expect(scenes.map(scene => scene.id)).toEqual(ALL_SCENES.map(scene => scene.id));
 	});
 
+	it("keeps CURRENT_SETUP_VERSION in sync with the highest scene minVersion", () => {
+		// main.ts's cold-launch gate sources CURRENT_SETUP_VERSION from the tiny
+		// `setup-version` module to decide whether to load the wizard at all. If a
+		// new scene raises the bar but the constant is not bumped, stale installs
+		// would never see the scene. Guard the invariant the gate relies on.
+		const highestMinVersion = Math.max(...ALL_SCENES.map(scene => scene.minVersion));
+		expect(CURRENT_SETUP_VERSION).toBe(highestMinVersion);
+	});
+
 	it("runs only scenes newer than the stored setup version", async () => {
 		const scenes = [testScene("v1-a", 1), testScene("v1-b", 1), testScene("v2", 2)];
 		const selected = await selectSetupScenes(1, scenes, fakeContextWithConfiguredModel(), { isTTY: true });

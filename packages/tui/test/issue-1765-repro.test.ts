@@ -33,6 +33,21 @@ class FocusedLine implements Component, Focusable {
 	}
 }
 
+// VirtualTerminal does not model DECRQM capability probing, so subclass it to
+// register and replay the renderer's mode-2026 report callback on demand. This
+// exercises the runtime probe path in `TUI.start()` end-to-end.
+class ProbingTerminal extends VirtualTerminal {
+	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
+
+	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
+		this.#privateModeCallbacks.push(callback);
+	}
+
+	emitPrivateModeReport(mode: number, supported: boolean): void {
+		for (const callback of this.#privateModeCallbacks) callback(mode, supported);
+	}
+}
+
 const SYNC_BEGIN = "\x1b[?2026h";
 const SYNC_END = "\x1b[?2026l";
 const DISABLE_AUTOWRAP = "\x1b[?7l";
@@ -186,5 +201,150 @@ describe("issue #1765: synchronized-output opt-out", () => {
 				tui.stop();
 			}
 		});
+	});
+});
+
+describe("synchronized-output runtime DECRQM probe", () => {
+	it("enables synchronized output after a positive DEC 2026 report on a default-off host", async () => {
+		// TMUX forces the static default off; the positive probe must upgrade it.
+		await withEnvPatch(
+			{
+				TMUX: "1",
+				WT_SESSION: undefined,
+				TERM_FEATURES: undefined,
+				PI_NO_SYNC_OUTPUT: undefined,
+				PI_FORCE_SYNC_OUTPUT: undefined,
+				PI_TUI_SYNC_OUTPUT: undefined,
+			},
+			async () => {
+				const term = new ProbingTerminal(32, 4, 100);
+				const writes = captureWrites(term);
+				const component = new MutableLines(["before probe"]);
+				const tui = new TUI(term);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await term.waitForRender();
+					expect(tui.synchronizedOutput).toBe(false);
+					expectNoSyncOutput(writes);
+
+					const mark = writes.length;
+					term.emitPrivateModeReport(2026, true);
+					expect(tui.synchronizedOutput).toBe(true);
+
+					component.lines = ["after probe"];
+					tui.requestRender();
+					await term.waitForRender();
+
+					const after = writes.slice(mark).join("");
+					expect(after).toContain(SYNC_BEGIN);
+					expect(after).toContain(SYNC_END);
+				} finally {
+					tui.stop();
+				}
+			},
+		);
+	});
+
+	it("disables synchronized output after a negative DEC 2026 report on a default-on host", async () => {
+		// WT_SESSION forces the static default on without a user override flag.
+		await withEnvPatch(
+			{
+				WT_SESSION: "abc",
+				PI_NO_SYNC_OUTPUT: undefined,
+				PI_FORCE_SYNC_OUTPUT: undefined,
+				PI_TUI_SYNC_OUTPUT: undefined,
+			},
+			async () => {
+				const term = new ProbingTerminal(32, 4, 100);
+				const writes = captureWrites(term);
+				const component = new MutableLines(["before probe"]);
+				const tui = new TUI(term);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await term.waitForRender();
+					expect(tui.synchronizedOutput).toBe(true);
+
+					const mark = writes.length;
+					term.emitPrivateModeReport(2026, false);
+					expect(tui.synchronizedOutput).toBe(false);
+
+					component.lines = ["after probe"];
+					tui.requestRender();
+					await term.waitForRender();
+
+					expectNoSyncOutput(writes.slice(mark));
+				} finally {
+					tui.stop();
+				}
+			},
+		);
+	});
+
+	it("ignores a positive probe when the user opted out", async () => {
+		await withEnvPatch(
+			{ PI_NO_SYNC_OUTPUT: "1", PI_FORCE_SYNC_OUTPUT: undefined, PI_TUI_SYNC_OUTPUT: undefined },
+			async () => {
+				const term = new ProbingTerminal(32, 4, 100);
+				const writes = captureWrites(term);
+				const component = new MutableLines(["before probe"]);
+				const tui = new TUI(term);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await term.waitForRender();
+					expect(tui.synchronizedOutput).toBe(false);
+
+					const mark = writes.length;
+					term.emitPrivateModeReport(2026, true);
+					expect(tui.synchronizedOutput).toBe(false);
+
+					component.lines = ["after probe"];
+					tui.requestRender();
+					await term.waitForRender();
+
+					expectNoSyncOutput(writes.slice(mark));
+				} finally {
+					tui.stop();
+				}
+			},
+		);
+	});
+
+	it("ignores a negative probe when the user forced sync on", async () => {
+		await withEnvPatch(
+			{ PI_FORCE_SYNC_OUTPUT: "1", PI_NO_SYNC_OUTPUT: undefined, PI_TUI_SYNC_OUTPUT: undefined },
+			async () => {
+				const term = new ProbingTerminal(32, 4, 100);
+				const writes = captureWrites(term);
+				const component = new MutableLines(["before probe"]);
+				const tui = new TUI(term);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await term.waitForRender();
+					expect(tui.synchronizedOutput).toBe(true);
+
+					const mark = writes.length;
+					term.emitPrivateModeReport(2026, false);
+					expect(tui.synchronizedOutput).toBe(true);
+
+					component.lines = ["after probe"];
+					tui.requestRender();
+					await term.waitForRender();
+
+					const after = writes.slice(mark).join("");
+					expect(after).toContain(SYNC_BEGIN);
+					expect(after).toContain(SYNC_END);
+				} finally {
+					tui.stop();
+				}
+			},
+		);
 	});
 });

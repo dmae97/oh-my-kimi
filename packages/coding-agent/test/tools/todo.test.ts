@@ -345,3 +345,124 @@ describe("todoMatchesAnyDescription", () => {
 		expect(todoMatchesAnyDescription("Audit AGENTS.md compliance", ["Audit AGENTS md compliance"])).toBe(true);
 	});
 });
+describe("todoToolRenderer.renderResult phase collapsing", () => {
+	async function buildThreePhaseAfterDone() {
+		const tool = new TodoTool(createSession());
+		await tool.execute("init", {
+			ops: [
+				{
+					op: "init",
+					list: [
+						{ phase: "Alpha", items: ["a1", "a2"] },
+						{ phase: "Beta", items: ["b1", "b2"] },
+						{ phase: "Gamma", items: ["c1", "c2"] },
+					],
+				},
+			],
+		});
+		// `done a1` keeps the active task inside Alpha (auto-promotes a2), leaving
+		// Beta and Gamma untouched by this update.
+		return tool.execute("done", { ops: [{ op: "done", task: "a1" }] });
+	}
+	function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {
+		const lines = Bun.stripANSI(component.render(100).join("\n")).split("\n");
+		return lines.slice(1, -1).map(line => line.replace(/^│/, "").replace(/│\s*$/, "").trim());
+	}
+	it("collapses untouched phases to a one-line summary while expanding the active phase", async () => {
+		const result = await buildThreePhaseAfterDone();
+		const component = todoToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme, {
+			ops: [{ op: "done", task: "a1" }],
+		});
+		const rendered = Bun.stripANSI(component.render(100).join("\n"));
+		// Active phase renders its full task list.
+		expect(rendered).toContain("a1");
+		expect(rendered).toContain("a2");
+		// Untouched phases collapse: headers + progress counts, no task contents.
+		expect(rendered).toContain("II. Beta");
+		expect(rendered).toContain("III. Gamma");
+		expect(rendered).toContain("0/2");
+		expect(rendered).not.toContain("b1");
+		expect(rendered).not.toContain("b2");
+		expect(rendered).not.toContain("c1");
+		expect(rendered).not.toContain("c2");
+	});
+	it("falls back to in_progress / completed signals when call args are unavailable", async () => {
+		const result = await buildThreePhaseAfterDone();
+		// Transcript rebuilds may not carry call args; the active (Alpha) phase is
+		// still derived from the in_progress task and the completion transition.
+		const component = todoToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
+		const rendered = Bun.stripANSI(component.render(100).join("\n"));
+		expect(rendered).toContain("a2");
+		expect(rendered).not.toContain("b1");
+		expect(rendered).not.toContain("c1");
+	});
+	it("shows every phase fully when manually expanded", async () => {
+		const result = await buildThreePhaseAfterDone();
+		const component = todoToolRenderer.renderResult(result, { expanded: true, isPartial: false }, theme, {
+			ops: [{ op: "done", task: "a1" }],
+		});
+		const rendered = Bun.stripANSI(component.render(100).join("\n"));
+		expect(rendered).toContain("b1");
+		expect(rendered).toContain("b2");
+		expect(rendered).toContain("c1");
+		expect(rendered).toContain("c2");
+	});
+	it("drops blank separator lines between phases", async () => {
+		const result = await buildThreePhaseAfterDone();
+		const component = todoToolRenderer.renderResult(result, { expanded: true, isPartial: false }, theme, {
+			ops: [{ op: "done", task: "a1" }],
+		});
+		// No empty body line survives between phases.
+		expect(innerLines(component).every(line => line.length > 0)).toBe(true);
+	});
+});
+
+describe("todoToolRenderer.renderCall malformed-args regression (#2005)", () => {
+	// Reporter saw `TypeError: args?.ops?.map is not a function` against
+	// Xiaomi Token Plan's Anthropic protocol because `parseStreamingJson`
+	// surfaced `{ ops: "[..." }` shapes mid-stream. The renderer is invoked
+	// on every streaming delta, so any non-array `ops` (string, object,
+	// number) must NOT crash the TUI render loop and trigger the spam-warn /
+	// retry cascade.
+	const renderOptions = { expanded: false, isPartial: true } as const;
+
+	it("does not throw when ops is a streaming-truncated string", () => {
+		// Mid-stream `partialJson === '{"ops":"[{'` parses into `{ops: "[{"}`.
+		const args = { ops: '[{"op":"init"' } as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
+		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+	});
+
+	it("does not throw when ops entries are null", () => {
+		// `partialParse` of `'{"ops":[null'` can hand back `{ops: [null]}` in
+		// intermediate states before the entry object opens.
+		const args = { ops: [null] } as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
+		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+	});
+
+	it("does not throw when an entry's items field is a non-array", () => {
+		const args = {
+			ops: [{ op: "append", phase: "Work", items: "Second" as unknown as string[] }],
+		} as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
+		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+	});
+
+	it("still renders ops summary metadata for well-formed args", () => {
+		const args = {
+			ops: [
+				{ op: "init", items: ["a", "b", "c"] },
+				{ op: "done", task: "a" },
+				{ op: "append", phase: "Cleanup", items: ["d"] },
+			],
+		};
+		const component = todoToolRenderer.renderCall(args, renderOptions, theme);
+		// `Text(text, 0, 0)` from `@oh-my-pi/pi-tui` exposes the content via .render().
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("init");
+		expect(rendered).toContain("3 items");
+		expect(rendered).toContain("done");
+		expect(rendered).toContain("a");
+		expect(rendered).toContain("append");
+		expect(rendered).toContain("Cleanup");
+		expect(rendered).toContain("1 item");
+	});
+});

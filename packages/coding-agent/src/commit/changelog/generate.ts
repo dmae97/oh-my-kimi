@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
@@ -25,7 +25,7 @@ export const changelogTool = {
 
 export interface ChangelogPromptInput {
 	model: Model<Api>;
-	apiKey: string;
+	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
 	changelogPath: string;
 	isPackageChangelog: boolean;

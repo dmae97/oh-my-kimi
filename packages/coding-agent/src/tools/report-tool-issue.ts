@@ -41,7 +41,7 @@ function buildReportToolIssueParams(activeBuiltinNames: readonly string[]) {
 }
 
 export function isAutoQaEnabled(settings?: Settings): boolean {
-	return $flag("PI_AUTO_QA") || !!settings?.get("dev.autoqa");
+	return $flag("PI_AUTO_QA", !!settings?.get("dev.autoqa"));
 }
 
 // ───────────────────────────────────────────────────────────────────────────

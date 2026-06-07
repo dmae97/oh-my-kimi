@@ -35,6 +35,17 @@ describe("ResolveTool", () => {
 		);
 	});
 
+	it("treats discard with no pending action as a successful cancellation, not an error", async () => {
+		const tool = new ResolveTool(createSession());
+		const result = await tool.execute("call-discard-none", {
+			action: "discard",
+			reason: "Abandoning the staged edit.",
+		});
+		expect(result.isError ?? false).toBe(false);
+		expect(getText(result)).toContain("Nothing to discard");
+		expect(result.details).toMatchObject({ action: "discard", reason: "Abandoning the staged edit." });
+	});
+
 	it("discards pending action and clears store", async () => {
 		let discardedReason: string | undefined;
 		const handler = async (input: unknown) => {

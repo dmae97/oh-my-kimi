@@ -20,6 +20,15 @@ describe("KeybindingsManager", () => {
 		expect(keybindings.getKeys("tui.editor.cursorUp")).toEqual(["up"]);
 	});
 
+	it("preserves Shift when matching printable uppercase letters", () => {
+		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+			"tui.input.copy": "shift+a",
+		});
+
+		expect(keybindings.matches("A", "tui.input.copy")).toBe(true);
+		expect(keybindings.matches("a", "tui.input.copy")).toBe(false);
+	});
+
 	it("still reports direct user binding conflicts without evicting defaults", () => {
 		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
 			"tui.input.submit": "ctrl+x",

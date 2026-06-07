@@ -2,6 +2,12 @@
 
 This document maps the non-theme runtime path from terminal input to rendered output in interactive mode. It focuses on behavior in `packages/tui` and its integration from `packages/coding-agent` controllers.
 
+> **Editing the rendering engine itself?** Read
+> [`tui-core-renderer.md`](./tui-core-renderer.md) first — it documents the
+> failure modes (yank / corruption / flash / width crashes) and the invariants
+> the render planner, native-scrollback bookkeeping, and capability detection
+> must not violate.
+
 ## Runtime layers and ownership
 
 - **`packages/tui` engine**: terminal lifecycle, stdin normalization, focus routing, render scheduling, differential painting, overlay composition, hardware cursor placement.
@@ -11,44 +17,49 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 
 ## Implementation files
 
-- [`../src/modes/interactive-mode.ts`](../packages/coding-agent/src/modes/interactive-mode.ts)
-- [`../src/modes/controllers/event-controller.ts`](../packages/coding-agent/src/modes/controllers/event-controller.ts)
-- [`../src/modes/controllers/input-controller.ts`](../packages/coding-agent/src/modes/controllers/input-controller.ts)
-- [`../src/modes/components/custom-editor.ts`](../packages/coding-agent/src/modes/components/custom-editor.ts)
-- [`../../tui/src/tui.ts`](../packages/tui/src/tui.ts)
-- [`../../tui/src/terminal.ts`](../packages/tui/src/terminal.ts)
-- [`../../tui/src/editor-component.ts`](../packages/tui/src/editor-component.ts)
-- [`../../tui/src/stdin-buffer.ts`](../packages/tui/src/stdin-buffer.ts)
-- [`../../tui/src/components/loader.ts`](../packages/tui/src/components/loader.ts)
+- [`packages/coding-agent/src/modes/interactive-mode.ts`](../packages/coding-agent/src/modes/interactive-mode.ts)
+- [`packages/coding-agent/src/modes/controllers/event-controller.ts`](../packages/coding-agent/src/modes/controllers/event-controller.ts)
+- [`packages/coding-agent/src/modes/controllers/input-controller.ts`](../packages/coding-agent/src/modes/controllers/input-controller.ts)
+- [`packages/coding-agent/src/modes/components/custom-editor.ts`](../packages/coding-agent/src/modes/components/custom-editor.ts)
+- [`packages/tui/src/tui.ts`](../packages/tui/src/tui.ts)
+- [`packages/tui/src/terminal.ts`](../packages/tui/src/terminal.ts)
+- [`packages/tui/src/editor-component.ts`](../packages/tui/src/editor-component.ts)
+- [`packages/tui/src/stdin-buffer.ts`](../packages/tui/src/stdin-buffer.ts)
+- [`packages/tui/src/components/loader.ts`](../packages/tui/src/components/loader.ts)
 
 ## Boot and component tree assembly
 
-`InteractiveMode` constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))`, applies `settings.get("clearOnShrink")`, and creates persistent containers:
+`InteractiveMode` constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))`, applies `clearOnShrink`, `tui.maxInlineImages`, and Kitty text-sizing settings, then creates persistent containers:
 
 - `chatContainer`
 - `pendingMessagesContainer`
 - `statusContainer`
 - `todoContainer`
 - `btwContainer`
+- `omfgContainer`
+- `errorBannerContainer`
 - `statusLine`
 - `hookWidgetContainerAbove`
 - `editorContainer` (holds `CustomEditor`)
 - `hookWidgetContainerBelow`
 
-`init()` wires the tree in that order, focuses the editor, registers input handlers via `InputController`, subscribes terminal appearance changes into theme auto-detection, starts TUI, and requests a forced render.
-A forced render (`requestRender(true)`) resets previous-line caches and cursor bookkeeping before repainting.
+`init()` wires the tree in that order after any startup warnings/welcome/changelog, focuses the editor, registers input handlers via `InputController`, starts TUI, pushes terminal title state, updates the editor border, and requests a forced render.
+A forced render (`requestRender(true)`) queues a viewport repaint or explicit session replacement; it does **not** throw away previous-line history by default.
 
 ## Terminal lifecycle and stdin normalization
 
 `ProcessTerminal.start()`:
 
 1. Enables raw mode and bracketed paste.
-2. Attaches resize handler.
-3. Creates a `StdinBuffer` to split partial escape chunks into complete sequences.
-4. Queries Kitty keyboard protocol support (`CSI ? u`), then enables protocol flags if supported; otherwise enables modifyOtherKeys fallback after a short timeout.
-5. Queries OSC 11 background color and enables Mode 2031 appearance notifications for dark/light theme detection.
-6. On Windows, attempts VT input enablement via `kernel32` mode flags.
-   `StdinBuffer` behavior:
+2. Attaches resize handler and refreshes dimensions.
+3. Enables Windows VT input mode when running on win32.
+4. Creates a `StdinBuffer` to split partial escape chunks into complete sequences.
+5. Queries Kitty keyboard protocol support (`CSI ? u`), then enables protocol flags if supported; otherwise enables modifyOtherKeys fallback after a short timeout.
+6. Queries OSC 11 background color and Mode 2031 appearance notifications for dark/light theme detection.
+7. Queries OSC 99 notification capabilities.
+8. Starts periodic OSC 11 polling only where safe, then probes DEC private modes 2026/2048/2031 via DECRQM.
+
+`StdinBuffer` behavior:
 
 - Buffers fragmented escape sequences (CSI/OSC/DCS/APC/SS3).
 - Emits `data` only when a sequence is complete or timeout-flushed.
@@ -90,7 +101,7 @@ This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in 
 
 `TUI.requestRender()` coalesces render requests and rate-limits ordinary frames:
 
-- forced renders (`requestRender(true, ...)`) reset cached frame/viewport state and run on `process.nextTick`
+- forced renders (`requestRender(true, ...)`) schedule an immediate frame and set `#forceViewportRepaintOnNextRender`; with `clearScrollback`, they also queue `sessionReplace`
 - ordinary renders schedule through `#scheduleRender()` and respect `TUI.#MIN_RENDER_INTERVAL_MS`
 - repeated requests while a render is pending collapse into the same scheduled frame
 
@@ -110,7 +121,7 @@ This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in 
    - noop
 6. Emit only the bytes required by the intent and commit cached frame/cursor/viewport state.
 
-Render writes use synchronized output mode (`CSI ? 2026 h/l`) to reduce flicker/tearing.
+Render writes use synchronized output mode (`CSI ? 2026 h/l`) when enabled; capability detection, DECRQM, or `PI_NO_SYNC_OUTPUT` can disable the wrappers while leaving autowrap discipline on.
 
 ## Render safety constraints
 
@@ -123,14 +134,19 @@ Critical safety checks in `TUI`:
 
 These constraints are runtime guards plus component conventions; renderers should still return width-safe lines rather than rely on truncation.
 
+The deeper reasons these guards exist — why the renderer cannot observe scroll
+position, why ED3 (`CSI 3 J`) is confined to one path, and why the hot path
+clamps instead of throwing — are documented in
+[`tui-core-renderer.md`](./tui-core-renderer.md).
+
 ## Resize handling
 
 Resize events are event-driven from `ProcessTerminal` to `TUI.requestRender()`.
 
 Effects:
 
-- Width changes repaint or rebuild because wrapping semantics change.
-- Height-only changes repaint the viewport when needed, but skip repaint in Termux and terminal multiplexers where replays are scrollback-hostile.
+- Width or height changes repaint or rebuild because terminal reflow invalidates wrapping, viewport, and cursor anchors.
+- Inside terminal multiplexers, resize uses viewport repaint instead of destructive native-scrollback replay; pane history cannot be erased safely and a full replay duplicates transcript rows.
 - Viewport/top tracking (`#viewportTopRow`, `#maxLinesRendered`, scrollback high-water state) avoids invalid relative cursor math and defers destructive native scrollback rewrites while the user is scrolled into history.
 - Overlay visibility can depend on terminal dimensions (`OverlayOptions.visible`); focus is corrected when overlays become non-visible after resize.
 
@@ -182,18 +198,6 @@ Escape exits inactive mode by clearing editor text and restoring border color; w
 1. Registers one-shot `SIGCONT` handler to restart TUI and force render.
 2. Stops TUI before suspend.
 3. Sends `SIGTSTP` to process group.
-
-### Background mode (`/background` or `/bg`)
-
-`handleBackgroundCommand()`:
-
-- Rejects when idle.
-- Switches tool UI context to non-interactive (`hasUI=false`) so interactive UI tools fail fast.
-- Stops loaders/status line and unsubscribes foreground event handler.
-- Subscribes background event handler (primarily waits for `agent_end`).
-- Stops TUI and sends `SIGTSTP` (POSIX job control path).
-
-On `agent_end` in background with no queued work, controller sends completion notification and shuts down.
 
 ## Cancellation paths
 

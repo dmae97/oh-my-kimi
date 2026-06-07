@@ -21,7 +21,7 @@ import {
 	truncateToWidth,
 } from "../tools/render-utils";
 import { renderStatusLine } from "../tui";
-import { CachedOutputBlock } from "../tui/output-block";
+import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import type { LspParams, LspToolDetails } from "./types";
 
 // =============================================================================
@@ -138,7 +138,7 @@ export function renderResult(
 
 	const outputBlock = new CachedOutputBlock();
 
-	return {
+	return markFramedBlockComponent({
 		render(width: number): string[] {
 			// Read mutable state at render time
 			const { expanded, isPartial, spinnerFrame } = options;
@@ -194,7 +194,7 @@ export function renderResult(
 		invalidate() {
 			outputBlock.invalidate();
 		},
-	};
+	});
 }
 
 // =============================================================================

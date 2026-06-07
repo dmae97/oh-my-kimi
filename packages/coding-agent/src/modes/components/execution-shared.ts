@@ -7,7 +7,7 @@
  * stay in their respective files.
  */
 
-import { type Component, Container, Loader, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { type Component, Container, Loader, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import { formatTruncationMetaNotice, type TruncationMeta } from "../../tools/output-meta";
 import { DynamicBorder } from "./dynamic-border";
@@ -31,7 +31,6 @@ export function buildExecutionFrame(
 ): { contentContainer: Container; loader: Loader } {
 	const borderColor = (str: string) => theme.fg(colorKey, str);
 
-	parent.addChild(new Spacer(1));
 	parent.addChild(new DynamicBorder(borderColor));
 
 	const contentContainer = new Container();

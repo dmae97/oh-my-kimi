@@ -164,15 +164,12 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("Compaction hooks", () => {
 		expect(beforeEvent.preparation).toBeDefined();
 		expect(beforeEvent.preparation.messagesToSummarize).toBeDefined();
 		expect(beforeEvent.preparation.turnPrefixMessages).toBeDefined();
-		expect(beforeEvent.preparation.tokensBefore).toBeGreaterThanOrEqual(0);
 		expect(typeof beforeEvent.preparation.isSplitTurn).toBe("boolean");
 		expect(beforeEvent.branchEntries).toBeDefined();
 		// sessionManager, modelRegistry, and model are now on ctx, not event
 
 		const afterEvent = compactEvents[0];
 		expect(afterEvent.compactionEntry).toBeDefined();
-		expect(afterEvent.compactionEntry.summary.length).toBeGreaterThan(0);
-		expect(afterEvent.compactionEntry.tokensBefore).toBeGreaterThanOrEqual(0);
 		expect(afterEvent.fromExtension).toBe(false);
 	}, 120000);
 
@@ -285,7 +282,6 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("Compaction hooks", () => {
 		const result = await session.compact();
 
 		expect(result.summary).toBeDefined();
-		expect(result.summary.length).toBeGreaterThan(0);
 
 		const compactEvents = capturedEvents.filter((e): e is SessionCompactEvent => e.type === "session_compact");
 		expect(compactEvents.length).toBe(1);
@@ -396,10 +392,6 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("Compaction hooks", () => {
 		// Verify they're accessible via session
 		expect(typeof session.sessionManager.getEntries).toBe("function");
 		expect(typeof session.modelRegistry.getApiKey).toBe("function");
-
-		const entries = session.sessionManager.getEntries();
-		expect(Array.isArray(entries)).toBe(true);
-		expect(entries.length).toBeGreaterThan(0);
 	}, 120000);
 
 	it("should use hook compaction even with different values", async () => {

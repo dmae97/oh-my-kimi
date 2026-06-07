@@ -7,6 +7,9 @@ import { formatStatusIcon } from "../tools/render-utils";
 
 export interface StatusLineOptions {
 	icon?: ToolUIStatus;
+	/** Pre-rendered glyph that replaces the status icon (e.g. a magnifier for
+	 * search-family tools). Takes precedence over `icon`. */
+	iconOverride?: string;
 	spinnerFrame?: number;
 	title: string;
 	titleColor?: ThemeColor;
@@ -27,7 +30,8 @@ function flattenForHeader(text: string): string {
 }
 
 export function renderStatusLine(options: StatusLineOptions, theme: Theme): string {
-	const icon = options.icon ? formatStatusIcon(options.icon, theme, options.spinnerFrame) : "";
+	const icon =
+		options.iconOverride ?? (options.icon ? formatStatusIcon(options.icon, theme, options.spinnerFrame) : "");
 	const titleColor = options.titleColor ?? "accent";
 	const title = theme.fg(titleColor, flattenForHeader(options.title));
 	let line = icon ? `${icon} ${title}` : title;

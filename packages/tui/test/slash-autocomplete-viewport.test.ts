@@ -29,14 +29,32 @@ class SlashProvider implements AutocompleteProvider {
 }
 
 class UnknownViewportTerminal extends VirtualTerminal {
+	#eagerEraseScrollbackRisk: boolean | undefined;
+
+	constructor(columns: number, rows: number, eagerEraseScrollbackRisk?: boolean) {
+		super(columns, rows);
+		this.#eagerEraseScrollbackRisk = eagerEraseScrollbackRisk;
+	}
+
 	isNativeViewportAtBottom(): undefined {
 		return undefined;
+	}
+
+	hasEagerEraseScrollbackRisk(): boolean | undefined {
+		return this.#eagerEraseScrollbackRisk;
 	}
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
 	await new Promise<void>(resolve => process.nextTick(resolve));
-	await Bun.sleep(120);
+	// Each keystroke arms Editor's autocomplete debounce (100ms) before the
+	// provider is re-queried, and the resulting onAutocompleteUpdate render is
+	// throttled by the TUI's MIN_RENDER_INTERVAL_MS (~33ms). 120ms no longer
+	// covers debounce plus render jitter, so capture could still see the stale
+	// (unfiltered) menu and push the live editor row out of a 6-row viewport
+	// (issue #1979). Stay well above 100+33ms so the post-debounce render lands
+	// before getViewport() runs.
+	await Bun.sleep(250);
 	await term.flush();
 }
 
@@ -72,6 +90,87 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			if (originalWtSession === undefined) delete Bun.env.WT_SESSION;
 			else Bun.env.WT_SESSION = originalWtSession;
+		}
+	});
+
+	it("repaints direct autocomplete shrink on ED3-risk POSIX terminals", async () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+		let tui: TUI | undefined;
+		try {
+			const term = new UnknownViewportTerminal(40, 8, true);
+			tui = new TUI(term);
+			const root = new Container();
+			root.addChild({
+				invalidate() {},
+				render: () => ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4", "chat-5", "chat-6"],
+			});
+			const editor = new Editor(defaultEditorTheme);
+			let submitted: string | undefined;
+			editor.setAutocompleteProvider(new SlashProvider());
+			editor.onAutocompleteUpdate = () => {
+				tui?.requestRender(false, { allowUnknownViewportMutation: true });
+			};
+			editor.onSubmit = text => {
+				submitted = text;
+			};
+			root.addChild(editor);
+			tui.addChild(root);
+			tui.setFocus(editor);
+
+			tui.start();
+			await settle(term);
+			for (const char of "/st") {
+				term.sendInput(char);
+				await settle(term);
+			}
+			let viewport = term.getViewport().join("\n");
+			expect(editor.getText()).toBe("/st");
+			expect(viewport).toContain("/st");
+			expect(viewport).not.toContain("/s\n");
+			expect(term.getScrollBuffer()).toEqual([
+				"chat-0",
+				"chat-1",
+				"chat-2",
+				"chat-3",
+				"chat-4",
+				"chat-5",
+				"chat-6",
+				"+--------------------------------------+",
+				"+- /st|                               -+",
+				"> status",
+				"  stats",
+				"  stop",
+				"",
+				"",
+			]);
+
+			term.sendInput("\r");
+			await settle(term);
+			viewport = term.getViewport().join("\n");
+			expect(submitted).toBe("/status");
+			expect(editor.getText()).toBe("");
+			expect(viewport).not.toContain("status");
+			expect(viewport).not.toContain("/st");
+			expect(term.getScrollBuffer()).toEqual([
+				"chat-0",
+				"chat-1",
+				"chat-2",
+				"chat-3",
+				"chat-4",
+				"chat-5",
+				"chat-6",
+				"+--------------------------------------+",
+				"+- |                                  -+",
+				"",
+				"",
+				"",
+				"",
+				"",
+			]);
+		} finally {
+			tui?.stop();
+			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 		}
 	});
 

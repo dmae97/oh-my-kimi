@@ -5,7 +5,7 @@
  * Endpoint: POST https://api.synthetic.new/v2/search
  */
 
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
@@ -66,12 +66,14 @@ async function callSyntheticSearch(
 
 /** Execute Synthetic web search. */
 export async function searchSynthetic(params: SearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
-	if (!apiKey) {
-		throw new Error("Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.");
-	}
+	const keyOrResolver: ApiKey = params.authStorage.resolver("synthetic", {
+		sessionId: params.sessionId,
+	});
 
-	const data = await callSyntheticSearch(apiKey, params.query, params.signal);
+	const data = await withAuth(keyOrResolver, key => callSyntheticSearch(key, params.query, params.signal), {
+		signal: params.signal,
+		missingKeyMessage: "Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.",
+	});
 	const sources: SearchSource[] = [];
 
 	for (const result of data.results ?? []) {

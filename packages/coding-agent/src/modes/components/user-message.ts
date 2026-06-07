@@ -1,4 +1,4 @@
-import { Container, Markdown, Spacer } from "@oh-my-pi/pi-tui";
+import { Container, Markdown } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { imageReferenceHyperlink, renderImageReferences } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
@@ -30,7 +30,6 @@ export class UserMessageComponent extends Container {
 				renderText: baseText,
 				renderReference: (label, index) => imageReferenceHyperlink(label, index, imageLinks, imageLabel),
 			});
-		this.addChild(new Spacer(1));
 		this.addChild(
 			new Markdown(text, 1, 1, getMarkdownTheme(), {
 				bgColor,

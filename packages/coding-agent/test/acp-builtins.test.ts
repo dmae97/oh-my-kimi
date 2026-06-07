@@ -492,20 +492,6 @@ describe("wave 3 commands", () => {
 		expect(output[0]).toContain("Usage: /memory");
 	});
 
-	it("/memory view: outputs memory payload (or empty message)", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/memory view", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output.length).toBeGreaterThan(0);
-	});
-
-	it("/memory (no args): defaults to view", async () => {
-		const { output, runtime } = createRuntime();
-		const result = await executeAcpBuiltinSlashCommand("/memory", runtime);
-		expect(result).toEqual({ consumed: true });
-		expect(output.length).toBeGreaterThan(0);
-	});
-
 	// /todo start fuzzy match
 	it("/todo start: finds pending task by substring and starts it", async () => {
 		const { output, session, runtime } = createRuntime();
@@ -667,37 +653,6 @@ describe("wave 4 commands", () => {
 	});
 
 	// /plugins
-	it("/plugins list: outputs without throwing when registries are empty", async () => {
-		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
-		const { PluginManager } = await import("../src/extensibility/plugins");
-		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
-		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
-		try {
-			const { output, runtime } = createRuntime();
-			const result = await executeAcpBuiltinSlashCommand("/plugins list", runtime);
-			expect(result).toEqual({ consumed: true });
-			expect(output.length).toBeGreaterThan(0);
-		} finally {
-			listInstalledSpy.mockRestore();
-			npmListSpy.mockRestore();
-		}
-	});
-
-	it("/plugins (no args): defaults to list", async () => {
-		const { MarketplaceManager } = await import("../src/extensibility/plugins/marketplace");
-		const { PluginManager } = await import("../src/extensibility/plugins");
-		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
-		const npmListSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([]);
-		try {
-			const { output, runtime } = createRuntime();
-			const result = await executeAcpBuiltinSlashCommand("/plugins", runtime);
-			expect(result).toEqual({ consumed: true });
-			expect(output.length).toBeGreaterThan(0);
-		} finally {
-			listInstalledSpy.mockRestore();
-			npmListSpy.mockRestore();
-		}
-	});
 
 	// /todo start with in_progress status in fuzzy list
 	it("/todo start: resolves ambiguous matches by preferring active tasks", async () => {

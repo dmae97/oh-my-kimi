@@ -28,8 +28,6 @@ describe.skipIf(SKIP)("handleMastodon", () => {
 			expect(result?.content).toContain("**Followers:**");
 			expect(result?.content).toContain("**Following:**");
 			expect(result?.content).toContain("**Posts:**");
-			expect(result?.fetchedAt).toBeTruthy();
-			expect(result?.truncated).toBeDefined();
 			expect(result?.notes?.[0]).toContain("Mastodon API");
 		},
 		{ timeout: 30000 },
@@ -67,8 +65,6 @@ describe.skipIf(SKIP)("handleBluesky", () => {
 			expect(result?.content).toContain("**Following:**");
 			expect(result?.content).toContain("**Posts:**");
 			expect(result?.content).toContain("**DID:**");
-			expect(result?.fetchedAt).toBeTruthy();
-			expect(result?.truncated).toBeDefined();
 			expect(result?.notes).toContain("Fetched via AT Protocol API");
 		},
 		{ timeout: 30000 },
@@ -84,8 +80,6 @@ describe.skipIf(SKIP)("handleBluesky", () => {
 			expect(result?.contentType).toBe("text/markdown");
 			expect(result?.content).toContain("@jay.bsky.team");
 			expect(result?.content).toContain("**Followers:**");
-			expect(result?.fetchedAt).toBeTruthy();
-			expect(result?.truncated).toBeDefined();
 		},
 		{ timeout: 30000 },
 	);

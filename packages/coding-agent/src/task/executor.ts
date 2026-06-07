@@ -166,6 +166,13 @@ export interface ExecutorOptions {
 	outputSchema?: unknown;
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
+	/**
+	 * Override the `task.maxRuntimeMs` wall-clock cap for this run. When provided
+	 * it wins over the settings value; `0` disables the per-subagent wall-clock
+	 * limit entirely. Used by the eval `agent()` bridge, whose parent cell
+	 * watchdog is already suspended for the call's duration.
+	 */
+	maxRuntimeMs?: number;
 	enableLsp?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
@@ -481,7 +488,7 @@ function getUsageTokens(usage: unknown): number {
 /**
  * Create proxy tools that reuse the parent's MCP connections.
  */
-function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
+export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	return mcpManager.getTools().map(tool => {
 		const mcpTool = tool as { mcpToolName?: string; mcpServerName?: string };
 		return {
@@ -531,7 +538,10 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	});
 }
 
-function createSubagentSettings(baseSettings: Settings, overrides?: Partial<Record<SettingPath, unknown>>): Settings {
+export function createSubagentSettings(
+	baseSettings: Settings,
+	overrides?: Partial<Record<SettingPath, unknown>>,
+): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
@@ -625,7 +635,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
 	);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
-	const maxRuntimeMs = Math.max(0, Math.trunc(Number(settings.get("task.maxRuntimeMs") ?? 0) || 0));
+	const maxRuntimeMs = Math.max(
+		0,
+		Math.trunc(Number(options.maxRuntimeMs ?? settings.get("task.maxRuntimeMs") ?? 0) || 0),
+	);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
@@ -1484,7 +1497,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				if (lastAssistant.stopReason === "aborted") {
 					aborted = abortReason === "signal" || runtimeLimitExceeded || abortReason === undefined;
 					if (aborted) {
-						abortReasonText ??= resolveAbortReasonText();
+						// A real caller signal or the wall-clock timer carries a precise
+						// reason (signal.reason / "runtime limit exceeded"). An internal
+						// turn abort (abortReason === undefined) does NOT — prefer the
+						// assistant message's own errorMessage ("Request was aborted" or a
+						// specific stream error) over the misleading "Cancelled by caller".
+						abortReasonText ??=
+							abortReason === "signal" || runtimeLimitExceeded
+								? resolveAbortReasonText()
+								: lastAssistant.errorMessage?.trim() || resolveAbortReasonText();
 					}
 					exitCode = 1;
 				} else if (lastAssistant.stopReason === "error") {

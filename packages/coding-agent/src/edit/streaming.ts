@@ -424,7 +424,7 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		return previews.length > 0 ? previews : null;
 	},
 	renderStreamingFallback() {
-		// Never leak raw hashline syntax (`64:`, `|payload`, `¶path#hash`)
+		// Never leak raw hashline syntax (`64:`, `|payload`, `[path#hash]`)
 		// to the user — the streaming preview already projects every
 		// parseable op onto the real file via applyPartialTo, and an
 		// unparseable trailing chunk renders as "no preview yet" rather

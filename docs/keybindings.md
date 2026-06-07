@@ -27,20 +27,23 @@ app.stt.toggle: []
 | `app.model.cycleForward`    | `Ctrl+P`                               | Cycle role models forward                     |
 | `app.model.cycleBackward`   | `Shift+Ctrl+P`                         | Cycle role models in temporary mode           |
 | `app.model.selectTemporary` | `Alt+P`                                | Pick a model temporarily for this session     |
-| `app.model.select`          | `Ctrl+L`                               | Open the model selector and set roles         |
+| `app.model.select`          | `Alt+M`                                | Open the model selector and set roles         |
 | `app.plan.toggle`           | `Alt+Shift+P`                          | Toggle plan mode                              |
 | `app.history.search`        | `Ctrl+R`                               | Search prompt history                         |
 | `app.tools.expand`          | `Ctrl+O`                               | Toggle tool-output expansion                  |
 | `app.thinking.toggle`       | `Ctrl+T`                               | Toggle thinking-block visibility              |
 | `app.thinking.cycle`        | `Shift+Tab`                            | Cycle thinking level                          |
 | `app.editor.external`       | `Ctrl+G`                               | Edit the draft in `$VISUAL` / `$EDITOR`       |
-| `app.message.followUp`      | `Ctrl+Enter`                           | Queue a follow-up message                     |
+| `app.message.followUp`      | `Ctrl+Q`, `Ctrl+Enter`                 | Queue a follow-up message                     |
 | `app.message.dequeue`       | `Alt+Up`                               | Dequeue a queued message back into the editor |
+| `app.display.reset`         | `Ctrl+L`                               | Reset terminal display                        |
 | `app.clipboard.copyLine`    | `Alt+Shift+L`                          | Copy the current line                         |
 | `app.clipboard.copyPrompt`  | `Alt+Shift+C`                          | Copy the whole prompt                         |
 | `app.clipboard.pasteImage`  | `Ctrl+V` (`Alt+V` fallback on Windows) | Paste an image from the clipboard             |
 | `app.stt.toggle`            | `Alt+H`                                | Toggle speech-to-text recording               |
 
-On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing.
+On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing. Windows Terminal also swallows `Ctrl+Enter`, so the follow-up shortcut also binds `Ctrl+Q` — the same chord GitHub Copilot CLI uses. If your existing `keybindings.yml` already assigns `Ctrl+Q` to another action, that user remap wins and follow-up keeps `Ctrl+Enter` unless you explicitly bind `app.message.followUp`.
+
+Terminals that implement OSC 5522 enhanced paste can send clipboard MIME data directly to `omp`; image pastes are attached as `[Image #N]`, while text/plain paste events keep normal paste behavior. When OSC 5522 is unavailable, bracketed paste still handles text, and a pasted single image-file path is loaded as an image when the file is readable from the `omp` host.
 
 Older unqualified action names are migrated when `keybindings.yml` is loaded, but new docs and new configs should use the namespaced action IDs above. Existing `keybindings.json` files are still accepted and migrated to `keybindings.yml`; `keybindings.yaml` is also accepted.

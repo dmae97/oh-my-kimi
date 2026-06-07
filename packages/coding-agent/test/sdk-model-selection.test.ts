@@ -12,6 +12,7 @@ import { Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("createAgentSession deferred model pattern resolution", () => {
 	let tempDir: string;
+	const authStoragesToClose: AuthStorage[] = [];
 
 	beforeEach(() => {
 		tempDir = path.join(os.tmpdir(), `pi-sdk-model-selection-${Snowflake.next()}`);
@@ -19,6 +20,10 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	afterEach(() => {
+		for (const authStorage of authStoragesToClose) {
+			authStorage.close();
+		}
+		authStoragesToClose.length = 0;
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -52,10 +57,20 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		});
 	};
 
-	function buildSessionOptions(modelPattern: string) {
+	async function buildSessionOptions(modelPattern: string) {
+		// Pass an explicit ModelRegistry so createAgentSession skips its implicit
+		// ModelRegistry.refreshInBackground() — a network model-discovery pass
+		// (~250ms/session) that contributes nothing here: the model resolves from
+		// the inline extension provider, never from network catalogs. Mirrors the
+		// explicit-registry pattern the resume tests below already rely on.
+		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		return {
 			cwd: tempDir,
 			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			disableExtensionDiscovery: true,
 			extensions: [providerExtension],
@@ -71,7 +86,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 	test("resolves explicit modelPattern after extension providers register", async () => {
 		const { session, modelFallbackMessage } = await createAgentSession(
-			buildSessionOptions("runtime-provider/runtime-model"),
+			await buildSessionOptions("runtime-provider/runtime-model"),
 		);
 
 		expect(session.model).toBeDefined();
@@ -82,7 +97,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 	test("does not silently fallback when explicit modelPattern is unresolved", async () => {
 		const { session, modelFallbackMessage } = await createAgentSession(
-			buildSessionOptions("missing-provider/missing-model"),
+			await buildSessionOptions("missing-provider/missing-model"),
 		);
 
 		expect(session.model).toBeUndefined();
@@ -95,7 +110,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		settings.setModelRole("default", "pi/smol:high");
 
 		const { session } = await createAgentSession({
-			...buildSessionOptions("runtime-provider/runtime-reasoning-model"),
+			...(await buildSessionOptions("runtime-provider/runtime-reasoning-model")),
 			settings,
 		});
 

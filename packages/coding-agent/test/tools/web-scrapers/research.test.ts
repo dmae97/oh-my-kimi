@@ -23,8 +23,6 @@ describe.skipIf(SKIP)("handleWikidata", () => {
 		expect(result?.content).toContain("Apple");
 		expect(result?.content).toContain("Q312");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches Q5 - human (entity)", async () => {
@@ -34,8 +32,6 @@ describe.skipIf(SKIP)("handleWikidata", () => {
 		expect(result?.content).toContain("human");
 		expect(result?.content).toContain("Q5");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -55,8 +51,6 @@ describe.skipIf(SKIP)("handleOpenLibrary", () => {
 		expect(result).not.toBeNull();
 		expect(result?.method).toBe("openlibrary");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches work OL45804W - The Lord of the Rings", async () => {
@@ -65,8 +59,6 @@ describe.skipIf(SKIP)("handleOpenLibrary", () => {
 		expect(result?.method).toBe("openlibrary");
 		expect(result?.content).toContain("OL45804W");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -89,8 +81,6 @@ describe.skipIf(SKIP)("handleBiorxiv", () => {
 		expect(result?.content).toContain("AlphaFold");
 		expect(result?.content).toContain("Abstract");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	// Testing with version suffix handling

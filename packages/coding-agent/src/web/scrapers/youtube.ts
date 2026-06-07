@@ -113,8 +113,9 @@ export const handleYouTube: SpecialHandler = async (
 	const notes: string[] = [];
 	const videoUrl = `https://www.youtube.com/watch?v=${yt.videoId}`;
 
-	// Prefer Parallel extract when credentials are available
-	if (settings.get("providers.parallelFetch") && findParallelApiKey(storage)) {
+	// Prefer Parallel extract when it sits in the reader chain and creds exist
+	const fetchPreference = settings.get("providers.fetch");
+	if ((fetchPreference === "auto" || fetchPreference === "parallel") && findParallelApiKey(storage)) {
 		try {
 			const parallelResult = await extractWithParallel(
 				[videoUrl],

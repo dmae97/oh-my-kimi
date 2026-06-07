@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { isEnoent, logger, ptree, untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { applyWorkspaceEdit } from "./edits";
@@ -147,6 +148,7 @@ const CLIENT_CAPABILITIES = {
 			failureHandling: "textOnlyTransactional",
 		},
 		configuration: true,
+		workspaceFolders: true,
 		symbol: {
 			dynamicRegistration: false,
 			symbolKind: {
@@ -172,47 +174,67 @@ const CLIENT_CAPABILITIES = {
 // LSP Message Protocol
 // =============================================================================
 
-/**
- * Parse a single LSP message from a buffer.
- * Returns the parsed message and remaining buffer, or null if incomplete.
- */
-function parseMessage(
-	buffer: Buffer,
-): { message: LspJsonRpcResponse | LspJsonRpcNotification; remaining: Buffer } | null {
-	// Only decode enough to find the header
-	const headerEndIndex = findHeaderEnd(buffer);
-	if (headerEndIndex === -1) return null;
-
-	const headerText = new TextDecoder().decode(buffer.slice(0, headerEndIndex));
-	const contentLengthMatch = headerText.match(/Content-Length: (\d+)/i);
-	if (!contentLengthMatch) return null;
-
-	const contentLength = Number.parseInt(contentLengthMatch[1], 10);
-	const messageStart = headerEndIndex + 4; // Skip \r\n\r\n
-	const messageEnd = messageStart + contentLength;
-
-	if (buffer.length < messageEnd) return null;
-
-	const messageBytes = buffer.subarray(messageStart, messageEnd);
-	const messageText = new TextDecoder().decode(messageBytes);
-	const remaining = buffer.subarray(messageEnd);
-
-	return {
-		message: JSON.parse(messageText),
-		remaining,
-	};
-}
+// Reused for all full (non-streaming) decodes; each decode() resets state, so a
+// single instance is safe and avoids per-message TextDecoder allocation.
+const MESSAGE_DECODER = new TextDecoder("utf-8");
 
 /**
- * Find the end of the header section (before \r\n\r\n)
+ * Locate the `\r\n\r\n` header terminator across the pending chunk list.
+ * Returns the absolute byte index of the first `\r`, or -1 when not present.
+ * Equivalent to scanning the contiguous concatenation of the chunks.
  */
-function findHeaderEnd(buffer: Uint8Array): number {
-	for (let i = 0; i < buffer.length - 3; i++) {
-		if (buffer[i] === 13 && buffer[i + 1] === 10 && buffer[i + 2] === 13 && buffer[i + 3] === 10) {
-			return i;
+function findHeaderEndInChunks(chunks: Buffer[]): number {
+	let global = 0;
+	let b0 = -1;
+	let b1 = -1;
+	let b2 = -1;
+	for (const chunk of chunks) {
+		for (let i = 0; i < chunk.length; i++) {
+			const b3 = chunk[i];
+			if (b0 === 13 && b1 === 10 && b2 === 13 && b3 === 10) {
+				return global - 3;
+			}
+			b0 = b1;
+			b1 = b2;
+			b2 = b3;
+			global++;
 		}
 	}
 	return -1;
+}
+
+/** Copy the byte range [from, to) out of the pending chunk list into one Buffer. */
+function copyChunkRange(chunks: Buffer[], from: number, to: number): Buffer {
+	const out = Buffer.allocUnsafe(to - from);
+	let global = 0;
+	let written = 0;
+	for (const chunk of chunks) {
+		const chunkEnd = global + chunk.length;
+		if (chunkEnd > from && global < to) {
+			const start = Math.max(from, global) - global;
+			const end = Math.min(to, chunkEnd) - global;
+			chunk.copy(out, written, start, end);
+			written += end - start;
+		}
+		global = chunkEnd;
+		if (global >= to) break;
+	}
+	return out;
+}
+
+/** Drop the first `count` bytes from the pending chunk list in place. */
+function dropChunkFront(chunks: Buffer[], count: number): void {
+	let removed = 0;
+	while (chunks.length > 0) {
+		const head = chunks[0];
+		if (removed + head.length <= count) {
+			removed += head.length;
+			chunks.shift();
+		} else {
+			chunks[0] = head.subarray(count - removed);
+			break;
+		}
+	}
 }
 
 async function writeMessage(
@@ -247,22 +269,43 @@ async function startMessageReader(client: LspClient): Promise<void> {
 
 	const reader = (client.proc.stdout as ReadableStream<Uint8Array>).getReader();
 
+	// Incoming bytes are buffered as a list of chunks and only joined when a full
+	// message is framed. Concatenating the accumulator on every read was O(n^2)
+	// for messages that span many reads (e.g. a large initial diagnostics burst).
+	const pendingChunks: Buffer[] = [];
+	let pendingLen = 0;
+	if (client.messageBuffer.length > 0) {
+		const seed = Buffer.from(client.messageBuffer);
+		pendingChunks.push(seed);
+		pendingLen = seed.length;
+	}
+
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
 
-			// Atomically update buffer before processing
-			const currentBuffer: Buffer = Buffer.concat([client.messageBuffer, value]);
-			client.messageBuffer = currentBuffer;
+			pendingChunks.push(Buffer.from(value));
+			pendingLen += value.length;
 
-			// Process all complete messages in buffer
-			// Use local variable to avoid race with concurrent buffer updates
-			let workingBuffer = currentBuffer;
-			let parsed = parseMessage(workingBuffer);
-			while (parsed) {
-				const { message, remaining } = parsed;
-				workingBuffer = remaining;
+			// Drain every complete message currently buffered.
+			while (true) {
+				const headerEnd = findHeaderEndInChunks(pendingChunks);
+				if (headerEnd === -1) break;
+
+				const headerText = MESSAGE_DECODER.decode(copyChunkRange(pendingChunks, 0, headerEnd));
+				const contentLengthMatch = headerText.match(/Content-Length: (\d+)/i);
+				if (!contentLengthMatch) break;
+
+				const contentLength = Number.parseInt(contentLengthMatch[1], 10);
+				const messageStart = headerEnd + 4; // Skip \r\n\r\n
+				const messageEnd = messageStart + contentLength;
+				if (pendingLen < messageEnd) break;
+
+				const messageText = MESSAGE_DECODER.decode(copyChunkRange(pendingChunks, messageStart, messageEnd));
+				const message: LspJsonRpcResponse | LspJsonRpcNotification = JSON.parse(messageText);
+				dropChunkFront(pendingChunks, messageEnd);
+				pendingLen -= messageEnd;
 
 				// Route message
 				if ("id" in message && message.id !== undefined) {
@@ -299,12 +342,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 						}
 					}
 				}
-
-				parsed = parseMessage(workingBuffer);
 			}
-
-			// Atomically commit processed buffer
-			client.messageBuffer = workingBuffer;
 		}
 	} catch (err) {
 		// Connection closed or error - reject all pending requests
@@ -313,9 +351,32 @@ async function startMessageReader(client: LspClient): Promise<void> {
 		}
 		client.pendingRequests.clear();
 	} finally {
+		// Persist any unparsed remainder so a restarted reader resumes mid-message.
+		client.messageBuffer =
+			pendingChunks.length === 0
+				? new Uint8Array(0)
+				: pendingChunks.length === 1
+					? pendingChunks[0]
+					: Buffer.concat(pendingChunks, pendingLen);
 		reader.releaseLock();
 		client.isReading = false;
 	}
+}
+
+/**
+ * Build the workspace folder list advertised to the server. Identical shape
+ * for `initialize` params and `workspace/workspaceFolders` server requests.
+ */
+function currentWorkspaceFolders(client: LspClient): Array<{ uri: string; name: string }> {
+	return [{ uri: fileToUri(client.cwd), name: path.basename(client.cwd) || "workspace" }];
+}
+
+/**
+ * Handle workspace/workspaceFolders requests from the server.
+ */
+async function handleWorkspaceFoldersRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
+	if (typeof message.id !== "number") return;
+	await sendResponse(client, message.id, currentWorkspaceFolders(client), "workspace/workspaceFolders");
 }
 
 /**
@@ -362,6 +423,10 @@ async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequ
 async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
 	if (message.method === "workspace/configuration") {
 		await handleConfigurationRequest(client, message);
+		return;
+	}
+	if (message.method === "workspace/workspaceFolders") {
+		await handleWorkspaceFoldersRequest(client, message);
 		return;
 	}
 	if (message.method === "workspace/applyEdit") {
@@ -412,7 +477,66 @@ async function sendResponse(
 /** Timeout for warmup initialize requests (5 seconds) */
 export const WARMUP_TIMEOUT_MS = 5000;
 
-/** Max time to wait for the server to report project loading completion via $/progress */
+/** Max time to poll rust-analyzer after progress ends but before Cargo workspaces are ready. */
+const RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS = 5_000;
+const RUST_ANALYZER_WORKSPACE_READY_POLL_MS = 100;
+const RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS = 2_000;
+const RUST_ANALYZER_STATUS_REQUEST_TIMEOUT_MS = 1_000;
+const rustAnalyzerReadyClients = new WeakSet<LspClient>();
+
+function commandBasename(command: string): string {
+	const slash = command.lastIndexOf("/");
+	const backslash = command.lastIndexOf("\\");
+	const separator = Math.max(slash, backslash);
+	return separator === -1 ? command : command.slice(separator + 1);
+}
+
+function isRustAnalyzerClient(client: LspClient): boolean {
+	return (
+		commandBasename(client.config.command) === "rust-analyzer" ||
+		(client.config.resolvedCommand ? commandBasename(client.config.resolvedCommand) === "rust-analyzer" : false)
+	);
+}
+
+function isRustAnalyzerStatusTimeout(err: unknown): boolean {
+	return err instanceof Error && err.message.startsWith("LSP request rust-analyzer/analyzerStatus timed out after ");
+}
+
+async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSignal): Promise<void> {
+	if (rustAnalyzerReadyClients.has(client)) {
+		return;
+	}
+	const timings = client.config.workspaceReadyTimings;
+	const timeoutMs = timings?.timeoutMs ?? RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS;
+	const pollMs = timings?.pollMs ?? RUST_ANALYZER_WORKSPACE_READY_POLL_MS;
+	const settleMs = timings?.settleMs ?? RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS;
+	const statusRequestTimeoutMs = timings?.statusRequestTimeoutMs ?? RUST_ANALYZER_STATUS_REQUEST_TIMEOUT_MS;
+	const started = Date.now();
+	const deadline = started + timeoutMs;
+	while (true) {
+		throwIfAborted(signal);
+		let status: unknown;
+		try {
+			status = await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, statusRequestTimeoutMs);
+		} catch (err) {
+			if (!isRustAnalyzerStatusTimeout(err) || Date.now() >= deadline) {
+				return;
+			}
+			await Bun.sleep(pollMs);
+			continue;
+		}
+		const ready = typeof status === "string" && !status.startsWith("No workspaces");
+		if (ready && Date.now() - started >= settleMs) {
+			rustAnalyzerReadyClients.add(client);
+			return;
+		}
+		if (Date.now() >= deadline) {
+			return;
+		}
+		await Bun.sleep(pollMs);
+	}
+}
+
 const PROJECT_LOAD_TIMEOUT_MS = 15_000;
 
 /** Max time to wait for graceful LSP shutdown and process exit. */
@@ -530,7 +654,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 					rootPath: cwd,
 					capabilities: CLIENT_CAPABILITIES,
 					initializationOptions: config.initOptions ?? {},
-					workspaceFolders: [{ uri: fileToUri(cwd), name: cwd.split("/").pop() ?? "workspace" }],
+					workspaceFolders: currentWorkspaceFolders(client),
 				},
 				undefined, // signal
 				initTimeoutMs,
@@ -635,6 +759,9 @@ export async function waitForProjectLoaded(client: LspClient, signal?: AbortSign
 			? [new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))]
 			: []),
 	]);
+	if (isRustAnalyzerClient(client)) {
+		await waitForRustAnalyzerWorkspace(client, signal);
+	}
 }
 
 /**

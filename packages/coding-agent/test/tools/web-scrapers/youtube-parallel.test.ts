@@ -8,7 +8,7 @@ describe("handleYouTube with Parallel extract", () => {
 	beforeEach(async () => {
 		resetSettingsForTest();
 		process.env.PARALLEL_API_KEY = "test-parallel-key";
-		await Settings.init({ inMemory: true, overrides: { "providers.parallelFetch": true } });
+		await Settings.init({ inMemory: true, overrides: { "providers.fetch": "auto" } });
 	});
 
 	afterEach(() => {

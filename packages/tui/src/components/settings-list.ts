@@ -1,6 +1,7 @@
 import { getKeybindings } from "../keybindings";
 import type { Component } from "../tui";
 import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
+import { ScrollView } from "./scroll-view";
 
 export interface SettingItem {
 	/** Unique identifier for this setting */
@@ -90,6 +91,22 @@ export class SettingsList implements Component {
 		return this.#renderMainList(width);
 	}
 
+	#renderItemRow(item: SettingItem, index: number, maxLabelWidth: number, rowWidth: number): string {
+		const isSelected = index === this.#selectedIndex;
+		const prefix = isSelected ? this.#theme.cursor : "  ";
+		const prefixWidth = visibleWidth(prefix);
+		const labelPadded = item.label + padding(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
+		const labelText = this.#theme.label(labelPadded, isSelected, item.changed === true);
+		const separator = "  ";
+		const valueMaxWidth = rowWidth - prefixWidth - maxLabelWidth - visibleWidth(separator) - 2;
+		const valueText = this.#theme.value(
+			truncateToWidth(item.currentValue, valueMaxWidth, Ellipsis.Omit),
+			isSelected,
+			item.changed === true,
+		);
+		return truncateToWidth(prefix + labelText + separator + valueText, Math.max(0, rowWidth));
+	}
+
 	#renderMainList(width: number): string[] {
 		const lines: string[] = [];
 
@@ -98,48 +115,29 @@ export class SettingsList implements Component {
 			return lines;
 		}
 
-		// Calculate visible range with scrolling
+		const viewportHeight = Math.min(this.#maxVisible, this.#items.length);
 		const startIndex = Math.max(
 			0,
-			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), this.#items.length - this.#maxVisible),
+			Math.min(this.#selectedIndex - Math.floor(viewportHeight / 2), this.#items.length - viewportHeight),
 		);
-		const endIndex = Math.min(startIndex + this.#maxVisible, this.#items.length);
-
-		// Calculate max label width for alignment
 		const maxLabelWidth = Math.min(30, Math.max(...this.#items.map(item => visibleWidth(item.label))));
-
-		// Render visible items
-		for (let i = startIndex; i < endIndex; i++) {
-			const item = this.#items[i];
-			if (!item) continue;
-
-			const isSelected = i === this.#selectedIndex;
-			const prefix = isSelected ? this.#theme.cursor : "  ";
-			const prefixWidth = visibleWidth(prefix);
-
-			// Pad label to align values
-			const labelPadded = item.label + padding(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
-			const labelText = this.#theme.label(labelPadded, isSelected, item.changed === true);
-
-			// Calculate space for value
-			const separator = "  ";
-			const usedWidth = prefixWidth + maxLabelWidth + visibleWidth(separator);
-			const valueMaxWidth = width - usedWidth - 2;
-
-			const valueText = this.#theme.value(
-				truncateToWidth(item.currentValue, valueMaxWidth, Ellipsis.Omit),
-				isSelected,
-				item.changed === true,
-			);
-
-			lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
-		}
-
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < this.#items.length) {
-			const scrollText = `  (${this.#selectedIndex + 1}/${this.#items.length})`;
-			lines.push(this.#theme.hint(truncateToWidth(scrollText, width - 2, Ellipsis.Omit)));
-		}
+		const itemRowsOverflow = this.#items.length > viewportHeight;
+		const itemRowWidth = Math.max(0, width - (itemRowsOverflow ? 1 : 0));
+		const visibleItems = this.#items.slice(startIndex, startIndex + viewportHeight);
+		const itemRows = visibleItems.map((item, index) =>
+			this.#renderItemRow(item, startIndex + index, maxLabelWidth, itemRowWidth),
+		);
+		const scrollView = new ScrollView(itemRows, {
+			height: viewportHeight,
+			scrollbar: "auto",
+			totalRows: this.#items.length,
+			theme: {
+				track: text => this.#theme.hint(text),
+				thumb: text => this.#theme.label(text, true, false),
+			},
+		});
+		scrollView.setScrollOffset(startIndex);
+		lines.push(...scrollView.render(width));
 
 		// Add description for selected item
 		const selectedItem = this.#items[this.#selectedIndex];

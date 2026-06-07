@@ -10,7 +10,7 @@ import { AgentOutputManager } from "../../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
 import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
-import { EVAL_HEARTBEAT_OP, setBridgeHeartbeatIntervalMs } from "../heartbeat";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
@@ -231,12 +231,62 @@ describe("runEvalAgent", () => {
 		});
 		await expect(runEvalAgent({ prompt: "fail" }, { session: makeSession() })).rejects.toThrow("boom");
 	});
+
+	// Regression: a runtime-limit abort returns exitCode=1, stderr="", error=undefined,
+	// aborted=true, abortReason="Subagent runtime limit exceeded (...)". The previous
+	// failure-message coalesce stopped at the empty `stderr` (since `??` only skips
+	// nullish values) and shipped an empty error through the bridge — Python then
+	// surfaced the generic `bridge call '__agent__' failed`. See #2006.
+	it("surfaces abortReason for aborts that leave stderr empty", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess");
+		runSpy.mockImplementationOnce(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				error: undefined,
+				aborted: true,
+				abortReason: "Subagent runtime limit exceeded (task.maxRuntimeMs=900000)",
+			}),
+		);
+		runSpy.mockImplementationOnce(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "   ",
+				error: "   ",
+				aborted: true,
+				abortReason: "Cancelled by caller",
+			}),
+		);
+		runSpy.mockImplementationOnce(async options =>
+			singleResult(options, {
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				error: undefined,
+			}),
+		);
+
+		await expect(runEvalAgent({ prompt: "slow" }, { session: makeSession() })).rejects.toThrow(
+			"Subagent runtime limit exceeded (task.maxRuntimeMs=900000)",
+		);
+		// Whitespace-only stderr/error must not mask abortReason either.
+		await expect(runEvalAgent({ prompt: "cancelled" }, { session: makeSession() })).rejects.toThrow(
+			"Cancelled by caller",
+		);
+		// Last resort: still produce a non-empty message even when nothing useful is set,
+		// so Python never falls back to `bridge call '__agent__' failed`.
+		await expect(runEvalAgent({ prompt: "blank" }, { session: makeSession() })).rejects.toThrow(
+			"agent() subagent 'task' failed.",
+		);
+	});
 });
 
 describe("agent() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		setBridgeHeartbeatIntervalMs();
 	});
 
 	afterAll(async () => {
@@ -327,18 +377,6 @@ describe("agent() through eval runtimes", () => {
 			singleResult(options, { output: "hello from python" }),
 		);
 
-		const probe = await executePython('print("probe")', {
-			cwd: tempDir.path(),
-			sessionId: `${sessionId}:probe`,
-			sessionFile,
-			kernelMode: "per-call",
-		});
-		if (probe.exitCode === undefined && probe.cancelled) {
-			expect(probe.output).toBe("");
-			return;
-		}
-		expect(probe.exitCode).toBe(0);
-
 		const result = await executePython('print(agent("hi"))', {
 			cwd: tempDir.path(),
 			sessionId,
@@ -346,6 +384,10 @@ describe("agent() through eval runtimes", () => {
 			kernelMode: "per-call",
 			toolSession: session,
 		});
+		if (result.exitCode === undefined && result.cancelled) {
+			expect(result.output).toBe("");
+			return; // kernel unavailable in this environment
+		}
 
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("hello from python");
@@ -374,22 +416,14 @@ describe("agent() through eval runtimes", () => {
 			}
 		});
 
-		const probe = await executePython('print("probe")', {
-			cwd: tempDir.path(),
-			sessionId: `${sessionId}:probe`,
-			sessionFile,
-			kernelMode: "per-call",
-		});
-		if (probe.exitCode === undefined && probe.cancelled) {
-			expect(probe.output).toBe("");
-			return;
-		}
-		expect(probe.exitCode).toBe(0);
-
 		const result = await executePython(
 			'import json\nprint(json.dumps(parallel([lambda n=n: agent(n) for n in ["a", "b", "c", "d"]])))',
 			{ cwd: tempDir.path(), sessionId, sessionFile, kernelMode: "per-call", toolSession: session },
 		);
+		if (result.exitCode === undefined && result.cancelled) {
+			expect(result.output).toBe("");
+			return; // kernel unavailable in this environment
+		}
 
 		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.output.trim())).toEqual(["a", "b", "c", "d"]);
@@ -413,7 +447,14 @@ describe("agent() through eval runtimes", () => {
 		// The host must respond the instant the cell aborts so the kernel can
 		// unwind via KeyboardInterrupt instead of being hard-killed (which used to
 		// surface "[kernel] Python kernel shutdown" and lose all session state).
+		let inFlight = 0;
+		let markSaturated: (() => void) | undefined;
+		const saturated = new Promise<void>(resolve => {
+			markSaturated = resolve;
+		});
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			// task.maxConcurrency=6 → six bridge calls block at once; signal then.
+			if (++inFlight >= 6) markSaturated?.();
 			await Bun.sleep(9000); // deliberately ignores options.signal
 			return singleResult(options, { output: options.assignment ?? "" });
 		});
@@ -433,8 +474,9 @@ describe("agent() through eval runtimes", () => {
 		expect(seed.exitCode).toBe(0);
 
 		const ac = new AbortController();
-		// Abort ~1s in, after the worker threads are blocked in their bridge calls.
-		setTimeout(() => ac.abort(new Error("external interrupt")), 1000);
+		// Abort the instant all six worker threads are confirmed blocked in their
+		// bridge calls (condition-driven) instead of waiting a fixed wall second.
+		void saturated.then(() => ac.abort(new Error("external interrupt")));
 
 		const start = Date.now();
 		const result = await executePython(
@@ -560,52 +602,52 @@ describe("agent() through eval runtimes", () => {
 		expect(displayAgentEvents.length).toBe(2);
 	});
 
-	it("keeps the idle watchdog armed while a quiet agent() runs past the budget", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-agent-heartbeat-");
-		const { session } = makeEvalSession(tempDir, "js-agent-heartbeat");
+	it("pauses the idle watchdog while a quiet agent() runs past the budget", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-timeout-pause-");
+		const { session } = makeEvalSession(tempDir, "js-agent-timeout-pause");
 		mockAgents();
-		// Heartbeat cadence well under the idle budget so a working-but-silent
-		// subagent re-arms the watchdog several times before it could expire.
-		setBridgeHeartbeatIntervalMs(15);
 
-		// runSubprocess runs far past the budget and emits NO progress of its own
-		// — the only thing standing between the subagent and a spurious idle abort
-		// is the heartbeat keepalive the bridge pumps while it awaits.
+		// runSubprocess runs far past the eval timeout budget and emits NO progress
+		// of its own. The bridge pause must make that delegated time invisible to
+		// the watchdog.
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			await Bun.sleep(200);
+			await Bun.sleep(40);
 			return singleResult(options, { output: "done" });
 		});
 
-		// Mirror the eval tool's wiring: an IdleTimeout drives cancellation and
-		// ONLY a bridge heartbeat re-arms it.
-		using idle = new IdleTimeout(60);
+		const ops: string[] = [];
+		using idle = new IdleTimeout(20);
 		const result = await runEvalAgent(
 			{ prompt: "investigate" },
 			{
 				session,
 				signal: idle.signal,
 				emitStatus: event => {
-					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+					ops.push(event.op);
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP) idle.pause();
+					if (event.op === EVAL_TIMEOUT_RESUME_OP) idle.resume();
 				},
 			},
 		);
 
-		expect(idle.signal.aborted).toBe(false);
 		expect(result.text).toBe("done");
+		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP]);
+		expect(idle.signal.aborted).toBe(false);
+
+		await Bun.sleep(60);
+		expect(idle.signal.aborted).toBe(true);
 	});
 
-	it("does not let agent() progress snapshots re-arm the watchdog without a heartbeat", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-agent-progress-no-rearm-");
-		const { session } = makeEvalSession(tempDir, "js-agent-progress-no-rearm");
+	it("keeps timeout paused despite agent() progress snapshots", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-agent-progress-timeout-pause-");
+		const { session } = makeEvalSession(tempDir, "js-agent-progress-timeout-pause");
 		mockAgents();
-		// Heartbeat slower than the budget: only the immediate beat at call start
-		// fires, so after the budget elapses nothing re-arms the watchdog.
-		setBridgeHeartbeatIntervalMs(10_000);
 
 		// Stream frequent progress snapshots (op:"agent") for well past the budget.
-		// Progress is rendered but MUST NOT count as activity — only heartbeats do.
+		// They render as status, but timeout accounting is controlled only by the
+		// bridge pause/resume events.
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			for (let i = 0; i < 40; i++) {
+			for (let i = 0; i < 20; i++) {
 				options.onProgress?.({
 					index: options.index,
 					id: options.id,
@@ -622,28 +664,30 @@ describe("agent() through eval runtimes", () => {
 					cost: 0,
 					durationMs: i * 10,
 				});
-				await Bun.sleep(10);
+				await Bun.sleep(5);
 			}
 			return singleResult(options, { output: "done" });
 		});
 
 		const ops: string[] = [];
-		using idle = new IdleTimeout(80);
-		await runEvalAgent(
+		using idle = new IdleTimeout(40);
+		const result = await runEvalAgent(
 			{ prompt: "investigate" },
 			{
 				session,
 				signal: idle.signal,
 				emitStatus: event => {
 					ops.push(event.op);
-					if (event.op === EVAL_HEARTBEAT_OP) idle.bump();
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP) idle.pause();
+					if (event.op === EVAL_TIMEOUT_RESUME_OP) idle.resume();
 				},
 			},
 		);
 
-		// Progress streamed, but the watchdog still fired: agent snapshots never
-		// re-armed it, and the lone start heartbeat lapsed before the call ended.
+		expect(result.text).toBe("done");
+		expect(ops[0]).toBe(EVAL_TIMEOUT_PAUSE_OP);
 		expect(ops).toContain("agent");
-		expect(idle.signal.aborted).toBe(true);
+		expect(ops.at(-1)).toBe(EVAL_TIMEOUT_RESUME_OP);
+		expect(idle.signal.aborted).toBe(false);
 	});
 });

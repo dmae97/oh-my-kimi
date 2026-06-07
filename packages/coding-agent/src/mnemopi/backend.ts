@@ -5,6 +5,7 @@ import { Mnemopi } from "@oh-my-pi/pi-mnemopi";
 import { BankManager } from "@oh-my-pi/pi-mnemopi/core";
 import { type DiagnosticSummary, inspectDatabase } from "@oh-my-pi/pi-mnemopi/diagnose";
 import { logger } from "@oh-my-pi/pi-utils";
+
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
@@ -334,7 +335,10 @@ async function resolveMnemopiProviderOptions(
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					{
-						apiKey,
+						apiKey: modelRegistry.resolver(model.provider, {
+							sessionId,
+							baseUrl: model.baseUrl,
+						}),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,
 					},

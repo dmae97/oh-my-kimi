@@ -546,7 +546,7 @@ export class StatusLineComponent implements Component {
 		return `${modelId}|${sp.length}:${sp[0]?.length ?? 0}|${tools.length}|${skills.length}`;
 	}
 
-	#buildSegmentContext(width: number): SegmentContext {
+	#buildSegmentContext(width: number, segmentOptions: StatusLineSettings["segmentOptions"]): SegmentContext {
 		const state = this.session.state;
 
 		// Trigger background fetch (5-min TTL); render uses cached value
@@ -575,7 +575,7 @@ export class StatusLineComponent implements Component {
 		return {
 			session: this.session,
 			width,
-			options: this.#resolveSettings().segmentOptions ?? {},
+			options: segmentOptions ?? {},
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
 			goalMode: this.#goalModeStatus,
@@ -632,8 +632,8 @@ export class StatusLineComponent implements Component {
 	}
 
 	#buildStatusLine(width: number): string {
-		const ctx = this.#buildSegmentContext(width);
 		const effectiveSettings = this.#resolveSettings();
+		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions);
 		const separatorDef = getSeparator(effectiveSettings.separator ?? "powerline-thin", theme);
 
 		const bgAnsi = theme.getBgAnsi("statusLineBg");
@@ -759,8 +759,6 @@ export class StatusLineComponent implements Component {
 			return leftGroup + (leftGroup && rightGroup ? " " : "") + rightGroup;
 		}
 
-		leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
-		rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
 		const sessionName =
 			effectiveSettings.sessionAccent !== false ? this.session.sessionManager?.getSessionName() : undefined;

@@ -29,7 +29,10 @@ describe("ModelRegistry", () => {
 		fs.mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = path.join(tempDir, "models.json");
 		cacheDbPath = path.join(tempDir, "models.db");
-		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		// In-memory auth DB: tests need a fresh, isolated credential store per case but
+		// never reopen it from disk, so :memory: avoids the WAL/chmod disk-open cost
+		// (~3ms/test) while preserving per-test isolation.
+		authStorage = await AuthStorage.create(":memory:");
 	});
 
 	afterEach(() => {

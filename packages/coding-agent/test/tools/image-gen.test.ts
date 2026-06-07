@@ -62,6 +62,8 @@ describe("imageGenTool", () => {
 			modelRegistry: {
 				getApiKey: async () => "test-openai-key",
 				getApiKeyForProvider: async () => undefined,
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => "test-openai-key",
 			} as unknown as ModelRegistry,
 			model,
 			isIdle: () => true,
@@ -126,7 +128,9 @@ describe("imageGenTool", () => {
 				getAll: () => [],
 				authStorage: {
 					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
 				},
+				resolver: () => async () => "test-xai-token",
 			} as unknown as ModelRegistry,
 			model: undefined,
 			isIdle: () => true,

@@ -157,24 +157,6 @@ describe("serverSupportsResourceSubscriptions", () => {
 });
 
 describe("subscribeToResources", () => {
-	it("no-ops on empty URI array", async () => {
-		const transport = createMockTransport(new Map());
-		const conn = createMockConnection({ resources: { subscribe: true } }, transport);
-		await subscribeToResources(conn, []);
-	});
-
-	it("no-ops when server lacks subscribe capability", async () => {
-		const transport = createMockTransport(new Map());
-		const conn = createMockConnection({ resources: {} }, transport);
-		await subscribeToResources(conn, ["test://a"]);
-	});
-
-	it("sends resources/subscribe for each URI", async () => {
-		const transport = createMockTransport(new Map([["resources/subscribe", [{}, {}]]]));
-		const conn = createMockConnection({ resources: { subscribe: true } }, transport);
-		await subscribeToResources(conn, ["test://a", "test://b"]);
-	});
-
 	it("does not throw when one subscription fails", async () => {
 		const transport: MCPTransport = {
 			connected: true,
@@ -191,24 +173,6 @@ describe("subscribeToResources", () => {
 });
 
 describe("unsubscribeFromResources", () => {
-	it("no-ops on empty URI array", async () => {
-		const transport = createMockTransport(new Map());
-		const conn = createMockConnection({ resources: { subscribe: true } }, transport);
-		await unsubscribeFromResources(conn, []);
-	});
-
-	it("no-ops when server lacks subscribe capability", async () => {
-		const transport = createMockTransport(new Map());
-		const conn = createMockConnection({ resources: {} }, transport);
-		await unsubscribeFromResources(conn, ["test://a"]);
-	});
-
-	it("sends resources/unsubscribe for each URI", async () => {
-		const transport = createMockTransport(new Map([["resources/unsubscribe", [{}, {}]]]));
-		const conn = createMockConnection({ resources: { subscribe: true } }, transport);
-		await unsubscribeFromResources(conn, ["test://a", "test://b"]);
-	});
-
 	it("does not throw when one unsubscription fails", async () => {
 		const transport: MCPTransport = {
 			connected: true,

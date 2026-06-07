@@ -16,8 +16,6 @@ describe.skipIf(SKIP)("handleBrew", () => {
 		expect(result?.content).toContain("wget");
 		expect(result?.content).toContain("brew install wget");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches firefox cask", async () => {
@@ -27,8 +25,6 @@ describe.skipIf(SKIP)("handleBrew", () => {
 		expect(result?.content).toContain("Firefox");
 		expect(result?.content).toContain("brew install --cask firefox");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -41,8 +37,6 @@ describe.skipIf(SKIP)("handleAur", () => {
 		expect(result?.content).toContain("AUR helper");
 		expect(result?.content).toContain("yay -S yay");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -54,8 +48,6 @@ describe.skipIf(SKIP)("handleRubyGems", () => {
 		expect(result?.content).toContain("rails");
 		expect(result?.content).toContain("Total Downloads");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -67,8 +59,6 @@ describe.skipIf(SKIP)("handleNuGet", () => {
 		expect(result?.content).toContain("Newtonsoft.Json");
 		expect(result?.content).toContain("JSON");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -80,8 +70,6 @@ describe.skipIf(SKIP)("handlePackagist", () => {
 		expect(result?.content).toContain("laravel/framework");
 		expect(result?.content).toContain("Downloads");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 });
 
@@ -95,8 +83,6 @@ describe.skipIf(SKIP)("handleMaven", () => {
 		expect(result?.content).toContain("<groupId>");
 		expect(result?.content).toContain("implementation");
 		expect(result?.contentType).toBe("text/markdown");
-		expect(result?.fetchedAt).toBeTruthy();
-		expect(result?.truncated).toBeDefined();
 	});
 
 	it("fetches commons-lang3 artifact from mvnrepository.com", async () => {

@@ -10,12 +10,12 @@ export interface ExecutorBackendExecOptions {
 	signal?: AbortSignal;
 	session: ToolSession;
 	/**
-	 * Inactivity budget in milliseconds (the cell's `timeout`). Cancellation is
-	 * driven entirely by `signal`, which the eval tool arms as an idle watchdog
-	 * that fires a `TimeoutError` reason after this much time with no progress
-	 * (status) events. Backends use this value only for timeout-annotation text
-	 * and as cold-start headroom; they MUST NOT derive a competing wall-clock
-	 * timer from it.
+	 * Runtime-work budget in milliseconds (the cell's `timeout`). Cancellation is
+	 * driven entirely by `signal`, which the eval tool arms as a watchdog that
+	 * pauses on bridge timeout-control status events and fires a `TimeoutError`
+	 * reason only while the Python/JS runtime owns control. Backends use this
+	 * value only for timeout-annotation text and as cold-start headroom; they MUST
+	 * NOT derive a competing wall-clock timer from it.
 	 */
 	idleTimeoutMs: number;
 	reset: boolean;

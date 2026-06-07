@@ -15,10 +15,11 @@ import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent
 import { type Api, Effort, getSupportedEfforts, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
+
 import { expandRoleAlias, formatModelString, resolveModelFromString } from "../config/model-resolver";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
-import { withBridgeHeartbeat } from "./heartbeat";
+import { withBridgeTimeoutPause } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 
 /** Synthetic bridge name reserved for the `llm()` helper across both runtimes. */
@@ -112,8 +113,9 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 		);
 	}
 
-	const apiKey = await options.session.modelRegistry?.getApiKey(model);
-	if (!apiKey) {
+	const registry = options.session.modelRegistry;
+	const apiKey = await registry?.getApiKey(model);
+	if (!registry || !apiKey) {
 		throw new ToolError(
 			`llm() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
 		);
@@ -132,10 +134,9 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 
 	const telemetry = resolveTelemetry(options.session.getTelemetry?.(), options.session.getSessionId?.() ?? undefined);
 
-	// A oneshot completion emits no status until it returns, so pump a heartbeat
-	// while it runs to keep the eval idle watchdog armed across a slow (e.g.
-	// reasoning-tier) request that would otherwise look like a stalled cell.
-	const response = await withBridgeHeartbeat(options.emitStatus, () =>
+	// Suspend eval timeout accounting while the model request owns control. The
+	// timeout clock restarts once the bridge returns to the cell runtime.
+	const response = await withBridgeTimeoutPause(options.emitStatus, () =>
 		instrumentedCompleteSimple(
 			model,
 			{
@@ -144,7 +145,10 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 				tools,
 			},
 			{
-				apiKey,
+				apiKey: registry.resolver(model.provider, {
+					sessionId: options.session.getSessionId?.() ?? undefined,
+					baseUrl: model.baseUrl,
+				}),
 				signal: options.signal,
 				reasoning: reasoningForTier(tier, model),
 				toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,

@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-registry";
@@ -9,16 +10,16 @@ import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
-import type { AgentSessionEvent } from "../../session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { isLowSignalTitleInput } from "../../tiny/text";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
+import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
-import { ensureSupportedImageInput } from "../../utils/image-loading";
+import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 
@@ -40,8 +41,10 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
 
+	#enhancedPaste?: EnhancedPasteController;
+
 	#showTinyTitleDownloadProgress(modelKey: string): void {
-		if (!isTinyTitleLocalModelKey(modelKey) || this.ctx.isBackgrounded) return;
+		if (!isTinyTitleLocalModelKey(modelKey)) return;
 		const component = new TinyTitleDownloadProgressComponent(modelKey);
 		let added = false;
 		let disposed = false;
@@ -91,7 +94,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					void this.ctx.session.abort();
+					void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
@@ -121,7 +124,7 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				void this.ctx.session.abort();
+				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
@@ -144,6 +147,8 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.clear", this.ctx.keybindings.getKeys("app.clear"));
 		this.ctx.editor.onClear = () => this.handleCtrlC();
 		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
+		this.ctx.editor.setActionKeys("app.display.reset", this.ctx.keybindings.getKeys("app.display.reset"));
+		this.ctx.editor.onDisplayReset = () => this.ctx.ui.resetDisplay();
 		this.ctx.editor.onExit = () => this.handleCtrlD();
 		this.ctx.editor.setActionKeys("app.suspend", this.ctx.keybindings.getKeys("app.suspend"));
 		this.ctx.editor.onSuspend = () => this.handleCtrlZ();
@@ -174,6 +179,7 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
 		);
 		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
+		this.ctx.editor.onPasteImagePath = path => void this.handleImagePathPaste(path);
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteTextRaw",
 			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
@@ -188,11 +194,9 @@ export class InputController {
 		this.ctx.editor.onExpandTools = () => this.toggleToolOutputExpansion();
 		this.ctx.editor.setActionKeys("app.message.dequeue", this.ctx.keybindings.getKeys("app.message.dequeue"));
 		this.ctx.editor.onDequeue = () => this.handleDequeue();
-
 		this.ctx.editor.clearCustomKeyHandlers();
 		// Wire up extension shortcuts
 		this.registerExtensionShortcuts();
-
 		const planModeKeys = this.ctx.keybindings.getKeys("app.plan.toggle");
 		for (const key of planModeKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
@@ -223,6 +227,8 @@ export class InputController {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionObserver());
 		}
 
+		this.#setupEnhancedPaste();
+
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
 			const wasPythonMode = this.ctx.isPythonMode;
@@ -235,16 +241,45 @@ export class InputController {
 		};
 	}
 
+	#setupEnhancedPaste(): void {
+		if (this.#enhancedPaste) return;
+
+		this.#enhancedPaste = new EnhancedPasteController({
+			write: data => this.ctx.ui.terminal.write(data),
+			pasteText: text => {
+				this.ctx.editor.pasteText(text);
+				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			},
+			pasteImage: async image => {
+				await this.#normalizeAndInsertPastedImage(image, `Unsupported pasted image format: ${image.mimeType}`);
+			},
+			showStatus: message => this.ctx.showStatus(message),
+		});
+		this.ctx.ui.addInputListener(data => (this.#enhancedPaste?.handleInput(data) ? { consume: true } : undefined));
+		this.ctx.ui.addStartListener(() => this.#enhancedPaste?.enable());
+	}
+
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
 			text = text.trim();
 			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
 
-			// Empty submit while streaming with queued messages: flush queues immediately
-			if (!text && this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount > 0) {
-				// Abort current stream and let queued messages be processed
-				await this.ctx.session.abort();
-				return;
+			// Empty submit while streaming with queued steering: interrupt now and
+			// immediately resume so the visible `Steer:` entry is sent without
+			// waiting for the current tool/model boundary.
+			if (!text && this.ctx.session.isStreaming) {
+				const queuedMessages = this.ctx.session.getQueuedMessages();
+				if (queuedMessages.steering.length > 0) {
+					await this.ctx.session.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+					this.ctx.updatePendingMessagesDisplay();
+					this.ctx.ui.requestRender();
+					return;
+				}
+				if (this.ctx.session.queuedMessageCount > 0) {
+					// Preserve the existing empty-submit flush for non-steer queues.
+					await this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+					return;
+				}
 			}
 
 			if (!text) return;
@@ -291,7 +326,6 @@ export class InputController {
 			// Handle built-in slash commands
 			const slashResult = await executeBuiltinSlashCommand(text, {
 				ctx: this.ctx,
-				handleBackgroundCommand: () => this.handleBackgroundCommand(),
 			});
 			if (slashResult === true) {
 				return;
@@ -600,7 +634,7 @@ export class InputController {
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.ctx.session.abort();
+				this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			}
 			return 0;
 		}
@@ -610,128 +644,99 @@ export class InputController {
 		this.ctx.editor.setText(combinedText);
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.ctx.session.abort();
+			this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 		}
 		return allQueued.length;
 	}
 
-	handleBackgroundCommand(): void {
-		if (this.ctx.isBackgrounded) {
-			this.ctx.showStatus("Background mode already enabled");
-			return;
-		}
-		if (!this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0) {
-			this.ctx.showWarning("Agent is idle; nothing to background");
-			return;
-		}
-		if (this.ctx.hasActiveBtw()) {
-			this.ctx.handleBtwEscape();
-		}
-		if (this.ctx.hasActiveOmfg()) {
-			this.ctx.handleOmfgEscape();
-		}
-
-		this.ctx.isBackgrounded = true;
-		const backgroundUiContext = this.ctx.createBackgroundUiContext();
-
-		// Background mode disables interactive UI so tools like ask fail fast.
-		this.ctx.setToolUIContext(backgroundUiContext, false);
-		this.ctx.initializeHookRunner(backgroundUiContext, false);
-
-		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-		}
-		if (this.ctx.autoCompactionLoader) {
-			this.ctx.autoCompactionLoader.stop();
-			this.ctx.autoCompactionLoader = undefined;
-		}
-		if (this.ctx.retryLoader) {
-			this.ctx.retryLoader.stop();
-			this.ctx.retryLoader = undefined;
-		}
-		this.ctx.statusContainer.clear();
-		this.ctx.statusLine.dispose();
-
-		if (this.ctx.unsubscribe) {
-			this.ctx.unsubscribe();
-		}
-		this.ctx.unsubscribe = this.ctx.session.subscribe(async (event: AgentSessionEvent) => {
-			await this.ctx.handleBackgroundEvent(event);
+	async #insertPendingImage(imageData: ImageContent): Promise<void> {
+		const imageLink = (
+			await materializeImageReferenceLinks(
+				[
+					{
+						type: "image",
+						data: imageData.data,
+						mimeType: imageData.mimeType,
+					},
+				],
+				this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
+			)
+		)?.[0];
+		this.ctx.pendingImages.push({
+			type: "image",
+			data: imageData.data,
+			mimeType: imageData.mimeType,
 		});
+		this.ctx.pendingImageLinks.push(imageLink);
+		this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+		const imageNum = this.ctx.pendingImages.length;
+		this.ctx.editor.insertText(`[Image #${imageNum}] `);
+		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+	}
 
-		// Backgrounding keeps the current process to preserve in-flight agent state.
-		if (this.ctx.isInitialized) {
-			this.ctx.ui.stop();
-			this.ctx.isInitialized = false;
+	async #normalizeAndInsertPastedImage(image: ImageContent, unsupportedMessage: string): Promise<boolean> {
+		let imageData = await ensureSupportedImageInput(image);
+		if (!imageData) {
+			this.ctx.showStatus(unsupportedMessage);
+			return false;
 		}
-
-		process.stdout.write("Background mode enabled. Run `bg` to continue in background.\n");
-
-		if (process.platform === "win32" || !process.stdout.isTTY) {
-			process.stdout.write("Backgrounding requires POSIX job control; continuing in foreground.\n");
-			return;
+		if (settings.get("images.autoResize")) {
+			try {
+				const resized = await resizeImage({
+					type: "image",
+					data: imageData.data,
+					mimeType: imageData.mimeType,
+				});
+				imageData = { type: "image", data: resized.data, mimeType: resized.mimeType };
+			} catch {
+				// Keep the normalized image when resize fails.
+			}
 		}
+		await this.#insertPendingImage(imageData);
+		return true;
+	}
 
-		process.kill(0, "SIGTSTP");
+	async handleImagePathPaste(path: string): Promise<void> {
+		try {
+			const image = await loadImageInput({
+				path,
+				cwd: this.ctx.sessionManager.getCwd(),
+				autoResize: false,
+			});
+			if (!image) {
+				this.ctx.editor.pasteText(path);
+				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+				this.ctx.showStatus("Pasted path is not a supported image");
+				return;
+			}
+			await this.#normalizeAndInsertPastedImage(
+				{ type: "image", data: image.data, mimeType: image.mimeType },
+				`Unsupported pasted image format: ${image.mimeType}`,
+			);
+		} catch (error) {
+			this.ctx.editor.pasteText(path);
+			this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			this.ctx.showStatus(
+				error instanceof ImageInputTooLargeError ? error.message : "Failed to read pasted image path",
+			);
+		}
 	}
 
 	async handleImagePaste(): Promise<boolean> {
 		try {
 			const image = await readImageFromClipboard();
-			if (image) {
-				const base64Data = image.data.toBase64();
-				let imageData = await ensureSupportedImageInput({
-					type: "image",
-					data: base64Data,
-					mimeType: image.mimeType,
-				});
-				if (!imageData) {
-					this.ctx.showStatus(`Unsupported clipboard image format: ${image.mimeType}`);
-					return false;
-				}
-				if (settings.get("images.autoResize")) {
-					try {
-						const resized = await resizeImage({
-							type: "image",
-							data: imageData.data,
-							mimeType: imageData.mimeType,
-						});
-						imageData = { type: "image", data: resized.data, mimeType: resized.mimeType };
-					} catch {
-						// Keep the normalized image when resize fails.
-					}
-				}
-
-				const imageLink = (
-					await materializeImageReferenceLinks(
-						[
-							{
-								type: "image",
-								data: imageData.data,
-								mimeType: imageData.mimeType,
-							},
-						],
-						this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
-					)
-				)?.[0];
-				this.ctx.pendingImages.push({
-					type: "image",
-					data: imageData.data,
-					mimeType: imageData.mimeType,
-				});
-				this.ctx.pendingImageLinks.push(imageLink);
-				this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
-				// Insert placeholder at cursor like Claude does
-				const imageNum = this.ctx.pendingImages.length;
-				const placeholder = `[Image #${imageNum}]`;
-				this.ctx.editor.insertText(`${placeholder} `);
-				this.ctx.ui.requestRender();
-				return true;
+			if (!image) {
+				this.ctx.showStatus("No image in clipboard (use terminal paste for text)");
+				return false;
 			}
-			// No image in clipboard - show hint
-			this.ctx.showStatus("No image in clipboard (use terminal paste for text)");
-			return false;
+			return await this.#normalizeAndInsertPastedImage(
+				{
+					type: "image",
+					data: image.data.toBase64(),
+					mimeType: image.mimeType,
+				},
+				`Unsupported clipboard image format: ${image.mimeType}`,
+			);
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;
@@ -846,7 +851,15 @@ export class InputController {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+		// Toggling expansion mutates every block, but on ED3-risk terminals the
+		// transcript freezes a snapshot of each block once it scrolls past the live
+		// region (committed native scrollback is immutable there). A plain repaint
+		// replays those stale snapshots, so the toggle appears to do nothing above
+		// the live block. resetDisplay() invalidates the snapshots and forces a
+		// full clear + replay — the keyboard-accessible resize-reset equivalent —
+		// which is the only path that re-emits the whole transcript at its new
+		// heights.
+		this.ctx.ui.resetDisplay();
 	}
 
 	toggleThinkingBlockVisibility(): void {

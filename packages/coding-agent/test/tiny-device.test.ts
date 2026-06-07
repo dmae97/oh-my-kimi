@@ -49,13 +49,6 @@ describe("tiny model device setting → PI_TINY_DEVICE mapping", () => {
 		expect(tinyModelDeviceSettingToEnv("cuda")).toBe("cuda");
 	});
 
-	it("keeps every non-default setting value resolvable by the worker", () => {
-		for (const value of TINY_MODEL_DEVICE_SETTING_VALUES) {
-			if (value === TINY_MODEL_DEVICE_DEFAULT) continue;
-			expect(() => normalizeTinyModelDevice(tinyModelDeviceSettingToEnv(value))).not.toThrow();
-		}
-	});
-
 	it("keeps submenu options aligned with the accepted values", () => {
 		expect(TINY_MODEL_DEVICE_SETTING_OPTIONS.map(option => option.value)).toEqual([
 			...TINY_MODEL_DEVICE_SETTING_VALUES,

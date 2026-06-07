@@ -91,6 +91,19 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		expect(body.max_completion_tokens).toBeUndefined();
 	});
 
+	it("does not mix Fireworks DeepSeek effort with the native thinking toggle", async () => {
+		const model = getBundledModel("fireworks", "deepseek-v4-pro") as Model<"openai-completions">;
+		const compat = resolveOpenAICompat(model);
+		const body = await capturePayload(model);
+
+		expect(compat.extraBody).toBeUndefined();
+		expect(body.tools).toBeDefined();
+		expect(body.tool_choice).toBeUndefined();
+		expect(body.reasoning_effort).toBe("high");
+		expect(body.thinking).toBeUndefined();
+		expect(body.max_tokens).toBe(123);
+	});
+
 	it("preserves OpenRouter reasoning when tool_choice auto is present", async () => {
 		const model = getBundledModel("openrouter", "deepseek/deepseek-v4-flash") as Model<"openai-completions">;
 		const compat = detectOpenAICompat(model);

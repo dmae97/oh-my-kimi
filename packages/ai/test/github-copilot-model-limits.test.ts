@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effort } from "../src/effort";
 import { createModelManager } from "../src/model-manager";
-import { Effort } from "../src/model-thinking";
 import { getBundledModel } from "../src/models";
 import { githubCopilotModelManagerOptions } from "../src/provider-models/openai-compat";
 

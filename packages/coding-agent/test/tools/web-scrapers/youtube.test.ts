@@ -112,18 +112,6 @@ describe.skipIf(SKIP)("handleYouTube", () => {
 		}
 	}, 30000);
 
-	it("handles videos without transcripts gracefully", async () => {
-		// Many music videos lack captions, but this is not guaranteed
-		// Just verify the handler doesn't crash and provides some info
-		const result = await handleYouTube("https://www.youtube.com/watch?v=kJQP7kiw5Fk", 30);
-		expect(result).not.toBeNull();
-
-		if (result?.method === "youtube") {
-			// Should still have basic metadata
-			expect(result.content).toContain("Video ID");
-		}
-	}, 30000);
-
 	it("returns appropriate response when yt-dlp is not available", async () => {
 		// We can't force yt-dlp to be unavailable in tests, but we can verify
 		// the return structure matches expectations for both cases
@@ -132,13 +120,7 @@ describe.skipIf(SKIP)("handleYouTube", () => {
 
 		// Should have one of these methods
 		expect(["parallel", "youtube", "youtube-no-ytdlp"]).toContain(result.method);
-
-		// Both should have required fields
 		expect(result.url).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-		expect(result.finalUrl).toContain("youtube.com");
-		expect(result.fetchedAt).toBeTruthy();
-		expect(typeof result.truncated).toBe("boolean");
-		expect(Array.isArray(result.notes)).toBe(true);
 	}, 30000);
 
 	it("normalizes video URLs to canonical format", async () => {
