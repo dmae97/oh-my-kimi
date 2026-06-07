@@ -17,8 +17,8 @@ import { isLowSignalTitleInput } from "../../tiny/text";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
+import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
@@ -705,7 +705,9 @@ export class InputController {
 		} catch (error) {
 			this.ctx.editor.pasteText(path);
 			this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
-			this.ctx.showStatus(error instanceof ImageInputTooLargeError ? error.message : "Failed to read pasted image path");
+			this.ctx.showStatus(
+				error instanceof ImageInputTooLargeError ? error.message : "Failed to read pasted image path",
+			);
 		}
 	}
 

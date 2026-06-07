@@ -773,6 +773,53 @@ function renderNoteAttachments(phases: TodoPhase[], uiTheme: Theme, indent: stri
 	return lines;
 }
 
+/**
+ * Phases the latest update touched, plus the active (in_progress) phase.
+ * Returns `null` when there is no usable signal, meaning "render every phase
+ * fully" — this preserves the legacy view and the manual-expand path.
+ */
+function computeTouchedPhases(
+	args: TodoRenderArgs | undefined,
+	phases: TodoPhase[],
+	completedTasks: TodoCompletionTransition[],
+): Set<string> | null {
+	const touched = new Set<string>();
+	// The phase holding the in_progress task is where attention sits after the
+	// auto-promotion that follows every completion.
+	for (const phase of phases) {
+		if (phase.tasks.some(task => task.status === "in_progress")) touched.add(phase.name);
+	}
+	// Phases with a task that just transitioned to completed in this update.
+	for (const transition of completedTasks) touched.add(transition.phase);
+	// Phases explicitly named by the ops that ran. `init` replaces the whole
+	// list, so the entire plan is fresh and every phase counts as touched.
+	const ops = Array.isArray(args?.ops) ? args.ops : [];
+	for (const op of ops) {
+		if (!op || typeof op !== "object") continue;
+		if (op.op === "init") {
+			for (const phase of phases) touched.add(phase.name);
+			break;
+		}
+		if (typeof op.phase === "string" && op.phase) {
+			const named = phases.find(phase => phase.name === op.phase);
+			if (named) touched.add(named.name);
+		}
+		if (typeof op.task === "string" && op.task) {
+			const located = findTaskByContent(phases, op.task);
+			if (located) touched.add(located.phase.name);
+		}
+	}
+	return touched.size > 0 ? touched : null;
+}
+
+/** One-line summary for a collapsed (untouched) phase: dim header + progress. */
+function formatPhaseSummary(phase: TodoPhase, oneBasedIndex: number, uiTheme: Theme): string {
+	const total = phase.tasks.length;
+	const done = phase.tasks.filter(task => task.status === "completed").length;
+	const name = uiTheme.fg("dim", chalk.bold(formatPhaseDisplayName(phase.name, oneBasedIndex)));
+	return `${name}${uiTheme.fg("dim", `  ${done}/${total}`)}`;
+}
+
 export const todoToolRenderer = {
 	renderCall(args: TodoRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		// `args` here is the raw partially-parsed JSON from the streaming
@@ -808,7 +855,7 @@ export const todoToolRenderer = {
 		result: { content: Array<{ type: string; text?: string }>; details?: TodoToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		_args?: TodoRenderArgs,
+		args?: TodoRenderArgs,
 	): Component {
 		if (result.isError) {
 			const errorText = result.content?.find(content => content.type === "text")?.text ?? "Todo operation failed";
@@ -844,11 +891,18 @@ export const todoToolRenderer = {
 			const { expanded, spinnerFrame } = options;
 			const multiPhase = phases.length > 1;
 			const indent = multiPhase ? "  " : "";
+			// Collapse phases this update didn't touch down to a one-line summary so
+			// a single task flip doesn't redraw every phase's full task list. The
+			// manual expand toggle (and the no-signal fallback) still shows all.
+			const touched = expanded || !multiPhase ? null : computeTouchedPhases(args, phases, completedTasks);
 			const bodyLines: string[] = [];
 			for (let p = 0; p < phases.length; p++) {
 				const phase = phases[p];
+				if (touched && !touched.has(phase.name)) {
+					bodyLines.push(formatPhaseSummary(phase, p + 1, uiTheme));
+					continue;
+				}
 				if (multiPhase) {
-					if (p > 0) bodyLines.push("");
 					bodyLines.push(uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1))));
 				}
 				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;

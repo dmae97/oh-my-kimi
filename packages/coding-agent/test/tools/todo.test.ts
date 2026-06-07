@@ -345,6 +345,77 @@ describe("todoMatchesAnyDescription", () => {
 		expect(todoMatchesAnyDescription("Audit AGENTS.md compliance", ["Audit AGENTS md compliance"])).toBe(true);
 	});
 });
+describe("todoToolRenderer.renderResult phase collapsing", () => {
+	async function buildThreePhaseAfterDone() {
+		const tool = new TodoTool(createSession());
+		await tool.execute("init", {
+			ops: [
+				{
+					op: "init",
+					list: [
+						{ phase: "Alpha", items: ["a1", "a2"] },
+						{ phase: "Beta", items: ["b1", "b2"] },
+						{ phase: "Gamma", items: ["c1", "c2"] },
+					],
+				},
+			],
+		});
+		// `done a1` keeps the active task inside Alpha (auto-promotes a2), leaving
+		// Beta and Gamma untouched by this update.
+		return tool.execute("done", { ops: [{ op: "done", task: "a1" }] });
+	}
+	function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {
+		const lines = Bun.stripANSI(component.render(100).join("\n")).split("\n");
+		return lines.slice(1, -1).map(line => line.replace(/^│/, "").replace(/│\s*$/, "").trim());
+	}
+	it("collapses untouched phases to a one-line summary while expanding the active phase", async () => {
+		const result = await buildThreePhaseAfterDone();
+		const component = todoToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme, {
+			ops: [{ op: "done", task: "a1" }],
+		});
+		const rendered = Bun.stripANSI(component.render(100).join("\n"));
+		// Active phase renders its full task list.
+		expect(rendered).toContain("a1");
+		expect(rendered).toContain("a2");
+		// Untouched phases collapse: headers + progress counts, no task contents.
+		expect(rendered).toContain("II. Beta");
+		expect(rendered).toContain("III. Gamma");
+		expect(rendered).toContain("0/2");
+		expect(rendered).not.toContain("b1");
+		expect(rendered).not.toContain("b2");
+		expect(rendered).not.toContain("c1");
+		expect(rendered).not.toContain("c2");
+	});
+	it("falls back to in_progress / completed signals when call args are unavailable", async () => {
+		const result = await buildThreePhaseAfterDone();
+		// Transcript rebuilds may not carry call args; the active (Alpha) phase is
+		// still derived from the in_progress task and the completion transition.
+		const component = todoToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
+		const rendered = Bun.stripANSI(component.render(100).join("\n"));
+		expect(rendered).toContain("a2");
+		expect(rendered).not.toContain("b1");
+		expect(rendered).not.toContain("c1");
+	});
+	it("shows every phase fully when manually expanded", async () => {
+		const result = await buildThreePhaseAfterDone();
+		const component = todoToolRenderer.renderResult(result, { expanded: true, isPartial: false }, theme, {
+			ops: [{ op: "done", task: "a1" }],
+		});
+		const rendered = Bun.stripANSI(component.render(100).join("\n"));
+		expect(rendered).toContain("b1");
+		expect(rendered).toContain("b2");
+		expect(rendered).toContain("c1");
+		expect(rendered).toContain("c2");
+	});
+	it("drops blank separator lines between phases", async () => {
+		const result = await buildThreePhaseAfterDone();
+		const component = todoToolRenderer.renderResult(result, { expanded: true, isPartial: false }, theme, {
+			ops: [{ op: "done", task: "a1" }],
+		});
+		// No empty body line survives between phases.
+		expect(innerLines(component).every(line => line.length > 0)).toBe(true);
+	});
+});
 
 describe("todoToolRenderer.renderCall malformed-args regression (#2005)", () => {
 	// Reporter saw `TypeError: args?.ops?.map is not a function` against
