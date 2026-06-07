@@ -11,6 +11,8 @@ const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const ENTER = "\r";
+const TAB = "\t";
+const SHIFT_DOWN = "\x1b[1;2B";
 const CANCEL = "\x07"; // ctrl+g, remapped to tui.select.cancel below
 
 let darkTheme = await getThemeByName("dark");
@@ -191,5 +193,202 @@ describe("PlanReviewOverlay", () => {
 		expect(out).toContain("Fresh plan");
 		expect(out).toContain("brand new body");
 		expect(out).not.toContain("para 199");
+	});
+
+	// Plan with ≥2 headings + nesting, wide enough for the sidebar at width 80.
+	const SECTION_PLAN =
+		"# Overview\n\nintro body\n\n## Goal\n\ngoal body\n\n## Steps\n\nstep body\n\n# Risks\n\nrisk body\n";
+	it("renders no per-line ellipsis in the plan body", () => {
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\nshort line one\n\nshort line two",
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		const body = render(overlay)
+			.split("\n")
+			.filter(line => line.includes("short line"));
+		expect(body.length).toBeGreaterThan(0);
+		for (const line of body) expect(line).not.toContain("…");
+	});
+
+	it("shows a header-less section sidebar and cycles focus regions with Tab", () => {
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		const out = render(overlay);
+		// Two-column split chrome (┬ joins the title rule over the divider) and the
+		// bare section list — no "Contents" label.
+		expect(out).toContain("┬");
+		expect(out).not.toContain("Contents");
+		expect(out).toContain("Overview");
+		// Tab into the ToC region surfaces its focus-specific help.
+		overlay.handleInput(TAB);
+		const tocFocused = render(overlay);
+		expect(tocFocused).toContain("a annotate");
+		expect(tocFocused).toContain("d delete");
+	});
+
+	it("omits the single plan-title heading from the ToC", () => {
+		// One shallow H1 title + two H2 sections: the title is redundant in the ToC.
+		const overlay = new PlanReviewOverlay(
+			"# Plan: build the thing\n\nintro\n\n## Design\n\nd\n\n## Rollout\n\nr\n",
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		const sidebar = render(overlay)
+			.split("\n")
+			.map(line => line.split("│")[1] ?? "")
+			.join("\n");
+		expect(sidebar).toContain("Design");
+		expect(sidebar).toContain("Rollout");
+		expect(sidebar).not.toContain("build the thing");
+	});
+
+	it("flows past the end of a region into the actions on Down", () => {
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc, first section
+		// Walk to the last ToC entry, then one more Down drops into the actions.
+		for (let i = 0; i < 10; i++) overlay.handleInput(DOWN);
+		const out = render(overlay);
+		// Actions focus restores the option cursor highlight + actions help.
+		expect(out).toContain("⏎ confirm");
+		expect(out).not.toContain("a annotate");
+	});
+
+	it("scrolls the body exactly one line per keystroke in body focus", () => {
+		// Tall enough to overflow any test viewport, so the body genuinely scrolls.
+		const rows = Array.from({ length: 400 }, (_, i) => `L${String(i).padStart(3, "0")}`).join("\n");
+		const overlay = new PlanReviewOverlay(
+			`# Plan\n\n\`\`\`\n${rows}\n\`\`\`\n`,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		const visibleRows = (): string[] =>
+			render(overlay)
+				.split("\n")
+				.map(line => line.match(/L\d\d\d/)?.[0])
+				.filter((m): m is string => m !== undefined);
+		render(overlay); // first render loads the body lines into the ScrollView
+		overlay.handleInput(TAB); // actions -> body (no sidebar with a single heading)
+		// Scroll well past the heading/fence so the window is pure code rows.
+		for (let i = 0; i < 12; i++) overlay.handleInput(DOWN);
+		const before = visibleRows();
+		overlay.handleInput(DOWN);
+		const after = visibleRows();
+		// One-line scroll: the window advances by exactly one row.
+		expect(after[0]).toBe(before[1]);
+	});
+
+	it("jumps the body to a section when the ToC cursor moves", () => {
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput(DOWN); // -> Goal, scrubbing the body to it
+		const body = render(overlay).split("\n").slice(1, 5).join(" ");
+		expect(body).toContain("Goal");
+	});
+
+	it("deletes the selected section and restores it with undo", () => {
+		const onPlanEdited = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn(), onPlanEdited },
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput(DOWN); // -> Goal
+		overlay.handleInput("d");
+		expect(onPlanEdited).toHaveBeenCalled();
+		const edited = onPlanEdited.mock.calls.at(-1)?.[0] as string;
+		expect(edited).not.toContain("## Goal");
+		expect(edited).toContain("## Steps");
+		expect(render(overlay)).not.toContain("goal body");
+
+		overlay.handleInput("u");
+		const restored = render(overlay);
+		expect(restored).toContain("Goal");
+		expect(restored).toContain("goal body");
+	});
+
+	it("annotates a section and emits feedback for the Refine loop", () => {
+		const onFeedbackChange = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn(), onFeedbackChange },
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput("a"); // annotate Overview
+		for (const ch of "needs detail") overlay.handleInput(ch);
+		overlay.handleInput(ENTER); // submit
+		const out = render(overlay);
+		expect(out).toContain("needs detail"); // callout in the body
+		expect(out).toContain("✎"); // marker in the sidebar
+		expect(onFeedbackChange).toHaveBeenCalled();
+		const feedback = onFeedbackChange.mock.calls.at(-1)?.[0] as string;
+		expect(feedback).toContain("Overview");
+		expect(feedback).toContain("needs detail");
+	});
+
+	it("drives the slider with both arrows even when a sidebar is present", () => {
+		const changes: number[] = [];
+		const slider: HookSelectorSlider = {
+			caption: "continue with",
+			index: 0,
+			segments: [{ label: "default" }, { label: "slow", detail: "opus" }],
+			onChange: index => changes.push(index),
+		};
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, slider },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		render(overlay); // establish the sidebar
+		// The sidebar sits beside the body, not the slider, so left must still step
+		// the tier back instead of being stolen to focus the ToC.
+		overlay.handleInput(RIGHT); // 0 -> 1
+		overlay.handleInput(LEFT); // 1 -> 0
+		expect(changes).toEqual([1, 0]);
+		// Focus stayed on the actions region (left did not jump to the ToC).
+		expect(render(overlay)).not.toContain("a annotate");
+	});
+
+	it("fast-scrolls the body with Shift+Arrow", () => {
+		const rows = Array.from({ length: 400 }, (_, i) => `L${String(i).padStart(3, "0")}`).join("\n");
+		const overlay = new PlanReviewOverlay(
+			`# Plan\n\n\`\`\`\n${rows}\n\`\`\`\n`,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		const firstRow = (): number =>
+			Number(
+				(
+					render(overlay)
+						.split("\n")
+						.map(line => line.match(/L\d\d\d/)?.[0])
+						.find((m): m is string => m !== undefined) ?? "L000"
+				).slice(1),
+			);
+		render(overlay); // first render loads the body lines into the ScrollView
+		overlay.handleInput(TAB); // -> body
+		// Scroll into the pure-code region so the leading heading rows don't skew
+		// the absolute row math, then compare a single step to a Shift step.
+		for (let i = 0; i < 10; i++) overlay.handleInput(DOWN);
+		const base = firstRow();
+		overlay.handleInput(SHIFT_DOWN); // Shift+Down — fastScrollLines (5) at once
+		expect(firstRow() - base).toBe(5);
 	});
 });

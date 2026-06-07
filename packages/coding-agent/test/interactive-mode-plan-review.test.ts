@@ -146,6 +146,101 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(review.mock.calls[1]?.[0]).not.toContain("First plan");
 	});
 
+	it("re-prompts the model with annotation feedback when Refine is chosen", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nbody");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		const feedback = "Refinement feedback on the plan:\n\n## Goal\n- needs detail\n";
+		// The overlay reports annotation feedback through onFeedbackChange before the
+		// operator picks "Refine plan".
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, _options, dialogOptions) => {
+			dialogOptions?.onFeedbackChange?.(feedback);
+			return "Refine plan";
+		});
+		const startSpy = vi
+			.spyOn(mode, "startPendingSubmission")
+			.mockReturnValue({ text: feedback, cancelled: false, started: false });
+		const onInput = vi.fn();
+		mode.onInputCallback = onInput;
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://PLAN.md",
+		});
+
+		expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("needs detail") }));
+		expect(onInput).toHaveBeenCalledTimes(1);
+	});
+
+	it("Refine with no annotations does not re-prompt the model", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nbody");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Refine plan");
+		const startSpy = vi.spyOn(mode, "startPendingSubmission");
+		const onInput = vi.fn();
+		mode.onInputCallback = onInput;
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://PLAN.md",
+		});
+
+		expect(startSpy).not.toHaveBeenCalled();
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
+	it("approves with in-overlay edits and mirrors them to the plan file", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\noriginal body\n");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		const edited = "# Plan\n\nedited body\n";
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, _options, dialogOptions) => {
+			dialogOptions?.onPlanEdited?.(edited);
+			return "Approve and execute";
+		});
+		vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+			finalPlanFilePath: "local://PLAN.md",
+		});
+
+		// The synthetic plan-approved prompt carries the in-overlay edit, not the
+		// stale on-disk content (preferring editedContent avoids the write race).
+		const call = promptSpy.mock.calls.find(isPlanApprovedCall);
+		expect(call).toBeDefined();
+		expect(call?.[0] as string).toContain("edited body");
+		expect(call?.[0] as string).not.toContain("original body");
+		// onPlanEdited mirrored the edit to the plan file.
+		expect(await Bun.file(resolvedPlanPath).text()).toContain("edited body");
+	});
+
 	it("offers approve-and-keep-context as a distinct plan approval path", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

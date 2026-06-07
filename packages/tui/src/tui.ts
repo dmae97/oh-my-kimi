@@ -306,6 +306,17 @@ export interface OverlayOptions {
 	 * Called each render cycle with current terminal dimensions.
 	 */
 	visible?: (termWidth: number, termHeight: number) => boolean;
+
+	// === Fullscreen ===
+	/**
+	 * Borrow the terminal's alternate screen buffer for this overlay's lifetime
+	 * (vim/less idiom). While the topmost visible overlay sets this, the engine
+	 * paints only the modal on the alt screen and emits no ED3 / scrollback
+	 * bytes, so the transcript on the normal screen stays untouched and is not
+	 * scrollable behind the modal. Defaults off — all other overlays are
+	 * unchanged and still draw over the transcript on the normal screen.
+	 */
+	fullscreen?: boolean;
 }
 
 /**
@@ -497,6 +508,16 @@ export class TUI extends Container {
 	// describes the screen. Tracking only the dimension delta misses this.
 	#resizeEventPending = false;
 	#stopped = false;
+
+	// Transient alternate-screen state for a fullscreen overlay. While active, the
+	// engine paints only the modal on the alt buffer and leaves every
+	// normal-screen accounting field (#previousLines, #viewportTopRow, …)
+	// untouched, so exiting reconciles cleanly against the terminal-restored
+	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
+	#altActive = false;
+	#altPreviousLines: string[] = [];
+	#altEnterWidth = 0;
+	#altEnterHeight = 0;
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -953,6 +974,13 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		// Leave the alt buffer first so the teardown cursor math below runs against
+		// the restored normal screen (which #previousLines still describes).
+		if (this.#altActive) {
+			this.terminal.write("\x1b[?1049l");
+			this.#altActive = false;
+			this.#altPreviousLines = [];
+		}
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 			for (const id of this.#imageBudget.takeAllTransmittedIds()) {
 				this.terminal.write(encodeKittyDeleteImage(id));
@@ -1505,6 +1533,36 @@ export class TUI extends Container {
 		// Reset the per-frame fit memo: width is fixed for this frame, so cached
 		// fit results stay valid across the compose pass and every emitter re-fit.
 		this.#fitLineCache.clear();
+
+		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
+		// requests it, borrow the terminal's alternate buffer (saved/restored by
+		// the terminal around 1049h/1049l) and paint only the modal there. This
+		// touches no normal-screen accounting field, so the transcript on the
+		// normal screen stays untouched and unscrollable behind the modal, and
+		// exiting reconciles cleanly against the terminal-restored screen.
+		const wantAlt = this.#wantsAltScreen();
+		if (wantAlt && !this.#altActive) {
+			this.terminal.write("\x1b[?1049h");
+			this.terminal.hideCursor();
+			this.#altActive = true;
+			this.#altPreviousLines = [];
+			this.#altEnterWidth = width;
+			this.#altEnterHeight = height;
+		} else if (!wantAlt && this.#altActive) {
+			this.terminal.write("\x1b[?1049l");
+			this.#altActive = false;
+			this.#altPreviousLines = [];
+			// A resize while on the alt buffer reflowed the terminal's saved normal
+			// screen; it no longer matches #previousLines, so force the geometry
+			// rebuild path instead of a stale diff.
+			if (width !== this.#altEnterWidth || height !== this.#altEnterHeight) {
+				this.#resizeEventPending = true;
+			}
+		}
+		if (this.#altActive) {
+			this.#renderAltFrame(width, height);
+			return;
+		}
 
 		// 1. Compose the frame. Bracket the transcript render so the image budget
 		// observes every inline image in display order (overlays carry none).
@@ -2611,6 +2669,61 @@ export class TUI extends Container {
 
 		this.#maxLinesRendered = lines.length;
 		this.#commit(lines, width, height, viewportTop, toRow);
+	}
+
+	/** Topmost visible overlay requests the alternate-screen buffer. */
+	#wantsAltScreen(): boolean {
+		for (let i = this.overlayStack.length - 1; i >= 0; i--) {
+			const entry = this.overlayStack[i]!;
+			if (!this.#isOverlayVisible(entry)) continue;
+			return entry.options?.fullscreen === true;
+		}
+		return false;
+	}
+
+	/**
+	 * Compose and paint a single fullscreen overlay frame on the alt buffer.
+	 * Cursor markers are stripped (the modal draws its own in-band caret and
+	 * keeps the hardware cursor hidden), and only the modal is composited over a
+	 * blank base — the transcript is never touched while the alt buffer is up.
+	 */
+	#renderAltFrame(width: number, height: number): void {
+		const base: string[] = new Array(Math.max(0, height)).fill("");
+		let lines = this.#compositeOverlays(base, width, height);
+		this.#extractCursorPosition(lines, height);
+		lines = this.#fitLinesToWidth(this.#applyLineResets(lines), width);
+		this.#emitAltFrame(lines, width, height);
+	}
+
+	/**
+	 * Full per-row viewport rewrite on the alt buffer. Emits only sync-output
+	 * brackets, a cursor home, and per-row rewrites — never ED3, append-tail, or
+	 * any native-scrollback byte, so it is fully isolated from the planner and
+	 * #commit. The hardware cursor stays hidden (it is never re-shown here).
+	 */
+	#emitAltFrame(lines: string[], width: number, height: number): void {
+		const fitted: string[] = new Array(height);
+		for (let r = 0; r < height; r++) fitted[r] = this.#fitLineToWidth(lines[r] ?? "", width);
+		// Skip an identical repaint (the modal is mostly static between keystrokes).
+		if (this.#altPreviousLines.length === height) {
+			let same = true;
+			for (let r = 0; r < height; r++) {
+				if (fitted[r] !== this.#altPreviousLines[r]) {
+					same = false;
+					break;
+				}
+			}
+			if (same) return;
+		}
+		let buffer = `${this.#paintBeginSequence}\x1b[H`;
+		for (let r = 0; r < height; r++) {
+			if (r > 0) buffer += "\r\n";
+			buffer += this.#lineRewriteSequence(fitted[r], width);
+		}
+		buffer += this.#paintEndSequence;
+		this.terminal.write(buffer);
+		this.#altPreviousLines = fitted;
+		this.#fullRedrawCount += 1;
 	}
 
 	/**

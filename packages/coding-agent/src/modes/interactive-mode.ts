@@ -1689,6 +1689,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			helpText?: string;
 			disabledIndices?: number[];
 			onExternalEditor?: () => void;
+			onPlanEdited?: (content: string) => void;
+			onFeedbackChange?: (feedback: string) => void;
 			initialIndex?: number;
 		},
 		extra?: { slider?: HookSelectorSlider },
@@ -1712,11 +1714,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				helpText: dialogOptions?.helpText,
 				initialIndex: dialogOptions?.initialIndex,
 				slider: extra?.slider,
+				externalEditorLabel: this.keybindings.getDisplayString("app.editor.external") || undefined,
 			},
 			{
 				onPick: choice => finish(choice),
 				onCancel: () => finish(undefined),
 				onExternalEditor: dialogOptions?.onExternalEditor,
+				onPlanEdited: dialogOptions?.onPlanEdited,
+				onFeedbackChange: dialogOptions?.onFeedbackChange,
 			},
 		);
 		this.#planReviewOverlay = overlay;
@@ -1725,6 +1730,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			width: "100%",
 			maxHeight: "100%",
 			margin: 0,
+			fullscreen: true,
 		});
 		this.ui.setFocus(overlay);
 		this.ui.requestRender();
@@ -1754,14 +1760,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		} catch {
 			return null;
 		}
-	}
-
-	#getPlanReviewHelpText(): string {
-		const externalEditorKey = this.keybindings.getDisplayString("app.editor.external");
-		if (!externalEditorKey) {
-			return "up/down select  enter confirm  pgup/pgdn scroll  esc cancel";
-		}
-		return `up/down select  enter confirm  pgup/pgdn scroll  ${externalEditorKey.toLowerCase()} open in editor  esc cancel`;
 	}
 
 	#getPlanApprovalContextUsage(): ContextUsage | undefined {
@@ -2280,7 +2278,14 @@ export class InteractiveMode implements InteractiveModeContext {
 						},
 					}
 				: undefined;
-		const helpText = slider ? `${this.#getPlanReviewHelpText()}  ◂/▸ model` : this.#getPlanReviewHelpText();
+		// The overlay now owns the dynamic, focus-aware help line; the caller only
+		// supplies the trailing cancel hint.
+		const helpText = "esc cancel";
+		// In-overlay edits (section deletes/undo) and section annotations. Deletes
+		// update `editedContent` (and mirror to disk); annotations build `feedback`
+		// that the Refine branch re-prompts the model with.
+		let editedContent: string | undefined;
+		let feedback = "";
 
 		const choice = await this.showPlanReview(
 			planContent,
@@ -2289,6 +2294,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			{
 				helpText,
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
+				onPlanEdited: content => {
+					editedContent = content;
+					void Bun.write(this.#resolvePlanFilePath(planFilePath), content);
+				},
+				onFeedbackChange: value => {
+					feedback = value;
+				},
 				disabledIndices: keepContextDisabled ? [PLAN_KEEP_CONTEXT_OPTION_INDEX] : undefined,
 			},
 			{ slider },
@@ -2297,7 +2309,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
-				const latestPlanContent = await this.#readPlanFile(planFilePath);
+				// Prefer in-overlay edits (already in memory) over a disk re-read; the
+				// `onPlanEdited` write is fire-and-forget, so reading the file here could
+				// race ahead of it.
+				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath));
 				if (!latestPlanContent) {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
@@ -2325,6 +2340,16 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.showError(
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
 				);
+			}
+			return;
+		}
+
+		if (choice === "Refine plan") {
+			// Section annotations entered in the overlay become a refinement prompt
+			// re-submitted to the model. With no annotations, fall back to today's
+			// behavior: close the overlay and let the operator type their own.
+			if (feedback.trim() && this.onInputCallback) {
+				this.onInputCallback(this.startPendingSubmission({ text: feedback }));
 			}
 			return;
 		}

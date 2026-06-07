@@ -3209,6 +3209,79 @@ describe("TUI terminal-state regressions", () => {
 		});
 	});
 
+	describe("fullscreen overlay alt-screen", () => {
+		it("enters the alt buffer on show, leaves it on hide, and emits no ED3 while modal", async () => {
+			const term = new VirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL-0", "MODAL-1"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				// Borrowed the alternate screen buffer …
+				expect(modalWrites).toContain("\x1b[?1049h");
+				// … and never erased scrollback (ED3) or otherwise touched the transcript.
+				expect(modalWrites).not.toContain("\x1b[3J");
+				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeTrue();
+
+				const hideFrom = writes.length;
+				handle.hide();
+				await settle(term);
+
+				expect(writes.slice(hideFrom).join("")).toContain("\x1b[?1049l");
+				// Transcript is back on the normal screen after leaving the alt buffer.
+				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
+				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("leaves native scrollback untouched across the modal lifetime", async () => {
+			const term = new VirtualTerminal(40, 6, 200);
+			const tui = new TUI(term);
+			// Base transcript overflows the viewport, so rows land in scrollback.
+			tui.addChild(new MutableLinesComponent(rows("base-", 24)));
+
+			try {
+				tui.start();
+				await settle(term);
+				const scrollbackBefore = term.getScrollBuffer().map(line => line.trimEnd());
+
+				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+				handle.hide();
+				await settle(term);
+
+				// The modal borrowed/returned the alt buffer without rewriting the
+				// normal screen's scrollback — the transcript a reader scrolled up to
+				// see is identical before and after.
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(scrollbackBefore);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	describe("stress scenarios", () => {
 		it("rapid content mutations converge to final expected screen", async () => {
 			const term = new VirtualTerminal(30, 8);
