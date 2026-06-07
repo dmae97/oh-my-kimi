@@ -66,7 +66,7 @@ export class FooterComponent implements Component {
 				}
 
 				try {
-					const watchPath = head.isReftable ? path.join(head.gitDir, "reftable", "tables.list") : head.headPath;
+					const watchPath = head.isReftable ? path.join(head.gitDir, "reftable") : head.headPath;
 					this.#gitWatcher = fs.watch(watchPath, () => {
 						this.#cachedBranch = undefined; // Invalidate cache
 						if (this.#onBranchChange) {
