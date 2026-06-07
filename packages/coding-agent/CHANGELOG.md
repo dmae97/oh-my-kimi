@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `display.smoothStreaming` setting (default `true`) to let users enable or disable smooth assistant-stream text reveal
 - Added `/tan <work>` slash command to fork the current conversation into a background agent so tangential work can continue asynchronously while your main session stays active
 - Added a background `/tan` dispatch message that records the handoff in the transcript and marks the delegated work as non-blocking
 - Added `providerPromptCacheKey` support to `CreateAgentSessionOptions` so `/tan` background sessions can reuse the parent session’s prompt-cache lineage
@@ -17,6 +19,7 @@
 
 ### Changed
 
+- Changed assistant streaming output to reveal text incrementally at 30 FPS with grapheme-safe adaptive catch-up, instead of replacing the whole message chunk-by-chunk
 - Changed shimmer-driven TUI animations (working text, pending bash/eval borders, and theme activity-spinner documentation) to render at 30fps instead of 60fps.
 - Changed running `task` tool agent rows to use a static `•` marker and shimmer only the subagent name, leaving descriptions, stats, and nested tool detail text solid while removing the rotating status glyph from those rows.
 - Changed settings singleton method access to reuse bound methods for the active instance instead of allocating a new bound function on every `settings.get` lookup.
@@ -43,7 +46,6 @@
 
 - Fixed the working-status shimmer to opt into the loader's 30fps animated-message repaint path while keeping both the status spinner and pending bash/eval tool spinners on their normal 80 ms glyph cadence.
 - Fixed consecutive `read` tool calls failing to collapse into a single grouped block when a reasoning model emits one read per completion (`[thinking, read]`). The read group was reset on every assistant `message_start`, so each read rendered as its own one-entry `Read …` line; now a read run accretes across completions and is broken only by a rendered non-empty text/thinking block, a non-read tool, or a user/IRC message — matching the transcript-rebuild path. `ReadToolGroupComponent` now reports its live/finalized state so the growing `Read (N)` header repaints correctly on native-scrollback (risk) terminals.
-
 - Fixed the `task` tool shared-context brief rendering raw Markdown headings (`# Goal`, `# Constraints`) inside framed call/result blocks instead of using the normal Markdown renderer.
 - Fixed the animated pending border on `bash`/`eval` blocks leaving a frozen dark "bar" segment behind after a backgrounded command finalized through the async update path. Once a command is auto-backgrounded (`details.async.state === "running"`) the block stays "partial" in the TUI until the async job-manager delivers the final result, but it also gets committed to native scrollback — so a mid-sweep shimmer frame baked a stray darkened border segment into the committed copy. The border now stops animating (and the 60fps redraw loop stops) the moment a block enters the backgrounded state, so the committed frame is a clean static border.
 - Fixed cold `omp` launch to clear native terminal history on the first paint, avoiding a once-per-launch duplicate welcome/transcript copy before the normal session replay.

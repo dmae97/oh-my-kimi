@@ -20,6 +20,7 @@ import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
+import { StreamingRevealController } from "./streaming-reveal";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -66,9 +67,15 @@ export class EventController {
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
+	#streamingReveal: StreamingRevealController;
 	#handlers: AgentSessionEventHandlers;
 
 	constructor(private ctx: InteractiveModeContext) {
+		this.#streamingReveal = new StreamingRevealController({
+			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
+			getHideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),
 			agent_end: e => this.#handleAgentEnd(e),
@@ -101,6 +108,7 @@ export class EventController {
 	}
 
 	dispose(): void {
+		this.#streamingReveal.stop();
 		this.#cancelIdleCompaction();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -317,7 +325,7 @@ export class EventController {
 			);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
-			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+			this.#streamingReveal.begin(this.ctx.streamingComponent, this.ctx.streamingMessage);
 			this.ctx.ui.requestRender();
 		}
 	}
@@ -361,7 +369,7 @@ export class EventController {
 	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
-			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+			this.#streamingReveal.setTarget(this.ctx.streamingMessage);
 
 			const visibleBlockCount = this.ctx.streamingMessage.content.filter(
 				content =>
@@ -462,6 +470,7 @@ export class EventController {
 		}
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
+			this.#streamingReveal.stop();
 			let errorMessage: string | undefined;
 			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
@@ -667,6 +676,7 @@ export class EventController {
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		this.#agentTurnActive = false;
 		this.#assistantMessageStreaming = false;
+		this.#streamingReveal.stop();
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
