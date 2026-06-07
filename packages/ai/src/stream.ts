@@ -286,6 +286,18 @@ export function getEnvApiKey(provider: string): string | undefined {
 }
 
 /**
+ * Name of the environment variable that backs `getEnvApiKey` for a provider,
+ * when that provider maps to a single named variable (e.g. `github-copilot` →
+ * `COPILOT_GITHUB_TOKEN`). Returns undefined for providers whose env fallback
+ * is computed (multi-var pickers, Vertex ADC / Bedrock probes, …) since no
+ * single variable name describes the source.
+ */
+export function getEnvApiKeyName(provider: string): string | undefined {
+	const resolver = serviceProviderMap[provider];
+	return typeof resolver === "string" ? resolver : undefined;
+}
+
+/**
  * Enumerate every provider that has an env-var fallback for `getEnvApiKey`.
  * Used by `omp auth-broker migrate --include-env` to discover env-sourced keys
  * that should be uploaded to the broker.
