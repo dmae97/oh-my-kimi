@@ -38,6 +38,7 @@ import type { OAuthCredential } from "../../session/auth-storage";
 import { shortenPath } from "../../tools/render-utils";
 import { openPath } from "../../utils/open";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
+import { TranscriptBlock } from "../components/transcript-container";
 import { parseCommandArgs } from "../shared";
 import { theme } from "../theme/theme";
 import type { InteractiveModeContext } from "../types";
@@ -547,56 +548,41 @@ export class MCPCommandController {
 				},
 				{
 					onAuth: (info: { url: string; instructions?: string }) => {
-						// Show auth URL prominently in chat
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
-							new Text(theme.fg("accent", "━━━ OAuth Authorization Required ━━━"), 1, 0),
-						);
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
-							new Text(theme.fg("muted", "Preparing browser authorization..."), 1, 0),
-						);
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
+						// Show auth URL prominently in chat as one block
+						const block = new TranscriptBlock();
+						this.ctx.chatContainer.addChild(block);
+						block.addChild(new Text(theme.fg("accent", "━━━ OAuth Authorization Required ━━━"), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("muted", "Preparing browser authorization..."), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(
 							new Text(
 								theme.fg("muted", "Waiting for authorization... (Press Ctrl+C to cancel, 5 minute timeout)"),
 								1,
 								0,
 							),
 						);
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(
-							new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0),
-						);
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0));
 						this.ctx.ui.requestRender();
 						// Try to open browser automatically
 						try {
 							openPath(info.url);
 
 							// Show confirmation that browser should open
-							this.ctx.chatContainer.addChild(new Spacer(1));
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("success", "→ Opening browser automatically..."), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(new Spacer(1));
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(new Text(theme.fg("accent", info.url), 1, 0));
+							block.addChild(new Spacer(1));
+							block.addChild(new Text(theme.fg("success", "→ Opening browser automatically..."), 1, 0));
+							block.addChild(new Spacer(1));
+							block.addChild(new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0));
+							block.addChild(new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0));
+							block.addChild(new Text(theme.fg("accent", info.url), 1, 0));
 							this.ctx.ui.requestRender();
 						} catch (_error) {
 							// Show error if browser doesn't open
-							this.ctx.chatContainer.addChild(new Spacer(1));
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("warning", "→ Could not open browser automatically"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(
-								new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0),
-							);
-							this.ctx.chatContainer.addChild(new Text(theme.fg("accent", info.url), 1, 0));
+							block.addChild(new Spacer(1));
+							block.addChild(new Text(theme.fg("warning", "→ Could not open browser automatically"), 1, 0));
+							block.addChild(new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0));
+							block.addChild(new Text(theme.fg("accent", info.url), 1, 0));
 							this.ctx.ui.requestRender();
 						}
 					},

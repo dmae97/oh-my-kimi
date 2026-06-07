@@ -50,6 +50,7 @@ import { SessionObserverOverlayComponent } from "../components/session-observer-
 import { SessionSelectorComponent } from "../components/session-selector";
 import { SettingsSelectorComponent } from "../components/settings-selector";
 import { ToolExecutionComponent } from "../components/tool-execution";
+import { TranscriptBlock } from "../components/transcript-container";
 import { TreeSelectorComponent } from "../components/tree-selector";
 import { UserMessageSelectorComponent } from "../components/user-message-selector";
 import type { SessionObserverRegistry } from "../session-observer-registry";
@@ -931,26 +932,28 @@ export class SelectorController {
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
 				onAuth: (info: { url: string; instructions?: string }) => {
-					this.ctx.chatContainer.addChild(new Spacer(1));
-					this.ctx.chatContainer.addChild(new Text(theme.fg("dim", info.url), 1, 0));
+					const block = new TranscriptBlock();
+					this.ctx.chatContainer.addChild(block);
+					block.addChild(new Text(theme.fg("dim", info.url), 1, 0));
 					const hyperlink = `\x1b]8;;${info.url}\x07Click here to login\x1b]8;;\x07`;
-					this.ctx.chatContainer.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
+					block.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
 					if (info.instructions) {
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(new Text(theme.fg("warning", info.instructions), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("warning", info.instructions), 1, 0));
 					}
 					if (useManualInput) {
-						this.ctx.chatContainer.addChild(new Spacer(1));
-						this.ctx.chatContainer.addChild(new Text(theme.fg("dim", MANUAL_LOGIN_TIP), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("dim", MANUAL_LOGIN_TIP), 1, 0));
 					}
 					this.ctx.ui.requestRender();
 					this.ctx.openInBrowser(info.url);
 				},
 				onPrompt: async (prompt: { message: string; placeholder?: string }) => {
-					this.ctx.chatContainer.addChild(new Spacer(1));
-					this.ctx.chatContainer.addChild(new Text(theme.fg("warning", prompt.message), 1, 0));
+					const promptBlock = new TranscriptBlock();
+					this.ctx.chatContainer.addChild(promptBlock);
+					promptBlock.addChild(new Text(theme.fg("warning", prompt.message), 1, 0));
 					if (prompt.placeholder) {
-						this.ctx.chatContainer.addChild(new Text(theme.fg("dim", prompt.placeholder), 1, 0));
+						promptBlock.addChild(new Text(theme.fg("dim", prompt.placeholder), 1, 0));
 					}
 					this.ctx.ui.requestRender();
 					const { promise, resolve } = Promise.withResolvers<string>();
@@ -975,11 +978,12 @@ export class SelectorController {
 				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
 			});
 			await this.ctx.session.modelRegistry.refresh();
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			const block = new TranscriptBlock();
+			block.addChild(
 				new Text(theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}`), 1, 0),
 			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Credentials saved to ${getAgentDbPath()}`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Credentials saved to ${getAgentDbPath()}`), 1, 0));
+			this.ctx.chatContainer.addChild(block);
 			this.ctx.ui.requestRender();
 		} catch (error: unknown) {
 			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1002,19 +1006,18 @@ export class SelectorController {
 
 			await authStorage.logout(providerId);
 			await this.ctx.session.modelRegistry.refresh();
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			const block = new TranscriptBlock();
+			block.addChild(
 				new Text(theme.fg("success", `${theme.status.success} Successfully logged out of ${providerId}`), 1, 0),
 			);
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("dim", `Credentials removed from ${getAgentDbPath()}`), 1, 0),
-			);
+			block.addChild(new Text(theme.fg("dim", `Credentials removed from ${getAgentDbPath()}`), 1, 0));
 			const remainingSource = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
 			if (remainingSource) {
-				this.ctx.chatContainer.addChild(
+				block.addChild(
 					new Text(theme.fg("warning", `${providerId} is still authenticated via ${remainingSource}`), 1, 0),
 				);
 			}
+			this.ctx.chatContainer.addChild(block);
 			this.ctx.ui.requestRender();
 		} catch (error: unknown) {
 			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);

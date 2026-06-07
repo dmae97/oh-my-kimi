@@ -101,7 +101,8 @@ export function extractBlocks(text: string): MessageBlock[] {
 		const quoted = QUOTE_LINE_RE.exec(line);
 		if (quoted) {
 			// Strip the `>` marker plus one optional following space.
-			(quote ??= []).push(quoted[1].startsWith(" ") ? quoted[1].slice(1) : quoted[1]);
+			quote ??= [];
+			quote.push(quoted[1].startsWith(" ") ? quoted[1].slice(1) : quoted[1]);
 		} else {
 			flushQuote();
 		}

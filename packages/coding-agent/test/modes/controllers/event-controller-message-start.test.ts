@@ -194,11 +194,11 @@ describe("EventController IRC expiry", () => {
 
 		await controller.handleEvent({ type: "irc_message", message });
 
-		expect(chatContainer.children).toHaveLength(2);
+		expect(chatContainer.children).toHaveLength(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(9_999);
-		expect(chatContainer.children).toHaveLength(2);
+		expect(chatContainer.children).toHaveLength(1);
 
 		vi.advanceTimersByTime(1);
 		expect(chatContainer.children).toHaveLength(0);
@@ -215,7 +215,7 @@ describe("EventController IRC expiry", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 
 		expect(addMessageToChat).toHaveBeenCalledTimes(1);
-		expect(chatContainer.children).toHaveLength(2);
+		expect(chatContainer.children).toHaveLength(1);
 		vi.advanceTimersByTime(10_000);
 		expect(chatContainer.children).toHaveLength(0);
 	});
@@ -230,7 +230,7 @@ describe("EventController IRC expiry", () => {
 		controller.dispose();
 		vi.advanceTimersByTime(10_000);
 
-		expect(chatContainer.children).toHaveLength(2);
+		expect(chatContainer.children).toHaveLength(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });

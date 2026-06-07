@@ -208,10 +208,6 @@ export class AssistantMessageComponent extends Container {
 			c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
 		);
 
-		if (hasVisibleContent) {
-			this.#contentContainer.addChild(new Spacer(1));
-		}
-
 		// Render content in order
 		let thinkingIndex = 0;
 		for (let i = 0; i < message.content.length; i++) {

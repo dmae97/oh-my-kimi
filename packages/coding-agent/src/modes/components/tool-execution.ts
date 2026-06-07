@@ -245,11 +245,10 @@ export class ToolExecutionComponent extends Container {
 		this.#cwd = cwd;
 		this.#args = args;
 
-		this.addChild(new Spacer(1));
-
-		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins
-		this.#contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
-		this.#contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
+		// paddingY is 0: the transcript owns inter-block spacing (see TranscriptContainer).
+		this.#contentBox = new Box(1, 0, (text: string) => theme.bg("toolPendingBg", text));
+		this.#contentText = new Text("", 1, 0, (text: string) => theme.bg("toolPendingBg", text));
 
 		// Use Box for custom tools or built-in tools that have renderers
 		const hasRenderer = toolName in toolRenderers;

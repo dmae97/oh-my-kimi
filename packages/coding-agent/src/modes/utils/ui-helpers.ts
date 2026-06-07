@@ -17,6 +17,7 @@ import {
 } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
+import { TranscriptBlock } from "../../modes/components/transcript-container";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
@@ -153,6 +154,7 @@ export class UiHelpers {
 											durationMs: details?.durationMs,
 										},
 									];
+						const block = new TranscriptBlock();
 						for (const job of jobs) {
 							const jobId = job.jobId ?? "unknown";
 							const typeLabel = job.type ? `[${job.type}]` : "[job]";
@@ -165,8 +167,9 @@ export class UiHelpers {
 							]
 								.filter(Boolean)
 								.join(" ");
-							this.ctx.chatContainer.addChild(new Text(line, 1, 0));
+							block.addChild(new Text(line, 1, 0));
 						}
+						this.ctx.chatContainer.addChild(block);
 						break;
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
@@ -206,19 +209,18 @@ export class UiHelpers {
 							body = details?.body ?? "";
 							arrow = `${from} ⇨ ${to}`;
 						}
-						const components: Component[] = [];
+						const block = new TranscriptBlock();
 						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
 						const headerComponent = new Text(header, 1, 0);
-						this.ctx.chatContainer.addChild(headerComponent);
-						components.push(headerComponent);
+						block.addChild(headerComponent);
 						if (body) {
 							for (const line of body.split("\n")) {
 								const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
-								this.ctx.chatContainer.addChild(lineComponent);
-								components.push(lineComponent);
+								block.addChild(lineComponent);
 							}
 						}
-						return components;
+						this.ctx.chatContainer.addChild(block);
+						return [block];
 					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
@@ -229,14 +231,12 @@ export class UiHelpers {
 				break;
 			}
 			case "compactionSummary": {
-				this.ctx.chatContainer.addChild(new Spacer(1));
 				const component = new CompactionSummaryMessageComponent(message);
 				component.setExpanded(this.ctx.toolOutputExpanded);
 				this.ctx.chatContainer.addChild(component);
 				break;
 			}
 			case "branchSummary": {
-				this.ctx.chatContainer.addChild(new Spacer(1));
 				const component = new BranchSummaryMessageComponent(message);
 				component.setExpanded(this.ctx.toolOutputExpanded);
 				this.ctx.chatContainer.addChild(component);
@@ -244,6 +244,7 @@ export class UiHelpers {
 			}
 			case "fileMention": {
 				// Render compact file mention display
+				const block = new TranscriptBlock();
 				for (const file of message.files) {
 					let suffix: string;
 					if (file.skippedReason === "tooLarge") {
@@ -260,8 +261,9 @@ export class UiHelpers {
 						"accent",
 						file.path,
 					)} ${theme.fg("dim", suffix)}`;
-					this.ctx.chatContainer.addChild(new Text(text, 0, 0));
+					block.addChild(new Text(text, 0, 0));
 				}
+				if (block.children.length > 0) this.ctx.chatContainer.addChild(block);
 				break;
 			}
 			case "user":
@@ -558,9 +560,9 @@ export class UiHelpers {
 	}
 
 	showNewVersionNotification(newVersion: string): void {
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder(text => theme.fg("warning", text)));
-		this.ctx.chatContainer.addChild(
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
+		block.addChild(
 			new Text(
 				theme.bold(theme.fg("warning", "Update Available")) +
 					"\n" +
@@ -570,7 +572,8 @@ export class UiHelpers {
 				0,
 			),
 		);
-		this.ctx.chatContainer.addChild(new DynamicBorder(text => theme.fg("warning", text)));
+		block.addChild(new DynamicBorder(text => theme.fg("warning", text)));
+		this.ctx.chatContainer.addChild(block);
 		this.ctx.ui.requestRender();
 	}
 

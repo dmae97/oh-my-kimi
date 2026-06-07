@@ -19,6 +19,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getSessionsDir } from "@oh-my-pi/pi-utils";
 import { DynamicBorder } from "../modes/components/dynamic-border";
+import { TranscriptBlock } from "../modes/components/transcript-container";
 import { getSelectListTheme, getSymbolTheme, theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import { formatBytes } from "../tools/render-utils";
@@ -150,12 +151,13 @@ export class DebugSelectorComponent extends Container {
 		}
 
 		// Show message and wait for keypress
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(theme.fg("accent", `${theme.status.info} CPU profiling started`), 1, 0));
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
+		const block = new TranscriptBlock();
+		block.addChild(new Text(theme.fg("accent", `${theme.status.info} CPU profiling started`), 1, 0));
+		block.addChild(new Spacer(1));
+		block.addChild(
 			new Text(theme.fg("muted", "Reproduce the performance issue, then press Enter to stop profiling."), 1, 0),
 		);
+		this.ctx.chatContainer.addChild(block);
 		this.ctx.ui.requestRender();
 
 		// Wait for Enter keypress
@@ -201,12 +203,11 @@ export class DebugSelectorComponent extends Container {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Performance report saved`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			const block = new TranscriptBlock();
+			block.addChild(new Text(theme.fg("success", `${theme.status.success} Performance report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			this.ctx.chatContainer.addChild(block);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
@@ -262,12 +263,11 @@ export class DebugSelectorComponent extends Container {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Report bundle saved`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			const block = new TranscriptBlock();
+			block.addChild(new Text(theme.fg("success", `${theme.status.success} Report bundle saved`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			this.ctx.chatContainer.addChild(block);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
@@ -301,12 +301,11 @@ export class DebugSelectorComponent extends Container {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Memory report saved`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			const block = new TranscriptBlock();
+			block.addChild(new Text(theme.fg("success", `${theme.status.success} Memory report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			this.ctx.chatContainer.addChild(block);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
@@ -365,10 +364,11 @@ export class DebugSelectorComponent extends Container {
 			const info = await collectSystemInfo();
 			const formatted = formatSystemInfo(info);
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
-			this.ctx.chatContainer.addChild(new Text(formatted, 1, 0));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
+			const block = new TranscriptBlock();
+			block.addChild(new DynamicBorder());
+			block.addChild(new Text(formatted, 1, 0));
+			block.addChild(new DynamicBorder());
+			this.ctx.chatContainer.addChild(block);
 		} catch (err) {
 			this.ctx.showError(`Failed to collect system info: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -384,10 +384,11 @@ export class DebugSelectorComponent extends Container {
 		});
 		const formatted = formatTerminalState(info);
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(formatted, 1, 0));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder());
+		block.addChild(new Text(formatted, 1, 0));
+		block.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(block);
 		this.ctx.ui.requestRender();
 	}
 

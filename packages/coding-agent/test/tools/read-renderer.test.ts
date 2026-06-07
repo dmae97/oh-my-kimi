@@ -102,7 +102,7 @@ describe("read ToolExecutionComponent framing", () => {
 				(line, index) => index > topBorderIndex && line.includes(activeTheme.boxSharp.bottomLeft),
 			);
 
-			expect(topBorderIndex).toBe(1);
+			expect(topBorderIndex).toBe(0);
 			expect(lines[topBorderIndex + 1]).toContain("export const x = 1;");
 			expect(bottomBorderIndex).toBe(lines.length - 1);
 		} finally {

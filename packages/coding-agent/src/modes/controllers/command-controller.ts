@@ -28,6 +28,7 @@ import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
+import { TranscriptBlock } from "../../modes/components/transcript-container";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/context-usage";
@@ -46,12 +47,13 @@ import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 
 function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown: string): void {
-	ctx.chatContainer.addChild(new Spacer(1));
-	ctx.chatContainer.addChild(new DynamicBorder());
-	ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
-	ctx.chatContainer.addChild(new Spacer(1));
-	ctx.chatContainer.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
-	ctx.chatContainer.addChild(new DynamicBorder());
+	const block = new TranscriptBlock();
+	block.addChild(new DynamicBorder());
+	block.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
+	block.addChild(new Spacer(1));
+	block.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
+	block.addChild(new DynamicBorder());
+	ctx.chatContainer.addChild(block);
 	ctx.ui.requestRender();
 }
 
@@ -426,12 +428,13 @@ export class CommandController {
 			? ""
 			: `\n\n${theme.fg("dim", "Use")} ${theme.bold("/changelog full")} ${theme.fg("dim", "to view the complete changelog.")}`;
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Markdown(changelogMarkdown + hint, 1, 1, getMarkdownTheme()));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder());
+		block.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
+		block.addChild(new Spacer(1));
+		block.addChild(new Markdown(changelogMarkdown + hint, 1, 1, getMarkdownTheme()));
+		block.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(block);
 		this.ctx.ui.requestRender();
 	}
 
@@ -452,12 +455,13 @@ export class CommandController {
 			return;
 		}
 		const output = renderContextUsage(breakdown, theme);
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder());
+		block.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
+		block.addChild(new Spacer(1));
+		block.addChild(new Text(output, 1, 0));
+		block.addChild(new DynamicBorder());
+		this.ctx.chatContainer.addChild(block);
 		this.ctx.ui.requestRender();
 	}
 
@@ -473,12 +477,13 @@ export class CommandController {
 				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
 			}
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
-			this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Memory Injection Payload")), 1, 0));
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new Markdown(payload, 1, 1, getMarkdownTheme()));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
+			const block = new TranscriptBlock();
+			block.addChild(new DynamicBorder());
+			block.addChild(new Text(theme.bold(theme.fg("accent", "Memory Injection Payload")), 1, 0));
+			block.addChild(new Spacer(1));
+			block.addChild(new Markdown(payload, 1, 1, getMarkdownTheme()));
+			block.addChild(new DynamicBorder());
+			this.ctx.chatContainer.addChild(block);
 			this.ctx.ui.requestRender();
 			return;
 		}

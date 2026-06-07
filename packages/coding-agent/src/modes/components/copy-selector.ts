@@ -33,7 +33,6 @@ interface FlatNode {
 	ancestorHasNext: boolean[];
 }
 
-
 /** Render one tree connector as exactly three cells (e.g. "├─ ", "└─ ", "|--"). */
 function connectorCells(symbol: string): string {
 	const chars = Array.from(symbol);
