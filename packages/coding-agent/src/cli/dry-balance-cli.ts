@@ -152,6 +152,8 @@ export interface DryBalanceDependencies {
 	now?: () => number;
 	stdoutIsTTY?: boolean;
 	stderrIsTTY?: boolean;
+	stdoutColumns?: number;
+	stderrColumns?: number;
 }
 
 type DryBalanceAttemptResult =
@@ -310,10 +312,11 @@ function renderBenchStatusLine(
 	}
 }
 
-function createBenchProgressSink(
+export function createBenchProgressSink(
 	total: number,
 	write: (text: string) => void,
 	interactive: boolean,
+	columns: number,
 ): DryBalanceBenchProgressSink {
 	const statuses: DryBalanceBenchProgressStatus[] = Array.from({ length: total }, () => ({ state: "waiting" }));
 	if (!interactive) {
@@ -333,13 +336,21 @@ function createBenchProgressSink(
 	let frame = 0;
 	let lineCount = 0;
 	let timer: NodeJS.Timeout | undefined;
+	const width = Number.isFinite(columns) && columns > 0 ? Math.trunc(columns) : 80;
 	const render = (): void => {
 		const lines = [
 			chalk.bold("bench requests"),
 			...statuses.map((status, index) => renderBenchStatusLine(status, index, total, frame)),
 		];
-		if (lineCount > 0) write(`\x1b[${lineCount}A`);
-		write(`${lines.map(line => `\x1b[2K${line}`).join("\n")}\n`);
+		// Anchor every redraw at column 0 and terminate each row with CRLF: a
+		// bare `\n` only returns to column 0 when the tty performs ONLCR
+		// translation, which is off whenever the terminal is in raw mode — there
+		// the old column-preserving cursor-up staircased each frame into
+		// scrollback. Cap each line to the terminal width so a wrapped row never
+		// desyncs the `\x1b[<n>A` cursor-up from the logical line count.
+		const move = lineCount > 0 ? `\x1b[${lineCount}A` : "";
+		const body = lines.map(line => `\x1b[2K${truncateToWidth(line, width)}`).join("\r\n");
+		write(`${move}\r${body}\r\n`);
 		lineCount = lines.length;
 	};
 	render();
@@ -792,7 +803,10 @@ export async function runDryBalanceCommand(
 			const progressInteractive = command.flags.json
 				? (deps.stderrIsTTY ?? process.stderr.isTTY === true)
 				: (deps.stdoutIsTTY ?? process.stdout.isTTY === true);
-			progress = createBenchProgressSink(targets.length, progressWrite, progressInteractive);
+			const progressColumns = command.flags.json
+				? (deps.stderrColumns ?? process.stderr.columns ?? 80)
+				: (deps.stdoutColumns ?? process.stdout.columns ?? 80);
+			progress = createBenchProgressSink(targets.length, progressWrite, progressInteractive, progressColumns);
 			benchResults = await runBenchTargets(model, targets, randomSessionId, progress, streamFn, now);
 			results = targets.map(target =>
 				target.ok ? { ok: true, account: target.account } : { ok: false, reason: target.error },

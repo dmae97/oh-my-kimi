@@ -9,6 +9,7 @@
 
 - Fixed duplicate file entries in grouped outputs for `find`, `search`, `ast_grep`, `ast_edit`, and `lsp` diagnostics when the same path appeared multiple times
 - Fixed search, grep, and edit output rendering so repeated directory group blank-line boundaries no longer break nested path/link reconstruction
+- Fixed `omp dry-balance --bench` flooding the terminal with staircased, duplicated spinner/status lines (and an indented summary) when the tty has ONLCR/OPOST disabled (raw mode). The interactive progress region separated rows with a bare LF and repositioned with a column-preserving `\x1b[<n>A` cursor-up, both of which only land at column 0 when the terminal translates LF→CRLF; with that translation off, every 80 ms redraw cascaded down and to the right into scrollback. The live region now carriage-returns before every cleared row, terminates each row with CRLF, and caps each row to the terminal width so a wrapped line cannot desync the cursor-up from the logical line count.
 
 ## [15.10.0] - 2026-06-06
 
