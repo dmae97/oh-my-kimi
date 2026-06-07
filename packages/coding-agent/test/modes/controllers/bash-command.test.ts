@@ -39,6 +39,7 @@ describe("bash shortcut command", () => {
 			pendingMessagesContainer: createContainer(),
 			pendingBashComponents: [],
 			ui: { requestRender: vi.fn() },
+			present: vi.fn(),
 			showError: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
