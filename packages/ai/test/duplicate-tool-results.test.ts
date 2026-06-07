@@ -32,6 +32,43 @@ describe("Duplicate Tool Results Regression", () => {
 		reasoning: true,
 	};
 
+	const makeEvalAssistantMessage = (id: string, timestamp: number): AssistantMessage => ({
+		role: "assistant",
+		content: [{ type: "toolCall", id, name: "eval", arguments: {} }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-3-5-sonnet-20241022",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp,
+	});
+
+	const makeEvalToolResult = (id: string, text: string, timestamp: number): ToolResultMessage => ({
+		role: "toolResult",
+		toolCallId: id,
+		toolName: "eval",
+		content: [{ type: "text", text }],
+		isError: false,
+		timestamp,
+	});
+
+	const getAssistantToolIds = (messages: Message[]): string[] =>
+		messages.flatMap(message =>
+			message.role === "assistant"
+				? message.content.filter((block): block is ToolCall => block.type === "toolCall").map(block => block.id)
+				: [],
+		);
+
+	const getToolResults = (messages: Message[]): ToolResultMessage[] =>
+		messages.filter((message): message is ToolResultMessage => message.role === "toolResult");
+
 	it("should not duplicate tool results for errored messages when results already exist", () => {
 		const toolCallId = "toolu_019xqMTvqWZiTDy8XxmjxrTo";
 
@@ -315,6 +352,66 @@ describe("Duplicate Tool Results Regression", () => {
 		expect(result1.length).toBe(1);
 		expect(result2.length).toBe(1);
 		expect(result3.length).toBe(1);
+	});
+
+	it("deduplicates repeated tool call ids and preserves call/result pairing", () => {
+		const duplicateId = "functions.eval:301";
+		const distinctId = "functions.eval:302";
+
+		const messages: Message[] = [
+			makeEvalAssistantMessage(duplicateId, 1),
+			makeEvalToolResult(duplicateId, "first", 2),
+			makeEvalAssistantMessage(duplicateId, 3),
+			makeEvalToolResult(duplicateId, "second", 4),
+			makeEvalAssistantMessage(duplicateId, 5),
+			makeEvalAssistantMessage(distinctId, 6),
+			makeEvalToolResult(distinctId, "third", 7),
+		];
+
+		const transformed = transformMessages(messages, model);
+		const assistantToolIds = getAssistantToolIds(transformed);
+		const toolResults = getToolResults(transformed);
+
+		expect(assistantToolIds).toEqual([duplicateId, `${duplicateId}_dup1`, `${duplicateId}_dup2`, distinctId]);
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			duplicateId,
+			`${duplicateId}_dup1`,
+			`${duplicateId}_dup2`,
+			distinctId,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup1`)?.content).toEqual([
+			{ type: "text", text: "second" },
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup2`)?.content).toEqual([
+			{ type: "text", text: "No result provided" },
+		]);
+	});
+
+	it("deduplicates repeated ids without colliding with existing generated-looking ids", () => {
+		const duplicateId = "functions.eval:301";
+		const generatedLookingId = `${duplicateId}_dup1`;
+		const messages: Message[] = [
+			makeEvalAssistantMessage(duplicateId, 1),
+			makeEvalToolResult(duplicateId, "first", 2),
+			makeEvalAssistantMessage(generatedLookingId, 3),
+			makeEvalToolResult(generatedLookingId, "already-used", 4),
+			makeEvalAssistantMessage(duplicateId, 5),
+			makeEvalToolResult(duplicateId, "second", 6),
+		];
+
+		const transformed = transformMessages(messages, model);
+		const assistantToolIds = getAssistantToolIds(transformed);
+		const toolResults = getToolResults(transformed);
+
+		expect(assistantToolIds).toEqual([duplicateId, generatedLookingId, `${duplicateId}_dup2`]);
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			duplicateId,
+			generatedLookingId,
+			`${duplicateId}_dup2`,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup2`)?.content).toEqual([
+			{ type: "text", text: "second" },
+		]);
 	});
 });
 
