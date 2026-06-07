@@ -1967,6 +1967,7 @@ export class SessionManager {
 	#inMemoryArtifacts: Map<string, string> | null = null;
 	#inMemoryArtifactCounter = 0;
 	readonly #blobStore: BlobStore;
+	#suppressBreadcrumb = false;
 
 	private constructor(
 		private cwd: string,
@@ -1979,6 +1980,11 @@ export class SessionManager {
 			this.storage.ensureDirSync(sessionDir);
 		}
 		// Note: call _initSession() or _initSessionFile() after construction
+	}
+
+	#maybeWriteBreadcrumb(cwd: string, sessionFile: string): void {
+		if (this.#suppressBreadcrumb) return;
+		writeTerminalBreadcrumb(cwd, sessionFile);
 	}
 
 	/** Puts a binary blob into the blob store and returns the blob reference */
@@ -2027,7 +2033,7 @@ export class SessionManager {
 		this.#adoptedArtifactManager = null;
 		this.#buildIndex();
 		if (this.#sessionFile) {
-			writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+			this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 		}
 	}
 
@@ -2047,7 +2053,7 @@ export class SessionManager {
 		this.#persistError = undefined;
 		this.#persistErrorReported = false;
 		this.#sessionFile = path.resolve(sessionFile);
-		writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+		this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 		this.#fileEntries = await loadEntriesFromFile(this.#sessionFile, this.storage);
 		if (this.#fileEntries.length > 0) {
 			const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
@@ -2064,7 +2070,7 @@ export class SessionManager {
 			if (headerCwd && headerCwd !== this.cwd) {
 				this.cwd = headerCwd;
 				this.sessionDir = path.resolve(this.#sessionFile, "..");
-				writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+				this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 			}
 
 			this.#needsFullRewriteOnNextPersist = migrateToCurrentVersion(this.#fileEntries);
@@ -2245,7 +2251,7 @@ export class SessionManager {
 
 		// Update terminal breadcrumb
 		if (this.#sessionFile) {
-			writeTerminalBreadcrumb(resolvedCwd, this.#sessionFile);
+			this.#maybeWriteBreadcrumb(resolvedCwd, this.#sessionFile);
 		}
 	}
 
@@ -2280,7 +2286,7 @@ export class SessionManager {
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
 			this.#sessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${this.#sessionId}.jsonl`);
-			writeTerminalBreadcrumb(this.cwd, this.#sessionFile);
+			this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
 		}
 		return this.#sessionFile;
 	}
@@ -3429,9 +3435,11 @@ export class SessionManager {
 		cwd: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
+		options?: { suppressBreadcrumb?: boolean },
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
+		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		const forkEntries = structuredClone(await loadEntriesFromFile(sourcePath, storage)) as FileEntry[];
 		migrateToCurrentVersion(forkEntries);
 		await resolveBlobRefsInEntries(forkEntries, manager.#blobStore);

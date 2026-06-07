@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added optional `promptCacheKey` support to `AgentOptions` and `Agent` via a new `promptCacheKey` property so providers can receive a caller-provided prompt cache key
 - Added optional `ApiKeyResolveContext` parameter to `getApiKey` in `AgentOptions` and `AgentLoopConfig` so key resolvers can receive retry context
 
 ### Changed

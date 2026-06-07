@@ -290,6 +290,7 @@ export interface InteractiveModeContext {
 	handleDequeue(): void;
 	handleImagePaste(): Promise<boolean>;
 	handleBtwCommand(question: string): Promise<void>;
+	handleTanCommand(work: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
 	handleOmfgCommand(complaint: string): Promise<void>;

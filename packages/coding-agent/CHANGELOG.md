@@ -1,8 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `/tan <work>` slash command to fork the current conversation into a background agent so tangential work can continue asynchronously while your main session stays active
+- Added a background `/tan` dispatch message that records the handoff in the transcript and marks the delegated work as non-blocking
+- Added `providerPromptCacheKey` support to `CreateAgentSessionOptions` so `/tan` background sessions can reuse the parent session’s prompt-cache lineage
+- Added session cloning for `/tan` runs with copied artifacts and shared MCP proxy tools
+- Added `SessionManager.forkFrom`’s optional `suppressBreadcrumb` mode to avoid breadcrumb updates when forking background `/tan` sessions
 - Added OSC 5522 enhanced paste handling in `InputController`, so terminal clipboard events are decoded as image or text payloads and inserted without passing raw paste sequences to the editor
 - Added bracketed image-path paste support in `CustomEditor` so a single pasted image file path (PNG/JPEG/GIF/WEBP) is loaded from disk and inserted as an image candidate
 - Added direct support for `Image #N` insertion from pasted local image paths by routing successful image-path pastes through the same image normalization and resize flow as clipboard image pastes

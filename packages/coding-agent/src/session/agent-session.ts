@@ -1282,6 +1282,14 @@ export class AgentSession {
 		return this.#modelRegistry;
 	}
 
+	get asyncJobManager(): AsyncJobManager | undefined {
+		return this.#asyncJobManager;
+	}
+
+	getAgentId(): string | undefined {
+		return this.#agentId;
+	}
+
 	/** Advance the tool-choice queue and return the next directive for the upcoming LLM call. */
 	nextToolChoice(): ToolChoice | undefined {
 		return this.#toolChoiceQueue.nextToolChoice();

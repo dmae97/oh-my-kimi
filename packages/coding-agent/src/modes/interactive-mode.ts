@@ -116,6 +116,7 @@ import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
+import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
 import {
 	consumeLoopLimitIteration,
@@ -349,6 +350,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
+	readonly #tanCommandController: TanCommandController;
 	readonly #omfgController: OmfgController;
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
@@ -473,6 +475,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
+		this.#tanCommandController = new TanCommandController(this);
 		this.#omfgController = new OmfgController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
@@ -3066,6 +3069,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleBtwCommand(question: string): Promise<void> {
 		return this.#btwController.start(question);
+	}
+
+	handleTanCommand(work: string): Promise<void> {
+		return this.#tanCommandController.start(work);
 	}
 
 	hasActiveBtw(): boolean {

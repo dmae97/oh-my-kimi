@@ -279,6 +279,8 @@ export interface CreateAgentSessionOptions {
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
+	/** Optional provider-facing prompt cache key, distinct from request lineage. */
+	providerPromptCacheKey?: string;
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];
@@ -2000,6 +2002,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onPayload,
 			onResponse,
 			sessionId: providerSessionId,
+			promptCacheKey: options.providerPromptCacheKey,
 			transformContext,
 			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
 			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",

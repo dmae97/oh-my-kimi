@@ -134,6 +134,11 @@ export interface AgentOptions {
 	 */
 	sessionId?: string;
 	/**
+	 * Optional prompt cache key forwarded to LLM providers.
+	 * When omitted, providers may fall back to sessionId.
+	 */
+	promptCacheKey?: string;
+	/**
 	 * Shared provider state map for session-scoped transport/session caches.
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
@@ -284,6 +289,7 @@ export class Agent {
 	#interruptMode: "immediate" | "wait";
 	#maxToolCallsPerTurn?: number;
 	#sessionId?: string;
+	#promptCacheKey?: string;
 	#metadata?: Record<string, unknown>;
 	#metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	#providerSessionState?: Map<string, ProviderSessionState>;
@@ -345,6 +351,7 @@ export class Agent {
 		this.#maxToolCallsPerTurn = opts.maxToolCallsPerTurn;
 		this.streamFn = opts.streamFn || streamSimple;
 		this.#sessionId = opts.sessionId;
+		this.#promptCacheKey = opts.promptCacheKey;
 		this.#providerSessionState = opts.providerSessionState;
 		this.#thinkingBudgets = opts.thinkingBudgets;
 		this.#temperature = opts.temperature;
@@ -389,6 +396,20 @@ export class Agent {
 	 */
 	set sessionId(value: string | undefined) {
 		this.#sessionId = value;
+	}
+
+	/**
+	 * Get the prompt cache key forwarded to providers.
+	 */
+	get promptCacheKey(): string | undefined {
+		return this.#promptCacheKey;
+	}
+
+	/**
+	 * Set the prompt cache key forwarded to providers.
+	 */
+	set promptCacheKey(value: string | undefined) {
+		this.#promptCacheKey = value;
 	}
 
 	/**
@@ -937,6 +958,7 @@ export class Agent {
 			interruptMode: this.#interruptMode,
 			maxToolCallsPerTurn: this.#maxToolCallsPerTurn,
 			sessionId: this.#sessionId,
+			promptCacheKey: this.#promptCacheKey,
 			metadata: this.#metadataResolver ? undefined : this.#metadata,
 			metadataResolver: this.#metadataResolver,
 			providerSessionState: this.#providerSessionState,
