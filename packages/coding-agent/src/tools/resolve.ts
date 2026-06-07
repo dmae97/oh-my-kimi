@@ -187,6 +187,20 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 		return untilAborted(signal, async () => {
 			const invoker = this.session.peekQueueInvoker?.() ?? this.session.peekStandingResolveHandler?.();
 			if (!invoker) {
+				// `discard` is a request to cancel/abort a staged action. When nothing is
+				// pending, the desired end-state (no staged change) already holds, so honor
+				// it as a successful cancellation instead of surfacing a hard error to the
+				// model. `apply` still errors — there is nothing to apply.
+				if (params.action === "discard") {
+					return {
+						content: [{ type: "text" as const, text: "Nothing to discard; no pending action remains." }],
+						details: {
+							action: "discard",
+							reason: params.reason,
+							...(params.extra != null ? { extra: params.extra } : {}),
+						},
+					};
+				}
 				throw new ToolError("No pending action to resolve. Nothing to apply or discard.");
 			}
 			const result = (await invoker(params)) as AgentToolResult<ResolveToolDetails>;
