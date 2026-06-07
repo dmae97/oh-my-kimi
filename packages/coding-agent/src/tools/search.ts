@@ -1332,6 +1332,10 @@ function renderBudgetedSearchGroups(
 	return lines;
 }
 
+function searchStatusIcon(uiTheme: Theme): string {
+	return uiTheme.fg("toolTitle", uiTheme.symbol("icon.search"));
+}
+
 export const searchToolRenderer = {
 	inline: true,
 	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -1343,10 +1347,10 @@ export const searchToolRenderer = {
 		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Search", description: args.pattern || "?", meta },
+			{ icon: "pending", title: "Search", titleColor: "toolTitle", description: args.pattern || "?", meta },
 			uiTheme,
 		);
-		return new Text(text, 0, 0);
+		return new Text(text, 1, 0);
 	},
 
 	renderResult(
@@ -1359,7 +1363,7 @@ export const searchToolRenderer = {
 
 		if (result.isError || details?.error) {
 			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || "Unknown error";
-			return new Text(formatErrorMessage(errorText, uiTheme), 0, 0);
+			return new Text(formatErrorMessage(errorText, uiTheme), 1, 0);
 		}
 
 		const hasDetailedData = details?.matchCount !== undefined || details?.fileCount !== undefined;
@@ -1367,14 +1371,15 @@ export const searchToolRenderer = {
 		if (!hasDetailedData) {
 			const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text;
 			if (!textContent || textContent === "No matches found") {
-				return new Text(formatEmptyMessage("No matches found", uiTheme), 0, 0);
+				return new Text(formatEmptyMessage("No matches found", uiTheme), 1, 0);
 			}
 			const lines = textContent.split("\n").filter(line => line.trim() !== "");
 			const description = args?.pattern ?? undefined;
 			const header = renderStatusLine(
 				{
-					iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")),
+					iconOverride: searchStatusIcon(uiTheme),
 					title: "Search",
+					titleColor: "toolTitle",
 					description,
 					meta: [formatCount("item", lines.length)],
 				},
@@ -1396,6 +1401,7 @@ export const searchToolRenderer = {
 					);
 					return [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 				},
+				{ paddingX: 1 },
 			);
 		}
 
@@ -1416,12 +1422,12 @@ export const searchToolRenderer = {
 			const scopeMeta = searchScopeMeta(details);
 			if (scopeMeta) meta.push(scopeMeta);
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Search", description: args?.pattern, meta },
+				{ icon: "warning", title: "Search", titleColor: "toolTitle", description: args?.pattern, meta },
 				uiTheme,
 			);
 			const lines = [header, formatEmptyMessage("No matches found", uiTheme)];
 			if (missingNote) lines.push(missingNote);
-			return new Text(lines.join("\n"), 0, 0);
+			return new Text(lines.join("\n"), 1, 0);
 		}
 
 		const summaryParts = [formatCount("match", matchCount), formatCount("file", fileCount)];
@@ -1432,10 +1438,9 @@ export const searchToolRenderer = {
 		const description = args?.pattern ?? undefined;
 		const header = renderStatusLine(
 			{
-				...(truncated
-					? { icon: "warning" as const }
-					: { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }),
+				...(truncated ? { icon: "warning" as const } : { iconOverride: searchStatusIcon(uiTheme) }),
 				title: "Search",
+				titleColor: "toolTitle",
 				description,
 				meta,
 			},
@@ -1470,6 +1475,7 @@ export const searchToolRenderer = {
 				const matchLines = renderBudgetedSearchGroups(matchGroups, budget, matchCount, uiTheme, !options.expanded);
 				return [header, ...matchLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
+			{ paddingX: 1 },
 		);
 	},
 	mergeCallAndResult: true,

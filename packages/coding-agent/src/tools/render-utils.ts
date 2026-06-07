@@ -753,6 +753,7 @@ export function capParseErrors(
 export function createCachedComponent(
 	getExpanded: () => boolean,
 	compute: (width: number, expanded: boolean) => string[],
+	options: { paddingX?: number } = {},
 ): Component {
 	let cached: { key: bigint; lines: string[] } | undefined;
 	return {
@@ -760,9 +761,13 @@ export function createCachedComponent(
 			const expanded = getExpanded();
 			const key = new Hasher().bool(expanded).u32(width).digest();
 			if (cached?.key === key) return cached.lines;
-			const lines = compute(width, expanded);
-			cached = { key, lines };
-			return lines;
+			const paddingX = Math.max(0, options.paddingX ?? 0);
+			const innerWidth = Math.max(1, width - paddingX * 2);
+			const lines = compute(innerWidth, expanded);
+			const pad = paddingX === 0 ? "" : " ".repeat(paddingX);
+			const paddedLines = paddingX === 0 ? lines : lines.map(line => `${pad}${line}${pad}`);
+			cached = { key, lines: paddedLines };
+			return paddedLines;
 		},
 		invalidate() {
 			cached = undefined;

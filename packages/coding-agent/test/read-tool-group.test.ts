@@ -32,6 +32,42 @@ describe("ReadToolGroupComponent", () => {
 		expect(rendered.toLowerCase()).not.toContain("ctrl+o");
 	});
 
+	it("uses the read-specific success mark for completed reads", () => {
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/example.ts" }, "read-success");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 1" }],
+			},
+			false,
+			"read-success",
+		);
+
+		const rendered = component.render(120).join("\n");
+		const plain = Bun.stripANSI(rendered);
+
+		expect(plain).toContain(themeModule.theme.status.enabled);
+		expect(plain).not.toContain(themeModule.theme.status.success);
+		expect(rendered).toContain(themeModule.theme.fg("text", themeModule.theme.status.enabled));
+		expect(rendered).not.toContain(themeModule.theme.fg("success", themeModule.theme.status.enabled));
+	});
+
+	it("omits duplicate success marks from multi-read child rows", () => {
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/one.ts" }, "read-one");
+		component.updateArgs({ path: "/tmp/two.ts" }, "read-two");
+		component.updateResult({ content: [{ type: "text", text: "one" }] }, false, "read-one");
+		component.updateResult({ content: [{ type: "text", text: "two" }] }, false, "read-two");
+
+		const plain = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(plain).toContain("Read (2)");
+		expect(plain).toContain(`${themeModule.theme.tree.branch} /tmp/one.ts`);
+		expect(plain).toContain(`${themeModule.theme.tree.last} /tmp/two.ts`);
+		expect(plain).not.toContain(`${themeModule.theme.tree.branch} ${themeModule.theme.status.enabled}`);
+		expect(plain).not.toContain(`${themeModule.theme.tree.last} ${themeModule.theme.status.enabled}`);
+	});
+
 	it("renders warning previews with warning styling instead of success styling", () => {
 		const component = new ReadToolGroupComponent({ showContentPreview: true });
 		component.updateArgs({ path: "/tmp/example.ts" }, "read-1");

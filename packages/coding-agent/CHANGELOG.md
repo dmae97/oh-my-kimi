@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Changed grouped `read` output to use a white filled-circle mark for the group/single-read success state and omit duplicate per-file success marks inside multi-read groups.
+
 - Changed assistant streaming output to reveal text incrementally at 30 FPS with grapheme-safe adaptive catch-up, instead of replacing the whole message chunk-by-chunk
 - Changed shimmer-driven TUI animations (working text, pending bash/eval borders, and theme activity-spinner documentation) to render at 30fps instead of 60fps.
 - Changed running `task` tool agent rows to use a static `•` marker and shimmer only the subagent name, leaving descriptions, stats, and nested tool detail text solid while removing the rotating status glyph from those rows.
@@ -43,6 +45,8 @@
 - Removed the `/background` (and `/bg`) slash command and the background-mode subsystem it was the sole entry point for — `InteractiveMode.isBackgrounded`, `createBackgroundUiContext`, `handleBackgroundEvent`, and every `isBackgrounded` guard across the input/event/extension-UI controllers and UI helpers. The command suspended the whole process group via `SIGTSTP` (a leftover testing shortcut) instead of detaching the running agent, which is not the expected workflow — use terminal panes or a multiplexer instead.
 
 ### Fixed
+
+- Fixed inline `find` and `search` result blocks to align with grouped `read` output and render their success headers with the normal tool-title color instead of accent blue.
 
 - Fixed the working-status shimmer to opt into the loader's 30fps animated-message repaint path while keeping both the status spinner and pending bash/eval tool spinners on their normal 80 ms glyph cadence.
 - Fixed consecutive `read` tool calls failing to collapse into a single grouped block when a reasoning model emits one read per completion (`[thinking, read]`). The read group was reset on every assistant `message_start`, so each read rendered as its own one-entry `Read …` line; now a read run accretes across completions and is broken only by a rendered non-empty text/thinking block, a non-read tool, or a user/IRC message — matching the transcript-rebuild path. `ReadToolGroupComponent` now reports its live/finalized state so the growing `Read (N)` header repaints correctly on native-scrollback (risk) terminals.

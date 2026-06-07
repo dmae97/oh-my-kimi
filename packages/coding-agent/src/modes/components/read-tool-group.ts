@@ -197,9 +197,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const total = entriesWithoutPreview.length;
 		for (const [index, entry] of entriesWithoutPreview.entries()) {
 			const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
-			const statusSymbol = this.#formatStatus(entry.status);
+			const statusPrefix = entry.status === "success" ? "" : `${this.#formatStatus(entry.status)} `;
 			const pathDisplay = this.#formatPath(entry);
-			lines.push(`   ${theme.fg("dim", connector)} ${statusSymbol} ${pathDisplay}`.trimEnd());
+			lines.push(`   ${theme.fg("dim", connector)} ${statusPrefix}${pathDisplay}`.trimEnd());
 		}
 
 		this.#text.setText(lines.join("\n"));
@@ -270,7 +270,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#formatStatus(status: ReadEntry["status"]): string {
 		if (status === "success") {
-			return theme.fg("success", theme.status.success);
+			return theme.fg("text", theme.status.enabled);
 		}
 		if (status === "warning") {
 			return theme.fg("warning", theme.status.warning);

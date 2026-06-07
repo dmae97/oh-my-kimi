@@ -428,6 +428,10 @@ function formatFindRenderPaths(paths: FindRenderArgs["paths"]): string | undefin
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 
+function findStatusIcon(uiTheme: Theme): string {
+	return uiTheme.fg("toolTitle", uiTheme.symbol("icon.search"));
+}
+
 export const findToolRenderer = {
 	inline: true,
 	renderCall(args: FindRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -435,10 +439,16 @@ export const findToolRenderer = {
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: formatFindRenderPaths(args.paths) || "*", meta },
+			{
+				icon: "pending",
+				title: "Find",
+				titleColor: "toolTitle",
+				description: formatFindRenderPaths(args.paths) || "*",
+				meta,
+			},
 			uiTheme,
 		);
-		return new Text(text, 0, 0);
+		return new Text(text, 1, 0);
 	},
 
 	renderResult(
@@ -451,7 +461,7 @@ export const findToolRenderer = {
 
 		if (result.isError || details?.error) {
 			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || "Unknown error";
-			return new Text(formatErrorMessage(errorText, uiTheme), 0, 0);
+			return new Text(formatErrorMessage(errorText, uiTheme), 1, 0);
 		}
 
 		const hasDetailedData = details?.fileCount !== undefined;
@@ -464,14 +474,15 @@ export const findToolRenderer = {
 				textContent.includes("No files found") ||
 				textContent.trim() === ""
 			) {
-				return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+				return new Text(formatEmptyMessage("No files found", uiTheme), 1, 0);
 			}
 
 			const lines = textContent.split("\n").filter(l => l.trim());
 			const header = renderStatusLine(
 				{
-					iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")),
+					iconOverride: findStatusIcon(uiTheme),
 					title: "Find",
+					titleColor: "toolTitle",
 					description: formatFindRenderPaths(args?.paths),
 					meta: [formatCount("file", lines.length)],
 				},
@@ -492,6 +503,7 @@ export const findToolRenderer = {
 					);
 					return [header, ...listLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 				},
+				{ paddingX: 1 },
 			);
 		}
 
@@ -507,22 +519,27 @@ export const findToolRenderer = {
 
 		if (fileCount === 0) {
 			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", description: formatFindRenderPaths(args?.paths), meta: ["0 files"] },
+				{
+					icon: "warning",
+					title: "Find",
+					titleColor: "toolTitle",
+					description: formatFindRenderPaths(args?.paths),
+					meta: ["0 files"],
+				},
 				uiTheme,
 			);
 			const lines = [header, formatEmptyMessage("No files found", uiTheme)];
 			if (missingNote) lines.push(missingNote);
-			return new Text(lines.join("\n"), 0, 0);
+			return new Text(lines.join("\n"), 1, 0);
 		}
 		const meta: string[] = [formatCount("file", fileCount)];
 		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
 			{
-				...(truncated
-					? { icon: "warning" as const }
-					: { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }),
+				...(truncated ? { icon: "warning" as const } : { iconOverride: findStatusIcon(uiTheme) }),
 				title: "Find",
+				titleColor: "toolTitle",
 				description: formatFindRenderPaths(args?.paths),
 				meta,
 			},
@@ -561,6 +578,7 @@ export const findToolRenderer = {
 				);
 				return [header, ...fileLines, ...extraLines].map(l => truncateToWidth(l, width, Ellipsis.Omit));
 			},
+			{ paddingX: 1 },
 		);
 	},
 	mergeCallAndResult: true,
