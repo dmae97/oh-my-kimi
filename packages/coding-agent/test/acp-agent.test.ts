@@ -1274,6 +1274,51 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("includes extension-registered commands in available_commands_update and excludes ACP-builtin collisions", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		// Attach a fake extensionRunner that exposes two extension commands:
+		// one unique and one whose name collides with an ACP builtin ("fast").
+		(session as unknown as { extensionRunner: unknown }).extensionRunner = {
+			getRegisteredCommands(reserved?: Set<string>) {
+				return [
+					{ name: "my-ext-cmd", description: "Extension command", handler: async () => {} },
+					{ name: "fast", description: "Would shadow builtin", handler: async () => {} },
+				].filter(cmd => !reserved?.has(cmd.name));
+			},
+		};
+
+		await waitForBootstrapGuard();
+
+		const commandUpdates = harness.updates.filter(
+			update =>
+				update.sessionId === created.sessionId && update.update.sessionUpdate === "available_commands_update",
+		);
+		const names = commandUpdates.flatMap(update =>
+			update.update.sessionUpdate === "available_commands_update"
+				? update.update.availableCommands.map(command => command.name)
+				: [],
+		);
+
+		// Extension command must surface.
+		expect(names).toContain("my-ext-cmd");
+		// ACP builtin "fast" must still appear exactly once (not shadowed/duplicated).
+		expect(names.filter(n => n === "fast").length).toBe(1);
+		// Extension command that collided with the builtin must not add a duplicate.
+		// (The builtin "fast" entry wins via the reserved-set exclusion.)
+		const fastEntries = commandUpdates.flatMap(update =>
+			update.update.sessionUpdate === "available_commands_update"
+				? update.update.availableCommands.filter(c => c.name === "fast")
+				: [],
+		);
+		expect(fastEntries.length).toBe(1);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("executes skill commands through custom skill messages", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

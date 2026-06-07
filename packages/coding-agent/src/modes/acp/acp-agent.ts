@@ -1584,8 +1584,12 @@ export class AcpAgent implements Agent {
 
 		// Advertise in the order dispatch resolves them: ACP builtins first
 		// (so core commands like `/model`, `/mcp`, `/todo` cannot be shadowed),
-		// then skills, then custom/user commands, then file-based slash
-		// commands. `appendCommand` dedupes by name so earlier entries win.
+		// then skills, then custom/user (TypeScript) commands, then
+		// extension-registered commands, then file-based slash commands.
+		// `appendCommand` dedupes by name so earlier entries win; skills and
+		// custom TS commands intentionally shadow extension commands of the
+		// same name (unlike interactive mode, which inserts extension commands
+		// before customs/skills).
 		for (const command of ACP_BUILTIN_SLASH_COMMANDS) {
 			appendCommand(command);
 		}
