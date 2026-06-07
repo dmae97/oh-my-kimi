@@ -283,6 +283,11 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
 const EMPTY_STOP_MAX_RETRIES = 3;
+const NON_WHITESPACE_RE = /\S/;
+
+function hasNonWhitespace(value: string): boolean {
+	return NON_WHITESPACE_RE.test(value);
+}
 
 export interface AsyncJobSnapshot {
 	running: AsyncJobSnapshotItem[];
@@ -6539,9 +6544,13 @@ export class AgentSession {
 				this.#retryAttempt = 0;
 			}
 			this.#resolveRetry();
+			// Tool-use orphans corrupt Anthropic message history (tool_result without
+			// matching tool_use). Always remove them even when the retry cap is hit.
+			if (assistantMessage.stopReason === "toolUse") {
+				this.#removeEmptyStopFromActiveContext(assistantMessage);
+			}
 			return true;
 		}
-
 		this.#removeEmptyStopFromActiveContext(assistantMessage);
 		this.agent.appendMessage({
 			role: "developer",
@@ -6554,12 +6563,26 @@ export class AgentSession {
 	}
 
 	#isEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
-		if (assistantMessage.stopReason !== "stop") return false;
-		return !assistantMessage.content.some(content => {
-			if (content.type === "text") return content.text.trim().length > 0;
-			if (content.type === "thinking") return content.thinking.trim().length > 0;
-			return content.type === "toolCall";
-		});
+		switch (assistantMessage.stopReason) {
+			case "stop":
+				for (const content of assistantMessage.content) {
+					if (content.type === "toolCall") return false;
+					if (content.type === "text" && hasNonWhitespace(content.text)) return false;
+					if (content.type === "thinking" && hasNonWhitespace(content.thinking)) return false;
+				}
+				return true;
+			case "toolUse":
+				// An orphaned toolUse stop (no tool_use block) corrupts Anthropic history:
+				// a later tool_result has nothing to anchor to. Thinking alone cannot anchor
+				// a tool_result, so it does not rescue a toolUse stop here.
+				for (const content of assistantMessage.content) {
+					if (content.type === "toolCall") return false;
+					if (content.type === "text" && hasNonWhitespace(content.text)) return false;
+				}
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	#emptyStopRetryReminder(): string {
