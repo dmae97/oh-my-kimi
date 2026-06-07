@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `/model` visibility for auto-selected role defaults: inferred `pi/smol`/`pi/slow`/designer choices now show as compact `[ROLE auto]` badges, while explicitly configured roles keep the existing solid badges and thinking labels.
+
 - Added credential provenance to the `/login` and `/logout` provider picker: each authenticated provider now shows where its credential comes from — `(login)`, `(api key)`, `(env: VAR_NAME)`, `(config)`, `(--api-key)`, or `(custom provider)` — so a real OAuth login is distinguishable from an env var that merely aliases the provider (e.g. `COPILOT_GITHUB_TOKEN`). The origin is also matched by the picker's type-to-search filter.
 
 ### Fixed
