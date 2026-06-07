@@ -27,6 +27,7 @@ function normalizeAdapterConfig(config: unknown): DapAdapterConfig | null {
 		rootMarkers: normalizeStringArray(config.rootMarkers),
 		launchDefaults: normalizeObject(config.launchDefaults),
 		attachDefaults: normalizeObject(config.attachDefaults),
+		acceptsDirectoryProgram: config.acceptsDirectoryProgram === true,
 		...(connectMode ? { connectMode } : {}),
 	};
 }
@@ -64,6 +65,7 @@ export function resolveAdapter(adapterName: string, cwd: string): DapResolvedAda
 		launchDefaults: config.launchDefaults ?? {},
 		attachDefaults: config.attachDefaults ?? {},
 		connectMode: config.connectMode ?? "stdio",
+		acceptsDirectoryProgram: config.acceptsDirectoryProgram === true,
 	};
 }
 
@@ -147,4 +149,34 @@ export function selectAttachAdapter(cwd: string, adapterName?: string, port?: nu
 		if (match) return match;
 	}
 	return available[0] ?? null;
+}
+
+/** How the launch `program` resolves on disk. `"missing"` is reserved for
+ *  programs the adapter creates on demand (rare); we treat them like files. */
+export type LaunchProgramKind = "file" | "directory" | "missing";
+
+/** Compute adapter-specific launch arguments that depend on the resolved
+ *  program. Returned values are spread over `adapter.launchDefaults` so they
+ *  take precedence over the static defaults but can still be overridden by
+ *  the fields `DapSessionManager.launch` sets explicitly (program, cwd, args).
+ *
+ *  Currently scoped to dlv, where `mode` selects how the program path is
+ *  interpreted: directories and `.go` source files debug as a Go package
+ *  (`mode=debug`), anything else is treated as a compiled binary (`mode=exec`).
+ */
+export function resolveLaunchOverrides(
+	adapter: DapResolvedAdapter,
+	program: string,
+	programKind: LaunchProgramKind,
+): Record<string, unknown> {
+	if (adapter.name === "dlv") {
+		const extension = path.extname(program).toLowerCase();
+		if (programKind === "directory" || extension === ".go") {
+			return { mode: "debug" };
+		}
+		if (programKind === "file") {
+			return { mode: "exec" };
+		}
+	}
+	return {};
 }
