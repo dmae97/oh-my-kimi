@@ -2049,7 +2049,9 @@ export class TUI extends Container {
 			newLines.length < this.#previousLines.length &&
 			naturalViewportTop !== prevViewportTop
 		) {
-			return { kind: "viewportRepaint" };
+			return this.#bottomAnchoredViewportUnchanged(newLines, height)
+				? { kind: "deferredMutation" }
+				: { kind: "viewportRepaint" };
 		}
 
 		// Direct-input shrink can also move the natural viewport upward even when
@@ -2435,6 +2437,17 @@ export class TUI extends Container {
 		const committedSealedEnd = Math.min(this.#scrollbackHighWater, commitBoundary);
 		const renderViewportTop = Math.max(naturalViewportTop, committedSealedEnd);
 		return { kind: "liveRegionPinned", appendFrom, appendTo, renderViewportTop };
+	}
+
+	#bottomAnchoredViewportUnchanged(newLines: string[], height: number): boolean {
+		const previousViewportTop = Math.max(0, this.#previousLines.length - height);
+		const newViewportTop = Math.max(0, newLines.length - height);
+		for (let row = 0; row < height; row++) {
+			if ((newLines[newViewportTop + row] ?? "") !== (this.#previousLines[previousViewportTop + row] ?? "")) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	#planDeferredTailRepaint(newLines: string[], prevViewportTop: number, height: number): RenderIntent {

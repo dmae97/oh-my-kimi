@@ -29,6 +29,8 @@
 
 ### Fixed
 
+- Fixed tmux offscreen-shrink frames to skip repainting when the visible tail is unchanged, avoiding intermittent blank/refresh flashes in pane terminals ([#2046](https://github.com/can1357/oh-my-pi/issues/2046)).
+
 - Fixed `Loader` text updates to skip identical messages and preserve the rendered `Text` cache instead of invalidating it every timer tick.
 
 - Fixed fullscreen overlay alt-frame rendering to reuse the current line-preparation path instead of calling removed fitting helpers.
