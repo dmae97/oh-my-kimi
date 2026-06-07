@@ -710,7 +710,7 @@ function readRefSync(repository: GitRepository, targetRef: string): string | nul
 			const stdoutText = new TextDecoder().decode(symResult.stdout).trim();
 			return `${HEAD_REF_PREFIX} ${stdoutText}`;
 		}
-		const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", targetRef]));
+		const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", targetRef]));
 		const revResult = Bun.spawnSync(["git", ...revArgs], {
 			cwd: repository.repoRoot,
 			stdout: "pipe",
@@ -752,17 +752,18 @@ async function readRef(repository: GitRepository, targetRef: string, signal?: Ab
 			return `${HEAD_REF_PREFIX} ${symResult.stdout.trim()}`;
 		}
 		throwIfAborted(signal);
-		const revResult = await git(repository.repoRoot, ["rev-parse", targetRef], { readOnly: true, signal }).catch(
-			err => {
-				if (
-					signal?.aborted ||
-					(err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))
-				) {
-					throw err;
-				}
-				return null;
-			},
-		);
+		const revResult = await git(repository.repoRoot, ["rev-parse", "--verify", targetRef], {
+			readOnly: true,
+			signal,
+		}).catch(err => {
+			if (
+				signal?.aborted ||
+				(err instanceof Error && (err.name === "AbortError" || err.name === "ToolAbortError"))
+			) {
+				throw err;
+			}
+			return null;
+		});
 		if (revResult && revResult.exitCode === 0) {
 			return revResult.stdout.trim() || null;
 		}
