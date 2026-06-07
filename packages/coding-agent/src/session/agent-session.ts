@@ -1696,7 +1696,7 @@ export class AgentSession {
 							// Abort the stream immediately — do not gate on extension callbacks
 							this.#ttsrAbortPending = true;
 							this.#ensureTtsrResumePromise();
-							this.agent.abort();
+							this.agent.abort(this.#formatTtsrAbortReason(matches));
 							// Notify extensions (fire-and-forget, does not block abort)
 							this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
 							// Schedule retry after a short delay
@@ -2175,6 +2175,12 @@ export class AgentSession {
 			}
 			break;
 		}
+	}
+
+	#formatTtsrAbortReason(rules: Rule[]): string {
+		const label = rules.length === 1 ? "rule" : "rules";
+		const ruleNames = rules.map(rule => rule.name).join(", ");
+		return `TTSR matched ${label}: ${ruleNames}`;
 	}
 
 	/** Get TTSR injection payload and clear pending injections. */
