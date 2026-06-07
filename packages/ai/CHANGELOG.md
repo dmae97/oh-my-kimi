@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.1] - 2026-06-07
+
 ### Breaking Changes
 
 - Removed the `onAuthError` option from stream request options and shifted auth retry handling to resolver-based `apiKey` behavior, requiring callers using custom auth-retry hooks to migrate

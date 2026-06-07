@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.10.1] - 2026-06-07
 ### Breaking Changes
 
 - Removed Kitty temp-file image transmission, its startup support probe, the `PI_KITTY_IMAGE_TRANSMISSION` override, and the temp-file helper exports. Kitty/Ghostty image payloads now stay on in-band base64 before placeholder/direct placement, avoiding blank first renders from temp-file load races.

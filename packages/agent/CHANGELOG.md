@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.1] - 2026-06-07
+
 ### Added
 
 - Added optional `promptCacheKey` support to `AgentOptions` and `Agent` via a new `promptCacheKey` property so providers can receive a caller-provided prompt cache key

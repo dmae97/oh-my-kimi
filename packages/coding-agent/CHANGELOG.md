@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.1] - 2026-06-07
+
 ### Added
 
 - Added `display.smoothStreaming` setting (default `true`) to let users enable or disable smooth assistant-stream text reveal
