@@ -50,6 +50,8 @@
 
 ### Fixed
 
+- Fixed session auto-retry for generic `upstream_error: Upstream request failed` gateway failures.
+
 - Fixed inline `find` and `search` result blocks to align with grouped `read` output and render their success headers with the normal tool-title color instead of accent blue.
 
 - Fixed the working-status shimmer to opt into the loader's 30fps animated-message repaint path while keeping both the status spinner and pending bash/eval tool spinners on their normal 80 ms glyph cadence.
