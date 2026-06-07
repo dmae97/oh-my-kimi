@@ -21,6 +21,10 @@
 
 - Fixed Kitty OSC 5522 paste rejecting plain text as "no supported text or image data": the listing parser now decodes the `mime="."` DATA payload (whitespace-separated MIME list) Kitty actually sends, in addition to the per-type DATA packets described by the ancillary 5522-mode spec ([#2051](https://github.com/can1357/oh-my-pi/issues/2051))
 
+### Fixed
+
+- Fixed follow-up shortcut submission of builtin slash commands so `/goal set ...` applies goal mode instead of queueing as plain text.
+
 ## [15.10.1] - 2026-06-07
 
 ### Added
