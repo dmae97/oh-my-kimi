@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Changed the bash tool frame to use a plain top rule instead of repeating "Bash" in the title bar, and folded minimizer raw-output artifact links into the status footer as `Artifact: <id>`.
+
 - Changed grouped `read` output to use a white filled-circle mark for the group/single-read success state and omit duplicate per-file success marks inside multi-read groups.
 
 - Changed assistant streaming output to reveal text incrementally at 30 FPS with grapheme-safe adaptive catch-up, instead of replacing the whole message chunk-by-chunk
