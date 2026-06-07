@@ -1373,7 +1373,7 @@ export const searchToolRenderer = {
 			const description = args?.pattern ?? undefined;
 			const header = renderStatusLine(
 				{
-					iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")),
+					iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")),
 					title: "Search",
 					description,
 					meta: [formatCount("item", lines.length)],
@@ -1434,7 +1434,7 @@ export const searchToolRenderer = {
 			{
 				...(truncated
 					? { icon: "warning" as const }
-					: { iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")) }),
+					: { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }),
 				title: "Search",
 				description,
 				meta,

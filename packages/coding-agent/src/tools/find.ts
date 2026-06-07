@@ -470,7 +470,7 @@ export const findToolRenderer = {
 			const lines = textContent.split("\n").filter(l => l.trim());
 			const header = renderStatusLine(
 				{
-					iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")),
+					iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")),
 					title: "Find",
 					description: formatFindRenderPaths(args?.paths),
 					meta: [formatCount("file", lines.length)],
@@ -521,7 +521,7 @@ export const findToolRenderer = {
 			{
 				...(truncated
 					? { icon: "warning" as const }
-					: { iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")) }),
+					: { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }),
 				title: "Find",
 				description: formatFindRenderPaths(args?.paths),
 				meta,

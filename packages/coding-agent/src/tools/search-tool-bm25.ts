@@ -322,7 +322,7 @@ export const searchToolBm25Renderer = {
 		const header = renderStatusLine(
 			{
 				...(details.tools.length > 0
-					? { iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")) }
+					? { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }
 					: { icon: "warning" as const }),
 				title: TOOL_DISCOVERY_TITLE,
 				description: truncateToWidth(safeQuery, MATCH_LABEL_LEN),

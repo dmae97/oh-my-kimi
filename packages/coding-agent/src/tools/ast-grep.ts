@@ -387,7 +387,7 @@ export const astGrepToolRenderer = {
 			{
 				...(limitReached
 					? { icon: "warning" as const }
-					: { iconOverride: uiTheme.fg("success", uiTheme.symbol("icon.search")) }),
+					: { iconOverride: uiTheme.fg("accent", uiTheme.symbol("icon.search")) }),
 				title: "AST Grep",
 				description,
 				meta,

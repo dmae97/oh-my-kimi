@@ -39,6 +39,7 @@
 ### Fixed
 
 - Fixed plan approval resolution so `resolve` with `action: "apply"` can still find the plan file when `extra.title` is missing or stale by falling back to the current plan path and most-recent local plan artifacts
+- Fixed the search-family tool magnifier glyph (`find`, `search`, `ast_grep`, `search_tool_bm25`) to use the `accent` title color instead of `success` green, so the icon matches the tool title in the status header instead of standing out
 - Fixed TTSR stream interrupts to pass the matched rule name through the abort reason, so aborted in-flight tool placeholders say why they were stopped instead of `Request was aborted`.
 - Fixed URL reads for binary/special payloads to reuse local readers: remote archives list their root entries, SQLite databases show their table overview, notebooks render as editable cells, and unrenderable binary returns a metadata notice instead of decoded byte garbage.
 - Fixed pasted image-file paths that cannot be loaded to fall back to normal text paste with status feedback instead of disappearing.
