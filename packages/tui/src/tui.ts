@@ -433,11 +433,6 @@ type RenderIntent =
 export class TUI extends Container {
 	terminal: Terminal;
 	#previousLines: string[] = [];
-	// Per-frame cache of #fitLineToWidth results. Cleared at the top of every
-	// #doRender (where the frame width is fixed), so it only ever holds entries
-	// for one width. Eliminates the duplicate fit work between the compose pass
-	// and the emitters, plus repeated fits of identical blank padding rows.
-	#fitLineCache = new Map<string, string>();
 	#previousWidth = 0;
 	#previousHeight = 0;
 	#focusedComponent: Component | null = null;
@@ -1541,9 +1536,6 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
-		// Reset the per-frame fit memo: width is fixed for this frame, so cached
-		// fit results stay valid across the compose pass and every emitter re-fit.
-		this.#fitLineCache.clear();
 
 		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
 		// requests it, borrow the terminal's alternate buffer (saved/restored by
@@ -2457,25 +2449,10 @@ export class TUI extends Container {
 	}
 
 	#fitLineToWidth(line: string, width: number): string {
-		// Frame-scoped memo: #doRender clears this each frame after reading the
-		// terminal width, so within a frame `width` is constant and this map is
-		// keyed by line alone. The compose/fit pass (#fitLinesToWidth) and every
-		// emitter re-fit the same lines (and many repeated blank rows); the result
-		// is pure for a fixed width, so caching it is byte-identical and skips the
-		// redundant native visibleWidth/truncate work.
-		const cached = this.#fitLineCache.get(line);
-		if (cached !== undefined) return cached;
-		let result: string;
-		if (TERMINAL.isImageLine(line)) {
-			result = line;
-		} else if (visibleWidth(line) <= width) {
-			result = line;
-		} else {
-			const truncated = truncateToWidth(line, width, Ellipsis.Omit);
-			result = truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
-		}
-		this.#fitLineCache.set(line, result);
-		return result;
+		if (TERMINAL.isImageLine(line)) return line;
+		if (visibleWidth(line) <= width) return line;
+		const truncated = truncateToWidth(line, width, Ellipsis.Omit);
+		return truncated + (truncated.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
 	}
 
 	#lineRewriteSequence(line: string, width: number): string {
