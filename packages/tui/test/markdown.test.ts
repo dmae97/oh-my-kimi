@@ -1331,3 +1331,43 @@ describe("OSC 66 text-sizing headings", () => {
 		expect(lines.some(line => stripVTControlCharacters(line).includes("Sub"))).toBe(true);
 	});
 });
+
+describe("Markdown.render cache ownership", () => {
+	// Regression: the ask tool renderer did `md(question).push(...optionLines)`,
+	// mutating Markdown's cached array in place. render() handed out the live L1
+	// (per-instance) and L2 (module-level, shared across instances) cache arrays,
+	// so every redraw re-pushed onto the same growing array (+N lines/frame). That
+	// inflated the chat block unboundedly and cascaded into native-scrollback
+	// duplication. render() must return a caller-owned copy so push/splice can
+	// never poison the cache or a future render.
+	afterEach(() => clearRenderCache());
+
+	it("does not let a caller's mutation grow the next render (per-instance cache)", () => {
+		const md = new Markdown("Question text", 1, 0, defaultMarkdownTheme);
+		const baseline = md.render(40).length;
+		md.render(40).push("INJECTED-A", "INJECTED-B");
+		const after = md.render(40);
+		expect(after.length).toBe(baseline);
+		expect(after.some(line => line.includes("INJECTED"))).toBe(false);
+	});
+
+	it("does not let one instance's mutation leak into another via the shared L2 cache", () => {
+		const a = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
+		const b = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
+		const baseline = b.render(40).length;
+		// `a` populates L2; mutating its result must not corrupt the entry `b` reads.
+		a.render(40).push("LEAKED-1", "LEAKED-2", "LEAKED-3");
+		const fromB = b.render(40);
+		expect(fromB.length).toBe(baseline);
+		expect(fromB.some(line => line.includes("LEAKED"))).toBe(false);
+	});
+
+	it("stays stable across many mutate-then-render cycles (no accumulation)", () => {
+		const md = new Markdown("Pick one", 1, 0, defaultMarkdownTheme);
+		const baseline = md.render(40).length;
+		for (let i = 0; i < 25; i++) {
+			md.render(40).push(`OPT-${i}`);
+		}
+		expect(md.render(40).length).toBe(baseline);
+	});
+});
