@@ -22,7 +22,7 @@ const HL_HEADER_RE = new RegExp(`^\\s*\\[[^#\\r\\n]+#[0-9a-fA-F]{${HL_FILE_HASH_
 const DIFF_PLUS_RE = /^[+](?![+])/;
 const READ_TRUNCATION_NOTICE_RE = /^\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines? in (?:file|\S+))\b.*\bUse :L?\d+/;
 
-export function stripLeadingHashlinePrefixes(line: string): string {
+function stripLeadingHashlinePrefixes(line: string): string {
 	let result = line;
 	let previous: string;
 	do {
