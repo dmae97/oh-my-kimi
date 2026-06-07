@@ -2509,6 +2509,16 @@ export class TUI extends Container {
 				const end = this.#ansiSequenceEnd(raw, i);
 				if (end === -1) break;
 				const sequenceLength = end - i;
+				if (this.#ansiSequenceHasVisiblePayload(raw, i)) {
+					// OSC 66 text-sizing spans carry their visible cells inside the
+					// OSC payload. Always include the whole sequence — splitting it
+					// would corrupt the terminator — and let the next loop iteration
+					// terminate on the budget overflow.
+					chunks.push(raw.slice(i, end));
+					emitted += sequenceLength;
+					i = end;
+					continue;
+				}
 				if (emitted > 0 && sequenceLength <= maxSourceLength - emitted) {
 					chunks.push(raw.slice(i, end));
 					emitted += sequenceLength;
@@ -2550,6 +2560,17 @@ export class TUI extends Container {
 			return -1;
 		}
 		return start + 2 <= line.length ? start + 2 : -1;
+	}
+
+	#ansiSequenceHasVisiblePayload(line: string, start: number): boolean {
+		// OSC 66 (`\x1b]66;META;TEXT\x1b\\`) carries its visible cells inside the
+		// payload, mirroring the special case in {@link #ansiAsciiLineWidth}.
+		return (
+			line.charCodeAt(start + 1) === 0x5d &&
+			line.charCodeAt(start + 2) === 0x36 &&
+			line.charCodeAt(start + 3) === 0x36 &&
+			line.charCodeAt(start + 4) === 0x3b
+		);
 	}
 
 	#ansiAsciiLineWidth(line: string, maxWidth: number): number | undefined {

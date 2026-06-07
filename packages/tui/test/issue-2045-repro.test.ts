@@ -99,4 +99,22 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 		expect(rendered).toContain("link-label");
 		expect(rendered.length).toBeLessThan(12_000);
 	});
+
+	it("preserves OSC 66 text-sizing payloads at the start of long rows", async () => {
+		const term = new CaptureTerminal(80, 4);
+		const tui = new TUI(term);
+		const visibleText = "H".repeat(70);
+		const line = `\x1b]66;s=1;${visibleText}\x1b\\${"\x1b[31m".repeat(20_000)}`;
+
+		tui.addChild(new RawLinesComponent([line]));
+		try {
+			tui.start();
+			await settle();
+		} finally {
+			tui.stop();
+		}
+
+		const rendered = term.writes.join("");
+		expect(rendered).toContain(visibleText);
+	});
 });
