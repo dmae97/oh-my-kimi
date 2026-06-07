@@ -130,6 +130,34 @@ describe.skipIf(!supportsReftable)("git reftable support", () => {
 			expect(await git.repo.isReftable(repository4)).toBe(false);
 			expect(git.repo.isReftableSync(repository4)).toBe(false);
 		}
+
+		// Test adjacent hash comment (no preceding space)
+		const newConfigWithAdjacentHash = baseConfig.replace(
+			"refstorage = reftable",
+			"refstorage = reftable#adjacenthash",
+		);
+		await fs.writeFile(configPath, newConfigWithAdjacentHash);
+
+		const repository5 = await git.repo.resolve(testRepoDir);
+		expect(repository5).not.toBeNull();
+		if (repository5) {
+			expect(await git.repo.isReftable(repository5)).toBe(true);
+			expect(git.repo.isReftableSync(repository5)).toBe(true);
+		}
+
+		// Test adjacent semicolon comment (no preceding space)
+		const newConfigWithAdjacentSemicolon = baseConfig.replace(
+			"refstorage = reftable",
+			"refstorage = reftable;adjacentsemi",
+		);
+		await fs.writeFile(configPath, newConfigWithAdjacentSemicolon);
+
+		const repository6 = await git.repo.resolve(testRepoDir);
+		expect(repository6).not.toBeNull();
+		if (repository6) {
+			expect(await git.repo.isReftable(repository6)).toBe(true);
+			expect(git.repo.isReftableSync(repository6)).toBe(true);
+		}
 	});
 
 	test("resolves references in a reftable worktree", async () => {

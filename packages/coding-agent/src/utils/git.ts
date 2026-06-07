@@ -583,10 +583,7 @@ function parseGitConfigHasReftable(content: string): boolean {
 							inQuotes = !inQuotes;
 							cleanValue += char;
 						} else if (!inQuotes && (char === ";" || char === "#")) {
-							if (i === 0 || /\s/.test(value[i - 1])) {
-								break;
-							}
-							cleanValue += char;
+							break;
 						} else {
 							cleanValue += char;
 						}
