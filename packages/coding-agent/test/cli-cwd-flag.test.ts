@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { parseArgs } from "../src/cli/args";
-import { applyStartupCwd } from "../src/main";
+import { applyStartupCwd } from "../src/cli/startup-cwd";
 
 const originalProjectDir = getProjectDir();
 
