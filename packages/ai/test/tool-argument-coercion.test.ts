@@ -78,6 +78,123 @@ describe("Tool argument coercion", () => {
 		expect(result.paths).toEqual(["src/**/*.ts"]);
 	});
 
+	it("wraps a singleton object in an array when schema expects object array", () => {
+		const tool: Tool = {
+			name: "todo_like",
+			description: "",
+			parameters: z.object({
+				ops: z.array(
+					z.object({
+						op: z.literal("init"),
+						list: z.array(
+							z.object({
+								phase: z.string(),
+								items: z.array(z.string()),
+							}),
+						),
+					}),
+				),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-singleton-object-array",
+			name: "todo_like",
+			arguments: {
+				ops: {
+					op: "init",
+					list: [{ phase: "Repro", items: ["capture"] }],
+				},
+			},
+		});
+
+		expect(result).toEqual({
+			ops: [{ op: "init", list: [{ phase: "Repro", items: ["capture"] }] }],
+		});
+	});
+
+	it("wraps a singleton number in an array when schema expects number array", () => {
+		const tool: Tool = {
+			name: "numeric_list",
+			description: "",
+			parameters: z.object({ values: z.array(z.number()) }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-singleton-number-array",
+			name: "numeric_list",
+			arguments: { values: 7 },
+		});
+
+		expect(result).toEqual({ values: [7] });
+	});
+
+	it("does not wrap singleton values for array expectations from failed union branches", () => {
+		const entry = z.object({ id: z.number() });
+		const tool: Tool = {
+			name: "union_shape",
+			description: "",
+			parameters: z.union([z.array(entry), entry]),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-union-shape",
+			name: "union_shape",
+			arguments: { id: "1" },
+		});
+
+		expect(result).toEqual({ id: 1 });
+	});
+
+	it("does not wrap singleton values for JSON Schema anyOf array branches", () => {
+		const tool: Tool = {
+			name: "json_schema_union",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					target: {
+						anyOf: [
+							{
+								type: "array",
+								items: {
+									type: "object",
+									properties: { a: { type: "boolean" } },
+									required: ["a"],
+									additionalProperties: false,
+								},
+							},
+							{
+								type: "object",
+								properties: { a: { type: "boolean" } },
+								required: ["a"],
+								additionalProperties: false,
+							},
+						],
+					},
+				},
+				required: ["target"],
+				additionalProperties: false,
+			},
+		};
+
+		// The bug would silently coerce `{ a: "true" }` into `[{ a: true }]` by
+		// wrapping the object to satisfy the failed `anyOf` array branch and
+		// then coercing the inner string into a boolean. Branch tracking keeps
+		// the wrap from firing so the wrong shape never makes it through.
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-jsonschema-union",
+				name: "json_schema_union",
+				arguments: { target: { a: "true" } },
+			}),
+		).toThrow("Validation failed");
+	});
+
 	it("parses JSON objects in string values when schema expects object", () => {
 		const tool: Tool = {
 			name: "t4",

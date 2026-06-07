@@ -20,6 +20,14 @@ export interface JsonSchemaValidationIssue {
 	message: string;
 	expectedTypes?: string[];
 	keyword?: string;
+	/**
+	 * Marks issues that originate inside a failed `anyOf` / `oneOf` branch.
+	 * Consumers such as the tool-argument coercion layer use this to avoid
+	 * applying type repairs (e.g. singleton-array wrapping) that would be
+	 * authoritative outside of a combinator but are only one candidate
+	 * branch's expectation here.
+	 */
+	fromUnionBranch?: boolean;
 }
 
 export interface JsonSchemaValidationResult {
@@ -242,7 +250,9 @@ function validateSchemaNode(
 		const branchValid = keyword === "anyOf" ? matches > 0 : matches === 1;
 		if (!branchValid) {
 			if (matches === 0 && firstIssues && firstIssues.length > 0) {
-				issues.push(...firstIssues);
+				for (const branchIssue of firstIssues) {
+					issues.push({ ...branchIssue, fromUnionBranch: true });
+				}
 			} else {
 				pushIssue(
 					issues,

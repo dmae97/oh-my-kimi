@@ -724,6 +724,7 @@ interface FlatIssue {
 	keyword: "type" | "unrecognized" | "other";
 	instancePath: string;
 	expectedTypes: string[];
+	unionBranch: boolean;
 }
 
 /**
@@ -759,12 +760,12 @@ function mapZodExpectedToJsonSchemaType(expected: unknown): string | null {
  */
 function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 	const out: FlatIssue[] = [];
-	const walk = (issue: ZodIssue, prefix: ReadonlyArray<PropertyKey>): void => {
+	const walk = (issue: ZodIssue, prefix: ReadonlyArray<PropertyKey>, unionBranch: boolean): void => {
 		const fullPath = prefix.length === 0 ? issue.path : [...prefix, ...issue.path];
 		if (issue.code === "invalid_type") {
 			const mapped = mapZodExpectedToJsonSchemaType((issue as { expected?: unknown }).expected);
 			if (mapped) {
-				out.push({ keyword: "type", instancePath: pathToPointer(fullPath), expectedTypes: [mapped] });
+				out.push({ keyword: "type", instancePath: pathToPointer(fullPath), expectedTypes: [mapped], unionBranch });
 				return;
 			}
 		}
@@ -775,6 +776,7 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 					keyword: "unrecognized",
 					instancePath: pathToPointer([...fullPath, key]),
 					expectedTypes: [],
+					unionBranch,
 				});
 			}
 			return;
@@ -784,15 +786,15 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 			if (inner) {
 				for (const branch of inner) {
 					for (const child of branch) {
-						walk(child, fullPath);
+						walk(child, fullPath, true);
 					}
 				}
 			}
 			return;
 		}
-		out.push({ keyword: "other", instancePath: pathToPointer(fullPath), expectedTypes: [] });
+		out.push({ keyword: "other", instancePath: pathToPointer(fullPath), expectedTypes: [], unionBranch });
 	};
-	for (const issue of issues) walk(issue, []);
+	for (const issue of issues) walk(issue, [], false);
 	return out;
 }
 
@@ -801,7 +803,9 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
  *
  * Two kinds of repair are applied:
  *  - **type**: when a value is a JSON-encoded string and the schema wants
- *    something else, parse it and substitute the parsed value.
+ *    something else, parse it and substitute the parsed value. When a
+ *    non-union schema wants an array but receives a singleton value, wrap that
+ *    value in a one-element array.
  *  - **unrecognized**: when a strict object received an extra key (Zod's
  *    `unrecognized_keys` or JSON Schema's `additionalProperties: false`),
  *    drop that key so re-validation succeeds. This effectively coerces every
@@ -811,6 +815,7 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
  * The function is safe and conservative:
  *   - Only processes "type" and "unrecognized" issues
  *   - Only attempts JSON coercion on string values
+ *   - Only wraps singleton array values for non-union type expectations
  *   - Only accepts parsed results that match the expected type
  *   - Clones the args object before mutation (copy-on-write)
  */
@@ -836,12 +841,16 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 		if (issue.expectedTypes.length === 0) continue;
 
 		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
-		if (typeof currentValue !== "string") continue;
-
-		const result = tryParseJsonForTypes(currentValue, issue.expectedTypes);
+		const result =
+			typeof currentValue === "string"
+				? tryParseJsonForTypes(currentValue, issue.expectedTypes)
+				: { value: currentValue, changed: false };
 		const coercedValue = result.changed
 			? result.value
-			: issue.expectedTypes.includes("array")
+			: issue.expectedTypes.includes("array") &&
+					!issue.unionBranch &&
+					currentValue !== undefined &&
+					!Array.isArray(currentValue)
 				? [currentValue]
 				: undefined;
 		if (coercedValue === undefined) continue;
@@ -905,17 +914,20 @@ function preserveUnknownRootFields(input: unknown, parsed: unknown): unknown {
 
 function flattenJsonSchemaIssues(issues: ReadonlyArray<JsonSchemaValidationIssue>): FlatIssue[] {
 	return issues.map(issue => {
+		const unionBranch = issue.fromUnionBranch === true;
 		if (issue.keyword === "additionalProperties") {
 			return {
 				keyword: "unrecognized",
 				instancePath: pathToPointer(issue.path),
 				expectedTypes: [],
+				unionBranch,
 			};
 		}
 		return {
 			keyword: issue.keyword === "type" ? "type" : "other",
 			instancePath: pathToPointer(issue.path),
 			expectedTypes: issue.expectedTypes ?? [],
+			unionBranch,
 		};
 	});
 }
