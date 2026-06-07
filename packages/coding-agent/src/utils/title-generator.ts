@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { type Api, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { reuseInitialApiKey } from "../config/api-key-resolver";
+
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
@@ -239,7 +239,7 @@ export async function generateTitleOnline(
 				tools: [setTitleTool],
 			},
 			{
-				apiKey: reuseInitialApiKey(apiKey, registry, model.provider, { sessionId, baseUrl: model.baseUrl }),
+				apiKey: registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl }),
 				maxTokens,
 				disableReasoning: true,
 				toolChoice: { type: "tool", name: SET_TITLE_TOOL_NAME },

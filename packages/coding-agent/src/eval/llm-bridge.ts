@@ -15,7 +15,7 @@ import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent
 import { type Api, Effort, getSupportedEfforts, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
-import { reuseInitialApiKey } from "../config/api-key-resolver";
+
 import { expandRoleAlias, formatModelString, resolveModelFromString } from "../config/model-resolver";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
@@ -145,7 +145,7 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 				tools,
 			},
 			{
-				apiKey: reuseInitialApiKey(apiKey, registry, model.provider, {
+				apiKey: registry.resolver(model.provider, {
 					sessionId: options.session.getSessionId?.() ?? undefined,
 					baseUrl: model.baseUrl,
 				}),

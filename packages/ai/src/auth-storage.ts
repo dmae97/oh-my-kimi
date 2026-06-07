@@ -590,36 +590,6 @@ export interface InvalidateCredentialMatchingOptions {
 	sessionId?: string;
 }
 
-/**
- * Build an {@link ApiKeyResolver} backed directly by an {@link AuthStorage},
- * implementing the central a/b/c auth-retry policy for consumers that hold an
- * AuthStorage rather than a higher-level registry (e.g. web-search providers):
- *
- * - initial (`error: undefined`) → resolve the session credential.
- * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential.
- * - step (c) `lastChance` → rotate to a sibling credential, then re-resolve.
- */
-export function createAuthStorageResolver(
-	storage: Pick<AuthStorage, "getApiKey" | "rotateSessionCredential">,
-	provider: string,
-	options?: { sessionId?: string; baseUrl?: string; modelId?: string },
-): ApiKeyResolver {
-	const { sessionId, baseUrl, modelId } = options ?? {};
-	return async ({ lastChance, error, signal }) => {
-		if (error === undefined) {
-			return storage.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
-		}
-		if (lastChance) {
-			// Rotate to a sibling credential on an account constraint. No
-			// retry-after handling here — `markUsageLimitReached` owns the block
-			// duration and the outer retry layer owns the no-sibling wait.
-			await storage.rotateSessionCredential(provider, sessionId, { error, signal });
-			return storage.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
-		}
-		return storage.getApiKey(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
-	};
-}
-
 function isAbortSignalOption(
 	value: InvalidateCredentialMatchingOptions | AbortSignal | undefined,
 ): value is AbortSignal {
@@ -3785,6 +3755,31 @@ export class AuthStorage {
 		}
 
 		return hasSibling;
+	}
+
+	/**
+	 * Build an {@link ApiKeyResolver} backed by this storage, implementing the
+	 * central a/b/c auth-retry policy:
+	 *
+	 * - initial (`error: undefined`) → resolve the session credential.
+	 * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential.
+	 * - step (c) `lastChance` → rotate to a sibling credential, then re-resolve.
+	 *
+	 * Used by web-search providers and other consumers that hold an AuthStorage
+	 * directly (no ModelRegistry in scope).
+	 */
+	resolver(provider: string, options?: { sessionId?: string; baseUrl?: string; modelId?: string }): ApiKeyResolver {
+		const { sessionId, baseUrl, modelId } = options ?? {};
+		return async ({ lastChance, error, signal }) => {
+			if (error === undefined) {
+				return this.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
+			}
+			if (lastChance) {
+				await this.rotateSessionCredential(provider, sessionId, { error, signal });
+				return this.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
+			}
+			return this.getApiKey(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
+		};
 	}
 
 	// ─── Auth Broker integration ────────────────────────────────────────────

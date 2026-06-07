@@ -95,12 +95,14 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 	...SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
 ];
 
+import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
+import { type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { type ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCanonicalModelIndex,
@@ -2383,6 +2385,15 @@ export class ModelRegistry {
 			forceRefresh: options?.forceRefresh,
 			signal: options?.signal,
 		});
+	}
+
+	/**
+	 * Build an {@link ApiKeyResolver} for this provider, implementing the
+	 * central a/b/c auth-retry policy. Callers that need the initial key for
+	 * a guard can call `resolveApiKeyOnce(resolver)`.
+	 */
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver {
+		return createApiKeyResolver(this, provider, options);
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {

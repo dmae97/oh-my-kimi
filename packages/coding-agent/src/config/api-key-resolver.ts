@@ -19,25 +19,23 @@ export interface ApiKeyResolverRegistry {
 		options?: { baseUrl?: string; forceRefresh?: boolean; signal?: AbortSignal },
 	): Promise<string | undefined>;
 	authStorage: Pick<AuthStorage, "rotateSessionCredential">;
+	/**
+	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
+	 * policy: initial → resolve; step (b) → force-refresh same account; step (c)
+	 * → rotate to a sibling credential, then re-resolve.
+	 *
+	 * The resolver is stateless (safe to reuse across requests). Callers that
+	 * need the initial key for a guard can call `resolveApiKeyOnce(resolver)`.
+	 */
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
 }
 
 /**
- * Build an {@link ApiKeyResolver} backed by the model registry's auth storage,
- * implementing the central a/b/c auth-retry policy for every non-agent network
- * consumer (utility completions, image generation, web search):
- *
- * - initial (`error: undefined`) → resolve the session credential (cheap; may
- *   return a locally-cached not-yet-expired token).
- * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential
- *   (a peer/broker may have rotated its token out from under our cached copy).
- * - step (c) `lastChance` → rotate to a sibling credential (usage-limit block
- *   vs credential invalidation, by error class), then re-resolve.
- *
- * Stateless: nothing is captured beyond the registry/provider/options, so the
- * same resolver is safe to reuse across attempts and requests.
+ * Default implementation of {@link ApiKeyResolverRegistry.resolver}.
+ * Also usable standalone for structural registries that don't carry the method.
  */
 export function createApiKeyResolver(
-	registry: ApiKeyResolverRegistry,
+	registry: Pick<ApiKeyResolverRegistry, "getApiKeyForProvider" | "authStorage">,
 	provider: string,
 	options: ApiKeyResolverOptions = {},
 ): ApiKeyResolver {
@@ -57,21 +55,4 @@ export function createApiKeyResolver(
 		}
 		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, forceRefresh: true, signal });
 	};
-}
-
-/**
- * Wrap an already-resolved `initialKey` in an {@link ApiKeyResolver}: the
- * initial step returns that key verbatim (so a caller that resolved it eagerly
- * — e.g. to preserve a metadata / guard ordering, or to short-circuit when no
- * credential exists — does not pay for a second resolve), while retry steps
- * fall through to {@link createApiKeyResolver}'s force-refresh / rotate policy.
- */
-export function reuseInitialApiKey(
-	initialKey: string | undefined,
-	registry: ApiKeyResolverRegistry,
-	provider: string,
-	options: ApiKeyResolverOptions = {},
-): ApiKeyResolver {
-	const retry = createApiKeyResolver(registry, provider, options);
-	return ctx => (ctx.error === undefined ? initialKey : retry(ctx));
 }

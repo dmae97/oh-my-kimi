@@ -68,6 +68,9 @@ function createSession(
 		modelRegistry: {
 			getAvailable: () => availableModels,
 			getApiKey: async () => apiKey,
+			getApiKeyForProvider: async () => apiKey,
+			authStorage: { rotateSessionCredential: async () => false },
+			resolver: () => async () => apiKey,
 		} as unknown as NonNullable<ToolSession["modelRegistry"]>,
 	};
 }

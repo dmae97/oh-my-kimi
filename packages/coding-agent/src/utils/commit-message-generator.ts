@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import { reuseInitialApiKey } from "../config/api-key-resolver";
+
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -112,7 +112,7 @@ export async function generateCommitMessage(
 					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				},
 				{
-					apiKey: reuseInitialApiKey(apiKey, registry, candidate.model.provider, {
+					apiKey: registry.resolver(candidate.model.provider, {
 						sessionId,
 						baseUrl: candidate.model.baseUrl,
 					}),

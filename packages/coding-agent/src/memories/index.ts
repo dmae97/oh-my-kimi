@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type ApiKey, clampThinkingLevelForModel, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
-import { reuseInitialApiKey } from "../config/api-key-resolver";
+
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -272,7 +272,7 @@ async function runPhase1(options: {
 			const result = await runStage1Job({
 				claim,
 				model: phase1Model,
-				apiKey: reuseInitialApiKey(phase1ApiKey, modelRegistry, phase1Model.provider, {
+				apiKey: modelRegistry.resolver(phase1Model.provider, {
 					sessionId: session.sessionId,
 					baseUrl: phase1Model.baseUrl,
 				}),
@@ -432,7 +432,7 @@ async function runPhase2(options: {
 			const consolidated = await runConsolidationModel({
 				memoryRoot,
 				model: phase2Model,
-				apiKey: reuseInitialApiKey(phase2ApiKey, modelRegistry, phase2Model.provider, {
+				apiKey: modelRegistry.resolver(phase2Model.provider, {
 					sessionId: session.sessionId,
 					baseUrl: phase2Model.baseUrl,
 				}),

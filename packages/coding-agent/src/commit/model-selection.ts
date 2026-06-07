@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
-import { type ApiKeyResolverRegistry, reuseInitialApiKey } from "../config/api-key-resolver";
+import type { ApiKeyResolverRegistry } from "../config/api-key-resolver";
 import { MODEL_ROLE_IDS } from "../config/model-registry";
 import {
 	type ModelLookupRegistry,
@@ -47,7 +47,7 @@ export async function resolvePrimaryModel(
 	}
 	return {
 		model,
-		apiKey: reuseInitialApiKey(apiKey, modelRegistry, model.provider, { baseUrl: model.baseUrl }),
+		apiKey: modelRegistry.resolver(model.provider, { baseUrl: model.baseUrl }),
 		thinkingLevel: resolved?.thinkingLevel,
 	};
 }
@@ -65,7 +65,7 @@ export async function resolveSmolModel(
 		if (apiKey) {
 			return {
 				model: resolvedSmol.model,
-				apiKey: reuseInitialApiKey(apiKey, modelRegistry, resolvedSmol.model.provider, {
+				apiKey: modelRegistry.resolver(resolvedSmol.model.provider, {
 					baseUrl: resolvedSmol.model.baseUrl,
 				}),
 				thinkingLevel: resolvedSmol.thinkingLevel,
@@ -81,7 +81,7 @@ export async function resolveSmolModel(
 		if (apiKey) {
 			return {
 				model: candidate,
-				apiKey: reuseInitialApiKey(apiKey, modelRegistry, candidate.provider, { baseUrl: candidate.baseUrl }),
+				apiKey: modelRegistry.resolver(candidate.provider, { baseUrl: candidate.baseUrl }),
 			};
 		}
 	}

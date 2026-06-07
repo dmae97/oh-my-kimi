@@ -21,6 +21,12 @@ describe("Tavily web search provider", () => {
 		hasAuth() {
 			return Boolean(process.env.TAVILY_API_KEY);
 		},
+		resolver(_provider: string) {
+			return async () => process.env.TAVILY_API_KEY ?? undefined;
+		},
+		async rotateSessionCredential() {
+			return false;
+		},
 	} as unknown as AuthStorage;
 
 	function makeParams(query: string) {
