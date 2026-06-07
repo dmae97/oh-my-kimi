@@ -29,7 +29,13 @@ import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
 import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
-import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
+import {
+	getModelMatchPreferences,
+	resolveCliModel,
+	resolveModelRoleValue,
+	resolveModelScope,
+	type ScopedModel,
+} from "./config/model-resolver";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import {
@@ -610,9 +616,7 @@ async function buildSessionOptions(
 	// Model from CLI
 	// - supports --provider <name> --model <pattern>
 	// - supports --model <provider>/<pattern>
-	const modelMatchPreferences = {
-		usageOrder: activeSettings.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(activeSettings);
 	if (parsed.model) {
 		const resolved = resolveCliModel({
 			cliProvider: parsed.provider,
@@ -904,9 +908,7 @@ export async function runRootCommand(
 
 	let scopedModels: ScopedModel[] = [];
 	const modelPatterns = parsedArgs.models ?? settingsInstance.get("enabledModels");
-	const modelMatchPreferences = {
-		usageOrder: settingsInstance.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(settingsInstance);
 	if (modelPatterns && modelPatterns.length > 0) {
 		scopedModels = await logger.time(
 			"resolveModelScope",

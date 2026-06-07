@@ -109,6 +109,7 @@ import {
 	extractExplicitThinkingSelector,
 	formatModelSelectorValue,
 	formatModelString,
+	getModelMatchPreferences,
 	parseModelString,
 	type ResolvedModelRoleValue,
 	resolveModelRoleValue,
@@ -5450,7 +5451,7 @@ export class AgentSession {
 
 		const currentModel = this.model;
 		if (!currentModel) return undefined;
-		const matchPreferences = { usageOrder: this.settings.getStorage()?.getModelUsageOrder() };
+		const matchPreferences = getModelMatchPreferences(this.settings);
 		const models: ResolvedRoleModel[] = [];
 
 		for (const role of roleOrder) {
@@ -7166,7 +7167,7 @@ export class AgentSession {
 
 		return resolveModelRoleValue(roleModelStr, availableModels, {
 			settings: this.settings,
-			matchPreferences: { usageOrder: this.settings.getStorage()?.getModelUsageOrder() },
+			matchPreferences: getModelMatchPreferences(this.settings),
 			modelRegistry: this.#modelRegistry,
 		});
 	}

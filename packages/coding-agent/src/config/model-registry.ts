@@ -118,6 +118,7 @@ import {
 	getModelLikeIdSegments,
 	stripBracketedModelIdAffixes,
 } from "./model-id-affixes";
+import { buildModelProviderPriorityRank } from "./model-provider-priority";
 import {
 	type ModelOverride,
 	type ModelsConfig,
@@ -2208,27 +2209,8 @@ export class ModelRegistry {
 		});
 	}
 
-	#providerRank(models: readonly Model<Api>[]): Map<string, number> {
-		const configuredProviders = getConfiguredProviderOrderFromSettings();
-		const result = new Map<string, number>();
-		let nextRank = 0;
-		for (const provider of configuredProviders) {
-			const normalized = provider.trim().toLowerCase();
-			if (!normalized || result.has(normalized)) {
-				continue;
-			}
-			result.set(normalized, nextRank);
-			nextRank += 1;
-		}
-		for (const model of models) {
-			const normalized = model.provider.toLowerCase();
-			if (result.has(normalized)) {
-				continue;
-			}
-			result.set(normalized, nextRank);
-			nextRank += 1;
-		}
-		return result;
+	#providerRank(): Map<string, number> {
+		return buildModelProviderPriorityRank(getConfiguredProviderOrderFromSettings());
 	}
 
 	#resolveCanonicalVariant(
@@ -2238,7 +2220,7 @@ export class ModelRegistry {
 		if (variants.length === 0) {
 			return undefined;
 		}
-		const providerRank = this.#providerRank(allCandidates);
+		const providerRank = this.#providerRank();
 		const modelOrder = new Map<string, number>();
 		for (let index = 0; index < allCandidates.length; index += 1) {
 			modelOrder.set(formatCanonicalVariantSelector(allCandidates[index]!), index);

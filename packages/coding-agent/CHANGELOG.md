@@ -1,15 +1,20 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `/model` visibility for auto-selected role defaults: inferred `pi/smol`/`pi/slow`/designer choices now show as compact `[ROLE auto]` badges, while explicitly configured roles keep the existing solid badges and thinking labels.
-
 - Added credential provenance to the `/login` and `/logout` provider picker: each authenticated provider now shows where its credential comes from — `(login)`, `(api key)`, `(env: VAR_NAME)`, `(config)`, `(--api-key)`, or `(custom provider)` — so a real OAuth login is distinguishable from an env var that merely aliases the provider (e.g. `COPILOT_GITHUB_TOKEN`). The origin is also matched by the picker's type-to-search filter.
+
+### Changed
+
+- Changed model resolution to apply provider-priority ordering when selecting models for roles and ambiguous patterns, using `modelProviderOrder` settings and built-in provider priority so first-party providers are preferred over relays in tie cases
+- Changed model canonical variant selection to use the same provider-priority ordering instead of candidate order when deduplicating equivalent upstream models
 
 ### Fixed
 
+- Fixed startup model fallback selection so sessions now prefer each provider’s configured default model before choosing the first available authenticated model
+- Fixed implicit model selection path for tools and sessions by honoring persisted model-provider order when no explicit pattern is provided
 - Fixed the working spinner appearing to ignore Esc for 2-3 seconds when an interrupt lands mid-tool. Esc fires the abort synchronously, but the agent loop only stops the loader at `agent_end`, which it cannot reach until every in-flight tool settles in `executeToolCalls`' `await Promise.allSettled(...)` — and process/subagent/kernel-owning tools tear down gracefully (SIGTERM, 2-3s grace, SIGKILL), so the loader kept showing the unchanged "Working…/<intent>" line and read as a dropped keypress. The loader now switches to "Interrupting…" the instant Esc requests the abort and freezes intent-driven label updates until the turn unwinds (`EventController.notifyInterrupting`), so the interrupt is acknowledged immediately even while teardown completes.
 - Fixed a flaky JS eval worker startup that intermittently failed unrelated CI runs. The worker-ready wait reused Bun's 5s default per-test timeout as its floor, so a slow cold-start under `--isolate` + high concurrency was aborted mid-init; terminating a still-initializing Bun worker is the documented SIGILL/SIGTRAP crash trigger, which took down the whole test file. Worker init now floors at a fixed 15s infrastructure budget (independent of, and still dominated by, a larger per-cell `timeout`), and the JS eval test suites set a 20s file-local timeout so cold starts complete instead of being torn down.
 - Fixed reviewer-style subagent yields crashing the calling eval cell when a caller-supplied output schema declares `additionalProperties: false` without a `findings` property. `normalizeCompleteData` now consults the active validator before splicing collected `report_finding` entries onto the yielded payload, so injection is suppressed when the schema would reject it — keeping the executor's post-mortem validation in lockstep with the in-tool `yield` validation that already accepted the same raw payload ([#2070](https://github.com/can1357/oh-my-pi/issues/2070))

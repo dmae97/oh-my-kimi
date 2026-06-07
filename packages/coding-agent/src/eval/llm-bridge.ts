@@ -16,7 +16,12 @@ import { type Api, Effort, getSupportedEfforts, type Model, type Tool } from "@o
 import * as z from "zod/v4";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 
-import { expandRoleAlias, formatModelString, resolveModelFromString } from "../config/model-resolver";
+import {
+	expandRoleAlias,
+	formatModelString,
+	getModelMatchPreferences,
+	resolveModelFromString,
+} from "../config/model-resolver";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
@@ -65,7 +70,7 @@ function resolveTierModel(tier: LlmTier, session: ToolSession): Model<Api> | und
 	const available = modelRegistry.getAvailable();
 	if (available.length === 0) return undefined;
 
-	const matchPreferences = { usageOrder: session.settings.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(session.settings);
 	const resolve = (pattern: string | undefined): Model<Api> | undefined => {
 		if (!pattern) return undefined;
 		const expanded = expandRoleAlias(pattern, session.settings);

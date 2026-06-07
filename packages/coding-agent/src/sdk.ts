@@ -41,7 +41,9 @@ import { createApiKeyResolver } from "./config/api-key-resolver";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
+	defaultModelPerProvider,
 	formatModelString,
+	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
 	resolveAllowedModels,
@@ -1031,9 +1033,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const hasServiceTierEntry = existingBranch.some(entry => entry.type === "service_tier_change");
 
 	const hasExplicitModel = options.model !== undefined || options.modelPattern !== undefined;
-	const modelMatchPreferences = {
-		usageOrder: settings.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(settings);
 	const allowedModels = await logger.time("resolveAllowedModels", () =>
 		resolveAllowedModels(modelRegistry, settings, modelMatchPreferences),
 	);
@@ -1554,9 +1554,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Resolve deferred --model pattern now that extension models are registered.
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();
-			const matchPreferences = {
-				usageOrder: settings.getStorage()?.getModelUsageOrder(),
-			};
+			const matchPreferences = getModelMatchPreferences(settings);
 			const { model: resolved } = parseModelPattern(options.modelPattern, availableModels, matchPreferences, {
 				modelRegistry,
 			});
@@ -1575,10 +1573,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			for (const candidate of fallbackCandidates) {
-				if (await hasModelApiKey(candidate)) {
-					model = candidate;
+			// Prefer each provider's configured default model
+			// (DEFAULT_MODEL_PER_PROVIDER) over raw catalog order. Without this the
+			// first-run fallback picks whatever model sorts first in models.json for
+			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
+			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
+			// findInitialModel's precedence.
+			for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
+				const preferred = fallbackCandidates.find(
+					candidate => candidate.provider === provider && candidate.id === defaultId,
+				);
+				if (preferred && (await hasModelApiKey(preferred))) {
+					model = preferred;
 					break;
+				}
+			}
+			// Otherwise, first available model with a valid API key.
+			if (!model) {
+				for (const candidate of fallbackCandidates) {
+					if (await hasModelApiKey(candidate)) {
+						model = candidate;
+						break;
+					}
 				}
 			}
 			if (model) {
