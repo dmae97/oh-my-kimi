@@ -331,8 +331,10 @@ describe("TUI inline-image budget", () => {
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
 		monotonicNow = 0;
+		// Advance one full 30fps frame (>1000/30ms) per tick so the render
+		// throttle computes a zero delay and every requestRender flushes inline.
 		vi.spyOn(performance, "now").mockImplementation(() => {
-			monotonicNow += 20;
+			monotonicNow += 40;
 			return monotonicNow;
 		});
 	});
@@ -348,7 +350,7 @@ describe("TUI inline-image budget", () => {
 			const tick = Promise.withResolvers<void>();
 			process.nextTick(tick.resolve);
 			await tick.promise;
-			await Bun.sleep(1);
+			await Bun.sleep(40);
 			await term.flush();
 		}
 	}

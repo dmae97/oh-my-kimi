@@ -39,7 +39,10 @@ class AppendOnlyLiveLineList extends LiveLineList {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await Bun.sleep(20);
+	const nextTick = Promise.withResolvers<void>();
+	process.nextTick(nextTick.resolve);
+	await nextTick.promise;
+	await Bun.sleep(40);
 	await term.flush();
 }
 

@@ -106,7 +106,7 @@ async function withEnv(name: string, value: string, run: () => Promise<void>): P
 
 async function flushRender(term: VirtualTerminal): Promise<void> {
 	await new Promise<void>(resolve => process.nextTick(resolve));
-	await Bun.sleep(17);
+	await Bun.sleep(40);
 	await term.flush();
 }
 
