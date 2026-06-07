@@ -9,8 +9,8 @@ import type { Theme } from "../modes/theme/theme";
 import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-manager";
-import { framedBlock, renderStatusLine } from "../tui";
-import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS } from "./render-utils";
+import { framedBlock, renderStatusLine, renderTreeList } from "../tui";
+import { formatErrorDetail, PREVIEW_LIMITS } from "./render-utils";
 
 // =============================================================================
 // Types
@@ -852,15 +852,18 @@ export const todoToolRenderer = {
 					bodyLines.push(uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1))));
 				}
 				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
-				const maxItems = expanded
-					? phase.tasks.length
-					: Math.min(phase.tasks.length, PREVIEW_LIMITS.COLLAPSED_ITEMS);
-				for (let i = 0; i < maxItems; i++) {
-					bodyLines.push(`${indent}${formatTodoLine(phase.tasks[i], uiTheme, "", completionKeys, spinnerFrame)}`);
-				}
-				const remaining = phase.tasks.length - maxItems;
-				if (!expanded && remaining > 0) {
-					bodyLines.push(`${indent}${uiTheme.fg("muted", formatMoreItems(remaining, "todo"))}`);
+				const treeLines = renderTreeList(
+					{
+						items: phase.tasks,
+						expanded,
+						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
+						itemType: "todo",
+						renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
+					},
+					uiTheme,
+				);
+				for (const line of treeLines) {
+					bodyLines.push(`${indent}${line}`);
 				}
 			}
 			bodyLines.push(...renderNoteAttachments(phases, uiTheme, indent));
