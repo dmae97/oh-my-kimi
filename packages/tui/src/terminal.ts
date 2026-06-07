@@ -504,10 +504,19 @@ export class ProcessTerminal implements Terminal {
 			}
 
 			const match = sequence.match(kittyResponsePattern);
-			if (match && !this.#modifyOtherKeysActive) {
+			if (match) {
 				if (this.#modifyOtherKeysTimeout) {
 					clearTimeout(this.#modifyOtherKeysTimeout);
 					this.#modifyOtherKeysTimeout = undefined;
+				}
+				// A DA1 sentinel that beat the kitty reply may have already
+				// engaged the modifyOtherKeys fallback (terminals such as
+				// Superset/xterm-on-Electron answer DA1 before `\x1b[?u`).
+				// Kitty is strictly preferred — undo the fallback so the two
+				// modes do not stack. See #2042.
+				if (this.#modifyOtherKeysActive) {
+					this.#safeWrite("\x1b[>4;0m");
+					this.#modifyOtherKeysActive = false;
 				}
 				// Any reply to `\x1b[?u` means the terminal speaks the kitty keyboard
 				// protocol. The reported flag value is the *current* stack-top — fresh
