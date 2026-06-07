@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for `impersonated_service_account` Application Default Credentials (ADC) in Vertex AI to enable chained impersonation without failing via 401 `invalid_client`.
+
+### Fixed
+
+- Fixed duplicate upstream `tool_call_id` values collapsing distinct tool calls during message transformation, preserving one call/result pairing per emitted tool call before provider replay. ([#2055](https://github.com/can1357/oh-my-pi/issues/2055))
+
 ## [15.10.1] - 2026-06-07
 
 ### Breaking Changes

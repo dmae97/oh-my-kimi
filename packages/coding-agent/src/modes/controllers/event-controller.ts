@@ -26,6 +26,16 @@ type AgentSessionEventKind = AgentSessionEvent["type"];
 
 const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 
+/**
+ * Loader label shown the instant a user interrupt (Esc) is requested, kept until
+ * the agent turn fully unwinds. Esc fires the abort synchronously, but the loop
+ * only stops the spinner at `agent_end`, which it cannot reach until every
+ * in-flight tool settles its abort in `executeToolCalls` (`Promise.allSettled`).
+ * Swapping the steady "Working…" for this acknowledges the keypress instead of
+ * reading as an ignored Esc for the seconds a slow tool takes to tear down.
+ */
+export const INTERRUPTING_WORKING_MESSAGE = "Interrupting…";
+
 // Events that change foreground streaming state, or that reset a turn. The TUI
 // eager native-scrollback rebuild mode is recomputed only on these so unrelated
 // IRC/notices/status refreshes do not toggle scrollback replay policy.
@@ -57,6 +67,7 @@ export class EventController {
 	#backgroundToolCallIds = new Set<string>();
 	#assistantMessageStreaming = false;
 	#agentTurnActive = false;
+	#interrupting = false;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
@@ -167,6 +178,7 @@ export class EventController {
 		return true;
 	}
 	#updateWorkingMessageFromIntent(intent: unknown): void {
+		if (this.#interrupting) return;
 		// Streamed JSON can deliver non-string `_i` (object, number, boolean) before
 		// schema validation; `?.` only guards null/undefined, so guard the type too.
 		if (typeof intent !== "string") return;
@@ -174,6 +186,19 @@ export class EventController {
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
 		this.ctx.setWorkingMessage(`${trimmed}${interruptHint()}`);
+	}
+
+	/**
+	 * Acknowledge a user interrupt (Esc) immediately: switch the loader to
+	 * `INTERRUPTING_WORKING_MESSAGE` and freeze intent-driven working-message
+	 * updates for the rest of the turn so a late `tool_execution_start` intent
+	 * cannot repaint a "Working…/<intent>" line over the acknowledgment. Reset at
+	 * the next `agent_start`. No-op outside an active turn or if already set.
+	 */
+	notifyInterrupting(): void {
+		if (!this.#agentTurnActive || this.#interrupting) return;
+		this.#interrupting = true;
+		this.ctx.setWorkingMessage(INTERRUPTING_WORKING_MESSAGE);
 	}
 
 	subscribeToAgent(): void {
@@ -220,6 +245,7 @@ export class EventController {
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#agentTurnActive = true;
+		this.#interrupting = false;
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();

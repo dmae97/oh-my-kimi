@@ -709,6 +709,7 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		parameters: tool.parameters,
 		hidden: tool.hidden,
 		deferrable: tool.deferrable,
+		approval: typeof tool.approval === "function" ? tool.approval.bind(tool) : tool.approval,
 		mcpServerName: tool.mcpServerName,
 		mcpToolName: tool.mcpToolName,
 		execute: (toolCallId, params, signal, onUpdate, ctx) =>

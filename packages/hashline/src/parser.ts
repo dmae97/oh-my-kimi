@@ -12,6 +12,7 @@ import {
 	EMPTY_INSERT,
 	MINUS_ROW_REJECTED,
 } from "./messages";
+import { stripOneLeadingHashlinePrefix } from "./prefixes";
 import { type BlockTarget, cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
 import type { Anchor, Cursor, Edit } from "./types";
 
@@ -81,7 +82,7 @@ interface PendingComment {
 	text: string;
 }
 
-type PayloadRow = { kind: "literal"; text: string; lineNum: number };
+type PayloadRow = { kind: "literal"; text: string; lineNum: number; bare?: boolean };
 
 interface Pending {
 	target: BlockTarget;
@@ -220,7 +221,14 @@ export class Executor {
 				throw new Error(`line ${lineNum}: ${DELETE_BLOCK_TAKES_NO_BODY}`);
 			if (text.trimStart().charCodeAt(0) === 45 /* - */) throw new Error(`line ${lineNum}: ${MINUS_ROW_REJECTED}`);
 			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
-			this.#pending.payloads.push({ kind: "literal", text, lineNum });
+			// Defer read-output line-number stripping to #flushPending: a bare
+			// "N:text" row is only a copy-paste artifact from snapshot output
+			// when *every* bare row in the hunk carries that prefix. Stripping a
+			// row in isolation would corrupt a genuine body that merely starts
+			// with "digits:" (YAML ports "42:hello", timestamps "12:30") when it
+			// sits next to an unprefixed sibling. Rows with an explicit "+" go
+			// through #handleLiteralPayload and are never bare, never stripped.
+			this.#pending.payloads.push({ kind: "literal", text, lineNum, bare: true });
 			return;
 		}
 		if (text.trim().length === 0) return;
@@ -228,6 +236,26 @@ export class Executor {
 			`line ${lineNum}: payload line has no preceding hunk header. ` +
 				`Use \`replace N..M:\`, \`delete N..M\`, or \`insert before|after|head|tail:\` above the body. Got ${JSON.stringify(text)}.`,
 		);
+	}
+
+	/**
+	 * Strip a single read-output line-number prefix (`N:`) from every bare body
+	 * row, but only when *all* bare rows carry one. A uniform set of prefixes is
+	 * the signature of content pasted straight from `read`/`search` output; a
+	 * mixed set means the `N:` is genuine payload content and must stay. Rows
+	 * authored with an explicit `+` are not bare and are never touched.
+	 */
+	#stripBarePrefixesIfUniform(payloads: PayloadRow[]): void {
+		let sawBare = false;
+		for (const row of payloads) {
+			if (!row.bare) continue;
+			sawBare = true;
+			if (stripOneLeadingHashlinePrefix(row.text) === row.text) return;
+		}
+		if (!sawBare) return;
+		for (const row of payloads) {
+			if (row.bare) row.text = stripOneLeadingHashlinePrefix(row.text);
+		}
 	}
 
 	#pushInsert(cursor: Cursor, text: string, lineNum: number, mode?: "replacement"): void {
@@ -263,6 +291,7 @@ export class Executor {
 		const pending = this.#pending;
 		if (!pending) return;
 		const { target, lineNum, payloads } = pending;
+		this.#stripBarePrefixesIfUniform(payloads);
 		this.#pending = undefined;
 		if (target.kind === "delete") {
 			for (const anchor of expandRange(target.range)) this.#pushDelete(anchor, lineNum);

@@ -51,6 +51,14 @@ function emptyStop(): MockResponse {
 	};
 }
 
+function orphanedToolUseStop(): MockResponse {
+	return {
+		content: [{ type: "thinking", thinking: "I should call a tool next." }],
+		stopReason: "toolUse",
+		usage: { output: 1, cacheRead: 100 },
+	};
+}
+
 async function createHarness(
 	responses: MockResponse[],
 	settingsOverrides: SettingsOverrides = {},
@@ -177,6 +185,45 @@ describe("AgentSession empty stop guard", () => {
 		).toHaveLength(1);
 	});
 
+	it("retries a tool-use stop that has no tool call or text", async () => {
+		const { session, mock } = await createHarness([
+			recordCall("orphan", "call-record-orphan"),
+			orphanedToolUseStop(),
+			{ content: ["finished after orphaned tool-use retry"], stopReason: "stop" },
+		]);
+
+		await session.prompt("record orphan");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(3);
+		expect(assistantText(session.agent.state.messages)).toContain("finished after orphaned tool-use retry");
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+	});
+
+	it("removes orphaned tool-use stops even when retry cap is hit", async () => {
+		const { session, mock } = await createHarness([
+			recordCall("gamma", "call-record-gamma"),
+			orphanedToolUseStop(),
+			orphanedToolUseStop(),
+			orphanedToolUseStop(),
+			orphanedToolUseStop(),
+		]);
+		await session.prompt("record gamma");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(5);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
+		const activeBranchMessages = session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message as AgentMessage);
+		const orphanedToolUseStops = activeBranchMessages.filter(
+			message =>
+				message.role === "assistant" &&
+				message.stopReason === "toolUse" &&
+				!message.content.some(content => content.type === "toolCall"),
+		);
+		expect(orphanedToolUseStops).toHaveLength(0);
+	});
 	it("caps empty stop retries at three attempts", async () => {
 		const { session, mock } = await createHarness([
 			recordCall("beta", "call-record-beta"),

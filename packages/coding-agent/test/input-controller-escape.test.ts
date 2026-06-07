@@ -154,6 +154,7 @@ function createContext(): {
 		addMessageToChat,
 		cancelPendingSubmission,
 		ensureLoadingAnimation,
+		notifyInterrupting: vi.fn(),
 		finishPendingSubmission: vi.fn(),
 		flushPendingBashComponents: vi.fn(),
 		markPendingSubmissionStarted: vi.fn(() => true),

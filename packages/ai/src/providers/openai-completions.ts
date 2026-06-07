@@ -537,7 +537,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			}
 			stream.push({ type: "start", partial: output });
 
-			const parseMiniMaxThinkTags = model.provider === "minimax-code" || model.provider === "minimax-code-cn";
 			// Some OpenAI-compatible DeepSeek hosts (including NVIDIA NIM and DeepSeek's
 			// native API) leak chat-template tool-call markers in `delta.content` even
 			// though tool calls are also surfaced structurally. Strip the leaked markers
@@ -678,9 +677,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 			};
 
-			const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id, {
-				parseThinkingTags: parseMiniMaxThinkTags,
-			});
+			const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id);
 			const streamMarkupHealing = streamMarkupHealingPattern
 				? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
 				: undefined;

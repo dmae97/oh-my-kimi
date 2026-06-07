@@ -4,10 +4,8 @@
  * This file handles CLI argument parsing and translates them into
  * createAgentSession() options. The SDK does the heavy lifting.
  */
-
-import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -28,6 +26,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
+import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
 import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
@@ -344,11 +343,11 @@ async function runInteractiveMode(
 	}
 }
 
-type ForkSessionPromptResult = "accepted" | "declined" | "unavailable";
+type SessionPromptResult = "accepted" | "declined" | "unavailable";
 
-type ForkSessionPrompt = (session: SessionInfo) => Promise<ForkSessionPromptResult>;
+type SessionPrompt = (session: SessionInfo) => Promise<SessionPromptResult>;
 
-async function promptForkSession(session: SessionInfo): Promise<ForkSessionPromptResult> {
+async function promptForkSession(session: SessionInfo): Promise<SessionPromptResult> {
 	if (!process.stdin.isTTY) {
 		return "unavailable";
 	}
@@ -357,6 +356,20 @@ async function promptForkSession(session: SessionInfo): Promise<ForkSessionPromp
 	try {
 		const answer = (await rl.question(message)).trim().toLowerCase();
 		return answer === "y" || answer === "yes" ? "accepted" : "declined";
+	} finally {
+		rl.close();
+	}
+}
+
+async function promptMoveSession(session: SessionInfo): Promise<SessionPromptResult> {
+	if (!process.stdin.isTTY) {
+		return "unavailable";
+	}
+	const message = `Session's directory no longer exists (${session.cwd}). Move (re-root) it into the current directory? [Y/n] `;
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	try {
+		const answer = (await rl.question(message)).trim().toLowerCase();
+		return answer === "" || answer === "y" || answer === "yes" ? "accepted" : "declined";
 	} finally {
 		rl.close();
 	}
@@ -407,7 +420,8 @@ export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	activeSettings: Settings = settings,
-	askToForkSession: ForkSessionPrompt = promptForkSession,
+	askToForkSession: SessionPrompt = promptForkSession,
+	askToMoveSession: SessionPrompt = promptMoveSession,
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
@@ -440,6 +454,24 @@ export async function createSessionManager(
 			const normalizedCwd = normalizePathForComparison(cwd);
 			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
 			if (normalizedCwd !== normalizedMatchCwd) {
+				// If the session's recorded directory no longer exists, it was almost
+				// certainly moved/renamed (e.g. `git worktree move`). Re-root the existing
+				// session here instead of forking a duplicate copy.
+				const sourceCwd = match.session.cwd;
+				if (sourceCwd && !fsSync.existsSync(sourceCwd)) {
+					const movePromptResult = await askToMoveSession(match.session);
+					if (movePromptResult === "unavailable") {
+						throw new Error(
+							`Session "${sessionArg}" belongs to a directory that no longer exists (${sourceCwd}); run interactively to move it into the current project.`,
+						);
+					}
+					if (movePromptResult === "declined") {
+						return undefined;
+					}
+					const manager = await SessionManager.open(match.session.path, parsed.sessionDir);
+					await manager.moveTo(cwd, parsed.sessionDir);
+					return manager;
+				}
 				const forkPromptResult = await askToForkSession(match.session);
 				if (forkPromptResult === "unavailable") {
 					throw new Error(
@@ -478,56 +510,6 @@ export async function createSessionManager(
 	}
 	// Default case (new session) returns undefined, SDK will create one
 	return undefined;
-}
-
-async function maybeAutoChdir(parsed: Args): Promise<void> {
-	if (parsed.allowHome || parsed.cwd) {
-		return;
-	}
-
-	const home = os.homedir();
-	if (!home) {
-		return;
-	}
-
-	const normalizePath = normalizePathForComparison;
-
-	const cwd = normalizePath(getProjectDir());
-	const normalizedHome = normalizePath(home);
-	if (cwd !== normalizedHome) {
-		return;
-	}
-
-	const isDirectory = async (p: string) => {
-		try {
-			const s = await fs.stat(p);
-			return s.isDirectory();
-		} catch {
-			return false;
-		}
-	};
-
-	const candidates = [path.join(home, "tmp"), "/tmp", "/var/tmp"];
-	for (const candidate of candidates) {
-		try {
-			if (!(await isDirectory(candidate))) {
-				continue;
-			}
-			setProjectDir(candidate);
-			return;
-		} catch {
-			// Try next candidate.
-		}
-	}
-
-	try {
-		const fallback = os.tmpdir();
-		if (fallback && normalizePath(fallback) !== cwd && (await isDirectory(fallback))) {
-			setProjectDir(fallback);
-		}
-	} catch {
-		// Ignore fallback errors.
-	}
 }
 
 /** Discover SYSTEM.md file if no CLI system prompt was provided */
@@ -745,7 +727,7 @@ export async function runRootCommand(
 	await logger.time("initTheme:initial", initTheme);
 
 	const parsedArgs = parsed;
-	await logger.time("maybeAutoChdir", maybeAutoChdir, parsedArgs);
+	await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 
 	const notifs: (InteractiveModeNotify | null)[] = [];
 

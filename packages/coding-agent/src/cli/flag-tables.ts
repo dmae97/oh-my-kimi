@@ -94,6 +94,9 @@ const setResume: OptionalSetter = (result, value) => {
  * token starts with `-`.
  */
 export const STRING_SETTERS: Record<string, StringSetter> = {
+	"--cwd": (result, value) => {
+		result.cwd = value;
+	},
 	"--mode": (result, value) => {
 		if (value === "text" || value === "json" || value === "rpc" || value === "acp" || value === "rpc-ui") {
 			result.mode = value;

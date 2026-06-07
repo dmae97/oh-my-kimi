@@ -106,6 +106,34 @@ describe("hashline body contracts", () => {
 		expect(result.warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
+	it("strips read-output line number prefix from auto-piped bare body rows", () => {
+		const result = parsePatch("replace 2..2:\n2:hello");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\nhello\nc\nd\ne");
+		expect(result.warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
+	});
+	it("preserves `+N:` literal payloads without stripping", () => {
+		const result = parsePatch("replace 2..2:\n+3:keep");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n3:keep\nc\nd\ne");
+		expect(result.warnings.some(w => /Auto-prefixed/.test(w))).toBe(false);
+	});
+	it("strips only one N: prefix from bare body rows (preserves nested digits:colon)", () => {
+		// "2:42:hello" → should yield "42:hello", NOT "hello" (recursive would over-strip)
+		const result = parsePatch("replace 2..2:\n2:42:hello");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n42:hello\nc\nd\ne");
+	});
+
+	it("strips N: prefixes only when every bare body row carries one", () => {
+		const result = parsePatch("replace 2..3:\n2:foo\n3:bar");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\nfoo\nbar\nd\ne");
+	});
+
+	it("leaves bare body rows untouched when only some carry an N: prefix", () => {
+		// "3:keep" looks like a snapshot prefix but "plain" does not, so the body
+		// is genuine content (not a pasted snapshot) — strip nothing.
+		const result = parsePatch("replace 2..3:\n3:keep\nplain");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n3:keep\nplain\nd\ne");
+	});
+
 	it("rejects `-` body rows with a teaching error", () => {
 		expect(() => parsePatch("replace 2..2:\n-old\n+new")).toThrow(/`-` rows are not valid/);
 	});

@@ -34,7 +34,11 @@ import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
-import { buildOutputValidator, summarizeValidationFailure } from "../tools/output-schema-validator";
+import {
+	buildOutputValidator,
+	type OutputValidator,
+	summarizeValidationFailure,
+} from "../tools/output-schema-validator";
 
 import { type ReportFindingDetails, toReviewFinding } from "../tools/review";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -256,21 +260,40 @@ function extractCompletionData(parsed: unknown): unknown {
 	return parsed;
 }
 
-function normalizeCompleteData(data: unknown, reportFindings?: ReviewFinding[]): unknown {
-	let normalized = parseStringifiedJson(data ?? null);
+/**
+ * Resolve the final yielded payload, optionally splicing collected
+ * `report_finding` entries into a top-level `findings` array.
+ *
+ * Injection is suppressed when an active validator would reject the augmented
+ * payload (e.g. a caller-supplied schema with `additionalProperties: false`
+ * that does not declare `findings`). That keeps the in-tool yield validator
+ * (which only sees the raw, pre-injection data) in lockstep with this
+ * post-mortem validator — honoring the "accepted in-tool ⇒ accepted
+ * post-mortem" guarantee documented in `output-schema-validator.ts`. The
+ * dropped findings are still preserved verbatim in the agent's progress
+ * stream and JSONL artifact, so no information is lost when injection is
+ * suppressed.
+ */
+function normalizeCompleteData(
+	data: unknown,
+	reportFindings: ReviewFinding[] | undefined,
+	validator: OutputValidator | undefined,
+): unknown {
+	const normalized = parseStringifiedJson(data ?? null);
 	if (
-		Array.isArray(reportFindings) &&
-		reportFindings.length > 0 &&
-		normalized &&
-		typeof normalized === "object" &&
-		!Array.isArray(normalized)
+		!Array.isArray(reportFindings) ||
+		reportFindings.length === 0 ||
+		!normalized ||
+		typeof normalized !== "object" ||
+		Array.isArray(normalized)
 	) {
-		const record = normalized as Record<string, unknown>;
-		if (!("findings" in record)) {
-			normalized = { ...record, findings: reportFindings };
-		}
+		return normalized;
 	}
-	return normalized;
+	const record = normalized as Record<string, unknown>;
+	if ("findings" in record) return normalized;
+	const injected = { ...record, findings: reportFindings };
+	if (validator && !validator.validate(injected).success) return normalized;
+	return injected;
 }
 
 function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { data: unknown } | null {
@@ -360,13 +383,13 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			if (submitData === null || submitData === undefined) {
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
-				const completeData = normalizeCompleteData(submitData, reportFindings);
 				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
 				if (schemaError) {
 					rawOutput = `{"error":"schema_violation","message":"invalid output schema: ${schemaError.replace(/"/g, '\\"')}"}`;
 					stderr = `schema_violation: invalid output schema: ${schemaError}`;
 					exitCode = 1;
 				} else {
+					const completeData = normalizeCompleteData(submitData, reportFindings, validator);
 					const result = validator?.validate(completeData) ?? { success: true as const };
 					if (!result.success) {
 						const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
@@ -393,8 +416,8 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
 		if (fallback) {
-			const completeData = normalizeCompleteData(fallback.data, reportFindings);
 			const { validator } = buildOutputValidator(outputSchema);
+			const completeData = normalizeCompleteData(fallback.data, reportFindings, validator);
 			const result = validator?.validate(completeData) ?? { success: true as const };
 			if (!result.success) {
 				const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);

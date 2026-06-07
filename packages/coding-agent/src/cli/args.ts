@@ -225,7 +225,7 @@ export function getExtraHelpText(): string {
   NODE_EXTRA_CA_CERTS        - CA bundle path (or inline PEM) for server certificate validation
   OPENAI_API_KEY             - OpenAI GPT models
   GEMINI_API_KEY             - Google Gemini models
-  GITHUB_TOKEN               - GitHub Copilot (or GH_TOKEN, COPILOT_GITHUB_TOKEN)
+  COPILOT_GITHUB_TOKEN      - GitHub Copilot
 
   ${chalk.dim("# Additional LLM Providers")}
   AZURE_OPENAI_API_KEY       - Azure OpenAI models
