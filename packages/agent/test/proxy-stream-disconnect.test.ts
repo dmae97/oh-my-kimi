@@ -144,6 +144,29 @@ describe("streamProxy — server disconnect without terminal event", () => {
 		expect(result.stopReason).toBe("aborted");
 	});
 
+	it("preserves custom abort reason when client aborts mid-stream", async () => {
+		const abortController = new AbortController();
+		abortController.abort("user-interrupt");
+
+		const events: ProxyAssistantMessageEvent[] = [{ type: "start" }];
+		const body = buildSseBody(events);
+
+		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
+			signal: abortController.signal,
+		});
+
+		const collected = await collectEvents(stream);
+		const result = await stream.result();
+		expect(result.stopReason).toBe("aborted");
+		// Custom abort reason must be preserved in errorMessage, not overwritten
+		// by the generic "Proxy stream ended without a terminal event" message
+		expect(result.errorMessage).toBe("user-interrupt");
+	});
+
 	it("completes normally when server sends a 'done' event", async () => {
 		const events: ProxyAssistantMessageEvent[] = [
 			{ type: "start" },
