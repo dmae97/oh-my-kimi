@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/registry/oauth/anthropic";
 import { buildAnthropicAuthConfig, buildAnthropicSearchHeaders, buildAnthropicUrl } from "../src/utils/anthropic-auth";
-import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/utils/oauth/anthropic";
 import { withEnv } from "./helpers";
 
 const originalFetch = global.fetch;

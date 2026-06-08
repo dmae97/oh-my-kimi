@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginZenMux } from "../src/utils/oauth/zenmux";
+import { loginZenMux } from "../src/registry/zenmux";
 
 const originalFetch = global.fetch;
 

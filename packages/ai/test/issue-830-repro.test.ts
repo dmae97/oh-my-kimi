@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import { MODELS_DEV_PROVIDER_DESCRIPTORS } from "../src/provider-models/openai-compat";
+import { getOAuthProviders } from "../src/registry/oauth";
 import { getEnvApiKey } from "../src/stream";
 import type { OpenAICompat } from "../src/types";
-import { getOAuthProviders } from "../src/utils/oauth";
 
 describe("deepseek built-in provider (issue #830)", () => {
 	test("registers built-in runtime descriptor with DEEPSEEK_API_KEY env discovery", () => {

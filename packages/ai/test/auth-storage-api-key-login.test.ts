@@ -5,9 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import * as deepseekModule from "../src/utils/oauth/deepseek";
-import * as kagiModule from "../src/utils/oauth/kagi";
-import * as ollamaCloudModule from "../src/utils/oauth/ollama-cloud";
+import * as deepseekModule from "../src/registry/deepseek";
+import * as kagiModule from "../src/registry/kagi";
+import * as ollamaCloudModule from "../src/registry/ollama-cloud";
 
 function countCredentialRows(dbPath: string, provider: string): number {
 	const db = new Database(dbPath, { readonly: true });

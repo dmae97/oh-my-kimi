@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginSynthetic } from "../src/utils/oauth/synthetic";
+import { loginSynthetic } from "../src/registry/synthetic";
 
 const originalFetch = global.fetch;
 

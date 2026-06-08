@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginNanoGPT } from "../src/utils/oauth/nanogpt";
+import { loginNanoGPT } from "../src/registry/nanogpt";
 
 const originalFetch = global.fetch;
 

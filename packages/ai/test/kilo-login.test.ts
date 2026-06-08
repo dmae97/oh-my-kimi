@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginKilo } from "../src/utils/oauth/kilo";
+import { loginKilo } from "../src/registry/kilo";
 
 const originalFetch = global.fetch;
 

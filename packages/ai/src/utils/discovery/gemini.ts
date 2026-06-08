@@ -1,6 +1,6 @@
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
 import { getBundledModels } from "../../models";
+import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../../provider-models/discovery-constants";
 import type { Model } from "../../types";
 
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";

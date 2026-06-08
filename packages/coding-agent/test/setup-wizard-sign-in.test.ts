@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import type { OAuthLoginCallbacks, OAuthProviderId } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import type { OAuthLoginCallbacks, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { SignInTab } from "../src/modes/setup-wizard/scenes/sign-in";
 import type { SetupSceneHost } from "../src/modes/setup-wizard/scenes/types";

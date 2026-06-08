@@ -1,5 +1,5 @@
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
+import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../../provider-models/discovery-constants";
 import type { Api, Model, Provider } from "../../types";
 
 const MODELS_PATH = "/models";

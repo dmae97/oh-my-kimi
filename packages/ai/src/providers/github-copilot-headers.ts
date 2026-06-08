@@ -1,5 +1,5 @@
+import { getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../registry/oauth/github-copilot";
 import type { Message } from "../types";
-import { getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 /**
  * Infer whether the current request to Copilot is user-initiated or agent-initiated.
  * Accepts `unknown[]` because providers may pass pre-converted message shapes.

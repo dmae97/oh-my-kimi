@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 
 import { xiaomiModelManagerOptions } from "../src/provider-models/openai-compat";
-import { loginXiaomi } from "../src/utils/oauth/xiaomi";
+import { loginXiaomi } from "../src/registry/oauth/xiaomi";
 
 const TOKEN_PLAN_SGP_HOST = "token-plan-sgp.xiaomimimo.com";
 const STANDARD_HOST = "api.xiaomimimo.com";

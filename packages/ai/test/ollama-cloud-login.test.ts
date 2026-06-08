@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loginOllamaCloud } from "../src/utils/oauth/ollama-cloud";
+import { loginOllamaCloud } from "../src/registry/ollama-cloud";
 
 describe("ollama cloud login", () => {
 	it("opens Ollama Cloud key settings and trims the pasted key", async () => {

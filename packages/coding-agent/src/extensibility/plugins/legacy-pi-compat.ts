@@ -33,10 +33,11 @@ const PI_PACKAGE_ALTERNATION = PI_PACKAGE_NAMES.join("|");
 // bundled copy. Add new entries as `pkg/from -> pkg/to` whenever a plugin
 // surfaces another upstream-only subpath that breaks resolution.
 const PI_SUBPATH_REMAPS: ReadonlyMap<string, string> = new Map<string, string>([
-	// `@mariozechner/pi-ai/oauth` re-exported `./utils/oauth/index.js`.
-	// Our pi-ai keeps the implementation under `utils/oauth` but never added a
-	// root-level re-export, so map the upstream subpath onto it directly.
-	["pi-ai/oauth", "pi-ai/utils/oauth"],
+	// (currently empty) Upstream `@mariozechner/pi-ai/oauth` re-exported
+	// `./utils/oauth/index.js`. Our pi-ai now exposes the same surface at the
+	// real `@oh-my-pi/pi-ai/oauth` export, so the legacy subpath canonicalizes
+	// straight to it with no rewrite. Add `from -> to` entries here whenever a
+	// future upstream-only subpath surfaces that breaks resolution.
 ]);
 
 const LEGACY_PI_SPECIFIER_FILTER = new RegExp(`^@(?:${PI_SCOPE_ALTERNATION})/(?:${PI_PACKAGE_ALTERNATION})(?:/.*)?$`);
@@ -119,7 +120,7 @@ const TYPEBOX_SHIM_PATH = BUNFS_PACKAGE_ROOT
 // longer satisfies those imports. The override below redirects only the bare
 // pi-ai package root onto a sibling shim that re-exports the canonical surface
 // plus the borrowed `Type` runtime from the Zod-backed TypeBox shim. Subpath
-// imports such as `@oh-my-pi/pi-ai/utils/oauth` continue to resolve directly
+// imports such as `@oh-my-pi/pi-ai/oauth` continue to resolve directly
 // against the bundled pi-ai package.
 const LEGACY_PI_AI_SHIM_PATH = BUNFS_PACKAGE_ROOT
 	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-ai-shim.js")

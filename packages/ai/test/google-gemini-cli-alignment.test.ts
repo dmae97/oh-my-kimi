@@ -8,8 +8,8 @@ import {
 	shouldRefreshGeminiCliCredentials,
 	streamGoogleGeminiCli,
 } from "../src/providers/google-gemini-cli";
+import { getOAuthApiKey } from "../src/registry/oauth";
 import type { Context, Model, TJsonSchema } from "../src/types";
-import { getOAuthApiKey } from "../src/utils/oauth";
 
 function createModel(provider: "google-gemini-cli" | "google-antigravity"): Model<"google-gemini-cli"> {
 	return {

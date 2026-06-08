@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { OAuthCallbackFlow } from "../src/utils/oauth/callback-server";
-import type { OAuthCredentials } from "../src/utils/oauth/types";
+import { OAuthCallbackFlow } from "../src/registry/oauth/callback-server";
+import type { OAuthCredentials } from "../src/registry/oauth/types";
 
 class TestCallbackFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(_state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {

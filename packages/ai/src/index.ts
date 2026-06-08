@@ -29,6 +29,7 @@ export * from "./providers/openai-completions";
 export * from "./providers/openai-responses";
 export * from "./providers/synthetic";
 export * from "./rate-limit-utils";
+export * from "./registry";
 export * from "./stream";
 export * from "./types";
 export * from "./usage";
@@ -43,13 +44,6 @@ export * from "./usage/zai";
 export * from "./utils/anthropic-auth";
 export * from "./utils/discovery";
 export * from "./utils/event-stream";
-export * from "./utils/oauth";
-export type {
-	OAuthCredentials,
-	OAuthProvider,
-	OAuthProviderId,
-	OAuthProviderInfo,
-} from "./utils/oauth/types";
 export * from "./utils/overflow";
 export * from "./utils/retry";
 export * from "./utils/schema";

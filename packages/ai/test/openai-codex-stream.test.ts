@@ -2101,6 +2101,69 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("interrupts websocket streams that emit only whitespace tool-call argument deltas", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run for degenerate tool-call arguments");
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		let sendCount = 0;
+		let closeCount = 0;
+		class WhitespaceArgumentsWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				sendCount += 1;
+				this.sendJson({
+					type: "response.output_item.added",
+					item: {
+						type: "function_call",
+						id: "fc_ws_whitespace",
+						call_id: "call_ws_whitespace",
+						name: "todo",
+						arguments: "",
+					},
+				});
+				for (let sequence = 1; sequence <= 300; sequence += 1) {
+					this.sendJson({
+						type: "response.function_call_arguments.delta",
+						delta: sequence % 2 === 0 ? " ".repeat(64) : "\t",
+						item_id: "fc_ws_whitespace",
+						output_index: 1,
+						sequence_number: sequence,
+					});
+				}
+			}
+
+			close(): void {
+				closeCount += 1;
+				super.close();
+			}
+		}
+		global.WebSocket = WhitespaceArgumentsWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			sessionId: "ws-whitespace-arguments-session",
+			providerSessionState,
+		}).result();
+
+		expect(sendCount).toBe(1);
+		expect(closeCount).toBeGreaterThan(0);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("whitespace-only tool-call argument delta");
+		expect(result.errorMessage).toContain("fc_ws_whitespace");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("retries websocket stream closes before surfacing transport errors", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

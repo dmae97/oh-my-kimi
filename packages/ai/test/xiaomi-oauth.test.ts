@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginXiaomi } from "../src/utils/oauth/xiaomi";
+import { loginXiaomi } from "../src/registry/oauth/xiaomi";
 
 const originalFetch = global.fetch;
 

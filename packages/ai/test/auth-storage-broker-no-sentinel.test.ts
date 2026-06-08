@@ -8,7 +8,7 @@ import {
 	REMOTE_REFRESH_SENTINEL,
 	SqliteAuthCredentialStore,
 } from "../src/auth-storage";
-import * as oauthUtils from "../src/utils/oauth";
+import * as oauthUtils from "../src/registry/oauth";
 
 describe("AuthStorage broker sentinel refresh", () => {
 	let tempDir = "";

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import { zenmuxModelManagerOptions } from "../src/provider-models/openai-compat";
+import { getOAuthProviders } from "../src/registry/oauth";
 import { getEnvApiKey } from "../src/stream";
-import { getOAuthProviders } from "../src/utils/oauth";
 
 const originalZenMuxApiKey = Bun.env.ZENMUX_API_KEY;
 const originalFetch = global.fetch;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginGitHubCopilot } from "../src/utils/oauth/github-copilot";
+import { loginGitHubCopilot } from "../src/registry/oauth/github-copilot";
 
 const originalFetch = global.fetch;
 const FAST_POLL_OPTIONS = { pollIntervalFloorMs: 0, pollIntervalScaleMs: 1 } as const;

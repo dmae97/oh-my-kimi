@@ -357,7 +357,7 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 /**
  * Providers whose chat endpoint expects a JSON-serialized credential blob
  * (`{ token, projectId, refreshToken, expiresAt, … }`) rather than the raw
- * access token. Mirrors `getOAuthApiKey` in `packages/ai/src/utils/oauth`.
+ * access token. Mirrors `getOAuthApiKey` in `packages/ai/src/registry/oauth`.
  */
 const STRUCTURED_API_KEY_PROVIDERS: ReadonlySet<string> = new Set([
 	"github-copilot",

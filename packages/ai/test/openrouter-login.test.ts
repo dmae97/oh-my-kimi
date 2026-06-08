@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import { getOAuthProviders } from "../src/registry/oauth";
 import { getEnvApiKey } from "../src/stream";
-import { getOAuthProviders } from "../src/utils/oauth";
 
 const originalOpenRouterApiKey = Bun.env.OPENROUTER_API_KEY;
 const originalFetch = global.fetch;

@@ -190,7 +190,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		// the `scope: "global"` field that CC attaches to its middle breakpoint —
 		// `prompt-caching-scope-2026-01-05` only works against canonical
 		// `api.anthropic.com`, and third-party Anthropic-compatible proxies
-		// (z.ai, openrouter, g0i, …) reject the unknown field outright.
+		// (z.ai, openrouter, …) reject the unknown field outright.
 		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
@@ -487,7 +487,10 @@ describe("Anthropic request fingerprint alignment", () => {
 			{ metadata: { account_uuid: otherAccountId }, sessionId },
 		)) as { metadata?: { user_id?: string } };
 		const firstUserId = JSON.parse(first.metadata?.user_id ?? "{}") as { account_uuid?: string; device_id?: string };
-		const secondUserId = JSON.parse(second.metadata?.user_id ?? "{}") as { account_uuid?: string; device_id?: string };
+		const secondUserId = JSON.parse(second.metadata?.user_id ?? "{}") as {
+			account_uuid?: string;
+			device_id?: string;
+		};
 
 		expect(firstUserId.account_uuid).toBe(accountId);
 		expect(secondUserId.account_uuid).toBe(otherAccountId);

@@ -3,6 +3,8 @@
  *
  * Normalizes Copilot quota usage into the shared UsageReport schema.
  */
+
+import { OPENCODE_HEADERS } from "../registry/oauth/github-copilot";
 import type {
 	UsageAmount,
 	UsageFetchContext,
@@ -14,7 +16,6 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord, toBoolean, toNumber } from "../utils";
-import { OPENCODE_HEADERS } from "../utils/oauth/github-copilot";
 
 type CopilotQuotaDetail = {
 	entitlement: number;

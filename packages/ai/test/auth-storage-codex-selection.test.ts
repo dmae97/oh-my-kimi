@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import * as oauthUtils from "../src/registry/oauth";
+import type { OAuthCredentials } from "../src/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "../src/usage";
-import * as oauthUtils from "../src/utils/oauth";
-import type { OAuthCredentials } from "../src/utils/oauth/types";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;

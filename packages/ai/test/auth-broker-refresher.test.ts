@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthBrokerRefresher, AuthStorage, SqliteAuthCredentialStore } from "../src";
-import * as oauthUtils from "../src/utils/oauth";
+import * as oauthUtils from "../src/registry/oauth";
 
 const ANTHROPIC_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"] as const;
 const savedEnv: Partial<Record<(typeof ANTHROPIC_ENV)[number], string | undefined>> = {};

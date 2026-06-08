@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import { registerOAuthProvider, unregisterOAuthProviders } from "../src/utils/oauth";
+import { registerOAuthProvider, unregisterOAuthProviders } from "../src/registry/oauth";
 
 describe("AuthStorage OAuth refresh skew", () => {
 	let tempDir = "";

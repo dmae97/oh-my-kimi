@@ -8,7 +8,7 @@ import {
 	type CredentialDisabledEvent,
 	SqliteAuthCredentialStore,
 } from "../src/auth-storage";
-import * as oauthUtils from "../src/utils/oauth";
+import * as oauthUtils from "../src/registry/oauth";
 import { withEnv } from "./helpers";
 
 const SUPPRESS_ANTHROPIC_ENV = {

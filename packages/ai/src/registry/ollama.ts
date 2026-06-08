@@ -1,0 +1,47 @@
+import { ollamaModelManagerOptions } from "../provider-models/openai-compat";
+import type { OAuthController } from "./oauth/types";
+import type { ModelManagerConfig, ProviderDefinition } from "./types";
+
+const OLLAMA_DOCS_URL = "https://github.com/ollama/ollama/blob/main/docs/api.md";
+
+/**
+ * Login to Ollama.
+ *
+ * Returns a trimmed API key/token string. Empty string means local no-auth mode.
+ */
+export async function loginOllama(options: OAuthController): Promise<string> {
+	if (options.signal?.aborted) {
+		throw new Error("Login cancelled");
+	}
+	if (!options.onPrompt) {
+		return "";
+	}
+
+	options.onAuth?.({
+		url: OLLAMA_DOCS_URL,
+		instructions:
+			"Optional: paste an Ollama API key/token for authenticated hosts. Leave empty for local no-auth mode.",
+	});
+
+	const apiKey = await options.onPrompt({
+		message: "Paste your Ollama API key/token (optional)",
+		placeholder: "ollama-local",
+		allowEmpty: true,
+	});
+
+	if (options.signal?.aborted) {
+		throw new Error("Login cancelled");
+	}
+
+	return apiKey.trim();
+}
+
+export const ollamaProvider = {
+	id: "ollama",
+	name: "Ollama (Local OpenAI-compatible)",
+	defaultModel: "gpt-oss:20b",
+	createModelManagerOptions: (config: ModelManagerConfig) => ollamaModelManagerOptions(config),
+	allowUnauthenticated: true,
+	login: loginOllama,
+	envKeys: "OLLAMA_API_KEY",
+} as const satisfies ProviderDefinition;

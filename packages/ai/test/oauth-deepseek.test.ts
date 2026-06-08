@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 
-import { loginDeepSeek, normalizeDeepSeekApiKey } from "../src/utils/oauth/deepseek";
-import type { OAuthController } from "../src/utils/oauth/types";
+import { loginDeepSeek, normalizeDeepSeekApiKey } from "../src/registry/deepseek";
+import type { OAuthController } from "../src/registry/oauth/types";
 
 const originalFetch = global.fetch;
 

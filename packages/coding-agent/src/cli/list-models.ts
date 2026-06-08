@@ -189,6 +189,11 @@ export async function runListModelsCommand(options: RunListModelsOptions): Promi
 		modelRegistry.registerProvider(name, config, sourceId);
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
+	// Discover runtime (extension) provider catalogs now that they are registered.
+	// The full refresh in main.ts ran before extensions loaded, so this is the only
+	// point where extension-contributed dynamic providers get discovered. Cache-aware
+	// so it reuses the shared 24 h model cache instead of refetching every invocation.
+	await modelRegistry.refreshRuntimeProviders("online-if-uncached");
 
 	await listModels(modelRegistry, searchPattern);
 }

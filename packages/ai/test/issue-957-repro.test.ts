@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import * as kimiOauth from "../src/utils/oauth/kimi";
+import * as kimiOauth from "../src/registry/oauth/kimi";
 
 const originalFetch = global.fetch;
 

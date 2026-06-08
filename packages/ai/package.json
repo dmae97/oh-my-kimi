@@ -120,13 +120,13 @@
 			"types": "./src/utils/discovery/*.ts",
 			"import": "./src/utils/discovery/*.ts"
 		},
-		"./utils/oauth": {
-			"types": "./src/utils/oauth/index.ts",
-			"import": "./src/utils/oauth/index.ts"
+		"./oauth": {
+			"types": "./src/registry/oauth/index.ts",
+			"import": "./src/registry/oauth/index.ts"
 		},
-		"./utils/oauth/*": {
-			"types": "./src/utils/oauth/*.ts",
-			"import": "./src/utils/oauth/*.ts"
+		"./oauth/*": {
+			"types": "./src/registry/oauth/*.ts",
+			"import": "./src/registry/oauth/*.ts"
 		},
 		"./utils/schema": {
 			"types": "./src/utils/schema/index.ts",
