@@ -1,4 +1,4 @@
-import { Editor, type KeyId, matchesKey, parseKittySequence } from "@oh-my-pi/pi-tui";
+import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
 import { imageReferenceHyperlink, renderImageReferences } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
@@ -46,6 +46,14 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
 };
+
+function buildMatchKeys(keys: readonly KeyId[]): Set<string> {
+	const matchKeys = new Set<string>();
+	for (const key of keys) {
+		addKeyAliases(matchKeys, key);
+	}
+	return matchKeys;
+}
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
@@ -108,21 +116,38 @@ export class CustomEditor extends Editor {
 
 	/** Custom key handlers from extensions and non-built-in app actions. */
 	#customKeyHandlers = new Map<KeyId, () => void>();
+	#customMatchKeys = new Map<string, () => void>();
 	#actionKeys = new Map<ConfigurableEditorAction, KeyId[]>(
 		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [action as ConfigurableEditorAction, [...keys]]),
+	);
+	#actionMatchKeys = new Map<ConfigurableEditorAction, Set<string>>(
+		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [
+			action as ConfigurableEditorAction,
+			buildMatchKeys(keys),
+		]),
 	);
 
 	setActionKeys(action: ConfigurableEditorAction, keys: KeyId[]): void {
 		this.#actionKeys.set(action, [...keys]);
+		this.#rebuildActionMatchKeys(action);
 	}
 
-	#matchesAction(data: string, action: ConfigurableEditorAction): boolean {
-		const keys = this.#actionKeys.get(action);
-		if (!keys) return false;
-		for (const key of keys) {
-			if (matchesKey(data, key)) return true;
+	#rebuildActionMatchKeys(action: ConfigurableEditorAction): void {
+		this.#actionMatchKeys.set(action, buildMatchKeys(this.#actionKeys.get(action) ?? []));
+	}
+
+	#rebuildCustomMatchKeys(): void {
+		this.#customMatchKeys.clear();
+		for (const [keyId, handler] of this.#customKeyHandlers) {
+			for (const alias of buildMatchKeys([keyId])) {
+				// Preserve current iteration behavior: the first registered handler for colliding aliases wins.
+				if (!this.#customMatchKeys.has(alias)) this.#customMatchKeys.set(alias, handler);
+			}
 		}
-		return false;
+	}
+
+	#matchesAction(canonical: string | undefined, action: ConfigurableEditorAction): boolean {
+		return canonical !== undefined && (this.#actionMatchKeys.get(action)?.has(canonical) ?? false);
 	}
 
 	/**
@@ -130,6 +155,7 @@ export class CustomEditor extends Editor {
 	 */
 	setCustomKeyHandler(key: KeyId, handler: () => void): void {
 		this.#customKeyHandlers.set(key, handler);
+		this.#rebuildCustomMatchKeys();
 	}
 
 	/**
@@ -137,6 +163,7 @@ export class CustomEditor extends Editor {
 	 */
 	removeCustomKeyHandler(key: KeyId): void {
 		this.#customKeyHandlers.delete(key);
+		this.#rebuildCustomMatchKeys();
 	}
 
 	/**
@@ -144,11 +171,12 @@ export class CustomEditor extends Editor {
 	 */
 	clearCustomKeyHandlers(): void {
 		this.#customKeyHandlers.clear();
+		this.#rebuildCustomMatchKeys();
 	}
 
 	handleInput(data: string): void {
-		const parsed = parseKittySequence(data);
-		if (parsed && (parsed.modifier & 64) !== 0 && this.onCapsLock) {
+		const kittyParsed = parseKittySequence(data);
+		if (kittyParsed && (kittyParsed.modifier & 64) !== 0 && this.onCapsLock) {
 			// Caps Lock is modifier bit 64
 			this.onCapsLock();
 			return;
@@ -160,125 +188,129 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		// Intercept configured image paste (async - fires and handles result)
-		if (this.#matchesAction(data, "app.clipboard.pasteImage") && this.onPasteImage) {
-			void this.onPasteImage();
-			return;
-		}
+		const parsedKey = parseKey(data);
+		const canonical = parsedKey !== undefined ? canonicalKeyId(parsedKey) : undefined;
 
-		// Intercept configured raw text paste (fires and handles result)
-		if (this.#matchesAction(data, "app.clipboard.pasteTextRaw") && this.onPasteTextRaw) {
-			this.onPasteTextRaw();
-			return;
-		}
+		if (canonical !== undefined) {
+			// Intercept configured image paste (async - fires and handles result)
+			if (this.#matchesAction(canonical, "app.clipboard.pasteImage") && this.onPasteImage) {
+				void this.onPasteImage();
+				return;
+			}
 
-		// Intercept configured external editor shortcut
-		if (this.#matchesAction(data, "app.editor.external") && this.onExternalEditor) {
-			this.onExternalEditor();
-			return;
-		}
+			// Intercept configured raw text paste (fires and handles result)
+			if (this.#matchesAction(canonical, "app.clipboard.pasteTextRaw") && this.onPasteTextRaw) {
+				this.onPasteTextRaw();
+				return;
+			}
 
-		// Intercept configured temporary model selector shortcut
-		if (this.#matchesAction(data, "app.model.selectTemporary") && this.onSelectModelTemporary) {
-			this.onSelectModelTemporary();
-			return;
-		}
+			// Intercept configured external editor shortcut
+			if (this.#matchesAction(canonical, "app.editor.external") && this.onExternalEditor) {
+				this.onExternalEditor();
+				return;
+			}
 
-		// Intercept configured display reset shortcut
-		if (this.#matchesAction(data, "app.display.reset") && this.onDisplayReset) {
-			this.onDisplayReset();
-			return;
-		}
+			// Intercept configured temporary model selector shortcut
+			if (this.#matchesAction(canonical, "app.model.selectTemporary") && this.onSelectModelTemporary) {
+				this.onSelectModelTemporary();
+				return;
+			}
 
-		// Intercept configured suspend shortcut
-		if (this.#matchesAction(data, "app.suspend") && this.onSuspend) {
-			this.onSuspend();
-			return;
-		}
+			// Intercept configured display reset shortcut
+			if (this.#matchesAction(canonical, "app.display.reset") && this.onDisplayReset) {
+				this.onDisplayReset();
+				return;
+			}
 
-		// Intercept configured thinking block visibility toggle
-		if (this.#matchesAction(data, "app.thinking.toggle") && this.onToggleThinking) {
-			this.onToggleThinking();
-			return;
-		}
+			// Intercept configured suspend shortcut
+			if (this.#matchesAction(canonical, "app.suspend") && this.onSuspend) {
+				this.onSuspend();
+				return;
+			}
 
-		// Intercept configured model selector shortcut
-		if (this.#matchesAction(data, "app.model.select") && this.onSelectModel) {
-			this.onSelectModel();
-			return;
-		}
+			// Intercept configured thinking block visibility toggle
+			if (this.#matchesAction(canonical, "app.thinking.toggle") && this.onToggleThinking) {
+				this.onToggleThinking();
+				return;
+			}
 
-		// Intercept configured history search shortcut
-		if (this.#matchesAction(data, "app.history.search") && this.onHistorySearch) {
-			this.onHistorySearch();
-			return;
-		}
+			// Intercept configured model selector shortcut
+			if (this.#matchesAction(canonical, "app.model.select") && this.onSelectModel) {
+				this.onSelectModel();
+				return;
+			}
 
-		// Intercept configured tool output expansion shortcut
-		if (this.#matchesAction(data, "app.tools.expand") && this.onExpandTools) {
-			this.onExpandTools();
-			return;
-		}
+			// Intercept configured history search shortcut
+			if (this.#matchesAction(canonical, "app.history.search") && this.onHistorySearch) {
+				this.onHistorySearch();
+				return;
+			}
 
-		// Intercept configured backward model cycling (check before forward cycling)
-		if (this.#matchesAction(data, "app.model.cycleBackward") && this.onCycleModelBackward) {
-			this.onCycleModelBackward();
-			return;
-		}
+			// Intercept configured tool output expansion shortcut
+			if (this.#matchesAction(canonical, "app.tools.expand") && this.onExpandTools) {
+				this.onExpandTools();
+				return;
+			}
 
-		// Intercept configured forward model cycling
-		if (this.#matchesAction(data, "app.model.cycleForward") && this.onCycleModelForward) {
-			this.onCycleModelForward();
-			return;
-		}
+			// Intercept configured backward model cycling (check before forward cycling)
+			if (this.#matchesAction(canonical, "app.model.cycleBackward") && this.onCycleModelBackward) {
+				this.onCycleModelBackward();
+				return;
+			}
 
-		// Intercept configured thinking level cycling
-		if (this.#matchesAction(data, "app.thinking.cycle") && this.onCycleThinkingLevel) {
-			this.onCycleThinkingLevel();
-			return;
-		}
+			// Intercept configured forward model cycling
+			if (this.#matchesAction(canonical, "app.model.cycleForward") && this.onCycleModelForward) {
+				this.onCycleModelForward();
+				return;
+			}
 
-		// Intercept configured interrupt shortcut.
-		// When the autocomplete popup is visible, ESC's first job is to dismiss
-		// the popup — let super.handleInput() route it to #cancelAutocomplete().
-		// The user can press ESC again afterward to fire the global interrupt
-		// handler. This matches the standard TUI/IDE pattern and prevents a
-		// single ESC from both closing an @ completion and aborting an active
-		// agent run (#1655).
-		if (this.#matchesAction(data, "app.interrupt") && this.onEscape && !this.isShowingAutocomplete()) {
-			this.onEscape();
-			return;
-		}
+			// Intercept configured thinking level cycling
+			if (this.#matchesAction(canonical, "app.thinking.cycle") && this.onCycleThinkingLevel) {
+				this.onCycleThinkingLevel();
+				return;
+			}
 
-		// Intercept configured clear shortcut
-		if (this.#matchesAction(data, "app.clear") && this.onClear) {
-			this.onClear();
-			return;
-		}
+			// Intercept configured interrupt shortcut.
+			// When the autocomplete popup is visible, ESC's first job is to dismiss
+			// the popup — let super.handleInput() route it to #cancelAutocomplete().
+			// The user can press ESC again afterward to fire the global interrupt
+			// handler. This matches the standard TUI/IDE pattern and prevents a
+			// single ESC from both closing an @ completion and aborting an active
+			// agent run (#1655).
+			if (this.#matchesAction(canonical, "app.interrupt") && this.onEscape && !this.isShowingAutocomplete()) {
+				this.onEscape();
+				return;
+			}
 
-		// Intercept configured exit shortcut. Always consume the shortcut so it
-		// never reaches the parent handler; firing onExit is the controller's
-		// chance to snapshot the current text as a draft before shutting down.
-		if (this.#matchesAction(data, "app.exit")) {
-			this.onExit?.();
-			return;
-		}
+			// Intercept configured clear shortcut
+			if (this.#matchesAction(canonical, "app.clear") && this.onClear) {
+				this.onClear();
+				return;
+			}
 
-		// Intercept configured dequeue shortcut (restore queued message to editor)
-		if (this.#matchesAction(data, "app.message.dequeue") && this.onDequeue) {
-			this.onDequeue();
-			return;
-		}
+			// Intercept configured exit shortcut. Always consume the shortcut so it
+			// never reaches the parent handler; firing onExit is the controller's
+			// chance to snapshot the current text as a draft before shutting down.
+			if (this.#matchesAction(canonical, "app.exit")) {
+				this.onExit?.();
+				return;
+			}
 
-		// Intercept configured copy-prompt shortcut
-		if (this.#matchesAction(data, "app.clipboard.copyPrompt") && this.onCopyPrompt) {
-			this.onCopyPrompt();
-			return;
-		}
+			// Intercept configured dequeue shortcut (restore queued message to editor)
+			if (this.#matchesAction(canonical, "app.message.dequeue") && this.onDequeue) {
+				this.onDequeue();
+				return;
+			}
 
-		// Check custom key handlers (extensions)
-		for (const [keyId, handler] of this.#customKeyHandlers) {
-			if (matchesKey(data, keyId)) {
+			// Intercept configured copy-prompt shortcut
+			if (this.#matchesAction(canonical, "app.clipboard.copyPrompt") && this.onCopyPrompt) {
+				this.onCopyPrompt();
+				return;
+			}
+
+			// Check custom key handlers (extensions)
+			const handler = this.#customMatchKeys.get(canonical);
+			if (handler) {
 				handler();
 				return;
 			}

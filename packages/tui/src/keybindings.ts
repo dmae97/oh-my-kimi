@@ -182,7 +182,7 @@ function isAsciiUppercaseLetter(key: string): boolean {
 	return code >= 65 && code <= 90;
 }
 
-function canonicalKeyId(key: string): string {
+export function canonicalKeyId(key: string): string {
 	let offset = 0;
 	const modifiers: string[] = [];
 	let foundModifier = true;
@@ -214,7 +214,7 @@ function canonicalKeyId(key: string): string {
 	return `${modifiers.join("+")}+${base}`;
 }
 
-function addKeyAliases(keys: Set<string>, key: KeyId): void {
+export function addKeyAliases(keys: Set<string>, key: KeyId): void {
 	const canonical = canonicalKeyId(key);
 	keys.add(canonical);
 	if (SHIFTED_SYMBOL_KEYS.has(canonical)) {

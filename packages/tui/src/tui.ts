@@ -2695,7 +2695,13 @@ export class TUI extends Container {
 	 * the end so cursor/viewport/scrollback accounting stays consistent.
 	 */
 
-	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursor: HardwareCursorUpdate): void {
+	#commit(
+		lines: string[],
+		width: number,
+		height: number,
+		viewportTop: number,
+		hardwareCursor: HardwareCursorUpdate,
+	): void {
 		this.#deferredTailLine = undefined;
 		this.#previousLines = lines;
 		this.#previousVisibleOverlayComponents = this.#visibleOverlayComponentsThisRender;
@@ -2758,10 +2764,7 @@ export class TUI extends Container {
 	#sameHardwareCursorState(state: HardwareCursorState): boolean {
 		const current = this.#hardwareCursorState;
 		return (
-			current !== null &&
-			current.row === state.row &&
-			current.col === state.col &&
-			current.visible === state.visible
+			current !== null && current.row === state.row && current.col === state.col && current.visible === state.visible
 		);
 	}
 
@@ -3223,7 +3226,13 @@ export class TUI extends Container {
 	): void {
 		const extraLines = this.#previousLines.length - lines.length;
 		if (extraLines <= 0) {
-			this.#commit(lines, width, height, Math.max(0, lines.length - height), this.#preserveHardwareCursorUpdate(prevHardwareCursorRow));
+			this.#commit(
+				lines,
+				width,
+				height,
+				Math.max(0, lines.length - height),
+				this.#preserveHardwareCursorUpdate(prevHardwareCursorRow),
+			);
 			this.#maxLinesRendered = lines.length;
 			return;
 		}
@@ -3502,7 +3511,7 @@ export class TUI extends Container {
 
 		return { seq, toRow: target.row, toCol: target.col, visible: target.visible, state: target };
 	}
-	
+
 	#isHiddenCursorKnown(): boolean {
 		return this.#hardwareCursorVisibilityKnown && !this.#hardwareCursorVisible;
 	}

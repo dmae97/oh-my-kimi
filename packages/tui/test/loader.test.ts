@@ -69,7 +69,13 @@ describe("Loader component", () => {
 	it("requests render for message changes but not repeated identical messages", () => {
 		vi.useFakeTimers();
 		const ui = { requestRender: vi.fn() } as unknown as TUI;
-		const loader = new Loader(ui, text => text, text => text, "Checking", ["0"]);
+		const loader = new Loader(
+			ui,
+			text => text,
+			text => text,
+			"Checking",
+			["0"],
+		);
 
 		expect(ui.requestRender).toHaveBeenCalledTimes(1);
 
