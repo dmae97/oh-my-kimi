@@ -40,7 +40,6 @@ import {
 	rangesOverlap,
 } from "./edits";
 import { detectLspmux } from "./lspmux";
-import { renderCall, renderResult } from "./render";
 import {
 	type CodeAction,
 	type CodeActionContext,
@@ -1310,10 +1309,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 	readonly summary = "Query LSP (language server) for diagnostics, hover info, and references";
 	readonly description: string;
 	readonly parameters = lspSchema;
-	readonly renderCall = renderCall;
-	readonly renderResult = renderResult;
-	readonly mergeCallAndResult = true;
-	readonly inline = true;
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {

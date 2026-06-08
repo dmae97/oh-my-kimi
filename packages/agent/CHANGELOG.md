@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a non-interrupting "aside" message channel to the agent loop (`AgentLoopConfig.getAsideMessages` / `Agent.setAsideMessageProvider`). Asides are drained at each step boundary (after a tool batch, before the next model call) and at the yield check, so passive notifications (e.g. background-job completions, late LSP diagnostics) reach the model *between requests* without waiting for the agent to stop and without aborting in-flight tools the way steering does.
+
 ### Changed
 
 - Changed core custom and hook messages to convert to `developer` messages for provider context.
