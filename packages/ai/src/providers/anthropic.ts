@@ -314,16 +314,29 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 	return state;
 }
 
+/**
+ * Key the sticky strict-tools / fast-mode learning per endpoint+model. A
+ * grammar-too-large 400 or a fast-mode rejection is specific to the model (its
+ * tool grammar / entitlement) and the endpoint (direct Anthropic vs a gateway /
+ * Foundry / Bedrock proxy), so it MUST NOT bleed onto unrelated anthropic-messages
+ * requests in the same session. NUL separates the two components so neither can
+ * forge the boundary.
+ */
+function anthropicProviderSessionStateKey(baseUrl: string, modelId: string): string {
+	return `${ANTHROPIC_PROVIDER_SESSION_STATE_KEY}:${baseUrl}\u0000${modelId}`;
+}
+
 function getAnthropicProviderSessionState(
 	providerSessionState: Map<string, ProviderSessionState> | undefined,
+	baseUrl: string,
+	modelId: string,
 ): AnthropicProviderSessionState | undefined {
 	if (!providerSessionState) return undefined;
-	const existing = providerSessionState.get(ANTHROPIC_PROVIDER_SESSION_STATE_KEY) as
-		| AnthropicProviderSessionState
-		| undefined;
+	const key = anthropicProviderSessionStateKey(baseUrl, modelId);
+	const existing = providerSessionState.get(key) as AnthropicProviderSessionState | undefined;
 	if (existing) return existing;
 	const created = createAnthropicProviderSessionState();
-	providerSessionState.set(ANTHROPIC_PROVIDER_SESSION_STATE_KEY, created);
+	providerSessionState.set(key, created);
 	return created;
 }
 
@@ -338,10 +351,14 @@ export function clearAnthropicFastModeFallback(
 	providerSessionState: Map<string, ProviderSessionState> | undefined,
 ): void {
 	if (!providerSessionState) return;
-	const state = providerSessionState.get(ANTHROPIC_PROVIDER_SESSION_STATE_KEY) as
-		| AnthropicProviderSessionState
-		| undefined;
-	if (state) state.fastModeDisabled = false;
+	// Fast mode is re-armed session-wide (user toggled `/fast on`), so clear the
+	// sticky flag on every per-endpoint/model Anthropic entry — plus the legacy
+	// unscoped key — rather than a single shared object.
+	const prefix = `${ANTHROPIC_PROVIDER_SESSION_STATE_KEY}:`;
+	for (const [key, value] of providerSessionState) {
+		if (key !== ANTHROPIC_PROVIDER_SESSION_STATE_KEY && !key.startsWith(prefix)) continue;
+		(value as AnthropicProviderSessionState).fastModeDisabled = false;
+	}
 }
 
 function isAnthropicStrictGrammarTooLargeError(error: unknown): boolean {
@@ -1434,7 +1451,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const baseUrl =
 				resolveAnthropicBaseUrl(model, options?.apiKey ?? getEnvApiKey(model.provider) ?? "") ??
 				"https://api.anthropic.com";
-			const providerSessionState = getAnthropicProviderSessionState(options?.providerSessionState);
+			const providerSessionState = getAnthropicProviderSessionState(options?.providerSessionState, baseUrl, model.id);
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let strictFallbackErrorMessage: string | undefined;
@@ -1899,6 +1916,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				}
 			}
 
+			// A strict-tools / grammar-too-large fallback (or a transient retry that ran
+			// after one) stamps `strictFallbackErrorMessage` onto `output.errorMessage` for
+			// the *discarded* attempt. Reaching here means a later attempt succeeded
+			// (the in-loop guard throws on error/aborted before this break), so drop the
+			// stale 400 text — otherwise a successful turn ships a phantom error string to
+			// telemetry/UI. Only the exact stale value is cleared, never a real refusal message.
+			if (output.errorMessage !== undefined && output.errorMessage === strictFallbackErrorMessage) {
+				output.errorMessage = undefined;
+			}
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			if (dropFastMode && resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
@@ -2466,8 +2492,11 @@ function buildParams(
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
 				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
 				// response by default. Opt into summarized reasoning so thinking deltas keep
-				// streaming with human-readable content for callers that rely on it.
-				if (options.thinkingDisplay !== undefined || supportsAdaptiveThinkingDisplay(model.id)) {
+				// streaming with human-readable content for callers that rely on it. The
+				// `display` field is gated strictly on model support: Opus 4.6 / Sonnet 4.6+
+				// reject it with a 400, so an explicit `thinkingDisplay` MUST NOT force it onto
+				// a model that can't accept it (a hidden-thinking toggle must never break the request).
+				if (supportsAdaptiveThinkingDisplay(model.id)) {
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
