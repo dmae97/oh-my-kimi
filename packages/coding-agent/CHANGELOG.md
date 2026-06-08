@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed the plan-mode active prompt (`prompts/system/plan-mode-active.md`) to stop producing shallow plans. The prior rewrite quantified brevity ("3–5 short sections", "minimum detail needed", "omit branch-by-branch logic") while leaving depth abstract, so models followed the concrete brevity gradient and under-specified. Rebalanced "The Plan": Approach is now the load-bearing section and each bullet must state the concrete change (what function/type/behavior is touched and HOW) so no design decision is left to the implementer; depth scales with the change instead of a flat section cap; "minimum detail" is replaced by a sufficiency test (detail is enough when every step is decided, edge cases/defaults/real branches spelled out); and the closing `<critical>` adds an executable self-check plus an explicit tiebreak — when brevity and decision-completeness conflict, completeness wins.
+
+### Fixed
+
+- Fixed session search to return all sessions unchanged when the query is blank
+- Fixed duplicate session suggestions by deduplicating history matches by session path when merging metadata and prompt-history results
+- Fixed `/resume` search ranking so sessions whose prompts or metadata match the query now prefer prompt recency and recent literal matches instead of letting older earlier-title fuzzy matches outrank a just-used session.
 
 ## [15.10.2] - 2026-06-08
 ### Added
