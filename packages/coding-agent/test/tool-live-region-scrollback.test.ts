@@ -70,6 +70,23 @@ describe("transcript reactive commit boundary", () => {
 		});
 	});
 
+	it("treats in-place growth of the trailing line as append-only", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			// Models a streaming assistant reply: stable head rows plus a current
+			// line that grows token-by-token without adding a new row — the dominant
+			// streaming shape, and the one a strict line-count-growth check missed,
+			// stranding the scrolled-off head outside tmux pane history.
+			const block = new MutableLiveBlock(["para one", "para two", "the quick brown"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			block.setLines(["para one", "para two", "the quick brown fox"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
+		});
+	});
+
 	it("marks interior live re-layout volatile and defers commit", async () => {
 		await withTerminalRisk(true, () => {
 			const chat = new TranscriptContainer();

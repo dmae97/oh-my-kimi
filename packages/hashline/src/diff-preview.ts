@@ -5,7 +5,7 @@
  * offset tracking, but omitted from the preview. Added and context lines are
  * anchored to their post-edit positions so a follow-up edit can reuse visible
  * concrete lines directly. Long contiguous added runs are summarized with a
- * `+…` marker instead of echoing every inserted line.
+ * `…` marker instead of echoing every inserted line.
  *
  * This is intentionally decoupled from the diff producer: anything that
  * emits the `<sign><lineNum>|<content>` shape works.
@@ -13,6 +13,15 @@
 import type { CompactDiffOptions, CompactDiffPreview } from "./types";
 
 const DEFAULT_ADDED_RUN_CONTEXT_LINES = 2;
+
+const PREVIEW_ELISION_MARKER = "…";
+const RAW_ELISION_MARKERS = new Set(["...", PREVIEW_ELISION_MARKER, `+${PREVIEW_ELISION_MARKER}`]);
+
+function appendPreviewLine(output: string[], line: string): void {
+	const normalized = RAW_ELISION_MARKERS.has(line) ? PREVIEW_ELISION_MARKER : line;
+	if (normalized === PREVIEW_ELISION_MARKER && output[output.length - 1] === PREVIEW_ELISION_MARKER) return;
+	output.push(normalized);
+}
 
 interface ParsedDiffLine {
 	kind: "+" | "-" | " ";
@@ -44,13 +53,13 @@ function appendAddedRun(output: string[], run: string[], edgeLines: number): voi
 
 	const collapseThreshold = edgeLines * 2 + 1;
 	if (run.length <= collapseThreshold) {
-		for (const text of run) output.push(text);
+		for (const text of run) appendPreviewLine(output, text);
 		return;
 	}
 
-	for (let i = 0; i < edgeLines; i++) output.push(run[i]);
-	output.push("+…");
-	for (let i = run.length - edgeLines; i < run.length; i++) output.push(run[i]);
+	for (let i = 0; i < edgeLines; i++) appendPreviewLine(output, run[i]);
+	appendPreviewLine(output, PREVIEW_ELISION_MARKER);
+	for (let i = run.length - edgeLines; i < run.length; i++) appendPreviewLine(output, run[i]);
 }
 
 export function buildCompactDiffPreview(diff: string, options: CompactDiffOptions = {}): CompactDiffPreview {
@@ -75,14 +84,14 @@ export function buildCompactDiffPreview(diff: string, options: CompactDiffOption
 		const parsed = parseNumberedDiffLine(line);
 		if (!parsed) {
 			flushAddedRun();
-			formatted.push(line);
+			appendPreviewLine(formatted, line);
 			continue;
 		}
 
 		switch (parsed.kind) {
 			case "+": {
 				addedLines++;
-				addedRun.push(`+${parsed.lineNumber}:${parsed.content}`);
+				addedRun.push(`${parsed.lineNumber}:${parsed.content}`);
 				break;
 			}
 			case "-":
@@ -92,7 +101,7 @@ export function buildCompactDiffPreview(diff: string, options: CompactDiffOption
 			default: {
 				flushAddedRun();
 				const newLineNumber = parsed.lineNumber + addedLines - removedLines;
-				formatted.push(` ${newLineNumber}:${parsed.content}`);
+				appendPreviewLine(formatted, `${newLineNumber}:${parsed.content}`);
 				break;
 			}
 		}
