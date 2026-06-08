@@ -1427,7 +1427,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const getArtifactsDir = () => sessionManager.getArtifactsDir();
 		if (!options.parentTaskPrefix) {
 			setActiveSkills(skills);
-			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
+			// Include TTSR rules so `rule://<name>` can resolve them too. They are
+			// registered with the manager and bucketed out before rulebook/always,
+			// so without this a TTSR-only rule (e.g. a triggered builtin) is not
+			// addressable and `rule://` reports "Available: none".
+			setActiveRules([...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()]);
 			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
 		const localProtocolOptions = options.localProtocolOptions ?? {

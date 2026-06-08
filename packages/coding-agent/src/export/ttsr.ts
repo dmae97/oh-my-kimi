@@ -561,6 +561,11 @@ export class TtsrManager {
 		return this.#rules.size > 0;
 	}
 
+	/** All rules currently registered for TTSR monitoring, in registration order. */
+	getRules(): Rule[] {
+		return Array.from(this.#rules.values(), entry => entry.rule);
+	}
+
 	/** Increment message counter (call after each turn). */
 	incrementMessageCount(): void {
 		this.#messageCount++;

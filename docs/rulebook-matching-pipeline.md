@@ -242,18 +242,18 @@ This is advisory/contextual: prompt text asks the model to read applicable rules
 
 ## 8. `rule://` internal URL behavior
 
-`RuleProtocolHandler` is registered with:
+`RuleProtocolHandler` resolves against the process-global active-rule snapshot
+installed once per top-level session in `sdk.ts`:
 
 ```ts
-new RuleProtocolHandler({
-  getRules: () => [...rulebookRules, ...alwaysApplyRules],
-});
+setActiveRules([...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()]);
 ```
 
 Implications:
 
-- `rule://<name>` resolves against both **rulebookRules** and **alwaysApplyRules**.
-- TTSR-only rules and rules with no description and no `alwaysApply` are not addressable via `rule://`.
+- `rule://<name>` resolves against **rulebookRules**, **alwaysApplyRules**, and **registered TTSR rules**.
+- TTSR rules are bucketed out before rulebook/always, but `ttsrManager.getRules()` re-adds them to the snapshot so a triggered rule (e.g. a builtin) stays addressable for re-reading.
+- Rules with no description, no `alwaysApply`, and no accepted TTSR condition are not addressable via `rule://`.
 - Resolution is exact name match.
 - Unknown names return error listing available rule names.
 - Returned content is raw `rule.content` (frontmatter stripped), content type `text/markdown`.
@@ -262,5 +262,5 @@ Implications:
 
 1. The rule providers currently loaded for `rules` are `native`, `agents`, `cursor`, `windsurf`, `cline`, and embedded `builtin-defaults`; provider files for other tools may parse other config formats but do not register rule loaders.
 2. `globs` metadata is surfaced to prompt/UI and is used as a global path gate for TTSR matching, but it is not used to automatically select rulebook rules for `rule://`.
-3. Rule selection for `rule://` includes rulebook and always-apply rules, but not TTSR-only rules.
+3. Rule selection for `rule://` includes rulebook, always-apply, and registered TTSR rules (so a triggered TTSR rule can be re-read), but not rules that registered no condition and carry neither a description nor `alwaysApply`.
 4. Discovery warnings (`loadCapability("rules").warnings`) are produced but `createAgentSession` does not currently surface/log them in this path.
