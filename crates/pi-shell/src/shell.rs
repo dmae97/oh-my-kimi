@@ -1918,6 +1918,57 @@ mod tests {
 		);
 	}
 
+	#[tokio::test(flavor = "multi_thread")]
+	async fn wait_accepts_last_background_process_id() {
+		let options = ShellExecuteOptions {
+			command: "/bin/sh -c 'exit 7' & mover=$!; wait \"$mover\"".to_string(),
+			..Default::default()
+		};
+
+		let result = execute_shell(options, None, CancelToken::default())
+			.await
+			.expect("execute should succeed");
+
+		assert_eq!(result.exit_code, Some(7));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn wait_n_p_records_completed_process_id() {
+		let options = ShellExecuteOptions {
+			command: "/bin/sh -c 'sleep 0.2; exit 42' & slow=$!; /bin/sh -c 'exit 13' & fast=$!; \
+			          wait -n -p hit \"$slow\" \"$fast\"; status=$?; wait \"$slow\"; [ \"$status\" \
+			          -eq 13 ] && [ \"$hit\" = \"$fast\" ]"
+				.to_string(),
+			..Default::default()
+		};
+
+		let result = execute_shell(options, None, CancelToken::default())
+			.await
+			.expect("execute should succeed");
+
+		assert_eq!(result.exit_code, Some(0));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn wait_f_accepts_process_id() {
+		let options = ShellExecuteOptions {
+			command: "/bin/sh -c 'exit 5' & child=$!; wait -f \"$child\"".to_string(),
+			..Default::default()
+		};
+
+		let result = execute_shell(options, None, CancelToken::default())
+			.await
+			.expect("execute should succeed");
+
+		assert_eq!(result.exit_code, Some(5));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+	}
+
 	#[tokio::test]
 	async fn abort_state_signals_cancel_token() {
 		let abort_state = ShellAbortState::default();
