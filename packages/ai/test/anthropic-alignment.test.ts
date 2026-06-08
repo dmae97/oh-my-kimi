@@ -1528,8 +1528,15 @@ describe("Anthropic request fingerprint alignment", () => {
 		const name = "Read";
 		const prefixed = applyClaudeToolPrefix(name);
 		expect(prefixed).toBe(`${claudeToolPrefix}${name}`);
-		expect(applyClaudeToolPrefix(prefixed)).toBe(prefixed); // idempotent
 		expect(stripClaudeToolPrefix(prefixed)).toBe(name); // roundtrip
+
+		// The prefix codec is injective, NOT idempotent: an internal tool name that
+		// already starts with the prefix gets a second one so it survives the return
+		// trip. Skipping it would strip a real leading underscore and lose the tool.
+		const underscored = `${claudeToolPrefix}foo`;
+		const underscoredWire = applyClaudeToolPrefix(underscored);
+		expect(underscoredWire).toBe(`${claudeToolPrefix}${underscored}`);
+		expect(stripClaudeToolPrefix(underscoredWire)).toBe(underscored);
 	});
 });
 

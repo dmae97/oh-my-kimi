@@ -661,7 +661,11 @@ const ANTHROPIC_BUILTIN_TOOL_NAMES = new Set(["web_search", "code_execution", "t
 export const applyClaudeToolPrefix = (name: string): string => {
 	if (!claudeToolPrefix) return name;
 	if (ANTHROPIC_BUILTIN_TOOL_NAMES.has(name.toLowerCase())) return name;
-	if (name.toLowerCase().startsWith(claudeToolPrefix.toLowerCase())) return name;
+	// Always prepend (no "already prefixed" short-circuit): the prefix is a wire
+	// transport detail applied once to internal tool names, and `stripClaudeToolPrefix`
+	// removes exactly one prefix on receive. Skipping names that already start with the
+	// prefix would make a tool literally named `_foo` lose its leading underscore on the
+	// return trip (`_foo` → wire `_foo` → strip → `foo`), so the agent loop can't find it.
 	return `${claudeToolPrefix}${name}`;
 };
 
