@@ -196,9 +196,9 @@ const sharedHeaders = {
 	"Accept-Encoding": "gzip, deflate, br, zstd",
 	Connection: "keep-alive",
 	"Content-Type": "application/json",
-	"Anthropic-Version": "2023-06-01",
-	"Anthropic-Dangerous-Direct-Browser-Access": "true",
-	"X-App": "cli",
+	"anthropic-version": "2023-06-01",
+	"anthropic-dangerous-direct-browser-access": "true",
+	"x-app": "cli",
 };
 
 export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<string, string> {
@@ -216,7 +216,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			...modelHeaders,
 			Accept: acceptHeader,
 			...sharedHeaders,
-			"Anthropic-Beta": betaHeader,
+			"anthropic-beta": betaHeader,
 			"cf-aig-authorization": `Bearer ${options.apiKey}`,
 		};
 	}
@@ -225,14 +225,14 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
 		const userAgent = isClaudeCodeClientUserAgent(incomingUserAgent)
 			? incomingUserAgent
-			: `claude-cli/${claudeCodeVersion} (external, cli)`;
+			: `claude-cli/${claudeCodeVersion} (external, local-agent, agent-sdk/${claudeAgentSdkVersion})`;
 		return {
 			...modelHeaders,
 			...claudeCodeHeaders,
 			Accept: acceptHeader,
 			Authorization: `Bearer ${options.apiKey}`,
 			...sharedHeaders,
-			"Anthropic-Beta": betaHeader,
+			"anthropic-beta": betaHeader,
 			...(options.claudeCodeSessionId ? { "X-Claude-Code-Session-Id": options.claudeCodeSessionId } : {}),
 			"x-client-request-id": nodeCrypto.randomUUID(),
 			"User-Agent": userAgent,
@@ -243,14 +243,14 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			Accept: acceptHeader,
 			Authorization: `Bearer ${options.apiKey}`,
 			...sharedHeaders,
-			"Anthropic-Beta": betaHeader,
+			"anthropic-beta": betaHeader,
 		};
 	} else {
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
 			...sharedHeaders,
-			"Anthropic-Beta": betaHeader,
+			"anthropic-beta": betaHeader,
 			"X-Api-Key": options.apiKey,
 		};
 	}
@@ -259,12 +259,6 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 type AnthropicCacheControl = NonNullable<TextBlockParam["cache_control"]>;
 
 type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_config"]>;
-
-function getAnthropicOutputConfig(params: MessageCreateParamsStreaming): AnthropicOutputConfig {
-	const outputConfig = params.output_config ?? {};
-	params.output_config = outputConfig;
-	return outputConfig;
-}
 
 const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
 let warnedStopSequencesTrim = false;
@@ -398,9 +392,14 @@ function getCacheControl(
 }
 
 // Stealth mode: mimic Claude Code's request fingerprint.
-export const claudeCodeVersion = "2.1.160";
-export const claudeToolPrefix: string = "proxy_";
-export const claudeCodeSystemInstruction = "You are Claude Code, Anthropic's official CLI for Claude.";
+export const claudeCodeVersion = "2.1.165";
+export const claudeAgentSdkVersion = "0.3.165";
+export const claudeClientVersion = "1.11187.4";
+export const claudeToolPrefix: string = "_";
+export const claudeCodeSystemInstruction = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+// Claude Code caps requested output at 64k tokens even when the model ceiling is
+// higher (e.g. Opus 4.8 supports 128k); clamp to match the wire fingerprint.
+export const CLAUDE_CODE_MAX_OUTPUT_TOKENS = 64000;
 
 export function mapStainlessOs(platform: string): "MacOS" | "Windows" | "Linux" | "FreeBSD" | `Other::${string}` {
 	switch (platform.toLowerCase()) {
@@ -443,7 +442,9 @@ export const claudeCodeHeaders = {
 	"X-Stainless-Lang": "js",
 	"X-Stainless-Arch": mapStainlessArch(process.arch),
 	"X-Stainless-OS": mapStainlessOs(process.platform),
-	"X-Stainless-Timeout": "600",
+	"X-Stainless-Timeout": "900",
+	"anthropic-client-platform": "desktop_app",
+	"anthropic-client-version": claudeClientVersion,
 };
 
 const enforcedHeaderKeys = new Set(
@@ -453,11 +454,11 @@ const enforcedHeaderKeys = new Set(
 		"Accept-Encoding",
 		"Connection",
 		"Content-Type",
-		"Anthropic-Version",
-		"Anthropic-Dangerous-Direct-Browser-Access",
-		"Anthropic-Beta",
+		"anthropic-version",
+		"anthropic-dangerous-direct-browser-access",
+		"anthropic-beta",
 		"User-Agent",
-		"X-App",
+		"x-app",
 		"Authorization",
 		"X-Api-Key",
 		"X-Claude-Code-Session-Id",
@@ -480,7 +481,7 @@ function createClaudeBillingHeader(firstUserMessageText: string): string {
 		.slice(0, 3);
 	// cch=00000: placeholder replaced with the real attestation hash by wrapFetchForCch
 	// before the request hits the wire (see below).
-	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=cli; ${CCH_PLACEHOLDER_STR};`;
+	return `${CLAUDE_BILLING_HEADER_PREFIX} cc_version=${claudeCodeVersion}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER_STR};`;
 }
 
 // cch attestation: XXHash64(body_with_placeholder, seed) low-20-bits, 5 hex chars.
@@ -620,19 +621,17 @@ function resolveAnthropicMetadataUserId(
 	return generateClaudeJsonUserId(sessionId);
 }
 const ANTHROPIC_BUILTIN_TOOL_NAMES = new Set(["web_search", "code_execution", "text_editor", "computer"]);
-export const applyClaudeToolPrefix = (name: string, prefixOverride: string = claudeToolPrefix) => {
-	if (!prefixOverride) return name;
+export const applyClaudeToolPrefix = (name: string): string => {
+	if (!claudeToolPrefix) return name;
 	if (ANTHROPIC_BUILTIN_TOOL_NAMES.has(name.toLowerCase())) return name;
-	const prefix = prefixOverride.toLowerCase();
-	if (name.toLowerCase().startsWith(prefix)) return name;
-	return `${prefixOverride}${name}`;
+	if (name.toLowerCase().startsWith(claudeToolPrefix.toLowerCase())) return name;
+	return `${claudeToolPrefix}${name}`;
 };
 
-export const stripClaudeToolPrefix = (name: string, prefixOverride: string = claudeToolPrefix) => {
-	if (!prefixOverride) return name;
-	const prefix = prefixOverride.toLowerCase();
-	if (!name.toLowerCase().startsWith(prefix)) return name;
-	return name.slice(prefixOverride.length);
+export const stripClaudeToolPrefix = (name: string): string => {
+	if (!claudeToolPrefix) return name;
+	if (!name.toLowerCase().startsWith(claudeToolPrefix.toLowerCase())) return name;
+	return name.slice(claudeToolPrefix.length);
 };
 
 const ANTHROPIC_MANY_IMAGE_THRESHOLD = 20;
@@ -2285,13 +2284,6 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 	return "";
 }
 
-function applyClaudeCodeContextManagement(params: MessageCreateParamsStreaming, isOAuthToken: boolean): void {
-	if (!isOAuthToken || params.thinking?.type !== "adaptive") return;
-	params.context_management = {
-		edits: [{ type: "clear_thinking_20251015", keep: "all" }],
-	};
-}
-
 function buildParams(
 	model: Model<"anthropic-messages">,
 	baseUrl: string,
@@ -2301,20 +2293,101 @@ function buildParams(
 	disableStrictTools = false,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention, isOAuthToken);
+
+	// Pre-compute system blocks so they occupy the right slot in the serialized body.
+	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
+	const firstUserMessageText = shouldInjectClaudeCodeInstruction
+		? extractClaudeCodeFirstUserMessageText(context.messages)
+		: "";
+	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {
+		includeClaudeCodeInstruction: shouldInjectClaudeCodeInstruction,
+		firstUserMessageText,
+	});
+
+	// Pre-compute tools.
+	let tools: ReturnType<typeof convertTools> | undefined;
+	if (context.tools) {
+		tools = convertTools(
+			context.tools,
+			isOAuthToken,
+			disableStrictTools || model.provider === "github-copilot",
+			getAnthropicCompat(model).supportsEagerToolInputStreaming,
+		);
+	} else if (isOAuthToken) {
+		tools = [];
+	}
+
+	// Pre-compute metadata.
+	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken, options?.sessionId);
+	const metadata = metadataUserId ? { user_id: metadataUserId } : undefined;
+
+	// Pre-compute thinking + output_config effort.
+	let thinking: MessageCreateParamsStreaming["thinking"] | undefined;
+	let outputConfigEffort: AnthropicEffort | undefined;
+	if (model.reasoning) {
+		if (options?.thinkingEnabled) {
+			const mode = model.thinking?.mode;
+			const effort = resolveAnthropicAdaptiveEffort(model, options);
+			const compat = getAnthropicCompat(model);
+			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
+				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
+				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
+				// response by default. Opt into summarized reasoning so thinking deltas keep
+				// streaming with human-readable content for callers that rely on it.
+				if (options.thinkingDisplay !== undefined || supportsAdaptiveThinkingDisplay(model.id)) {
+					adaptive.display = options.thinkingDisplay ?? "summarized";
+				}
+				thinking = adaptive;
+				if (effort) outputConfigEffort = effort;
+			} else {
+				thinking = {
+					type: "enabled",
+					budget_tokens: options.thinkingBudgetTokens || 1024,
+					display: options.thinkingDisplay ?? "summarized",
+				};
+				if (mode === "anthropic-budget-effort" && effort) outputConfigEffort = effort;
+			}
+		} else if (options?.thinkingEnabled === false) {
+			thinking = { type: "disabled" };
+		}
+	}
+
+	// Pre-compute context_management (depends on thinking).
+	const contextManagement =
+		isOAuthToken && thinking?.type === "adaptive"
+			? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
+			: undefined;
+
+	// Pre-compute output_config.
+	const outputConfigEntries: AnthropicOutputConfig = {};
+	if (outputConfigEffort) outputConfigEntries.effort = outputConfigEffort;
+	if (options?.taskBudget) outputConfigEntries.task_budget = options.taskBudget;
+	const outputConfig = Object.keys(outputConfigEntries).length ? outputConfigEntries : undefined;
+
+	// Build params in the canonical field order: model → messages → system → tools →
+	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
-		max_tokens: options?.maxTokens || model.maxTokens,
+		...(systemBlocks && { system: systemBlocks }),
+		...(tools !== undefined && { tools }),
+		...(metadata && { metadata }),
+		max_tokens: Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, options?.maxTokens || model.maxTokens),
+		...(thinking && { thinking }),
+		...(contextManagement && { context_management: contextManagement }),
+		...(outputConfig && { output_config: outputConfig }),
 		stream: true,
 	};
-	if (options?.temperature !== undefined && !options?.thinkingEnabled) {
+
+	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
+	const allowSamplingParams = !hasOpus47ApiRestrictions(model.id);
+	if (allowSamplingParams && options?.temperature !== undefined && !options?.thinkingEnabled) {
 		params.temperature = options.temperature;
 	}
-
-	if (options?.topP !== undefined) {
+	if (allowSamplingParams && options?.topP !== undefined) {
 		params.top_p = options.topP;
 	}
-	if (options?.topK !== undefined) {
+	if (allowSamplingParams && options?.topK !== undefined) {
 		params.top_k = options.topK;
 	}
 	if (options?.stopSequences?.length) {
@@ -2328,65 +2401,6 @@ function buildParams(
 		}
 		params.stop_sequences =
 			seqs.length > ANTHROPIC_STOP_SEQUENCES_MAX ? seqs.slice(0, ANTHROPIC_STOP_SEQUENCES_MAX) : seqs;
-	}
-
-	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
-	if (hasOpus47ApiRestrictions(model.id)) {
-		delete params.top_p;
-		delete params.top_k;
-		delete params.temperature;
-	}
-
-	if (context.tools) {
-		params.tools = convertTools(
-			context.tools,
-			isOAuthToken,
-			disableStrictTools || model.provider === "github-copilot",
-			getAnthropicCompat(model).supportsEagerToolInputStreaming,
-		);
-	} else if (isOAuthToken) {
-		params.tools = [];
-	}
-
-	if (model.reasoning) {
-		if (options?.thinkingEnabled) {
-			const mode = model.thinking?.mode;
-			const effort = resolveAnthropicAdaptiveEffort(model, options);
-
-			const compat = getAnthropicCompat(model);
-			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
-				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
-				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
-				// response by default. Opt into summarized reasoning so thinking deltas keep
-				// streaming with human-readable content for callers that rely on it.
-				if (options.thinkingDisplay !== undefined || supportsAdaptiveThinkingDisplay(model.id)) {
-					adaptive.display = options.thinkingDisplay ?? "summarized";
-				}
-				params.thinking = adaptive;
-				if (effort) {
-					getAnthropicOutputConfig(params).effort = effort;
-				}
-			} else {
-				params.thinking = {
-					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
-					display: options.thinkingDisplay ?? "summarized",
-				};
-				if (mode === "anthropic-budget-effort" && effort) {
-					getAnthropicOutputConfig(params).effort = effort;
-				}
-			}
-		} else if (options?.thinkingEnabled === false) {
-			params.thinking = { type: "disabled" };
-		}
-	}
-
-	if (options?.taskBudget) {
-		getAnthropicOutputConfig(params).task_budget = options.taskBudget;
-	}
-	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken, options?.sessionId);
-	if (metadataUserId) {
-		params.metadata = { user_id: metadataUserId };
 	}
 
 	if (resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
@@ -2403,19 +2417,7 @@ function buildParams(
 		}
 	}
 
-	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
-	const firstUserMessageText = shouldInjectClaudeCodeInstruction
-		? extractClaudeCodeFirstUserMessageText(context.messages)
-		: "";
-	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {
-		includeClaudeCodeInstruction: shouldInjectClaudeCodeInstruction,
-		firstUserMessageText,
-	});
-	if (systemBlocks) {
-		params.system = systemBlocks;
-	}
 	disableThinkingIfToolChoiceForced(params);
-	applyClaudeCodeContextManagement(params, isOAuthToken);
 	ensureMaxTokensForThinking(params, model);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
