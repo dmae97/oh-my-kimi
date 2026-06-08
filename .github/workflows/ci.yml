@@ -545,13 +545,14 @@ jobs:
            run: bun run ci:release:publish
 
    # Regenerate the Homebrew tap formula (can1357/homebrew-tap) from the freshly
-   # published release assets and push it. Depends only on release-github (the
-   # release and its binaries must exist). No-ops when HOMEBREW_TAP_DEPLOY_KEY is
-   # unset, so a release never blocks on tap access.
+   # published release assets and push it. Gated on release_github_verify so the
+   # tap only cuts over to a release whose published binary was verified (matches
+   # how release-npm is gated). No-ops when HOMEBREW_TAP_DEPLOY_KEY is unset, so a
+   # release never blocks on tap access.
    release_brew:
       if: ${{ needs.gate.outputs.is-release == 'true' && !cancelled() &&
-         needs['release-github'].result == 'success' }}
-      needs: [gate, release-github]
+         needs.release_github_verify.result == 'success' }}
+      needs: [gate, release_github_verify]
       runs-on: ubuntu-22.04
       env:
          HAS_TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
