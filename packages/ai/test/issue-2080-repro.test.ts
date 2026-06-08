@@ -159,4 +159,62 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 			},
 		]);
 	});
+
+	it("emits a concat-safe `toolcall_delta` sequence — accumulated deltas parse to the merged args", async () => {
+		// Codex review on PR #2082 caught that emitting `JSON.stringify(rawArgs)` per chunk
+		// feeds downstream concat consumers (proxy.ts, openai-chat-server, etc.) an invalid
+		// sequence like `{"input":"a"}{"input":"b"}` even when the merged source-side args
+		// are correct. The fix defers object-chunk emission to `finishToolCallBlock`, which
+		// flushes one delta carrying the full merged JSON. Verify that contract by
+		// reconstructing the args the way the proxy does (concat + parse) and comparing
+		// against the source-side merged result.
+		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
+		global.fetch = createMockFetch([
+			toolCallChunk(model, {
+				name: "edit",
+				arguments: { input: "[foo.ts#A1B2]\nreplace 91..91:\n+    " },
+			}),
+			toolCallChunk(model, {
+				arguments: { input: 'const out = await executeTool("nuke", { path: "x" }, ctx);' },
+			}),
+			stopChunk(model),
+			"[DONE]",
+		]);
+
+		const s = streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" });
+		let accumulated = "";
+		let toolCallEndArgs: unknown;
+		for await (const event of s) {
+			if (event.type === "toolcall_delta") accumulated += event.delta;
+			else if (event.type === "toolcall_end") toolCallEndArgs = event.toolCall.arguments;
+		}
+
+		const expected = {
+			input: '[foo.ts#A1B2]\nreplace 91..91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
+		};
+		// Source-side merged result (what `block.arguments` is set to in `finishToolCallBlock`).
+		expect(toolCallEndArgs).toEqual(expected);
+		// Concat consumers must observe the same args by parsing the accumulated delta string —
+		// this is the contract proxy.ts:286-290 reconstructs against.
+		expect(JSON.parse(accumulated)).toEqual(expected);
+	});
+
+	it("keeps the single-chunk object case concat-safe (no #1776 regression)", async () => {
+		// The #1776 fix sent the full JSON as one delta during streaming. The PR #2082 follow-up
+		// moves emission to `finishToolCallBlock`. The single-chunk path stays correct end-to-end:
+		// the proxy still concatenates ("" then the final delta) and parses to the same args.
+		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
+		global.fetch = createMockFetch([
+			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\ndelete 5" } }),
+			stopChunk(model),
+			"[DONE]",
+		]);
+
+		const s = streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" });
+		let accumulated = "";
+		for await (const event of s) {
+			if (event.type === "toolcall_delta") accumulated += event.delta;
+		}
+		expect(JSON.parse(accumulated)).toEqual({ input: "[foo.ts#A1B2]\ndelete 5" });
+	});
 });
