@@ -151,4 +151,23 @@ describe("YieldQueue", () => {
 
 		expect(harness.streamingMessages.map(messageText)).toEqual(["second", "first"]);
 	});
+
+	test("drainMessages builds non-stale entries, clears the queue, returns nothing on re-drain", async () => {
+		const harness = createHarness(true);
+		harness.queue.register<Entry>("items", {
+			isStale: entry => entry.stale === true,
+			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+		});
+
+		harness.queue.enqueue("items", { id: "keep" });
+		harness.queue.enqueue("items", { id: "drop", stale: true });
+
+		const drained = harness.queue.drainMessages();
+		expect(drained.map(messageText)).toEqual(["keep"]);
+		// Pull-based drain has no injection side effects and empties the queue.
+		expect(harness.streamingMessages).toHaveLength(0);
+		expect(harness.idleBatches).toHaveLength(0);
+		expect(harness.queue.has()).toBe(false);
+		expect(harness.queue.drainMessages()).toEqual([]);
+	});
 });
