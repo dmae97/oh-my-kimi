@@ -18,6 +18,7 @@
 - Changed model resolution to apply provider-priority ordering when selecting models for roles and ambiguous patterns, using `modelProviderOrder` settings and built-in provider priority so first-party providers are preferred over relays in tie cases
 - Changed model canonical variant selection to use the same provider-priority ordering instead of candidate order when deduplicating equivalent upstream models
 - Changed the working-message shimmer to sweep at a fixed velocity (cells/second) instead of a fixed sweep duration divided by the message length. The band now advances ≤1 cell per 30fps redraw frame and stays equally smooth on short and long messages — previously a longer message swept proportionally faster and stepped visibly because it outran the redraw cadence. Sweep/round-trip duration now scales with length. Additionally, when `display.shimmer = disabled` the working line is static, so the loader no longer schedules 30fps redraws for it and falls back to the spinner-only ~12.5fps cadence.
+- Changed the eval fan-out trigger keyword from `workflow`/`workflows` to `workflowz`.
 
 ### Fixed
 
