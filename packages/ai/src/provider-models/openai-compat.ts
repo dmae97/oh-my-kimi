@@ -864,6 +864,13 @@ export function xaiOAuthModelManagerOptions(
 // 6.4 AIML API
 // ---------------------------------------------------------------------------
 
+const AIML_API_NON_CHAT_MODEL_ID_PATTERN =
+	/(?:^|[/:._-])(?:audio|embed|embedding|embeddings|image|speech|tts|video)(?:$|[/:._-])/i;
+
+export function isLikelyAimlApiChatModelId(id: string): boolean {
+	return !AIML_API_NON_CHAT_MODEL_ID_PATTERN.test(id);
+}
+
 export interface AimlApiModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -872,7 +879,27 @@ export interface AimlApiModelManagerConfig {
 export function aimlApiModelManagerOptions(
 	config?: AimlApiModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("aimlapi", "https://api.aimlapi.com/v1", config);
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.aimlapi.com/v1";
+	const references = createBundledReferenceMap<"openai-completions">("aimlapi");
+	return {
+		providerId: "aimlapi",
+		dynamicModelsAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "aimlapi",
+					baseUrl,
+					apiKey,
+					filterModel: (_entry, model) => isLikelyAimlApiChatModelId(model.id),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
 }
 
 // ---------------------------------------------------------------------------
