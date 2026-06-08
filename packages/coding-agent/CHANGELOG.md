@@ -11,6 +11,10 @@
 - Fixed duplicate session suggestions by deduplicating history matches by session path when merging metadata and prompt-history results
 - Fixed `/resume` search ranking so sessions whose prompts or metadata match the query now prefer prompt recency and recent literal matches instead of letting older earlier-title fuzzy matches outrank a just-used session.
 
+### Removed
+
+- Removed the animated pending border ("shimmer") on running `bash`, `eval`, and `ssh` execution blocks. While pending, a block now shows a static accent border instead of sweeping a dark segment around its bottom edge; `display.shimmer` still governs the working-status line and `task` row animations.
+
 ## [15.10.2] - 2026-06-08
 ### Added
 

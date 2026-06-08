@@ -15,7 +15,6 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
-import { shimmerEnabled } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
@@ -133,9 +132,10 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
-/** Drive pending-tool redraws at 30fps so the animated border sweep stays
- * smooth without spending twice the frame budget. The TUI throttles at the same
- * cadence, and static frames diff to a no-op redraw at ~zero cost. */
+/** Drive pending-tool redraws at 30fps so the running `task` row's shimmered
+ * subagent name stays smooth without spending twice the frame budget. The TUI
+ * throttles at the same cadence, and static frames diff to a no-op redraw at
+ * ~zero cost. */
 const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
 /** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
  * render cadence (mirrors `Loader`). */
@@ -425,16 +425,7 @@ export class ToolExecutionComponent extends Container {
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		// Sweep the border of bash/eval execution blocks while they're pending — but
-		// not once they've been backgrounded: a backgrounded job's block gets
-		// committed to scrollback and finalizes later via the async update path, so a
-		// mid-sweep frame would freeze a stray dark "bar" segment into the border.
-		const isPendingExecBlock =
-			this.#isPartial &&
-			shimmerEnabled() &&
-			(this.#toolName === "bash" || this.#toolName === "eval") &&
-			!isBackgroundAsyncRunning;
-		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
+		const needsSpinner = isStreamingArgs || isPartialTask;
 		if (needsSpinner && !this.#spinnerInterval) {
 			const now = performance.now();
 			const frameCount = theme.spinnerFrames.length;
@@ -446,7 +437,7 @@ export class ToolExecutionComponent extends Container {
 			this.#spinnerInterval = setInterval(() => {
 				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
-				// Redraw at 30fps for a smooth border sweep, but keep the spinner
+				// Redraw at 30fps for a smooth `task` name shimmer, but keep the spinner
 				// glyph phase-locked to its classic ~12.5fps cadence. Advancing the
 				// anchor by elapsed frames instead of resetting to `now` avoids the
 				// 30fps timer quantizing the glyph down to one step every three ticks.

@@ -252,7 +252,6 @@ export const sshToolRenderer = {
 						state: "pending",
 						sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: _options.expanded }) }],
 						width,
-						animate: true,
 					},
 					uiTheme,
 				),

@@ -16,9 +16,8 @@ import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } f
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import { borderShimmerTick, markFramedBlockComponent, renderCodeCell } from "../tui";
+import { markFramedBlockComponent, renderCodeCell } from "../tui";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
@@ -491,8 +490,7 @@ export const evalToolRenderer = {
 
 		return markFramedBlockComponent({
 			render: (width: number): string[] => {
-				const animate = options.isPartial && shimmerEnabled();
-				const key = `${animate ? borderShimmerTick() : 0}|${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+				const key = `${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -516,7 +514,6 @@ export const evalToolRenderer = {
 							// the code has finalized (see `isStreamingPreviewAppendOnly`).
 							codeMaxLines: Number.POSITIVE_INFINITY,
 							expanded: options.expanded,
-							animate,
 						},
 						uiTheme,
 					);
@@ -579,8 +576,7 @@ export const evalToolRenderer = {
 				render: (width: number): string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const animate = options.isPartial && shimmerEnabled();
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${animate ? borderShimmerTick() : 0}`;
+					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
 					}
@@ -622,7 +618,6 @@ export const evalToolRenderer = {
 								codeMaxLines: Number.POSITIVE_INFINITY,
 								expanded,
 								width,
-								animate,
 							},
 							uiTheme,
 						);
