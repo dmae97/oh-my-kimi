@@ -53,7 +53,7 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("env", key=key, value=val, action="get")
         return val
 
-    def read(path: str | Path, *, offset: int = 1, limit: int | None = None) -> str:
+    def read(path: str | Path, offset: int = 1, limit: int | None = None) -> str:
         """Read file contents. offset/limit are 1-indexed line numbers."""
         p = Path(path)
         data = p.read_text(encoding="utf-8")
