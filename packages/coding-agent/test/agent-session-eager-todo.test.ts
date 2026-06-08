@@ -191,7 +191,7 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[0]).toEqual({
 			toolChoice: "todo",
 			toolNames: ["todo", "bash"],
-			messageRoles: ["user", "user"],
+			messageRoles: ["developer", "user"],
 			messageTexts: [expect.any(String), "list all work trees"],
 			lastMessageRole: "user",
 			lastMessageText: "list all work trees",
@@ -221,7 +221,7 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[0]).toEqual({
 			toolChoice: "todo",
 			toolNames: ["todo", "bash"],
-			messageRoles: ["user", "user"],
+			messageRoles: ["developer", "user"],
 			messageTexts: [expect.any(String), "list all work trees"],
 			lastMessageRole: "user",
 			lastMessageText: "list all work trees",
