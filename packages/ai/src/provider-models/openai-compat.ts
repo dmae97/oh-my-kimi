@@ -861,6 +861,25 @@ export function xaiOAuthModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 6.4 AIML API
+// ---------------------------------------------------------------------------
+
+export interface AimlApiModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function aimlApiModelManagerOptions(
+	config?: AimlApiModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions(
+		"aimlapi" as Parameters<typeof getBundledModels>[0],
+		"https://api.aimlapi.com/v1",
+		config,
+	);
+}
+
+// ---------------------------------------------------------------------------
 // 6.5 DeepSeek
 // ---------------------------------------------------------------------------
 

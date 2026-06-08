@@ -59,10 +59,7 @@ import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { YieldTool } from "./yield";
 
-// Exa MCP tools (22 tools)
-
 export * from "../edit";
-export * from "../exa";
 export type * from "../exa/types";
 export * from "../goals";
 export * from "../lsp";

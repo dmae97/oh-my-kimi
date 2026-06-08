@@ -236,13 +236,13 @@ describe("subagent LSP availability", () => {
 		expect(getOptions()?.enableLsp).toBe(false);
 	});
 
-	it("applies plan-mode subagent tools and honors task.enableLsp", async () => {
+	it("applies plan-mode subagent tools, preserves read-only agent tools, and honors task.enableLsp", async () => {
 		mockAgents({
 			name: "task",
-			description: "Task agent",
-			systemPrompt: "Use normal tools.",
+			description: "Reviewer-like task agent",
+			systemPrompt: "Review with read-only specialty tools.",
 			source: "bundled",
-			tools: ["bash"],
+			tools: ["bash", "ast_grep", "report_finding"],
 		});
 		const { getOptions } = mockCreateAgentSession();
 		const planMode = { enabled: true, planFilePath: "local://PLAN.md" };
@@ -250,7 +250,9 @@ describe("subagent LSP availability", () => {
 		const tool = await TaskTool.create(createSession({ planMode, taskEnableLsp: true }));
 		await tool.execute("tool-call", TEST_TASK);
 
+		const toolNames = getOptions()?.toolNames;
 		expect(getOptions()?.enableLsp).toBe(true);
-		expect(getOptions()?.toolNames).toEqual(["read", "search", "find", "lsp", "web_search", "irc"]);
+		expect(toolNames).toEqual(["read", "search", "find", "lsp", "web_search", "ast_grep", "report_finding", "irc"]);
+		expect(toolNames).not.toContain("bash");
 	});
 });

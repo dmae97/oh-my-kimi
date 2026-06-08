@@ -21,6 +21,7 @@ const DEFAULT_MODEL_PROVIDER_ORDER = [
 	"fireworks",
 	"cerebras",
 	"openrouter",
+	"aimlapi",
 	"together",
 
 	// Generic gateways and editor/proxy providers. These are useful when picked

@@ -677,7 +677,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 
 		const planModeState = this.session.getPlanModeState?.();
-		const planModeTools = ["read", "search", "find", "lsp", "web_search"];
+		const planModeBaseTools = ["read", "search", "find", "lsp", "web_search"];
+		const planModeTools = [
+			...planModeBaseTools,
+			...(agent.tools ?? []).filter(tool => READ_ONLY_TOOL_NAMES.has(tool) && !planModeBaseTools.includes(tool)),
+		];
 		const effectiveAgent: typeof agent = planModeState?.enabled
 			? {
 					...agent,

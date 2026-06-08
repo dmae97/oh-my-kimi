@@ -1096,7 +1096,9 @@ export class AgentDashboard extends Container {
 			}
 			if (
 				!this.#createGenerating &&
-				(matchesKey(data, "ctrl+enter") || (data.charCodeAt(0) === 10 && data.length > 1))
+				(matchesKey(data, "ctrl+enter") ||
+					(data === "\n" && this.#createDescription.trim().length > 0) ||
+					(data.charCodeAt(0) === 10 && data.length > 1))
 			) {
 				this.#submitCreateDescription();
 				return;
