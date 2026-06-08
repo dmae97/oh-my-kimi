@@ -636,7 +636,13 @@ const CLAUDE_DEVICE_ID_ACCOUNT_HASH_DOMAIN = "omp-claude-device-id-v2";
 export function deriveClaudeDeviceId(installId: string, accountId?: string): string {
 	const hash = nodeCrypto.createHash("sha256");
 	if (accountId && accountId.length > 0) {
-		return hash.update(CLAUDE_DEVICE_ID_ACCOUNT_HASH_DOMAIN).update("\0").update(installId).update("\0").update(accountId).digest("hex");
+		return hash
+			.update(CLAUDE_DEVICE_ID_ACCOUNT_HASH_DOMAIN)
+			.update("\0")
+			.update(installId)
+			.update("\0")
+			.update(accountId)
+			.digest("hex");
 	}
 	return hash.update(CLAUDE_DEVICE_ID_INSTALL_HASH_DOMAIN).update(installId).digest("hex");
 }

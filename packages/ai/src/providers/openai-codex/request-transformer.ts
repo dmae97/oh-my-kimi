@@ -40,6 +40,10 @@ export interface RequestBody {
 	presence_penalty?: number;
 	repetition_penalty?: number;
 	reasoning?: Partial<ReasoningConfig>;
+	stream_options?: {
+		include_obfuscation?: boolean;
+		[key: string]: unknown;
+	};
 	text?: {
 		verbosity?: "low" | "medium" | "high";
 	};
@@ -161,6 +165,8 @@ export async function transformRequestBody(
 ): Promise<RequestBody> {
 	body.store = false;
 	body.stream = true;
+	body.stream_options ??= {};
+	body.stream_options.include_obfuscation = false;
 
 	if (body.input && Array.isArray(body.input)) {
 		body.input = filterInput(body.input);

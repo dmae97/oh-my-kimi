@@ -435,7 +435,11 @@ describe("openai-codex streaming", () => {
 		expect(outbound).toBeDefined();
 		expect(outbound.raw[0]).toMatch(/^: ws → /);
 		expect(outbound.data.length).toBeGreaterThan(0);
-		expect(() => JSON.parse(outbound.data)).not.toThrow();
+		const outboundRequest = JSON.parse(outbound.data) as Record<string, unknown>;
+		expect(outboundRequest).toMatchObject({
+			type: "response.create",
+			stream_options: { include_obfuscation: false },
+		});
 
 		// Inbound frames mirror the Codex response sequence emitted by `emitCodexResponse`.
 		expect(inbound.map(e => e.event)).toEqual([
