@@ -17,11 +17,11 @@
  * moonshot discovery mapper and stamps default thinking metadata.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effort } from "../src/effort";
-import { getBundledModel } from "../src/models";
-import { moonshotModelManagerOptions } from "../src/provider-models/openai-compat";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { AssistantMessage, Context, Model } from "../src/types";
+import { Effort } from "@oh-my-pi/pi-ai/effort";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { moonshotModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 
