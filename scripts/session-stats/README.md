@@ -58,11 +58,17 @@ aggregations and ordered session walks cheap.
 bun run stats:tools                        # per-tool token totals
 bun run stats:tools -- --by d --top 8      # bucket by day, top 8 tools each
 bun run stats:edits                        # edit-tool reliability audit
+bun run stats:edits -- --since w           # edit sub-types over the last week
 bun run stats:followups                    # five hashline-edit detectors
 bun run stats:followups -- --max-fix 2 --min-dup 8 --show 20
 ```
 
-All three accept `-n N` / `--folder SUBSTR` to scope the query.
+All three accept `-n N` / `--folder SUBSTR` to scope the query, plus
+`--since <h|d|w|m|Nh|Nd|Nw>` to keep only calls newer than a time window
+(per-call `timestamp`, so it slices long sessions precisely). The `edits`
+audit reads each call's `is_error` flag as the authoritative success/failure
+signal and decodes hashline op kinds (`replace`, `insert after`, `delete`,
+`replace block`, …) into the verb distribution.
 
 The Rust crate that previously lived here was retired in favor of this
 SQLite-backed flow. The schema persists everything the analyses used to
