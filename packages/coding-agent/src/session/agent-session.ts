@@ -6808,9 +6808,13 @@ export class AgentSession {
 			return undefined;
 		}
 
-		if (!this.#toolRegistry.has("todo")) {
-			logger.warn("Eager todo enforcement skipped because todo is unavailable", {
-				activeToolNames: this.agent.state.tools.map(tool => tool.name),
+		// Must check the active tool set, not just the registry: tool discovery
+		// (tools.discoveryMode === "all") can register `todo` while hiding it from
+		// the exposed tools. Forcing a named tool_choice for an inactive tool makes
+		// the provider reject the request (HTTP 400).
+		if (!this.getActiveToolNames().includes("todo")) {
+			logger.warn("Eager todo enforcement skipped because todo is not active", {
+				activeToolNames: this.getActiveToolNames(),
 			});
 			return undefined;
 		}

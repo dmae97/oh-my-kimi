@@ -128,6 +128,14 @@
 			"types": "./src/registry/oauth/*.ts",
 			"import": "./src/registry/oauth/*.ts"
 		},
+		"./registry": {
+			"types": "./src/registry/index.ts",
+			"import": "./src/registry/index.ts"
+		},
+		"./registry/oauth": {
+			"types": "./src/registry/oauth/index.ts",
+			"import": "./src/registry/oauth/index.ts"
+		},
 		"./utils/schema": {
 			"types": "./src/utils/schema/index.ts",
 			"import": "./src/utils/schema/index.ts"
