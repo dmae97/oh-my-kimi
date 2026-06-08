@@ -46,13 +46,4 @@ describe("buildCompactDiffPreview", () => {
 		expect(preview.addedLines).toBe(7);
 		expect(preview.removedLines).toBe(0);
 	});
-
-	it("drops context-gap placeholders and conveys elision via the line-number jump", () => {
-		const preview = buildCompactDiffPreview(
-			[" 2|line 2", " 3|line 3", " 4|...", " 49|line 49", "+50|inserted"].join("\n"),
-		);
-
-		expect(preview.preview).toBe([" 2:line 2", " 3:line 3", " 49:line 49", "+50:inserted"].join("\n"));
-		expect(preview.addedLines).toBe(1);
-	});
 });

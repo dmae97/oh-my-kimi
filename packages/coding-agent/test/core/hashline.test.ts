@@ -3,8 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	type InMemorySnapshotStore as FileReadCache,
 	formatHashlineHeader,
-	InMemorySnapshotStore as FileReadCache,
 	MismatchError as HashlineMismatchError,
 } from "@oh-my-pi/hashline";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -15,9 +15,8 @@ import {
 	getFileSnapshotStore as getFileReadCache,
 	hashlineEditParamsSchema,
 } from "@oh-my-pi/pi-coding-agent/edit";
-import * as z from "zod/v4";
-
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import * as z from "zod/v4";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -48,7 +47,6 @@ function header(filePath: string, tag: string): string {
 function sameLineRange(anchor: string): string {
 	return `replace ${anchor}..${anchor}:`;
 }
-
 
 async function withTempDir(fn: (tempDir: string) => Promise<void>): Promise<void> {
 	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-edit-"));
@@ -84,12 +82,6 @@ function hashlineExecuteOptions(
 	};
 }
 
-
-
-
-
-
-
 describe("hashline executor", () => {
 	it("rejects file creation and directs to the write tool", async () => {
 		await withTempDir(async tempDir => {
@@ -115,7 +107,6 @@ describe("hashline executor", () => {
 			expect(text).not.toContain("Auto-absorbed");
 		});
 	});
-
 
 	it("emits an actionable no-op diagnostic when the payload matches the file byte-for-byte", async () => {
 		await withTempDir(async tempDir => {
@@ -274,7 +265,6 @@ describe("hashlineEditParamsSchema — payload shape", () => {
 	});
 });
 
-
 describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 	it("recovers when the file was modified out-of-band after a read", async () => {
 		await withTempDir(async tempDir => {
@@ -337,8 +327,6 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
 		});
 	});
-
-
 
 	it("captures the post-edit result so the next edit can recover from anchors against it", async () => {
 		await withTempDir(async tempDir => {
@@ -411,9 +399,4 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
 		});
 	});
-
-
 });
-
-
-

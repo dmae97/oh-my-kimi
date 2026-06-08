@@ -2,15 +2,15 @@ import { describe, expect, it } from "bun:test";
 import {
 	applyEdits,
 	detectLineEnding,
+	type Edit,
 	formatHashlineHeader,
 	InMemoryFilesystem,
 	InMemorySnapshotStore,
 	Patch,
 	Patcher,
+	type PatchSection,
 	parsePatch,
 	Recovery,
-	type Edit,
-	type PatchSection,
 	type SplitOptions,
 } from "@oh-my-pi/hashline";
 
@@ -117,9 +117,9 @@ describe("hashline parser — range-anchor contracts", () => {
 	it("preserves whitespace-bearing and sigil-leading payload exactly", () => {
 		const payload = "\tconst streamKeepaliveMs = opts.streamKeepaliveMs;";
 		expect(applyDiff(content, `insert after ${tag(2)}:\n${repl(payload)}`)).toBe(`aaa\nbbb\n${payload}\nccc`);
-		expect(applyDiff(content, `${sameLineRange(tag(2))}\n${repl("|literal")}\n${repl("^literal")}\n${repl("↓literal")}`)).toBe(
-			"aaa\n|literal\n^literal\n↓literal\nccc",
-		);
+		expect(
+			applyDiff(content, `${sameLineRange(tag(2))}\n${repl("|literal")}\n${repl("^literal")}\n${repl("↓literal")}`),
+		).toBe("aaa\n|literal\n^literal\n↓literal\nccc");
 	});
 
 	it("strips copied read-output prefixes only inside pasted bare body rows", () => {
@@ -259,7 +259,9 @@ describe("hashline abort sentinel", () => {
 	const sentinel = "*** Abort";
 
 	it("terminates parsing without surfacing a warning", () => {
-		const diff = [`insert after ${tag(1)}:`, repl("HELLO"), sentinel, `insert after ${tag(99)}:`, repl("never")].join("\n");
+		const diff = [`insert after ${tag(1)}:`, repl("HELLO"), sentinel, `insert after ${tag(99)}:`, repl("never")].join(
+			"\n",
+		);
 		const { edits, warnings } = parsePatch(diff);
 		expect(edits).toHaveLength(1);
 		expect(edits[0]).toMatchObject({ kind: "insert", text: "HELLO" });
@@ -267,7 +269,15 @@ describe("hashline abort sentinel", () => {
 	});
 
 	it("stops the input splitter before later sections", () => {
-		const input = ["[a.ts]", `insert after ${tag(1)}:`, repl("a-payload"), sentinel, "[b.ts]", `insert after ${tag(1)}:`, repl("never")].join("\n");
+		const input = [
+			"[a.ts]",
+			`insert after ${tag(1)}:`,
+			repl("a-payload"),
+			sentinel,
+			"[b.ts]",
+			`insert after ${tag(1)}:`,
+			repl("never"),
+		].join("\n");
 		const sections = splitHashlineInputs(input);
 		expect(sections).toHaveLength(1);
 		expect(sections[0].path).toBe("a.ts");
@@ -278,8 +288,12 @@ describe("hashline abort sentinel", () => {
 describe("hashline parser — delete and blank payload semantics", () => {
 	it("applies inline delete and empty replace operations", () => {
 		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\ndelete 2\n").diff)).toBe("line1\nline3\n");
-		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\ndelete 2..3\n").diff)).toBe("line1\nline4\n");
-		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nreplace 2..2:\n").diff)).toBe("line1\nline3\n");
+		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\ndelete 2..3\n").diff)).toBe(
+			"line1\nline4\n",
+		);
+		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nreplace 2..2:\n").diff)).toBe(
+			"line1\nline3\n",
+		);
 	});
 
 	it("treats old inline replacement syntax as orphan body", () => {

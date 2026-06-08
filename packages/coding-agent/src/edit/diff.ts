@@ -133,8 +133,10 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 					newLineNum++;
 				}
 
+				// Mid-skip placeholder is omitted too: the jump between the trailing
+				// number of the leading context and the leading number of the
+				// trailing context conveys the gap, just like leading/trailing skips.
 				if (middleSkip > 0) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
 					oldLineNum += middleSkip;
 					newLineNum += middleSkip;
 					for (const line of linesToShow.slice(firstChunkLength)) {

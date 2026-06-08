@@ -11,7 +11,10 @@ describe("generateDiffString", () => {
 		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 2);
 		const diffLines = result.diff.split("\n");
 
-		expect(diffLines).toContain(" 5|...");
+		// The mid-skip emits no placeholder row; the jump from the leading
+		// context (line 4) to the trailing context (line 16) conveys the gap.
+		expect(diffLines.some(line => line.endsWith("|...") || line.endsWith("|…"))).toBe(false);
+		expect(diffLines[diffLines.indexOf(" 4|line 4") + 1]).toBe(" 16|line 16");
 		expect(diffLines).toContain("-2|line 2");
 		expect(diffLines).toContain("+2|line 2 changed");
 		expect(diffLines).toContain("-18|line 18");

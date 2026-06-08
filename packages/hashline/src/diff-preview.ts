@@ -96,12 +96,6 @@ export function buildCompactDiffPreview(diff: string, options: CompactDiffOption
 				break;
 			default: {
 				flushAddedRun();
-				// Context-gap placeholders (`...`/`…`) carry no real content and are
-				// byte-identical to a genuine context line whose text is "...". Drop
-				// them from the model-facing preview; the jump in emitted line
-				// numbers conveys the elision (matching how the diff producer already
-				// omits leading/trailing skips).
-				if (parsed.content === "..." || parsed.content === "…") break;
 				const newLineNumber = parsed.lineNumber + addedLines - removedLines;
 				formatted.push(` ${newLineNumber}:${parsed.content}`);
 				break;
