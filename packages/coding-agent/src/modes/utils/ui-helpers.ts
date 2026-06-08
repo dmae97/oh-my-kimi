@@ -358,7 +358,11 @@ export class UiHelpers {
 						(content.type === "thinking" && content.thinking.trim().length > 0),
 				);
 				if (hasVisibleAssistantContent) {
-					readGroup?.finalize();
+					// Rebuild reconstructs immutable history; seal (not finalize) so the
+					// group freezes even if a read's result was never persisted —
+					// finalize alone keeps a pending entry live and would stop the whole
+					// transcript below it from committing to native scrollback.
+					readGroup?.seal();
 					readGroup = null;
 				}
 				const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
@@ -408,7 +412,7 @@ export class UiHelpers {
 						continue;
 					}
 
-					readGroup?.finalize();
+					readGroup?.seal();
 					readGroup = null;
 					const tool = this.ctx.session.getToolByName(content.name);
 					const renderArgs =
@@ -496,9 +500,10 @@ export class UiHelpers {
 			}
 		}
 
-		// The trailing read run has no following break to close it; finalize so the
-		// rebuilt group commits to native scrollback like every other historical block.
-		readGroup?.finalize();
+		// The trailing read run has no following break to close it; seal so the
+		// rebuilt group freezes (even with a never-persisted result) and commits to
+		// native scrollback like every other historical block.
+		readGroup?.seal();
 
 		// Render deferred messages (compaction summaries) at the bottom so they're visible
 		for (const message of deferredMessages) {

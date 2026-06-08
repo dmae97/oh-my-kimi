@@ -33,6 +33,7 @@
 - Fixed read-group summaries for multi-path `read` results to use result-provided display targets so each resolved path is shown as its own row
 - Fixed read-group range summaries to abbreviate long merged selectors with ellipsis to keep repeated-file range rows readable
 - Fixed read-group TUI summaries so a single delimited `read` call renders as separate read rows, and repeated reads of the same file collapse under one file with full-file/range children.
+- Fixed grouped `read` rows freezing on their pending "⏳ Read <path>" preview on ED3-risk terminals (ghostty/kitty/iTerm2/…) when a parallel sibling tool closed the read run and appended a block below the group before the read's result arrived. The read-group block now stays in the repaintable live region until its entries settle, so the late success result repaints instead of being stranded; a `seal()` escape hatch (turn end / transcript rebuild) still lets a never-delivered read freeze rather than pinning the live region.
 - Fixed session search to return all sessions unchanged when the query is blank
 - Fixed duplicate session suggestions by deduplicating history matches by session path when merging metadata and prompt-history results
 - Fixed `/resume` search ranking so sessions whose prompts or metadata match the query now prefer prompt recency and recent literal matches instead of letting older earlier-title fuzzy matches outrank a just-used session.
