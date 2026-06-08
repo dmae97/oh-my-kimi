@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { Settings } from "../../src/config/settings";
-import type { ToolSession } from "../../src/tools/index";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	AskTool,
 	BUILTIN_TOOLS,
@@ -10,7 +10,7 @@ import {
 	IrcTool,
 	JobTool,
 	SshTool,
-} from "../../src/tools/index";
+} from "@oh-my-pi/pi-coding-agent/tools";
 
 const allToolsSettings = Settings.isolated({
 	"astGrep.enabled": true,

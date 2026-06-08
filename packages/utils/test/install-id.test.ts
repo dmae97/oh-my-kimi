@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __resetInstallIdCacheForTests, getAgentDir, getConfigRootDir, getInstallId, setAgentDir } from "../src/dirs";
-import { Snowflake } from "../src/snowflake";
+import {
+	__resetInstallIdCacheForTests,
+	getAgentDir,
+	getConfigRootDir,
+	getInstallId,
+	setAgentDir,
+} from "@oh-my-pi/pi-utils/dirs";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

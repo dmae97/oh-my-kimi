@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { isValidJsonSchema, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { Type } from "../../src/extensibility/typebox";
+import { Type } from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
 
 describe("pi.typebox compatibility shim", () => {
 	it("rejects extra properties when additionalProperties is false", () => {

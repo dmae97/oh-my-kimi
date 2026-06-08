@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
-import { streamAnthropic } from "../src/providers/anthropic";
-import { AnthropicMessages } from "../src/providers/anthropic-client";
-import type { AssistantMessageEvent, Context, Model, ProviderSessionState } from "../src/types";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import type { AssistantMessageEvent, Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 
 const model: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",

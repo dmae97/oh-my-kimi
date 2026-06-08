@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { loginMiniMaxCode, loginMiniMaxCodeCn } from "@oh-my-pi/pi-ai/registry/oauth/minimax-code";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { loginMiniMaxCode, loginMiniMaxCodeCn } from "../src/registry/oauth/minimax-code";
 
 describe("MiniMax Coding Plan login", () => {
 	it("opens the international platform and validates against the international API", async () => {

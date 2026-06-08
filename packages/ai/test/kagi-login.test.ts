@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loginKagi } from "../src/registry/kagi";
+import { loginKagi } from "@oh-my-pi/pi-ai/registry/kagi";
 
 describe("kagi login", () => {
 	it("opens Kagi API settings and prompts for key", async () => {

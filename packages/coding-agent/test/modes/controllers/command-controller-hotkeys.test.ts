@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildHotkeysMarkdown } from "../../../src/modes/utils/hotkeys-markdown";
+import { buildHotkeysMarkdown } from "@oh-my-pi/pi-coding-agent/modes/utils/hotkeys-markdown";
 
 describe("buildHotkeysMarkdown", () => {
 	it("emits flush-left markdown and uses the configured temporary selector hint", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import type { Model } from "@oh-my-pi/pi-ai/types";
 import MODELS_JSON from "../src/models.json" with { type: "json" };
-import type { Model } from "../src/types";
 
 // Pins the invariant: the committed `models.json` must never carry a
 // local/self-hosted provider's catalog. Those providers default to an endpoint

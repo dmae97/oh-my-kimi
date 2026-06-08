@@ -9,7 +9,7 @@ import {
 	buildMiseUpgradeArgs,
 	replaceBinaryForUpdate,
 	resolveUpdateMethodForTest,
-} from "../src/cli/update-cli";
+} from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 
 const tempDirs: string[] = [];
 

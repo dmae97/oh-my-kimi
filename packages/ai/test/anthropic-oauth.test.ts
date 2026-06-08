@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/registry/oauth/anthropic";
-import { buildAnthropicAuthConfig, buildAnthropicSearchHeaders, buildAnthropicUrl } from "../src/utils/anthropic-auth";
+import { AnthropicOAuthFlow, refreshAnthropicToken } from "@oh-my-pi/pi-ai/registry/oauth/anthropic";
+import {
+	buildAnthropicAuthConfig,
+	buildAnthropicSearchHeaders,
+	buildAnthropicUrl,
+} from "@oh-my-pi/pi-ai/utils/anthropic-auth";
 import { withEnv } from "./helpers";
 
 const originalFetch = global.fetch;

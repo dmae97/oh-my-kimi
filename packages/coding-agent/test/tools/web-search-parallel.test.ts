@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { searchWithParallel } from "@oh-my-pi/pi-coding-agent/web/parallel";
+import { searchParallel } from "@oh-my-pi/pi-coding-agent/web/search/providers/parallel";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import type { AgentStorage } from "../../src/session/agent-storage";
-import { searchWithParallel } from "../../src/web/parallel";
-import { searchParallel } from "../../src/web/search/providers/parallel";
 
 describe("Parallel web search", () => {
 	const fakeStorage = {

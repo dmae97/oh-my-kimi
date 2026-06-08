@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "../../src/config/settings";
-import { buildMemoryToolDeveloperInstructions, getMemoryRoot } from "../../src/memories";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { buildMemoryToolDeveloperInstructions, getMemoryRoot } from "@oh-my-pi/pi-coding-agent/memories";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-instructions-"));

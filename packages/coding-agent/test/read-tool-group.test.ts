@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import { resetSettingsForTest, Settings, settings } from "../src/config/settings";
-import { getDefault } from "../src/config/settings-schema";
-import { ReadToolGroupComponent, readArgsTargetInternalUrl } from "../src/modes/components/read-tool-group";
-import * as themeModule from "../src/modes/theme/theme";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import {
+	ReadToolGroupComponent,
+	readArgsTargetInternalUrl,
+} from "@oh-my-pi/pi-coding-agent/modes/components/read-tool-group";
+import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);

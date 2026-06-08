@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveUpdateMethodForTest } from "../src/cli/update-cli";
+import { resolveUpdateMethodForTest } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 
 // Issue #845: on Windows with Bun installed via Scoop, ~/.bun is a junction
 // to scoop\persist\Oven-sh.Bun\.bun. `bun pm bin -g` and the omp path that

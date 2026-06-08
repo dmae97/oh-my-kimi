@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { SegmentContext } from "../src/modes/components/status-line/segments";
-import { renderSegment } from "../src/modes/components/status-line/segments";
-import { initTheme, theme } from "../src/modes/theme/theme";
+import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
+import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 beforeAll(async () => {
 	await initTheme();

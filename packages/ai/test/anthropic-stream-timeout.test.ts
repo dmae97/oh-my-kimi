@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { streamAnthropic } from "../src/providers/anthropic";
-import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
-import type { Context, Model } from "../src/types";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type { AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { waitForDelayOrAbort } from "./helpers";
 
 const originalFetch = global.fetch;

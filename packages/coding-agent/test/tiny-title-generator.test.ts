@@ -1,23 +1,31 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { type Api, type AssistantMessage, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
-import { isSubcommand } from "../src/cli-commands";
-import { getDefault, getEnumValues, getUi } from "../src/config/settings-schema";
-import { TinyTitleDownloadProgressComponent } from "../src/modes/components/tiny-title-download-progress";
-import { initTheme } from "../src/modes/theme/theme";
+import { isSubcommand } from "@oh-my-pi/pi-coding-agent/cli-commands";
+import { getDefault, getEnumValues, getUi } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { TinyTitleDownloadProgressComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tiny-title-download-progress";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
 	TINY_MODEL_DEVICE_SETTING_OPTIONS,
 	TINY_MODEL_DEVICE_SETTING_VALUES,
-} from "../src/tiny/device";
+} from "@oh-my-pi/pi-coding-agent/tiny/device";
 import {
 	TINY_MODEL_DTYPE_DEFAULT,
 	TINY_MODEL_DTYPE_SETTING_OPTIONS,
 	TINY_MODEL_DTYPE_SETTING_VALUES,
-} from "../src/tiny/dtype";
-import { ONLINE_TINY_TITLE_MODEL_KEY, TINY_TITLE_MODEL_OPTIONS, TINY_TITLE_MODEL_VALUES } from "../src/tiny/models";
-import { tinyTitleClient } from "../src/tiny/title-client";
-import { generateSessionTitle, raceFirstNonNull, TITLE_LOCAL_FALLBACK_DELAY_MS } from "../src/utils/title-generator";
+} from "@oh-my-pi/pi-coding-agent/tiny/dtype";
+import {
+	ONLINE_TINY_TITLE_MODEL_KEY,
+	TINY_TITLE_MODEL_OPTIONS,
+	TINY_TITLE_MODEL_VALUES,
+} from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+import {
+	generateSessionTitle,
+	raceFirstNonNull,
+	TITLE_LOCAL_FALLBACK_DELAY_MS,
+} from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 
 async function flushMicrotasks(turns = 4): Promise<void> {
 	for (let i = 0; i < turns; i += 1) await Promise.resolve();

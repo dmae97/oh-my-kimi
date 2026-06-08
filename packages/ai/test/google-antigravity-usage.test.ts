@@ -5,8 +5,8 @@
  * different model entries, and handles mixed-case tier names.
  */
 import { describe, expect, it } from "bun:test";
-import type { UsageFetchContext, UsageFetchParams } from "../src/usage";
-import { antigravityUsageProvider } from "../src/usage/google-antigravity";
+import type { UsageFetchContext, UsageFetchParams } from "@oh-my-pi/pi-ai/usage";
+import { antigravityUsageProvider } from "@oh-my-pi/pi-ai/usage/google-antigravity";
 
 const accessTokenFixture = (() => {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");

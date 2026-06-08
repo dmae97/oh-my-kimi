@@ -8,9 +8,9 @@
  *   2. The PR #1199 P2 fix (xhigh → max) actually clears the wire — without
  *      the mapping Fireworks 400s the request.
  */
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const apiKey = process.env.FIREPASS_API_KEY;
 if (!apiKey) {

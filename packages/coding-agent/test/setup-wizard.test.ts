@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { runOnboardingSetup } from "../src/commands/setup";
-import { Settings } from "../src/config/settings";
-import { SETTINGS_SCHEMA } from "../src/config/settings-schema";
+import { runOnboardingSetup } from "@oh-my-pi/pi-coding-agent/commands/setup";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { SETTINGS_SCHEMA } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import {
 	ALL_SCENES,
 	CURRENT_SETUP_VERSION,
@@ -9,11 +9,11 @@ import {
 	type SetupScene,
 	type SetupSceneHost,
 	selectSetupScenes,
-} from "../src/modes/setup-wizard";
-import { WebSearchTab } from "../src/modes/setup-wizard/scenes/web-search";
-import { initTheme, theme } from "../src/modes/theme/theme";
-import type { InteractiveModeContext } from "../src/modes/types";
-import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "../src/web/search/types";
+} from "@oh-my-pi/pi-coding-agent/modes/setup-wizard";
+import { WebSearchTab } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/web-search";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 function fakeContextWithConfiguredModel(): InteractiveModeContext {
 	return {

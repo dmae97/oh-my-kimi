@@ -2,13 +2,18 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "../../src/config/settings";
-import * as dapModule from "../../src/dap";
-import { DapClient } from "../../src/dap/client";
-import { DapSessionManager } from "../../src/dap/session";
-import type { DapCapabilities, DapClientState, DapEventMessage, DapResolvedAdapter } from "../../src/dap/types";
-import type { ToolSession } from "../../src/tools";
-import { DebugTool } from "../../src/tools/debug";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as dapModule from "@oh-my-pi/pi-coding-agent/dap";
+import { DapClient } from "@oh-my-pi/pi-coding-agent/dap/client";
+import { DapSessionManager } from "@oh-my-pi/pi-coding-agent/dap/session";
+import type {
+	DapCapabilities,
+	DapClientState,
+	DapEventMessage,
+	DapResolvedAdapter,
+} from "@oh-my-pi/pi-coding-agent/dap/types";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { DebugTool } from "@oh-my-pi/pi-coding-agent/tools/debug";
 
 const TEST_ADAPTER: DapResolvedAdapter = {
 	name: "lldb-dap",

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import {
+	collectTerminalState,
+	formatTerminalState,
+	type TerminalStateInfo,
+} from "@oh-my-pi/pi-coding-agent/debug/terminal-info";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { collectTerminalState, formatTerminalState, type TerminalStateInfo } from "../../src/debug/terminal-info";
 
 const sample: TerminalStateInfo = {
 	detectedId: "kitty",

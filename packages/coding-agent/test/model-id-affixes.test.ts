@@ -4,7 +4,7 @@ import {
 	getLongestModelLikeIdSegment,
 	getModelLikeIdSegments,
 	stripBracketedModelIdAffixes,
-} from "../src/config/model-id-affixes";
+} from "@oh-my-pi/pi-coding-agent/config/model-id-affixes";
 
 describe("getModelLikeIdSegments", () => {
 	test("keeps only family-prefixed segments that carry a digit, deduped", () => {

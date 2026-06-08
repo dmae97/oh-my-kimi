@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __internalsForTesting, withFileLock } from "../src/config/file-lock";
+import { __internalsForTesting, withFileLock } from "@oh-my-pi/pi-coding-agent/config/file-lock";
 
 const { tryAcquireLock, releaseLock, readLockInfo, isLockStale, getLockPath } = __internalsForTesting;
 

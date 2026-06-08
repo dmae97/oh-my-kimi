@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { EnhancedPasteController } from "../../src/utils/enhanced-paste";
+import { EnhancedPasteController } from "@oh-my-pi/pi-coding-agent/utils/enhanced-paste";
 
 const ST = "\x1b\\";
 const BEL = "\x07";

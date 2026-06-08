@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { xiaomiModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import { loginXiaomi } from "@oh-my-pi/pi-ai/registry/oauth/xiaomi";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-
-import { xiaomiModelManagerOptions } from "../src/provider-models/openai-compat";
-import { loginXiaomi } from "../src/registry/oauth/xiaomi";
 
 const TOKEN_PLAN_SGP_HOST = "token-plan-sgp.xiaomimimo.com";
 const STANDARD_HOST = "api.xiaomimimo.com";

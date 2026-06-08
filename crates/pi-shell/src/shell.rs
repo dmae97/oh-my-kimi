@@ -2290,8 +2290,7 @@ mod tests {
 			.stdout(std::process::Stdio::null())
 			.stderr(std::process::Stdio::null())
 			.status()
-			.map(|status| status.success())
-			.unwrap_or(false);
+			.is_ok_and(|status| status.success());
 		if !python_ok {
 			eprintln!("skipping nohup_builtin_does_not_mask_sighup: python3 unavailable");
 			return;

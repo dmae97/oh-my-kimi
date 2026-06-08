@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { getSessionAccentHex } from "@oh-my-pi/pi-coding-agent/utils/session-color";
 import { relativeLuminance } from "@oh-my-pi/pi-utils";
-import { getSessionAccentHex } from "../src/utils/session-color";
 
 const lum = (hex: string): number => relativeLuminance(hex) ?? 0;
 const contrast = (a: number, b: number): number => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
-import { parseArgs } from "../src/cli/args";
+import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 
 describe("parseArgs — --hide-thinking flag", () => {
 	it("parses --hide-thinking as a boolean flag", () => {

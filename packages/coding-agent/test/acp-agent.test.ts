@@ -18,13 +18,17 @@ import {
 	zSessionNotification,
 } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	ACP_BOOTSTRAP_RACE_GUARD_MS,
+	AcpAgent,
+	createAcpExtensionUiContext,
+} from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { ACP_BOOTSTRAP_RACE_GUARD_MS, AcpAgent, createAcpExtensionUiContext } from "../src/modes/acp/acp-agent";
-import type { PlanModeState } from "../src/plan-mode/state";
-import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
-import { SILENT_ABORT_MARKER } from "../src/session/messages";
-import { SessionManager } from "../src/session/session-manager";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
 const TEST_MODELS: Model[] = [

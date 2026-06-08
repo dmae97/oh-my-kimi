@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import { searchGemini } from "@oh-my-pi/pi-coding-agent/web/search/providers/gemini";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { searchGemini } from "../../src/web/search/providers/gemini";
 
 const SSE_RESPONSE =
 	'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini answer"}]}}],"modelVersion":"gemini-2.5-flash"}}\n\n';

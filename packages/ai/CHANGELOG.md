@@ -2,11 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the OAuth subpath export `@oh-my-pi/pi-ai/utils/oauth` → `@oh-my-pi/pi-ai/oauth` (and `@oh-my-pi/pi-ai/utils/oauth/*` → `@oh-my-pi/pi-ai/oauth/*`, e.g. `oauth/types`, `oauth/callback-server`, `oauth/openai-codex`) after relocating the OAuth implementation out of `utils/oauth/` into `registry/oauth/`. The high-level OAuth API (`getOAuthProviders`, `refreshOAuthToken`, `getOAuthApiKey`, `registerOAuthProvider`, `unregisterOAuthProviders`, `getOAuthProvider`) and the `OAuth*` types stay exported from the package root, unchanged.
+
 ### Changed
 
 - Changed Anthropic retry handling to avoid retrying 4xx responses other than 408 and 429
 - Optimized the Anthropic `cch` attestation patch to locate the billing-header placeholder with native `Buffer.indexOf` (memmem) instead of a hand-rolled byte loop. The marker sits ~99% through the body (`messages` serializes before `system`), so the old scan walked almost the entire payload; output bytes are unchanged but the patch is ~7.5x faster (563µs -> 75µs on a 1MB body).
-- Refactored provider configuration to a single-source registry (`provider-registry/`). The `KnownProvider`/`OAuthProvider` type unions, `PROVIDER_DESCRIPTORS`, `DEFAULT_MODEL_PER_PROVIDER`, the `serviceProviderMap` env-key fallbacks, the `/login` provider list (`builtInOAuthProviders`), and the `refreshOAuthToken`/`AuthStorage.login` dispatch are all derived from it. Thin provider-specific login flows are now inlined into the provider def file; heavier provider-local oauth flows live adjacent under `provider-registry/providers/oauth/`; only shared oauth infra / streaming helpers remain in `utils/oauth/`. Adding a provider that reuses an existing wire API is now one new provider def plus one registry entry in the common case. Exposes `PROVIDER_REGISTRY`, `getProviderDefinition`, `ProviderDefinition`, and `PASTE_CODE_LOGIN_PROVIDERS`.
+- Refactored provider configuration to a single-source registry (`registry/`, renamed from `provider-registry/` with its `providers/` subdir flattened up). The `KnownProvider`/`OAuthProvider` type unions, `PROVIDER_DESCRIPTORS`, `DEFAULT_MODEL_PER_PROVIDER`, the `serviceProviderMap` env-key fallbacks, the `/login` provider list (`builtInOAuthProviders`), and the `refreshOAuthToken`/`AuthStorage.login` dispatch are all derived from it. Provider defs live directly under `registry/`; thin provider-specific login flows are inlined into the def file, while heavier provider-local OAuth flows and the shared OAuth flow infra (`callback-server`, `pkce`, `google-oauth-shared`, `types`, runtime `index`) now live together under `registry/oauth/` (previously split across `provider-registry/providers/oauth/` and `utils/oauth/`). The non-OAuth API-key paste/validation helpers (`api-key-login`, `api-key-validation`) sit beside the defs in `registry/`. Adding a provider that reuses an existing wire API is now one new provider def plus one registry entry in the common case. Exposes `PROVIDER_REGISTRY`, `getProviderDefinition`, `ProviderDefinition`, and `PASTE_CODE_LOGIN_PROVIDERS`.
 
 ### Fixed
 

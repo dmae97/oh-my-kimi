@@ -64,6 +64,10 @@
 			"types": "./src/core/index.ts",
 			"import": "./src/core/index.ts"
 		},
+		"./core/beam": {
+			"types": "./src/core/beam/index.ts",
+			"import": "./src/core/beam/index.ts"
+		},
 		"./beam": {
 			"types": "./src/core/beam/index.ts",
 			"import": "./src/core/beam/index.ts"
@@ -79,6 +83,11 @@
 		"./cli": {
 			"types": "./src/cli.ts",
 			"import": "./src/cli.ts"
-		}
+		},
+		"./*": {
+			"types": "./src/*.ts",
+			"import": "./src/*.ts"
+		},
+		"./*.js": "./src/*.ts"
 	}
 }

@@ -1,12 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { type Component, TERMINAL, Text, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { Settings } from "../src/config/settings";
-import { AssistantMessageComponent } from "../src/modes/components/assistant-message";
-import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
-import { TranscriptContainer } from "../src/modes/components/transcript-container";
-import { initTheme } from "../src/modes/theme/theme";
 
 type MutableTerminalInfo = {
 	eagerEraseScrollbackRisk: boolean;

@@ -819,10 +819,15 @@ pub fn ast_match(options: AstMatchOptions<'_>) -> task::Promise<AstMatchResult> 
 				.then(left.byte_end.cmp(&right.byte_end))
 		});
 
-		let visible_matches =
-			all_matches.into_iter().skip(normalized_offset as usize).collect::<Vec<_>>();
+		let visible_matches = all_matches
+			.into_iter()
+			.skip(normalized_offset as usize)
+			.collect::<Vec<_>>();
 		let limit_reached = visible_matches.len() > normalized_limit as usize;
-		let matches = visible_matches.into_iter().take(normalized_limit as usize).collect::<Vec<_>>();
+		let matches = visible_matches
+			.into_iter()
+			.take(normalized_limit as usize)
+			.collect::<Vec<_>>();
 
 		Ok(AstMatchResult {
 			matches,

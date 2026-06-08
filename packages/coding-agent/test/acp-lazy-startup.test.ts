@@ -11,12 +11,12 @@ import {
 	type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createAcpConnection } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-mode";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { Settings } from "../src/config/settings";
-import { createAcpConnection } from "../src/modes/acp/acp-mode";
-import type { AgentSession } from "../src/session/agent-session";
-import { AuthStorage } from "../src/session/auth-storage";
-import { SessionManager } from "../src/session/session-manager";
 
 const TEST_MODEL: Model = {
 	id: "claude-sonnet-4-20250514",
@@ -156,7 +156,7 @@ async function closeTransport(writable: WritableStream<unknown>): Promise<void> 
 
 describe("ACP lazy startup", () => {
 	it("keeps ACP background jobs disabled by default and preserves explicit opt-ins", async () => {
-		const { runRootCommand } = await import("../src/main");
+		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
 
 		type ObservedBackgroundSettings = {
 			asyncEnabled: boolean;
@@ -314,8 +314,8 @@ describe("ACP lazy startup", () => {
 		const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 		try {
 			const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
-			const { runRootCommand } = await import("../src/main");
-			const { createAgentSession } = await import("../src/sdk");
+			const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+			const { createAgentSession } = await import("@oh-my-pi/pi-coding-agent/sdk");
 			let session: AgentSession | undefined;
 
 			const stopped = runRootCommand(

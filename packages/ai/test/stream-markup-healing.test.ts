@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import { stream } from "../src/stream";
-import type { Context, Model, Tool, ToolCall } from "../src/types";
-import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "../src/utils/stream-markup-healing";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { stream } from "@oh-my-pi/pi-ai/stream";
+import type { Context, Model, Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
+import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
 
 const originalFetch = global.fetch;
 

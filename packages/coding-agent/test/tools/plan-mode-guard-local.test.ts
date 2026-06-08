@@ -2,9 +2,9 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { PlanModeState } from "../../src/plan-mode/state";
-import type { ToolSession } from "../../src/tools";
-import { enforcePlanModeWrite, resolvePlanPath } from "../../src/tools/plan-mode-guard";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { enforcePlanModeWrite, resolvePlanPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 
 interface SessionOverrides {
 	artifactsDir?: string | null;

@@ -5,7 +5,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
-} from "../src/utils/idle-iterator";
+} from "@oh-my-pi/pi-ai/utils/idle-iterator";
 
 /**
  * Per-provider fallback overrides on the stream-watchdog helpers.

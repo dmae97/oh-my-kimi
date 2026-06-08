@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import * as Beam from "../src/core/beam/index";
+import * as Beam from "@oh-my-pi/pi-mnemopi/core/beam";
 import {
 	explainRecallDiagnostics,
 	getDiagnostics,
@@ -7,8 +7,8 @@ import {
 	RECALL_TIERS,
 	RecallDiagnostics,
 	resetRecallDiagnostics,
-} from "../src/core/recall-diagnostics";
-import * as Db from "../src/db";
+} from "@oh-my-pi/pi-mnemopi/core/recall-diagnostics";
+import * as Db from "@oh-my-pi/pi-mnemopi/db";
 
 describe("recall diagnostics counters", () => {
 	it("starts with canonical tiers and zeroed JSON-serializable snapshot", () => {

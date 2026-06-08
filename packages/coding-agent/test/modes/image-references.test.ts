@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type PlaceholderKind, renderPlaceholders } from "../../src/modes/image-references";
+import { type PlaceholderKind, renderPlaceholders } from "@oh-my-pi/pi-coding-agent/modes/image-references";
 
 function capture(text: string): {
 	out: string;

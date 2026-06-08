@@ -5,14 +5,14 @@ import path from "node:path";
 import type { AgentSideConnection, SessionNotification } from "@agentclientprotocol/sdk";
 import { zSessionNotification } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { AcpAgent } from "../src/modes/acp/acp-agent";
+import { AcpAgent } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
 import {
 	buildToolCallStartUpdate,
 	mapAgentSessionEventToAcpSessionUpdates,
 	normalizeReplayToolArguments,
-} from "../src/modes/acp/acp-event-mapper";
-import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
-import { SessionManager } from "../src/session/session-manager";
+} from "@oh-my-pi/pi-coding-agent/modes/acp/acp-event-mapper";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { expectAcpStructure, expectAcpStructureRejects } from "./helpers/acp-schema";
 
 function makeAssistantMessage(text: string) {

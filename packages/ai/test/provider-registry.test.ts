@@ -1,17 +1,17 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
-import { PASTE_CODE_LOGIN_PROVIDERS } from "../src/registry";
+import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-ai/provider-models/descriptors";
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai/registry";
 import {
 	getOAuthProviders,
 	refreshOAuthToken,
 	registerOAuthProvider,
 	unregisterOAuthProviders,
-} from "../src/registry/oauth";
-import * as anthropicOauth from "../src/registry/oauth/anthropic";
-import type { OAuthCredentials, OAuthProvider } from "../src/registry/oauth/types";
-import { getEnvApiKey } from "../src/stream";
+} from "@oh-my-pi/pi-ai/registry/oauth";
+import * as anthropicOauth from "@oh-my-pi/pi-ai/registry/oauth/anthropic";
+import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/registry/oauth/types";
+import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
 const ENV_KEYS = ["ZENMUX_API_KEY", "EXA_API_KEY"] as const;

@@ -4,46 +4,24 @@ import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatCount, getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { settings } from "../../config/settings";
-import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../config/settings-schema";
-import { theme } from "../../modes/theme/theme";
-import type { AgentSession } from "../../session/agent-session";
-import * as git from "../../utils/git";
-import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
-import { sanitizeStatusText } from "../shared";
-import { computeNonMessageTokens } from "../utils/context-usage";
-import {
-	canReuseCachedPr,
-	createPrCacheContext,
-	isSamePrCacheContext,
-	type PrCacheContext,
-} from "./status-line/git-utils";
-import { getPreset } from "./status-line/presets";
-import { renderSegment, type SegmentContext } from "./status-line/segments";
-import { getSeparator } from "./status-line/separators";
-import { calculateTokensPerSecond } from "./status-line/token-rate";
-
-export interface StatusLineSegmentOptions {
-	model?: { showThinkingLevel?: boolean };
-	path?: { abbreviate?: boolean; maxLength?: number; stripWorkPrefix?: boolean };
-	git?: { showBranch?: boolean; showStaged?: boolean; showUnstaged?: boolean; showUntracked?: boolean };
-	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
-}
-
-export interface StatusLineSettings {
-	preset?: StatusLinePreset;
-	leftSegments?: StatusLineSegmentId[];
-	rightSegments?: StatusLineSegmentId[];
-	separator?: StatusLineSeparatorStyle;
-	segmentOptions?: StatusLineSegmentOptions;
-	showHookStatus?: boolean;
-	sessionAccent?: boolean;
-}
-
-export type EffectiveStatusLineSettings = Required<
-	Pick<StatusLineSettings, "leftSegments" | "rightSegments" | "separator" | "segmentOptions">
-> &
-	StatusLineSettings;
+import { settings } from "../../../config/settings";
+import type { AgentSession } from "../../../session/agent-session";
+import * as git from "../../../utils/git";
+import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
+import { sanitizeStatusText } from "../../shared";
+import { theme } from "../../theme/theme";
+import { computeNonMessageTokens } from "../../utils/context-usage";
+import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
+import { getPreset } from "./presets";
+import { renderSegment, type SegmentContext } from "./segments";
+import { getSeparator } from "./separators";
+import { calculateTokensPerSecond } from "./token-rate";
+import type {
+	EffectiveStatusLineSettings,
+	StatusLineSegmentId,
+	StatusLineSegmentOptions,
+	StatusLineSettings,
+} from "./types";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Per-message token cache

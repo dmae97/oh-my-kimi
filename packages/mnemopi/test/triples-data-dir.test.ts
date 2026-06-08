@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultTripleDbPath, TripleStore } from "../src/core/triples";
+import { defaultTripleDbPath, TripleStore } from "@oh-my-pi/pi-mnemopi/core/triples";
 
 const originalHome = process.env.HOME;
 const originalDataDir = process.env.MNEMOPI_DATA_DIR;

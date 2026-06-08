@@ -3,10 +3,10 @@ import { stripVTControlCharacters } from "node:util";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
+import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { setDefaultTabWidth } from "@oh-my-pi/pi-utils";
-import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
 import { defaultEditorTheme } from "./test-themes";
 
 describe("Editor component", () => {

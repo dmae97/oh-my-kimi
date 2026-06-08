@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { type Component, TERMINAL } from "@oh-my-pi/pi-tui";
-import { TranscriptContainer } from "../src/modes/components/transcript-container";
 
 type MutableTerminalInfo = { eagerEraseScrollbackRisk: boolean };
 const mutableTerminalInfo = TERMINAL as unknown as MutableTerminalInfo;

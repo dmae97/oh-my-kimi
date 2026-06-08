@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { formatFindGroupedOutput } from "../../src/tools/find";
-import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "../../src/tools/grouped-file-output";
+import { formatFindGroupedOutput } from "@oh-my-pi/pi-coding-agent/tools/find";
+import {
+	classifyGroupedLines,
+	formatGroupedFiles,
+	groupLineIndicesByBlank,
+} from "@oh-my-pi/pi-coding-agent/tools/grouped-file-output";
 
 describe("formatFindGroupedOutput", () => {
 	it("folds a shared absolute prefix into one heading and nests the rest", () => {

@@ -3,11 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { StatusLineComponent, type StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
+import { STATUS_LINE_PRESETS } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/presets";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { StatusLineComponent, type StatusLineSettings } from "../src/modes/components/status-line";
-import { STATUS_LINE_PRESETS } from "../src/modes/components/status-line/presets";
-import { initTheme } from "../src/modes/theme/theme";
 
 const originalProjectDir = getProjectDir();
 let projectDir: string;

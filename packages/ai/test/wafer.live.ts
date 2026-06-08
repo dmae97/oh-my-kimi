@@ -7,9 +7,9 @@
  * `model` field preserved verbatim (`GLM-5.1`, not lowercased) and a non-empty
  * assistant text returned.
  */
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const apiKey = process.env.WAFER_PASS_API_KEY ?? process.env.WAFER_SERVERLESS_API_KEY;
 if (!apiKey) {

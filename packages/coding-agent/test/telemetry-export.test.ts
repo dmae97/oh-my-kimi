@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { initTelemetryExport, isTelemetryExportEnabled } from "../src/telemetry-export";
+import { initTelemetryExport, isTelemetryExportEnabled } from "@oh-my-pi/pi-coding-agent/telemetry-export";
 
 /**
  * Gating contract for the OTLP export bootstrap. These cases all short-circuit

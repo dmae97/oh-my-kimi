@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { buildAnthropicClientOptions, streamAnthropic } from "../src/providers/anthropic";
-import { OPENCODE_HEADERS } from "../src/registry/oauth/github-copilot";
-import type { Context, Model } from "../src/types";
-import { buildAnthropicUrl } from "../src/utils/anthropic-auth";
+import { buildAnthropicClientOptions, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { OPENCODE_HEADERS } from "@oh-my-pi/pi-ai/registry/oauth/github-copilot";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { buildAnthropicUrl } from "@oh-my-pi/pi-ai/utils/anthropic-auth";
 
 const originalFetch = global.fetch;
 

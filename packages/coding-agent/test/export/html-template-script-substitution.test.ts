@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { TEMPLATE } from "../../src/export/html/template.generated";
+import { TEMPLATE } from "@oh-my-pi/pi-coding-agent/export/html/template.generated";
 
 // Regression: `String.prototype.replace(string, string)` treats `$'`, `$&`,
 // `$$`, `$n`, etc. as substitution patterns. The inlined `<script>` body now

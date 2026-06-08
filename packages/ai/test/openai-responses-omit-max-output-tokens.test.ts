@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamSimple } from "../src/stream";
-import type { Context, Model } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

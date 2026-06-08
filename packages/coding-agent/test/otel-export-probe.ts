@@ -9,8 +9,13 @@
  * core uses, flushes, and exits 0 only if the receiver got a non-empty
  * protobuf POST at /v1/traces.
  */
+
+import {
+	flushTelemetryExport,
+	initTelemetryExport,
+	isTelemetryExportEnabled,
+} from "@oh-my-pi/pi-coding-agent/telemetry-export";
 import { trace } from "@opentelemetry/api";
-import { flushTelemetryExport, initTelemetryExport, isTelemetryExportEnabled } from "../src/telemetry-export";
 
 let received = false;
 

@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { CustomEditor } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
+import { UserMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/user-message";
+import { getEditorTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { Container } from "@oh-my-pi/pi-tui";
-import { resetSettingsForTest, Settings } from "../../../src/config/settings";
-import { CustomEditor } from "../../../src/modes/components/custom-editor";
-import { UserMessageComponent } from "../../../src/modes/components/user-message";
-import { getEditorTheme, initTheme } from "../../../src/modes/theme/theme";
-import type { InteractiveModeContext } from "../../../src/modes/types";
-import { UiHelpers } from "../../../src/modes/utils/ui-helpers";
 
 beforeAll(async () => {
 	resetSettingsForTest();

@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-coding-agent/modes/components/read-tool-group";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { type Component, TERMINAL } from "@oh-my-pi/pi-tui";
-import { resetSettingsForTest, Settings, settings } from "../src/config/settings";
-import { ReadToolGroupComponent } from "../src/modes/components/read-tool-group";
-import { TranscriptContainer } from "../src/modes/components/transcript-container";
-import * as themeModule from "../src/modes/theme/theme";
 
 /** Minimal transcript block whose finalized state is fixed at construction. */
 class StubBlock implements Component {

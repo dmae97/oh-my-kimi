@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { TEMPLATE } from "../../src/export/html/template.generated";
+import { TEMPLATE } from "@oh-my-pi/pi-coding-agent/export/html/template.generated";
 
 describe("HTML export template developer message support", () => {
 	it("renders developer-role messages in the main feed", () => {

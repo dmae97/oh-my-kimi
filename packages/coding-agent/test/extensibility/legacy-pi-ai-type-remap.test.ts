@@ -7,8 +7,8 @@ import {
 	__resetLegacyPiResolutionCache,
 	installLegacyPiSpecifierShim,
 	loadLegacyPiModule,
-} from "../../src/extensibility/plugins/legacy-pi-compat";
-import { Type as TypeBoxShimType } from "../../src/extensibility/typebox";
+} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
+import { Type as TypeBoxShimType } from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
 
 // pi-ai 15.1.0 removed the runtime `Type` export from `@oh-my-pi/pi-ai`'s
 // package root. Legacy extensions (and their aliased-scope variants such as

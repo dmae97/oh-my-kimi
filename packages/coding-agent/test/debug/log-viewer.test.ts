@@ -4,7 +4,7 @@ import {
 	DebugLogViewerModel,
 	LOAD_OLDER_LABEL,
 	SESSION_BOUNDARY_WARNING,
-} from "../../src/debug/log-viewer";
+} from "@oh-my-pi/pi-coding-agent/debug/log-viewer";
 
 describe("DebugLogViewerModel", () => {
 	const describeRow = (row: { kind: string; logIndex?: number }): string => {

@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 
-import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import { xiaomiModelManagerOptions } from "../src/provider-models/openai-compat";
-import { convertMessages, detectCompat } from "../src/providers/openai-completions";
-import { getOAuthProviders } from "../src/registry/oauth";
-import type { AssistantMessage, Model, ThinkingContent, ToolCall } from "../src/types";
+import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import { xiaomiModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import { convertMessages, detectCompat } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
+import type { AssistantMessage, Model, ThinkingContent, ToolCall } from "@oh-my-pi/pi-ai/types";
 
 const TP_KEY = "tp-ci1p8t1w4e1sbxgyc8v65tnrjbzro287igmvyf25van9mt76";
 const SGP_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";

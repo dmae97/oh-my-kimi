@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { iterateUntilAbort } from "../src/utils/abortable-iterator";
+import { iterateUntilAbort } from "@oh-my-pi/pi-ai/utils/abortable-iterator";
 
 function makeSource<T>(handlers: { next: () => Promise<IteratorResult<T>>; onReturn?: () => void }): AsyncIterable<T> {
 	return {

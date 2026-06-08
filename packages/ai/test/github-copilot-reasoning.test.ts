@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "../src/effort";
-import { getBundledModel } from "../src/models";
-import { streamAnthropic } from "../src/providers/anthropic";
-import { streamOpenAIResponses } from "../src/providers/openai-responses";
-import type { Context, Model } from "../src/types";
+import { Effort } from "@oh-my-pi/pi-ai/effort";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],

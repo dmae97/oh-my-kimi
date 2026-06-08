@@ -1,20 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { ModelRegistry } from "../../src/config/model-registry";
-import { Settings } from "../../src/config/settings";
-import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
-import type { PlanModeState } from "../../src/plan-mode/state";
-import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../../src/sdk";
-import * as sdkModule from "../../src/sdk";
-import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
-import { TaskTool } from "../../src/task";
-import * as discoveryModule from "../../src/task/discovery";
-import type { AgentDefinition, TaskParams } from "../../src/task/types";
-import type { IsolationHandle, WorktreeBaseline } from "../../src/task/worktree";
-import * as worktreeModule from "../../src/task/worktree";
-import type { ToolSession } from "../../src/tools";
-import "../../src/tools/yield";
-import { EventBus } from "../../src/utils/event-bus";
+import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import type { AgentDefinition, TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { IsolationHandle, WorktreeBaseline } from "@oh-my-pi/pi-coding-agent/task/worktree";
+import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import "@oh-my-pi/pi-coding-agent/tools/yield";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 const TEST_TASK: TaskParams = {
 	agent: "task",

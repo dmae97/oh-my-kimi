@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { hookFetch } from "../../utils/src/hook-fetch";
-import { MCPOAuthFlow } from "../src/mcp/oauth-flow";
+import { MCPOAuthFlow } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
+import { hookFetch } from "@oh-my-pi/pi-utils/hook-fetch";
 
 const originalFetch = global.fetch;
 

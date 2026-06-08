@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginSynthetic } from "../src/registry/synthetic";
+import { loginSynthetic } from "@oh-my-pi/pi-ai/registry/synthetic";
 
 const originalFetch = global.fetch;
 

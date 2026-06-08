@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
-import { parseAgentFields } from "../../src/discovery/helpers";
+import { parseAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 
 describe("parseAgentFields", () => {
 	test("parses blocking from boolean frontmatter", () => {
