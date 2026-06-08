@@ -1,15 +1,33 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { resetSettingsForTest, Settings, settings } from "../src/config/settings";
 import { getDefault } from "../src/config/settings-schema";
 import { ReadToolGroupComponent, readArgsTargetInternalUrl } from "../src/modes/components/read-tool-group";
 import * as themeModule from "../src/modes/theme/theme";
 
+function extractLinkUris(text: string): string[] {
+	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
+}
+
+function extractLinkTexts(text: string): string[] {
+	return [...text.matchAll(/\x1b\]8;[^;]*;[^\x1b]+\x1b\\([\s\S]*?)\x1b\]8;;\x1b\\/g)].map(match =>
+		Bun.stripANSI(match[1]!),
+	);
+}
+
 describe("ReadToolGroupComponent", () => {
 	beforeAll(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
 		await themeModule.initTheme(false, undefined, undefined, "dark", "light");
 	});
 
 	afterEach(() => {
+		settings.clearOverride("tui.hyperlinks");
 		vi.restoreAllMocks();
+	});
+
+	afterAll(() => {
+		resetSettingsForTest();
 	});
 
 	it("keeps inline read previews disabled by default", () => {
@@ -187,6 +205,48 @@ describe("ReadToolGroupComponent", () => {
 		const matches = rendered.match(/Read \/tmp\/example\.ts:L10-L20/g) ?? [];
 
 		expect(matches).toHaveLength(1);
+	});
+
+	it("links grouped summary paths to resolved filesystem paths and selector lines", () => {
+		settings.override("tui.hyperlinks", "always");
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "src/example.ts:7-9" }, "read-link");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 7" }],
+				details: { meta: { source: { type: "path", value: "/workspace/src/example.ts" } } },
+			},
+			false,
+			"read-link",
+		);
+
+		const rendered = component.render(120).join("\n");
+
+		expect(Bun.stripANSI(rendered)).toContain("Read src/example.ts:7-9");
+		expect(extractLinkUris(rendered)).toContain("file:///workspace/src/example.ts?line=7");
+		expect(extractLinkTexts(rendered)).toContain("src/example.ts");
+		expect(extractLinkTexts(rendered)).not.toContain("src/example.ts:7-9");
+	});
+
+	it("links inline preview titles when the summary row is suppressed", () => {
+		settings.override("tui.hyperlinks", "always");
+		const component = new ReadToolGroupComponent({ showContentPreview: true });
+		component.updateArgs({ path: "src/preview.ts:20-22" }, "read-preview-link");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 20\nline 21\nline 22" }],
+				details: { resolvedPath: "/workspace/src/preview.ts" },
+			},
+			false,
+			"read-preview-link",
+		);
+
+		const rendered = component.render(120).join("\n");
+
+		expect(Bun.stripANSI(rendered)).toContain("Read src/preview.ts:20-22");
+		expect(extractLinkUris(rendered)).toContain("file:///workspace/src/preview.ts?line=20");
+		expect(extractLinkTexts(rendered)).toContain("src/preview.ts");
+		expect(extractLinkTexts(rendered)).not.toContain("src/preview.ts:20-22");
 	});
 });
 

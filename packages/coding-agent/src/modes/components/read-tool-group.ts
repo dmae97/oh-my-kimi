@@ -1,10 +1,11 @@
+import * as path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { InternalUrlRouter } from "../../internal-urls";
 import { getLanguageFromPath, theme } from "../../modes/theme/theme";
-import { parseLineRanges, splitPathAndSel } from "../../tools/path-utils";
+import { parseLineRanges, selectorLineRanges, splitPathAndSel } from "../../tools/path-utils";
 import { PREVIEW_LIMITS, shortenPath } from "../../tools/render-utils";
-import { renderCodeCell } from "../../tui";
+import { fileHyperlink, renderCodeCell, tryResolveInternalUrlSync } from "../../tui";
 import type { ToolExecutionHandle } from "./tool-execution";
 
 /**
@@ -46,12 +47,19 @@ type ReadToolSuffixResolution = {
 };
 
 type ReadToolResultDetails = {
+	resolvedPath?: string;
 	suffixResolution?: {
 		from?: string;
 		to?: string;
 	};
 	conflictCount?: number;
 	displayReadTargets?: unknown;
+	meta?: {
+		source?: {
+			type?: string;
+			value?: string;
+		};
+	};
 };
 
 type ReadToolGroupOptions = {
@@ -69,6 +77,7 @@ type ReadEntry = {
 	toolCallId: string;
 	path: string;
 	displayPaths?: string[];
+	linkPath?: string;
 	status: "pending" | "success" | "warning" | "error";
 	correctedFrom?: string;
 	contentText?: string;
@@ -82,6 +91,7 @@ type ReadDisplayTarget = {
 	entry: ReadEntry;
 	targetPath: string;
 	basePath: string;
+	linkPath?: string;
 	selector?: string;
 };
 
@@ -107,6 +117,53 @@ function getDisplayReadTargets(details: ReadToolResultDetails | undefined): stri
 		.map(target => target.trim())
 		.filter(target => target.length > 0);
 	return targets.length > 0 ? targets : undefined;
+}
+
+function displayPathWithSuffixResolution(currentPath: string, suffixResolution: ReadToolSuffixResolution): string {
+	const currentSelector = splitPathAndSel(currentPath).sel;
+	if (!currentSelector || splitPathAndSel(suffixResolution.to).sel) return suffixResolution.to;
+	return `${suffixResolution.to}:${currentSelector}`;
+}
+
+function readSourceFsPath(details: ReadToolResultDetails | undefined): string | undefined {
+	const source = details?.meta?.source;
+	return source?.type === "path" && typeof source.value === "string" ? source.value : undefined;
+}
+
+function readResultLinkPath(details: ReadToolResultDetails | undefined): string | undefined {
+	return typeof details?.resolvedPath === "string" ? details.resolvedPath : readSourceFsPath(details);
+}
+
+function readTargetLinkPath(basePath: string, entryLinkPath: string | undefined): string | undefined {
+	if (entryLinkPath) return entryLinkPath;
+	const resolvedInternalPath = tryResolveInternalUrlSync(basePath);
+	if (resolvedInternalPath) return resolvedInternalPath;
+	return path.isAbsolute(basePath) ? basePath : undefined;
+}
+
+function firstSelectorLine(selector: string | undefined): number | undefined {
+	try {
+		return selectorLineRanges(selector)?.[0].startLine;
+	} catch {
+		return undefined;
+	}
+}
+
+function firstSelectorLineForTargets(targets: ReadDisplayTarget[]): number | undefined {
+	let line: number | undefined;
+	for (const target of targets) {
+		const targetLine = firstSelectorLine(target.selector);
+		if (targetLine === undefined) continue;
+		if (line === undefined || targetLine < line) line = targetLine;
+	}
+	return line;
+}
+
+function linkPathForTargets(targets: ReadDisplayTarget[]): string | undefined {
+	for (const target of targets) {
+		if (target.linkPath) return target.linkPath;
+	}
+	return undefined;
 }
 
 function selectorChunkIsLineRangeList(chunk: string): boolean {
@@ -277,8 +334,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const details = result.details as ReadToolResultDetails | undefined;
 		const suffixResolution = getSuffixResolution(details);
 		const displayPaths = getDisplayReadTargets(details);
+		entry.linkPath = readResultLinkPath(details);
 		if (suffixResolution) {
-			entry.path = suffixResolution.to;
+			entry.path = displayPathWithSuffixResolution(entry.path, suffixResolution);
 			entry.correctedFrom = suffixResolution.from;
 			entry.displayPaths = undefined;
 		} else {
@@ -364,13 +422,16 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const targets: ReadDisplayTarget[] = [];
 		for (const entry of entries) {
 			const pathSpecs = entry.displayPaths ?? splitReadDisplayPathSpecs(entry.path);
+			const useEntryLinkPath = pathSpecs.length === 1;
 			for (const pathSpec of pathSpecs) {
 				const split = splitPathAndSel(pathSpec);
+				const linkPath = readTargetLinkPath(split.path, useEntryLinkPath ? entry.linkPath : undefined);
 				for (const selector of splitSelectorDisplayParts(split.sel)) {
 					targets.push({
 						entry,
 						targetPath: selector ? `${split.path}:${selector}` : pathSpec,
 						basePath: split.path,
+						linkPath,
 						selector,
 					});
 				}
@@ -434,6 +495,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return this.#formatPathValue(row.targetPath, {
 			correctedFrom: this.#correctedFromForTargets(row.targets),
 			conflictCount: this.#conflictCountForTargets(row.targets),
+			line: firstSelectorLineForTargets(row.targets),
+			linkPath: linkPathForTargets(row.targets),
 		});
 	}
 
@@ -479,9 +542,22 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return this.#previewEntriesForRow(row).length > 0;
 	}
 
-	#formatPathValue(value: string, options: { correctedFrom?: string; conflictCount?: number } = {}): string {
-		const filePath = shortenPath(value);
+	#formatPathValue(
+		value: string,
+		options: { correctedFrom?: string; conflictCount?: number; line?: number; linkPath?: string } = {},
+	): string {
+		const split = splitPathAndSel(value);
+		const selectorSuffix = split.sel ? `:${split.sel}` : "";
+		const baseValue = split.sel ? split.path : value;
+		const filePath = shortenPath(baseValue);
 		let pathDisplay = filePath ? theme.fg("accent", filePath) : theme.fg("toolOutput", "…");
+		if (filePath && options.linkPath) {
+			const linkOptions = options.line !== undefined ? { line: options.line } : undefined;
+			pathDisplay = fileHyperlink(options.linkPath, pathDisplay, linkOptions);
+		}
+		if (selectorSuffix) {
+			pathDisplay += theme.fg("accent", selectorSuffix);
+		}
 		if (options.correctedFrom) {
 			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(options.correctedFrom)})`);
 		}
@@ -501,10 +577,18 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 * When expanded: shows full content.
 	 */
 	#addContentPreview(entry: ReadEntry): void {
-		const lang = getLanguageFromPath(splitPathAndSel(entry.path).path);
-		const filePath = shortenPath(entry.path);
-		const correctionSuffix = entry.correctedFrom ? ` (corrected from ${shortenPath(entry.correctedFrom)})` : "";
-		const title = filePath ? `Read ${filePath}${correctionSuffix}` : "Read";
+		const split = splitPathAndSel(entry.path);
+		const lang = getLanguageFromPath(split.path);
+		const pathValue = shortenPath(entry.path);
+		const pathDisplay = pathValue
+			? this.#formatPathValue(entry.path, {
+					correctedFrom: entry.correctedFrom,
+					conflictCount: entry.conflictCount,
+					line: firstSelectorLine(split.sel),
+					linkPath: readTargetLinkPath(split.path, entry.linkPath),
+				})
+			: "";
+		const title = pathDisplay ? `Read ${pathDisplay}` : "Read";
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const expanded = this.#expanded;

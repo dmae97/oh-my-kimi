@@ -1652,7 +1652,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				throw new ToolError("Multi-range line selectors are not supported for directory listings.");
 			}
 			const { offset, limit } = selToOffsetLimit(parsed);
-			const dirResult = await this.#readDirectory(absolutePath, offset, limit, signal);
+			// Directory listings are deterministic and fast; never abort them mid-scan
+			// (an interrupt would otherwise surface a misleading "Operation aborted").
+			const dirResult = await this.#readDirectory(absolutePath, offset, limit, undefined);
 			if (suffixResolution) {
 				dirResult.details ??= {};
 				dirResult.details.suffixResolution = suffixResolution;
@@ -1819,7 +1821,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						parsed,
 						displayMode,
 						suffixResolution,
-						signal,
+						undefined, // plain-file read: deterministic and fast, never abort mid-read
 					);
 					if (multiResult.bridgeResult) return multiResult.bridgeResult;
 					content = [{ type: "text", text: multiResult.outputText }];
@@ -1878,7 +1880,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						maxLinesToCollect,
 						maxBytesForRead,
 						selectedLineLimit,
-						signal,
+						undefined, // plain-file read: deterministic and fast, never abort mid-read
 					);
 
 					const {
@@ -2372,11 +2374,13 @@ function formatReadPathLink(
 	const plainDisplayPath = options.suffixResolution
 		? shortenPath(options.suffixResolution.to)
 		: shortenPath(basePath || options.resolvedPath || options.fallbackLabel || rawPath);
-	const target = options.resolvedPath ?? options.sourcePath ?? tryResolveInternalUrlSync(basePath);
+	const absoluteInputPath = path.isAbsolute(basePath) ? basePath : undefined;
+	const target =
+		options.resolvedPath ?? options.sourcePath ?? tryResolveInternalUrlSync(basePath) ?? absoluteInputPath;
 	const line = firstReadSelectorLine(split.sel) ?? options.offset;
 	const linkOptions = line !== undefined ? { line } : undefined;
-	const displayPath = target ? fileHyperlink(target, plainDisplayPath, linkOptions) : plainDisplayPath;
-	return `${displayPath}${selectorSuffix}`;
+	const linkedPath = target ? fileHyperlink(target, plainDisplayPath, linkOptions) : plainDisplayPath;
+	return `${linkedPath}${selectorSuffix}`;
 }
 
 export const readToolRenderer = {
