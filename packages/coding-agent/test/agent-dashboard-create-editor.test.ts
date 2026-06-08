@@ -76,13 +76,13 @@ describe("AgentDashboard create editor", () => {
 		expect(rendered).not.toContain("Description is required.");
 	});
 
-	test("submits new-agent descriptions on single LF", async () => {
+	test("submits new-agent descriptions on Windows Ctrl+Enter LF sequence", async () => {
 		await initTheme(false);
 		const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 24, {});
 
 		dashboard.handleInput("n");
 		typeText(dashboard, "single line");
-		dashboard.handleInput("\n");
+		dashboard.handleInput("\n\r");
 		await Bun.sleep(0);
 		const rendered = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
 
