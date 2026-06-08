@@ -482,6 +482,16 @@ export class TUI extends Container {
 	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
+	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
+	// SIGWINCH (and `process.stdout` already reports the new geometry) before
+	// the multiplexer finishes repainting the pane at the new size, and
+	// drag-resize/pane-close animations fire several events in flight. A forced
+	// render on each SIGWINCH races those mid-reflow paints — the multiplexer's
+	// catch-up paint then partially overwrites the TUI output, which the user
+	// sees as a viewport flash or blank screen before the next throttled frame
+	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
+	// a single forced render lets the multiplexer settle first.
+	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	#hardwareCursorState: HardwareCursorState | null = null;
@@ -549,6 +559,9 @@ export class TUI extends Container {
 	// between the viewport and scrollback, so the previous frame no longer
 	// describes the screen. Tracking only the dimension delta misses this.
 	#resizeEventPending = false;
+	// Active multiplexer SIGWINCH debounce. Reset on each event so the timer
+	// only fires once the pane stops resizing.
+	#multiplexerResizeTimer: RenderTimer | undefined;
 	#stopped = false;
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
@@ -858,12 +871,35 @@ export class TUI extends Container {
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
-				// Repaint immediately rather than via the throttled path: a resize must
-				// clear and replay at the fresh geometry before the terminal's reflow
-				// settles into a state a throttled frame would race. Forced render skips
-				// the 30fps coalescing window, matching resetDisplay()'s prompt repaint.
+				// Real terminals deliver SIGWINCH (and the equivalent ConPTY
+				// notification) atomically with the new `process.stdout` geometry, so
+				// a forced render must fire immediately: it clears and replays at the
+				// fresh size before the terminal's reflow settles into a state a
+				// throttled frame would race. Multiplexer panes (tmux/screen/zellij)
+				// do not give that guarantee. The host receives SIGWINCH while the
+				// multiplexer is still mid-reflow — it has not finished repainting
+				// the pane buffer at the new size — and a drag-resize or pane-close
+				// animation fires several events in flight. Forcing a render on each
+				// event races those mid-reflow paints: the multiplexer's catch-up
+				// paint then partially overwrites the TUI output, which the user sees
+				// as a viewport flash or blank screen before the next throttled
+				// frame arrives (issue #2088). Coalesce SIGWINCHes inside the settle
+				// window so a single forced render fires once the pane is quiet —
+				// `#resizeEventPending` is set on every event so the eventual render
+				// still classifies as a resize.
 				this.#resizeEventPending = true;
-				this.requestRender(true);
+				if (!isMultiplexerSession()) {
+					this.requestRender(true);
+					return;
+				}
+				if (this.#multiplexerResizeTimer) {
+					this.#multiplexerResizeTimer.cancel();
+				}
+				this.#multiplexerResizeTimer = this.#renderScheduler.scheduleRender(() => {
+					this.#multiplexerResizeTimer = undefined;
+					if (this.#stopped) return;
+					this.requestRender(true);
+				}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
 			},
 		);
 		for (const listener of this.#startListeners) {
@@ -1066,6 +1102,10 @@ export class TUI extends Container {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
+		if (this.#multiplexerResizeTimer) {
+			this.#multiplexerResizeTimer.cancel();
+			this.#multiplexerResizeTimer = undefined;
+		}
 		// Place the parent shell on the first line after the rendered content. When
 		// that line is still inside the viewport, moving there and writing `\r` is
 		// enough; emitting `\r\n` would create an extra blank row. If the content
@@ -1167,7 +1207,6 @@ export class TUI extends Container {
 		this.#renderRequested = true;
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 	}
-
 	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =
 			(this.#previousWidth > 0 && this.#previousWidth !== this.terminal.columns) ||

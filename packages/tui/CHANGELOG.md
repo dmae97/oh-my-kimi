@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Coalesced terminal-multiplexer SIGWINCH events into a single forced render once the pane stops resizing so closing/dragging a tmux/screen/zellij split no longer flashes the viewport blank before the new geometry repaints ([#2088](https://github.com/can1357/oh-my-pi/issues/2088)).
+
 ## [15.10.2] - 2026-06-08
 ### Added
 

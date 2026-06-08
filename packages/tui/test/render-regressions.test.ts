@@ -1527,11 +1527,14 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						// SIGWINCH (height shrink) and a streamed token arrive inside the
-						// same ~33ms frame budget. The TUI's own resize handler schedules a
-						// non-forced render; the append rides along.
+						// same multiplexer-resize debounce window. The TUI coalesces every
+						// SIGWINCH into one settled forced render once the pane stops
+						// resizing (issue #2088); the streamed append rides along on the
+						// eventual render at the new geometry.
 						lines.push("line-40 streamed");
 						component.setLines(lines);
 						term.resize(40, 6);
+						await Bun.sleep(80);
 						await settle(term);
 
 						// The visible pane must show the frame tail at the new geometry —
