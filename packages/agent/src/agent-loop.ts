@@ -445,7 +445,6 @@ interface StepCounter {
 	count: number;
 }
 
-
 /**
  * Resolve aside entries at the moment the loop is about to inject them. Each entry
  * is either a ready {@link AgentMessage} or a sync thunk evaluated here so the

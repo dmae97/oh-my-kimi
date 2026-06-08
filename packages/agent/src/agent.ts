@@ -110,7 +110,6 @@ export interface AgentOptions {
 	 */
 	interruptMode?: "immediate" | "wait";
 
-
 	/**
 	 * API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic")
 	 */
@@ -580,7 +579,6 @@ export class Agent {
 	set maxRetryDelayMs(value: number | undefined) {
 		this.#maxRetryDelayMs = value;
 	}
-
 
 	get state(): AgentState {
 		return this.#state;

@@ -372,7 +372,6 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
-
 	it("injects and strips intent when intent tracing is enabled", async () => {
 		const toolSchema = z.object({ value: z.string() });
 		const executedParams: Record<string, unknown>[] = [];

@@ -1102,11 +1102,17 @@ export function renderResult(
 	const isError = aborted || failed;
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
+	// Surface the dispatched agent type (e.g. `Reviewer`) alongside the count so
+	// the header reads `Task 16 agents: Reviewer`. All tasks in one call share a
+	// single `agent` type (top-level param), so one label covers the whole batch.
+	const agentName = args?.agent?.trim();
+	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
+	const metaLabel = countLabel ? (agentName ? `${countLabel}: ${agentName}` : countLabel) : agentName;
 	const header = renderStatusLine(
 		{
 			icon,
 			title: "Task",
-			meta: agentCount > 0 ? [`${agentCount} ${agentCount === 1 ? "agent" : "agents"}`] : undefined,
+			meta: metaLabel ? [metaLabel] : undefined,
 		},
 		theme,
 	);

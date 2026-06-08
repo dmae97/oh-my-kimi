@@ -50,7 +50,6 @@ describe("AgentSession message pipeline", () => {
 		}
 	});
 
-
 	it("applies transformContext before convertToLlm", async () => {
 		const inputMessages: AgentMessage[] = [{ role: "user", content: "hello", timestamp: Date.now() }];
 		const transformedMessages: AgentMessage[] = [

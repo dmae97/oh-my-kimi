@@ -1093,7 +1093,6 @@ export class AgentSession {
 		this.#flushPendingAgentEnd();
 	}
 
-
 	#flushPendingAgentEnd(): void {
 		const pending = this.#pendingAgentEndEmit;
 		if (!pending) return;
