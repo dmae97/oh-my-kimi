@@ -3529,12 +3529,23 @@ export class AgentSession {
 	 * Wrap a tool with a permission-gate proxy when an ACP client is connected.
 	 * Only wraps tools whose name is in PERMISSION_REQUIRED_TOOLS and only when
 	 * the bridge exposes `requestPermission`. No-ops for all other cases.
+	 *
+	 * In `yolo` mode, skips the gate unless the user policy explicitly requires a
+	 * prompt or deny (matching the behaviour of the normal approval wrapper).
 	 */
 	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
 		const bridge = this.#clientBridge;
 		// Match the capability+method gating pattern used by read/write/bash.
 		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
 		if (!PERMISSION_REQUIRED_TOOLS.has(tool.name)) return tool;
+		// In yolo mode, honour the user per-tool policy but skip the ACP gate when
+		// the effective decision is "allow" (absent policy or explicit "allow").
+		const approvalMode = (this.settings.get("tools.approvalMode") ?? "yolo") as string;
+		if (approvalMode === "yolo") {
+			const userPolicies = (this.settings.get("tools.approval") ?? {}) as Record<string, unknown>;
+			const toolPolicy = userPolicies[tool.name];
+			if (!toolPolicy || toolPolicy === "allow") return tool;
+		}
 		return new Proxy(tool, {
 			get: (target, prop) => {
 				if (prop !== "execute") return Reflect.get(target, prop, target);
