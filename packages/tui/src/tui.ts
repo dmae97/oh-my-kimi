@@ -776,6 +776,11 @@ export class TUI extends Container {
 		}
 	}
 
+	/** Component currently receiving keyboard input, if any. */
+	getFocused(): Component | null {
+		return this.#focusedComponent;
+	}
+
 	/**
 	 * Show an overlay component with configurable positioning and sizing.
 	 * Returns a handle to control the overlay's visibility.

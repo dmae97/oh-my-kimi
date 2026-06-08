@@ -229,4 +229,13 @@ describe("Input component", () => {
 		expect(line.replaceAll(CURSOR_MARKER, "")).toContain("abc");
 		expect(input.getUseTerminalCursor()).toBe(true);
 	});
+
+	it("pasteText absorbs a payload from a non-bracketed transport (kitty OSC 5522)", () => {
+		// Regression for #2127: when kitty's enhanced clipboard read delivers the
+		// API key directly via `pasteText`, the modal Input must capture it just
+		// like a bracketed paste — newlines stripped, value inserted, cursor at end.
+		const input = setupAtEnd("");
+		input.pasteText("sk-line1\nsk-line2\r\nsk-line3");
+		expect(input.getValue()).toBe("sk-line1sk-line2sk-line3");
+	});
 });

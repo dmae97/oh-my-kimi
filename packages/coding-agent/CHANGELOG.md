@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/login` API-key prompts (OpenCode Zen, Perplexity OTP, GitHub Enterprise URL, manual OAuth redirect URL, …) silently dropping pasted content on kitty/Linux/Wayland — and any other terminal supporting OSC 5522 enhanced paste. `InputController` enables kitty's enhanced clipboard protocol on TUI start and consumes the resulting OSC 5522 packets in an `addInputListener` that runs before focus dispatch, so the paste never reached the modal `Input`'s bracketed-paste handler; the routing then stuffed the text into the main `CustomEditor` unconditionally, even when `selector-controller` had detached the editor and focused a temporary OAuth input. The pasted API key accumulated in the hidden editor and only resurfaced in the main prompt when the user dismissed the modal with Enter or Esc. The enhanced-paste callback now consults `ui.getFocused()` and routes the text to the focused component when it exposes a `pasteText` hook, falling back to the editor only when no modal target is in focus; image pastes refuse with a status message instead of stuffing a binary blob into the hidden editor. ([#2127](https://github.com/can1357/oh-my-pi/issues/2127))
+
 ## [15.10.5] - 2026-06-08
 
 ### Added
