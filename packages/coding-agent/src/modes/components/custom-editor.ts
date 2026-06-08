@@ -76,7 +76,7 @@ export function extractBracketedImagePastePath(data: string): string | undefined
 export class CustomEditor extends Editor {
 	imageLinks?: readonly (string | undefined)[];
 
-	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflow" keywords as the user types
+	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflowz" keywords as the user types
 	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. Also make
 	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists. */
 	decorateText = (text: string): string =>
