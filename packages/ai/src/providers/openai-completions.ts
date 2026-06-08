@@ -869,12 +869,29 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 									}
 								}
 							} else if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-								// MiniMax-compatible hosts stream `function.arguments` as a complete object in a
-								// single delta instead of the OpenAI JSON-string contract. Hold the object directly
-								// — no `[object Object]` round-trip through the string buffer — and serialize once for
-								// the wire delta that proxy servers forward verbatim as `input_json_delta`.
-								block.partialArgs = rawArgs;
-								block.arguments = rawArgs;
+								// MiniMax-compatible hosts stream `function.arguments` as an object instead of the
+								// OpenAI JSON-string contract. Most chunks carry the complete object in one delta,
+								// but cannot rely on that: replacing per-chunk drops earlier keys (and earlier
+								// string content for the same key) when the host fragments the args across deltas.
+								// Shallow-merge into the accumulated object; for shared string keys, detect
+								// cumulative-vs-delta semantics with `startsWith` so we neither duplicate cumulative
+								// payloads nor lose delta fragments. Degenerates to the previous "last wins"
+								// behaviour for the common single-chunk shape (no prior value to merge with).
+								const prev =
+									block.partialArgs && typeof block.partialArgs === "object" && !Array.isArray(block.partialArgs)
+										? (block.partialArgs as Record<string, unknown>)
+										: undefined;
+								const merged: Record<string, unknown> = prev ? { ...prev } : {};
+								for (const [key, value] of Object.entries(rawArgs)) {
+									const prevValue = merged[key];
+									if (typeof prevValue === "string" && typeof value === "string") {
+										merged[key] = value.startsWith(prevValue) ? value : prevValue + value;
+									} else {
+										merged[key] = value;
+									}
+								}
+								block.partialArgs = merged;
+								block.arguments = merged;
 								delta = JSON.stringify(rawArgs);
 							}
 							stream.push({
