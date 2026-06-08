@@ -15,6 +15,7 @@
 - Fixed GPT-5 Harmony leakage handling by recovering valid leaked tool calls when possible and discarding leaked partial assistant output before retrying
 - Fixed tool-call cancellation handling so aborted tools are marked aborted with an explicit reason and do not report generic errors
 - Fixed tool-call completion so assistant messages on abort keep only completed tool-call blocks and continue processing tool calls when a length stop still included results
+- Fixed deliberate aborts (TTSR rule matches, user-interrupt labels) so a mid-stream tool-call block that never reached `toolcall_end` is retained on the aborted assistant message and paired with a placeholder result labeled by the abort reason, instead of being dropped; anonymous aborts (bare `abort()`) still drop incomplete tool calls whose partial arguments are unsafe to replay
 - Fixed runs that stopped with reason `length` after returning tool results so execution continues to handle additional tool calls
 
 ## [15.10.3] - 2026-06-08
