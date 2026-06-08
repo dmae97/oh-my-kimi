@@ -35,6 +35,9 @@ export function buildExactVectorIndex<TId>(rows: readonly VectorIndexRow<TId>[])
 		if (vector.length > dimensions) dimensions = vector.length;
 	}
 
+	// Float32Array keeps a compact contiguous matrix that matches the shape we'd
+	// feed into future ANN/quantized backends. Exact cosine ranking remains sound
+	// here because we store normalized vectors and only compare normalized dots.
 	const matrix = new Float32Array(valid.length * dimensions);
 	const ids: TId[] = [];
 	for (let row = 0; row < valid.length; row += 1) {

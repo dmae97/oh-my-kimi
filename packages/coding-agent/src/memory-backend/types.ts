@@ -1,7 +1,7 @@
 /**
  * Memory backend abstraction.
  *
- * Backends are mutually exclusive — `resolveMemoryBackend(settings)` returns
+ * Backends are mutually exclusive — `await resolveMemoryBackend(settings)` returns
  * exactly one. Implementations MUST be self-contained: they own the per-session
  * state they create in `start()` and tear it down on `clear()`.
  */
@@ -35,13 +35,13 @@ export interface MemoryBackendStatus {
 
 export interface MemoryBackendSearchOptions {
 	limit?: number;
+	/** Best-effort abort signal. Backends may only observe it before/after an underlying recall call. */
 	signal?: AbortSignal;
 }
 
 export interface MemoryBackendSearchItem {
 	id?: string;
 	content: string;
-	bank?: string;
 	source?: string;
 	timestamp?: string;
 	score?: number;

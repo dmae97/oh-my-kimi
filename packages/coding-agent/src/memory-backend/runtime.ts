@@ -1,12 +1,12 @@
 import type { AgentSession } from "../session/agent-session";
 import { resolveMemoryBackend } from "./resolve";
 import type {
+	MemoryBackendId,
 	MemoryBackendOperationContext,
 	MemoryBackendSaveInput,
 	MemoryBackendSearchOptions,
 	MemoryRuntimeContext,
 } from "./types";
-
 export function createMemoryRuntimeContext(context: MemoryBackendOperationContext): MemoryRuntimeContext {
 	const settings = context.session?.settings;
 	return {
@@ -57,10 +57,10 @@ export function createSessionMemoryRuntimeContext(
 	return createMemoryRuntimeContext({ agentDir, cwd, session });
 }
 
-function unavailableSearch(backend: string, query: string, message: string) {
-	return { backend: backend as never, query, count: 0, items: [], message };
+function unavailableSearch(backend: MemoryBackendId, query: string, message: string) {
+	return { backend, query, count: 0, items: [], message };
 }
 
-function unavailableSave(backend: string, message: string) {
-	return { backend: backend as never, stored: 0, message };
+function unavailableSave(backend: MemoryBackendId, message: string) {
+	return { backend, stored: 0, message };
 }

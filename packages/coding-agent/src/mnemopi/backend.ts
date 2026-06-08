@@ -206,12 +206,15 @@ export const mnemopiBackend: MemoryBackend = {
 		}
 		const limit = clampLimit(options?.limit);
 		const results = (await primary.recallResultsScoped(query)).slice(0, limit);
+		if (options?.signal?.aborted) {
+			return { backend: "mnemopi", query, count: 0, items: [], message: "Search aborted." };
+		}
 		const items: MemoryBackendSearchItem[] = results.map(result => ({
 			id: result.id,
 			content: result.content,
 			source: result.source ?? undefined,
 			timestamp: result.timestamp ?? undefined,
-			score: result.score ?? result.importance,
+			score: result.score,
 		}));
 		return { backend: "mnemopi", query, count: items.length, items };
 	},
@@ -474,8 +477,8 @@ async function resolveMnemopiProviderOptions(
 		return {
 			...base,
 			llm: async (prompt, opts) => {
-				const apiKey = await modelRegistry.getApiKey(model, sessionId);
-				if (!apiKey) {
+				const hasApiKey = await modelRegistry.getApiKey(model, sessionId);
+				if (!hasApiKey) {
 					logger.warn("Mnemopi: smol completion requested but no current API key is available.", {
 						provider: model.provider,
 						model: model.id,
@@ -488,7 +491,10 @@ async function resolveMnemopiProviderOptions(
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					{
-						apiKey,
+						apiKey: modelRegistry.resolver(model.provider, {
+							sessionId,
+							baseUrl: model.baseUrl,
+						}),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,
 					},
