@@ -353,6 +353,13 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 							maxResults: effectiveLimit,
 							sortByMtime: true,
 							gitignore: useGitignore,
+							// parseFindPattern explicitly prepends "**/" when the user's
+							// pattern begins with a glob (so `*.ts` becomes `**/*.ts`).
+							// Anything that arrives here without "**/" was scoped to a
+							// single directory by the user (e.g. `dir/*`); disable the
+							// native auto-recursion so `dir/*` does not silently match
+							// `dir/sub/nested.ts`.
+							recursive: false,
 							signal: combinedSignal,
 						},
 						onMatch,
