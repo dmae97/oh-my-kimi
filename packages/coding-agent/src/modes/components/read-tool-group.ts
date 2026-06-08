@@ -291,6 +291,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	// (see TranscriptContainer / NativeScrollbackLiveRegion). The controller calls
 	// `finalize()` once the run breaks so the block can commit to native scrollback.
 	#finalized = false;
+	// Forced terminal even with a still-pending entry: the turn ended (abort or
+	// completion) so no late result is coming. Set via `seal()`.
+	#sealed = false;
 
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
@@ -301,11 +304,34 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	isTranscriptBlockFinalized(): boolean {
-		return this.#finalized;
+		if (this.#sealed) return true;
+		if (!this.#finalized) return false;
+		// Closed to new entries, but a still-pending entry means its result is in
+		// flight — parallel reads can finalize the group (a sibling tool starts and
+		// breaks the run) before a read's `tool_execution_end` lands. Stay live so
+		// the late result repaints instead of freezing the pending preview into
+		// native scrollback on ED3-risk terminals (#issue: stuck "Read <path>").
+		return !this.#hasPendingEntries();
+	}
+
+	#hasPendingEntries(): boolean {
+		for (const entry of this.#entries.values()) {
+			if (entry.status === "pending") return true;
+		}
+		return false;
 	}
 
 	finalize(): void {
 		this.#finalized = true;
+	}
+
+	/**
+	 * Force the group terminal even if an entry never received its result (the
+	 * turn aborted or ended). Lets it freeze and stop pinning the transcript live
+	 * region instead of lingering on a pending preview until the next thaw.
+	 */
+	seal(): void {
+		this.#sealed = true;
 	}
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
