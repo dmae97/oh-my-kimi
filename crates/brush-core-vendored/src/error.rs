@@ -29,6 +29,10 @@ pub enum ErrorKind {
 	#[error("cannot assign list to array member")]
 	AssigningListToArrayMember,
 
+	/// An attempt was made to assign an associative array value without using a subscript.
+	#[error("must use subscript when assigning associative array")]
+	AssociativeArrayMissingSubscript,
+
 	/// An attempt was made to convert an associative array to an indexed array.
 	#[error("cannot convert associative array to indexed array")]
 	ConvertingAssociativeArrayToIndexedArray,

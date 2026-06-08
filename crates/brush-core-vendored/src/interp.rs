@@ -1766,7 +1766,7 @@ async fn apply_assignment(
 						existing_value.assign_at_index(array_index, s, assignment.append)?;
 					},
 					ShellValueLiteral::Array(_) => {
-						return error::unimp("replacing an array item with an array");
+						return Err(error::ErrorKind::AssigningListToArrayMember.into());
 					},
 				}
 			} else {
@@ -1796,7 +1796,7 @@ async fn apply_assignment(
 				ShellValue::indexed_array_from_literals(ArrayLiteral(vec![(Some(array_index), s)]))
 			},
 			ShellValueLiteral::Array(_) => {
-				return error::unimp("cannot assign list to array member");
+				return Err(error::ErrorKind::AssigningListToArrayMember.into());
 			},
 		}
 	} else {
@@ -1917,7 +1917,10 @@ pub(crate) async fn setup_redirect(
 						ast::IoFileRedirectKind::DuplicateInput => 0,
 						ast::IoFileRedirectKind::DuplicateOutput => 1,
 						_ => {
-							return error::unimp("unexpected redirect kind");
+							return Err(error::ErrorKind::InternalError(format!(
+								"unexpected redirect kind for file descriptor target: {kind:?}"
+							))
+							.into());
 						},
 					};
 
@@ -1937,7 +1940,10 @@ pub(crate) async fn setup_redirect(
 						ast::IoFileRedirectKind::DuplicateInput => 0,
 						ast::IoFileRedirectKind::DuplicateOutput => 1,
 						_ => {
-							return error::unimp("unexpected redirect kind");
+							return Err(error::ErrorKind::InternalError(format!(
+								"unexpected redirect kind for duplicate target: {kind:?}"
+							))
+							.into());
 						},
 					};
 
@@ -2008,7 +2014,12 @@ pub(crate) async fn setup_redirect(
 
 							params.open_files.set_fd(fd_num, target_file);
 						},
-						_ => return error::unimp("invalid process substitution"),
+						_ => {
+							return Err(error::ErrorKind::InternalError(format!(
+								"process substitution used with invalid redirect kind: {kind:?}"
+							))
+							.into());
+						},
 					}
 				},
 			}
@@ -2113,6 +2124,16 @@ fn setup_process_substitution(
 	let mut child_params = params.clone();
 	child_params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
 
+	// Starting at 63 (a.k.a. 64-1)--and decrementing--look for an
+	// available fd before starting the substitution command.
+	let mut candidate_fd_num = 63;
+	while params.open_files.contains_fd(candidate_fd_num) {
+		candidate_fd_num -= 1;
+		if candidate_fd_num == 0 {
+			return Err(error::ErrorKind::TooManyOpenFiles.into());
+		}
+	}
+
 	// Set up pipe so we can connect to the command.
 	let (reader, writer) = std::io::pipe()?;
 	let (reader, writer) = (reader.into(), writer.into());
@@ -2139,15 +2160,6 @@ fn setup_process_substitution(
 			.await;
 	});
 
-	// Starting at 63 (a.k.a. 64-1)--and decrementing--look for an
-	// available fd.
-	let mut candidate_fd_num = 63;
-	while params.open_files.contains_fd(candidate_fd_num) {
-		candidate_fd_num -= 1;
-		if candidate_fd_num == 0 {
-			return error::unimp("no available file descriptors");
-		}
-	}
 
 	Ok((candidate_fd_num, target_file))
 }

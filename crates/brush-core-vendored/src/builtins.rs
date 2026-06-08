@@ -174,8 +174,138 @@ impl<SE: extensions::ShellExtensions> Registration<SE> {
 	}
 }
 
-fn get_builtin_man_page(_name: &str, _command: &clap::Command) -> Result<String, error::Error> {
-	error::unimp("man page rendering is not yet implemented")
+fn get_builtin_man_page(name: &str, command: &clap::Command) -> Result<String, error::Error> {
+	let mut man_page = String::new();
+
+	append_man_section(&mut man_page, "NAME");
+	let description = command
+		.get_about()
+		.map_or_else(String::new, std::string::ToString::to_string);
+	if description.is_empty() {
+		man_page.push_str(name);
+		man_page.push('\n');
+	} else {
+		man_page.push_str(name);
+		man_page.push_str(" - ");
+		man_page.push_str(&description);
+		man_page.push('\n');
+	}
+
+	append_man_section(&mut man_page, "SYNOPSIS");
+	let mut usage_command = command.clone();
+	let usage = usage_command.render_usage();
+	man_page.push_str(&usage.to_string());
+	man_page.push('\n');
+
+	if let Some(about) = command.get_long_about().or_else(|| command.get_about()) {
+		append_man_section(&mut man_page, "DESCRIPTION");
+		man_page.push_str(&about.to_string());
+		man_page.push('\n');
+	}
+
+	append_man_arguments_section(&mut man_page, command);
+	append_man_options_section(&mut man_page, command);
+
+	Ok(man_page)
+}
+
+fn append_man_section(buf: &mut String, title: &str) {
+	if !buf.is_empty() {
+		buf.push('\n');
+	}
+
+	buf.push_str(title);
+	buf.push('\n');
+}
+
+fn append_man_arguments_section(buf: &mut String, command: &clap::Command) {
+	let mut section_written = false;
+	for arg in command.get_positionals() {
+		if arg.is_hide_set() {
+			continue;
+		}
+
+		if !section_written {
+			append_man_section(buf, "ARGUMENTS");
+			section_written = true;
+		}
+
+		write_man_arg_help(buf, &format_man_value_names(arg), arg);
+	}
+}
+
+fn append_man_options_section(buf: &mut String, command: &clap::Command) {
+	let mut section_written = false;
+	for arg in command.get_opts() {
+		if arg.is_hide_set() {
+			continue;
+		}
+
+		if !section_written {
+			append_man_section(buf, "OPTIONS");
+			section_written = true;
+		}
+
+		write_man_arg_help(buf, &format_man_option(arg), arg);
+	}
+}
+
+fn write_man_arg_help(buf: &mut String, label: &str, arg: &clap::Arg) {
+	buf.push_str("  ");
+	buf.push_str(label);
+	buf.push('\n');
+	if let Some(help) = arg.get_long_help().or_else(|| arg.get_help()) {
+		buf.push_str("      ");
+		buf.push_str(&help.to_string());
+		buf.push('\n');
+	}
+}
+
+fn format_man_option(arg: &clap::Arg) -> String {
+	let mut option = String::new();
+	if let Some(short) = arg.get_short() {
+		option.push('-');
+		option.push(short);
+	}
+
+	if let Some(long) = arg.get_long() {
+		if !option.is_empty() {
+			option.push_str(", ");
+		}
+
+		option.push_str("--");
+		option.push_str(long);
+	}
+
+	let values = format_man_value_names(arg);
+	if !values.is_empty() {
+		if !option.is_empty() {
+			option.push(' ');
+		}
+
+		option.push_str(&values);
+	}
+
+	option
+}
+
+fn format_man_value_names(arg: &clap::Arg) -> String {
+	let Some(value_names) = arg.get_value_names() else {
+		return String::new();
+	};
+
+	let mut values = String::new();
+	for name in value_names {
+		if !values.is_empty() {
+			values.push(' ');
+		}
+
+		values.push('<');
+		values.push_str(name);
+		values.push('>');
+	}
+
+	values
 }
 
 fn get_builtin_short_description(name: &str, command: &clap::Command) -> String {

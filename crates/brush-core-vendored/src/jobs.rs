@@ -226,7 +226,6 @@ impl JobManager {
 		self.jobs.iter().any(|job| job.contains_process_id(pid))
 	}
 
-
 	/// Tries to resolve the given process ID to a managed job.
 	///
 	/// # Arguments
@@ -534,16 +533,17 @@ impl Job {
 
 	/// Moves the job to execute in the background.
 	pub fn move_to_background(&mut self) -> Result<(), error::Error> {
-		if matches!(self.state, JobState::Stopped) {
-			if let Some(pgid) = self.process_group_id() {
+		match &self.state {
+			JobState::Stopped => {
+				let pgid = self
+					.process_group_id()
+					.ok_or(error::ErrorKind::FailedToSendSignal)?;
 				sys::signal::continue_process(pgid)?;
 				self.state = JobState::Running;
 				Ok(())
-			} else {
-				Err(error::ErrorKind::FailedToSendSignal.into())
-			}
-		} else {
-			error::unimp("move job to background")
+			},
+			JobState::Running => Ok(()),
+			JobState::Unknown | JobState::Done => Err(error::ErrorKind::FailedToSendSignal.into()),
 		}
 	}
 
@@ -604,7 +604,6 @@ impl Job {
 			JobSelector::ProcessId(pid) => self.contains_process_id(pid),
 		}
 	}
-
 
 	fn contains_process_id(&self, pid: i32) -> bool {
 		self.tasks.iter().any(|task| match task {
