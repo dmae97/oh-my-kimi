@@ -114,8 +114,30 @@ interface CodexResponse {
 	usage?: CodexUsage;
 }
 
+/**
+ * Recognizes Codex answers that are pure image placeholders — short prose that
+ * only points at an attached/inline image and carries no information of its
+ * own. Codex returns several variants ("(see attached image)", "see image
+ * above", "[Attached image]", …) when the assistant produced a screenshot
+ * instead of a textual answer; treat them all as non-answers so the chain
+ * advances to a provider that actually returns text.
+ */
 function isImagePlaceholderAnswer(text: string): boolean {
-	return text.trim().toLowerCase() === "(see attached image)";
+	const trimmed = text.trim();
+	if (trimmed.length === 0 || trimmed.length > 80) return false;
+	// Strip surrounding brackets/parens/quotes and trailing punctuation.
+	const stripped = trimmed
+		.replace(/^[[("'`*_]+/, "")
+		.replace(/[\])"'`*_.!?]+$/, "")
+		.trim()
+		.toLowerCase();
+	return (
+		/^(?:please\s+)?(?:see|view|refer to)\s+(?:the\s+)?(?:above\s+|below\s+|attached\s+|enclosed\s+|inline\s+)?image[s]?(?:\s+(?:above|below|attached|enclosed|inline))?$/.test(
+			stripped,
+		) ||
+		/^(?:the\s+)?(?:above|below|attached|enclosed|inline)\s+image[s]?$/.test(stripped) ||
+		/^image[s]?\s+(?:above|below|attached|enclosed|inline)$/.test(stripped)
+	);
 }
 
 function addSource(sources: SearchSource[], source: SearchSource): void {
@@ -423,15 +445,18 @@ async function callCodexSearch(
 
 	const finalAnswer = answerParts.join("\n\n").trim();
 	const streamedAnswer = streamedAnswerParts.join("").trim();
-	if (isImagePlaceholderAnswer(finalAnswer) && streamedAnswer.length === 0) {
+	// Throw to advance the chain whenever Codex emitted nothing but image
+	// placeholder prose — including the case where the streamed delta itself
+	// is the placeholder (the model occasionally streams the same text it
+	// publishes as the final output_text).
+	const finalIsPlaceholder = finalAnswer.length > 0 && isImagePlaceholderAnswer(finalAnswer);
+	const streamedIsPlaceholder = streamedAnswer.length > 0 && isImagePlaceholderAnswer(streamedAnswer);
+	const hasFinalText = finalAnswer.length > 0 && !finalIsPlaceholder;
+	const hasStreamedText = streamedAnswer.length > 0 && !streamedIsPlaceholder;
+	if (!hasFinalText && !hasStreamedText && sources.length === 0) {
 		throw new SearchProviderError("codex", "Codex returned image-only response", 502);
 	}
-	const answer =
-		finalAnswer.length > 0 && !isImagePlaceholderAnswer(finalAnswer)
-			? finalAnswer
-			: streamedAnswer.length > 0
-				? streamedAnswer
-				: finalAnswer;
+	const answer = hasFinalText ? finalAnswer : hasStreamedText ? streamedAnswer : "";
 
 	// Fallback: when Codex omits url_citation annotations, scrape markdown links
 	// and bare URLs from the synthesized answer so callers still receive sources.

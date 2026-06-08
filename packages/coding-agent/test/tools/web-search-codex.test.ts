@@ -386,4 +386,70 @@ describe("searchCodex model selection", () => {
 			},
 		]);
 	});
+
+	it("throws to advance the chain when both streamed and final answers are image placeholders without sources", async () => {
+		const sse = [
+			`data: ${JSON.stringify({
+				type: "response.output_text.delta",
+				delta: "[Attached image]",
+			})}`,
+			"",
+			`data: ${JSON.stringify({
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					content: [{ type: "output_text", text: "See image above.", annotations: [] }],
+				},
+			})}`,
+			"",
+			`data: ${JSON.stringify({
+				type: "response.completed",
+				response: { id: "resp_codex_placeholder_only", model: "gpt-5.5" },
+			})}`,
+			"",
+		].join("\n");
+
+		using _hook = hookFetch(
+			() => new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+		);
+
+		await expect(searchCodex(makeSearchParams("image only"))).rejects.toThrow(/image-only response/);
+	});
+
+	it("drops placeholder prose from the answer but keeps annotation sources when both are placeholders", async () => {
+		const sse = [
+			`data: ${JSON.stringify({
+				type: "response.output_text.delta",
+				delta: "(see attached image)",
+			})}`,
+			"",
+			`data: ${JSON.stringify({
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					content: [
+						{
+							type: "output_text",
+							text: "(See attached image.)",
+							annotations: [{ type: "url_citation", url: "https://example.com/docs", title: "Docs" }],
+						},
+					],
+				},
+			})}`,
+			"",
+			`data: ${JSON.stringify({
+				type: "response.completed",
+				response: { id: "resp_codex_placeholder_with_sources", model: "gpt-5.5" },
+			})}`,
+			"",
+		].join("\n");
+
+		using _hook = hookFetch(
+			() => new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+		);
+
+		const result = await searchCodex(makeSearchParams("image with sources"));
+		expect(result.answer).toBeUndefined();
+		expect(result.sources).toEqual([{ title: "Docs", url: "https://example.com/docs" }]);
+	});
 });
