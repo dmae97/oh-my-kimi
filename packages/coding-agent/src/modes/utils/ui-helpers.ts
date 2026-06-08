@@ -11,6 +11,10 @@ import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import {
+	type LateDiagnosticsFile,
+	LateDiagnosticsMessageComponent,
+} from "../../modes/components/late-diagnostics-message";
+import {
 	ReadToolGroupComponent,
 	readArgsHaveTarget,
 	readArgsTargetInternalUrl,
@@ -31,7 +35,7 @@ import {
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
-import { formatBytes, formatDuration, replaceTabs, shortenPath } from "../../tools/render-utils";
+import { formatBytes, formatDuration } from "../../tools/render-utils";
 
 type TextBlock = { type: "text"; text: string };
 interface RenderInitialMessagesOptions {
@@ -172,29 +176,12 @@ export class UiHelpers {
 					if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
 						const details = (
 							message as CustomMessage<{
-								files?: Array<{
-									path?: string;
-									summary?: string;
-									errored?: boolean;
-									messages?: string[];
-								}>;
+								files?: LateDiagnosticsFile[];
 							}>
 						).details;
-						const files = details?.files ?? [];
-						const block = new TranscriptBlock();
-						for (const file of files) {
-							const errored = file.errored ?? false;
-							const colorKey = errored ? "error" : "warning";
-							const icon = errored ? theme.status.error : theme.status.warning;
-							const shortPath = file.path ? shortenPath(file.path) : "unknown";
-							const summary = file.summary ? ` ${theme.fg("dim", `(${file.summary})`)}` : "";
-							const header = `${theme.fg(colorKey, `${icon} Late diagnostics`)} ${theme.fg("accent", shortPath)}${summary}`;
-							block.addChild(new Text(header, 1, 0));
-							for (const line of file.messages ?? []) {
-								block.addChild(new Text(theme.fg("muted", `  ${replaceTabs(line)}`), 0, 0));
-							}
-						}
-						this.ctx.chatContainer.addChild(block);
+						const component = new LateDiagnosticsMessageComponent(details?.files ?? []);
+						component.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(component);
 						break;
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
