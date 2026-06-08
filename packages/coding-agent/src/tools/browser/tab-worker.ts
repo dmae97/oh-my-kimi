@@ -27,7 +27,7 @@ import {
 	DEFAULT_VIEWPORT,
 	loadPuppeteerInWorker,
 } from "./launch";
-import { extractReadableFromHtml, type ReadableFormat, type ReadableResult } from "./readable";
+import { extractReadableFromHtml, type ReadableFormat } from "./readable";
 import type {
 	Observation,
 	ObservationEntry,
@@ -97,7 +97,7 @@ interface TabApi {
 	): Promise<void>;
 	observe(opts?: { includeAll?: boolean; viewportOnly?: boolean }): Promise<Observation>;
 	screenshot(opts?: ScreenshotOptions): Promise<ScreenshotResult>;
-	extract(format?: ReadableFormat): Promise<ReadableResult | null>;
+	extract(format?: ReadableFormat): Promise<string>;
 	click(selector: string): Promise<void>;
 	type(selector: string, text: string): Promise<void>;
 	fill(selector: string, value: string): Promise<void>;
@@ -165,6 +165,25 @@ function cloneSafe(value: unknown): unknown {
 		return JSON.parse(JSON.stringify(value)) as unknown;
 	} catch {}
 	return String(value);
+}
+
+/**
+ * Strip `user:pass@` from a URL before surfacing it in tool outputs / details
+ * so Basic Auth credentials don't leak into transcripts. Returns the original
+ * string verbatim when it doesn't parse as a URL or when there are no
+ * credentials to redact.
+ */
+function redactUrlCredentials(url: string): string {
+	if (!url || (!url.includes("@") && !url.includes("//"))) return url;
+	try {
+		const parsed = new URL(url);
+		if (!parsed.username && !parsed.password) return url;
+		parsed.username = "";
+		parsed.password = "";
+		return parsed.toString();
+	} catch {
+		return url;
+	}
 }
 
 function errorPayload(error: unknown): RunErrorPayload {
@@ -491,7 +510,7 @@ export class WorkerCore {
 		const targetId = this.#targetId ?? (await targetIdForPage(page));
 		this.#targetId = targetId;
 		return {
-			url: page.url(),
+			url: redactUrlCredentials(page.url()),
 			title: await page.title().catch(() => undefined),
 			viewport: page.viewport() ?? DEFAULT_VIEWPORT,
 			targetId,
@@ -677,7 +696,17 @@ export class WorkerCore {
 			screenshot: async opts => await this.#captureScreenshot(session, displays, screenshots, signal, opts),
 			extract: async (format = "markdown") => {
 				const html = (await untilAborted(signal, () => page.content())) as string;
-				return extractReadableFromHtml(html, page.url(), format);
+				const result = await extractReadableFromHtml(html, page.url(), format);
+				if (!result) {
+					throw new ToolError(`tab.extract(${JSON.stringify(format)}) found no readable content on ${page.url()}`);
+				}
+				const content = format === "markdown" ? result.markdown : result.text;
+				if (!content) {
+					throw new ToolError(
+						`tab.extract(${JSON.stringify(format)}) produced empty ${format} content for ${page.url()}`,
+					);
+				}
+				return content;
 			},
 			click: async selector => {
 				const resolved = normalizeSelector(selector);

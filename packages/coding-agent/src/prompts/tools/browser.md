@@ -26,7 +26,7 @@ Drives real Chromium tab; full puppeteer access via JS execution.
   - `tab.waitForResponse(pattern, { timeout? })` — pattern substring, `RegExp`, or `(response) => boolean`. Returns raw puppeteer `HTTPResponse` (call `.text()` / `.json()` / `.status()` / `.headers()` on it).
   - `tab.evaluate(fn, …args)` — sugar for `page.evaluate` with abort signal already wired. Use this instead of dropping to `page.evaluate` for ad-hoc DOM reads.
   - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — captures screenshot and **auto-attaches to tool output for you to view** (unless `silent: true`). `save` is **strictly optional**: OMIT when you just want to look at page — downscaled image shown regardless, full-res capture written to temp file automatically. Pass `save` (a path) ONLY when deliberately need to keep full-res copy on disk for later use; `browser.screenshotDir` does same for every shot. NEVER invent `save` path for throwaway/temporal screenshot.
-  - `tab.extract(format = "markdown")` — Readability-extracted page content.
+  - `tab.extract(format = "markdown")` — returns Readability-extracted page content as a string (`"markdown"` or `"text"`). Throws if the page yields no readable content.
 - Selectors accept CSS plus puppeteer query handlers: `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`. Playwright-style `p-aria/[name="…"]`, `p-text/…` normalized.
 - Default `tab.observe()` over `tab.screenshot()` for page state. Screenshot only when visual appearance matters.
 </instruction>
