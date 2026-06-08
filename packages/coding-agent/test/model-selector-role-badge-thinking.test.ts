@@ -137,6 +137,23 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(menuRendered).toContain("Set as SMOL (Quick)");
 	});
 
+	test("shows compact auto badges for unconfigured role defaults", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const haiku = createContextTestModel("claude-haiku-4.5", 128_000);
+		const codex = createContextTestModel("gpt-5.1-codex", 128_000);
+
+		const selector = createScopedSelector([codex, haiku], settings, () => {});
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("claude-haiku-4.5");
+		expect(rendered).toContain("gpt-5.1-codex");
+		expect(rendered).toContain("[SMOL auto]");
+		expect(rendered).toContain("[SLOW auto]");
+	});
+
 	test("dims and disables models below the current context size", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});

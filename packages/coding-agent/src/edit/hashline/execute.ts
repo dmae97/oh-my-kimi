@@ -11,6 +11,7 @@
  * round-trip once.
  */
 import {
+	type BlockResolution,
 	buildCompactDiffPreview,
 	MismatchError as HashlineMismatchError,
 	Patch,
@@ -76,6 +77,14 @@ interface RenderedSection {
 	perFileResult: EditToolPerFileResult;
 }
 
+function formatBlockResolution(resolution: BlockResolution): string {
+	const op = resolution.isDelete ? "delete block" : "replace block";
+	const lines = resolution.end - resolution.start + 1;
+	const span =
+		resolution.start === resolution.end ? `line ${resolution.start}` : `lines ${resolution.start}-${resolution.end}`;
+	return `${op} ${resolution.anchorLine} → resolved ${span} (${lines} line${lines === 1 ? "" : "s"})`;
+}
+
 function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsResult | undefined): RenderedSection {
 	if (result.op === "noop") {
 		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema> = {
@@ -96,10 +105,14 @@ function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsR
 
 	const warningsBlock = result.warnings.length > 0 ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
 	const previewBlock = preview.preview ? `\n${preview.preview}` : "";
+	const blockBlock =
+		result.blockResolutions && result.blockResolutions.length > 0
+			? `\n${result.blockResolutions.map(formatBlockResolution).join("\n")}`
+			: "";
 	const firstChangedLine = result.firstChangedLine ?? diff.firstChangedLine;
 	return {
 		toolResult: {
-			content: [{ type: "text", text: `${result.header}${previewBlock}${warningsBlock}` }],
+			content: [{ type: "text", text: `${result.header}${blockBlock}${previewBlock}${warningsBlock}` }],
 			details: {
 				diff: diff.diff,
 				firstChangedLine,

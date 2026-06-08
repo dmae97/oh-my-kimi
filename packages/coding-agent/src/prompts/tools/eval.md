@@ -8,7 +8,7 @@ Cell fields:
 - `language` — {{#if py}}`"py"` for the IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` for the persistent JavaScript VM{{/if}}.
 - `code` — cell body, verbatim. Newlines, quotes, and indentation are JSON-encoded; no fences, no headers.
 - `title` (optional) — short label shown in the transcript (e.g. `"imports"`, `"load config"`).
-- `timeout` (optional) — per-cell wall-clock budget in seconds (1-600). Default 30. It bounds the cell's **own** work, but is paused while an `agent()`/`parallel()`/`llm()` call is in flight — so a long fanout or a slow completion runs to completion, while the cell itself is still bounded. Compute, `print`/stdout, `log()`/`phase()`, and ordinary tool calls all count against the budget; raise `timeout` for a cell that does heavy local work or long non-agent tool calls.
+- `timeout` (optional) — per-cell wall-clock budget in seconds (1-600). Default 30. It bounds the cell's **own** work, but is paused while an `agent()`/`parallel()`/`completion()` call is in flight — so a long fanout or a slow completion runs to completion, while the cell itself is still bounded. Compute, `print`/stdout, `log()`/`phase()`, and ordinary tool calls all count against the budget; raise `timeout` for a cell that does heavy local work or long non-agent tool calls.
 - `reset` (optional) — wipe this cell's language kernel before running.{{#ifAll py js}} Reset is per-language: a `py` cell's reset does not touch the JavaScript VM and vice versa.{{/ifAll}}
 
 **Work incrementally:**
@@ -22,7 +22,7 @@ Cell fields:
 </instruction>
 
 <prelude>
-{{#ifAll py js}}Same helpers in both runtimes with the same positional argument order. Python: trailing options as keyword args. JavaScript: trailing options as a trailing object literal. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are a final object literal.{{/if}}{{/ifAll}}
+{{#ifAll py js}}Same helpers in both runtimes with the same positional argument order. Python: trailing options as keyword args. JavaScript: trailing options are a single trailing object literal, never positional — passing options positionally (or any extra positional arg) throws. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are a single trailing object literal, never positional — passing options positionally (or any extra positional arg) throws.{{/if}}{{/ifAll}}
 ```
 display(value) → None
     Render a value in the current cell output.
@@ -44,10 +44,13 @@ output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | di
     Read task/agent output by ID. Single id returns text/dict; multiple ids return a list.
 tool.<name>(args) → unknown
     Invoke any session tool by name. `args` is the tool's parameter object.
-llm(prompt, model?="default", system?=None, schema?=None) → str | dict
-    Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
-agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
+completion(prompt, model?="default", system?=None, schema?=None) → str | dict
+    Oneshot, stateless completion (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
+{{#if spawns}}agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
     Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
+{{#if js}}    In JS, pass options as one trailing object — never positional: agent(prompt, { agentType, context, schema }).
+{{/if}}
+{{/if}}
 parallel(thunks) → list
     Run thunks (callables) through a bounded pool, preserving input order. The pool is as wide as a `task` tool batch (tracks the `task.maxConcurrency` setting), so fan out as wide as the work divides — don't pre-shrink it. Barrier: returns once all finish; a thunk that throws propagates.
 pipeline(items, ...stages) → list

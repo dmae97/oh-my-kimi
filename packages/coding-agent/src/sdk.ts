@@ -41,7 +41,9 @@ import { createApiKeyResolver } from "./config/api-key-resolver";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
+	defaultModelPerProvider,
 	formatModelString,
+	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
 	resolveAllowedModels,
@@ -89,6 +91,7 @@ import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./
 import { resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
+import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	collectEnvSecrets,
@@ -108,7 +111,12 @@ import {
 	type SnapshotResponse,
 	writeAuthBrokerSnapshotCache,
 } from "./session/auth-storage";
-import { type CustomMessage, convertToLlm, wrapSteeringForModel } from "./session/messages";
+import {
+	type CustomMessage,
+	convertToLlm,
+	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	wrapSteeringForModel,
+} from "./session/messages";
 import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
@@ -141,6 +149,7 @@ import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
+	type DeferredDiagnosticsEntry,
 	discoverStartupLspServers,
 	EditTool,
 	EvalTool,
@@ -219,6 +228,42 @@ function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): CustomMessag
 		content: prompt.render(asyncResultTemplate, {
 			multiple: jobs.length > 1,
 			jobs,
+		}),
+		display: true,
+		attribution: "agent",
+		details,
+		timestamp: Date.now(),
+	};
+}
+
+type LateDiagnosticsDetails = {
+	files: Array<{ path: string; summary: string; errored: boolean; messages: string[] }>;
+};
+
+function buildLateDiagnosticsBatchMessage(
+	entries: DeferredDiagnosticsEntry[],
+): CustomMessage<LateDiagnosticsDetails> | null {
+	if (entries.length === 0) return null;
+	const files = entries.map(entry => ({
+		path: entry.path,
+		summary: entry.summary,
+		messages: entry.messages,
+		errored: entry.errored,
+	}));
+	const details: LateDiagnosticsDetails = {
+		files: files.map(file => ({
+			path: file.path,
+			summary: file.summary,
+			errored: file.errored,
+			messages: file.messages,
+		})),
+	};
+	return {
+		role: "custom",
+		customType: LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+		content: prompt.render(lateDiagnosticTemplate, {
+			multiple: files.length > 1,
+			files,
 		}),
 		display: true,
 		attribution: "agent",
@@ -1031,9 +1076,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const hasServiceTierEntry = existingBranch.some(entry => entry.type === "service_tier_change");
 
 	const hasExplicitModel = options.model !== undefined || options.modelPattern !== undefined;
-	const modelMatchPreferences = {
-		usageOrder: settings.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(settings);
 	const allowedModels = await logger.time("resolveAllowedModels", () =>
 		resolveAllowedModels(modelRegistry, settings, modelMatchPreferences),
 	);
@@ -1267,6 +1310,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) return formatModelString(model);
 			return undefined;
 		};
+		// Per-path mutation counter shared across edit/write tools. Late-diagnostics
+		// entries capture it at fetch time and are dropped at injection if a newer
+		// mutation (any tool) bumped it in the meantime.
+		const fileMutationVersions = new Map<string, number>();
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
@@ -1312,6 +1359,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			recordEvalSubagentUsage: output => sessionManager.recordEvalSubagentOutput(output),
 			getClientBridge: () => session?.clientBridge,
 			getCompactContext: () => session.formatCompactContext(),
+			queueDeferredDiagnostics: entry => session?.yieldQueue.enqueue(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, entry),
+			bumpFileMutationVersion: path => {
+				const next = (fileMutationVersions.get(path) ?? 0) + 1;
+				fileMutationVersions.set(path, next);
+				return next;
+			},
+			getFileMutationVersion: path => fileMutationVersions.get(path) ?? 0,
 			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
 			isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
@@ -1554,9 +1608,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Resolve deferred --model pattern now that extension models are registered.
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();
-			const matchPreferences = {
-				usageOrder: settings.getStorage()?.getModelUsageOrder(),
-			};
+			const matchPreferences = getModelMatchPreferences(settings);
 			const { model: resolved } = parseModelPattern(options.modelPattern, availableModels, matchPreferences, {
 				modelRegistry,
 			});
@@ -1575,10 +1627,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			for (const candidate of fallbackCandidates) {
-				if (await hasModelApiKey(candidate)) {
-					model = candidate;
+			// Prefer each provider's configured default model
+			// (DEFAULT_MODEL_PER_PROVIDER) over raw catalog order. Without this the
+			// first-run fallback picks whatever model sorts first in models.json for
+			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
+			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
+			// findInitialModel's precedence.
+			for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
+				const preferred = fallbackCandidates.find(
+					candidate => candidate.provider === provider && candidate.id === defaultId,
+				);
+				if (preferred && (await hasModelApiKey(preferred))) {
+					model = preferred;
 					break;
+				}
+			}
+			// Otherwise, first available model with a valid API key.
+			if (!model) {
+				for (const candidate of fallbackCandidates) {
+					if (await hasModelApiKey(candidate)) {
+						model = candidate;
+						break;
+					}
 				}
 			}
 			if (model) {
@@ -2150,6 +2220,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
 			build: buildMcpNotificationBatchMessage,
+		});
+		session.yieldQueue.register<DeferredDiagnosticsEntry>(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, {
+			isStale: entry => entry.isStale(),
+			build: buildLateDiagnosticsBatchMessage,
 		});
 
 		// Attach the live session to the pre-registered ref so peers can route IRC

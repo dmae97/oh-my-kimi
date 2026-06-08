@@ -17,7 +17,7 @@ import {
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-registry";
-import { resolveModelRoleValue } from "../../config/model-resolver";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
@@ -29,6 +29,25 @@ function makeInvertedBadge(label: string, color: ThemeColor): string {
 	const fgAnsi = theme.getFgAnsi(color);
 	const bgAnsi = fgAnsi.replace(/\x1b\[38;/g, "\x1b[48;");
 	return `${bgAnsi}\x1b[30m ${label} \x1b[39m\x1b[49m`;
+}
+
+function makeAutoSelectedBadge(label: string, color: ThemeColor): string {
+	return `${theme.fg("dim", "[")}${theme.fg(color, label)}${theme.fg("dim", " auto]")}`;
+}
+
+function makeRoleBadgeToken(label: string, color: ThemeColor, assigned: RoleAssignment): string {
+	if (assigned.autoSelected) {
+		const badge = makeAutoSelectedBadge(label, color);
+		if (assigned.thinkingLevel === ThinkingLevel.Inherit) {
+			return badge;
+		}
+		const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
+		return `${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`;
+	}
+
+	const badge = makeInvertedBadge(label, color);
+	const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
+	return `${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`;
 }
 
 function normalizeSearchText(value: string): string {
@@ -86,6 +105,7 @@ interface ScopedModelItem {
 interface RoleAssignment {
 	model: Model;
 	thinkingLevel: ConfiguredThinkingLevel;
+	autoSelected: boolean;
 }
 
 type RoleSelectCallback = (
@@ -271,12 +291,17 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	#loadRoleModels(): void {
+	#loadRoleModels(autoCandidateModels?: ReadonlyArray<Model>): void {
+		const nextRoles = {} as Record<string, RoleAssignment | undefined>;
 		const allModels = this.#modelRegistry.getAll();
-		const matchPreferences = { usageOrder: this.#settings.getStorage()?.getModelUsageOrder() };
-		for (const role of getKnownRoleIds(this.#settings)) {
+		const matchPreferences = getModelMatchPreferences(this.#settings);
+		const knownRoles = getKnownRoleIds(this.#settings);
+		const configuredRoles = new Set<string>();
+
+		for (const role of knownRoles) {
 			const roleValue = this.#settings.getModelRole(role);
 			if (!roleValue) continue;
+			configuredRoles.add(role);
 
 			const resolved = resolveModelRoleValue(roleValue, allModels, {
 				settings: this.#settings,
@@ -284,15 +309,39 @@ export class ModelSelectorComponent extends Container {
 				modelRegistry: this.#modelRegistry,
 			});
 			if (resolved.model) {
-				this.#roles[role] = {
+				nextRoles[role] = {
 					model: resolved.model,
 					thinkingLevel:
 						resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined
 							? resolved.thinkingLevel
 							: ThinkingLevel.Inherit,
+					autoSelected: false,
 				};
 			}
 		}
+
+		if (autoCandidateModels && autoCandidateModels.length > 0) {
+			const candidates = [...autoCandidateModels];
+			for (const role of knownRoles) {
+				if (configuredRoles.has(role)) continue;
+				const resolved = resolveModelRoleValue(`pi/${role}`, candidates, {
+					settings: this.#settings,
+					matchPreferences,
+					modelRegistry: this.#modelRegistry,
+				});
+				if (!resolved.model) continue;
+				nextRoles[role] = {
+					model: resolved.model,
+					thinkingLevel:
+						resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined
+							? resolved.thinkingLevel
+							: ThinkingLevel.Inherit,
+					autoSelected: true,
+				};
+			}
+		}
+
+		this.#roles = nextRoles;
 	}
 
 	/**
@@ -427,6 +476,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		const candidates = models.map(item => item.model);
+		this.#loadRoleModels(candidates);
 		const canonicalRecords = this.#modelRegistry.getCanonicalModels({
 			availableOnly: this.#scopedModels.length === 0,
 			candidates,
@@ -871,25 +921,21 @@ export class ModelSelectorComponent extends Container {
 			const isDisabled = this.#isItemDisabled(item);
 			const disabledSuffix = this.#formatContextLimitSuffix(item.model);
 
-			// Build role badges (inverted: color as background, black text)
+			// Build role badges. Solid badges are configured; outlined badges are auto-selected defaults.
 			const roleBadgeTokens: string[] = [];
 			for (const role of MODEL_ROLE_IDS) {
 				const { tag, color } = getRoleInfo(role, this.#settings);
 				const assigned = this.#roles[role];
 				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
-				const badge = makeInvertedBadge(tag, color ?? "success");
-				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
-				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
+				roleBadgeTokens.push(makeRoleBadgeToken(tag, color ?? "success", assigned));
 			}
 			// Custom role badges
 			for (const [role, assigned] of Object.entries(this.#roles)) {
 				if (role in MODEL_ROLES || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 				const roleInfo = getRoleInfo(role, this.#settings);
 				const badgeLabel = roleInfo.tag ?? roleInfo.name;
-				const badge = makeInvertedBadge(badgeLabel, roleInfo.color ?? "muted");
-				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
-				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
+				roleBadgeTokens.push(makeRoleBadgeToken(badgeLabel, roleInfo.color ?? "muted", assigned));
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
 
@@ -1184,7 +1230,7 @@ export class ModelSelectorComponent extends Container {
 		const selectedThinkingLevel = thinkingLevel ?? this.#getCurrentRoleThinkingLevel(role);
 
 		// Update local state for UI
-		this.#roles[role] = { model: item.model, thinkingLevel: selectedThinkingLevel };
+		this.#roles[role] = { model: item.model, thinkingLevel: selectedThinkingLevel, autoSelected: false };
 
 		// Notify caller (for updating agent state if needed)
 		this.#onSelectCallback(item.model, role, selectedThinkingLevel, item.selector);

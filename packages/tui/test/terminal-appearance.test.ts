@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { extractPrintableText } from "@oh-my-pi/pi-tui/keys";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	type CellDimensions,
@@ -610,6 +611,85 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		vi.advanceTimersByTime(50);
 		process.stdin.emit("data", "$y");
 		expect(reports).toContainEqual({ mode: 2048, supported: true });
+		terminal.stop();
+	});
+
+	it("reassembles an in-band resize report split past the flush window without leaking the tail", () => {
+		// The reported bug: resizing rapidly keeps the event loop busy, so the
+		// StdinBuffer flush timeout (10ms) fires after the `\x1b[48;…` prefix but
+		// before the terminator. The tail then arrives as bare characters that
+		// leaked into the editor as literal text (e.g. `8;125;1156;1125t`).
+		vi.useFakeTimers();
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+
+		process.stdin.emit("data", "\x1b[48;40;160");
+		vi.advanceTimersByTime(50); // flush window elapses mid-report
+		process.stdin.emit("data", ";800;1600t"); // tail arrives as bare chars
+
+		expect(received).toEqual([]);
+		expect(terminal.rows).toBe(40);
+		expect(terminal.columns).toBe(160);
+		expect(resizeCount()).toBe(1);
+		terminal.stop();
+	});
+
+	it("reassembles a well-formed report split at the type field (\\x1b[4 | 8;…t)", () => {
+		// Splitting right after `\x1b[4` is the exact shape from the bug report (ESC
+		// `[` `4` flushed, the rest leaking). Reassembly must catch the bare `\x1b[4`
+		// prefix and still apply the resize for a well-formed 5-field report.
+		vi.useFakeTimers();
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+
+		process.stdin.emit("data", "\x1b[4");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "8;40;125;1156;1125t");
+
+		expect(received).toEqual([]);
+		expect(terminal.rows).toBe(40);
+		expect(terminal.columns).toBe(125);
+		terminal.stop();
+	});
+
+	it("forwards a split report fragment as one escape sequence instead of leaking bare characters", () => {
+		// The reported symptom: a fragment like `8;125;1156;1125t` (the tail of
+		// `\x1b[48;125;1156;1125t`, missing a field) appeared as literal text in the
+		// editor because the tail arrived as individual printable characters. Even
+		// when the reassembled sequence is not a valid resize report, it must reach
+		// the input handler as ONE escape sequence — `extractPrintableText` then
+		// rejects it (it contains ESC), so no characters are inserted.
+		vi.useFakeTimers();
+		const { terminal, received } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+
+		process.stdin.emit("data", "\x1b[4");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "8;125;1156;1125t");
+
+		expect(received).toEqual(["\x1b[48;125;1156;1125t"]);
+		expect(received.every(seq => extractPrintableText(seq) === undefined)).toBe(true);
+		terminal.stop();
+	});
+
+	it("forwards a split kitty key colliding with the in-band prefix instead of swallowing it", () => {
+		// Kitty reports the '0' key (codepoint 48) as `\x1b[48;<mods>u`. If such a
+		// key is split past the flush window while in-band resize is active, the
+		// reassembled sequence is not a resize report and must reach the input
+		// handler — never be dropped as terminal noise.
+		vi.useFakeTimers();
+		const { terminal, received } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+
+		process.stdin.emit("data", "\x1b[48;5");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "u");
+
+		expect(received).toEqual(["\x1b[48;5u"]);
 		terminal.stop();
 	});
 });

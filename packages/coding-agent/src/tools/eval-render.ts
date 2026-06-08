@@ -16,9 +16,8 @@ import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } f
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import { borderShimmerTick, markFramedBlockComponent, renderCodeCell } from "../tui";
+import { markFramedBlockComponent, renderCodeCell } from "../tui";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
@@ -247,7 +246,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		sh: "icon.package",
 		env: "icon.package",
 		batch: "icon.package",
-		llm: "icon.package",
+		completion: "icon.package",
 		log: "icon.package",
 		phase: "icon.package",
 	};
@@ -316,7 +315,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
 			break;
-		case "llm":
+		case "completion":
 			if (data.model) parts.push(String(data.model));
 			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
 			parts.push(`${data.chars ?? 0} chars`);
@@ -491,8 +490,7 @@ export const evalToolRenderer = {
 
 		return markFramedBlockComponent({
 			render: (width: number): string[] => {
-				const animate = options.isPartial && shimmerEnabled();
-				const key = `${animate ? borderShimmerTick() : 0}|${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+				const key = `${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -510,13 +508,9 @@ export const evalToolRenderer = {
 							status: "pending",
 							width,
 							// Always render the full source: the code is fixed input, not the
-							// streaming part, so it is never compacted. While still pending
-							// (args streaming) the block is not yet committed to native
-							// scrollback — its head is only committed once a result exists and
-							// the code has finalized (see `isStreamingPreviewAppendOnly`).
+							// streaming part, so it is never compacted.
 							codeMaxLines: Number.POSITIVE_INFINITY,
 							expanded: options.expanded,
-							animate,
 						},
 						uiTheme,
 					);
@@ -579,8 +573,7 @@ export const evalToolRenderer = {
 				render: (width: number): string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const animate = options.isPartial && shimmerEnabled();
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${animate ? borderShimmerTick() : 0}`;
+					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
 					}
@@ -622,7 +615,6 @@ export const evalToolRenderer = {
 								codeMaxLines: Number.POSITIVE_INFINITY,
 								expanded,
 								width,
-								animate,
 							},
 							uiTheme,
 						);
@@ -752,17 +744,6 @@ export const evalToolRenderer = {
 		};
 	},
 
-	// Append-only once a result exists (args complete → code finalized). The code
-	// is rendered in full as a fixed top-anchored prefix, and the streamed stdout
-	// below it only appends rows at the bottom, so the scrolled-off head commits
-	// to native scrollback instead of being yanked — collapsed or expanded, since
-	// the collapsed output cap keeps its sliding tail in the bottom live region.
-	// Returns false while still pending: the code is mid-stream (args incomplete)
-	// and its header still reads "pending", so committing it would strand a stale
-	// pending preview in history.
-	isStreamingPreviewAppendOnly(_args: EvalRenderArgs, _options: RenderResultOptions, result?: unknown): boolean {
-		return result != null;
-	},
 	mergeCallAndResult: true,
 	inline: true,
 };

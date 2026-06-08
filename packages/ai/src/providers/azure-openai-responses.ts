@@ -11,6 +11,7 @@ import type {
 	AssistantMessage,
 	Context,
 	Model,
+	RawSseEvent,
 	ServiceTier,
 	StreamFunction,
 	StreamOptions,
@@ -27,7 +28,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
-import { wrapFetchForSseDebug } from "../utils/sse-debug";
+import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
 import {
@@ -89,6 +90,18 @@ type AzureOpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	repetition_penalty?: number;
 };
 
+async function* observeDecodedAzureResponsesEvents(
+	events: AsyncIterable<ResponseStreamEvent>,
+	observer: (event: RawSseEvent) => void,
+): AsyncGenerator<ResponseStreamEvent> {
+	for await (const event of events) {
+		const data = JSON.stringify(event);
+		// Reconstructed from decoded SDK event; not literal wire bytes.
+		notifyRawSseEvent(observer, { event: event.type, data, raw: [`event: ${event.type}`, `data: ${data}`] });
+		yield event;
+	}
+}
+
 /**
  * Generate function for Azure OpenAI Responses API
  */
@@ -114,6 +127,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new Error(AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
+		const onSseEvent = options?.onSseEvent;
+		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
 
 		try {
 			// Create Azure OpenAI client
@@ -156,26 +171,24 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 			stream.push({ type: "start", partial: output });
 
-			await processResponsesStream(
-				iterateWithIdleTimeout(openaiStream, {
-					idleTimeoutMs,
-					firstItemTimeoutMs: firstEventTimeoutMs,
-					firstItemErrorMessage: AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
-					errorMessage: "Azure OpenAI responses stream stalled while waiting for the next event",
-					onIdle: () => requestAbortController.abort(),
-					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
-					abortSignal: options?.signal,
-					isProgressItem: isOpenAIResponsesProgressEvent,
-				}),
-				output,
-				stream,
-				model,
-				{
-					onFirstToken: () => {
-						if (!firstTokenTime) firstTokenTime = Date.now();
-					},
+			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
+				idleTimeoutMs,
+				firstItemTimeoutMs: firstEventTimeoutMs,
+				firstItemErrorMessage: AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
+				errorMessage: "Azure OpenAI responses stream stalled while waiting for the next event",
+				onIdle: () => requestAbortController.abort(),
+				onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+				abortSignal: options?.signal,
+				isProgressItem: isOpenAIResponsesProgressEvent,
+			});
+			const observedOpenaiStream = rawSseObserver
+				? observeDecodedAzureResponsesEvents(timedOpenaiStream, rawSseObserver)
+				: timedOpenaiStream;
+			await processResponsesStream(observedOpenaiStream, output, stream, model, {
+				onFirstToken: () => {
+					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
-			);
+			});
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
@@ -269,7 +282,6 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 
 	const baseFetch = options?.fetch ?? fetch;
-	const onSseEvent = options?.onSseEvent;
 	return new AzureOpenAI({
 		apiKey,
 		apiVersion,
@@ -277,7 +289,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		maxRetries: 5,
 		defaultHeaders: headers,
 		baseURL: baseUrl,
-		fetch: onSseEvent ? wrapFetchForSseDebug(baseFetch, event => onSseEvent(event, model)) : baseFetch,
+		fetch: baseFetch,
 	});
 }
 

@@ -1,14 +1,4 @@
-import turnAbortedGuidance from "../prompts/turn-aborted-guidance.md" with { type: "text" };
-import type {
-	Api,
-	AssistantMessage,
-	DeveloperMessage,
-	Message,
-	Model,
-	ToolCall,
-	ToolResultMessage,
-	UserMessage,
-} from "../types";
+import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
@@ -28,15 +18,19 @@ const enum ToolCallStatus {
  */
 const MAX_TOOL_CALL_ID_LENGTH = 64;
 
-function appendDuplicateSuffix(originalId: string, suffix: string): string {
-	if (originalId.length + suffix.length <= MAX_TOOL_CALL_ID_LENGTH) return `${originalId}${suffix}`;
-	const prefixBudget = Math.max(0, MAX_TOOL_CALL_ID_LENGTH - suffix.length);
+function appendDuplicateSuffix(originalId: string, suffix: string, maxLength: number): string {
+	if (originalId.length + suffix.length <= maxLength) return `${originalId}${suffix}`;
+	const prefixBudget = Math.max(0, maxLength - suffix.length);
 	return `${originalId.slice(0, prefixBudget)}${suffix}`;
 }
 
 type PendingToolResultRewrite = { replacementId: string } | undefined;
 
-function deduplicateToolCallIds(messages: Message[]): Message[] {
+function deduplicateToolCallIds(
+	messages: Message[],
+	maxToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
+	duplicateSuffixPrefix = "_dup",
+): Message[] {
 	const seenToolCallIds = new Map<string, number>();
 	const pendingToolResultRewrites = new Map<string, PendingToolResultRewrite[]>();
 
@@ -90,10 +84,18 @@ function deduplicateToolCallIds(messages: Message[]): Message[] {
 			}
 
 			let duplicateIndex = previousCount;
-			let replacementId = appendDuplicateSuffix(block.id, `_dup${duplicateIndex}`);
+			let replacementId = appendDuplicateSuffix(
+				block.id,
+				`${duplicateSuffixPrefix}${duplicateIndex}`,
+				maxToolCallIdLength,
+			);
 			while (seenToolCallIds.has(replacementId)) {
 				duplicateIndex += 1;
-				replacementId = appendDuplicateSuffix(block.id, `_dup${duplicateIndex}`);
+				replacementId = appendDuplicateSuffix(
+					block.id,
+					`${duplicateSuffixPrefix}${duplicateIndex}`,
+					maxToolCallIdLength,
+				);
 			}
 			seenToolCallIds.set(block.id, duplicateIndex + 1);
 			seenToolCallIds.set(replacementId, 1);
@@ -130,12 +132,13 @@ function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number 
  * For aborted/errored turns, this function:
  * - Preserves tool call structure (unlike converting to text summaries)
  * - Injects synthetic "aborted" tool results
- * - Adds a <turn-aborted> guidance marker for the model
  */
 export function transformMessages<TApi extends Api>(
 	messages: Message[],
 	model: Model<TApi>,
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+	maxNormalizedToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
+	duplicateToolCallIdSuffixPrefix = "_dup",
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -255,6 +258,8 @@ export function transformMessages<TApi extends Api>(
 			}
 			return msg;
 		}),
+		maxNormalizedToolCallIdLength,
+		duplicateToolCallIdSuffixPrefix,
 	);
 	const realToolResultsById = new Map<string, ToolResultMessage>();
 	for (const msg of transformed) {
@@ -329,11 +334,6 @@ export function transformMessages<TApi extends Api>(
 			} as ToolResultMessage);
 			toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
 		}
-		result.push({
-			role: "developer",
-			content: turnAbortedGuidance,
-			timestamp: pendingAbortedTimestamp + 1,
-		} as DeveloperMessage);
 		pendingAbortedToolCalls = new Map();
 		pendingAbortedTimestamp = undefined;
 	};
@@ -362,11 +362,6 @@ export function transformMessages<TApi extends Api>(
 			// (OpenAI completions `reasoning_text`, Google signed thought parts).
 			const originalMsg = messages[i]!;
 			if (originalMsg.role === "assistant" && shouldDropTruncatedThinkingOnlyAssistant(originalMsg)) {
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					// Still arm the aborted-turn note so downstream guidance fires.
-					pendingAbortedToolCalls = new Map();
-					pendingAbortedTimestamp = assistantMsg.timestamp;
-				}
 				continue;
 			}
 

@@ -22,6 +22,7 @@ import {
 } from "@oh-my-pi/hashline";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
+	canonicalSnapshotKey,
 	type ExecuteHashlineSingleOptions,
 	executeHashlineSingle,
 	generateDiffString,
@@ -94,9 +95,19 @@ const outputSepRe = ":";
 function tag(line: number, _content: string): string {
 	return `${line}`;
 }
-
 function recordFullSnapshot(cache: FileReadCache, filePath: string, fullText: string): string {
-	return cache.record(filePath, fullText);
+	// Mirror the production read/write recorders: collapse symlink-equivalent
+	// path spellings (e.g. macOS `/tmp/...` vs `/private/tmp/...`) so the patcher
+	// looks up snapshots under the same canonical key it just recorded.
+	return cache.record(canonicalSnapshotKey(filePath), fullText);
+}
+
+/** Snapshot-cache lookup that mirrors {@link recordFullSnapshot}'s canonical key. */
+function snapshotHead(cache: FileReadCache, filePath: string) {
+	return cache.head(canonicalSnapshotKey(filePath));
+}
+function snapshotByHash(cache: FileReadCache, filePath: string, hash: string) {
+	return cache.byHash(canonicalSnapshotKey(filePath), hash);
 }
 
 function header(filePath: string, tag: string): string {
@@ -959,7 +970,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			const v1Text = `${v1Lines.join("\n")}\n`;
 			expect(await Bun.file(filePath).text()).toBe(v1Text);
 			const v1Tag = recordFullSnapshot(getFileReadCache(session), filePath, v1Text);
-			const snap = getFileReadCache(session).head(filePath);
+			const snap = snapshotHead(getFileReadCache(session), filePath);
 			expect(snap?.text).toBe(v1Text);
 
 			// External actor insert heads 7 lines after the edit. Anchors authored
@@ -1024,7 +1035,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 
 		const recovered = tryRecoverHashlineWithCache({
 			cache,
-			absolutePath: fakePath,
+			absolutePath: canonicalSnapshotKey(fakePath),
 			currentText,
 			tag: v0Tag,
 			edits: parseHashline(`replace 10..10:\n${repl("L10-EDITED")}`).edits,
@@ -1040,9 +1051,9 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 		const oneTag = recordFullSnapshot(cache, fakePath, "one\n");
 		const twoTag = recordFullSnapshot(cache, fakePath, "two\n");
 		recordFullSnapshot(cache, fakePath, "three\n");
-		expect(cache.head(fakePath)?.text).toBe("three\n");
-		expect(cache.byHash(fakePath, oneTag)?.text).toBe("one\n");
-		expect(cache.byHash(fakePath, twoTag)?.text).toBe("two\n");
+		expect(snapshotHead(cache, fakePath)?.text).toBe("three\n");
+		expect(snapshotByHash(cache, fakePath, oneTag)?.text).toBe("one\n");
+		expect(snapshotByHash(cache, fakePath, twoTag)?.text).toBe("two\n");
 	});
 	it("evicts the least-recently-used path beyond the LRU cap", () => {
 		const cache = new FileReadCache({ maxPaths: 4 });
@@ -1050,10 +1061,10 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			recordFullSnapshot(cache, `/tmp/file-${i}.ts`, `x${i}\n`);
 		}
 		// The two oldest paths aged out; the four most-recent survive.
-		expect(cache.head("/tmp/file-0.ts")).toBeNull();
-		expect(cache.head("/tmp/file-1.ts")).toBeNull();
-		expect(cache.head("/tmp/file-2.ts")?.text).toBe("x2\n");
-		expect(cache.head("/tmp/file-5.ts")?.text).toBe("x5\n");
+		expect(snapshotHead(cache, "/tmp/file-0.ts")).toBeNull();
+		expect(snapshotHead(cache, "/tmp/file-1.ts")).toBeNull();
+		expect(snapshotHead(cache, "/tmp/file-2.ts")?.text).toBe("x2\n");
+		expect(snapshotHead(cache, "/tmp/file-5.ts")?.text).toBe("x5\n");
 	});
 });
 

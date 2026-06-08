@@ -422,7 +422,7 @@ describe("parseModelPattern", () => {
 			expect(result.model?.provider).toBe("kimi-code");
 		});
 
-		test("falls back to deprioritizing openrouter when no usage data", () => {
+		test("prefers first-party providers over OpenRouter when no usage data exists", () => {
 			const result = parseModelPattern("k2.5", allModels, { usageOrder: [] });
 			expect(result.model?.provider).toBe("kimi-code");
 		});

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { canonicalSnapshotKey } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
@@ -217,7 +218,10 @@ describe("tool path arrays", () => {
 		expect(tag).toBeDefined();
 		if (!tag) throw new Error("Missing search snapshot tag");
 
-		const snapshot = session.fileSnapshotStore?.byHash(path.join(tempDir, "apps", "grep.txt"), tag);
+		const snapshot = session.fileSnapshotStore?.byHash(
+			canonicalSnapshotKey(path.join(tempDir, "apps", "grep.txt")),
+			tag,
+		);
 		expect(snapshot?.text).toBe("shared-needle apps\n");
 	});
 
@@ -243,6 +247,29 @@ describe("tool path arrays", () => {
 		expect(text).toContain("note.txt");
 		expect(details?.fileCount).toBe(1);
 		expect(details?.scopePath).toBe("folder with spaces");
+	});
+	it("search resolves bracketed literal paths (Next.js routes) when they exist", async () => {
+		// Create `apps/[id]/page.tsx` — `[id]` is glob char-class syntax but here it
+		// is a literal directory name. The literal path must take precedence over
+		// the glob interpretation, otherwise the lookup returns no matches.
+		await fs.mkdir(path.join(tempDir, "apps", "[id]"), { recursive: true });
+		await Bun.write(path.join(tempDir, "apps", "[id]", "page.tsx"), "bracket-needle\n");
+
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "search");
+		if (!tool) throw new Error("Missing search tool");
+
+		const single = await tool.execute("search-bracket-literal-single", {
+			pattern: "bracket-needle",
+			paths: ["apps/[id]/page.tsx"],
+		});
+		expect(getText(single)).toContain("bracket-needle");
+
+		const dir = await tool.execute("search-bracket-literal-dir", {
+			pattern: "bracket-needle",
+			paths: ["apps/[id]"],
+		});
+		expect(getText(dir)).toContain("bracket-needle");
 	});
 
 	it("search pending renderer accepts a single string path", () => {

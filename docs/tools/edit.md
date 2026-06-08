@@ -29,9 +29,9 @@ Patch language inside `input`:
 - **File header**: `¶PATH#TAG`. `TAG` is four uppercase-hex chars minted by the session snapshot store.
 - **Operations**:
   - `replace N..M:` — replace original lines N..M with the body rows below.
-  - `replace block N:` — replace the whole tree-sitter block beginning on line N (its header line through its closing line) with the body rows. The line span is resolved at apply time from the file's parse tree; point N at the line that opens the construct. Errors (and steers to `replace N..M:`) when the language is unsupported, line N is blank or a closing delimiter, no node begins there, or the resolved block has a syntax error.
+  - `replace block N:` — replace the whole tree-sitter block beginning on line N (its header line through its closing line) with the body rows. The line span is resolved at apply time from the file's parse tree; point N at the line that opens the construct. The resolved span is exactly the node that begins on line N — a leading decorator, attribute, or doc-comment is a separate node and is not included; point N at the first decorator line (Python wraps `@dec` + `def` as one block) or fall back to `replace N..M:` to take a leading line-comment that parses as its own node (e.g. Rust `///`). On success the result echoes the matched span (`replace block N → resolved lines A-B`). Errors (and steers to `replace N..M:`) when the language is unsupported, line N is blank or a closing delimiter, no node begins there, or the resolved block has a syntax error.
   - `delete N..M` — delete original lines N..M. No body.
-  - `delete block N` — delete the whole tree-sitter block beginning on line N (resolved like `replace block N`). No body. Same resolution failure modes and `delete N..M` fallback.
+  - `delete block N` — delete the whole tree-sitter block beginning on line N (resolved like `replace block N`, with the same decorator/comment caveat). No body. On success the result echoes the matched span (`delete block N → resolved lines A-B`). Same resolution failure modes and `delete N..M` fallback.
   - `insert before N:` — insert body rows immediately before line N.
   - `insert after N:` — insert body rows immediately after line N.
   - `insert head:` — insert body rows at the start of the file.
@@ -69,6 +69,7 @@ The canonical grammar is strict, but the hand parser accepts a few non-dangerous
 - `content` contains one text block per call. For a successful single-file edit it is either:
   - `<path>:` plus a compact diff preview from `packages/hashline/src/diff-preview.ts`, or
   - `Updated <path>` / `Created <path>` when no compact preview text is emitted.
+- When the patch used `replace block`/`delete block` ops (and the apply matched the tagged content), one `replace block N → resolved lines A-B (K lines)` line per block op is inserted between the `¶PATH#TAG` header and the diff preview, so the caller can confirm tree-sitter resolved the construct it intended.
 - Parse, apply, or recovery warnings are appended as:
 
 ```text

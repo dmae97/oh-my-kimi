@@ -14,7 +14,6 @@ import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import { shimmerEnabled } from "../modes/theme/shimmer";
 import { highlightCode, type Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
@@ -29,6 +28,7 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
 import { checkBashInterception } from "./bash-interceptor";
 import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
+import { invalidateGithubCacheForBashCommand } from "./gh-cache-invalidation";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
 import { capPreviewLines, formatToolWorkingDirectory, replaceTabs } from "./render-utils";
@@ -721,6 +721,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			cwd = await expandInternalUrls(cwd, { ...internalUrlOptions, noEscape: true });
 		}
 
+		// Best-effort cache invalidation: drop github-cache rows for any issue/PR
+		// number touched by a mutating `gh` subcommand inside this bash call so
+		// subsequent issue:// / pr:// reads pick up the post-mutation state
+		// instead of the cached pre-mutation snapshot.
+		invalidateGithubCacheForBashCommand(command);
+
 		const commandCwd = cwd ? resolveToCwd(cwd, this.session.cwd) : this.session.cwd;
 		let cwdStat: fs.Stats;
 		try {
@@ -1123,7 +1129,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							state: "pending",
 							sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
 							width,
-							animate: true,
 						},
 						uiTheme,
 					),
@@ -1254,11 +1259,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
-							// Don't animate once the command has been backgrounded: the block
-							// gets committed to scrollback and finalizes later via the async
-							// update path, so a mid-sweep frame would freeze a stray dark
-							// border segment.
-							animate: options.isPartial && shimmerEnabled() && details?.async?.state !== "running",
 						},
 						uiTheme,
 					);

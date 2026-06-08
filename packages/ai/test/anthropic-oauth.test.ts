@@ -388,6 +388,6 @@ describe("buildAnthropicSearchHeaders", () => {
 	it("includes the web-search beta in Anthropic-Beta", () => {
 		const auth = buildAnthropicAuthConfig("sk-ant-api-key");
 		const headers = buildAnthropicSearchHeaders(auth);
-		expect(headers["Anthropic-Beta"]).toContain("web-search-2025-03-05");
+		expect(headers["anthropic-beta"]).toContain("web-search-2025-03-05");
 	});
 });

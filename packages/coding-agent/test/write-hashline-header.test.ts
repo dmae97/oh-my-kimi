@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Patch, Patcher } from "@oh-my-pi/hashline";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@oh-my-pi/pi-coding-agent/edit/hashline/filesystem";
 import { writethroughNoop } from "@oh-my-pi/pi-coding-agent/lsp";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -65,7 +65,7 @@ describe("write tool hashline header", () => {
 
 		// The tag must address a snapshot whose content matches what we wrote so a
 		// follow-up edit can land without an extra `read` round-trip.
-		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag!);
+		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(filePath), tag!);
 		expect(snapshot).not.toBeNull();
 		expect(snapshot?.text).toBe(content);
 	});

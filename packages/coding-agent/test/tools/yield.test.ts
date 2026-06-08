@@ -387,7 +387,12 @@ describe("YieldTool", () => {
 		const overrideResult = await tool.execute("call-short-override", {
 			result: { data: { token: "ab" } },
 		} as never);
-		expect(overrideResult.details).toEqual({ data: { token: "ab" }, status: "success", error: undefined });
+		expect(overrideResult.details).toEqual({
+			data: { token: "ab" },
+			status: "success",
+			error: undefined,
+			schemaOverridden: true,
+		});
 		expect(overrideResult.content).toEqual([
 			{
 				type: "text",

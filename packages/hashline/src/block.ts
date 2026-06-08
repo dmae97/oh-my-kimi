@@ -10,7 +10,7 @@
  * remain, so {@link applyEdits} (and recovery) only ever see resolved edits.
  */
 import { BLOCK_RESOLVER_UNAVAILABLE, blockUnresolvedMessage } from "./messages";
-import type { BlockResolver, Cursor, Edit } from "./types";
+import type { BlockResolution, BlockResolver, Cursor, Edit } from "./types";
 
 export interface ResolveBlockEditsOptions {
 	/**
@@ -21,6 +21,13 @@ export interface ResolveBlockEditsOptions {
 	 * or transient parse error must not throw.
 	 */
 	onUnresolved?: "throw" | "drop";
+	/**
+	 * Invoked once per successfully resolved block edit, in patch order, with
+	 * the anchor line and the concrete span it resolved to. Lets the host echo
+	 * the resolution back to the caller. Never fired for dropped/unresolvable
+	 * edits.
+	 */
+	onResolved?: (resolution: BlockResolution) => void;
 }
 
 /** True when at least one edit is an unresolved `replace block N:` edit. */
@@ -61,6 +68,12 @@ export function resolveBlockEdits(
 				`line ${edit.lineNum}: ${resolver ? blockUnresolvedMessage(edit.anchor.line) : BLOCK_RESOLVER_UNAVAILABLE}`,
 			);
 		}
+		options.onResolved?.({
+			anchorLine: edit.anchor.line,
+			start: span.start,
+			end: span.end,
+			isDelete: edit.payloads.length === 0,
+		});
 		// Mirror the parser's `replace start..end:` expansion exactly: one
 		// `before_anchor` replacement insert per payload row at `span.start`,
 		// then one delete per line across `[span.start, span.end]`. An empty

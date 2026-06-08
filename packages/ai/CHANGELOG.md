@@ -2,13 +2,43 @@
 
 ## [Unreleased]
 
+## [15.10.4] - 2026-06-08
+### Added
+
+- Added `anthropic-client-platform` (`desktop_app`) and `anthropic-client-version` (`1.11187.4`) headers to the Anthropic request fingerprint for OAuth sessions
+
+### Changed
+
+- Changed non-built-in tool names sent to Anthropic from `proxy_` prefixing to `_` prefixing (for example `bash` to `_bash`) while built-in tool names remain unchanged
+- Updated the Anthropic OAuth stealth fingerprint to track Claude Code 2.1.165: `claudeCodeVersion` bumped to `2.1.165` (flows into both the `cc_version` billing header and the `claude-cli/<version>` user-agent), `claudeCodeSystemInstruction` changed to `"You are a Claude agent, built on Anthropic's Claude Agent SDK."`, and the billing-header `cc_entrypoint` changed from `cli` to `local-agent`.
+- Clamped the Anthropic request `max_tokens` to `Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, options.maxTokens || model.maxTokens)` (64k) so OAuth requests match Claude Code's requested output cap instead of sending the model's full ceiling (e.g. 128k for Opus 4.8).
+
+## [15.10.3] - 2026-06-08
+
+### Removed
+
+- Removed the synthetic `<turn-aborted>` developer guidance note that `transformMessages` injected after an aborted/errored assistant turn (and its `turn-aborted-guidance.md` prompt). The per-call synthetic `"aborted"` tool results already tell the model the turn's tools were terminated, so the extra "verify current state before retrying" note was redundant — and it biased the model toward second-guessing a deliberate user interrupt when the turn was resumed.
+- Removed the legacy Anthropic first-user-message skip for `<system-reminder>` blocks now that synthetic reminders no longer travel as user messages.
+
+
+## [15.10.2] - 2026-06-08
 ### Added
 
 - Added support for `impersonated_service_account` Application Default Credentials (ADC) in Vertex AI to enable chained impersonation without failing via 401 `invalid_client`.
+- Added `AuthStorage.getCredentialOrigin(provider)` (returning a structured `CredentialOrigin` / `CredentialOriginKind`) and `getEnvApiKeyName(provider)`, so callers can render where a provider's auth comes from — runtime override, config, stored OAuth/api-key, env var (with the backing variable name), or fallback resolver — without parsing the prose of `describeCredentialSource`.
+
+### Changed
+
+- Changed `onSseEvent` recording for OpenAI Responses, Azure OpenAI Responses, OpenAI Completions, and Anthropic stream providers to emit reconstructed SSE events from decoded SDK stream items instead of wrapping raw fetch responses
+- Changed OpenAI Completions SSE diagnostics to include `event: "chat.completion.chunk"` in `onSseEvent` records for chunked responses
+- Changed the default Anthropic model in `DEFAULT_MODEL_PER_PROVIDER` from `claude-sonnet-4-6` to `claude-opus-4-6`, so sessions that fall back to the provider default (no configured `default` role, no `--model`, no restored session) now start on Claude Opus 4.6.
 
 ### Fixed
 
-- Fixed duplicate upstream `tool_call_id` values collapsing distinct tool calls during message transformation, preserving one call/result pairing per emitted tool call before provider replay. ([#2055](https://github.com/can1357/oh-my-pi/issues/2055))
+- Fixed duplicate upstream `tool_call_id` values collapsing distinct tool calls during message transformation, preserving one call/result pairing per emitted tool call before provider replay and keeping generated duplicate IDs distinct after OpenAI/Mistral wire-length caps. ([#2055](https://github.com/can1357/oh-my-pi/issues/2055))
+- Fixed the Anthropic provider retrying persistent account usage/quota limits (e.g. `429 "This request would exceed your account's rate limit"`, `usage_limit_reached`) as if they were transient. Because the error text contains "rate limit", `isProviderRetryableError` matched it and the stream retry loop looped through its 2s/4s/8s backoff (then the `streamSimple` a/b/c policy re-minted the credential and ran the whole thing again) before surfacing the failure — even though the server's `retry-after` parked the account for minutes-to-hours. These errors are now recognized via `isUsageLimitError` and surfaced immediately to the credential-rotation layer, so e.g. `omp dry-balance --bench` reports a rate-limited account as failed at once instead of appearing to hang.
+- Fixed MiniMax-compatible OpenAI-completions hosts losing tool-call argument content when `function.arguments` is streamed as an object across more than one delta. The accumulator added in #1776 wrote `block.partialArgs = rawArgs` per chunk, so every chunk but the last was overwritten — for an `edit` call this surfaced as a tail-slice of the patch text being applied (e.g. a single-line `replace 91..91:` body extending the deletion across the surrounding rows). Chunks are now shallow-merged; for shared string keys, `startsWith` distinguishes cumulative restatements (take the latest) from per-chunk-delta fragments (concatenate). Per-chunk `toolcall_delta` emission for the object branch is suppressed (the previous code emitted `JSON.stringify(rawArgs)` per chunk, which fed downstream concat consumers — `packages/agent/src/proxy.ts`, `openai-chat-server`, `openai-responses-server`, `anthropic-messages-server` — an invalid sequence like `{"input":"a"}{"input":"b"}`); the merged object is flushed instead as a single concat-safe delta in `finishToolCallBlock` before `toolcall_end`, so accumulators reconstruct the args correctly. The single-chunk shape covered by the existing #1776 regression test stays correct end-to-end. ([#2080](https://github.com/can1357/oh-my-pi/issues/2080))
+- Fixed the OpenAI Responses compatibility server misrouting late `toolcall_delta` events for earlier parallel tool calls after a later `toolcall_start`. The encoder now keeps OpenFunctionCall state by content index, allocates output indexes at item start, and closes each tool item by its own `toolcall_end`, preserving deferred MiniMax object-argument flushes for the matching call. ([#2080](https://github.com/can1357/oh-my-pi/issues/2080))
 
 ## [15.10.1] - 2026-06-07
 

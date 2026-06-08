@@ -68,4 +68,27 @@ describe("RawSseDebugBuffer", () => {
 		expect(resolveRawSseDebugBuffer(owner)).toBe(buffer);
 		expect(buffer.snapshot().totalEvents).toBe(1);
 	});
+
+	it("keeps session-owned records captured before the viewer resolves the buffer", () => {
+		const session = { rawSseDebugBuffer: new RawSseDebugBuffer() };
+		session.rawSseDebugBuffer.recordResponse(
+			{ status: 200, requestId: "req_pre_viewer", headers: {}, metadata: { lastTransport: "sse" } },
+			model,
+		);
+		session.rawSseDebugBuffer.recordEvent(
+			{ event: "message_start", data: "{}", raw: ["event: message_start", "data: {}"] },
+			model,
+		);
+		session.rawSseDebugBuffer.recordEvent(
+			{ event: "message_stop", data: "{}", raw: ["event: message_stop", "data: {}"] },
+			model,
+		);
+
+		const buffer = resolveRawSseDebugBuffer(session);
+
+		expect(buffer).toBe(session.rawSseDebugBuffer);
+		expect(buffer.snapshot().totalEvents).toBe(2);
+		expect(buffer.toRawText()).toContain("requestId=req_pre_viewer");
+		expect(buffer.toRawText()).toContain("event: message_stop");
+	});
 });

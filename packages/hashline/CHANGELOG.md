@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [15.10.3] - 2026-06-08
+
+### Added
+
+- Added a `BlockResolution` type and surfaced resolved block spans on `ApplyResult.blockResolutions` / `PatchSectionResult.blockResolutions`. `resolveBlockEdits` now accepts an `onResolved` callback that reports each `replace block N:` / `delete block N` anchor's resolved `[start, end]` span (and whether it was a delete). Spans are surfaced only on the no-drift apply paths, where the resolved line numbers line up with the tag the caller read.
+
+### Changed
+
+- Reworked the `edit` tool prompt (`prompt.md`): added a `replace block N` vs `replace N..M` decision rule, documented that a leading decorator/attribute/doc-comment is a separate node not swept into the block (point N at the first decorator line, or use `replace N..M` for a Rust-style `///` sibling comment), reframed the blast-radius guidance so "block replace" no longer reads as the dangerous option, and added a decorated-definition example.
+
+## [15.10.2] - 2026-06-08
+
 ### Fixed
 
 - Stripped read-output line-number prefixes (`N:`) from auto-piped bare body rows so that pasting `3:text` without a `+` prefix no longer injects `3:` as literal content. Stripping is applied only when *every* bare row in the hunk carries the prefix (the signature of a pasted snapshot) and removes at most one prefix per row, so a genuine body that merely starts with `digits:` (YAML port maps, timestamps) is left intact ([#1492](https://github.com/can1357/oh-my-pi/issues/1492)).

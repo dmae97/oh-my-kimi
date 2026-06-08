@@ -34,6 +34,7 @@ import type { OutputMeta } from "../tools/output-meta";
 import { formatOutputNotice } from "../tools/output-meta";
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
+export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 
 export interface SkillPromptDetails {
 	name: string;
@@ -71,21 +72,29 @@ export function isSilentAbort(errorMessage: string | undefined): boolean {
 }
 
 /** Reason threaded through `AbortController.abort(reason)` when the user aborts
- *  the turn with Esc (see `AgentSession.abort`). The agent surfaces it verbatim
- *  on the aborted assistant message's `errorMessage`, so the transcript reads as
- *  a deliberate user interrupt instead of an opaque failure. */
+ *  the turn with Esc (see `AgentSession.abort`). The agent keeps it on the
+ *  aborted assistant message's `errorMessage` so queued follow-ups/tool-result
+ *  placeholders can distinguish a deliberate interrupt from a bare lifecycle
+ *  abort, but interactive renderers suppress this redundant transcript line. */
 export const USER_INTERRUPT_LABEL = "Interrupted by user";
+
+export function isUserInterruptAbort(errorMessage: string | undefined): boolean {
+	return errorMessage === USER_INTERRUPT_LABEL;
+}
+
+export function shouldRenderAbortReason(errorMessage: string | undefined): boolean {
+	return !isSilentAbort(errorMessage) && !isUserInterruptAbort(errorMessage);
+}
 
 /** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
  *  reason (bare `abort()`). Renderers treat it as "no specific reason given". */
 const GENERIC_ABORT_SENTINEL = "Request was aborted";
 
 /** Resolve the operator-facing label for an aborted assistant turn. A custom
- *  abort reason (e.g. `USER_INTERRUPT_LABEL`) threaded onto `errorMessage` is
- *  shown verbatim; aborts with no threaded reason fall back to the retry-aware
- *  generic label. Centralizes the live-stream (`EventController`), replay
- *  (`ui-helpers`), and component (`AssistantMessageComponent`) render paths so
- *  they stay in lockstep. */
+ *  abort reason threaded onto `errorMessage` is returned verbatim; aborts with
+ *  no threaded reason fall back to the retry-aware generic label. Call
+ *  `shouldRenderAbortReason` before rendering when user interrupts should stay
+ *  visually quiet. */
 export function resolveAbortLabel(errorMessage: string | undefined, retryAttempt = 0): string {
 	if (errorMessage && errorMessage !== GENERIC_ABORT_SENTINEL && !isSilentAbort(errorMessage)) {
 		return errorMessage;
@@ -524,7 +533,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				case "custom":
 				case "hookMessage": {
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
-					const role = "user";
+					const role = "developer";
 					const attribution = m.attribution;
 					return {
 						role,
@@ -564,17 +573,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 							const inner = file.content ? `\n${file.content}\n` : "\n";
 							return `<file path="${file.path}">${inner}</file>`;
 						})
-						.join("\n\n");
-					const content: (TextContent | ImageContent)[] = [
-						{ type: "text" as const, text: `<system-reminder>\n${fileContents}\n</system-reminder>` },
-					];
+						.join("\n");
+					const content: (TextContent | ImageContent)[] = [{ type: "text" as const, text: fileContents }];
 					for (const file of m.files) {
 						if (file.image) {
 							content.push(file.image);
 						}
 					}
 					return {
-						role: "user",
+						role: "developer",
 						content,
 						attribution: "user",
 						timestamp: m.timestamp,

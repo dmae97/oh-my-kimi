@@ -11,10 +11,20 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
-import type { AuthStorage } from "../../session/auth-storage";
+import type { AuthStorage, CredentialOriginKind } from "../../session/auth-storage";
 import { DynamicBorder } from "./dynamic-border";
 
 const OAUTH_SELECTOR_MAX_VISIBLE = 10;
+
+/** Compact, human-readable tag for each credential-origin leg. */
+const ORIGIN_LABELS: Record<CredentialOriginKind, string> = {
+	runtime: "--api-key",
+	config: "config",
+	oauth: "login",
+	api_key: "api key",
+	env: "env",
+	fallback: "custom provider",
+};
 /**
  * Component that renders an OAuth provider selector.
  */
@@ -146,20 +156,34 @@ export class OAuthSelectorComponent extends Container {
 		}
 	}
 
+	/**
+	 * Muted provenance suffix (" (env: COPILOT_GITHUB_TOKEN)", " (login)", …) so
+	 * the list distinguishes a real login from an env var aliasing the provider.
+	 */
+	#getSourceLabel(providerId: string): string {
+		const origin = this.#authStorage.getCredentialOrigin(providerId);
+		if (!origin) return "";
+		const detail = origin.kind === "env" && origin.envVar ? `env: ${origin.envVar}` : ORIGIN_LABELS[origin.kind];
+		return theme.fg("muted", ` (${detail})`);
+	}
+
 	#getStatusIndicator(providerId: string): string {
 		const state = this.#authState.get(providerId);
+		const source = this.#getSourceLabel(providerId);
 		if (state === "checking") {
 			const frameCount = theme.spinnerFrames.length;
 			const spinner = frameCount > 0 ? theme.spinnerFrames[this.#spinnerFrame % frameCount] : theme.status.pending;
-			return theme.fg("warning", ` ${spinner} checking`);
+			return theme.fg("warning", ` ${spinner} checking`) + source;
 		}
 		if (state === "invalid") {
-			return theme.fg("error", ` ${theme.status.error} invalid`);
+			return theme.fg("error", ` ${theme.status.error} invalid`) + source;
 		}
 		if (state === "valid") {
-			return theme.fg("success", ` ${theme.status.success} logged in`);
+			return theme.fg("success", ` ${theme.status.success} logged in`) + source;
 		}
-		return this.#hasSelectableAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+		return this.#hasSelectableAuth(providerId)
+			? theme.fg("success", ` ${theme.status.success} logged in`) + source
+			: "";
 	}
 
 	#isSearchEnabled(): boolean {
@@ -178,8 +202,10 @@ export class OAuthSelectorComponent extends Container {
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
 		let text = `${provider.name} ${provider.id}`;
-		if (this.#hasSelectableAuth(provider.id)) {
-			text += " logged in authenticated";
+		const origin = this.#authStorage.getCredentialOrigin(provider.id);
+		if (origin) {
+			text += ` logged in authenticated ${ORIGIN_LABELS[origin.kind]}`;
+			if (origin.envVar) text += ` ${origin.envVar}`;
 		}
 		if (!provider.available) {
 			text += " unavailable";

@@ -272,7 +272,12 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			persistArtifacts: Boolean(sessionFile),
 			artifactsDir,
 			contextFile,
-			enableLsp: (options.session.enableLsp ?? true) && options.session.settings.get("task.enableLsp"),
+			// Eval `agent()` subagents are short-lived programmatic helpers (data
+			// collection, structured output, parallel() fan-out). LSP server
+			// cold-start costs tens of seconds and is pure overhead here, so it is
+			// forced off regardless of the `task.enableLsp` setting — that knob only
+			// governs LSP-aware delegation through the `task` tool.
+			enableLsp: false,
 			signal: options.signal,
 			eventBus: options.session.eventBus,
 			onProgress: progress => emitProgressStatus(options.emitStatus, progress),

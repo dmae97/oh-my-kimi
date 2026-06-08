@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { mergeSessionRanking } from "../src/modes/components/session-selector";
+import { mergeSessionRanking, rankSessionSearchMatches } from "../src/modes/components/session-selector";
 import type { SessionInfo } from "../src/session/session-manager";
 
-function makeSession(id: string): SessionInfo {
+function makeSession(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo {
 	return {
 		path: `${id}.jsonl`,
 		id,
@@ -13,32 +13,81 @@ function makeSession(id: string): SessionInfo {
 		size: 100,
 		firstMessage: "",
 		allMessagesText: "",
+		...overrides,
 	};
 }
 
 const ids = (sessions: SessionInfo[]): string[] => sessions.map(s => s.id);
 
-describe("mergeSessionRanking", () => {
-	it("orders dual matches first (in fuzzy order), then fuzzy-only, then history-only", () => {
-		const all = ["a", "b", "c", "d", "e"].map(makeSession);
-		const byId = new Map(all.map(s => [s.id, s]));
-		const fuzzy = ["a", "b", "c"].map(id => byId.get(id)!); // metadata matches, best→worst
-		const historyIds = ["c", "a", "e"]; // prompt matches, best→worst
+describe("rankSessionSearchMatches", () => {
+	it("keeps literal query matches recency-first instead of overvaluing earlier word position", () => {
+		const oldPrefix = makeSession("old-prefix", {
+			title: "Resize Buffer Issue",
+			firstMessage: "why doesnt resize properly clean the scrollback buffer",
+			modified: new Date("2024-01-01T00:00:00Z"),
+		});
+		const oldControls = makeSession("old-controls", {
+			title: "Resize Controls",
+			firstMessage: "can you make width height resize always clean reset",
+			modified: new Date("2024-01-01T01:00:00Z"),
+		});
+		const recentWindow = makeSession("recent-window", {
+			title: "Window Resize Issues",
+			firstMessage: "when i resize the window rapidly i end up with this",
+			modified: new Date("2024-01-03T00:00:00Z"),
+		});
 
-		// a,c matched both → lead in their fuzzy order [a, c]; b fuzzy-only; e history-only.
-		expect(ids(mergeSessionRanking(all, fuzzy, historyIds))).toEqual(["a", "c", "b", "e"]);
+		expect(ids(rankSessionSearchMatches([oldPrefix, oldControls, recentWindow], "resize"))).toEqual([
+			"recent-window",
+			"old-controls",
+			"old-prefix",
+		]);
 	});
 
-	it("never drops a fuzzy match and appends history-only matches after it", () => {
-		const all = ["a", "b"].map(makeSession);
+	it("keeps literal substring matches ahead of pure fuzzy matches", () => {
+		const fuzzyRecent = makeSession("fuzzy-recent", {
+			title: "Render Shape Index Zone Endpoint",
+			modified: new Date("2024-01-03T00:00:00Z"),
+		});
+		const literalOld = makeSession("literal-old", {
+			title: "Resize Buffer Issue",
+			modified: new Date("2024-01-01T00:00:00Z"),
+		});
+
+		expect(ids(rankSessionSearchMatches([fuzzyRecent, literalOld], "resize"))).toEqual([
+			"literal-old",
+			"fuzzy-recent",
+		]);
+	});
+
+	it("returns all sessions unchanged for an empty query", () => {
+		const sessions = [makeSession("a"), makeSession("b")];
+
+		expect(rankSessionSearchMatches(sessions, "   ")).toBe(sessions);
+	});
+});
+
+describe("mergeSessionRanking", () => {
+	it("orders prompt-history matches first by history rank, then metadata-only matches", () => {
+		const all = ["a", "b", "c", "d", "e"].map(id => makeSession(id));
+		const byId = new Map(all.map(s => [s.id, s]));
+		const fuzzy = ["a", "b", "c"].map(id => byId.get(id)!); // metadata matches, already ranked
+		const historyIds = ["c", "a", "e"]; // prompt matches, best→worst
+
+		// c,a,e matched prompt history → lead in history order; b is metadata-only.
+		expect(ids(mergeSessionRanking(all, fuzzy, historyIds))).toEqual(["c", "a", "e", "b"]);
+	});
+
+	it("never drops a metadata match and appends it after prompt-history matches", () => {
+		const all = ["a", "b"].map(id => makeSession(id));
 		const byId = new Map(all.map(s => [s.id, s]));
 		const fuzzy = [byId.get("a")!];
 
-		expect(ids(mergeSessionRanking(all, fuzzy, ["b"]))).toEqual(["a", "b"]);
+		expect(ids(mergeSessionRanking(all, fuzzy, ["b"]))).toEqual(["b", "a"]);
 	});
 
 	it("surfaces purely history-matched sessions ordered by prompt-history rank", () => {
-		const all = ["a", "b", "c"].map(makeSession);
+		const all = ["a", "b", "c"].map(id => makeSession(id));
 
 		// No fuzzy match at all; c is the best prompt-history match, then a. b is excluded.
 		expect(ids(mergeSessionRanking(all, [], ["c", "a"]))).toEqual(["c", "a"]);
@@ -53,7 +102,7 @@ describe("mergeSessionRanking", () => {
 	});
 
 	it("returns the fuzzy result unchanged when there are no history matches", () => {
-		const all = ["a", "b"].map(makeSession);
+		const all = ["a", "b"].map(id => makeSession(id));
 		const byId = new Map(all.map(s => [s.id, s]));
 		const fuzzy = ["b", "a"].map(id => byId.get(id)!);
 

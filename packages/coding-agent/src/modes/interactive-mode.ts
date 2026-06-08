@@ -50,7 +50,7 @@ import chalk from "chalk";
 import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
 import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
-import { isSettingsInitialized, Settings, settings } from "../config/settings";
+import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	ContextUsage,
@@ -125,7 +125,7 @@ import {
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
 import { interruptHint } from "./shared";
-import { type ShimmerPalette, shimmerSegments, shimmerText } from "./theme/shimmer";
+import { type ShimmerPalette, shimmerEnabled, shimmerSegments, shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
 import {
 	getEditorTheme,
@@ -155,6 +155,12 @@ const HINT_SHIMMER_PALETTE: ShimmerPalette = {
 interface WorkingMessageAccent {
 	main: string;
 	dim: string;
+}
+
+interface WorkingMessageAccentCacheKey {
+	sessionName: string | undefined;
+	accentSurfaceLuminance: number | undefined;
+	sessionAccentEnabled: boolean;
 }
 
 function renderWorkingMessage(message: string, accent?: WorkingMessageAccent): string {
@@ -301,6 +307,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	autoCompactionLoader: Loader | undefined = undefined;
 	retryLoader: Loader | undefined = undefined;
 	#pendingWorkingMessage: string | undefined;
+	#workingMessageAccentCacheKey?: WorkingMessageAccentCacheKey;
+	#workingMessageAccentCacheValue?: WorkingMessageAccent;
+	#workingMessageAccentCacheHasValue = false;
 	get #defaultWorkingMessage(): string {
 		return `Working…${interruptHint()}`;
 	}
@@ -638,9 +647,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.subscribe(event => {
 				void this.#handleGoalSessionEvent(event);
 			}),
+			this.sessionManager.onSessionNameChanged(() => {
+				this.#handleSessionAccentInputsChanged();
+			}),
+			onStatusLineSessionAccentChanged(() => {
+				this.#syncStatusLineSettings();
+				this.#handleSessionAccentInputsChanged();
+			}),
 		);
 		// Set up theme file watcher
 		onThemeChange(() => {
+			this.#clearWorkingMessageAccentCache();
 			clearRenderCache();
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
@@ -965,9 +982,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#goalContinuationTurnInFlight = false;
 		}
 		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-			this.statusContainer.clear();
+			this.#stopLoadingAnimation(true);
 		}
 		if (!submission.customType) {
 			this.pendingImages = submission.images ? [...submission.images] : [];
@@ -1005,9 +1020,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			pendingSubmissionDispose?.();
 			this.#pendingWorkingMessage = undefined;
 			if (this.loadingAnimation) {
-				this.loadingAnimation.stop();
-				this.loadingAnimation = undefined;
-				this.statusContainer.clear();
+				this.#stopLoadingAnimation(true);
 			}
 		}
 	}
@@ -1021,6 +1034,24 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#syncEditorMaxHeight(): void {
 		this.editor.setMaxHeight(this.#computeEditorMaxHeight());
+	}
+
+	#syncStatusLineSettings(): void {
+		this.statusLine.updateSettings({
+			preset: settings.get("statusLine.preset"),
+			leftSegments: settings.get("statusLine.leftSegments"),
+			rightSegments: settings.get("statusLine.rightSegments"),
+			separator: settings.get("statusLine.separator"),
+			showHookStatus: settings.get("statusLine.showHookStatus"),
+			sessionAccent: settings.get("statusLine.sessionAccent"),
+			segmentOptions: settings.get("statusLine.segmentOptions"),
+		});
+	}
+
+	#handleSessionAccentInputsChanged(): void {
+		this.#clearWorkingMessageAccentCache();
+		this.statusLine.invalidate();
+		this.updateEditorBorderColor();
 	}
 
 	updateEditorBorderColor(): void {
@@ -2416,8 +2447,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	stop(): void {
 		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
+			this.#stopLoadingAnimation(false);
 		}
 		this.#cleanupMicAnimation();
 		this.#cancelTodoAutoClearTimer();
@@ -2581,9 +2611,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmissionDispose = undefined;
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-			this.statusContainer.clear();
+			this.#stopLoadingAnimation(true);
 		}
 		this.#uiHelpers.showError(message);
 	}
@@ -2646,24 +2674,69 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	#clearWorkingMessageAccentCache(): void {
+		this.#workingMessageAccentCacheKey = undefined;
+		this.#workingMessageAccentCacheValue = undefined;
+		this.#workingMessageAccentCacheHasValue = false;
+	}
+
+	#buildWorkingMessageAccentCacheKey(): WorkingMessageAccentCacheKey {
+		const sessionAccentEnabled = !isSettingsInitialized() || settings.get("statusLine.sessionAccent") !== false;
+		return {
+			sessionAccentEnabled,
+			sessionName: sessionAccentEnabled ? this.sessionManager.getSessionName() : undefined,
+			accentSurfaceLuminance: theme.accentSurfaceLuminance,
+		};
+	}
+
+	#workingMessageAccentCacheKeyEquals(a: WorkingMessageAccentCacheKey, b: WorkingMessageAccentCacheKey): boolean {
+		return (
+			a.sessionName === b.sessionName &&
+			a.accentSurfaceLuminance === b.accentSurfaceLuminance &&
+			a.sessionAccentEnabled === b.sessionAccentEnabled
+		);
+	}
+
+	#cacheWorkingMessageAccent(
+		key: WorkingMessageAccentCacheKey,
+		value: WorkingMessageAccent | undefined,
+	): WorkingMessageAccent | undefined {
+		this.#workingMessageAccentCacheKey = key;
+		this.#workingMessageAccentCacheValue = value;
+		this.#workingMessageAccentCacheHasValue = true;
+		return value;
+	}
+
 	#getWorkingMessageAccent(): WorkingMessageAccent | undefined {
-		const accentEnabled = !isSettingsInitialized() || settings.get("statusLine.sessionAccent") !== false;
-		const sessionName = accentEnabled ? this.sessionManager.getSessionName() : undefined;
-		if (!sessionName) return undefined;
-		const hex = getSessionAccentHex(sessionName, theme.accentSurfaceLuminance);
+		const key = this.#buildWorkingMessageAccentCacheKey();
+		if (
+			this.#workingMessageAccentCacheHasValue &&
+			this.#workingMessageAccentCacheKey &&
+			this.#workingMessageAccentCacheKeyEquals(key, this.#workingMessageAccentCacheKey)
+		) {
+			return this.#workingMessageAccentCacheValue;
+		}
+		if (!key.sessionAccentEnabled || !key.sessionName) {
+			return this.#cacheWorkingMessageAccent(key, undefined);
+		}
+		const hex = getSessionAccentHex(key.sessionName, key.accentSurfaceLuminance);
 		const main = getSessionAccentAnsi(hex);
 		const dim = getSessionAccentAnsi(adjustHsv(hex, { s: 0.55, v: 0.65 }));
-		return main && dim ? { main, dim } : undefined;
+		return this.#cacheWorkingMessageAccent(key, main && dim ? { main, dim } : undefined);
 	}
 
 	ensureLoadingAnimation(): void {
 		if (!this.loadingAnimation) {
+			this.#clearWorkingMessageAccentCache();
 			this.statusContainer.clear();
 			const messageColorFn = ((message: string) =>
 				renderWorkingMessage(message, this.#getWorkingMessageAccent())) as LoaderMessageColorFn & {
-				animated: true;
+				animated?: true;
 			};
-			messageColorFn.animated = true;
+			// Shimmer drives the 30fps redraw; when it is disabled the working
+			// message is static, so leave `animated` unset and let the loader use
+			// the spinner-only ~12.5fps cadence instead of repainting a frozen line.
+			if (shimmerEnabled()) messageColorFn.animated = true;
 			this.loadingAnimation = new Loader(
 				this.ui,
 				spinner => {
@@ -2678,6 +2751,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.applyPendingWorkingMessage();
+	}
+
+	#stopLoadingAnimation(clearStatusContainer: boolean): void {
+		if (!this.loadingAnimation) return;
+		this.loadingAnimation.stop();
+		this.loadingAnimation = undefined;
+		this.#clearWorkingMessageAccentCache();
+		if (clearStatusContainer) {
+			this.statusContainer.clear();
+		}
 	}
 
 	setWorkingMessage(message?: string): void {

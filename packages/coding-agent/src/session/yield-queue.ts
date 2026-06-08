@@ -10,7 +10,7 @@ export interface YieldDispatcher<P> {
 
 export interface YieldQueueOptions {
 	isStreaming: () => boolean;
-	injectStreaming(msg: AgentMessage): void;
+	injectStreaming?(msg: AgentMessage): void;
 	injectIdle(messages: AgentMessage[]): Promise<void>;
 	scheduleIdleFlush(run: () => Promise<void>): void;
 }
@@ -85,7 +85,7 @@ export class YieldQueue {
 			if (!message) continue;
 			if (mode === "streaming") {
 				try {
-					this.#options.injectStreaming(message);
+					this.#options.injectStreaming?.(message);
 				} catch (error) {
 					logger.warn("Yield queue streaming dispatch failed", { kind, error: formatError(error) });
 				}
@@ -100,6 +100,24 @@ export class YieldQueue {
 				logger.warn("Yield queue idle dispatch failed", { error: formatError(error) });
 			}
 		}
+	}
+
+	/**
+	 * Snapshot and remove all queued entries, returning one lazy thunk per kind.
+	 * Each thunk applies the dispatcher's staleness filter and builds the batched
+	 * message only when called — so the consumer (the agent loop) decides, at the
+	 * moment it injects, whether the message is still worth delivering (a thunk may
+	 * return null to skip). Background-job completions and late diagnostics reach
+	 * the model between requests without the agent having to stop.
+	 */
+	drainLazy(): Array<() => AgentMessage | null> {
+		const thunks: Array<() => AgentMessage | null> = [];
+		for (const [kind, dispatcher] of this.#dispatchers) {
+			const entries = this.#drain(kind);
+			if (entries.length === 0) continue;
+			thunks.push(() => this.#build(kind, dispatcher, entries));
+		}
+		return thunks;
 	}
 
 	clear(): void {

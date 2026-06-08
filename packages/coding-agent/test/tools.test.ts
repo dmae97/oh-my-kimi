@@ -1892,6 +1892,21 @@ function b() {
 			const files = (result.details?.files ?? []).slice().sort();
 			expect(files).toEqual(["alpha/tests/", "beta/tests/"]);
 		});
+
+		it("should not recurse into subdirectories for a single-star glob like dir/*", async () => {
+			const dir = path.join(testDir, "shallow");
+			const sub = path.join(dir, "sub");
+			fs.mkdirSync(sub, { recursive: true });
+			fs.writeFileSync(path.join(dir, "top.tsx"), "t");
+			fs.writeFileSync(path.join(sub, "nested.tsx"), "n");
+
+			const result = await findTool.execute("test-call-14h", {
+				paths: [`${dir}/*.tsx`],
+			});
+
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["shallow/top.tsx"]);
+		});
 	});
 });
 

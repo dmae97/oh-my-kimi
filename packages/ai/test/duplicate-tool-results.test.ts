@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { convertMessages, detectCompat } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type {
 	Api,
 	AssistantMessage,
+	Context,
 	DeveloperMessage,
 	Message,
 	Model,
@@ -10,6 +12,11 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "@oh-my-pi/pi-ai/types";
+import type {
+	ChatCompletionAssistantMessageParam,
+	ChatCompletionMessageParam,
+	ChatCompletionToolMessageParam,
+} from "openai/resources/chat/completions";
 
 /**
  * Regression test for: "each tool_use must have a single result. Found multiple tool_result blocks with id"
@@ -491,6 +498,74 @@ describe("Duplicate Tool Results Regression", () => {
 			{ type: "text", text: "second" },
 		]);
 	});
+
+	it("keeps duplicate ids distinct after OpenAI completions provider caps", () => {
+		const assistantWireMessages = (messages: ChatCompletionMessageParam[]): ChatCompletionAssistantMessageParam[] =>
+			messages.filter(
+				(message): message is ChatCompletionAssistantMessageParam =>
+					message.role === "assistant" && Array.isArray(message.tool_calls),
+			);
+		const toolWireIds = (messages: ChatCompletionMessageParam[]): string[] =>
+			messages
+				.filter((message): message is ChatCompletionToolMessageParam => message.role === "tool")
+				.map(message => message.tool_call_id);
+
+		const cases: Array<{
+			model: Model<"openai-completions">;
+			duplicateId: string;
+			expectedDuplicateId: string;
+		}> = [
+			{
+				model: {
+					api: "openai-completions",
+					provider: "openai",
+					id: "gpt-4o-mini",
+					name: "GPT-4o Mini",
+					baseUrl: "https://api.openai.com/v1",
+					input: ["text"],
+					cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+					maxTokens: 8192,
+					contextWindow: 128000,
+					reasoning: false,
+				},
+				duplicateId: `call_${"a".repeat(35)}`,
+				expectedDuplicateId: `${`call_${"a".repeat(35)}`.slice(0, 35)}_dup1`,
+			},
+			{
+				model: {
+					api: "openai-completions",
+					provider: "mistral",
+					id: "mistral-large-latest",
+					name: "Mistral Large",
+					baseUrl: "https://api.mistral.ai/v1",
+					input: ["text"],
+					cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+					maxTokens: 8192,
+					contextWindow: 128000,
+					reasoning: false,
+				},
+				duplicateId: "ABCDEF123",
+				expectedDuplicateId: "ABCDEdup1",
+			},
+		];
+
+		for (const { model: providerModel, duplicateId, expectedDuplicateId } of cases) {
+			const messages: Message[] = [
+				makeEvalAssistantMessage(duplicateId, 1),
+				makeEvalToolResult(duplicateId, "first", 2),
+				makeEvalAssistantMessage(duplicateId, 3),
+				makeEvalToolResult(duplicateId, "second", 4),
+			];
+			const context: Context = { messages };
+			const wireMessages = convertMessages(providerModel, context, detectCompat(providerModel));
+			const assistantIds = assistantWireMessages(wireMessages).flatMap(
+				message => message.tool_calls?.map(toolCall => toolCall.id) ?? [],
+			);
+
+			expect(assistantIds, providerModel.provider).toEqual([duplicateId, expectedDuplicateId]);
+			expect(toolWireIds(wireMessages), providerModel.provider).toEqual([duplicateId, expectedDuplicateId]);
+		}
+	});
 });
 
 /**
@@ -888,10 +963,9 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 			transformed.filter(m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === orphanId).length,
 		).toBe(0);
 
-		// 2. No premature developer note for the orphan: a developer message would
-		//    break assistant→toolResult contiguity. The only developer message
-		//    allowed is the `turnAbortedGuidance` injected by
-		//    `flushPendingAbortedToolCalls` at its natural turn boundary.
+		// 2. No developer note for the orphan: a developer message would break
+		//    assistant→toolResult contiguity, and we no longer inject any synthetic
+		//    aborted-turn note at all.
 		const orphanNotes = transformed.filter(
 			(m): m is DeveloperMessage =>
 				m.role === "developer" &&
@@ -1003,7 +1077,6 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
  * Tests for Codex-style abort handling:
  * - Tool calls are preserved (not converted to text summaries)
  * - Synthetic "aborted" tool results are injected
- * - A <turn-aborted> guidance marker is added as synthetic user message
  */
 describe("Codex-style Abort Handling", () => {
 	const model: Model<"anthropic-messages"> = {
@@ -1060,39 +1133,6 @@ describe("Codex-style Abort Handling", () => {
 		// Text content should also be preserved
 		const textContent = assistantMsg.content.find(b => b.type === "text");
 		expect(textContent).toBeDefined();
-	});
-
-	it("should inject turn-aborted guidance marker as synthetic user message", () => {
-		const assistantMessage: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "toolCall", id: "toolu_marker_test", name: "bash", arguments: { command: "sleep 10" } }],
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-3-5-sonnet-20241022",
-			usage: {
-				input: 100,
-				output: 50,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 150,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "error",
-			errorMessage: "Request was aborted",
-			timestamp: 1000,
-		};
-
-		const messages = [{ role: "user" as const, content: "Run command", timestamp: 500 }, assistantMessage];
-
-		const transformed = transformMessages(messages, model);
-
-		// Should have: user, assistant, toolResult, developer(guidance)
-		expect(transformed.length).toBe(4);
-
-		// Last message should be the guidance marker
-		const guidanceMsg = transformed[3] as DeveloperMessage;
-		expect(guidanceMsg.role).toBe("developer");
-		expect(guidanceMsg.content).toContain("<turn-aborted>");
 	});
 
 	it("should inject synthetic 'aborted' tool results with isError true", () => {

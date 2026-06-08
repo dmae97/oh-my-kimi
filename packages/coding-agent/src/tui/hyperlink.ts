@@ -5,6 +5,7 @@
  * sequences when the active terminal supports hyperlinks and the user setting
  * permits it. Falls back to plain text when disabled.
  */
+import * as url from "node:url";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { settings } from "../config/settings";
 import {
@@ -28,21 +29,12 @@ function buildLinkId(uri: string): string {
 	return (h >>> 0).toString(16).padStart(8, "0");
 }
 
-/** Build a `file://` URI for an absolute path with optional line/col query params. */
-function buildFileUri(absPath: string, opts?: { line?: number; col?: number }): string {
-	// Normalize backslashes for Windows paths before constructing the URL.
-	const normalized = absPath.replaceAll("\\", "/");
-	const prefix = normalized.startsWith("/") ? "file://" : "file:///";
-	// Split on slashes, encode each component, reassemble.
-	const encoded = normalized
-		.split("/")
-		.map(segment => encodeURIComponent(segment))
-		.join("/");
-	const params: string[] = [];
-	if (opts?.line !== undefined) params.push(`line=${opts.line}`);
-	if (opts?.col !== undefined) params.push(`col=${opts.col}`);
-	const query = params.length > 0 ? `?${params.join("&")}` : "";
-	return `${prefix}${encoded}${query}`;
+/** Build a properly encoded `file://` URI with optional line/col query params. */
+function buildFileUri(filePath: string, opts?: { line?: number; col?: number }): string {
+	const uri = url.pathToFileURL(filePath);
+	if (opts?.line !== undefined) uri.searchParams.set("line", String(opts.line));
+	if (opts?.col !== undefined) uri.searchParams.set("col", String(opts.col));
+	return uri.href;
 }
 
 /**
@@ -104,21 +96,19 @@ export function urlHyperlink(url: string, displayText: string): string {
 }
 
 /**
- * Wrap `displayText` in an OSC 8 hyperlink pointing at the given absolute file path.
+ * Wrap `displayText` in an OSC 8 hyperlink pointing at a filesystem path.
  *
  * Returns `displayText` unchanged when hyperlinks are disabled or when
  * the text already contains an OSC 8 sequence (prevents double-wrapping).
+ * Relative paths resolve against the current working directory before URI
+ * encoding so the OSC 8 target is always a valid `file://` URL.
  *
- * The caller is responsible for passing an absolute path. Relative paths
- * produce invalid `file://` URIs and are accepted silently to avoid runtime
- * errors in renderer hot paths.
- *
- * @param absPath - Absolute filesystem path
+ * @param filePath - Filesystem path
  * @param displayText - Text to render as the hyperlink anchor (may contain ANSI codes)
  * @param opts - Optional line/col position appended as `?line=N&col=M` query params
  */
-export function fileHyperlink(absPath: string, displayText: string, opts?: { line?: number; col?: number }): string {
-	return wrapHyperlink(buildFileUri(absPath, opts), displayText);
+export function fileHyperlink(filePath: string, displayText: string, opts?: { line?: number; col?: number }): string {
+	return wrapHyperlink(buildFileUri(filePath, opts), displayText);
 }
 
 /**

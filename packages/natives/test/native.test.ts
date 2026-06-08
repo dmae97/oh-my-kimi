@@ -14,7 +14,9 @@ import {
 	invalidateFsScanCache,
 	listWorkspace,
 	MacOSPowerAssertion,
+	matchesKey,
 	PtySession,
+	parseKey,
 	summarizeCode,
 	truncateToWidth,
 	visibleWidth,
@@ -148,6 +150,17 @@ describe("pi-natives", () => {
 			expect(summarizeCode({ path: "fixture.ts", code, minBodyLines: 3 }).elided).toBe(true);
 		});
 	});
+	describe("keys", () => {
+		it("matches Ghostty's super+alt Backspace Kitty wire", () => {
+			const ghosttyOptionBackspace = "\x1b[127;11u";
+
+			expect(matchesKey(ghosttyOptionBackspace, "super+alt+backspace", true)).toBe(true);
+			expect(matchesKey(ghosttyOptionBackspace, "alt+super+backspace", true)).toBe(true);
+			expect(matchesKey(ghosttyOptionBackspace, "alt+backspace", true)).toBe(false);
+			expect(parseKey(ghosttyOptionBackspace, true)).toBe("alt+super+backspace");
+		});
+	});
+
 	describe("grep", () => {
 		it("should find patterns in files", async () => {
 			const result = await grep({

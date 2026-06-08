@@ -633,12 +633,11 @@ function renderAgentProgress(
 	let statusLine: string;
 	if (progress.status === "running") {
 		const bullet = theme.fg("accent", "•");
-		const name = shimmerEnabled()
-			? shimmerText(displayId, theme)
-			: theme.fg("accent", description ? theme.bold(displayId) : displayId);
+		const name = theme.fg("accent", description ? theme.bold(displayId) : displayId);
 		statusLine = `${indent}${bullet} ${name}`;
 		if (description) {
-			statusLine += theme.fg("accent", `: ${description}`);
+			const desc = shimmerEnabled() ? shimmerText(description, theme) : theme.fg("accent", description);
+			statusLine += `${theme.fg("accent", ":")} ${desc}`;
 		}
 	} else {
 		statusLine = `${indent}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;

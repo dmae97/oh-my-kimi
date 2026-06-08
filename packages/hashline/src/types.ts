@@ -59,6 +59,13 @@ export interface ApplyResult {
 	firstChangedLine?: number;
 	/** Diagnostic warnings collected by the parser, patcher, or recovery. */
 	warnings?: string[];
+	/**
+	 * Resolved spans for each `replace block`/`delete block` op in this apply,
+	 * in patch order. Present only when the apply matched the tagged content
+	 * (the common no-drift path), so the line numbers line up with what the
+	 * caller read. Absent when there were no block ops.
+	 */
+	blockResolutions?: BlockResolution[];
 }
 
 /** A parsed `[A..B]` line range. */
@@ -110,6 +117,24 @@ export interface BlockSpan {
 	start: number;
 	/** Last line of the block (1-indexed, inclusive). */
 	end: number;
+}
+
+/**
+ * One `replace block N:` / `delete block N` anchor resolved to its concrete
+ * line span. Surfaced on {@link ApplyResult} so the host can echo
+ * "block N → lines start..end" and let the model catch a wrong opener — e.g. a
+ * decorator or doc-comment that sits in a separate node outside the resolved
+ * block.
+ */
+export interface BlockResolution {
+	/** The 1-indexed line the block op was anchored on (the `N`). */
+	anchorLine: number;
+	/** First line of the resolved span (1-indexed, inclusive). */
+	start: number;
+	/** Last line of the resolved span (1-indexed, inclusive). */
+	end: number;
+	/** True for `delete block N`; false for `replace block N:`. */
+	isDelete: boolean;
 }
 
 /** Request handed to a {@link BlockResolver} to resolve one `replace block N:` anchor. */

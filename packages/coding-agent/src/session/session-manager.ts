@@ -753,8 +753,8 @@ export function buildSessionContext(
 	// turn's tool results are off the selected path: its result children live on a
 	// sibling branch, or it is the leaf itself (results are children below it). Left
 	// in place, `transformMessages` fabricates one synthetic "aborted"/"No result
-	// provided" result per dangling call plus a `<turn-aborted>` developer note, which
-	// render as phantom failed calls and re-inject the failed batch into the model's
+	// provided" result per dangling call, which render as phantom failed calls and
+	// re-inject the failed batch into the model's
 	// context — the rewind/restore loop.
 	//
 	// Stripping is necessary but not sufficient: a *modified* assistant turn that still
@@ -1972,6 +1972,7 @@ export class SessionManager {
 	#inMemoryArtifactCounter = 0;
 	readonly #blobStore: BlobStore;
 	#suppressBreadcrumb = false;
+	#sessionNameChangedCallbacks = new Set<() => void>();
 
 	private constructor(
 		private cwd: string,
@@ -2743,6 +2744,23 @@ export class SessionManager {
 		return this.#sessionName;
 	}
 
+	onSessionNameChanged(cb: () => void): () => void {
+		this.#sessionNameChangedCallbacks.add(cb);
+		return () => {
+			this.#sessionNameChangedCallbacks.delete(cb);
+		};
+	}
+
+	#fireSessionNameChanged(): void {
+		for (const cb of [...this.#sessionNameChangedCallbacks]) {
+			try {
+				cb();
+			} catch (err) {
+				logger.warn("SessionManager: session name change hook failed", { error: String(err) });
+			}
+		}
+	}
+
 	/** Strip C0/C1 control characters (includes ESC, so removes ANSI sequences) and collapse whitespace. */
 	static #sanitizeName(name: string): string {
 		return name
@@ -2778,6 +2796,7 @@ export class SessionManager {
 		if (this.persist && sessionFile && this.storage.existsSync(sessionFile)) {
 			await this.#rewriteFile();
 		}
+		this.#fireSessionNameChanged();
 		return true;
 	}
 

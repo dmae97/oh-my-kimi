@@ -720,7 +720,12 @@ export class EventController {
 				// seal it so it freezes (and stops animating) rather than lingering in
 				// the transcript live region as a streaming preview until the next thaw.
 				const component = this.ctx.pendingTools.get(toolCallId);
-				if (component instanceof ToolExecutionComponent) component.seal();
+				// A foreground read still pending at turn end shares a group component
+				// keyed by every read's id; seal it too so a never-delivered read does
+				// not keep the group live (and pinning the live region) indefinitely.
+				if (component instanceof ToolExecutionComponent || component instanceof ReadToolGroupComponent) {
+					component.seal();
+				}
 				this.ctx.pendingTools.delete(toolCallId);
 			}
 		}

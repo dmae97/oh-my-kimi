@@ -6,7 +6,7 @@ Every file section starts with `[PATH#TAG]`. `TAG` is the 4-hex snapshot tag fro
 
 <ops>
 replace N..M:      replace original lines N..M with the body rows below. CAUTION, IT IS INCLUSIVE! MAKE SURE YOU INTEND TO DELETE BOTH ENDS!
-replace block N:   replace the whole syntactic block that BEGINS on line N — its header line through its closing line — resolved with tree-sitter. Body rows below. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line.
+replace block N:   replace the whole syntactic block that BEGINS on line N — header line through closing line — resolved with tree-sitter, so you never count the end. Body rows below. Reach for this to rewrite a whole construct (function/`if`/loop/class body): the end can't be mis-counted or clipped mid-block. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line. The span is EXACTLY that node — a leading decorator/attribute/doc-comment is a separate node and is NOT swept in (see rules).
 delete N..M        delete original lines N..M. No body.
 delete block N     delete the whole syntactic block that BEGINS on line N.
 insert before N:   insert the body rows immediately before line N.
@@ -31,7 +31,8 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - An elided or partial read is NOT a read of the gap. A `…` (or any collapsed/truncated region) between two excerpts means those lines are UNSEEN — treat them exactly like lines you never opened. Never place a hunk on, or span a range across, an elided region; `read` that range explicitly first. Reconstructing it from memory of "what the code probably looks like" is how ranges drift off-by-N and shred neighboring blocks.
 - On a stale-tag rejection — or any result you cannot fully account for — STOP and re-`read`. Never stack more line-numbered edits onto output you have not re-grounded; that compounds corruption.
 - One hunk per range; the body is the final content, never an old/new pair.
-- Keep every range as tight as the change: a range must cover ONLY lines whose content actually changes. Never widen it to swallow an unchanged signature, brace, or neighboring statement just to rewrite a few lines inside — change one line with `replace N..N`, not the whole block around it. (A range where every line genuinely changes is correctly long; tightness is about excluding unchanged lines, not about being short.) This bounds the blast radius if a number is off: a stale single-line replace corrupts one line, while a stale block replace shreds the whole block and its structure.
+- Keep every range as tight as the change: a range must cover ONLY lines whose content actually changes. Never widen it to swallow an unchanged signature, brace, or neighboring statement just to rewrite a few lines inside — change one line with `replace N..N`, not the whole block around it. (A range where every line genuinely changes is correctly long; tightness is about excluding unchanged lines, not about being short.) This bounds the blast radius if a number is off: a stale one-line range corrupts one line, while a stale wide range shreds every line it spans. (This is about hand-counted `replace N..M` ranges; the `replace block N` operator is the opposite — tree-sitter fixes the end, so it can't be mis-counted or clipped.)
+- `replace block N` vs `replace N..M`: use `replace block N` to rewrite a WHOLE construct (function / `if` / loop / class body) — tree-sitter resolves its closing line, so a long body can't be mis-counted and a stale end can't clip it mid-block; the edit result echoes the span it matched (`replace block N → resolved lines A-B`), so glance at it to confirm you got what you meant. Use `replace N..M` to change specific lines inside a construct. The resolved span is EXACTLY the node beginning on line N: a leading decorator, attribute, or doc-comment is a separate node and is NOT included. To replace a decorated/annotated definition together with its decorator, point N at the FIRST decorator line (Python parses `@dec` + `def` as one block). A leading line-comment that parses as its own node (e.g. Rust `///`) is not captured by any single opener — use `replace N..M` spanning the comment and the construct.
 - To change lines 2 and 5 while keeping 3–4, issue two hunks (`replace 2..2:` and `replace 5..5:`). Untouched lines are simply absent from every range.
 - Pure additions use `insert`, never a widened `replace`. If the change only adds lines, `insert before/after` the spot and keep every existing line out of all ranges. Do NOT `replace` a span of keepers and retype them around the new line "to preserve" them — those retyped keepers are exactly what gets silently dropped when one is forgotten. A keeper that never enters your body cannot be lost. `replace` is only for lines whose own text changes.
 - NEVER use this tool to format code — reordering imports, re-indenting, aligning columns, or any mechanical restyling. That is the project formatter's job; run it instead of hand-editing layout here.
@@ -84,6 +85,15 @@ replace block 1:
 +def greet(name):
 +    print(f"Hello, {name}")
 ```
+
+A decorator or doc-comment is a SEPARATE block — `replace block` on the `def`/`fn` line keeps it. Point N at the decorator to take both; here line 1 is `@cache`, so anchoring on the `def` (line 2) would resolve only the function and orphan `@cache`:
+```
+[svc.py#C3D4]
+replace block 1:
++@cache
++def load(key):
++    return store[key]
+```
 </example>
 
 <anti-patterns>
@@ -117,6 +127,6 @@ insert after 2:
 <critical>
 If you remember nothing else:
 1. RE-GROUND AFTER EVERY EDIT. Each applied edit mints a fresh `#TAG` and renumbers the file — the tag and line numbers you just used are now dead. Take the next edit's numbers from the edit response or a fresh `read`, never from pre-edit memory. On a stale-tag rejection or any unexpected result, STOP and re-`read`.
-2. RANGES ARE TIGHT AND IN-BOUNDS. Cover only lines whose content actually changes; never widen a range to swallow an unchanged signature, brace, or statement, and never start or end a range mid-expression or mid-block. A stale single-line replace corrupts one line; a stale block replace shreds the whole block.
+2. RANGES ARE TIGHT AND IN-BOUNDS. Cover only lines whose content actually changes; never widen a range to swallow an unchanged signature, brace, or statement, and never start or end a range mid-expression or mid-block. A stale one-line range corrupts one line; a stale wide range shreds everything it spans — to rewrite a whole construct, prefer `replace block N` so tree-sitter fixes the end.
 3. THE BODY IS THE FINAL CONTENT. Only `+TEXT` rows under a `:` header — never `-old`/bare context lines, never an old/new pair. The range does the deleting.
 </critical>

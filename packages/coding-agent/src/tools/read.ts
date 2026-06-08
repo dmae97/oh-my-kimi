@@ -9,7 +9,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore, recordFileSnapshot } from "../edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore, recordFileSnapshot } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -131,7 +131,7 @@ function recordFullHashlineContext(
 ): HashlineHeaderContext | undefined {
 	if (!absolutePath || !path.isAbsolute(absolutePath)) return undefined;
 	const normalized = normalizeToLF(fullText);
-	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
+	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return {
 		header: formatHashlineHeader(displayPath, tag),
 		tag,
@@ -575,6 +575,8 @@ export interface ReadToolDetails {
 	summary?: { lines: number; elidedSpans: number; elidedLines: number };
 	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `⚠ N` badge). */
 	conflictCount?: number;
+	/** Paths recovered from a delimited read argument; used only by the TUI to render one call as multiple read rows. */
+	displayReadTargets?: string[];
 }
 
 type ReadParams = ReadToolInput;
@@ -670,7 +672,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly loadMode = "essential";
 	readonly description: string;
 	readonly parameters = readSchema;
-	readonly nonAbortable = true;
 	readonly strict = true;
 
 	readonly #autoResizeImages: boolean;
@@ -704,6 +705,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const notice = `Note: interpreted as ${parts.length} paths: ${parts.join(", ")}`;
 		const notes = [notice];
 		const content: Array<TextContent | ImageContent> = [];
+		const displayReadTargets: string[] = [];
 		let pendingText = notice;
 		const flushText = () => {
 			if (pendingText.length === 0) return;
@@ -717,6 +719,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		for (const part of parts) {
 			try {
 				const result = await this.execute("read-delimited-part", { path: part }, signal);
+				displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
 				for (const block of result.content) {
 					if (block.type === "text") {
 						appendText(block.text);
@@ -730,12 +733,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const message = error instanceof Error ? error.message : String(error);
 				const errorNote = `Could not read ${part}: ${message}`;
 				notes.push(errorNote);
+				displayReadTargets.push(part);
 				appendText(`[${errorNote}]`);
 			}
 		}
 		flushText();
 
-		return toolResult<ReadToolDetails>({ notes }).content(content).done();
+		return toolResult<ReadToolDetails>({ notes, displayReadTargets }).content(content).done();
 	}
 
 	async #resolveArchiveReadPath(readPath: string, signal?: AbortSignal): Promise<ResolvedArchiveReadPath | null> {
@@ -1648,7 +1652,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				throw new ToolError("Multi-range line selectors are not supported for directory listings.");
 			}
 			const { offset, limit } = selToOffsetLimit(parsed);
-			const dirResult = await this.#readDirectory(absolutePath, offset, limit, signal);
+			// Directory listings are deterministic and fast; never abort them mid-scan
+			// (an interrupt would otherwise surface a misleading "Operation aborted").
+			const dirResult = await this.#readDirectory(absolutePath, offset, limit, undefined);
 			if (suffixResolution) {
 				dirResult.details ??= {};
 				dirResult.details.suffixResolution = suffixResolution;
@@ -1750,15 +1756,25 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// Convert document via markit.
 			const result = await convertFileWithMarkit(absolutePath, signal);
 			if (result.ok) {
-				// Apply truncation to converted content
-				const truncation = truncateHead(result.content);
-				const outputText = truncation.content;
-
-				details = { truncation };
-				sourcePath = absolutePath;
-				truncationInfo = { result: truncation, options: { direction: "head", startLine: 1 } };
-
-				content = [{ type: "text", text: outputText }];
+				// Route the converted markdown through the in-memory text builder
+				// so line-range selectors (`file.pdf:50-100`, `:5-16,40-80`) and
+				// raw mode apply against the converted output. Without this,
+				// `file.pdf:50-100` silently returned the head of the document
+				// because only `truncateHead` was being applied.
+				if (isMultiRange(parsed) && parsed.kind === "lines") {
+					return this.#buildInMemoryMultiRangeResult(result.content, parsed.ranges, {
+						details: { resolvedPath: absolutePath },
+						sourcePath: absolutePath,
+						entityLabel: "document",
+					});
+				}
+				const { offset, limit } = selToOffsetLimit(parsed);
+				return this.#buildInMemoryTextResult(result.content, offset, limit, {
+					details: { resolvedPath: absolutePath },
+					sourcePath: absolutePath,
+					entityLabel: "document",
+					raw: isRawSelector(parsed),
+				});
 			} else if (result.error) {
 				content = [{ type: "text", text: `[Cannot read ${ext} file: ${result.error || "conversion failed"}]` }];
 			} else {
@@ -1805,7 +1821,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						parsed,
 						displayMode,
 						suffixResolution,
-						signal,
+						undefined, // plain-file read: deterministic and fast, never abort mid-read
 					);
 					if (multiResult.bridgeResult) return multiResult.bridgeResult;
 					content = [{ type: "text", text: multiResult.outputText }];
@@ -1864,7 +1880,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						maxLinesToCollect,
 						maxBytesForRead,
 						selectedLineLimit,
-						signal,
+						undefined, // plain-file read: deterministic and fast, never abort mid-read
 					);
 
 					const {
@@ -1944,7 +1960,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						// full file and any anchor validates while the file is unchanged.
 						const isWholeFile = offset === undefined && limit === undefined && !wasTruncated;
 						const tag = isWholeFile
-							? getFileSnapshotStore(this.session).record(absolutePath, normalizeToLF(collectedLines.join("\n")))
+							? getFileSnapshotStore(this.session).record(
+									canonicalSnapshotKey(absolutePath),
+									normalizeToLF(collectedLines.join("\n")),
+								)
 							: await recordFileSnapshot(this.session, absolutePath);
 						if (tag) {
 							hashContext = hashlineHeaderContext(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag);
@@ -2355,11 +2374,13 @@ function formatReadPathLink(
 	const plainDisplayPath = options.suffixResolution
 		? shortenPath(options.suffixResolution.to)
 		: shortenPath(basePath || options.resolvedPath || options.fallbackLabel || rawPath);
-	const target = options.resolvedPath ?? options.sourcePath ?? tryResolveInternalUrlSync(basePath);
+	const absoluteInputPath = path.isAbsolute(basePath) ? basePath : undefined;
+	const target =
+		options.resolvedPath ?? options.sourcePath ?? tryResolveInternalUrlSync(basePath) ?? absoluteInputPath;
 	const line = firstReadSelectorLine(split.sel) ?? options.offset;
 	const linkOptions = line !== undefined ? { line } : undefined;
-	const displayPath = target ? fileHyperlink(target, plainDisplayPath, linkOptions) : plainDisplayPath;
-	return `${displayPath}${selectorSuffix}`;
+	const linkedPath = target ? fileHyperlink(target, plainDisplayPath, linkOptions) : plainDisplayPath;
+	return `${linkedPath}${selectorSuffix}`;
 }
 
 export const readToolRenderer = {

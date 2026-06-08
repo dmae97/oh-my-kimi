@@ -119,4 +119,27 @@ describe("executePython lifecycle", () => {
 		expect(kernel.execute).toHaveBeenCalledTimes(0);
 		expect(kernelNext.execute).toHaveBeenCalledTimes(2);
 	});
+
+	it("coalesces concurrent reset requests instead of throwing 'reset already in progress'", async () => {
+		// Two cells from the same session asking for reset in flight at once
+		// previously crashed the second one with "Python kernel reset already
+		// in progress" — the user reported this as eval returning only the
+		// status line and no executed output. The executor now waits for the
+		// in-flight reset and then proceeds.
+		const kernelA = new FakeKernel(OK_RESULT);
+		const kernelB = new FakeKernel(OK_RESULT);
+		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(pythonKernel.PythonKernel, "start")
+			.mockResolvedValueOnce(kernelA as unknown as pythonKernel.PythonKernel)
+			.mockResolvedValueOnce(kernelB as unknown as pythonKernel.PythonKernel);
+		// Seed a live session that both reset cells will tear down.
+		await executePython("1 + 1", { kernelMode: "session", sessionId: "coalesce", cwd: getProjectDir() });
+
+		const [r1, r2] = await Promise.all([
+			executePython("2 + 2", { kernelMode: "session", sessionId: "coalesce", reset: true, cwd: getProjectDir() }),
+			executePython("3 + 3", { kernelMode: "session", sessionId: "coalesce", reset: true, cwd: getProjectDir() }),
+		]);
+		expect(r1.exitCode).toBe(0);
+		expect(r2.exitCode).toBe(0);
+	});
 });

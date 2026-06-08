@@ -20,6 +20,7 @@ export interface Osc5522Packet {
 interface PasteListingState {
 	phase: "listing";
 	mimes: string[];
+	kittyDotPayload?: true;
 	pw?: string;
 	loc?: string;
 }
@@ -159,6 +160,7 @@ export class EnhancedPasteController {
 				if (!packet.payload) return;
 				const listing = decodeBase64Utf8(packet.payload);
 				if (!listing) return;
+				state.kittyDotPayload = true;
 				for (const candidate of listing.split(/\s+/)) {
 					if (candidate && candidate !== MIME_LISTING_TARGET) state.mimes.push(candidate);
 				}
@@ -218,6 +220,11 @@ export class EnhancedPasteController {
 		if (state.pw) {
 			metadata.push(`pw=${state.pw}`, `name=${PASTE_EVENT_NAME_BASE64}`);
 		}
-		this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")};${encodedMime}${OSC_TERMINATOR_ST}`);
+		if (state.kittyDotPayload) {
+			this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")};${encodedMime}${OSC_TERMINATOR_BEL}`);
+			return;
+		}
+		metadata.push(`mime=${encodedMime}`);
+		this.#handlers.write(`${OSC5522_PREFIX}${metadata.join(":")}${OSC_TERMINATOR_BEL}`);
 	}
 }

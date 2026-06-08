@@ -18,6 +18,7 @@ describe("SignInTab", () => {
 		const authStorage = {
 			has: (_providerId: string) => false,
 			hasAuth: (_providerId: string) => false,
+			getCredentialOrigin: (_providerId: string) => undefined,
 			async login(_provider: OAuthProviderId, ctrl: OAuthLoginCallbacks): Promise<void> {
 				ctrl.onAuth({ url });
 				const prompt = ctrl.onManualCodeInput?.();

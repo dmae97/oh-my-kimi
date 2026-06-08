@@ -27,6 +27,14 @@ export type StreamFn = (
 ) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
 
 /**
+ * An aside entry: a ready {@link AgentMessage}, or a sync thunk evaluated at
+ * injection time that returns the message to inject or `null` to skip it. Thunks
+ * let the producer make the final inject-or-drop decision against current state
+ * (e.g. dropping late diagnostics a newer edit superseded).
+ */
+export type AsideMessage = AgentMessage | (() => AgentMessage | null);
+
+/**
  * Configuration for the agent loop.
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
@@ -132,6 +140,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * continues with another turn.
 	 */
 	getFollowUpMessages?: () => Promise<AgentMessage[]>;
+	/**
+	 * Returns non-interrupting "aside" messages to inject at a step boundary.
+	 *
+	 * Polled after each tool batch (before the next LLM call) AND at the yield
+	 * check. Unlike steering, these NEVER abort in-flight tools — they are passive
+	 * notifications (e.g. background-job completions, late LSP diagnostics) that
+	 * should reach the model between requests without waiting for the agent to
+	 * fully stop. Returned messages are appended to the context with normal
+	 * message events and keep the loop running so the model can react.
+	 */
+	getAsideMessages?: () => Promise<AsideMessage[]>;
 	/**
 	 * Hook fired right before the loop would exit.
 	 *
@@ -423,8 +442,6 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	loadMode?: "essential" | "discoverable";
 	/** Short one-line summary used for tool discovery indexes. */
 	summary?: string;
-	/** If true, tool execution ignores abort signals (runs to completion) */
-	nonAbortable?: boolean;
 	/**
 	 * Concurrency mode for tool scheduling when multiple calls are in one turn.
 	 * - "shared": can run alongside other shared tools (default)

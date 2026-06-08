@@ -17,7 +17,7 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
-import type { Terminal } from "./terminal";
+import { isConPTYHosted, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
 	ImageProtocol,
@@ -47,9 +47,9 @@ const SEGMENT_RESET = "\x1b[0m";
 const LINE_TERMINATOR = "\x1b[0m\x1b]8;;\x07";
 const ERASE_LINE = "\x1b[2K";
 const ERASE_TO_END_OF_LINE = "\x1b[K";
-// Bound the raw code-unit span handed to native width/truncation. A terminal
-// row can only display `width` cells, so oversized component rows should not
-// force proportional JS/native copies while deciding what the viewport shows.
+// Keep the common short-row path out of native width/truncation. Longer rows
+// are fit by visible cells, not source code units, so zero-width-heavy prefixes
+// cannot hide visible suffix text that still belongs in the viewport.
 const LINE_FIT_MIN_SOURCE_CODE_UNITS = 4096;
 const LINE_FIT_MAX_SOURCE_CODE_UNITS = 65536;
 const LINE_FIT_SOURCE_WIDTH_MULTIPLIER = 64;
@@ -74,11 +74,13 @@ const CURSOR_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}`;
 const CURSOR_BEGIN_NO_SYNC = HIDE_CURSOR;
 const CURSOR_END = SYNC_OUTPUT_END;
 const CURSOR_END_NO_SYNC = "";
-// Mouse reporting (normal click tracking + SGR extended coordinates), enabled
-// only for the lifetime of a fullscreen overlay so the rest of the app keeps the
-// terminal's native text selection.
-const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1006h";
-const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1000l";
+// Mouse reporting, enabled only for the lifetime of a fullscreen overlay so the
+// rest of the app keeps the terminal's native text selection. 1000h = button
+// click tracking, 1003h = any-motion tracking so overlays can light up hover
+// targets (the pointer moving with no button held), 1006h = SGR extended
+// coordinates so columns/rows past 223 are reported.
+const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
+const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -439,6 +441,24 @@ type RenderIntent =
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
 
+interface HardwareCursorState {
+	row: number;
+	col: number;
+	visible: boolean;
+}
+
+interface HardwareCursorUpdate {
+	toRow: number;
+	state: HardwareCursorState | null;
+	visible?: boolean;
+}
+
+interface CursorControlResult extends HardwareCursorUpdate {
+	seq: string;
+	toCol: number;
+	visible: boolean;
+}
+
 interface PreparedLine {
 	raw: string;
 	width: number;
@@ -464,8 +484,41 @@ export class TUI extends Container {
 	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
+	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
+	// SIGWINCH (and `process.stdout` already reports the new geometry) before
+	// the multiplexer finishes repainting the pane at the new size, and
+	// drag-resize/pane-close animations fire several events in flight. A forced
+	// render on each SIGWINCH races those mid-reflow paints — the multiplexer's
+	// catch-up paint then partially overwrites the TUI output, which the user
+	// sees as a viewport flash or blank screen before the next throttled frame
+	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
+	// a single forced render lets the multiplexer settle first.
+	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
+	// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
+	// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
+	// a transcript that overflows the viewport, scroll-pushing everything past
+	// the last `height` rows into native scrollback. Windows Terminal's
+	// viewport-follow logic gets lossy during that burst: spinner/blink-driven
+	// `requestRender(false)` calls firing inside the window each produce another
+	// diff write, and the WT host processes them faster than its viewport
+	// tracker can keep up — the visible tail ends up parked a few rows above
+	// the actual last row until any focus event (Alt+Tab) forces a host repaint.
+	// Coalescing every non-forced render inside this window into a single
+	// trailing render lets the host fully settle the big paint before any
+	// follow-up writes touch the buffer. The first-ever `initial` paint is
+	// deliberately exempt: nothing has been on screen yet, so no drift can
+	// have accumulated, and tests that start the TUI over an over-tall
+	// component depend on the next paint firing without delay. Only armed on
+	// ConPTY hosts (`isConPTYHosted()`); other terminals do not exhibit the
+	// drift and would just see an unnecessary post-paint latency. See #2095.
+	static readonly #CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
+	#postFullPaintSettleUntilMs = 0;
+	#postFullPaintSettleTimer: RenderTimer | undefined;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
+	#hardwareCursorState: HardwareCursorState | null = null;
+	#hardwareCursorVisibilityKnown = false;
+	#hardwareCursorVisible = false;
 	#viewportTopRow = 0; // Content row currently mapped to screen row 0
 	#sixelProbePendingDa = false;
 	#sixelProbePendingGraphics = false;
@@ -510,6 +563,9 @@ export class TUI extends Container {
 	#clearScrollbackOnNextRender = false;
 	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
+	// Focus changes are local live chrome (menus/editor/cursor), so the next
+	// frame may repaint an unknown-at-bottom viewport without waiting for a checkpoint.
+	#focusChangedSinceLastRender = false;
 	#eagerNativeScrollbackRebuild = false;
 	// Set when eager mode is switched off; applied after the next frame is
 	// classified so teardown frames from the same event batch still render
@@ -525,6 +581,13 @@ export class TUI extends Container {
 	// between the viewport and scrollback, so the previous frame no longer
 	// describes the screen. Tracking only the dimension delta misses this.
 	#resizeEventPending = false;
+	// Active multiplexer SIGWINCH debounce. Reset on each event so the timer
+	// only fires once the pane stops resizing. Forced renders (resetDisplay,
+	// finishSixelProbe, …) issued during the settle window route through the
+	// same timer; their `clearScrollback` intent is OR'd into the deferred
+	// flag below so the settled paint still honours every caller's request.
+	#multiplexerResizeTimer: RenderTimer | undefined;
+	#deferredForcedClearScrollback = false;
 	#stopped = false;
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
@@ -618,6 +681,7 @@ export class TUI extends Container {
 		this.#syncTerminalCursorMode(this.#focusedComponent);
 		if (!enabled) {
 			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
 		}
 		this.requestRender();
 	}
@@ -693,12 +757,16 @@ export class TUI extends Container {
 	}
 
 	setFocus(component: Component | null): void {
+		const previousFocusedComponent = this.#focusedComponent;
 		// Clear focused flag on old component
-		if (isFocusable(this.#focusedComponent)) {
-			this.#focusedComponent.focused = false;
+		if (isFocusable(previousFocusedComponent)) {
+			previousFocusedComponent.focused = false;
 		}
 
 		this.#focusedComponent = component;
+		if (previousFocusedComponent !== component) {
+			this.#focusChangedSinceLastRender = true;
+		}
 
 		// Set focused flag on new component and keep its software/hardware cursor
 		// rendering mode aligned with TUI's single cursor-visibility preference.
@@ -720,6 +788,7 @@ export class TUI extends Container {
 			this.setFocus(component);
 		}
 		this.terminal.hideCursor();
+		this.#recordHardwareCursorHidden();
 		this.requestRender();
 
 		// Return handle for controlling this overlay
@@ -733,7 +802,10 @@ export class TUI extends Container {
 						const topVisible = this.#getTopmostVisibleOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
-					if (this.overlayStack.length === 0) this.terminal.hideCursor();
+					if (this.overlayStack.length === 0) {
+						this.terminal.hideCursor();
+						this.#recordHardwareCursorHidden();
+					}
 					this.requestRender();
 				}
 			},
@@ -766,7 +838,10 @@ export class TUI extends Container {
 		// Find topmost visible overlay, or fall back to preFocus
 		const topVisible = this.#getTopmostVisibleOverlay();
 		this.setFocus(topVisible?.component ?? overlay.preFocus);
-		if (this.overlayStack.length === 0) this.terminal.hideCursor();
+		if (this.overlayStack.length === 0) {
+			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
+		}
 		this.requestRender();
 	}
 
@@ -822,12 +897,29 @@ export class TUI extends Container {
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
-				// Repaint immediately rather than via the throttled path: a resize must
-				// clear and replay at the fresh geometry before the terminal's reflow
-				// settles into a state a throttled frame would race. Forced render skips
-				// the 30fps coalescing window, matching resetDisplay()'s prompt repaint.
+				// Real terminals deliver SIGWINCH (and the equivalent ConPTY
+				// notification) atomically with the new `process.stdout` geometry, so
+				// a forced render must fire immediately: it clears and replays at the
+				// fresh size before the terminal's reflow settles into a state a
+				// throttled frame would race. Multiplexer panes (tmux/screen/zellij)
+				// do not give that guarantee. The host receives SIGWINCH while the
+				// multiplexer is still mid-reflow — it has not finished repainting
+				// the pane buffer at the new size — and a drag-resize or pane-close
+				// animation fires several events in flight. Forcing a render on each
+				// event races those mid-reflow paints: the multiplexer's catch-up
+				// paint then partially overwrites the TUI output, which the user sees
+				// as a viewport flash or blank screen before the next throttled
+				// frame arrives (issue #2088). `#armMultiplexerResizeTimer` coalesces
+				// SIGWINCHes (and any forced repaints arriving during the settle
+				// window) into a single render once the pane is quiet —
+				// `#resizeEventPending` is set first so the eventual render still
+				// classifies as a resize.
 				this.#resizeEventPending = true;
-				this.requestRender(true);
+				if (!isMultiplexerSession()) {
+					this.requestRender(true);
+					return;
+				}
+				this.#armMultiplexerResizeTimer(false);
 			},
 		);
 		for (const listener of this.#startListeners) {
@@ -838,6 +930,7 @@ export class TUI extends Container {
 			}
 		}
 		this.terminal.hideCursor();
+		this.#recordHardwareCursorHidden();
 		this.#querySixelSupport();
 		this.#queryCellSize();
 		this.requestRender(true, { clearScrollback: options?.clearScrollback === true });
@@ -1029,6 +1122,12 @@ export class TUI extends Container {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
+		if (this.#multiplexerResizeTimer) {
+			this.#multiplexerResizeTimer.cancel();
+			this.#multiplexerResizeTimer = undefined;
+		}
+		this.#clearPostFullPaintSettle();
+		this.#deferredForcedClearScrollback = false;
 		// Place the parent shell on the first line after the rendered content. When
 		// that line is still inside the viewport, moving there and writing `\r` is
 		// enough; emitting `\r\n` would create an extra blank row. If the content
@@ -1049,6 +1148,7 @@ export class TUI extends Container {
 		}
 
 		this.terminal.showCursor();
+		this.#forgetHardwareCursorState();
 		this.terminal.stop();
 	}
 
@@ -1102,6 +1202,15 @@ export class TUI extends Container {
 	resetDisplay(): void {
 		if (this.#stopped) return;
 		this.invalidate();
+		// A reset that lands inside a tmux/screen/zellij resize burst would
+		// paint mid-reflow and re-introduce the flash race (issue #2088).
+		// Fold it into the in-flight debounce instead; the settled paint runs
+		// the same `#prepareForcedRender(!isMultiplexerSession())` path via
+		// `requestRender(true)`, so the clear-scrollback intent is preserved.
+		if (this.#multiplexerResizeTimer) {
+			this.#armMultiplexerResizeTimer(!isMultiplexerSession());
+			return;
+		}
 		this.#prepareForcedRender(!isMultiplexerSession());
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;
@@ -1113,6 +1222,23 @@ export class TUI extends Container {
 		const allowUnknownViewportMutation = options?.allowUnknownViewportMutation === true;
 		this.#allowUnknownViewportMutationOnNextRender ||= allowUnknownViewportMutation;
 		if (force) {
+			// Forced repaints landing inside the multiplexer resize debounce
+			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
+			// `requestRender(true)`) would paint into a still-reflowing pane
+			// and reintroduce the flash race. Fold them into the in-flight
+			// debounce while preserving the caller's `clearScrollback` intent
+			// for the settled paint. The timer's own callback clears
+			// `#multiplexerResizeTimer` before re-entering `requestRender(true)`,
+			// so this guard only catches external callers — the deferred render
+			// itself proceeds straight to `#prepareForcedRender`.
+			if (this.#multiplexerResizeTimer) {
+				this.#armMultiplexerResizeTimer(options?.clearScrollback === true);
+				return;
+			}
+			// A forced render preempts the post-full-paint ConPTY settle: it owns
+			// the next paint and is going to redraw the buffer anyway, so the
+			// trailing coalesced render queued by the settle would only race it.
+			this.#clearPostFullPaintSettle();
 			this.#prepareForcedRender(options?.clearScrollback === true);
 			this.#renderRequested = true;
 			this.#renderScheduler.scheduleImmediate(() => {
@@ -1125,11 +1251,121 @@ export class TUI extends Container {
 			});
 			return;
 		}
+		// Coalesce non-forced renders inside the post-full-paint ConPTY settle
+		// window into one trailing render. Spinner/blink/streaming components
+		// otherwise fire `requestRender(false)` at 30 Hz while the host is still
+		// catching up with the previous big paint, and each follow-up viewport
+		// repaint nudges Windows Terminal's viewport tracker further off the
+		// last row (see #2095).
+		if (this.#postFullPaintSettleUntilMs > 0) {
+			const now = this.#renderScheduler.now();
+			if (now < this.#postFullPaintSettleUntilMs) {
+				if (this.#postFullPaintSettleTimer === undefined) {
+					this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
+						this.#postFullPaintSettleTimer = undefined;
+						this.#postFullPaintSettleUntilMs = 0;
+						if (this.#stopped) return;
+						this.requestRender(false);
+					}, this.#postFullPaintSettleUntilMs - now);
+				}
+				return;
+			}
+			this.#postFullPaintSettleUntilMs = 0;
+		}
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 	}
 
+	/**
+	 * Arm or extend the multiplexer-resize debounce so a single forced render
+	 * fires once the pane is quiet. Called by the SIGWINCH callback on every
+	 * resize event, and by `requestRender(true)` / `resetDisplay()` when they
+	 * land inside an in-flight settle window. Each call cancels the prior
+	 * timer, supersedes any queued throttled render (otherwise it would race
+	 * tmux's mid-reflow paint), and OR's the caller's `clearScrollback`
+	 * intent into `#deferredForcedClearScrollback` — the timer's callback
+	 * consumes that flag exactly once when it re-enters `requestRender(true)`.
+	 */
+	#armMultiplexerResizeTimer(clearScrollback: boolean): void {
+		this.#deferredForcedClearScrollback ||= clearScrollback;
+		if (this.#renderTimer) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+		}
+		this.#renderRequested = false;
+		if (this.#multiplexerResizeTimer) {
+			this.#multiplexerResizeTimer.cancel();
+		}
+		this.#multiplexerResizeTimer = this.#renderScheduler.scheduleRender(() => {
+			this.#multiplexerResizeTimer = undefined;
+			if (this.#stopped) {
+				this.#deferredForcedClearScrollback = false;
+				return;
+			}
+			const deferredClearScrollback = this.#deferredForcedClearScrollback;
+			this.#deferredForcedClearScrollback = false;
+			this.requestRender(true, { clearScrollback: deferredClearScrollback });
+		}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
+	}
+
+	/**
+	 * Arm the post-full-paint settle window after an `#emitFullPaint` that
+	 * pushed content into native scrollback on a ConPTY host. Idempotent inside
+	 * the window: a later overflowing paint extends `until` to the later
+	 * deadline so back-to-back big paints do not double-fire the trailing
+	 * coalesced render, and the existing deferred timer is rescheduled to the
+	 * later deadline.
+	 *
+	 * Mid-composition callers (most notably `ImageBudget.endPass()`, which can
+	 * call `requestRender()` from inside the in-flight paint when a new image
+	 * trips the budget) queue their render *before* the settle exists, so they
+	 * fall through the gate and set `#renderRequested` / `#renderTimer` on the
+	 * 30 Hz throttle. Without absorbing those, the throttled follow-up fires
+	 * inside the 150 ms quiet window and reintroduces the cascade the settle
+	 * was meant to stop. Cancel both, then eagerly arm the trailing settle
+	 * timer so the in-flight request still rides one coalesced render at the
+	 * end of the window. See #2095.
+	 */
+	#armPostFullPaintSettle(): void {
+		if (!isConPTYHosted()) return;
+		const until = this.#renderScheduler.now() + TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS;
+		if (until <= this.#postFullPaintSettleUntilMs) return;
+		this.#postFullPaintSettleUntilMs = until;
+		const hadPendingRender = this.#renderRequested || this.#renderTimer !== undefined;
+		// Reclaim any render that was queued during the in-flight composition:
+		// `#renderRequested` was set before the settle existed and would
+		// otherwise fire on the standard throttle inside the window.
+		this.#renderRequested = false;
+		if (this.#renderTimer) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+		}
+		if (this.#postFullPaintSettleTimer) {
+			this.#postFullPaintSettleTimer.cancel();
+			this.#postFullPaintSettleTimer = undefined;
+		}
+		if (hadPendingRender) {
+			// Replay the absorbed request via the trailing settle timer so the
+			// caller's render still happens — just deferred to the end of the
+			// window. Subsequent `requestRender(false)` calls during the
+			// settle see this timer and fold into it (existing gate at L1263).
+			this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
+				this.#postFullPaintSettleTimer = undefined;
+				this.#postFullPaintSettleUntilMs = 0;
+				if (this.#stopped) return;
+				this.requestRender(false);
+			}, TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
+		}
+	}
+
+	#clearPostFullPaintSettle(): void {
+		if (this.#postFullPaintSettleTimer) {
+			this.#postFullPaintSettleTimer.cancel();
+			this.#postFullPaintSettleTimer = undefined;
+		}
+		this.#postFullPaintSettleUntilMs = 0;
+	}
 	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =
 			(this.#previousWidth > 0 && this.#previousWidth !== this.terminal.columns) ||
@@ -1151,6 +1387,13 @@ export class TUI extends Container {
 
 	#scheduleRender(): void {
 		if (this.#stopped || this.#renderTimer || !this.#renderRequested) {
+			return;
+		}
+		// Defer any new throttled render scheduled inside the multiplexer
+		// resize settle window: it would race tmux's mid-reflow pane repaint.
+		// `#renderRequested` stays set so the eventual forced render — armed
+		// by the SIGWINCH callback — picks up the latest component state.
+		if (this.#multiplexerResizeTimer) {
 			return;
 		}
 		const elapsed = this.#renderScheduler.now() - this.#lastRenderAt;
@@ -1570,12 +1813,15 @@ export class TUI extends Container {
 		if (wantAlt && !this.#altActive) {
 			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
 			this.terminal.hideCursor();
+			this.#forgetHardwareCursorState();
+			this.#recordHardwareCursorHidden();
 			this.#altActive = true;
 			this.#altPreviousLines = [];
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			this.#forgetHardwareCursorState();
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 			// A resize while on the alt buffer reflowed the terminal's saved normal
@@ -1617,6 +1863,9 @@ export class TUI extends Container {
 		const prevHardwareCursorRow = this.#hardwareCursorRow;
 		const resizeEventOccurred = this.#resizeEventPending;
 		this.#resizeEventPending = false;
+		if (resizeEventOccurred) {
+			this.#forgetHardwareCursorState();
+		}
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		// A resize event with net-unchanged dimensions still reflowed the terminal
 		// buffer; classify it as a height change so the geometry branches repaint
@@ -1626,7 +1875,9 @@ export class TUI extends Container {
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const eagerEraseScrollbackRisk = this.#hasEagerEraseScrollbackRisk();
 		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !eagerEraseScrollbackRisk;
-		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender;
+		const focusChanged = this.#focusChangedSinceLastRender;
+		this.#focusChangedSinceLastRender = false;
+		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender || focusChanged;
 		const allowUnknownViewportMutation = explicitViewportMutation || eagerRebuildAllowed;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
@@ -1780,6 +2031,7 @@ export class TUI extends Container {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
 				});
+				if (lines.length > height) this.#armPostFullPaintSettle();
 				this.#hasEverRendered = true;
 				return;
 			case "historyRebuild":
@@ -1788,6 +2040,7 @@ export class TUI extends Container {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
 				});
+				if (lines.length > height) this.#armPostFullPaintSettle();
 				return;
 			case "overlayRebuild":
 				this.#clearNativeScrollbackDirty();
@@ -1798,6 +2051,7 @@ export class TUI extends Container {
 					clearScrollback: !isMultiplexerSession(),
 				});
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
+				if (baseLines.length > height) this.#armPostFullPaintSettle();
 				return;
 			case "liveRegionPinned":
 				this.#emitLiveRegionPinnedRepaint(
@@ -2515,40 +2769,47 @@ export class TUI extends Container {
 		);
 		if (raw.length <= maxSourceLength) return raw;
 
-		const chunks: string[] = [];
-		let emitted = 0;
-		for (let i = 0; i < raw.length && emitted < maxSourceLength; ) {
+		let output = "";
+		let cells = 0;
+		for (let i = 0; i < raw.length && cells < safeWidth; ) {
 			if (raw.charCodeAt(i) === 0x1b) {
 				const end = this.#ansiSequenceEnd(raw, i);
-				if (end === -1) break;
-				const sequenceLength = end - i;
+				if (end < 0) break;
 				if (this.#ansiSequenceHasVisiblePayload(raw, i)) {
-					// OSC 66 text-sizing spans carry their visible cells inside the
-					// OSC payload. Always include the whole sequence — splitting it
-					// would corrupt the terminator — and let the next loop iteration
-					// terminate on the budget overflow.
-					chunks.push(raw.slice(i, end));
-					emitted += sequenceLength;
-					i = end;
-					continue;
-				}
-				if (emitted > 0 && sequenceLength <= maxSourceLength - emitted) {
-					chunks.push(raw.slice(i, end));
-					emitted += sequenceLength;
+					const sequence = raw.slice(i, end);
+					if (output.length + sequence.length <= maxSourceLength) {
+						output += sequence;
+						cells += visibleWidth(sequence);
+					}
 				}
 				i = end;
 				continue;
 			}
 
-			const start = i;
-			const end = Math.min(raw.length, start + maxSourceLength - emitted);
-			while (i < end && raw.charCodeAt(i) !== 0x1b) i++;
-			if (i === start) break;
-			chunks.push(raw.slice(start, i));
-			emitted += i - start;
+			const code = raw.charCodeAt(i);
+			const next = code >= 0xd800 && code <= 0xdbff && i + 1 < raw.length ? i + 2 : i + 1;
+			const char = raw.slice(i, next);
+			const charWidth = visibleWidth(char);
+			if (charWidth > 0 && cells + charWidth > safeWidth) break;
+			if (output.length + char.length > maxSourceLength) {
+				if (charWidth > 0) break;
+				i = next;
+				continue;
+			}
+			if (charWidth === 0) {
+				const remainingVisibleCells = safeWidth - cells;
+				const reservedCodeUnits = remainingVisibleCells * 2;
+				if (output.length + char.length > maxSourceLength - reservedCodeUnits) {
+					i = next;
+					continue;
+				}
+			}
+			output += char;
+			cells += charWidth;
+			i = next;
 		}
 
-		return chunks.join("") + SEGMENT_RESET;
+		return output + SEGMENT_RESET;
 	}
 
 	#ansiSequenceEnd(line: string, start: number): number {
@@ -2576,8 +2837,7 @@ export class TUI extends Container {
 	}
 
 	#ansiSequenceHasVisiblePayload(line: string, start: number): boolean {
-		// OSC 66 (`\x1b]66;META;TEXT\x1b\\`) carries its visible cells inside the
-		// payload, mirroring the special case in {@link #ansiAsciiLineWidth}.
+		// OSC 66 (`\x1b]66;META;TEXT\x1b\\`) carries visible cells inside the payload.
 		return (
 			line.charCodeAt(start + 1) === 0x5d &&
 			line.charCodeAt(start + 2) === 0x36 &&
@@ -2652,7 +2912,13 @@ export class TUI extends Container {
 	 * the end so cursor/viewport/scrollback accounting stays consistent.
 	 */
 
-	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
+	#commit(
+		lines: string[],
+		width: number,
+		height: number,
+		viewportTop: number,
+		hardwareCursor: HardwareCursorUpdate,
+	): void {
 		this.#deferredTailLine = undefined;
 		this.#previousLines = lines;
 		this.#previousVisibleOverlayComponents = this.#visibleOverlayComponentsThisRender;
@@ -2661,7 +2927,73 @@ export class TUI extends Container {
 		this.#previousHeight = height;
 		this.#cursorRow = Math.max(0, lines.length - 1);
 		this.#viewportTopRow = viewportTop;
-		this.#hardwareCursorRow = hardwareCursorRow;
+		this.#recordHardwareCursorUpdate(hardwareCursor);
+	}
+
+	#targetHardwareCursorState(
+		cursorPos: { row: number; col: number } | null,
+		totalLines: number,
+	): HardwareCursorState | null {
+		if (!cursorPos || totalLines <= 0) return null;
+		return {
+			row: Math.max(0, Math.min(cursorPos.row, totalLines - 1)),
+			col: Math.max(0, cursorPos.col),
+			visible: this.#showHardwareCursor,
+		};
+	}
+
+	#recordHardwareCursorState(state: HardwareCursorState): void {
+		this.#hardwareCursorRow = state.row;
+		this.#hardwareCursorState = state;
+		this.#hardwareCursorVisible = state.visible;
+		this.#hardwareCursorVisibilityKnown = true;
+	}
+
+	#recordHardwareCursorRowOnly(row: number, visible?: boolean): void {
+		this.#hardwareCursorRow = row;
+		this.#hardwareCursorState = null;
+		if (visible !== undefined) {
+			this.#hardwareCursorVisible = visible;
+			this.#hardwareCursorVisibilityKnown = true;
+		}
+	}
+
+	#recordHardwareCursorUpdate(update: HardwareCursorUpdate): void {
+		if (update.state) {
+			this.#recordHardwareCursorState(update.state);
+			return;
+		}
+		this.#recordHardwareCursorRowOnly(update.toRow, update.visible);
+	}
+
+	#recordHardwareCursorHidden(): void {
+		this.#hardwareCursorVisible = false;
+		this.#hardwareCursorVisibilityKnown = true;
+		if (!this.#hardwareCursorState) return;
+		this.#hardwareCursorState = { ...this.#hardwareCursorState, visible: false };
+	}
+
+	#forgetHardwareCursorState(): void {
+		this.#hardwareCursorState = null;
+		this.#hardwareCursorVisibilityKnown = false;
+	}
+
+	#sameHardwareCursorState(state: HardwareCursorState): boolean {
+		const current = this.#hardwareCursorState;
+		return (
+			current !== null && current.row === state.row && current.col === state.col && current.visible === state.visible
+		);
+	}
+
+	#preserveHardwareCursorUpdate(row: number): HardwareCursorUpdate {
+		if (this.#hardwareCursorState?.row === row) {
+			return { toRow: row, state: this.#hardwareCursorState, visible: this.#hardwareCursorState.visible };
+		}
+		return {
+			toRow: row,
+			state: null,
+			visible: this.#hardwareCursorVisibilityKnown ? this.#hardwareCursorVisible : undefined,
+		};
 	}
 
 	/**
@@ -2724,8 +3056,8 @@ export class TUI extends Container {
 		}
 		buffer += fillSequence;
 		const finalRow = Math.max(0, lines.length - 1);
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
@@ -2738,7 +3070,7 @@ export class TUI extends Container {
 		if (pushedNow > this.#scrollbackHighWater) {
 			this.#scrollbackHighWater = pushedNow;
 		}
-		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), toRow);
+		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), cursorControl);
 	}
 
 	/**
@@ -2782,14 +3114,14 @@ export class TUI extends Container {
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
 		this.#scrollbackHighWater = appendTo;
-		this.#commit(lines, width, height, viewportTop, toRow);
+		this.#commit(lines, width, height, viewportTop, cursorControl);
 	}
 	/**
 	 * Rewrite the visible viewport in place. Cursor home, clear each row,
@@ -2855,13 +3187,13 @@ export class TUI extends Container {
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
-		this.#commit(lines, width, height, viewportTop, toRow);
+		this.#commit(lines, width, height, viewportTop, cursorControl);
 	}
 
 	/** Topmost visible overlay requests the alternate-screen buffer. */
@@ -2974,13 +3306,13 @@ export class TUI extends Container {
 				}
 				cursorFromRow = viewportTop + lastChangedScreenRow;
 			}
-			const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, cursorFromRow);
-			buffer += seq;
+			const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, cursorFromRow);
+			buffer += cursorControl.seq;
 			buffer += this.#paintEndSequence;
 			this.terminal.write(buffer);
 
 			this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
-			this.#commit(lines, width, height, viewportTop, toRow);
+			this.#commit(lines, width, height, viewportTop, cursorControl);
 			return;
 		}
 
@@ -3014,8 +3346,8 @@ export class TUI extends Container {
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
@@ -3023,7 +3355,7 @@ export class TUI extends Container {
 		if (boundedAppendTo > this.#scrollbackHighWater) {
 			this.#scrollbackHighWater = boundedAppendTo;
 		}
-		this.#commit(lines, width, height, viewportTop, toRow);
+		this.#commit(lines, width, height, viewportTop, cursorControl);
 	}
 
 	/**
@@ -3092,7 +3424,7 @@ export class TUI extends Container {
 		this.#previousWidth = width;
 		this.#previousHeight = height;
 		this.#viewportTopRow = prevViewportTop;
-		this.#hardwareCursorRow = row;
+		this.#recordHardwareCursorRowOnly(row, false);
 	}
 
 	/**
@@ -3111,7 +3443,13 @@ export class TUI extends Container {
 	): void {
 		const extraLines = this.#previousLines.length - lines.length;
 		if (extraLines <= 0) {
-			this.#commit(lines, width, height, Math.max(0, lines.length - height), prevHardwareCursorRow);
+			this.#commit(
+				lines,
+				width,
+				height,
+				Math.max(0, lines.length - height),
+				this.#preserveHardwareCursorUpdate(prevHardwareCursorRow),
+			);
 			this.#maxLinesRendered = lines.length;
 			return;
 		}
@@ -3146,13 +3484,13 @@ export class TUI extends Container {
 			buffer += `\x1b[${moveUp}A`;
 		}
 
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
-		this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
+		this.#commit(lines, width, height, Math.max(0, lines.length - height), cursorControl);
 	}
 
 	/**
@@ -3264,8 +3602,8 @@ export class TUI extends Container {
 		// so emitting them after the trailing-shrink cursor moves is safe.
 		buffer += fillSequence;
 
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 
 		this.#writeDiffDebug(
@@ -3278,7 +3616,7 @@ export class TUI extends Container {
 			renderEnd,
 			finalCursorRow,
 			cursorPos,
-			toRow,
+			cursorControl.toRow,
 			buffer,
 		);
 		this.terminal.write(buffer);
@@ -3290,7 +3628,7 @@ export class TUI extends Container {
 				this.#scrollbackHighWater = pushedNow;
 			}
 		}
-		this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
+		this.#commit(lines, width, height, Math.max(0, lines.length - height), cursorControl);
 	}
 
 	/** Optional intent log under PI_DEBUG_REDRAW. */
@@ -3369,16 +3707,15 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 		totalLines: number,
 		fromRow: number,
-	): { seq: string; toRow: number } {
-		// No IME target or no content — hide cursor regardless of preference
-		if (!cursorPos || totalLines <= 0) return { seq: "\x1b[?25l", toRow: fromRow };
+	): CursorControlResult {
+		// No IME target or no content — hide cursor regardless of preference.
+		const target = this.#targetHardwareCursorState(cursorPos, totalLines);
+		if (!target) {
+			return { seq: "\x1b[?25l", toRow: fromRow, toCol: 0, visible: false, state: null };
+		}
 
-		// Clamp cursor position to valid range
-		const targetRow = Math.max(0, Math.min(cursorPos.row, totalLines - 1));
-		const targetCol = Math.max(0, cursorPos.col);
-
-		// Move cursor from current position to target
-		const rowDelta = targetRow - fromRow;
+		// Move cursor from current position to target.
+		const rowDelta = target.row - fromRow;
 		let seq = "";
 		if (rowDelta > 0) {
 			seq += `\x1b[${rowDelta}B`; // Move down
@@ -3386,10 +3723,14 @@ export class TUI extends Container {
 			seq += `\x1b[${-rowDelta}A`; // Move up
 		}
 		// Move to absolute column (1-indexed)
-		seq += `\x1b[${targetCol + 1}G`;
-		seq += this.#showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
+		seq += `\x1b[${target.col + 1}G`;
+		seq += target.visible ? "\x1b[?25h" : "\x1b[?25l";
 
-		return { seq, toRow: targetRow };
+		return { seq, toRow: target.row, toCol: target.col, visible: target.visible, state: target };
+	}
+
+	#isHiddenCursorKnown(): boolean {
+		return this.#hardwareCursorVisibilityKnown && !this.#hardwareCursorVisible;
 	}
 
 	/**
@@ -3398,12 +3739,16 @@ export class TUI extends Container {
 	 * to embed the sequences into.
 	 */
 	#writeCursorPosition(cursorPos: { row: number; col: number } | null, totalLines: number): void {
-		if (!cursorPos || totalLines <= 0) {
+		const target = this.#targetHardwareCursorState(cursorPos, totalLines);
+		if (!target) {
+			if (this.#isHiddenCursorKnown()) return;
 			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
 			return;
 		}
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
-		this.#hardwareCursorRow = toRow;
-		this.terminal.write(`${this.#cursorBeginSequence}${seq}${this.#cursorEndSequence}`);
+		if (this.#sameHardwareCursorState(target)) return;
+		const cursorControl = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
+		this.terminal.write(`${this.#cursorBeginSequence}${cursorControl.seq}${this.#cursorEndSequence}`);
+		this.#recordHardwareCursorUpdate(cursorControl);
 	}
 }

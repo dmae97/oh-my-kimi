@@ -8,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -132,7 +132,7 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 function maybeWriteSnapshotHeader(session: ToolSession, absolutePath: string, content: string): string | undefined {
 	if (!resolveFileDisplayMode(session).hashLines) return undefined;
 	const normalized = normalizeToLF(content);
-	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
+	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return formatHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag);
 }
 
@@ -277,7 +277,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly label = "Write";
 	readonly description: string;
 	readonly parameters = writeSchema;
-	readonly nonAbortable = true;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
@@ -582,6 +581,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const batchRequest = getLspBatchRequest(context?.toolCall);
 		const diagnostics = await this.#writethrough(absolutePath, newContent, signal, undefined, batchRequest);
 		invalidateFsScanAfterWrite(absolutePath);
+		this.session.bumpFileMutationVersion?.(absolutePath);
 		this.session.fileSnapshotStore?.invalidate(absolutePath);
 		this.session.conflictHistory?.invalidate(entry.id);
 
@@ -707,6 +707,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			const diagnostics = await this.#writethrough(absolutePath, text, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
+			this.session.bumpFileMutationVersion?.(absolutePath);
 			this.session.fileSnapshotStore?.invalidate(absolutePath);
 			for (const entry of fileEntries) history.invalidate(entry.id);
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, text);
@@ -886,6 +887,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
+			this.session.bumpFileMutationVersion?.(absolutePath);
 			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
 			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
@@ -1037,17 +1039,6 @@ export const writeToolRenderer = {
 				width,
 			};
 		});
-	},
-
-	// Only the expanded (Ctrl+O) preview is append-only: it renders the whole
-	// content top-anchored, so streamed chunks only append rows at the bottom.
-	// The collapsed preview slides a bounded tail window (`formatStreamingContent`
-	// with `WRITE_STREAMING_PREVIEW_LINES`) whose visible rows re-layout as the
-	// window moves — not append-only, but it never overflows the viewport, so its
-	// head is never at risk of being dropped regardless. `write` has no partial
-	// result (content streams as args), so `result` is ignored here.
-	isStreamingPreviewAppendOnly(args: WriteRenderArgs, options: RenderResultOptions, _result?: unknown): boolean {
-		return Boolean(options?.expanded && args.content);
 	},
 
 	renderResult(

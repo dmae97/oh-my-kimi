@@ -156,7 +156,7 @@ export function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 								? [{ type: "text" as const, text: message.content }]
 								: message.content;
 						return {
-							role: "user",
+							role: "developer",
 							content,
 							attribution: message.attribution,
 							timestamp: message.timestamp,

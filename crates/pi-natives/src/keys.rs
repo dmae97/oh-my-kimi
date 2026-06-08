@@ -1700,7 +1700,8 @@ mod tests {
 		assert!(!matches_key_inner(b"\x1b[127;11u", "alt+backspace", true));
 		// And plain backspace (mod 0) must still not match a super+alt-modified press.
 		assert!(!matches_key_inner(b"\x1b[127;11u", "backspace", true));
-		// Release events stay ignored: super+alt+backspace release must not match a press.
+		// Release events stay ignored: super+alt+backspace release must not match a
+		// press.
 		assert!(!matches_key_inner(b"\x1b[127;11:3u", "super+alt+backspace", true));
 		assert_eq!(parse_key_inner(b"\x1b[127;11:3u", true).as_deref(), None);
 	}

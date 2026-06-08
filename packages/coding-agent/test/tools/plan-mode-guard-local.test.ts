@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { PlanModeState } from "../../src/plan-mode/state";
@@ -88,5 +89,25 @@ describe("enforcePlanModeWrite (working tree read-only, local:// sandbox writabl
 	it("is a no-op when plan mode is disabled", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo" });
 		expect(() => enforcePlanModeWrite(session, "src/foo.ts", { op: "update" })).not.toThrow();
+	});
+});
+
+describe("enforcePlanModeWrite accepts absolute local-sandbox paths", () => {
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
+
+	it("allows the absolute path returned by `read local://...` (== sandbox-resolved path)", async () => {
+		// Use an existing tmp directory so the realpath check inside the guard
+		// sees a real filesystem (macOS collapses /tmp -> /private/tmp etc.).
+		const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-guard-test-"));
+		const session = makeSession({ artifactsDir, planMode });
+		const absolute = resolvePlanPath(session, "local://my-plan.md");
+		expect(() => enforcePlanModeWrite(session, absolute, { op: "update" })).not.toThrow();
+	});
+
+	it("still rejects an absolute path outside the local sandbox", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+		expect(() => enforcePlanModeWrite(session, "/repo/src/foo.ts", { op: "update" })).toThrow(
+			/working tree is read-only/,
+		);
 	});
 });

@@ -88,8 +88,8 @@ export class Loader extends Text {
 
 	#updateDisplay() {
 		const frame = this.#frames[this.#currentFrame];
-		this.setText(`${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`);
-		if (this.#ui) {
+		const text = `${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`;
+		if (this.setText(text) && this.#ui) {
 			this.#ui.requestRender();
 		}
 	}

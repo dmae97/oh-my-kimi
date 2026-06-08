@@ -16,8 +16,8 @@ import { calculateCost } from "@oh-my-pi/pi-ai/models";
 import { parseStreamingJson } from "@oh-my-pi/pi-ai/utils/json-parse";
 import { readSseJson } from "@oh-my-pi/pi-utils";
 
-// Create stream class matching ProxyMessageEventStream
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+// Event stream adapter for proxy SSE events
+export class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
 		super(
 			event => event.type === "done" || event.type === "error",
@@ -167,9 +167,12 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 				}
 			}
 
-			if (options.signal?.aborted && !sawTerminalEvent) {
-				const reason = options.signal.reason;
-				throw reason instanceof Error ? reason : new Error(String(reason ?? "Request aborted"));
+			if (!sawTerminalEvent) {
+				if (options.signal?.aborted) {
+					const reason = options.signal.reason;
+					throw reason instanceof Error ? reason : new Error(String(reason ?? "Request aborted"));
+				}
+				throw new Error("Proxy stream ended without a terminal event (done or error)");
 			}
 
 			stream.end();

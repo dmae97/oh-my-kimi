@@ -82,6 +82,23 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 		expect(rendered.length).toBeLessThan(12_000);
 	});
 
+	it("preserves visible suffix text after long zero-width combining prefixes", async () => {
+		const term = new CaptureTerminal(3, 4);
+		const tui = new TUI(term);
+		const line = `a${"\u0301".repeat(4096)}bc`;
+
+		tui.addChild(new RawLinesComponent([line]));
+		try {
+			tui.start();
+			await settle();
+		} finally {
+			tui.stop();
+		}
+
+		const rendered = term.writes.join("");
+		expect(rendered).toContain("bc");
+	});
+
 	it("preserves visible text after oversized OSC hyperlink prefixes", async () => {
 		const term = new CaptureTerminal(80, 4);
 		const tui = new TUI(term);

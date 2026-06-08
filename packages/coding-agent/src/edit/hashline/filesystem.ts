@@ -23,6 +23,7 @@ import type { ToolSession } from "../../tools";
 import { assertEditableFileContent } from "../../tools/auto-generated-guard";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
+import { canonicalSnapshotKey } from "../file-snapshot-store";
 import { readEditFileText, serializeEditFileText } from "../read-file";
 import type { LspBatchRequest } from "../renderer";
 
@@ -81,7 +82,7 @@ export class HashlineFilesystem extends Filesystem {
 	}
 
 	canonicalPath(relativePath: string): string {
-		return this.resolveAbsolute(relativePath);
+		return canonicalSnapshotKey(this.resolveAbsolute(relativePath));
 	}
 
 	async readText(relativePath: string): Promise<string> {

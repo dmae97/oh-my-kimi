@@ -72,7 +72,7 @@ export interface SettingsOptions {
 /**
  * Get a nested value from an object by path segments.
  */
-function getByPath(obj: RawSettings, segments: string[]): unknown {
+function getByPath(obj: RawSettings, segments: readonly string[]): unknown {
 	let current: unknown = obj;
 	for (const segment of segments) {
 		if (current === null || current === undefined || typeof current !== "object") {
@@ -82,6 +82,10 @@ function getByPath(obj: RawSettings, segments: string[]): unknown {
 	}
 	return current;
 }
+
+const SETTING_PATH_SEGMENTS: Record<SettingPath, readonly string[]> = Object.fromEntries(
+	(Object.keys(SETTINGS_SCHEMA) as SettingPath[]).map(settingPath => [settingPath, settingPath.split(".")]),
+) as unknown as Record<SettingPath, readonly string[]>;
 
 /**
  * Set a nested value in an object by path segments.
@@ -196,6 +200,8 @@ export class Settings {
 	#overrides: RawSettings = {};
 	/** Merged view (global + project + overrides) */
 	#merged: RawSettings = {};
+	/** Cached resolved values from the merged view, including defaults/path scoping */
+	#resolvedCache = new Map<SettingPath, unknown>();
 
 	/** Paths modified during this session (for partial save) */
 	#modified = new Set<string>();
@@ -282,13 +288,15 @@ export class Settings {
 	 * Returns the merged value from global + project + overrides, or the default.
 	 */
 	get<P extends SettingPath>(path: P): SettingValue<P> {
-		const segments = path.split(".");
-		const value = getByPath(this.#merged, segments);
-		if (value !== undefined) {
-			const pathScopedValue = resolvePathScopedStringArray(path, value, this.#cwd);
-			return (pathScopedValue ?? value) as SettingValue<P>;
+		if (this.#resolvedCache.has(path)) {
+			return this.#resolvedCache.get(path) as SettingValue<P>;
 		}
-		return getDefault(path);
+
+		const value = getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]);
+		const resolved =
+			value !== undefined ? (resolvePathScopedStringArray(path, value, this.#cwd) ?? value) : getDefault(path);
+		this.#resolvedCache.set(path, resolved);
+		return resolved as SettingValue<P>;
 	}
 
 	/**
@@ -302,6 +310,7 @@ export class Settings {
 		setByPath(this.#global, segments, value);
 		this.#modified.add(path);
 		this.#rebuildMerged();
+		const next = this.get(path);
 		this.#queueSave();
 
 		// Trigger hook if exists
@@ -309,21 +318,25 @@ export class Settings {
 		if (hook) {
 			hook(value, prev);
 		}
+		this.#fireEffectiveSettingChanged(path, next, prev);
 	}
 
 	/**
 	 * Apply runtime overrides (not persisted).
 	 */
 	override<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+		const prev = this.get(path);
 		const segments = path.split(".");
 		setByPath(this.#overrides, segments, value);
 		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
 	}
 
 	/**
 	 * Clear a runtime override.
 	 */
 	clearOverride(path: SettingPath): void {
+		const prev = this.get(path);
 		const segments = path.split(".");
 		let current = this.#overrides;
 		for (let i = 0; i < segments.length - 1; i++) {
@@ -333,6 +346,14 @@ export class Settings {
 		}
 		delete current[segments[segments.length - 1]];
 		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
+	}
+
+	#fireEffectiveSettingChanged(path: SettingPath, value: unknown, prev: unknown): void {
+		if (Object.is(value, prev)) return;
+		if (path === "statusLine.sessionAccent") {
+			statusLineSessionAccentSignal.fire();
+		}
 	}
 
 	/**
@@ -842,6 +863,7 @@ export class Settings {
 	#rebuildMerged(): void {
 		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#project);
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
+		this.#resolvedCache.clear();
 	}
 
 	#fireAllHooks(): void {
@@ -885,6 +907,45 @@ export class Settings {
 
 type SettingHook<P extends SettingPath> = (value: SettingValue<P>, prev: SettingValue<P>) => void;
 
+/**
+ * Minimal change-notification primitive backing the exported `on*Changed`
+ * subscriptions. Holds a listener set, hands out unsubscribe closures, and
+ * isolates errors so a single throwing listener can't abort the rest or bubble
+ * out of `Settings.set()`.
+ *
+ * @typeParam A - argument tuple forwarded to each listener on `fire`.
+ */
+class SettingSignal<A extends unknown[] = []> {
+	#listeners = new Set<(...args: A) => void>();
+
+	constructor(private readonly label: string) {}
+
+	/** Subscribe `cb`; returns an unsubscribe function. */
+	on(cb: (...args: A) => void): () => void {
+		this.#listeners.add(cb);
+		return () => {
+			this.#listeners.delete(cb);
+		};
+	}
+
+	/**
+	 * Invoke every listener with `args`. Iterates a snapshot so a listener may
+	 * (un)subscribe mid-fire without re-entrancy — the Hindsight backend
+	 * re-registers the fresh state's listener on every rebuild — and wraps each
+	 * call so a throwing listener is logged and skipped instead of aborting the
+	 * rest.
+	 */
+	fire(...args: A): void {
+		for (const cb of [...this.#listeners]) {
+			try {
+				cb(...args);
+			} catch (err) {
+				logger.warn(`Settings: ${this.label} hook failed`, { error: String(err) });
+			}
+		}
+	}
+}
+
 const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	"theme.dark": value => {
 		if (typeof value === "string") {
@@ -917,45 +978,34 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	},
 	"provider.appendOnlyContext": value => {
 		if (typeof value === "string") {
-			for (const cb of appendOnlyModeCallbacks) cb(value);
+			appendOnlyModeSignal.fire(value);
 		}
 	},
-	"hindsight.bankId": () => fireHindsightScopeChanged(),
-	"hindsight.bankIdPrefix": () => fireHindsightScopeChanged(),
-	"hindsight.scoping": () => fireHindsightScopeChanged(),
+	"hindsight.bankId": () => hindsightScopeSignal.fire(),
+	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
+	"hindsight.scoping": () => hindsightScopeSignal.fire(),
 };
-/** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
-const appendOnlyModeCallbacks = new Set<(value: string) => void>();
+/** Fires when `provider.appendOnlyContext` changes at runtime. */
+const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider.appendOnlyContext");
 
 /**
  * Subscribe to append-only mode setting changes.
  * Returns an unsubscribe function. Multiple sessions (main + subagents)
  * can register independently without overwriting each other.
  */
-export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void {
-	appendOnlyModeCallbacks.add(cb);
-	return () => {
-		appendOnlyModeCallbacks.delete(cb);
-	};
-}
+export const onAppendOnlyModeChanged = (cb: (value: string) => void) => appendOnlyModeSignal.on(cb);
 
-/** Callbacks fired when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
-const hindsightScopeCallbacks = new Set<() => void>();
+/** Fires when `statusLine.sessionAccent` changes at runtime. */
+const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");
 
-function fireHindsightScopeChanged(): void {
-	// Snapshot the callback set before invoking — a callback's body is allowed
-	// to subscribe a NEW callback (the Hindsight backend re-registers the
-	// fresh state's listener on every rebuild). Iterating the live Set would
-	// re-invoke those just-added callbacks within the same fire, which spins
-	// in place: subscribe → invoke → subscribe → invoke → …
-	for (const cb of [...hindsightScopeCallbacks]) {
-		try {
-			cb();
-		} catch (err) {
-			logger.warn("Settings: hindsight scope hook failed", { error: String(err) });
-		}
-	}
-}
+/**
+ * Subscribe to session-accent setting changes.
+ * Returns an unsubscribe function. Callers should re-read settings in the callback.
+ */
+export const onStatusLineSessionAccentChanged = (cb: () => void) => statusLineSessionAccentSignal.on(cb);
+
+/** Fires when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
+const hindsightScopeSignal = new SettingSignal("hindsight scope");
 
 /**
  * Subscribe to changes in the Hindsight bank-scoping settings. Lets the
@@ -967,12 +1017,7 @@ function fireHindsightScopeChanged(): void {
  * Returns an unsubscribe function. The callback receives no arguments — the
  * caller is expected to re-read the relevant settings via `Settings.get`.
  */
-export function onHindsightScopeChanged(cb: () => void): () => void {
-	hindsightScopeCallbacks.add(cb);
-	return () => {
-		hindsightScopeCallbacks.delete(cb);
-	};
-}
+export const onHindsightScopeChanged = (cb: () => void) => hindsightScopeSignal.on(cb);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global Singleton
