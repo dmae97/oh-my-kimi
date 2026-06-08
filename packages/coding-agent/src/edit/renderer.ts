@@ -4,7 +4,7 @@
 
 import { HL_FILE_PREFIX, HL_FILE_SUFFIX } from "@oh-my-pi/hashline";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { FileDiagnosticsResult } from "../lsp";
@@ -13,7 +13,6 @@ import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import type { OutputMeta } from "../tools/output-meta";
 import {
 	formatDiagnostics,
-	formatDiffStats,
 	formatExpandHint,
 	formatStatusIcon,
 	getDiffStats,
@@ -182,42 +181,118 @@ function getOperationTitle(op: Operation | undefined): string {
 	return op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
 }
 
+interface EditPathDisplayOptions {
+	rename?: string;
+	firstChangedLine?: number;
+	linkPath?: string;
+	renameLinkPath?: string;
+	maxPathWidth?: number;
+}
+
+function truncateEditTitlePath(displayPath: string, maxWidth: number | undefined): string {
+	if (maxWidth === undefined) return displayPath;
+	const width = visibleWidth(displayPath);
+	const safeMaxWidth = Math.max(0, Math.floor(maxWidth));
+	if (width <= safeMaxWidth) return displayPath;
+
+	const contentWidth = safeMaxWidth - 1;
+	if (contentWidth <= 0) return "…";
+
+	const headWidth = Math.floor(contentWidth / 2);
+	const tailWidth = contentWidth - headWidth;
+	const head = sliceWithWidth(displayPath, 0, headWidth, true).text;
+	const tail = sliceWithWidth(displayPath, Math.max(0, width - tailWidth), tailWidth, true).text;
+	return `${head}…${tail}`;
+}
+
+function formatEditTitlePath(pathValue: string, maxWidth?: number): string {
+	return truncateEditTitlePath(replaceTabs(shortenPath(pathValue), pathValue), maxWidth);
+}
+
 function formatEditPathDisplay(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number; linkPath?: string; renameLinkPath?: string },
-): string {
+	options?: EditPathDisplayOptions,
+): { text: string; pathWidth: number } {
 	// `rawPath`/`rename` are shown (cwd-relative) but the OSC 8 link targets the
-	// absolute path when known — a relative `rawPath` would yield a `file:///rel`
-	// URI that resolves against filesystem root instead of cwd.
+	// absolute path when known — a relative `rawPath` would otherwise yield a
+	// `file:///rel` URI that resolves against filesystem root instead of cwd.
 	const linkTarget = options?.linkPath || rawPath;
+	const lineLink = options?.firstChangedLine ? { line: options.firstChangedLine } : undefined;
+	const primaryDisplay = rawPath ? formatEditTitlePath(rawPath, options?.maxPathWidth) : "…";
 	let pathDisplay = rawPath
-		? fileHyperlink(linkTarget, uiTheme.fg("accent", shortenPath(rawPath)))
-		: uiTheme.fg("toolOutput", "…");
-
-	if (options?.firstChangedLine) {
-		pathDisplay += uiTheme.fg("warning", `:${options.firstChangedLine}`);
-	}
+		? fileHyperlink(linkTarget, uiTheme.fg("accent", primaryDisplay), lineLink)
+		: uiTheme.fg("toolOutput", primaryDisplay);
+	let pathWidth = visibleWidth(primaryDisplay);
 
 	if (options?.rename) {
 		const renameTarget = options.renameLinkPath || options.rename;
-		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(renameTarget, uiTheme.fg("accent", shortenPath(options.rename)))}`;
+		const renameDisplay = formatEditTitlePath(options.rename, options.maxPathWidth);
+		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(renameTarget, uiTheme.fg("accent", renameDisplay))}`;
+		pathWidth += visibleWidth(renameDisplay);
 	}
 
-	return pathDisplay;
+	return { text: pathDisplay, pathWidth };
 }
 
 function formatEditDescription(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number; linkPath?: string; renameLinkPath?: string },
-): { language: string; description: string } {
+	options?: EditPathDisplayOptions,
+): { language: string; description: string; pathWidth: number } {
 	const language = getLanguageFromPath(rawPath) ?? "text";
 	const icon = uiTheme.fg("muted", uiTheme.getLangIcon(language));
+	const pathDisplay = formatEditPathDisplay(rawPath, uiTheme, options);
 	return {
 		language,
-		description: `${icon} ${formatEditPathDisplay(rawPath, uiTheme, options)}`,
+		description: `${icon} ${pathDisplay.text}`,
+		pathWidth: pathDisplay.pathWidth,
 	};
+}
+
+function editHeaderLabelBudget(width: number, uiTheme: Theme): number {
+	const leftGlyphs = `${uiTheme.boxSharp.topLeft}${uiTheme.boxSharp.horizontal.repeat(3)}`;
+	return Math.max(0, width - visibleWidth(leftGlyphs) - visibleWidth(uiTheme.boxSharp.topRight) - 2);
+}
+
+function renderEditHeader(
+	width: number,
+	uiTheme: Theme,
+	options: {
+		icon: "pending" | "success" | "error";
+		spinnerFrame?: number;
+		op?: Operation;
+		rawPath: string;
+		rename?: string;
+		firstChangedLine?: number;
+		linkPath?: string;
+		statsSuffix?: string;
+		extraSuffix?: string;
+	},
+): string {
+	const title = getOperationTitle(options.op);
+	const descriptionOptions: EditPathDisplayOptions = {
+		rename: options.rename,
+		firstChangedLine: options.firstChangedLine,
+		linkPath: options.linkPath,
+	};
+	const formatted = formatEditDescription(options.rawPath, uiTheme, descriptionOptions);
+	const suffix = `${options.statsSuffix ?? ""}${options.extraSuffix ?? ""}`;
+	const buildHeader = (description: string): string =>
+		renderStatusLine({ icon: options.icon, spinnerFrame: options.spinnerFrame, title, description }, uiTheme) +
+		suffix;
+
+	const header = buildHeader(formatted.description);
+	const overflow = visibleWidth(header) - editHeaderLabelBudget(width, uiTheme);
+	if (overflow <= 0 || formatted.pathWidth <= 1) return header;
+
+	const pathCount = Math.max(1, (options.rawPath ? 1 : 0) + (options.rename ? 1 : 0));
+	const fittedPathWidth = Math.max(1, Math.floor((formatted.pathWidth - overflow) / pathCount));
+	const fitted = formatEditDescription(options.rawPath, uiTheme, {
+		...descriptionOptions,
+		maxPathWidth: fittedPathWidth,
+	});
+	return buildHeader(fitted.description);
 }
 
 function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string): string {
@@ -379,10 +454,13 @@ function getApplyPatchRenderSummary(
 }
 
 function formatDiffStatsSuffix(diff: string, uiTheme: Theme): string {
-	const { added, removed, hunks } = getDiffStats(diff);
-	const stats = formatDiffStats(added, removed, hunks, uiTheme);
-	if (!stats) return "";
-	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
+	const { added, removed } = getDiffStats(diff);
+	if (added === 0 && removed === 0) return "";
+	const stats = [
+		added > 0 ? uiTheme.fg("toolDiffAdded", `+${added}`) : undefined,
+		removed > 0 ? uiTheme.fg("toolDiffRemoved", `-${removed}`) : undefined,
+	].filter(value => value !== undefined);
+	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats.join(uiTheme.fg("dim", "/"))}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
 }
 
 function renderDiffSection(
@@ -462,17 +540,19 @@ export const editToolRenderer = {
 			"";
 		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
 		const op = editArgs.op || firstEdit?.op || firstApplyPatchEntry?.op;
-		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
 		let fileCount = hashlineInputSummary?.entries.length ?? applyPatchSummary?.entries.length ?? 0;
 		if (Array.isArray(editArgs.edits)) {
 			fileCount = countEditFiles(editArgs.edits);
 		}
 		return framedBlock(uiTheme, width => {
-			let header = renderStatusLine(
-				{ icon: "pending", spinnerFrame: options?.spinnerFrame, title: getOperationTitle(op), description },
-				uiTheme,
-			);
-			if (fileCount > 1) header += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
+			const header = renderEditHeader(width, uiTheme, {
+				icon: "pending",
+				spinnerFrame: options?.spinnerFrame,
+				op,
+				rawPath,
+				rename,
+				extraSuffix: fileCount > 1 ? uiTheme.fg("dim", ` (+${fileCount - 1} more)`) : undefined,
+			});
 			let body = getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded);
 			if (applyPatchSummary?.error) {
 				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 2)))}`;
@@ -546,15 +626,20 @@ function renderSingleFileResult(
 			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
 			(details && !isError ? details.firstChangedLine : undefined);
 		const linkPath = details && "path" in details ? details.path : undefined;
-		const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine, linkPath });
 
 		// Change stats ride inline on the header bar next to the path.
 		const previewDiff = editDiffPreview && !("error" in editDiffPreview) ? editDiffPreview.diff : undefined;
 		const headerDiff = isError ? undefined : details?.diff || previewDiff;
 		const statsSuffix = headerDiff ? formatDiffStatsSuffix(headerDiff, uiTheme) : "";
-		const header =
-			renderStatusLine({ icon: isError ? "error" : "success", title: getOperationTitle(op), description }, uiTheme) +
-			statsSuffix;
+		const header = renderEditHeader(width, uiTheme, {
+			icon: isError ? "error" : "success",
+			op,
+			rawPath,
+			rename,
+			firstChangedLine,
+			linkPath,
+			statsSuffix,
+		});
 
 		let body = "";
 		if (isError) {

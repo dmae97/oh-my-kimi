@@ -199,6 +199,33 @@ describe("editToolRenderer", () => {
 		expect(rendered).not.toContain(" …");
 	});
 
+	it("omits changed-line suffixes from completed edit headers and middle-elides long paths", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated transcript-container.test.ts" }],
+				details: {
+					diff: "+1│const value = 2;",
+					firstChangedLine: 251,
+					op: "update",
+					path: "/tmp/project/packages/coding-agent/test/modes/components/transcript-container.test.ts",
+				},
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "packages/coding-agent/test/modes/components/transcript-container.test.ts" },
+		);
+
+		const wideHeader = Bun.stripANSI(component.render(160)[0]);
+		expect(wideHeader).toContain("packages/coding-agent/test/modes/components/transcript-container.test.ts");
+		expect(wideHeader).not.toContain(":251");
+
+		const narrowHeader = Bun.stripANSI(component.render(72)[0]);
+		expect(narrowHeader).toContain("…");
+		expect(narrowHeader).toContain("container.test.ts");
+		expect(narrowHeader).not.toContain(":251");
+	});
+
 	it("computes the hashline preview diff once a single-line edit finishes streaming", async () => {
 		await getUiTheme();
 		const uiStub = { requestRender() {} } as unknown as TUI;
@@ -323,11 +350,11 @@ describe("editToolRenderer", () => {
 		expect(lines[0]).toContain("demo.go");
 		expect(lines[0]).toContain("+2");
 		expect(lines[0]).toContain("-1");
-		expect(lines[0]).toContain("1 hunk");
+		expect(lines[0]).toContain("+2/-1");
 		// …only there (no standalone stats row), and the diff starts immediately
 		// below the header (no blank line, no lone lang-icon metadata row).
 		expect(lines[1]).toContain("115│ ctx");
-		expect(lines.filter(line => line.includes("hunk"))).toHaveLength(1);
+		expect(lines.filter(line => line.includes("+2/-1"))).toHaveLength(1);
 	});
 
 	it("renders completed edit gutters without inherited frame padding", async () => {
