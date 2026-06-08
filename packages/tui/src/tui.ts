@@ -74,11 +74,13 @@ const CURSOR_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}`;
 const CURSOR_BEGIN_NO_SYNC = HIDE_CURSOR;
 const CURSOR_END = SYNC_OUTPUT_END;
 const CURSOR_END_NO_SYNC = "";
-// Mouse reporting (normal click tracking + SGR extended coordinates), enabled
-// only for the lifetime of a fullscreen overlay so the rest of the app keeps the
-// terminal's native text selection.
-const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1006h";
-const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1000l";
+// Mouse reporting, enabled only for the lifetime of a fullscreen overlay so the
+// rest of the app keeps the terminal's native text selection. 1000h = button
+// click tracking, 1003h = any-motion tracking so overlays can light up hover
+// targets (the pointer moving with no button held), 1006h = SGR extended
+// coordinates so columns/rows past 223 are reported.
+const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
+const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;

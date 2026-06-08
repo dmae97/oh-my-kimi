@@ -141,6 +141,9 @@ export class PlanReviewOverlay implements Component {
 	#bodyClickRows = new Set<number>();
 	/** 1-based column at/under which a region-row click targets the sidebar. */
 	#sidebarClickMaxCol = 0;
+	/** Option index the pointer is currently hovering, or undefined. Updated from
+	 *  motion mouse reports and cleared when the pointer leaves the option rows. */
+	#hoveredOption: number | undefined;
 
 	#annotating = false;
 	#input: Input;
@@ -315,9 +318,10 @@ export class PlanReviewOverlay implements Component {
 	 * Hit-test an SGR mouse report (`\x1b[<b;x;yM/m`) against the click maps the
 	 * last render recorded. Returns true when consumed. The fullscreen overlay
 	 * paints from screen row 0, so a 1-based mouse row maps directly to the
-	 * rendered-line index. Wheel scrolls the body; a left click on an option
-	 * activates it (select + confirm), on a ToC row jumps to that section, and on
-	 * the body column focuses the body.
+	 * rendered-line index. Wheel scrolls the body; pointer motion lights up the
+	 * hovered option row; a left click on an option activates it (select +
+	 * confirm), on a ToC row jumps to that section, and on the body column focuses
+	 * the body.
 	 */
 	#handleMouse(data: string): boolean {
 		const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
@@ -331,7 +335,13 @@ export class PlanReviewOverlay implements Component {
 			return true;
 		}
 		if (match[4] !== "M") return true; // release
-		if (button & 32) return true; // motion/drag
+		if (button & 32) {
+			// Motion (hover or drag): light up the option row under the pointer so a
+			// mouse user gets the same affordance the keyboard cursor gives. Any
+			// non-option row clears the highlight.
+			this.#setHoveredOption(this.#optionClickRows.get(row));
+			return true;
+		}
 		if ((button & 3) !== 0) return true; // not the left button
 		const optionIndex = this.#optionClickRows.get(row);
 		if (optionIndex !== undefined) {
@@ -353,6 +363,12 @@ export class PlanReviewOverlay implements Component {
 			this.#setFocus("body");
 		}
 		return true;
+	}
+
+	/** Set the hovered option from a hit-tested row, ignoring disabled rows and
+	 *  non-option rows (both clear the highlight). */
+	#setHoveredOption(index: number | undefined): void {
+		this.#hoveredOption = index !== undefined && !this.#disabled.has(index) ? index : undefined;
 	}
 
 	#cycleRegion(direction: number): void {
@@ -611,14 +627,19 @@ export class PlanReviewOverlay implements Component {
 		return this.#options.map((label, i) => {
 			const selected = i === this.#selectedIndex;
 			const isDisabled = this.#disabled.has(i);
+			const hovered = !isDisabled && i === this.#hoveredOption;
 			// The cursor marks the selected option; it dims when actions are not the
 			// focused region so the active region's highlight stays unambiguous.
 			const cursor = selected ? theme.fg(active ? "accent" : "dim", `${theme.nav.cursor} `) : "  ";
-			const text = isDisabled
+			let text = isDisabled
 				? theme.fg("dim", label)
 				: selected && active
 					? theme.bold(theme.fg("accent", label))
 					: theme.fg("text", label);
+			// A pointer hovering an option paints a highlight band behind its label,
+			// distinct from the keyboard selection (cursor glyph + bold accent) which
+			// stays where it is. One space of padding gives the band a button shape.
+			if (hovered) text = theme.bg("selectedBg", ` ${text} `);
 			return cursor + text;
 		});
 	}
