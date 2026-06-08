@@ -45,6 +45,10 @@ export interface StageHunksOptions {
 	readonly rawDiff?: string;
 	readonly signal?: AbortSignal;
 }
+export interface HunkSelectionValidationError {
+	readonly path: string;
+	readonly message: string;
+}
 
 export interface DiffOptions {
 	readonly allowFailure?: boolean;
@@ -676,6 +680,43 @@ function selectHunks(file: FileHunks, selector: HunkSelection["hunks"]): FileHun
 		return file.hunks.filter(hunk => hunk.newStart <= end && hunk.newStart + hunk.newLines - 1 >= start);
 	}
 	return file.hunks;
+}
+
+export function createHunkSelectionValidator(
+	rawDiff: string,
+): (selections: readonly HunkSelection[]) => HunkSelectionValidationError[] {
+	const fileDiffMap = new Map(parseFileDiffs(rawDiff).map(entry => [entry.filename, entry]));
+	return selections => validateHunkSelectionsFromMap(fileDiffMap, selections);
+}
+
+function validateHunkSelectionsFromMap(
+	fileDiffMap: ReadonlyMap<string, FileDiff>,
+	selections: readonly HunkSelection[],
+): HunkSelectionValidationError[] {
+	const errors: HunkSelectionValidationError[] = [];
+
+	for (const selection of selections) {
+		const fileDiff = fileDiffMap.get(selection.path);
+		if (!fileDiff) continue;
+		if (selection.hunks.type === "all") continue;
+		if (fileDiff.isBinary) {
+			errors.push({ path: selection.path, message: `Cannot select hunks for binary file ${selection.path}` });
+			continue;
+		}
+		const selected = selectHunks(parseFileHunks(fileDiff), selection.hunks);
+		if (selected.length === 0) {
+			errors.push({ path: selection.path, message: `No hunks selected for ${selection.path}` });
+		}
+	}
+
+	return errors;
+}
+
+export function validateHunkSelections(
+	rawDiff: string,
+	selections: readonly HunkSelection[],
+): HunkSelectionValidationError[] {
+	return createHunkSelectionValidator(rawDiff)(selections);
 }
 
 function parseStatusPorcelain(text: string): GitStatusSummary {

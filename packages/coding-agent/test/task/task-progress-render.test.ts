@@ -102,3 +102,50 @@ describe("task progress rendering", () => {
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 });
+
+describe("task result detail-less state", () => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		resetSettingsForTest();
+	});
+
+	it("renders a validation failure with the error glyph, not a success bullet", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: false };
+		const component = taskToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: 'Validation failed for tool "task": tasks: Invalid input' }],
+				isError: true,
+			},
+			options,
+			theme,
+			{ agent: "explore", tasks: [] },
+		);
+		const stripped = Bun.stripANSI(component.render(120).join("\n"));
+
+		// A failed task must surface the error glyph and never the "done" bullet.
+		expect(stripped).toContain(theme.status.error);
+		expect(stripped).not.toContain(theme.status.done);
+		expect(stripped).toContain("Task");
+		expect(stripped).toContain("explore");
+		expect(stripped).toContain("Validation failed");
+	});
+
+	it("renders a detail-less success with the accent bullet, not an error glyph", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: false };
+		const component = taskToolRenderer.renderResult({ content: [{ type: "text", text: "done" }] }, options, theme, {
+			agent: "explore",
+			tasks: [],
+		});
+		const stripped = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(stripped).toContain(theme.status.done);
+		expect(stripped).not.toContain(theme.status.error);
+	});
+});
