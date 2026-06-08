@@ -83,6 +83,7 @@ const searchSchema = z
 		gitignore: z.boolean().optional().describe("respect gitignore"),
 		skip: z
 			.number()
+			.nullable()
 			.optional()
 			.describe("files to skip before collecting results — use to paginate when the prior call hit the file limit"),
 	})
@@ -107,6 +108,10 @@ export const SINGLE_FILE_MATCHES = 200;
  * (DEFAULT_FILE_LIMIT files × MULTI_FILE_PER_FILE_MATCHES matches) plus
  * pagination headroom so the caller can see total file count. */
 const INTERNAL_TOTAL_CAP = 2000;
+/** Mirrors `MAX_FILE_BYTES` in `crates/pi-natives/src/grep.rs`. Native grep
+ * silently returns no matches for files larger than this; surface a warning
+ * when the caller explicitly targeted such a file so they know to chunk it. */
+const NATIVE_GREP_MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 /**
  * Parsed `paths` entry — a path (possibly archive-shaped) plus an optional
@@ -666,7 +671,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				throw new ToolError("Pattern must not be empty");
 			}
 
-			const normalizedSkip = skip === undefined ? 0 : Number.isFinite(skip) ? Math.floor(skip) : Number.NaN;
+			const normalizedSkip =
+				skip === undefined || skip === null ? 0 : Number.isFinite(skip) ? Math.floor(skip) : Number.NaN;
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
@@ -728,7 +734,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					// reason instead of a downstream "path not found" from the scope resolver.
 					throw new ToolError(
 						`Cannot search archive member(s): ${archiveUnreadable.join(", ")}. ` +
-							`Read the file directly with \`read <archive>:<member>\` and grep the returned content, ` +
+							`Read the member with \`read <archive>:<member>\` and inspect the returned text, ` +
 							`or pass a UTF-8 text member.`,
 					);
 				}
@@ -991,6 +997,34 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					: "";
 				const { record: recordFile, list: fileList } = createFileRecorder();
 				const fileMatchCounts = new Map<string, number>();
+				// Detect explicit file targets that exceed the native grep size cap.
+				// Native silently returns no matches above the cap; without this note the
+				// caller sees "no matches" for a literal pattern that visibly exists.
+				const oversizedNote = await (async (): Promise<string | undefined> => {
+					const explicitFileTargets: string[] = [];
+					if (exactFilePaths) {
+						explicitFileTargets.push(...exactFilePaths);
+					} else if (searchablePaths.length > 0 && !isDirectory && !multiTargets) {
+						explicitFileTargets.push(searchPath);
+					}
+					if (explicitFileTargets.length === 0) return undefined;
+					const oversized: string[] = [];
+					await Promise.all(
+						explicitFileTargets.map(async target => {
+							try {
+								const st = await stat(target);
+								if (st.isFile() && st.size > NATIVE_GREP_MAX_FILE_BYTES) {
+									oversized.push(path.relative(this.session.cwd, target) || target);
+								}
+							} catch {
+								// Stat failures here are surfaced by other code paths.
+							}
+						}),
+					);
+					if (oversized.length === 0) return undefined;
+					const limitMb = Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024));
+					return `Skipped oversized files (>${limitMb}MB grep limit; split the file or narrow with \`read\`): ${oversized.join(", ")}`;
+				})();
 				const archiveNote =
 					archiveUnreadable.length > 0
 						? `Skipped archive entries (search supports text members only): ${archiveUnreadable.join(", ")}`
@@ -1002,7 +1036,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const missingPathsNote =
 					missingPathsForNote.length > 0 ? `Skipped missing paths: ${missingPathsForNote.join(", ")}` : undefined;
 				const warningNote =
-					[missingPathsNote, archiveNote].filter((s): s is string => Boolean(s)).join("\n") || undefined;
+					[missingPathsNote, archiveNote, oversizedNote].filter((s): s is string => Boolean(s)).join("\n") ||
+					undefined;
 				if (selectedMatches.length === 0) {
 					const details: SearchToolDetails = {
 						scopePath,
