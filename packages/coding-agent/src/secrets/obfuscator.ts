@@ -1,4 +1,4 @@
-import type { Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { Message } from "@oh-my-pi/pi-ai";
 import type { SessionContext } from "../session/session-manager";
 import { compileSecretRegex } from "./regex";
 
@@ -184,6 +184,12 @@ export class SecretObfuscator {
 		return deepWalkStrings(obj, s => this.deobfuscate(s));
 	}
 
+	/** Deep-walk an object, obfuscating all string values. */
+	obfuscateObject<T>(obj: T): T {
+		if (!this.#hasAny) return obj;
+		return deepWalkStrings(obj, s => this.obfuscate(s));
+	}
+
 	/** Find the obfuscate index for a known secret value. */
 	#findObfuscateIndex(secret: string): number | undefined {
 		// Check plain mappings first
@@ -211,25 +217,9 @@ export function deobfuscateSessionContext(
 // Message obfuscation (outbound to LLM)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Obfuscate all text content in LLM messages (for outbound interception). */
+/** Obfuscate all string content in LLM messages (for outbound interception). */
 export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
-	return messages.map(msg => {
-		if (!Array.isArray(msg.content)) return msg;
-
-		let changed = false;
-		const content = msg.content.map(block => {
-			if (block.type === "text") {
-				const obfuscated = obfuscator.obfuscate(block.text);
-				if (obfuscated !== block.text) {
-					changed = true;
-					return { ...block, text: obfuscated } as TextContent;
-				}
-			}
-			return block;
-		});
-
-		return changed ? ({ ...msg, content } as typeof msg) : msg;
-	});
+	return obfuscator.obfuscateObject(messages);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

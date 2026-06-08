@@ -9,6 +9,7 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
+	type Context,
 	type CredentialDisabledEvent,
 	type Message,
 	type Model,
@@ -2138,6 +2139,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
+		const obfuscateProviderContext = (context: Context): Context => {
+			if (!obfuscator?.hasSecrets()) return context;
+			return obfuscator.obfuscateObject(context);
+		};
+
 		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
 			const withContext = await extensionRunner.emitContext(messages);
 			return wrapSteeringForModel(withContext);
@@ -2215,7 +2221,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
 				const openrouterVariant =
 					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
-				return streamSimple(streamModel, context, {
+				return streamSimple(streamModel, obfuscateProviderContext(context), {
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 				});

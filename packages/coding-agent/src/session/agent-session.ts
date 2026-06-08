@@ -3999,6 +3999,20 @@ export class AgentSession {
 		return deobfuscateSessionContext(this.sessionManager.buildSessionContext(), this.#obfuscator);
 	}
 
+	#obfuscateForProvider<T>(value: T): T {
+		if (!this.#obfuscator?.hasSecrets()) return value;
+		return this.#obfuscator.obfuscateObject(value);
+	}
+
+	#deobfuscateFromProvider(text: string): string {
+		if (!this.#obfuscator?.hasSecrets()) return text;
+		return this.#obfuscator.deobfuscate(text);
+	}
+
+	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
+		return this.#obfuscateForProvider(convertToLlm(messages));
+	}
+
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
 		const transformedMessages = await this.#transformContext(messages, signal);
@@ -6179,8 +6193,8 @@ export class AgentSession {
 						{
 							promptOverride: compactionPrep.hookPrompt,
 							extraContext: compactionPrep.hookContext,
-							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
-							convertToLlm,
+							remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
+							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						},
 					);
 					summary = result.summary;
@@ -6363,15 +6377,15 @@ export class AgentSession {
 				throw new Error(`No API key for ${model.provider}`);
 			}
 
-			const handoffText = await generateHandoff(
+			const rawHandoffText = await generateHandoff(
 				this.agent.state.messages,
 				model,
 				apiKey,
 				{
-					systemPrompt: this.#baseSystemPrompt,
-					tools: this.agent.state.tools,
+					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
+					tools: this.#obfuscateForProvider(this.agent.state.tools),
 					customInstructions,
-					convertToLlm,
+					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 					initiatorOverride: "agent",
 					metadata: this.agent.metadataForProvider(model.provider),
 					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
@@ -6383,6 +6397,7 @@ export class AgentSession {
 				},
 				handoffSignal,
 			);
+			const handoffText = this.#deobfuscateFromProvider(rawHandoffText);
 
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
@@ -7347,7 +7362,7 @@ export class AgentSession {
 				return await compact(preparation, candidate, apiKey, customInstructions, signal, {
 					...options,
 					metadata: this.agent.metadataForProvider(candidate.provider),
-					convertToLlm,
+					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 					telemetry,
 					// Honor the user's /model thinking selection (incl. `off`) on
 					// the manual `/compact` path. Clamped per-model inside compact()
@@ -7637,10 +7652,10 @@ export class AgentSession {
 							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
 								promptOverride: compactionPrep.hookPrompt,
 								extraContext: compactionPrep.hookContext,
-								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
+								remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
 								metadata: this.agent.metadataForProvider(candidate.provider),
 								initiatorOverride: "agent",
-								convertToLlm,
+								convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 								telemetry,
 								// Honor the user's /model thinking selection on the
 								// auto-compaction path — the most-fired compaction
@@ -9514,7 +9529,7 @@ export class AgentSession {
 				customInstructions: options.customInstructions,
 				reserveTokens: branchSummarySettings.reserveTokens,
 				metadata: this.agent.metadataForProvider(model.provider),
-				convertToLlm,
+				convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 			});
 			this.#branchSummaryAbortController = undefined;

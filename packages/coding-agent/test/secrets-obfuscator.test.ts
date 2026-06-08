@@ -3,7 +3,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import type { Message } from "@oh-my-pi/pi-ai";
+import { obfuscateMessages, SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
 
 describe("compileSecretRegex", () => {
@@ -57,5 +58,67 @@ describe("SecretObfuscator regex behavior", () => {
 			cmd: original.cmd,
 			status: original.status,
 		});
+	});
+
+	it("obfuscates nested provider request payloads", () => {
+		const secret = "SUPER_SECRET_TOKEN_12345";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const payload = {
+			systemPrompt: [`workspace contains ${secret}`],
+			tools: [
+				{
+					name: "handoff",
+					description: `preserve ${secret}`,
+					parameters: {
+						type: "object",
+						properties: { note: { type: "string", description: `write ${secret}` } },
+					},
+				},
+			],
+		};
+
+		const obfuscated = obfuscator.obfuscateObject(payload);
+		const serialized = JSON.stringify(obfuscated);
+
+		expect(serialized).not.toContain(secret);
+		expect(obfuscator.deobfuscateObject(obfuscated)).toEqual(payload);
+	});
+
+	it("obfuscates system reminders and assistant tool calls in messages", () => {
+		const secret = "SUPER_SECRET_TOKEN_12345";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const messages: Message[] = [
+			{ role: "developer", content: `system reminder ${secret}`, timestamp: 1 },
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "call_1",
+						name: "handoff",
+						arguments: { note: secret },
+						intent: `handoff ${secret}`,
+					},
+				],
+				api: "test",
+				provider: "test",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		];
+
+		const obfuscated = obfuscateMessages(obfuscator, messages);
+
+		expect(JSON.stringify(obfuscated)).not.toContain(secret);
+		expect(obfuscator.deobfuscateObject(obfuscated)).toEqual(messages);
 	});
 });
