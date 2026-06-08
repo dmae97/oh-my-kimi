@@ -457,11 +457,11 @@ describe("anthropic stream envelope handling", () => {
 		expect(attempt).toBe(1);
 		expect(countEvents(events, "toolcall_start")).toBe(1);
 		expect(countEvents(events, "toolcall_delta")).toBe(1);
-		expect(countEvents(events, "toolcall_end")).toBe(1);
+		expect(countEvents(events, "toolcall_end")).toBe(0);
 		expect(countEvents(events, "error")).toBe(1);
 		expect(countEvents(events, "done")).toBe(0);
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("stream ended before terminal stop signal");
+		expect(result.errorMessage).toContain("Unterminated string");
 
 		const toolCall = result.content[0];
 		expect(toolCall?.type).toBe("toolCall");
@@ -494,7 +494,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(events, "done")).toBe(0);
 		expect(countEvents(events, "error")).toBe(1);
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("unterminated tool_use block");
+		expect(result.errorMessage).toContain("unterminated toolCall block");
 	});
 	it("parses raw SSE directly so unknown events do not fail Anthropic streams", async () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
@@ -541,7 +541,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(result.content).toEqual([{ type: "text", text: "partial" }]);
 	});
 
-	it("repairs malformed JSON in raw SSE event data before parsing", async () => {
+	it("surfaces malformed raw SSE event JSON instead of repairing protocol frames", async () => {
 		const malformedTextDelta =
 			'{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"line\\qbreak"}}';
 		const successEvents = createTextSuccessEvents("unused");
@@ -556,13 +556,16 @@ describe("anthropic stream envelope handling", () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => createRawSseRequest(frames) as never);
 
 		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
-		for await (const _ of stream) {
-			// drain stream
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
 		}
 		const result = await stream.result();
 
-		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "line\\qbreak" }]);
+		expect(countEvents(events, "error")).toBe(1);
+		expect(countEvents(events, "done")).toBe(0);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Could not parse Anthropic SSE event content_block_delta");
 	});
 	it("surfaces a refusal fallback message when stop_details is null", async () => {
 		const refusalEvents: MockAnthropicEvent[] = [

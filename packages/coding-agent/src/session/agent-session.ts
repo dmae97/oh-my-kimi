@@ -215,6 +215,7 @@ import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
+import { normalizeModelContextImages } from "../utils/image-loading";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
@@ -4272,6 +4273,24 @@ export class AgentSession {
 		};
 	}
 
+	async #normalizeMessageContentImages(
+		content: string | (TextContent | ImageContent)[],
+	): Promise<string | (TextContent | ImageContent)[]> {
+		if (typeof content === "string") return content;
+		const images = content.filter((part): part is ImageContent => part.type === "image");
+		if (images.length === 0) return content;
+		const normalizedImages = await normalizeModelContextImages(images);
+		if (!normalizedImages) return content;
+		let imageIndex = 0;
+		return content.map(part => (part.type === "image" ? normalizedImages[imageIndex++]! : part));
+	}
+
+	async #normalizeAgentMessageImages<T extends AgentMessage>(message: T): Promise<T> {
+		const content = await this.#normalizeMessageContentImages(message.content);
+		if (content === message.content) return message;
+		return { ...message, content } as T;
+	}
+
 	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
@@ -4371,10 +4390,11 @@ export class AgentSession {
 		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTodoPrelude(expandedText) : undefined;
+		const normalizedImages = await normalizeModelContextImages(options?.images);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (options?.images) {
-			userContent.push(...options.images);
+		if (normalizedImages) {
+			userContent.push(...normalizedImages);
 		}
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
@@ -4391,6 +4411,7 @@ export class AgentSession {
 		try {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
+				images: normalizedImages,
 				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
 				appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 			});
@@ -4533,7 +4554,9 @@ export class AgentSession {
 					useHashLines: resolveFileDisplayMode(this).hashLines,
 					snapshotStore: getFileSnapshotStore(this),
 				});
-				messages.push(...fileMentionMessages);
+				for (const fileMentionMessage of fileMentionMessages) {
+					messages.push(await this.#normalizeAgentMessageImages(fileMentionMessage));
+				}
 			}
 
 			const beforeAgentStartSystemPrompt = await this.#buildSystemPromptForAgentStart(expandedText);
@@ -4549,15 +4572,17 @@ export class AgentSession {
 					const promptAttribution: "user" | "agent" | undefined =
 						"attribution" in message ? message.attribution : undefined;
 					for (const msg of result.messages) {
-						messages.push({
-							role: "custom",
-							customType: msg.customType,
-							content: msg.content,
-							display: msg.display,
-							details: msg.details,
-							attribution: msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
-							timestamp: Date.now(),
-						});
+						messages.push(
+							await this.#normalizeAgentMessageImages({
+								role: "custom",
+								customType: msg.customType,
+								content: msg.content,
+								display: msg.display,
+								details: msg.details,
+								attribution: msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
+								timestamp: Date.now(),
+							}),
+						);
 					}
 				}
 
@@ -4765,11 +4790,12 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+		const normalizedImages = await normalizeModelContextImages(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#steeringMessages.push({ text: displayText });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images && images.length > 0) {
-			content.push(...images);
+		if (normalizedImages && normalizedImages.length > 0) {
+			content.push(...normalizedImages);
 		}
 		this.agent.steer({
 			role: "user",
@@ -4784,11 +4810,12 @@ export class AgentSession {
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
 	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+		const normalizedImages = await normalizeModelContextImages(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#followUpMessages.push({ text: displayText });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images && images.length > 0) {
-			content.push(...images);
+		if (normalizedImages && normalizedImages.length > 0) {
+			content.push(...normalizedImages);
 		}
 		this.agent.followUp({
 			role: "user",
@@ -4932,16 +4959,17 @@ export class AgentSession {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
+		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
 		if (this.isStreaming) {
 			if (options?.deliverAs === "nextTurn") {
-				this.#queueHiddenNextTurnMessage(appMessage, options?.triggerTurn ?? false);
+				this.#queueHiddenNextTurnMessage(normalizedAppMessage, options?.triggerTurn ?? false);
 				return;
 			}
 
 			if (options?.deliverAs === "followUp") {
-				this.agent.followUp(appMessage);
+				this.agent.followUp(normalizedAppMessage);
 			} else {
-				this.agent.steer(appMessage);
+				this.agent.steer(normalizedAppMessage);
 			}
 			return;
 		}
@@ -4949,16 +4977,16 @@ export class AgentSession {
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
 				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-					this.#queueHiddenNextTurnMessage(appMessage, false);
+					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 					return;
 				}
-				await this.agent.prompt(appMessage);
+				await this.agent.prompt(normalizedAppMessage);
 				return;
 			}
-			this.agent.appendMessage(appMessage);
+			this.agent.appendMessage(normalizedAppMessage);
 			this.sessionManager.appendCustomMessageEntry(
-				message.customType,
-				message.content,
+				normalizedAppMessage.customType,
+				normalizedAppMessage.content,
 				message.display,
 				message.details,
 				message.attribution ?? "agent",
@@ -4968,17 +4996,17 @@ export class AgentSession {
 
 		if (options?.triggerTurn) {
 			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-				this.#queueHiddenNextTurnMessage(appMessage, false);
+				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 				return;
 			}
-			await this.agent.prompt(appMessage);
+			await this.agent.prompt(normalizedAppMessage);
 			return;
 		}
 
-		this.agent.appendMessage(appMessage);
+		this.agent.appendMessage(normalizedAppMessage);
 		this.sessionManager.appendCustomMessageEntry(
-			message.customType,
-			message.content,
+			normalizedAppMessage.customType,
+			normalizedAppMessage.content,
 			message.display,
 			message.details,
 			message.attribution ?? "agent",

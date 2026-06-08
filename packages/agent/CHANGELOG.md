@@ -1,9 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Removed
 
 - Removed the `maxToolCallsPerTurn` option from `AgentOptions` and `AgentLoopConfig`, so assistant turns are no longer capped after a configured number of completed tool calls
+
+### Fixed
+
+- Fixed tool result parsing to mark assistant tool outputs with unsupported content block shapes as errors and include a diagnostic text block
+- Fixed GPT-5 Harmony leakage handling by recovering valid leaked tool calls when possible and discarding leaked partial assistant output before retrying
+- Fixed tool-call cancellation handling so aborted tools are marked aborted with an explicit reason and do not report generic errors
+- Fixed tool-call completion so assistant messages on abort keep only completed tool-call blocks and continue processing tool calls when a length stop still included results
+- Fixed runs that stopped with reason `length` after returning tool results so execution continues to handle additional tool calls
 
 ## [15.10.3] - 2026-06-08
 
