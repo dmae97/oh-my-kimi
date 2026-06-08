@@ -10,7 +10,7 @@ export interface YieldDispatcher<P> {
 
 export interface YieldQueueOptions {
 	isStreaming: () => boolean;
-	injectStreaming(msg: AgentMessage): void;
+	injectStreaming?(msg: AgentMessage): void;
 	injectIdle(messages: AgentMessage[]): Promise<void>;
 	scheduleIdleFlush(run: () => Promise<void>): void;
 }
@@ -85,7 +85,7 @@ export class YieldQueue {
 			if (!message) continue;
 			if (mode === "streaming") {
 				try {
-					this.#options.injectStreaming(message);
+					this.#options.injectStreaming?.(message);
 				} catch (error) {
 					logger.warn("Yield queue streaming dispatch failed", { kind, error: formatError(error) });
 				}
@@ -100,6 +100,24 @@ export class YieldQueue {
 				logger.warn("Yield queue idle dispatch failed", { error: formatError(error) });
 			}
 		}
+	}
+
+	/**
+	 * Build and remove all queued messages, applying each dispatcher's staleness
+	 * filter. No injection side effects — used for pull-based delivery at agent
+	 * step boundaries (see `Agent.setAsideMessageProvider`), so background-job
+	 * completions and late diagnostics reach the model between requests without
+	 * the agent having to stop.
+	 */
+	drainMessages(): AgentMessage[] {
+		const messages: AgentMessage[] = [];
+		for (const [kind, dispatcher] of this.#dispatchers) {
+			const entries = this.#drain(kind);
+			if (entries.length === 0) continue;
+			const message = this.#build(kind, dispatcher, entries);
+			if (message) messages.push(message);
+		}
+		return messages;
 	}
 
 	clear(): void {

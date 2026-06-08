@@ -319,6 +319,7 @@ export class Agent {
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 	#onBeforeYield?: () => Promise<void> | void;
+	#asideMessageProvider?: () => AgentMessage[] | Promise<AgentMessage[]>;
 	#telemetry?: AgentLoopConfig["telemetry"];
 	#appendOnlyContext?: AppendOnlyContextManager;
 
@@ -627,6 +628,15 @@ export class Agent {
 
 	setOnBeforeYield(fn: (() => Promise<void> | void) | undefined): void {
 		this.#onBeforeYield = fn;
+	}
+
+	/**
+	 * Provide a source of non-interrupting "aside" messages (e.g. background-job
+	 * completions, late LSP diagnostics) drained at each step boundary. Never
+	 * aborts in-flight tools. See `AgentLoopConfig.getAsideMessages`.
+	 */
+	setAsideMessageProvider(fn: (() => AgentMessage[] | Promise<AgentMessage[]>) | undefined): void {
+		this.#asideMessageProvider = fn;
 	}
 
 	emitExternalEvent(event: AgentEvent) {
@@ -999,6 +1009,7 @@ export class Agent {
 				return this.#dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
+			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
 			telemetry: this.#telemetry,
 		};

@@ -1174,7 +1174,6 @@ export class AgentSession {
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
-			injectStreaming: message => this.agent.followUp(message),
 			injectIdle: async messages => {
 				const first = messages[0];
 				if (!first) return;
@@ -1189,7 +1188,10 @@ export class AgentSession {
 				);
 			},
 		});
-		this.agent.setOnBeforeYield(() => this.yieldQueue.flush("streaming"));
+		// Background-job completions / late diagnostics are pulled into the run at
+		// each step boundary as non-interrupting asides (see Agent.getAsideMessages),
+		// so they reach the model between requests without waiting for a yield.
+		this.agent.setAsideMessageProvider(() => this.yieldQueue.drainMessages());
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
@@ -3040,7 +3042,7 @@ export class AgentSession {
 		this.#isDisposed = true;
 		this.#pendingBackgroundExchanges = [];
 		this.yieldQueue.clear();
-		this.agent.setOnBeforeYield(undefined);
+		this.agent.setAsideMessageProvider(undefined);
 		this.#evalExecutionDisposing = true;
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
