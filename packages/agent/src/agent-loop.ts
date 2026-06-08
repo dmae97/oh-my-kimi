@@ -33,6 +33,7 @@ import {
 	finishChatSpan,
 	finishExecuteToolSpan,
 	finishInvokeAgentSpan,
+	fireOnRunEnd,
 	PiGenAIAttr,
 	recordSkippedTool,
 	resolveTelemetry,
@@ -296,6 +297,9 @@ function buildAgentEndEvent(
 ): Extract<AgentEvent, { type: "agent_end" }> {
 	if (!telemetry) return { type: "agent_end", messages };
 	const snapshot = telemetry.collector.snapshot({ stepCount });
+	if (telemetry.collector.markRunEnded()) {
+		fireOnRunEnd(telemetry, snapshot.summary, snapshot.coverage);
+	}
 	return { type: "agent_end", messages, telemetry: snapshot.summary, coverage: snapshot.coverage };
 }
 
@@ -924,7 +928,8 @@ async function streamAssistantResponse(
 			const responseIterator = response[Symbol.asyncIterator]();
 			const finishAbortedStream = async (): Promise<AssistantMessage> => {
 				try {
-					await responseIterator.return?.();
+					const cleanup = responseIterator.return?.();
+					if (cleanup) void cleanup.catch(() => {});
 				} catch {
 					// Provider cancellation failures cannot change the committed aborted message.
 				}
@@ -1345,6 +1350,7 @@ async function executeToolCalls(
 		let result: AgentToolResult<any> = { content: [], details: {} };
 		let isError = false;
 		let caughtError: unknown;
+		let completedToolExecution = false;
 
 		await runInActiveSpan(toolSpan, async () => {
 			try {
@@ -1413,6 +1419,7 @@ async function executeToolCalls(
 					},
 					toolContext,
 				);
+				completedToolExecution = true;
 				const coerced = coerceToolResult(rawResult);
 				result = coerced.result;
 				if (coerced.malformed || result.isError) isError = true;
@@ -1425,7 +1432,7 @@ async function executeToolCalls(
 				isError = true;
 			}
 
-			if (afterToolCall && !toolSignal.aborted) {
+			if (afterToolCall && (!toolSignal.aborted || completedToolExecution)) {
 				try {
 					const after = await afterToolCall(
 						{

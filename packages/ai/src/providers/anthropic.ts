@@ -1548,7 +1548,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					let sawMessageStop = false;
 					const openBlocks = new Map<
 						number,
-						{ contentIndex: number; kind: "text" | "thinking" | "redactedThinking" | "toolCall" }
+						{ contentIndex: number; kind: "text" | "thinking" | "redactedThinking" | "toolCall" | "ignored" }
 					>();
 
 					const timedAnthropicStream = iterateWithIdleTimeout(anthropicStream, {
@@ -1662,6 +1662,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 									contentIndex,
 									partial: output,
 								});
+							} else {
+								openBlocks.set(event.index, { contentIndex: -1, kind: "ignored" });
 							}
 						} else if (event.type === "content_block_delta") {
 							if (sawTerminalEnvelope) {
@@ -1673,6 +1675,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 									`received content_block_delta for unopened index ${event.index}`,
 								);
 							}
+							if (openBlock.kind === "ignored") continue;
 							const block = blocks[openBlock.contentIndex];
 							if (event.delta.type === "text_delta") {
 								if (openBlock.kind !== "text" || block?.type !== "text") {
@@ -1738,6 +1741,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								throw createAnthropicStreamEnvelopeError(
 									`received content_block_stop for unopened index ${event.index}`,
 								);
+							}
+							if (openBlock.kind === "ignored") {
+								openBlocks.delete(event.index);
+								continue;
 							}
 							const block = blocks[openBlock.contentIndex];
 							if (!block || block.type !== openBlock.kind) {
@@ -2248,7 +2255,7 @@ function applyCacheControlToLastTextBlock(
 			return true;
 		}
 	}
-	return false;
+	return applyCacheControlToLastBlock(blocks, cacheControl);
 }
 
 function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?: AnthropicCacheControl): void {
@@ -2552,7 +2559,9 @@ function buildParams(
 	};
 
 	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
-	const allowSamplingParams = !hasOpus47ApiRestrictions(model.id) && !params.thinking;
+	const thinkingType = params.thinking?.type;
+	const allowSamplingParams =
+		!hasOpus47ApiRestrictions(model.id) && (thinkingType === undefined || thinkingType === "disabled");
 	if (allowSamplingParams && options?.temperature !== undefined) {
 		params.temperature = options.temperature;
 	}

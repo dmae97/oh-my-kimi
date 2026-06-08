@@ -237,6 +237,50 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
+	it("caches tool-result-only user messages in OAuth request payloads", async () => {
+		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+			systemPrompt: ["Stay concise."],
+			messages: [
+				{ role: "user", content: "Use the tool", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tool-1", name: "lookup", arguments: {} }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: ANTHROPIC_MODEL.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tool-1",
+					toolName: "lookup",
+					content: [{ type: "text", text: "large tool output" }],
+					details: {},
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		})) as { messages?: Array<{ content?: Array<{ type?: string; cache_control?: unknown }> | string }> };
+
+		const messages = payload.messages ?? [];
+		const lastContent = messages[messages.length - 1]?.content;
+		expect(Array.isArray(lastContent)).toBe(true);
+		expect(Array.isArray(lastContent) ? lastContent[0]?.type : undefined).toBe("tool_result");
+		expect(Array.isArray(lastContent) ? lastContent[0]?.cache_control : undefined).toEqual({
+			type: "ephemeral",
+			ttl: "1h",
+		});
+	});
+
 	it("clamps requested max_tokens to Claude Code's 64k cap when the model ceiling is higher", async () => {
 		const payload = (await captureAnthropicPayload(
 			{ ...ANTHROPIC_MODEL, id: "claude-opus-4-8", name: "Claude Opus 4.8", maxTokens: 128_000 },
@@ -1307,6 +1351,22 @@ describe("Anthropic request fingerprint alignment", () => {
 		)) as { thinking?: { type?: string } };
 
 		expect(payload.thinking).toEqual({ type: "disabled" });
+	});
+
+	it("keeps sampling params when reasoning is explicitly disabled", async () => {
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ thinkingEnabled: false, temperature: 0.2, topP: 0.3, topK: 4 },
+		)) as { thinking?: { type?: string }; temperature?: number; top_p?: number; top_k?: number };
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.temperature).toBe(0.2);
+		expect(payload.top_p).toBe(0.3);
+		expect(payload.top_k).toBe(4);
 	});
 
 	it("drops temperature and sampling params for Opus 4.7 without enabled thinking", async () => {

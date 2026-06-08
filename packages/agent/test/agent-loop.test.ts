@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { agentLoop, agentLoopContinue, INTENT_FIELD } from "@oh-my-pi/pi-agent-core/agent-loop";
+import { agentLoop, agentLoopContinue, agentLoopDetailed, INTENT_FIELD } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -9,7 +9,7 @@ import type {
 	AgentToolContext,
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
-import type { AssistantMessage, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import * as z from "zod/v4";
@@ -53,6 +53,24 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("message_end");
 		expect(eventTypes).toContain("turn_end");
 		expect(eventTypes).toContain("agent_end");
+	});
+
+	it("returns detailed telemetry when awaiting detailed() directly", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const mock = createMockModel({ responses: [{ content: ["Hi there!"] }] });
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const { detailed } = agentLoopDetailed([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		const result = await detailed();
+
+		expect(result.messages).toHaveLength(2);
+		expect(result.telemetry?.stepCount).toBe(1);
+		expect(result.telemetry?.chats.total).toBe(1);
+		expect(result.coverage?.modelsUsed).toEqual([mock.model.id]);
 	});
 
 	it("retries when harmony leakage reaches the committed assistant message (openai-codex)", async () => {
@@ -154,6 +172,40 @@ describe("agentLoop with AgentMessage", () => {
 		expect(finalMessage.stopReason).toBe("aborted");
 		expect(finalMessage.errorMessage).toBe("Request was aborted");
 		expect(events.map(event => event.type)).toContain("agent_end");
+	});
+
+	it("does not wait for provider iterator cleanup when aborting a stalled response", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const mock = createMockModel();
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const controller = new AbortController();
+		let returnCalled = false;
+		const streamFn = () =>
+			({
+				result: () => Promise.withResolvers<AssistantMessage>().promise,
+				[Symbol.asyncIterator]: () => ({
+					next: () => Promise.withResolvers<IteratorResult<AssistantMessageEvent>>().promise,
+					return: () => {
+						returnCalled = true;
+						return Promise.withResolvers<IteratorResult<AssistantMessageEvent>>().promise;
+					},
+				}),
+			}) as AssistantMessageEventStream;
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, controller.signal, streamFn);
+		queueMicrotask(() => controller.abort("stop now"));
+		const messages = await stream.result();
+
+		expect(returnCalled).toBe(true);
+		const finalMessage = messages[messages.length - 1];
+		expect(finalMessage.role).toBe("assistant");
+		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");
+		expect(finalMessage.stopReason).toBe("aborted");
+		expect(finalMessage.errorMessage).toBe("stop now");
 	});
 
 	it("surfaces a custom abort reason on the synthesized aborted message", async () => {
@@ -1074,6 +1126,55 @@ describe("agentLoopContinue with AgentMessage", () => {
 		if (toolResultMessage && toolResultMessage.role === "toolResult") {
 			expect(toolResultMessage.isError).toBe(true);
 			expect(toolResultMessage.content).toEqual([{ type: "text", text: "rewritten" }]);
+		}
+	});
+
+	it("runs afterToolCall for a completed result even when the run aborts before the hook", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		const controller = new AbortController();
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				controller.abort("stop after tool");
+				return {
+					content: [{ type: "text", text: `original: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		let hookSawAbortedSignal = false;
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			afterToolCall: async (_context, signal) => {
+				hookSawAbortedSignal = signal?.aborted === true;
+				return { content: [{ type: "text", text: "rewritten after abort" }] };
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo")], context, config, controller.signal, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(hookSawAbortedSignal).toBe(true);
+		const toolEnd = events.find(e => e.type === "tool_execution_end");
+		expect(toolEnd).toBeDefined();
+		if (toolEnd?.type === "tool_execution_end") {
+			expect(toolEnd.isError).toBe(false);
+			expect(toolEnd.result.content).toEqual([{ type: "text", text: "rewritten after abort" }]);
 		}
 	});
 

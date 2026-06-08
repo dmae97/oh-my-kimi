@@ -330,6 +330,62 @@ describe("anthropic stream envelope handling", () => {
 		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
 	});
 
+	it("ignores unknown content block envelopes while preserving known blocks", async () => {
+		const events: MockAnthropicEvent[] = [
+			{
+				type: "message_start",
+				message: {
+					id: "msg_unknown_block",
+					usage: {
+						input_tokens: 12,
+						output_tokens: 0,
+						cache_read_input_tokens: 0,
+						cache_creation_input_tokens: 0,
+					},
+				},
+			},
+			{
+				type: "content_block_start",
+				index: 0,
+				content_block: { type: "server_tool_use", id: "srv_1", name: "web_search" },
+			},
+			{
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "input_json_delta", partial_json: '{"query":"weather"}' },
+			},
+			{ type: "content_block_stop", index: 0 },
+			{ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "hello" } },
+			{ type: "content_block_stop", index: 1 },
+			{
+				type: "message_delta",
+				delta: { stop_reason: "end_turn" },
+				usage: {
+					input_tokens: 12,
+					output_tokens: 4,
+					cache_read_input_tokens: 0,
+					cache_creation_input_tokens: 0,
+				},
+			},
+			{ type: "message_stop" },
+		];
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => createMockRequest(events) as never);
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		const observed: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			observed.push(event);
+		}
+		const result = await stream.result();
+
+		expect(countEvents(observed, "error")).toBe(0);
+		expect(countEvents(observed, "done")).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.responseId).toBe("msg_unknown_block");
+		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
+	});
+
 	it("retries malformed envelopes before content starts without duplicating streamed text events", async () => {
 		let attempt = 0;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
