@@ -352,7 +352,7 @@ export class Settings {
 	#fireEffectiveSettingChanged(path: SettingPath, value: unknown, prev: unknown): void {
 		if (Object.is(value, prev)) return;
 		if (path === "statusLine.sessionAccent") {
-			fireStatusLineSessionAccentChanged();
+			statusLineSessionAccentSignal.fire();
 		}
 	}
 
@@ -907,6 +907,45 @@ export class Settings {
 
 type SettingHook<P extends SettingPath> = (value: SettingValue<P>, prev: SettingValue<P>) => void;
 
+/**
+ * Minimal change-notification primitive backing the exported `on*Changed`
+ * subscriptions. Holds a listener set, hands out unsubscribe closures, and
+ * isolates errors so a single throwing listener can't abort the rest or bubble
+ * out of `Settings.set()`.
+ *
+ * @typeParam A - argument tuple forwarded to each listener on `fire`.
+ */
+class SettingSignal<A extends unknown[] = []> {
+	#listeners = new Set<(...args: A) => void>();
+
+	constructor(private readonly label: string) {}
+
+	/** Subscribe `cb`; returns an unsubscribe function. */
+	on(cb: (...args: A) => void): () => void {
+		this.#listeners.add(cb);
+		return () => {
+			this.#listeners.delete(cb);
+		};
+	}
+
+	/**
+	 * Invoke every listener with `args`. Iterates a snapshot so a listener may
+	 * (un)subscribe mid-fire without re-entrancy — the Hindsight backend
+	 * re-registers the fresh state's listener on every rebuild — and wraps each
+	 * call so a throwing listener is logged and skipped instead of aborting the
+	 * rest.
+	 */
+	fire(...args: A): void {
+		for (const cb of [...this.#listeners]) {
+			try {
+				cb(...args);
+			} catch (err) {
+				logger.warn(`Settings: ${this.label} hook failed`, { error: String(err) });
+			}
+		}
+	}
+}
+
 const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	"theme.dark": value => {
 		if (typeof value === "string") {
@@ -939,69 +978,34 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	},
 	"provider.appendOnlyContext": value => {
 		if (typeof value === "string") {
-			for (const cb of appendOnlyModeCallbacks) cb(value);
+			appendOnlyModeSignal.fire(value);
 		}
 	},
-	"hindsight.bankId": () => fireHindsightScopeChanged(),
-	"hindsight.bankIdPrefix": () => fireHindsightScopeChanged(),
-	"hindsight.scoping": () => fireHindsightScopeChanged(),
+	"hindsight.bankId": () => hindsightScopeSignal.fire(),
+	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
+	"hindsight.scoping": () => hindsightScopeSignal.fire(),
 };
-/** Callbacks invoked when `provider.appendOnlyContext` changes at runtime. */
-const appendOnlyModeCallbacks = new Set<(value: string) => void>();
+/** Fires when `provider.appendOnlyContext` changes at runtime. */
+const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider.appendOnlyContext");
 
 /**
  * Subscribe to append-only mode setting changes.
  * Returns an unsubscribe function. Multiple sessions (main + subagents)
  * can register independently without overwriting each other.
  */
-export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void {
-	appendOnlyModeCallbacks.add(cb);
-	return () => {
-		appendOnlyModeCallbacks.delete(cb);
-	};
-}
+export const onAppendOnlyModeChanged = (cb: (value: string) => void) => appendOnlyModeSignal.on(cb);
 
-/** Callbacks invoked when `statusLine.sessionAccent` changes at runtime. */
-const statusLineSessionAccentCallbacks = new Set<() => void>();
-
-function fireStatusLineSessionAccentChanged(): void {
-	for (const cb of [...statusLineSessionAccentCallbacks]) {
-		try {
-			cb();
-		} catch (err) {
-			logger.warn("Settings: statusLine.sessionAccent hook failed", { error: String(err) });
-		}
-	}
-}
+/** Fires when `statusLine.sessionAccent` changes at runtime. */
+const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");
 
 /**
  * Subscribe to session-accent setting changes.
  * Returns an unsubscribe function. Callers should re-read settings in the callback.
  */
-export function onStatusLineSessionAccentChanged(cb: () => void): () => void {
-	statusLineSessionAccentCallbacks.add(cb);
-	return () => {
-		statusLineSessionAccentCallbacks.delete(cb);
-	};
-}
+export const onStatusLineSessionAccentChanged = (cb: () => void) => statusLineSessionAccentSignal.on(cb);
 
-/** Callbacks fired when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
-const hindsightScopeCallbacks = new Set<() => void>();
-
-function fireHindsightScopeChanged(): void {
-	// Snapshot the callback set before invoking — a callback's body is allowed
-	// to subscribe a NEW callback (the Hindsight backend re-registers the
-	// fresh state's listener on every rebuild). Iterating the live Set would
-	// re-invoke those just-added callbacks within the same fire, which spins
-	// in place: subscribe → invoke → subscribe → invoke → …
-	for (const cb of [...hindsightScopeCallbacks]) {
-		try {
-			cb();
-		} catch (err) {
-			logger.warn("Settings: hindsight scope hook failed", { error: String(err) });
-		}
-	}
-}
+/** Fires when any `hindsight.bankId` / `bankIdPrefix` / `scoping` value changes. */
+const hindsightScopeSignal = new SettingSignal("hindsight scope");
 
 /**
  * Subscribe to changes in the Hindsight bank-scoping settings. Lets the
@@ -1013,12 +1017,7 @@ function fireHindsightScopeChanged(): void {
  * Returns an unsubscribe function. The callback receives no arguments — the
  * caller is expected to re-read the relevant settings via `Settings.get`.
  */
-export function onHindsightScopeChanged(cb: () => void): () => void {
-	hindsightScopeCallbacks.add(cb);
-	return () => {
-		hindsightScopeCallbacks.delete(cb);
-	};
-}
+export const onHindsightScopeChanged = (cb: () => void) => hindsightScopeSignal.on(cb);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global Singleton

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import {
 	getDefault,
+	onAppendOnlyModeChanged,
 	onStatusLineSessionAccentChanged,
 	resetSettingsForTest,
 	Settings,
@@ -151,6 +152,27 @@ describe("Settings", () => {
 
 			isolated.set("statusLine.sessionAccent", true);
 			expect(values).toEqual([false, true, false]);
+		});
+	});
+
+	describe("provider.appendOnlyContext hooks", () => {
+		it("isolates a throwing listener so the rest still receive the value", () => {
+			const isolated = Settings.isolated();
+			const received: string[] = [];
+			const unsubscribeThrower = onAppendOnlyModeChanged(() => {
+				throw new Error("boom");
+			});
+			const unsubscribeOk = onAppendOnlyModeChanged(value => {
+				received.push(value);
+			});
+
+			try {
+				expect(() => isolated.set("provider.appendOnlyContext", "on")).not.toThrow();
+				expect(received).toEqual(["on"]);
+			} finally {
+				unsubscribeThrower();
+				unsubscribeOk();
+			}
 		});
 	});
 
