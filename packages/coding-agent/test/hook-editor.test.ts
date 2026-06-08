@@ -141,6 +141,41 @@ describe("HookEditorComponent default (hook) mode", () => {
 		expect(onSubmit).toHaveBeenCalledWith("draft");
 		expect(onCancel).not.toHaveBeenCalled();
 	});
+	it("submits the current text on Ctrl+Q (Windows Terminal fallback for #2118)", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Prompt", "line 1\nline 2", onSubmit, onCancel);
+
+		// Ctrl+Q raw byte (0x11). Windows Terminal cannot deliver a distinct
+		// Ctrl+Enter, so app.message.followUp also binds Ctrl+Q (#1903), and the
+		// hook editor must honor it for the same reason.
+		component.handleInput("\x11");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith("line 1\nline 2");
+		expect(onCancel).not.toHaveBeenCalled();
+	});
+
+	it("keeps Ctrl+Q working after Enter inserts a newline (Windows Terminal)", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Prompt", undefined, onSubmit, onCancel);
+
+		component.handleInput("a");
+		component.handleInput("b");
+		// Windows Terminal sends bare `\r` for both Enter and Ctrl+Enter; the
+		// hook editor must treat `\r` as a newline and reserve Ctrl+Q for submit.
+		component.handleInput("\r");
+		component.handleInput("c");
+		component.handleInput("d");
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		component.handleInput("\x11");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith("ab\ncd");
+		expect(onCancel).not.toHaveBeenCalled();
+	});
 
 	it("expands large paste markers when submitting on Ctrl+Enter", () => {
 		const onSubmit = vi.fn();

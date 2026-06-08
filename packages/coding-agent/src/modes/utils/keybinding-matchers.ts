@@ -49,3 +49,26 @@ export function matchesAppExternalEditor(data: string): boolean {
 	}
 	return matchesKey(data, "ctrl+g");
 }
+
+/**
+ * Match the "submit multi-line text input" keybinding (`app.message.followUp`).
+ *
+ * Used by forms where plain Enter inserts a newline and a modified-Enter chord
+ * submits — the main editor's follow-up handler, the agent dashboard's new-agent
+ * description, and the hook editor's hook-style mode. The keybinding defaults to
+ * `["ctrl+q", "ctrl+enter"]` so Windows Terminal (which can't deliver a distinct
+ * Ctrl+Enter event; #1903) still has a working chord without user remapping.
+ *
+ * Also recognizes a modifier-tagged LF (e.g. modifyOtherKeys legacy encoding for
+ * Ctrl+Enter), which the keybinding matcher itself does not cover.
+ */
+export function matchesAppFollowUp(data: string): boolean {
+	// Modifier-tagged LF: terminals that send `\n` followed by the CSI modifier
+	// payload (legacy modifyOtherKeys) report Ctrl+Enter this way.
+	if (data.charCodeAt(0) === 10 && data.length > 1) return true;
+	const keybindings = getKeybindings();
+	if (keybindings.getKeys("app.message.followUp").length > 0) {
+		return keybindings.matches(data, "app.message.followUp");
+	}
+	return matchesKey(data, "ctrl+enter") || matchesKey(data, "ctrl+q");
+}
