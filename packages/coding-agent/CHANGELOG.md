@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.10.2] - 2026-06-08
 ### Added
 
 - Added `raw-sse.txt` to debug report bundles, exporting recent raw provider SSE diagnostics when captured

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.2] - 2026-06-08
+
 ### Fixed
 
 - Stripped read-output line-number prefixes (`N:`) from auto-piped bare body rows so that pasting `3:text` without a `+` prefix no longer injects `3:` as literal content. Stripping is applied only when *every* bare row in the hunk carries the prefix (the signature of a pasted snapshot) and removes at most one prefix per row, so a genuine body that merely starts with `digits:` (YAML port maps, timestamps) is left intact ([#1492](https://github.com/can1357/oh-my-pi/issues/1492)).

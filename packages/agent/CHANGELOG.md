@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.2] - 2026-06-08
+
 ### Fixed
 
 - Fixed proxy stream silently returning a zero-token success response when the server disconnects without sending a `done` or `error` terminal SSE event. The stream now throws an error, surfacing the disconnect as an `error` event with `stopReason: "error"` and resolving `finalResultPromise`, instead of defaulting to `stopReason: "stop"` with empty content and leaving `stream.result()` callers hanging indefinitely.
