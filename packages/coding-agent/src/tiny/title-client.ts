@@ -39,7 +39,12 @@ export interface TinyTitleDownloadOptions {
 	onProgress?: (event: TinyTitleProgressEvent) => void;
 }
 
-const SMOKE_TEST_TIMEOUT_MS = 5_000;
+// Cold-starting the worker subprocess from a compiled binary (decompress + module
+// graph load) is slow on contended CI runners — the macos-15-intel release smoke
+// blew past 5s while arm64/linux/win passed. The probe only needs to prove the
+// worker spawns and ponges at all (a dead worker never ponges regardless), so a
+// generous bound removes the flake without weakening the check.
+const SMOKE_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * Hidden subcommand on the main CLI that boots the tiny-model worker in the
