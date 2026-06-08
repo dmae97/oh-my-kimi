@@ -139,13 +139,19 @@ export async function runEvalLlm(args: unknown, options: EvalLlmBridgeOptions): 
 
 	const telemetry = resolveTelemetry(options.session.getTelemetry?.(), options.session.getSessionId?.() ?? undefined);
 
+	// Some providers (notably openai-codex) require a non-empty `instructions`
+	// field on every Responses request and 400 with "Instructions are required"
+	// when it is missing. Fall back to a minimal default so `llm(prompt)` works
+	// without forcing every caller to pass a `system` prompt.
+	const systemPrompt = system ? [system] : ["You are a helpful assistant."];
+
 	// Suspend eval timeout accounting while the model request owns control. The
 	// timeout clock restarts once the bridge returns to the cell runtime.
 	const response = await withBridgeTimeoutPause(options.emitStatus, () =>
 		instrumentedCompleteSimple(
 			model,
 			{
-				systemPrompt: system ? [system] : undefined,
+				systemPrompt,
 				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 				tools,
 			},

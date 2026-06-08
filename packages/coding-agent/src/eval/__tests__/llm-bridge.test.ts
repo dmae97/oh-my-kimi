@@ -206,6 +206,26 @@ describe("runEvalLlm", () => {
 		expect(result.details).toEqual({ model: "p/smol", tier: "smol", structured: false });
 	});
 
+	it("supplies a non-empty systemPrompt when system is omitted (codex 'Instructions are required' guard)", async () => {
+		// The openai-codex Responses transformer drops `instructions` when no
+		// system prompt is provided, and the remote endpoint then 400s with
+		// "Instructions are required". runEvalLlm must always carry a non-empty
+		// systemPrompt so `llm("…")` without a `system` argument works.
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+		await runEvalLlm({ prompt: "q", model: "smol" }, { session: makeSession() });
+		const ctx = spy.mock.calls[0]?.[1] as { systemPrompt?: string[] };
+		expect(ctx.systemPrompt).toBeDefined();
+		expect(ctx.systemPrompt?.length).toBeGreaterThan(0);
+		expect(ctx.systemPrompt?.[0]).toMatch(/.+/);
+	});
+
+	it("honors an explicit system prompt instead of overriding it", async () => {
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+		await runEvalLlm({ prompt: "q", model: "smol", system: "Be terse." }, { session: makeSession() });
+		const ctx = spy.mock.calls[0]?.[1] as { systemPrompt?: string[] };
+		expect(ctx.systemPrompt).toEqual(["Be terse."]);
+	});
+
 	it("forces a respond tool call and returns its arguments in structured mode", async () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")

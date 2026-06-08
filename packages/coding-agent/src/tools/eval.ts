@@ -88,12 +88,21 @@ function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
 	js?: boolean;
+	/**
+	 * Whether `agent()` is allowed in this session. Driven by the parent's
+	 * spawn policy (`getSessionSpawns`). Defaults to `true` for backward
+	 * compatibility — when the session forbids spawning, the prelude doc
+	 * omits the `agent()` entry so the model does not promise itself a
+	 * helper that will only ever throw "spawns disabled".
+	 */
+	spawns?: boolean;
 }
 
 export function getEvalToolDescription(options: EvalToolDescriptionOptions = {}): string {
 	const py = options.py ?? true;
 	const js = options.js ?? true;
-	return prompt.render(evalDescription, { py, js });
+	const spawns = options.spawns ?? true;
+	return prompt.render(evalDescription, { py, js, spawns });
 }
 
 export interface EvalToolOptions {
@@ -169,7 +178,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	get description(): string {
 		if (!this.session) return getEvalToolDescription();
 		const backends = resolveEvalBackends(this.session);
-		return getEvalToolDescription({ py: backends.python, js: backends.js });
+		const sessionSpawns = this.session.getSessionSpawns?.() ?? "*";
+		const spawnsAllowed = sessionSpawns !== "" && sessionSpawns !== null;
+		return getEvalToolDescription({ py: backends.python, js: backends.js, spawns: spawnsAllowed });
 	}
 	readonly parameters = evalSchema;
 	readonly concurrency = "exclusive";
