@@ -927,6 +927,7 @@ export const todoToolRenderer = {
 				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
 				state: options.isPartial ? "pending" : "success",
 				borderColor: "borderMuted",
+				applyBg: false,
 				width,
 			};
 		});
