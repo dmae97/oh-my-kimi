@@ -30,7 +30,7 @@ import {
 	renderJsonTreeLines,
 } from "../../tools/json-tree";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
-import { type ToolRenderer, toolRenderers } from "../../tools/renderers";
+import { toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
 import { isFramedBlockComponent, renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
@@ -518,39 +518,6 @@ export class ToolExecutionComponent extends Container {
 		// continues while it runs and would otherwise pin an unbounded live region);
 		// a foreground tool streaming partial output stays live until it finishes.
 		return (this.#result.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
-	}
-
-	/**
-	 * While a tool's preview is still streaming, a block whose preview is
-	 * append-only (rows only grow at the bottom, never re-layout) lets the
-	 * renderer commit the scrolled-off head of an over-tall preview to native
-	 * scrollback instead of dropping it — the same anti-yank path a streaming
-	 * assistant reply uses (see {@link TranscriptContainer} +
-	 * `NativeScrollbackLiveRegion`). Covers both phases: a pre-result call preview
-	 * (a `write` whose content streams in) and a partial-result preview that
-	 * streams output below fixed input (an `eval`/`bash` whose stdout grows under
-	 * its code cell). Gated on {@link isTranscriptBlockFinalized} so the boundary
-	 * closes the instant the block reaches a terminal state — a final result that
-	 * may collapse to a compact view, a backgrounded async tool, or a seal — and
-	 * the renderer decides whether its current preview shape qualifies via
-	 * `isStreamingPreviewAppendOnly` (typically: only the expanded full view,
-	 * which is top-anchored; the collapsed tail window re-layouts but is bounded
-	 * so it never overflows anyway).
-	 */
-	isTranscriptBlockAppendOnly(): boolean {
-		// A finalized block's preview can collapse/re-layout; only a live,
-		// still-streaming block is a candidate.
-		if (this.isTranscriptBlockFinalized()) return false;
-		const predicate =
-			(this.#tool as { isStreamingPreviewAppendOnly?: ToolRenderer["isStreamingPreviewAppendOnly"] } | undefined)
-				?.isStreamingPreviewAppendOnly ?? toolRenderers[this.#toolName]?.isStreamingPreviewAppendOnly;
-		if (!predicate) return false;
-		try {
-			return predicate(this.#getCallArgsForRender(), this.#renderState, this.#result);
-		} catch (err) {
-			logger.warn("Tool append-only predicate failed", { tool: this.#toolName, error: String(err) });
-			return false;
-		}
 	}
 
 	/**

@@ -74,18 +74,6 @@ export class AssistantMessageComponent extends Container {
 		return this.#transcriptBlockFinalized;
 	}
 
-	/**
-	 * Assistant text/thinking streams in append-only: earlier rendered rows never
-	 * re-layout, new content only grows the block at the bottom. The transcript
-	 * reports this so the renderer may commit scrolled-off head rows of a long
-	 * streamed reply to native scrollback instead of dropping them (see
-	 * `NativeScrollbackLiveRegion#getNativeScrollbackCommitSafeEnd`). Volatile
-	 * blocks (tool previews that collapse) intentionally do not implement this.
-	 */
-	isTranscriptBlockAppendOnly(): boolean {
-		return true;
-	}
-
 	markTranscriptBlockFinalized(): void {
 		this.#transcriptBlockFinalized = true;
 	}

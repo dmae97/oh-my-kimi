@@ -508,10 +508,7 @@ export const evalToolRenderer = {
 							status: "pending",
 							width,
 							// Always render the full source: the code is fixed input, not the
-							// streaming part, so it is never compacted. While still pending
-							// (args streaming) the block is not yet committed to native
-							// scrollback — its head is only committed once a result exists and
-							// the code has finalized (see `isStreamingPreviewAppendOnly`).
+							// streaming part, so it is never compacted.
 							codeMaxLines: Number.POSITIVE_INFINITY,
 							expanded: options.expanded,
 						},
@@ -747,17 +744,6 @@ export const evalToolRenderer = {
 		};
 	},
 
-	// Append-only once a result exists (args complete → code finalized). The code
-	// is rendered in full as a fixed top-anchored prefix, and the streamed stdout
-	// below it only appends rows at the bottom, so the scrolled-off head commits
-	// to native scrollback instead of being yanked — collapsed or expanded, since
-	// the collapsed output cap keeps its sliding tail in the bottom live region.
-	// Returns false while still pending: the code is mid-stream (args incomplete)
-	// and its header still reads "pending", so committing it would strand a stale
-	// pending preview in history.
-	isStreamingPreviewAppendOnly(_args: EvalRenderArgs, _options: RenderResultOptions, result?: unknown): boolean {
-		return result != null;
-	},
 	mergeCallAndResult: true,
 	inline: true,
 };

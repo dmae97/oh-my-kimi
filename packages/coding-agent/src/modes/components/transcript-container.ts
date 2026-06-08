@@ -6,6 +6,8 @@ interface FrozenRender {
 	width: number;
 	lines: string[];
 	generation: number;
+	appendOnly: boolean;
+	volatile: boolean;
 }
 
 interface SnapshotCarrier {
@@ -17,26 +19,14 @@ interface SnapshotCarrier {
  * result, an assistant message mid-stream) reports `false` so the container
  * keeps it inside the live (repaintable) region instead of freezing it. Blocks
  * without the method are treated as finalized — the default, stable behavior.
- *
- * `isTranscriptBlockAppendOnly` marks a still-live block whose rendered rows
- * only grow at the bottom and never re-layout (a streaming assistant reply).
- * Such a block's scrolled-off head is safe to commit to native scrollback even
- * while live; blocks that omit it (tool previews that collapse to a compact
- * result) keep their mutable rows deferred. Default is `false`.
  */
 interface FinalizableBlock {
 	isTranscriptBlockFinalized?(): boolean;
-	isTranscriptBlockAppendOnly?(): boolean;
 }
 
 function isBlockFinalized(child: Component): boolean {
 	const fn = (child as Component & FinalizableBlock).isTranscriptBlockFinalized;
 	return fn ? fn.call(child) : true;
-}
-
-function isBlockAppendOnly(child: Component): boolean {
-	const fn = (child as Component & FinalizableBlock).isTranscriptBlockAppendOnly;
-	return fn ? fn.call(child) : false;
 }
 
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
@@ -57,6 +47,73 @@ function stripPlainBlankEdges(lines: string[]): string[] {
 	while (start < end && isPlainBlank(lines[start]!)) start++;
 	while (end > start && isPlainBlank(lines[end - 1]!)) end--;
 	return start === 0 && end === lines.length ? lines : lines.slice(start, end);
+}
+
+interface LiveCommitState {
+	appendOnly: boolean;
+	volatile: boolean;
+	safeLength: number;
+}
+
+function hasValidSnapshot(
+	snapshot: FrozenRender | undefined,
+	width: number,
+	generation: number,
+): snapshot is FrozenRender {
+	return snapshot !== undefined && snapshot.generation === generation && snapshot.width === width;
+}
+
+function commonPrefixLength(prev: string[], cur: string[]): number {
+	const limit = Math.min(prev.length, cur.length);
+	let i = 0;
+	while (i < limit && prev[i] === cur[i]) i++;
+	return i;
+}
+
+function commonSuffixLength(prev: string[], cur: string[], prefixLength: number): number {
+	const prevLimit = prev.length - prefixLength;
+	const curLimit = cur.length - prefixLength;
+	const limit = Math.min(prevLimit, curLimit);
+	let i = 0;
+	while (i < limit && prev[prev.length - 1 - i] === cur[cur.length - 1 - i]) i++;
+	return i;
+}
+
+function deriveLiveCommitState(
+	previous: FrozenRender | undefined,
+	current: string[],
+	width: number,
+	generation: number,
+): LiveCommitState {
+	let appendOnly = false;
+	let volatile = false;
+	if (hasValidSnapshot(previous, width, generation)) {
+		appendOnly = previous.appendOnly;
+		volatile = previous.volatile;
+
+		const prefixLength = commonPrefixLength(previous.lines, current);
+		const staticRender = prefixLength === previous.lines.length && prefixLength === current.length;
+		if (!staticRender) {
+			const suffixLength = commonSuffixLength(previous.lines, current, prefixLength);
+			const stablePreviousLength = prefixLength + suffixLength;
+			const appendGrew =
+				previous.lines.length > 0 &&
+				current.length > previous.lines.length &&
+				stablePreviousLength >= previous.lines.length;
+			if (appendGrew && !volatile) {
+				appendOnly = true;
+			} else if (stablePreviousLength < previous.lines.length) {
+				volatile = true;
+				appendOnly = false;
+			}
+		}
+	}
+
+	return {
+		appendOnly,
+		volatile,
+		safeLength: volatile ? 0 : appendOnly ? current.length : 0,
+	};
 }
 
 /**
@@ -97,11 +154,10 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	// render. TUI extends the native-scrollback pinned region from this point
 	// through the live blocks and the root chrome rendered below them.
 	#nativeScrollbackLiveRegionStart: number | undefined;
-	// Local line index up to which the leading run of live blocks is append-only
-	// (a streaming assistant reply): everything in [liveRegionStart,
-	// commitSafeEnd) only grows at the bottom and never re-layouts, so its
-	// scrolled-off head is safe to commit to native scrollback. `undefined` when
-	// the first live block is volatile (a tool preview).
+	// Local line index up to which the leading run of live blocks is safe to
+	// commit. Finalized blocks contribute their full frozen body; still-live
+	// blocks contribute only after their stripped render has been observed
+	// growing without changing a previously rendered interior row.
 	#nativeScrollbackCommitSafeEnd: number | undefined;
 
 	override invalidate(): void {
@@ -164,8 +220,9 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		if (risk) this.#prevLiveStartIndex = liveStartIndex;
 
 		const lines: string[] = [];
-		// Tracks whether we are still inside the leading run of append-only live
-		// blocks. The first non-append-only live block closes it.
+		// Tracks whether we are still inside the leading run of commit-safe live
+		// blocks. The first still-live volatile block closes it, but rendering
+		// continues so lower blocks remain visible.
 		let commitSafeOpen = true;
 		// The live-region start is recorded at the first visible row at/after the
 		// cutoff; empty leading blocks (or a separator) must not claim it early.
@@ -179,24 +236,41 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			// instead of recomputing; a stale generation (post-thaw) or width
 			// mismatch (resize) recomputes, as does a block still live last frame.
 			let contribution: string[] | undefined;
+			const previousSnapshot = risk ? child[kSnapshot] : undefined;
 			if (risk && i < liveStartIndex && i < replayCutoff) {
-				const snapshot = child[kSnapshot];
-				if (snapshot && snapshot.generation === this.#generation && snapshot.width === width) {
-					contribution = snapshot.lines;
+				if (hasValidSnapshot(previousSnapshot, width, this.#generation)) {
+					contribution = previousSnapshot.lines;
 				}
 			}
+			let liveCommitState: LiveCommitState | undefined;
 			if (contribution === undefined) {
 				const rendered = child.render(width);
 				contribution = stripPlainBlankEdges(rendered);
+				if (risk && i >= liveStartIndex && !isBlockFinalized(child)) {
+					liveCommitState = deriveLiveCommitState(previousSnapshot, contribution, width, this.#generation);
+				}
 				// Cache every block's latest contribution. While a block is in the
 				// live region this keeps its snapshot current; on the frame it crosses
 				// out, the recompute above refreshes it before it freezes.
-				if (risk) child[kSnapshot] = { width, lines: contribution, generation: this.#generation };
+				if (risk) {
+					child[kSnapshot] = {
+						width,
+						lines: contribution,
+						generation: this.#generation,
+						appendOnly: liveCommitState?.appendOnly ?? false,
+						volatile: liveCommitState?.volatile ?? false,
+					};
+				}
 			}
 
 			// Empty (or stripped-to-nothing) children contribute nothing and never
-			// affect spacing or the live-region offsets.
-			if (contribution.length === 0) continue;
+			// affect spacing or the live-region offsets. An empty still-live child
+			// still closes the commit-safe run: if it later gains rows, it pushes
+			// everything below it.
+			if (contribution.length === 0) {
+				if (risk && i >= liveStartIndex && commitSafeOpen && !isBlockFinalized(child)) commitSafeOpen = false;
+				continue;
+			}
 
 			// Every block is separated from preceding visible content by exactly one
 			// blank row — skipped when it opens the transcript or the prior row is
@@ -212,17 +286,19 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			}
 
 			if (sep) lines.push("");
+			const blockStart = lines.length;
 			for (let j = 0; j < contribution.length; j++) lines.push(contribution[j]!);
 
-			// Extend the commit-safe boundary through each leading append-only live
-			// block. The first volatile live block closes the run so its mutable
-			// rows stay deferred.
 			if (risk && i >= liveStartIndex && commitSafeOpen) {
-				if (isBlockAppendOnly(child)) {
-					this.#nativeScrollbackCommitSafeEnd = lines.length;
-				} else {
-					commitSafeOpen = false;
+				const finalized = isBlockFinalized(child);
+				const safeLength = finalized ? contribution.length : (liveCommitState?.safeLength ?? 0);
+				if (safeLength > 0) {
+					this.#nativeScrollbackCommitSafeEnd = blockStart + safeLength;
 				}
+				// A finalized, fully safe block may let the contiguous safe run extend
+				// into blocks rendered below it. A still-live block keeps pushing lower
+				// rows around as it grows, so the run closes there.
+				if (!(finalized && safeLength >= contribution.length)) commitSafeOpen = false;
 			}
 		}
 		return lines;

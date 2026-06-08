@@ -1039,17 +1039,6 @@ export const writeToolRenderer = {
 		});
 	},
 
-	// Only the expanded (Ctrl+O) preview is append-only: it renders the whole
-	// content top-anchored, so streamed chunks only append rows at the bottom.
-	// The collapsed preview slides a bounded tail window (`formatStreamingContent`
-	// with `WRITE_STREAMING_PREVIEW_LINES`) whose visible rows re-layout as the
-	// window moves — not append-only, but it never overflows the viewport, so its
-	// head is never at risk of being dropped regardless. `write` has no partial
-	// result (content streams as args), so `result` is ignored here.
-	isStreamingPreviewAppendOnly(args: WriteRenderArgs, options: RenderResultOptions, _result?: unknown): boolean {
-		return Boolean(options?.expanded && args.content);
-	},
-
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails; isError?: boolean },
 		options: RenderResultOptions,

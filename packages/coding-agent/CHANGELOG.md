@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed native scrollback commit boundaries to be computed generically from finalized transcript blocks and observed append-only live growth, so tall final tool results and streaming previews keep their scrolled-off heads on ED3-risk terminals without per-tool append-only predicates; live blocks that re-layout remain deferred until finalization or the next checkpoint.
 - Fixed read-group summaries for multi-path `read` results to use result-provided display targets so each resolved path is shown as its own row
 - Fixed read-group range summaries to abbreviate long merged selectors with ellipsis to keep repeated-file range rows readable
 - Fixed read-group TUI summaries so a single delimited `read` call renders as separate read rows, and repeated reads of the same file collapse under one file with full-file/range children.
