@@ -31,6 +31,15 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 - `async: true` only defers **reporting** of the result — it does NOT disable, extend, or detach the timeout. A daemon started with `async: true` is still killed when `timeout` elapses, regardless of how long the agent waits before reading the result.
 - For long-running daemons (dev servers, watchers): either pass an explicit large `timeout` (up to `3600`), or fully detach the process from this shell using `nohup …  &` / `setsid … &` / `disown` so it survives independent of the bash call's lifecycle.
 {{/if}}
+{{#if autoBackgroundEnabled}}
+
+## Auto-background
+
+- A foreground (non-`async`) call that has not completed within **{{autoBackgroundThresholdSeconds}}s** is automatically converted into a background job and returns a `Background job <id> started: …` notice with the buffered output so far. The command keeps running; the final result is delivered as a follow-up tool call when it completes.
+- This is NOT a failure or a re-queue. Treat the notice as "still running, will report back" — do not retry the same command, and do not wait synchronously for it.
+- Auto-backgrounding does NOT extend `timeout`: the job is still killed at the original deadline.
+- If you need the result inline (e.g. piping into another command), raise `timeout` above the expected duration so it finishes before the threshold matters{{#if asyncEnabled}}, or set `async: true` up front so the contract is explicit{{/if}}.
+{{/if}}
 
 # Output minimizer
 

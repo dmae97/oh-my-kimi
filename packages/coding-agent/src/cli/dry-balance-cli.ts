@@ -19,7 +19,7 @@ import type { CanonicalModelVariant } from "../config/model-equivalence";
 import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
-	type ModelMatchPreferences,
+	getModelMatchPreferences,
 	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelRoleValue,
@@ -542,9 +542,7 @@ async function resolveDryBalanceModel(
 	settings: Settings | undefined,
 	randomSessionId: () => string,
 ): Promise<{ model: Model<Api>; warning?: string }> {
-	const preferences: ModelMatchPreferences = {
-		usageOrder: settings?.getStorage()?.getModelUsageOrder(),
-	};
+	const preferences = getModelMatchPreferences(settings);
 	if (modelSelector) {
 		const resolved = resolveCliModel({
 			cliModel: modelSelector,

@@ -1,20 +1,112 @@
-import turnAbortedGuidance from "../prompts/turn-aborted-guidance.md" with { type: "text" };
-import type {
-	Api,
-	AssistantMessage,
-	DeveloperMessage,
-	Message,
-	Model,
-	ToolCall,
-	ToolResultMessage,
-	UserMessage,
-} from "../types";
+import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
 	Resolved = 1,
 	/** A synthetic aborted result was emitted; later real results must be skipped. */
 	Aborted = 2,
+}
+
+/**
+ * Maximum tool-call id length the strictest replay provider accepts.
+ *
+ * Anthropic requires `^[a-zA-Z0-9_-]+$` with a 64-char cap; Google and Codex
+ * `normalizeToolCallId` implementations cap individual id segments to the same
+ * 64-char ceiling. Replacement ids minted here flow back through
+ * `convertAnthropicMessages` (and friends) unchanged, so the `_dupN` suffix
+ * MUST not push a normalized id past this bound.
+ */
+const MAX_TOOL_CALL_ID_LENGTH = 64;
+
+function appendDuplicateSuffix(originalId: string, suffix: string, maxLength: number): string {
+	if (originalId.length + suffix.length <= maxLength) return `${originalId}${suffix}`;
+	const prefixBudget = Math.max(0, maxLength - suffix.length);
+	return `${originalId.slice(0, prefixBudget)}${suffix}`;
+}
+
+type PendingToolResultRewrite = { replacementId: string } | undefined;
+
+function deduplicateToolCallIds(
+	messages: Message[],
+	maxToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
+	duplicateSuffixPrefix = "_dup",
+): Message[] {
+	const seenToolCallIds = new Map<string, number>();
+	const pendingToolResultRewrites = new Map<string, PendingToolResultRewrite[]>();
+
+	return messages.map(msg => {
+		if (msg.role === "toolResult") {
+			const rewrites = pendingToolResultRewrites.get(msg.toolCallId);
+			if (!rewrites || rewrites.length === 0) return msg;
+
+			const rewrite = rewrites.shift();
+			if (rewrites.length === 0) pendingToolResultRewrites.delete(msg.toolCallId);
+			if (rewrite) return { ...msg, toolCallId: rewrite.replacementId };
+			return msg;
+		}
+
+		if (msg.role !== "assistant") return msg;
+
+		const enqueueToolResultRewrite = (id: string, rewrite: PendingToolResultRewrite): void => {
+			const rewrites = pendingToolResultRewrites.get(id);
+			if (rewrites) {
+				rewrites.push(rewrite);
+				return;
+			}
+			pendingToolResultRewrites.set(id, [rewrite]);
+		};
+
+		// Ids this turn has already touched; used to scope the "drop carried-over
+		// pending rewrites" semantics to the FIRST occurrence per turn so multiple
+		// blocks of the same id within one turn still accumulate as duplicates.
+		const idsTouchedInTurn = new Set<string>();
+		let contentChanged = false;
+		const content = msg.content.map(block => {
+			if (block.type !== "toolCall") return block;
+
+			// Drop any pending rewrites carried over from a prior assistant turn
+			// for this id on its first appearance this turn. When a later turn
+			// re-emits the same id, the older duplicate call's expected result
+			// never landed in time — the second pass synthesizes
+			// "No result provided" for it, and the upcoming real result(id) must
+			// route to one of THIS turn's calls. Without this guard the older
+			// `_dup` id would steal the next result.
+			if (!idsTouchedInTurn.has(block.id)) {
+				pendingToolResultRewrites.delete(block.id);
+				idsTouchedInTurn.add(block.id);
+			}
+
+			const previousCount = seenToolCallIds.get(block.id) ?? 0;
+			if (previousCount === 0) {
+				seenToolCallIds.set(block.id, 1);
+				enqueueToolResultRewrite(block.id, undefined);
+				return block;
+			}
+
+			let duplicateIndex = previousCount;
+			let replacementId = appendDuplicateSuffix(
+				block.id,
+				`${duplicateSuffixPrefix}${duplicateIndex}`,
+				maxToolCallIdLength,
+			);
+			while (seenToolCallIds.has(replacementId)) {
+				duplicateIndex += 1;
+				replacementId = appendDuplicateSuffix(
+					block.id,
+					`${duplicateSuffixPrefix}${duplicateIndex}`,
+					maxToolCallIdLength,
+				);
+			}
+			seenToolCallIds.set(block.id, duplicateIndex + 1);
+			seenToolCallIds.set(replacementId, 1);
+			enqueueToolResultRewrite(block.id, { replacementId });
+			contentChanged = true;
+			return { ...block, id: replacementId };
+		});
+
+		if (!contentChanged) return msg;
+		return { ...msg, content };
+	});
 }
 
 function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage): boolean {
@@ -40,128 +132,135 @@ function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number 
  * For aborted/errored turns, this function:
  * - Preserves tool call structure (unlike converting to text summaries)
  * - Injects synthetic "aborted" tool results
- * - Adds a <turn-aborted> guidance marker for the model
  */
 export function transformMessages<TApi extends Api>(
 	messages: Message[],
 	model: Model<TApi>,
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+	maxNormalizedToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
+	duplicateToolCallIdSuffixPrefix = "_dup",
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
 
 	const latestSurvivingAssistantIndex = getLatestSurvivingAssistantIndex(messages);
 	// First pass: transform messages (thinking blocks, tool call ID normalization)
-	const transformed = messages.map((msg, index) => {
-		// User and developer messages pass through unchanged
-		if (msg.role === "user" || msg.role === "developer") {
-			return msg;
-		}
+	const transformed = deduplicateToolCallIds(
+		messages.map((msg, index) => {
+			// User and developer messages pass through unchanged
+			if (msg.role === "user" || msg.role === "developer") {
+				return msg;
+			}
 
-		// Handle toolResult messages - normalize toolCallId if we have a mapping
-		if (msg.role === "toolResult") {
-			const normalizedId = toolCallIdMap.get(msg.toolCallId);
-			if (normalizedId && normalizedId !== msg.toolCallId) {
-				return { ...msg, toolCallId: normalizedId };
+			// Handle toolResult messages - normalize toolCallId if we have a mapping
+			if (msg.role === "toolResult") {
+				const normalizedId = toolCallIdMap.get(msg.toolCallId);
+				if (normalizedId && normalizedId !== msg.toolCallId) {
+					return { ...msg, toolCallId: normalizedId };
+				}
+				return msg;
+			}
+
+			// Assistant messages need transformation check
+			if (msg.role === "assistant") {
+				const assistantMsg = msg as AssistantMessage;
+				const isSameModel =
+					assistantMsg.provider === model.provider &&
+					assistantMsg.api === model.api &&
+					assistantMsg.model === model.id;
+
+				const mustPreserveLatestAnthropicThinking =
+					index === latestSurvivingAssistantIndex &&
+					model.api === "anthropic-messages" &&
+					assistantMsg.api === "anthropic-messages";
+				// Aborted/errored messages may have partially-streamed thinking signatures.
+				// A partial signature is invalid and will be rejected by the API, so we must
+				// strip signatures from thinking blocks in these messages.
+				//
+				// Abandoned tool-use turns get the same treatment once they are no longer
+				// the latest assistant message. When a turn carries toolCall blocks but did
+				// NOT request tool execution (stopReason !== "toolUse" — e.g.
+				// adaptive-thinking Opus emitting tool calls and then ending the turn on
+				// `end_turn`/`stop`), the agent loop pairs those calls with placeholder
+				// tool_results to keep the tool_use/tool_result contract valid. Historical
+				// abandoned turns cannot safely replay their end_turn-bound signatures in
+				// that continuation, so stripping downgrades them to plain text downstream.
+				// Latest abandoned turns are exempt because Anthropic requires thinking
+				// blocks from its most recent response to remain byte-for-byte unmodified.
+				const invalidStopReason = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
+				const abandonedToolUse =
+					!invalidStopReason &&
+					assistantMsg.stopReason !== "toolUse" &&
+					assistantMsg.content.some(b => b.type === "toolCall");
+				const hasInvalidSignatures = invalidStopReason || abandonedToolUse;
+
+				const transformedContent = assistantMsg.content.flatMap(block => {
+					if (block.type === "thinking") {
+						// Strip untrustworthy signatures so the encoder can downgrade to text.
+						const sanitized =
+							hasInvalidSignatures && block.thinkingSignature
+								? { ...block, thinkingSignature: undefined }
+								: block;
+						if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;
+						// For same model: keep thinking blocks with signatures (needed for replay)
+						// even if the thinking text is empty (OpenAI encrypted reasoning)
+						if (isSameModel && sanitized.thinkingSignature) return sanitized;
+						// Skip empty thinking blocks, convert others to plain text
+						if (!sanitized.thinking || sanitized.thinking.trim() === "") return [];
+						if (isSameModel) return sanitized;
+						return {
+							type: "text" as const,
+							text: sanitized.thinking,
+						};
+					}
+
+					if (block.type === "redactedThinking") {
+						if (mustPreserveLatestAnthropicThinking) return block;
+						if (isSameModel) return block;
+						return [];
+					}
+
+					if (block.type === "text") {
+						if (isSameModel) return block;
+						return {
+							type: "text" as const,
+							text: block.text,
+						};
+					}
+
+					if (block.type === "toolCall") {
+						const toolCall = block as ToolCall;
+						let normalizedToolCall: ToolCall = toolCall;
+
+						if (!isSameModel && toolCall.thoughtSignature) {
+							normalizedToolCall = { ...toolCall };
+							delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
+						}
+
+						if (!isSameModel && normalizeToolCallId) {
+							const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
+							if (normalizedId !== toolCall.id) {
+								toolCallIdMap.set(toolCall.id, normalizedId);
+								normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
+							}
+						}
+
+						return normalizedToolCall;
+					}
+
+					return block;
+				});
+
+				return {
+					...assistantMsg,
+					content: transformedContent,
+				};
 			}
 			return msg;
-		}
-
-		// Assistant messages need transformation check
-		if (msg.role === "assistant") {
-			const assistantMsg = msg as AssistantMessage;
-			const isSameModel =
-				assistantMsg.provider === model.provider &&
-				assistantMsg.api === model.api &&
-				assistantMsg.model === model.id;
-
-			const mustPreserveLatestAnthropicThinking =
-				index === latestSurvivingAssistantIndex &&
-				model.api === "anthropic-messages" &&
-				assistantMsg.api === "anthropic-messages";
-			// Aborted/errored messages may have partially-streamed thinking signatures.
-			// A partial signature is invalid and will be rejected by the API, so we must
-			// strip signatures from thinking blocks in these messages.
-			//
-			// Abandoned tool-use turns get the same treatment once they are no longer
-			// the latest assistant message. When a turn carries toolCall blocks but did
-			// NOT request tool execution (stopReason !== "toolUse" — e.g.
-			// adaptive-thinking Opus emitting tool calls and then ending the turn on
-			// `end_turn`/`stop`), the agent loop pairs those calls with placeholder
-			// tool_results to keep the tool_use/tool_result contract valid. Historical
-			// abandoned turns cannot safely replay their end_turn-bound signatures in
-			// that continuation, so stripping downgrades them to plain text downstream.
-			// Latest abandoned turns are exempt because Anthropic requires thinking
-			// blocks from its most recent response to remain byte-for-byte unmodified.
-			const invalidStopReason = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
-			const abandonedToolUse =
-				!invalidStopReason &&
-				assistantMsg.stopReason !== "toolUse" &&
-				assistantMsg.content.some(b => b.type === "toolCall");
-			const hasInvalidSignatures = invalidStopReason || abandonedToolUse;
-
-			const transformedContent = assistantMsg.content.flatMap(block => {
-				if (block.type === "thinking") {
-					// Strip untrustworthy signatures so the encoder can downgrade to text.
-					const sanitized =
-						hasInvalidSignatures && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block;
-					if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;
-					// For same model: keep thinking blocks with signatures (needed for replay)
-					// even if the thinking text is empty (OpenAI encrypted reasoning)
-					if (isSameModel && sanitized.thinkingSignature) return sanitized;
-					// Skip empty thinking blocks, convert others to plain text
-					if (!sanitized.thinking || sanitized.thinking.trim() === "") return [];
-					if (isSameModel) return sanitized;
-					return {
-						type: "text" as const,
-						text: sanitized.thinking,
-					};
-				}
-
-				if (block.type === "redactedThinking") {
-					if (mustPreserveLatestAnthropicThinking) return block;
-					if (isSameModel) return block;
-					return [];
-				}
-
-				if (block.type === "text") {
-					if (isSameModel) return block;
-					return {
-						type: "text" as const,
-						text: block.text,
-					};
-				}
-
-				if (block.type === "toolCall") {
-					const toolCall = block as ToolCall;
-					let normalizedToolCall: ToolCall = toolCall;
-
-					if (!isSameModel && toolCall.thoughtSignature) {
-						normalizedToolCall = { ...toolCall };
-						delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
-					}
-
-					if (!isSameModel && normalizeToolCallId) {
-						const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
-						if (normalizedId !== toolCall.id) {
-							toolCallIdMap.set(toolCall.id, normalizedId);
-							normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
-						}
-					}
-
-					return normalizedToolCall;
-				}
-
-				return block;
-			});
-
-			return {
-				...assistantMsg,
-				content: transformedContent,
-			};
-		}
-		return msg;
-	});
+		}),
+		maxNormalizedToolCallIdLength,
+		duplicateToolCallIdSuffixPrefix,
+	);
 	const realToolResultsById = new Map<string, ToolResultMessage>();
 	for (const msg of transformed) {
 		if (msg.role === "toolResult" && !realToolResultsById.has(msg.toolCallId)) {
@@ -235,11 +334,6 @@ export function transformMessages<TApi extends Api>(
 			} as ToolResultMessage);
 			toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
 		}
-		result.push({
-			role: "developer",
-			content: turnAbortedGuidance,
-			timestamp: pendingAbortedTimestamp + 1,
-		} as DeveloperMessage);
 		pendingAbortedToolCalls = new Map();
 		pendingAbortedTimestamp = undefined;
 	};
@@ -268,11 +362,6 @@ export function transformMessages<TApi extends Api>(
 			// (OpenAI completions `reasoning_text`, Google signed thought parts).
 			const originalMsg = messages[i]!;
 			if (originalMsg.role === "assistant" && shouldDropTruncatedThinkingOnlyAssistant(originalMsg)) {
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					// Still arm the aborted-turn note so downstream guidance fires.
-					pendingAbortedToolCalls = new Map();
-					pendingAbortedTimestamp = assistantMsg.timestamp;
-				}
 				continue;
 			}
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { KeybindingsManager, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
+import { addKeyAliases, canonicalKeyId, KeybindingsManager, parseKey, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui";
 
 describe("KeybindingsManager", () => {
 	it("does not evict selector confirm when input submit is rebound", () => {
@@ -42,5 +42,27 @@ describe("KeybindingsManager", () => {
 			},
 		]);
 		expect(keybindings.getKeys("tui.editor.cursorLeft")).toEqual(["left", "ctrl+b"]);
+	});
+
+	it("exports the canonical alias helpers used by matching", () => {
+		const aliases = new Set<string>();
+		for (const key of ["esc", "return", "?", "shift+a"] as const) {
+			addKeyAliases(aliases, key);
+		}
+
+		expect([...aliases].sort()).toEqual(["?", "enter", "escape", "shift+?", "shift+a"]);
+		expect(canonicalKeyId("A")).toBe("shift+a");
+		expect(canonicalKeyId("shift+?")).toBe("shift+?");
+
+		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+			"tui.input.copy": ["esc", "return", "?", "shift+a"],
+		});
+
+		for (const input of ["\x1b", "\r", "?", "A"]) {
+			const parsed = parseKey(input);
+			if (parsed === undefined) throw new Error(`Expected ${JSON.stringify(input)} to parse`);
+			expect(aliases.has(canonicalKeyId(parsed))).toBe(true);
+			expect(keybindings.matches(input, "tui.input.copy")).toBe(true);
+		}
 	});
 });

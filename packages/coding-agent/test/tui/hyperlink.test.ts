@@ -131,6 +131,21 @@ describe("fileHyperlink", () => {
 		expect(uri).not.toContain(" ");
 	});
 
+	it("percent-encodes URL-reserved path bytes before appending query params", () => {
+		setHyperlinkMode("always");
+		const result = fileHyperlink("/Users/foo/a#b?c% d.ts", "a#b?c% d.ts", { line: 12 });
+		const uri = extractLinkUri(result);
+		expect(uri).toBe("file:///Users/foo/a%23b%3Fc%25%20d.ts?line=12");
+	});
+
+	it("resolves relative paths before building file URIs", () => {
+		setHyperlinkMode("always");
+		const result = fileHyperlink("relative file#1.ts", "relative file#1.ts");
+		const uri = extractLinkUri(result);
+		expect(uri).toBeDefined();
+		expect(decodeURIComponent(new URL(uri!).pathname)).toEndWith("/relative file#1.ts");
+	});
+
 	it("appends line and col as query params when provided", () => {
 		setHyperlinkMode("always");
 		const result = fileHyperlink("/Users/foo/bar.ts", "bar.ts", { line: 42, col: 7 });

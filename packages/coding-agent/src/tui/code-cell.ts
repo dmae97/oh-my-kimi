@@ -32,8 +32,6 @@ export interface CodeCellOptions {
 	 */
 	codeTail?: boolean;
 	expanded?: boolean;
-	/** Animate the cell border with a sweeping segment while pending/running. */
-	animate?: boolean;
 	width: number;
 }
 
@@ -147,10 +145,7 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 		sections.push({ label: theme.fg("toolTitle", "Output"), lines: outputLines });
 	}
 
-	return renderOutputBlock(
-		{ header: title, headerMeta: meta, state, sections, width, animate: options.animate },
-		theme,
-	);
+	return renderOutputBlock({ header: title, headerMeta: meta, state, sections, width }, theme);
 }
 
 export interface MarkdownCellOptions {

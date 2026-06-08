@@ -248,7 +248,7 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["✔ write: 4 lines", "", "rule card"]);
 	});
 
-	it("keeps a streaming assistant live so an abort label can land after status rows below it (ED3-risk)", () => {
+	it("keeps a streaming assistant live so final interrupted content can land after status rows below it (ED3-risk)", () => {
 		riskFlag.eagerEraseScrollbackRisk = true;
 		const container = new TranscriptContainer();
 		const assistant = new AssistantMessageComponent();
@@ -262,7 +262,7 @@ describe("TranscriptContainer", () => {
 		expect(plain(container.render(80))).toContain("The config file write went through.");
 
 		// Status/notice rows can arrive below the still-streaming assistant before
-		// message_end stamps the abort label. The assistant must stay repaintable.
+		// message_end finalizes the interrupted message. The assistant must stay repaintable.
 		container.addChild(new Text("Copied raw SSE stream", 0, 0));
 		expect(plain(container.render(80))).toContain("Copied raw SSE stream");
 		expect(container.getNativeScrollbackLiveRegionStart()).toBe(0);
@@ -278,7 +278,7 @@ describe("TranscriptContainer", () => {
 
 		const rendered = plain(container.render(80));
 		expect(rendered).toContain("The config file write went through despite the interruption.");
-		expect(rendered).toContain(USER_INTERRUPT_LABEL);
+		expect(rendered).not.toContain(USER_INTERRUPT_LABEL);
 		expect(rendered).toContain("Copied raw SSE stream");
 		expect(container.getNativeScrollbackLiveRegionStart()).not.toBe(0);
 	});

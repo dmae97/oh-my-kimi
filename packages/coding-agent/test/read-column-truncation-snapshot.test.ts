@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { Patch, Patcher } from "@oh-my-pi/hashline";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@oh-my-pi/pi-coding-agent/edit/hashline/filesystem";
 import { writethroughNoop } from "@oh-my-pi/pi-coding-agent/lsp";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -111,7 +111,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		expect(text).not.toContain(longLine);
 
 		const { tag } = extractHeader(text);
-		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag);
+		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(filePath), tag);
 		expect(snapshot).not.toBeNull();
 
 		// The snapshot MUST hold the on-disk text, not the display-truncated version.
@@ -132,7 +132,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		expect(text).toContain("…");
 
 		const { tag } = extractHeader(text);
-		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag);
+		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(filePath), tag);
 		expect(snapshot?.text.split("\n")[1]).toBe(longLine);
 	});
 
@@ -149,7 +149,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		expect(text).toContain("…");
 
 		const { tag } = extractHeader(text);
-		const snapshot = getFileSnapshotStore(session).byHash(filePath, tag);
+		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(filePath), tag);
 		expect(snapshot?.text.split("\n")[1]).toBe(longLine);
 		expect(snapshot?.text.split("\n")[5]).toBe(longLine);
 	});

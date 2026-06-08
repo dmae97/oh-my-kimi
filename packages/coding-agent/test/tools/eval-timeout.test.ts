@@ -16,7 +16,7 @@ function makeSession(): ToolSession {
 
 /**
  * Defends the contract that a cell which does not delegate to an `agent()`/
- * `llm()` bridge call is bounded by a *plain wall-clock* timeout — not the
+ * `completion()` bridge call is bounded by a *plain wall-clock* timeout — not the
  * activity watchdog, which now only extends the budget while a bridge call is in
  * flight. Regression guard for the watchdog killing ordinary compute cells and
  * surfacing a misleading "of inactivity" message.
@@ -26,7 +26,7 @@ describe("EvalTool timeout semantics", () => {
 		await disposeAllVmContexts();
 	});
 
-	it("bounds a compute cell (no agent/llm) by a plain wall-clock timeout", async () => {
+	it("bounds a compute cell (no agent/completion) by a plain wall-clock timeout", async () => {
 		const tool = new EvalTool(makeSession());
 		// 1s budget; the cell idles for 5s and emits no status, so nothing extends
 		// the budget — it must be cut off at the wall-clock limit.

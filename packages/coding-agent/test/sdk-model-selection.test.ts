@@ -165,6 +165,50 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("prefers the provider default over catalog order in the startup fallback", async () => {
+		// Regression: with an Anthropic key but no configured `default` role and no
+		// session/CLI model, the step-4 startup fallback used to pick the first
+		// anthropic model in models.json catalog order (claude-3-5-sonnet-20240620)
+		// instead of the provider's configured default from DEFAULT_MODEL_PER_PROVIDER
+		// (claude-opus-4-6).
+		const providerDefault = getBundledModel("anthropic", "claude-opus-4-6");
+		const catalogFirst = getBundledModel("anthropic", "claude-3-5-sonnet-20240620");
+		if (!providerDefault || !catalogFirst) {
+			throw new Error("Expected bundled anthropic models for fallback regression");
+		}
+
+		const authStorage = await AuthStorage.create(path.join(tempDir, "fallbackauth.db"));
+		authStoragesToClose.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		// No `default` model role configured: forces the step-4 startup fallback.
+		const settings = Settings.isolated();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("anthropic");
+			expect(session.model?.id).toBe(providerDefault.id);
+			expect(session.model?.id).not.toBe(catalogFirst.id);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("restores role model from extension provider after startup resume", async () => {
 		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!defaultModel) {

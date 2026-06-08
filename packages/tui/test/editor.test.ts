@@ -3,6 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { setDefaultTabWidth } from "@oh-my-pi/pi-utils";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings";
@@ -616,6 +617,16 @@ describe("Editor component", () => {
 			editor.setText("foo bar");
 			editor.handleInput("\x1b\x7f"); // Alt+Backspace (legacy)
 			expect(editor.getText()).toBe("foo ");
+
+			// Issue #2064: Ghostty on macOS reports Option+Backspace as `ESC [127;11u`
+			// (kitty modifier 11 wire = super(8)|alt(2)). Without super support the
+			// editor used to ignore this entirely and the previous word survived.
+			setKittyProtocolActive(true);
+			editor.setText("foo bar");
+			editor.handleInput("\x1b[F"); // End — park cursor at EOL
+			editor.handleInput("\x1b[127;11u"); // Ghostty Option+Backspace
+			expect(editor.getText()).toBe("foo ");
+			setKittyProtocolActive(false);
 		});
 
 		it("navigates words correctly with Ctrl+Left/Right", () => {

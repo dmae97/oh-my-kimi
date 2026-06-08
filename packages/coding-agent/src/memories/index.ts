@@ -7,7 +7,7 @@ import { type ApiKey, clampThinkingLevelForModel, completeSimple, Effort, type M
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveModelRoleValue } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import consolidationTemplate from "../prompts/memories/consolidation.md" with { type: "text" };
 import readPathTemplate from "../prompts/memories/read-path.md" with { type: "text" };
@@ -1088,7 +1088,7 @@ async function resolveMemoryModel(options: {
 	if (requestedModel) {
 		const resolved = resolveModelRoleValue(requestedModel, modelRegistry.getAll(), {
 			settings: session.settings,
-			matchPreferences: { usageOrder: session.settings.getStorage()?.getModelUsageOrder() },
+			matchPreferences: getModelMatchPreferences(session.settings),
 			modelRegistry,
 		});
 		if (resolved.model) return resolved.model;

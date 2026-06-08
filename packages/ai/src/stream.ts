@@ -209,8 +209,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	tavily: "TAVILY_API_KEY",
 	parallel: "PARALLEL_API_KEY",
 	kagi: "KAGI_API_KEY",
-	// GitHub Copilot uses GitHub personal access token
-	"github-copilot": () => $pickenv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
+	"github-copilot": "COPILOT_GITHUB_TOKEN",
 	// Foundry mode optionally switches Anthropic auth to enterprise gateway credentials.
 	anthropic: () =>
 		isFoundryEnabled()
@@ -284,6 +283,18 @@ export function getEnvApiKey(provider: string): string | undefined {
 		return $env[resolver];
 	}
 	return resolver?.();
+}
+
+/**
+ * Name of the environment variable that backs `getEnvApiKey` for a provider,
+ * when that provider maps to a single named variable (e.g. `github-copilot` →
+ * `COPILOT_GITHUB_TOKEN`). Returns undefined for providers whose env fallback
+ * is computed (multi-var pickers, Vertex ADC / Bedrock probes, …) since no
+ * single variable name describes the source.
+ */
+export function getEnvApiKeyName(provider: string): string | undefined {
+	const resolver = serviceProviderMap[provider];
+	return typeof resolver === "string" ? resolver : undefined;
 }
 
 /**

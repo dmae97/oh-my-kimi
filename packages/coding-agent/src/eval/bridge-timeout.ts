@@ -2,7 +2,7 @@
  * Timeout suspension for in-flight host-side eval bridge calls.
  *
  * The eval watchdog caps a cell's `timeout` as a budget on the cell runtime's
- * own work. Host-side `agent()` / `parallel()` / `llm()` bridge calls hand
+ * own work. Host-side `agent()` / `parallel()` / `completion()` bridge calls hand
  * control to the outer TypeScript process, where the Python kernel or JS VM is
  * only waiting for a result. While that delegated work is in flight, the cell
  * timeout must be ignored completely; once the bridge returns and the runtime is

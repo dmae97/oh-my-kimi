@@ -166,9 +166,9 @@ Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, 
 
 ### Cell timeout
 
-Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
+Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`completion()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
 
-The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/llm is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
+The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/completion is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
 
 ### Kernel execution cancellation
 

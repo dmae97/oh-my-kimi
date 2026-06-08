@@ -71,6 +71,8 @@ function createStubInputControllerContext(opts: { skillCommands: Map<string, str
 	// Annotate parameters so `mock.calls[N]` is typed as a tuple (not `[]`) and
 	// `message` carries required skill prompt details for assertion below.
 	const promptCustomMessage = vi.fn(async (_message: { details: SkillPromptDetails }, _options?: unknown) => {});
+	const prompt = vi.fn(async (_text: string, _options?: unknown) => {});
+	const handleGoalModeCommand = vi.fn(async (_rest?: string) => {});
 	const updatePendingMessagesDisplay = vi.fn();
 	const requestRender = vi.fn();
 	const showError = vi.fn();
@@ -86,9 +88,12 @@ function createStubInputControllerContext(opts: { skillCommands: Map<string, str
 			isEvalRunning: false,
 			extensionRunner: undefined,
 			enqueueCustomMessageDisplay,
+			prompt,
 			promptCustomMessage,
 		},
 		showError,
+		handleGoalModeCommand,
+		goalModeEnabled: false,
 		updatePendingMessagesDisplay,
 		// Defaults that InputController touches on submit but don't matter here.
 		isBashMode: false,
@@ -101,7 +106,7 @@ function createStubInputControllerContext(opts: { skillCommands: Map<string, str
 		withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
 	} as unknown as InteractiveModeContext;
 
-	return { ctx, editor, enqueueCustomMessageDisplay, promptCustomMessage };
+	return { ctx, editor, enqueueCustomMessageDisplay, prompt, promptCustomMessage, handleGoalModeCommand };
 }
 
 describe("InputController #invokeSkillCommand (E1-E3)", () => {
@@ -164,6 +169,21 @@ describe("InputController #invokeSkillCommand (E1-E3)", () => {
 		}
 		const messageArg = firstCall[0];
 		expect(messageArg.details.__pendingDisplayTag).toBe("sk-test-0");
+	});
+
+	it("E2b: streaming follow-up applies builtin slash commands instead of queueing them", async () => {
+		const { ctx, editor, prompt, handleGoalModeCommand } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+		});
+
+		const controller = new InputController(ctx);
+		editor.setText("/goal set Ship the release");
+		await controller.handleFollowUp();
+
+		expect(handleGoalModeCommand).toHaveBeenCalledWith("set Ship the release");
+		expect(prompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("");
 	});
 
 	it("E3: not streaming -> enqueueCustomMessageDisplay NOT called and tag absent", async () => {

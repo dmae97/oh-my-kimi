@@ -205,6 +205,19 @@ describe("runEvalAgent", () => {
 		expect(secondOptions.outputSchema).toBeUndefined();
 	});
 
+	it("forces LSP off for bridge subagents even when task.enableLsp is on", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+		// makeSession() defaults to enableLsp: true and task.enableLsp: true.
+		const session = makeSession();
+
+		await runEvalAgent({ prompt: "hello" }, { session });
+
+		const options = runSpy.mock.calls[0]?.[0];
+		if (!options) throw new Error("runSubprocess was not called");
+		expect(options.enableLsp).toBe(false);
+	});
+
 	it("maps successful and failed subagent results", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess");

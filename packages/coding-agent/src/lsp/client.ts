@@ -946,18 +946,28 @@ export async function shutdownClient(key: string): Promise<void> {
 // LSP Protocol Methods
 // =============================================================================
 
-/** Default timeout for LSP requests (30 seconds) */
+/** Default timeout for LSP requests when no abort signal is provided (30 seconds) */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 /**
  * Send an LSP request and wait for response.
+ *
+ * Timeout policy:
+ * - If `timeoutMs` is explicitly provided, that value is used.
+ * - Else, if `signal` is provided, no internal timer is installed (the caller
+ *   owns the deadline via the signal — typically a wall-clock `AbortSignal.timeout`
+ *   from the LSP tool). Installing a second hard-coded 30s timer here used to
+ *   cause "timed out after 30000ms" errors even when the caller had requested
+ *   `timeout: 60`.
+ * - Else (no signal, no explicit timeout), fall back to `DEFAULT_REQUEST_TIMEOUT_MS`
+ *   to avoid leaking pending requests forever.
  */
 export async function sendRequest(
 	client: LspClient,
 	method: string,
 	params: unknown,
 	signal?: AbortSignal,
-	timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+	timeoutMs?: number,
 ): Promise<unknown> {
 	// Atomically increment and capture request ID
 	const id = ++client.requestId;
@@ -993,15 +1003,17 @@ export async function sendRequest(
 		reject(reason);
 	};
 
-	// Set timeout
-	timeout = setTimeout(() => {
-		if (client.pendingRequests.has(id)) {
-			client.pendingRequests.delete(id);
-			const err = new Error(`LSP request ${method} timed out after ${timeoutMs}ms`);
-			cleanup();
-			reject(err);
-		}
-	}, timeoutMs);
+	const effectiveTimeoutMs = timeoutMs ?? (signal ? undefined : DEFAULT_REQUEST_TIMEOUT_MS);
+	if (effectiveTimeoutMs !== undefined) {
+		timeout = setTimeout(() => {
+			if (client.pendingRequests.has(id)) {
+				client.pendingRequests.delete(id);
+				const err = new Error(`LSP request ${method} timed out after ${effectiveTimeoutMs}ms`);
+				cleanup();
+				reject(err);
+			}
+		}, effectiveTimeoutMs);
+	}
 	if (signal) {
 		signal.addEventListener("abort", abortHandler, { once: true });
 		if (signal.aborted) {

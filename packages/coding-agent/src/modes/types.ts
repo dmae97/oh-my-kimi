@@ -42,6 +42,10 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	customType?: string;
+	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
+	 *  as a hidden agent-authored `developer` message rather than a visible user
+	 *  turn. Used by the `c`/`.` continue shortcut. */
+	synthetic?: boolean;
 	display?: boolean;
 	cancelled: boolean;
 	started: boolean;
@@ -182,6 +186,9 @@ export interface InteractiveModeContext {
 	flushPendingModelSwitch(): Promise<void>;
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
+	/** Acknowledge a user interrupt (Esc) by switching the loader to an
+	 *  "Interrupting…" label until the agent turn unwinds. */
+	notifyInterrupting(): void;
 	ensureLoadingAnimation(): void;
 	startPendingSubmission(input: {
 		text: string;

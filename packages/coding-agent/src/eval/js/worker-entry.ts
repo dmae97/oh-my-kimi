@@ -18,6 +18,12 @@ const transport: Transport = {
 		} catch {
 			// Already closed.
 		}
+
+		// `parentPort.close()` only disconnects the channel in Bun; it does not
+		// make the Worker emit `close` or reap ref'ed user handles. Exit from
+		// inside the worker after `WorkerCore` has sent the `closed` ack so the
+		// host can observe real worker exit without calling `Worker.terminate()`.
+		setTimeout(() => process.exit(0), 0);
 	},
 };
 

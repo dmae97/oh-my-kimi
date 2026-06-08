@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
@@ -256,37 +256,5 @@ describe("bashToolRenderer", () => {
 		for (const idx of [forLine, echoLine, doneLine]) {
 			expect(rendered[idx]).toMatch(/\u001b\[38;(?:2|5);/);
 		}
-	});
-
-	it("keeps a backgrounded command's border static while a foreground one still shimmers", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
-		// Render a still-partial bash result at two wall-clock instants a quarter of
-		// a shimmer cycle apart. The animated bottom-edge segment lives at the far
-		// left at t=0 and near center at t=750ms, so an animating border yields
-		// different bytes across the two frames while a static one is identical.
-		const renderAt = (details: Record<string, unknown>, now: number): string => {
-			const spy = vi.spyOn(Date, "now").mockReturnValue(now);
-			try {
-				const component = bashToolRenderer.renderResult(
-					{ content: [{ type: "text", text: "Background job bg_1 started: sleep 30" }], details, isError: false },
-					{ expanded: false, isPartial: true },
-					uiTheme,
-					{ command: "sleep 30" },
-				);
-				return component.render(60).join("\n");
-			} finally {
-				spy.mockRestore();
-			}
-		};
-
-		// Backgrounded (finalizes later via the async update path): no shimmer, so
-		// the committed frame can't freeze a stray dark "bar" into the border.
-		const backgrounded = { async: { state: "running", jobId: "bg_1", type: "bash" } };
-		expect(renderAt(backgrounded, 0)).toBe(renderAt(backgrounded, 750));
-
-		// Foreground pending: the border still sweeps, so frames differ over time.
-		expect(renderAt({}, 0)).not.toBe(renderAt({}, 750));
 	});
 });

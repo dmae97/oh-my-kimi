@@ -170,6 +170,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 			await session.prompt(reminder, {
 				attribution: "agent",
 				expandPromptTemplates: false,
+				synthetic: true,
 			});
 		}
 

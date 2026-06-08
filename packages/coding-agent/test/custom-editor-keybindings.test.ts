@@ -138,3 +138,72 @@ describe("CustomEditor escape key dispatch", () => {
 		expect(onEscape).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("CustomEditor configurable key dispatch precedence", () => {
+	it("checks backward model cycling before forward cycling when both use the same key", () => {
+		const editor = createEditor();
+		const onCycleModelBackward = vi.fn();
+		const onCycleModelForward = vi.fn();
+		editor.onCycleModelBackward = onCycleModelBackward;
+		editor.onCycleModelForward = onCycleModelForward;
+		editor.setActionKeys("app.model.cycleBackward", ["ctrl+p"]);
+		editor.setActionKeys("app.model.cycleForward", ["ctrl+p"]);
+
+		editor.handleInput(ctrl("p"));
+
+		expect(onCycleModelBackward).toHaveBeenCalledTimes(1);
+		expect(onCycleModelForward).not.toHaveBeenCalled();
+	});
+
+	it("runs a built-in action before a colliding custom handler", () => {
+		const editor = createEditor();
+		const onClear = vi.fn();
+		const customHandler = vi.fn();
+		editor.onClear = onClear;
+		editor.setActionKeys("app.clear", ["ctrl+x"]);
+		editor.setCustomKeyHandler("ctrl+x", customHandler);
+
+		editor.handleInput(ctrl("x"));
+
+		expect(onClear).toHaveBeenCalledTimes(1);
+		expect(customHandler).not.toHaveBeenCalled();
+	});
+
+	it("falls through a guarded built-in action to a custom handler", () => {
+		const editor = createEditor();
+		const customHandler = vi.fn();
+		editor.setActionKeys("app.clear", ["ctrl+x"]);
+		editor.setCustomKeyHandler("ctrl+x", customHandler);
+
+		editor.handleInput(ctrl("x"));
+
+		expect(customHandler).toHaveBeenCalledTimes(1);
+	});
+
+	it("always consumes exit even when no exit callback is installed", () => {
+		const editor = createEditor();
+		const customHandler = vi.fn();
+		editor.setActionKeys("app.exit", ["x"]);
+		editor.setCustomKeyHandler("x", customHandler);
+
+		editor.handleInput("x");
+
+		expect(customHandler).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("");
+	});
+
+	it("passes unparseable printable input to the parent editor path", () => {
+		const editor = createEditor();
+		const onClear = vi.fn();
+		const customHandler = vi.fn();
+		editor.onClear = onClear;
+		editor.setActionKeys("app.clear", ["h"]);
+		editor.setCustomKeyHandler("h", customHandler);
+
+		editor.handleInput("hello");
+
+		expect(onClear).not.toHaveBeenCalled();
+		expect(customHandler).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("hello");
+	});
+});

@@ -632,11 +632,6 @@ describe("remote compaction setting", () => {
 
 		const remoteOutput = [
 			{ type: "message", role: "developer", content: [{ type: "input_text", text: "stale developer" }] },
-			{
-				type: "message",
-				role: "user",
-				content: [{ type: "input_text", text: "<system-reminder>wrapped</system-reminder>" }],
-			},
 			{ type: "message", role: "user", content: [{ type: "input_text", text: "Real preserved user" }] },
 			{ type: "reasoning", encrypted_content: "secret" },
 			{ type: "function_call_output", call_id: "call_1", output: "ignored" },

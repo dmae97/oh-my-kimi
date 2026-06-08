@@ -495,6 +495,76 @@ describe("openai-responses encodeStream", () => {
 		expect(output[2]!.id).not.toBe(output[2]!.call_id);
 	});
 
+	it("routes late tool-call deltas by contentIndex after later parallel starts", async () => {
+		const stream = new AssistantMessageEventStream();
+		const base: AssistantMessage = {
+			role: "assistant",
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5",
+			content: [],
+			usage: zeroUsage(),
+			stopReason: "toolUse",
+			timestamp: 1_700_000_000_000,
+		};
+		const callA = { type: "toolCall" as const, id: "call_a", name: "edit", arguments: {} };
+		const callB = { type: "toolCall" as const, id: "call_b", name: "read", arguments: {} };
+		const partialA: AssistantMessage = { ...base, content: [callA] };
+		const partialBoth: AssistantMessage = { ...base, content: [callA, callB] };
+		const finalMessage: AssistantMessage = {
+			...base,
+			content: [
+				{ ...callA, arguments: { input: "first" } },
+				{ ...callB, arguments: { path: "second" } },
+			],
+		};
+
+		queueMicrotask(() => {
+			stream.push({ type: "start", partial: base });
+			stream.push({ type: "toolcall_start", contentIndex: 0, partial: partialA });
+			stream.push({ type: "toolcall_start", contentIndex: 1, partial: partialBoth });
+			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"input":"first"}', partial: partialBoth });
+			stream.push({
+				type: "toolcall_end",
+				contentIndex: 0,
+				toolCall: { ...callA, arguments: { input: "first" } },
+				partial: partialBoth,
+			});
+			stream.push({ type: "toolcall_delta", contentIndex: 1, delta: '{"path":"second"}', partial: partialBoth });
+			stream.push({
+				type: "toolcall_end",
+				contentIndex: 1,
+				toolCall: { ...callB, arguments: { path: "second" } },
+				partial: partialBoth,
+			});
+			stream.push({ type: "done", reason: "toolUse", message: finalMessage });
+		});
+
+		const raw = await collectStream(encodeStream(stream, "gpt-5-requested"));
+		const frames = parseSse(raw);
+		const argumentDeltas = frames.filter(f => f.event === "response.function_call_arguments.delta");
+		expect(argumentDeltas.map(f => (f.data as Record<string, unknown>).output_index)).toEqual([0, 1]);
+		expect(argumentDeltas.map(f => (f.data as Record<string, unknown>).delta)).toEqual([
+			'{"input":"first"}',
+			'{"path":"second"}',
+		]);
+
+		const argumentDone = frames.filter(f => f.event === "response.function_call_arguments.done");
+		expect(argumentDone.map(f => (f.data as Record<string, unknown>).output_index)).toEqual([0, 1]);
+		expect(argumentDone.map(f => (f.data as Record<string, unknown>).arguments)).toEqual([
+			'{"input":"first"}',
+			'{"path":"second"}',
+		]);
+
+		const doneItems = frames
+			.filter(f => f.event === "response.output_item.done")
+			.map(f => (f.data as Record<string, unknown>).item as Record<string, unknown>)
+			.filter(item => item.type === "function_call");
+
+		expect(doneItems).toHaveLength(2);
+		expect(doneItems[0]).toMatchObject({ call_id: "call_a", name: "edit", arguments: '{"input":"first"}' });
+		expect(doneItems[1]).toMatchObject({ call_id: "call_b", name: "read", arguments: '{"path":"second"}' });
+	});
 	it("emits response.incomplete for length-limited streams", async () => {
 		const stream = new AssistantMessageEventStream();
 		const message: AssistantMessage = {

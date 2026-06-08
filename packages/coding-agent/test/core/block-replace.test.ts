@@ -113,6 +113,34 @@ describe("replace block — native tree-sitter resolution end-to-end", () => {
 		});
 	});
 
+	it("echoes the resolved span in the result text for replace block", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { header } = await seedFile(tempDir, session, "x.ts", TS_SOURCE);
+			const input = `${header}\nreplace block 1:\n+function x() {\n+  return 42;\n+}`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			// `function x() {` opens on line 1; tree-sitter resolves the whole body (lines 1-4).
+			expect(text).toContain("replace block 1 → resolved lines 1-4 (4 lines)");
+		});
+	});
+
+	it("echoes the resolved span in the result text for delete block", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { header } = await seedFile(tempDir, session, "x.ts", TS_SOURCE);
+			const input = `${header}\ndelete block 2`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			// `if (y) {` opens on line 2; resolves lines 2-3.
+			expect(text).toContain("delete block 2 → resolved lines 2-3 (2 lines)");
+		});
+	});
+
 	it("rejects a lone closing delimiter (no block begins there) and steers to `replace N..M:`", async () => {
 		await withTempDir(async tempDir => {
 			const session = makeSession(tempDir);

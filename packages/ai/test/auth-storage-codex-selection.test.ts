@@ -532,14 +532,14 @@ describe("AuthStorage codex oauth ranking", () => {
 			{ type: "oauth", ...createCredential("acct-third", "third@example.com"), expires: expiredAt },
 		]);
 
-		const startedAt = Date.now();
 		const apiKey = await authStorage.getApiKey("openai-codex");
-		const elapsedMs = Date.now() - startedAt;
 
 		expect(apiKey).toBe("refreshed-acct-third");
 		expect(refreshStarts).toHaveLength(3);
+		// Parallelism is proven deterministically by the concurrency counter: serial
+		// refreshes never overlap (peak in-flight stays 1). A wall-clock bound here was
+		// flaky on loaded CI runners, so maxConcurrent is the authoritative signal.
 		expect(maxConcurrent).toBe(3);
-		expect(elapsedMs).toBeLessThan(refreshDelayMs * 2);
 	});
 });
 

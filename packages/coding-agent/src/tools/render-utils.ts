@@ -338,6 +338,7 @@ export function formatDiagnostics(
 	expanded: boolean,
 	theme: Theme,
 	getLangIcon: (filePath: string) => string,
+	options?: { title?: string },
 ): string {
 	if (diag.messages.length === 0) return "";
 
@@ -369,7 +370,8 @@ export function formatDiagnostics(
 		? theme.styledSymbol("status.error", "error")
 		: theme.styledSymbol("status.warning", "warning");
 	const summary = sanitizeDiagnosticDisplayText(diag.summary);
-	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", `(${summary})`)}`;
+	const summaryTag = summary ? ` ${theme.fg("dim", `(${summary})`)}` : "";
+	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summaryTag}`;
 
 	const maxDiags = expanded ? diag.messages.length : 5;
 	let diagsShown = 0;

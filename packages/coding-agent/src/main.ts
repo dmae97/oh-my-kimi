@@ -4,10 +4,8 @@
  * This file handles CLI argument parsing and translates them into
  * createAgentSession() options. The SDK does the heavy lifting.
  */
-
-import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -28,9 +26,16 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { runListModelsCommand } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
+import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
 import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
-import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
+import {
+	getModelMatchPreferences,
+	resolveCliModel,
+	resolveModelRoleValue,
+	resolveModelScope,
+	type ScopedModel,
+} from "./config/model-resolver";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import {
@@ -166,7 +171,8 @@ export async function submitInteractiveInput(
 
 	try {
 		using _keepalive = new EventLoopKeepalive();
-		// Continue shortcuts submit an already-started empty prompt with no optimistic user message.
+		// Continue shortcuts submit an already-started synthetic developer prompt with
+		// no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
@@ -177,6 +183,8 @@ export async function submitInteractiveInput(
 				display: input.display ?? false,
 				attribution: "agent",
 			});
+		} else if (input.synthetic) {
+			await session.prompt(input.text, { synthetic: true, expandPromptTemplates: false });
 		} else {
 			await session.prompt(input.text, { images: input.images });
 		}
@@ -344,11 +352,11 @@ async function runInteractiveMode(
 	}
 }
 
-type ForkSessionPromptResult = "accepted" | "declined" | "unavailable";
+type SessionPromptResult = "accepted" | "declined" | "unavailable";
 
-type ForkSessionPrompt = (session: SessionInfo) => Promise<ForkSessionPromptResult>;
+type SessionPrompt = (session: SessionInfo) => Promise<SessionPromptResult>;
 
-async function promptForkSession(session: SessionInfo): Promise<ForkSessionPromptResult> {
+async function promptForkSession(session: SessionInfo): Promise<SessionPromptResult> {
 	if (!process.stdin.isTTY) {
 		return "unavailable";
 	}
@@ -360,6 +368,68 @@ async function promptForkSession(session: SessionInfo): Promise<ForkSessionPromp
 	} finally {
 		rl.close();
 	}
+}
+
+async function promptMoveSession(session: SessionInfo): Promise<SessionPromptResult> {
+	if (!process.stdin.isTTY) {
+		return "unavailable";
+	}
+	const message = `Session's directory no longer exists (${session.cwd}). Move (re-root) it into the current directory? [Y/n] `;
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	try {
+		const answer = (await rl.question(message)).trim().toLowerCase();
+		return answer === "" || answer === "y" || answer === "yes" ? "accepted" : "declined";
+	} finally {
+		rl.close();
+	}
+}
+
+/**
+ * Friendly CLI failure raised by {@link createSessionManager} when the user's
+ * session-resolution flags (`--resume`/`--fork`/cross-project prompts) cannot
+ * be satisfied. {@link runRootCommand} catches it and prints a clean stderr
+ * message instead of letting it surface as `[Uncaught Exception]`
+ * (see issue #2084).
+ */
+export class SessionResolutionError extends Error {
+	readonly hint?: string;
+	constructor(message: string, hint?: string) {
+		super(message);
+		this.name = "SessionResolutionError";
+		this.hint = hint;
+	}
+}
+
+type MissingCwdMoveResult =
+	| { status: "not-needed" }
+	| { status: "declined" }
+	| { status: "moved"; manager: SessionManager };
+
+async function moveMissingCwdSessionIfNeeded(
+	sessionArg: string,
+	session: SessionInfo,
+	cwd: string,
+	sessionDir: string | undefined,
+	askToMoveSession: SessionPrompt,
+): Promise<MissingCwdMoveResult> {
+	const sourceCwd = session.cwd;
+	if (!sourceCwd || fsSync.existsSync(sourceCwd)) {
+		return { status: "not-needed" };
+	}
+
+	const movePromptResult = await askToMoveSession(session);
+	if (movePromptResult === "unavailable") {
+		throw new SessionResolutionError(
+			`Session "${sessionArg}" belongs to a directory that no longer exists (${sourceCwd}); run interactively to move it into the current project.`,
+		);
+	}
+	if (movePromptResult === "declined") {
+		return { status: "declined" };
+	}
+
+	const manager = await SessionManager.open(session.path, sessionDir);
+	await manager.moveTo(cwd, sessionDir);
+	return { status: "moved", manager };
 }
 
 async function getChangelogForDisplay(parsed: Args): Promise<string | undefined> {
@@ -407,11 +477,12 @@ export async function createSessionManager(
 	parsed: Args,
 	cwd: string,
 	activeSettings: Settings = settings,
-	askToForkSession: ForkSessionPrompt = promptForkSession,
+	askToForkSession: SessionPrompt = promptForkSession,
+	askToMoveSession: SessionPrompt = promptMoveSession,
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
-			throw new Error("--fork requires session persistence");
+			throw new SessionResolutionError("--fork requires session persistence");
 		}
 		const forkSource = parsed.fork;
 		if (forkSource.includes("/") || forkSource.includes("\\") || forkSource.endsWith(".jsonl")) {
@@ -419,7 +490,10 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(forkSource, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new Error(`Session "${forkSource}" not found.`);
+			throw new SessionResolutionError(
+				`Session "${forkSource}" not found.`,
+				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
+			);
 		}
 		return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 	}
@@ -434,15 +508,46 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(sessionArg, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new Error(`Session "${sessionArg}" not found.`);
+			throw new SessionResolutionError(
+				`Session "${sessionArg}" not found.`,
+				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
+			);
+		}
+		if (match.scope === "local") {
+			const moveResult = await moveMissingCwdSessionIfNeeded(
+				sessionArg,
+				match.session,
+				cwd,
+				parsed.sessionDir,
+				askToMoveSession,
+			);
+			if (moveResult.status === "moved") {
+				return moveResult.manager;
+			}
+			if (moveResult.status === "declined") {
+				return undefined;
+			}
 		}
 		if (match.scope === "global") {
 			const normalizedCwd = normalizePathForComparison(cwd);
 			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
 			if (normalizedCwd !== normalizedMatchCwd) {
+				const moveResult = await moveMissingCwdSessionIfNeeded(
+					sessionArg,
+					match.session,
+					cwd,
+					parsed.sessionDir,
+					askToMoveSession,
+				);
+				if (moveResult.status === "moved") {
+					return moveResult.manager;
+				}
+				if (moveResult.status === "declined") {
+					return undefined;
+				}
 				const forkPromptResult = await askToForkSession(match.session);
 				if (forkPromptResult === "unavailable") {
-					throw new Error(
+					throw new SessionResolutionError(
 						`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
 					);
 				}
@@ -478,56 +583,6 @@ export async function createSessionManager(
 	}
 	// Default case (new session) returns undefined, SDK will create one
 	return undefined;
-}
-
-async function maybeAutoChdir(parsed: Args): Promise<void> {
-	if (parsed.allowHome || parsed.cwd) {
-		return;
-	}
-
-	const home = os.homedir();
-	if (!home) {
-		return;
-	}
-
-	const normalizePath = normalizePathForComparison;
-
-	const cwd = normalizePath(getProjectDir());
-	const normalizedHome = normalizePath(home);
-	if (cwd !== normalizedHome) {
-		return;
-	}
-
-	const isDirectory = async (p: string) => {
-		try {
-			const s = await fs.stat(p);
-			return s.isDirectory();
-		} catch {
-			return false;
-		}
-	};
-
-	const candidates = [path.join(home, "tmp"), "/tmp", "/var/tmp"];
-	for (const candidate of candidates) {
-		try {
-			if (!(await isDirectory(candidate))) {
-				continue;
-			}
-			setProjectDir(candidate);
-			return;
-		} catch {
-			// Try next candidate.
-		}
-	}
-
-	try {
-		const fallback = os.tmpdir();
-		if (fallback && normalizePath(fallback) !== cwd && (await isDirectory(fallback))) {
-			setProjectDir(fallback);
-		}
-	} catch {
-		// Ignore fallback errors.
-	}
 }
 
 /** Discover SYSTEM.md file if no CLI system prompt was provided */
@@ -586,9 +641,7 @@ async function buildSessionOptions(
 	// Model from CLI
 	// - supports --provider <name> --model <pattern>
 	// - supports --model <provider>/<pattern>
-	const modelMatchPreferences = {
-		usageOrder: activeSettings.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(activeSettings);
 	if (parsed.model) {
 		const resolved = resolveCliModel({
 			cliProvider: parsed.provider,
@@ -745,7 +798,7 @@ export async function runRootCommand(
 	await logger.time("initTheme:initial", initTheme);
 
 	const parsedArgs = parsed;
-	await logger.time("maybeAutoChdir", maybeAutoChdir, parsedArgs);
+	await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 
 	const notifs: (InteractiveModeNotify | null)[] = [];
 
@@ -880,9 +933,7 @@ export async function runRootCommand(
 
 	let scopedModels: ScopedModel[] = [];
 	const modelPatterns = parsedArgs.models ?? settingsInstance.get("enabledModels");
-	const modelMatchPreferences = {
-		usageOrder: settingsInstance.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(settingsInstance);
 	if (modelPatterns && modelPatterns.length > 0) {
 		scopedModels = await logger.time(
 			"resolveModelScope",
@@ -893,14 +944,29 @@ export async function runRootCommand(
 		);
 	}
 
-	// Create session manager based on CLI flags
-	let sessionManager = await logger.time(
-		"createSessionManager",
-		createSessionManager,
-		parsedArgs,
-		cwd,
-		settingsInstance,
-	);
+	// Create session manager based on CLI flags. SessionResolutionError signals a
+	// user-facing failure (unknown --resume/--fork id, non-interactive fork
+	// prompt, --fork with --no-session): print + exit cleanly instead of letting
+	// it surface as `[Uncaught Exception]` (see issue #2084).
+	let sessionManager: SessionManager | undefined;
+	try {
+		sessionManager = await logger.time(
+			"createSessionManager",
+			createSessionManager,
+			parsedArgs,
+			cwd,
+			settingsInstance,
+		);
+	} catch (error: unknown) {
+		if (error instanceof SessionResolutionError) {
+			process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
+			if (error.hint) {
+				process.stderr.write(`${chalk.dim(error.hint)}\n`);
+			}
+			process.exit(1);
+		}
+		throw error;
+	}
 
 	// User declined the cross-project fork prompt — exit cleanly with a friendly
 	// message rather than letting the decline bubble up as an uncaught exception

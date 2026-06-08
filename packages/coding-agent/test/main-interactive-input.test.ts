@@ -13,7 +13,7 @@ function createInput(overrides: Partial<SubmittedUserInput> = {}): SubmittedUser
 }
 
 describe("submitInteractiveInput", () => {
-	it("prompts already-started continue submissions without re-checking optimistic state", async () => {
+	it("routes already-started synthetic continue submissions to a hidden developer prompt", async () => {
 		const mode = {
 			markPendingSubmissionStarted: vi.fn(() => false),
 			finishPendingSubmission: vi.fn(),
@@ -24,12 +24,12 @@ describe("submitInteractiveInput", () => {
 			prompt: vi.fn(async () => {}),
 			promptCustomMessage: vi.fn(async () => {}),
 		};
-		const input = createInput({ text: "", started: true });
+		const input = createInput({ text: "resume now", started: true, synthetic: true });
 
 		await submitInteractiveInput(mode, session, input);
 
 		expect(mode.markPendingSubmissionStarted).not.toHaveBeenCalled();
-		expect(session.prompt).toHaveBeenCalledWith("", { images: undefined });
+		expect(session.prompt).toHaveBeenCalledWith("resume now", { synthetic: true, expandPromptTemplates: false });
 		expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
 		expect(mode.showError).not.toHaveBeenCalled();
 	});

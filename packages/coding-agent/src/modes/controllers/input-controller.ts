@@ -10,6 +10,7 @@ import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
+import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
@@ -94,6 +95,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
+					this.ctx.notifyInterrupting();
 					void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 				} else {
 					this.ctx.cancelPendingSubmission();
@@ -124,6 +126,7 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
+				this.ctx.notifyInterrupting();
 				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			} else if (!this.ctx.editor.getText().trim()) {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
@@ -284,14 +287,21 @@ export class InputController {
 
 			if (!text) return;
 
-			// Continue shortcuts: "." or "c" sends empty message (agent continues, no visible message)
+			// Continue shortcuts: "." or "c" resume the agent with a hidden agent-authored
+			// developer directive (no visible user message) instead of an empty turn, so the
+			// model continues the prior intent rather than second-guessing the interrupt.
 			if (text === "." || text === "c") {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
 					this.ctx.pendingImageLinks = [];
 					this.ctx.editor.imageLinks = undefined;
-					this.ctx.onInputCallback({ text: "", cancelled: false, started: true });
+					this.ctx.onInputCallback({
+						text: manualContinuePrompt,
+						cancelled: false,
+						started: true,
+						synthetic: true,
+					});
 				}
 				return;
 			}
@@ -499,17 +509,44 @@ export class InputController {
 	}
 
 	handleCtrlZ(): void {
-		// Set up handler to restore TUI when resumed
-		process.once("SIGCONT", () => {
+		// SIGTSTP is POSIX job-control: Windows has no equivalent and
+		// `process.kill(_, "SIGTSTP")` throws `TypeError: Unknown signal:
+		// SIGTSTP` there, taking the whole agent down via an uncaught
+		// exception (issue #2036). No-op on platforms that cannot suspend.
+		if (process.platform === "win32") {
+			this.ctx.showStatus("Suspend (Ctrl+Z) is not supported on this platform");
+			return;
+		}
+
+		// Capture the listener so we can detach it if the signal never
+		// fires; otherwise a failed suspend would leave a stale SIGCONT
+		// handler that fires on the next unrelated continue and tries to
+		// re-`start()` an already-running TUI.
+		const onResume = (): void => {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
-		});
+		};
+		process.once("SIGCONT", onResume);
 
-		// Stop the TUI (restore terminal to normal mode)
+		// Stop the TUI (restore terminal to normal mode) before sending the
+		// signal so the parent shell sees a sane terminal state.
 		this.ctx.ui.stop();
 
-		// Send SIGTSTP to process group (pid=0 means all processes in group)
-		process.kill(0, "SIGTSTP");
+		try {
+			// pid=0 → entire foreground process group; the shell receives
+			// SIGTSTP and parks the job.
+			process.kill(0, "SIGTSTP");
+		} catch (err) {
+			// Either the runtime refused the signal or the kernel rejected
+			// it (some sandboxes block sending to pid=0). Tear the resume
+			// hook down and bring the TUI back so the user is not stranded
+			// on a frozen prompt.
+			process.removeListener("SIGCONT", onResume);
+			this.ctx.ui.start();
+			this.ctx.ui.requestRender(true);
+			const reason = err instanceof Error ? err.message : String(err);
+			this.ctx.showError(`Failed to suspend: ${reason}`);
+		}
 	}
 
 	handleDequeue(): void {
@@ -589,7 +626,7 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
-		const text = this.ctx.editor.getText().trim();
+		let text = this.ctx.editor.getText().trim();
 		if (!text) return;
 
 		// Compaction first: while compacting, free text gets queued via
@@ -601,6 +638,16 @@ export class InputController {
 		if (this.ctx.session.isCompacting) {
 			this.ctx.queueCompactionMessage(text, "followUp");
 			return;
+		}
+
+		const slashResult = await executeBuiltinSlashCommand(text, {
+			ctx: this.ctx,
+		});
+		if (slashResult === true) {
+			return;
+		}
+		if (typeof slashResult === "string") {
+			text = slashResult;
 		}
 
 		// Skill commands invoke through the custom-message path regardless of

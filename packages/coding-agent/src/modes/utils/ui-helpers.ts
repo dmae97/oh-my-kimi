@@ -11,6 +11,10 @@ import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
 import {
+	type LateDiagnosticsFile,
+	LateDiagnosticsMessageComponent,
+} from "../../modes/components/late-diagnostics-message";
+import {
 	ReadToolGroupComponent,
 	readArgsHaveTarget,
 	readArgsTargetInternalUrl,
@@ -25,6 +29,7 @@ import type { CompactionQueuedMessage, InteractiveModeContext } from "../../mode
 import {
 	type CustomMessage,
 	isSilentAbort,
+	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
@@ -166,6 +171,17 @@ export class UiHelpers {
 							block.addChild(new Text(line, 1, 0));
 						}
 						this.ctx.chatContainer.addChild(block);
+						break;
+					}
+					if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
+						const details = (
+							message as CustomMessage<{
+								files?: LateDiagnosticsFile[];
+							}>
+						).details;
+						const component = new LateDiagnosticsMessageComponent(details?.files ?? []);
+						component.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(component);
 						break;
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
@@ -342,7 +358,11 @@ export class UiHelpers {
 						(content.type === "thinking" && content.thinking.trim().length > 0),
 				);
 				if (hasVisibleAssistantContent) {
-					readGroup?.finalize();
+					// Rebuild reconstructs immutable history; seal (not finalize) so the
+					// group freezes even if a read's result was never persisted —
+					// finalize alone keeps a pending entry live and would stop the whole
+					// transcript below it from committing to native scrollback.
+					readGroup?.seal();
 					readGroup = null;
 				}
 				const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
@@ -392,7 +412,7 @@ export class UiHelpers {
 						continue;
 					}
 
-					readGroup?.finalize();
+					readGroup?.seal();
 					readGroup = null;
 					const tool = this.ctx.session.getToolByName(content.name);
 					const renderArgs =
@@ -480,9 +500,10 @@ export class UiHelpers {
 			}
 		}
 
-		// The trailing read run has no following break to close it; finalize so the
-		// rebuilt group commits to native scrollback like every other historical block.
-		readGroup?.finalize();
+		// The trailing read run has no following break to close it; seal so the
+		// rebuilt group freezes (even with a never-persisted result) and commits to
+		// native scrollback like every other historical block.
+		readGroup?.seal();
 
 		// Render deferred messages (compaction summaries) at the bottom so they're visible
 		for (const message of deferredMessages) {

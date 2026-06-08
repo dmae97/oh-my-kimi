@@ -768,6 +768,107 @@ describe("agentLoop with AgentMessage", () => {
 		);
 		expect(sawInterruptInContext).toBe(true);
 	});
+
+	it("injects aside messages at the step boundary without interrupting tools", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "first" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "second" } },
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+
+		const asideMessage = createUserMessage("bg-job-complete");
+		let asideDelivered = false;
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			getAsideMessages: async () => {
+				if (!asideDelivered && executed.length >= 1) {
+					asideDelivered = true;
+					return [asideMessage];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// Asides are non-interrupting: BOTH tools in the batch run (steering would skip the 2nd).
+		expect(executed).toEqual(["first", "second"]);
+
+		// The aside lands after the tool results, before the next model call.
+		const seq = events.flatMap(event => {
+			if (event.type !== "message_start") return [];
+			if (event.message.role === "toolResult") return [`tool:${event.message.toolCallId}`];
+			if (event.message.role === "user" && typeof event.message.content === "string") {
+				return [event.message.content];
+			}
+			return [];
+		});
+		expect(seq).toContain("bg-job-complete");
+		expect(seq.indexOf("tool:tool-2")).toBeLessThan(seq.indexOf("bg-job-complete"));
+
+		// The model saw it on the very next request — delivered mid-run, no yield required.
+		const sawAsideInContext = mock.calls[1]?.context.messages.some(
+			m => m.role === "user" && typeof m.content === "string" && m.content === "bg-job-complete",
+		);
+		expect(sawAsideInContext).toBe(true);
+	});
+
+	it("evaluates aside thunks at injection and skips ones that return null", async () => {
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [] };
+		const mock = createMockModel({ responses: [{ content: ["done"] }] });
+		let polls = 0;
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			// A lazy aside that decides, at injection time, NOT to inject (e.g. superseded).
+			getAsideMessages: async () => {
+				polls++;
+				return [() => null];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("hi")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The thunk was consulted...
+		expect(polls).toBeGreaterThan(0);
+		// ...but a null result injects nothing and triggers no wasted continuation turn.
+		const userStarts = events.filter(e => e.type === "message_start" && e.message.role === "user");
+		expect(userStarts).toHaveLength(1); // only the original prompt
+		expect(mock.calls).toHaveLength(1);
+	});
 });
 
 it("refreshes tools and system prompt between same-turn model calls", async () => {

@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver } from "./auth-retry";
 import { isUsageLimitError } from "./rate-limit-utils";
-import { getEnvApiKey } from "./stream";
+import { getEnvApiKey, getEnvApiKeyName } from "./stream";
 import type { Provider } from "./types";
 import type {
 	CredentialRankingStrategy,
@@ -58,6 +58,23 @@ export type AuthCredential = ApiKeyCredential | OAuthCredential;
 export type AuthCredentialEntry = AuthCredential | AuthCredential[];
 
 export type AuthStorageData = Record<string, AuthCredentialEntry>;
+
+/**
+ * Cascade leg that supplies a provider's active credential, highest precedence
+ * first — mirrors {@link AuthStorage.getApiKey}'s resolution order.
+ */
+export type CredentialOriginKind = "runtime" | "config" | "oauth" | "api_key" | "env" | "fallback";
+
+/**
+ * Structured provenance for a provider's auth, for UI that needs a machine
+ * tag (the `/login` provider list) rather than the prose of
+ * {@link AuthStorage.describeCredentialSource}.
+ */
+export interface CredentialOrigin {
+	kind: CredentialOriginKind;
+	/** Env var name when `kind === "env"` and a single named variable backs it. */
+	envVar?: string;
+}
 
 /**
  * Serialized representation of AuthStorage for passing to subagent workers.
@@ -1428,6 +1445,26 @@ export class AuthStorage {
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
+	}
+
+	/**
+	 * Classify where a provider's auth comes from, following the same precedence
+	 * as {@link AuthStorage.getApiKey}: runtime override → config override →
+	 * stored credential (api_key before oauth, matching getApiKey) → env var →
+	 * fallback resolver. Returns undefined when no auth is configured.
+	 *
+	 * Compact, structured counterpart to {@link describeCredentialSource}.
+	 */
+	getCredentialOrigin(provider: string): CredentialOrigin | undefined {
+		if (this.#runtimeOverrides.has(provider)) return { kind: "runtime" };
+		if (this.#configOverrides.has(provider)) return { kind: "config" };
+		const stored = this.#getCredentialsForProvider(provider);
+		if (stored.length > 0) {
+			return { kind: stored.some(credential => credential.type === "api_key") ? "api_key" : "oauth" };
+		}
+		if (getEnvApiKey(provider)) return { kind: "env", envVar: getEnvApiKeyName(provider) };
+		if (this.#fallbackResolver?.(provider)) return { kind: "fallback" };
+		return undefined;
 	}
 
 	/**

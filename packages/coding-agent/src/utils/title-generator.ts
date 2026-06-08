@@ -33,7 +33,7 @@ const setTitleTool: Tool = {
 			title: {
 				type: "string",
 				description:
-					'A concise 3-6 word title for the session, or exactly "none" when the message carries no concrete task yet (greeting, small talk, vague).',
+					'A concise, sentence-case 3-7 word title for the session (capitalize only the first word and proper nouns), or exactly "none" when the message carries no concrete task yet (greeting, small talk, vague).',
 			},
 		},
 		required: ["title"],
@@ -224,7 +224,7 @@ export async function generateTitleOnline(
 		// account_uuid rather than the snapshot-at-call-site value.
 		const metadata = metadataResolver?.(model.provider);
 
-		// Title generation is a 3-6 word task, but some reasoning backends ignore
+		// Title generation is a 3-7 word task, but some reasoning backends ignore
 		// disableReasoning. Keep the normal cheap budget for non-reasoning models
 		// while reserving enough output room for reasoning models to still emit
 		// the forced tool call after any unavoidable thinking tokens.

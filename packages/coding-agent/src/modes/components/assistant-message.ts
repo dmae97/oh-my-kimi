@@ -4,7 +4,7 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
-import { isSilentAbort, resolveAbortLabel } from "../../session/messages";
+import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { resolveImageOptions } from "../../tools/render-utils";
 
 /**
@@ -72,18 +72,6 @@ export class AssistantMessageComponent extends Container {
 
 	isTranscriptBlockFinalized(): boolean {
 		return this.#transcriptBlockFinalized;
-	}
-
-	/**
-	 * Assistant text/thinking streams in append-only: earlier rendered rows never
-	 * re-layout, new content only grows the block at the bottom. The transcript
-	 * reports this so the renderer may commit scrolled-off head rows of a long
-	 * streamed reply to native scrollback instead of dropping them (see
-	 * `NativeScrollbackLiveRegion#getNativeScrollbackCommitSafeEnd`). Volatile
-	 * blocks (tool previews that collapse) intentionally do not implement this.
-	 */
-	isTranscriptBlockAppendOnly(): boolean {
-		return true;
 	}
 
 	markTranscriptBlockFinalized(): void {
@@ -252,7 +240,7 @@ export class AssistantMessageComponent extends Container {
 		// But only if there are no tool calls (tool execution components will show the error)
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (!hasToolCalls) {
-			if (message.stopReason === "aborted" && !isSilentAbort(message.errorMessage)) {
+			if (message.stopReason === "aborted" && shouldRenderAbortReason(message.errorMessage)) {
 				const abortMessage = resolveAbortLabel(message.errorMessage);
 				if (hasVisibleContent) {
 					this.#contentContainer.addChild(new Spacer(1));
@@ -268,7 +256,7 @@ export class AssistantMessageComponent extends Container {
 		}
 		if (
 			message.errorMessage &&
-			!isSilentAbort(message.errorMessage) &&
+			shouldRenderAbortReason(message.errorMessage) &&
 			message.stopReason !== "aborted" &&
 			message.stopReason !== "error"
 		) {

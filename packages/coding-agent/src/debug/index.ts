@@ -195,6 +195,7 @@ export class DebugSelectorComponent extends Container {
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
+				rawSseText: this.#getRawSseText(),
 				cpuProfile,
 				workProfile,
 			});
@@ -253,6 +254,7 @@ export class DebugSelectorComponent extends Container {
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
+				rawSseText: this.#getRawSseText(),
 			});
 
 			loader.stop();
@@ -288,6 +290,7 @@ export class DebugSelectorComponent extends Container {
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
+				rawSseText: this.#getRawSseText(),
 				heapSnapshot,
 			});
 
@@ -488,6 +491,11 @@ export class DebugSelectorComponent extends Container {
 			this.ctx.statusContainer.clear();
 			this.ctx.showError(`Failed to clear cache: ${err instanceof Error ? err.message : String(err)}`);
 		}
+	}
+
+	#getRawSseText(): string | undefined {
+		const rawSseText = resolveRawSseDebugBuffer(this.ctx.session).toRawText();
+		return rawSseText.trim().length > 0 ? rawSseText : undefined;
 	}
 
 	#getResolvedSettings(): Record<string, unknown> {

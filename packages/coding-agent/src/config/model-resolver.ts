@@ -17,6 +17,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
+import { buildModelProviderPriorityRank } from "./model-provider-priority";
 import { isAuthenticated, kNoAuth, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
 import type { Settings } from "./settings";
 
@@ -179,7 +180,9 @@ export function resolveProviderModelReference(
 export interface ModelMatchPreferences {
 	/** Most-recently-used model keys (provider/modelId) to prefer when ambiguous. */
 	usageOrder?: string[];
-	/** Providers to deprioritize when no recent usage is available. */
+	/** Provider precedence used for ambiguous unqualified model patterns. */
+	providerOrder?: readonly string[];
+	/** Providers to deprioritize when no recent usage or provider priority is available. */
 	deprioritizeProviders?: string[];
 }
 
@@ -194,6 +197,7 @@ type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "ge
 interface ModelPreferenceContext {
 	modelUsageRank: Map<string, number>;
 	providerUsageRank: Map<string, number>;
+	providerPriorityRank: Map<string, number>;
 	deprioritizedProviders: Set<string>;
 	modelOrder: Map<string, number>;
 }
@@ -215,14 +219,35 @@ function buildPreferenceContext(
 			providerUsageRank.set(parsed.provider, i);
 		}
 	}
-
-	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? ["openrouter"]);
+	const providerPriorityRank = buildModelProviderPriorityRank(preferences?.providerOrder);
+	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? []);
 	const modelOrder = new Map<string, number>();
 	for (let i = 0; i < availableModels.length; i += 1) {
 		modelOrder.set(formatModelString(availableModels[i]), i);
 	}
 
-	return { modelUsageRank, providerUsageRank, deprioritizedProviders, modelOrder };
+	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, modelOrder };
+}
+
+export function getModelMatchPreferences(
+	settings?: Partial<Pick<Settings, "get" | "getStorage">>,
+): ModelMatchPreferences {
+	return {
+		usageOrder: settings?.getStorage?.()?.getModelUsageOrder(),
+		providerOrder: settings?.get?.("modelProviderOrder"),
+	};
+}
+
+function mergeModelMatchPreferences(
+	settings: Settings | undefined,
+	preferences: ModelMatchPreferences | undefined,
+): ModelMatchPreferences {
+	const settingsPreferences = getModelMatchPreferences(settings);
+	return {
+		usageOrder: preferences?.usageOrder ?? settingsPreferences.usageOrder,
+		providerOrder: preferences?.providerOrder ?? settingsPreferences.providerOrder,
+		deprioritizeProviders: preferences?.deprioritizeProviders,
+	};
 }
 
 function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceContext): Model<Api> {
@@ -234,6 +259,12 @@ function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceCo
 		const bUsage = context.modelUsageRank.get(bKey);
 		if (aUsage !== undefined || bUsage !== undefined) {
 			return (aUsage ?? Number.POSITIVE_INFINITY) - (bUsage ?? Number.POSITIVE_INFINITY);
+		}
+
+		const aProviderPriority = context.providerPriorityRank.get(a.provider.toLowerCase());
+		const bProviderPriority = context.providerPriorityRank.get(b.provider.toLowerCase());
+		if (aProviderPriority !== undefined || bProviderPriority !== undefined) {
+			return (aProviderPriority ?? Number.POSITIVE_INFINITY) - (bProviderPriority ?? Number.POSITIVE_INFINITY);
 		}
 
 		const aProviderUsage = context.providerUsageRank.get(a.provider);
@@ -618,8 +649,9 @@ export function resolveModelRoleValue(
 	}
 
 	let warning: string | undefined;
+	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
 	for (const effectivePattern of effectivePatterns) {
-		const resolved = parseModelPattern(effectivePattern, availableModels, options?.matchPreferences, {
+		const resolved = parseModelPattern(effectivePattern, availableModels, matchPreferences, {
 			modelRegistry: options?.modelRegistry,
 		});
 		if (resolved.model) {
@@ -720,7 +752,7 @@ export function resolveModelOverride(
 ): { model?: Model<Api>; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
 	const availableModels = modelRegistry.getAvailable();
-	const matchPreferences = { usageOrder: settings?.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	for (const pattern of modelPatterns) {
 		const { model, thinkingLevel, explicitThinkingLevel } = resolveModelRoleValue(pattern, availableModels, {
 			settings,
@@ -800,7 +832,7 @@ export function resolveRoleSelection(
 	availableModels: Model<Api>[],
 	modelRegistry?: CanonicalModelRegistry,
 ): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
-	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	for (const role of roles) {
 		const resolved = resolveModelRoleValue(settings.getModelRole(role), availableModels, {
 			settings,

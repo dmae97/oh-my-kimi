@@ -40,6 +40,11 @@ export interface StatusLineSettings {
 	sessionAccent?: boolean;
 }
 
+export type EffectiveStatusLineSettings = Required<
+	Pick<StatusLineSettings, "leftSegments" | "rightSegments" | "separator" | "segmentOptions">
+> &
+	StatusLineSettings;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Per-message token cache
 // ═══════════════════════════════════════════════════════════════════════════
@@ -143,6 +148,7 @@ function tokensForMessage(msg: AgentMessage): number {
 
 export class StatusLineComponent implements Component {
 	#settings: StatusLineSettings = {};
+	#effectiveSettings: EffectiveStatusLineSettings | undefined;
 	#cachedBranch: string | null | undefined = undefined;
 	#cachedBranchRepoId: string | null | undefined = undefined;
 	#gitWatcher: fs.FSWatcher | null = null;
@@ -204,6 +210,11 @@ export class StatusLineComponent implements Component {
 
 	updateSettings(settings: StatusLineSettings): void {
 		this.#settings = settings;
+		this.#effectiveSettings = undefined;
+	}
+
+	getEffectiveSettingsForTest(): EffectiveStatusLineSettings {
+		return this.#resolveSettings();
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
@@ -594,10 +605,14 @@ export class StatusLineComponent implements Component {
 		};
 	}
 
-	#resolveSettings(): Required<
-		Pick<StatusLineSettings, "leftSegments" | "rightSegments" | "separator" | "segmentOptions">
-	> &
-		StatusLineSettings {
+	#resolveSettings(): EffectiveStatusLineSettings {
+		if (this.#effectiveSettings === undefined) {
+			this.#effectiveSettings = this.#computeEffectiveSettings();
+		}
+		return this.#effectiveSettings;
+	}
+
+	#computeEffectiveSettings(): EffectiveStatusLineSettings {
 		const preset = this.#settings.preset ?? "default";
 		const presetDef = getPreset(preset);
 		const useCustomSegments = preset === "custom";

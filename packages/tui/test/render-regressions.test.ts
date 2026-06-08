@@ -1469,6 +1469,40 @@ describe("TUI terminal-state regressions", () => {
 			});
 		});
 
+		it("tmux: offscreen shrink preserving the visible tail emits no repaint bytes", async () => {
+			await withEnvPatch({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
+				const term = new UnknownViewportTerminal(40, 4, 10_000);
+				const tui = new TUI(term);
+				const component = new MutableLinesComponent([
+					"old-0",
+					"remove-me",
+					"old-2",
+					"old-3",
+					"tail-0",
+					"tail-1",
+					"tail-2",
+					"tail-3",
+				]);
+				tui.addChild(component);
+
+				try {
+					tui.start();
+					await settle(term);
+					expect(visible(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
+
+					const writes = captureWrites(term);
+					component.setLines(["old-0", "old-2", "old-3", "tail-0", "tail-1", "tail-2", "tail-3"]);
+					tui.requestRender();
+					await settle(term);
+
+					expect(visible(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
+					expect(writes).toEqual([]);
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+
 		// Root cause family: the dirty/replay machinery assumes native scrollback
 		// can be cleared and rebuilt, which is never true inside a multiplexer —
 		// tmux owns pane history, reflows it on resize itself, and a "replay" can
@@ -1493,11 +1527,14 @@ describe("TUI terminal-state regressions", () => {
 						await settle(term);
 
 						// SIGWINCH (height shrink) and a streamed token arrive inside the
-						// same ~33ms frame budget. The TUI's own resize handler schedules a
-						// non-forced render; the append rides along.
+						// same multiplexer-resize debounce window. The TUI coalesces every
+						// SIGWINCH into one settled forced render once the pane stops
+						// resizing (issue #2088); the streamed append rides along on the
+						// eventual render at the new geometry.
 						lines.push("line-40 streamed");
 						component.setLines(lines);
 						term.resize(40, 6);
+						await Bun.sleep(80);
 						await settle(term);
 
 						// The visible pane must show the frame tail at the new geometry —
@@ -3252,8 +3289,9 @@ describe("TUI terminal-state regressions", () => {
 				const modalWrites = writes.slice(showFrom).join("");
 				// Borrowed the alternate screen buffer …
 				expect(modalWrites).toContain("\x1b[?1049h");
-				// … enabled mouse tracking for click/scroll support …
+				// … enabled mouse tracking for click/scroll/hover support …
 				expect(modalWrites).toContain("\x1b[?1000h");
+				expect(modalWrites).toContain("\x1b[?1003h"); // any-motion tracking drives hover
 				expect(modalWrites).toContain("\x1b[?1006h");
 				// … and never erased scrollback (ED3) or otherwise touched the transcript.
 				expect(modalWrites).not.toContain("\x1b[3J");
@@ -3267,6 +3305,7 @@ describe("TUI terminal-state regressions", () => {
 				expect(hideWrites).toContain("\x1b[?1049l");
 				// Mouse tracking is disabled again so the rest of the app keeps native
 				// terminal selection.
+				expect(hideWrites).toContain("\x1b[?1003l"); // motion tracking torn down too
 				expect(hideWrites).toContain("\x1b[?1000l");
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();

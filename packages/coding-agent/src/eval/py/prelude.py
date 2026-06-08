@@ -53,7 +53,7 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("env", key=key, value=val, action="get")
         return val
 
-    def read(path: str | Path, *, offset: int = 1, limit: int | None = None) -> str:
+    def read(path: str | Path, offset: int = 1, limit: int | None = None) -> str:
         """Read file contents. offset/limit are 1-indexed line numbers."""
         p = Path(path)
         data = p.read_text(encoding="utf-8")
@@ -463,8 +463,8 @@ if "__omp_prelude_loaded__" not in globals():
 
     tool = _ToolProxy()
 
-    def llm(prompt, *, model="default", system=None, schema=None):
-        """Oneshot, stateless LLM call against a model tier.
+    def completion(prompt, *, model="default", system=None, schema=None):
+        """Oneshot, stateless completion against a model tier.
 
         `model` selects a tier: "smol", "default" (the session's active model),
         or "slow". Pass `system` for a system prompt. Pass a JSON-Schema dict
@@ -476,7 +476,7 @@ if "__omp_prelude_loaded__" not in globals():
             args["system"] = system
         if schema is not None:
             args["schema"] = schema
-        res = _bridge_call("__llm__", args)
+        res = _bridge_call("__completion__", args)
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 

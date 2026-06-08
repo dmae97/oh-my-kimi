@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [15.10.3] - 2026-06-08
+
+### Added
+
+- Added a `BlockResolution` type and surfaced resolved block spans on `ApplyResult.blockResolutions` / `PatchSectionResult.blockResolutions`. `resolveBlockEdits` now accepts an `onResolved` callback that reports each `replace block N:` / `delete block N` anchor's resolved `[start, end]` span (and whether it was a delete). Spans are surfaced only on the no-drift apply paths, where the resolved line numbers line up with the tag the caller read.
+
+### Changed
+
+- Reworked the `edit` tool prompt (`prompt.md`): added a `replace block N` vs `replace N..M` decision rule, documented that a leading decorator/attribute/doc-comment is a separate node not swept into the block (point N at the first decorator line, or use `replace N..M` for a Rust-style `///` sibling comment), reframed the blast-radius guidance so "block replace" no longer reads as the dangerous option, and added a decorated-definition example.
+
+## [15.10.2] - 2026-06-08
+
+### Fixed
+
+- Stripped read-output line-number prefixes (`N:`) from auto-piped bare body rows so that pasting `3:text` without a `+` prefix no longer injects `3:` as literal content. Stripping is applied only when *every* bare row in the hunk carries the prefix (the signature of a pasted snapshot) and removes at most one prefix per row, so a genuine body that merely starts with `digits:` (YAML port maps, timestamps) is left intact ([#1492](https://github.com/can1357/oh-my-pi/issues/1492)).
+
 ## [15.9.67] - 2026-06-06
 
 ### Breaking Changes
@@ -40,7 +56,7 @@
 ### Added
 
 - Added `maxPaths` and `maxVersionsPerPath` options to `InMemorySnapshotStore` to bound tracked paths and per-path snapshot history
-- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`replace N..M:` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket counting skips strings, template literals, and comments. Each repair surfaces a `delimiter-balance` warning through `ApplyResult.warnings`.
+- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`replace N..M:` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket couples are also bounded by line count: structural balance delta repair is capped to 10 duplicate lines across all channels combined, massive balanced blocks are skipped.
 
 ### Changed
 

@@ -179,7 +179,7 @@ runs:
            name: pi-natives-${{ inputs.platform }}-${{ inputs.arch }}${{ inputs.variant && format('-{0}', inputs.variant) || '' }}-h${{ inputs.hash }}
            path: packages/natives/native/pi_natives.${{ inputs.platform }}-${{ inputs.arch }}*.node
            if-no-files-found: error
-           # Explicit so the rust-hash canary lookup keeps working even if org
+           # Explicit so the native_artifact_lookup canary keeps working even if org
            # defaults shift; bump if Rust source ever stays stable for >90 days
            # of main pushes and you want to avoid rebuilds.
            retention-days: 90

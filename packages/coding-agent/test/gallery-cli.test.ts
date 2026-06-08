@@ -53,19 +53,31 @@ describe("gallery harness", () => {
 		expect(error).not.toContain("SUCCESS_OUT");
 	});
 
-	it("routes customRendered tools (lsp, task) through the custom-tool branch", async () => {
-		// `lsp`/`task` attach their renderers on the real AgentTool, so the gallery
-		// must reproduce that path. With a result present and mergeCallAndResult, the
+	it("routes customRendered tools (task) through the custom-tool branch", async () => {
+		// `task` attaches its renderer on the real AgentTool, so the gallery must
+		// reproduce that path. With a result present and mergeCallAndResult, the
 		// custom branch must NOT emit a redundant tool-name line above the result box
 		// (regression guard for tool-execution's custom-branch fallback label).
-		const lsp = resolveFixture("lsp");
-		expect(lsp.customRendered).toBe(true);
-		const lines = await renderGalleryState("lsp", lsp, "error", 100);
+		const task = resolveFixture("task");
+		expect(task.customRendered).toBe(true);
+		const lines = await renderGalleryState("task", task, "error", 100);
 		const stripped = lines.map(line => Bun.stripANSI(line).trim());
-		// The framed result header is present...
-		expect(stripped.some(line => line.includes("LSP references"))).toBe(true);
-		// ...but no standalone "LSP" label line precedes it.
-		expect(stripped).not.toContain("LSP");
+		// The framed result header carries the label inside the box border...
+		expect(stripped.some(line => line.startsWith("┌") && line.includes("Task"))).toBe(true);
+		// ...but no standalone "Task" label line precedes it.
+		expect(stripped).not.toContain("Task");
+	});
+
+	it("renders gallery-only read group fixtures", async () => {
+		const fixture = resolveFixture("read_group");
+		const success = Bun.stripANSI((await renderGalleryState("read_group", fixture, "success", 140)).join("\n"));
+		const renderPathMatches = success.match(/packages\/coding-agent\/src\/task\/render\.ts/g) ?? [];
+
+		expect(success).toContain("Read (4)");
+		expect(renderPathMatches).toHaveLength(1);
+		expect(success).toContain("packages/coding-agent/src/task/render.ts:507-605,1070-1194,…,1270-1274");
+		expect(success).not.toContain("1210-1240");
+		expect(success).not.toContain("full file");
 	});
 
 	it("falls back to a generic fixture for registry tools without curated sample data", () => {

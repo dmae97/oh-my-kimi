@@ -10,10 +10,10 @@ import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
+import { runEvalCompletion } from "../completion-bridge";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
 import { executeJs } from "../js/executor";
-import { runEvalLlm } from "../llm-bridge";
 import { disposeAllKernelSessions, type PythonResult } from "../py/executor";
 
 function makeModel(provider: string, id: string, extra: Partial<Model<Api>> = {}): Model<Api> {
@@ -98,16 +98,19 @@ function assistant(opts: {
 	};
 }
 
-async function runPythonLlmInSubprocess(options: { structured: boolean; tempDir: TempDir }): Promise<PythonResult> {
+async function runPythonCompletionInSubprocess(options: {
+	structured: boolean;
+	tempDir: TempDir;
+}): Promise<PythonResult> {
 	const repoRoot = path.resolve(import.meta.dir, "../../../..");
-	const scriptPath = path.join(options.tempDir.path(), "run-python-llm.ts");
-	const resultPath = path.join(options.tempDir.path(), "python-llm-result.json");
+	const scriptPath = path.join(options.tempDir.path(), "run-python-completion.ts");
+	const resultPath = path.join(options.tempDir.path(), "python-completion-result.json");
 	const aiPath = path.resolve(import.meta.dir, "../../../../ai/src/index.ts");
 	const executorPath = path.resolve(import.meta.dir, "../py/executor.ts");
 	const settingsPath = path.resolve(import.meta.dir, "../../config/settings.ts");
 	const code = options.structured
-		? 'import json\nprint(json.dumps(llm("hi", schema={"type": "object"})))'
-		: 'print(llm("hi", model="smol"))';
+		? 'import json\nprint(json.dumps(completion("hi", schema={"type": "object"})))'
+		: 'print(completion("hi", model="smol"))';
 	const responseContent = options.structured
 		? '[{ type: "toolCall", id: "tc-1", name: "respond", arguments: { ok: true } }]'
 		: '[{ type: "text", text: "hello from python" }]';
@@ -153,7 +156,7 @@ vi.spyOn(ai, "completeSimple").mockResolvedValue({
 });
 const result = await executePython(${JSON.stringify(code)}, {
 	cwd: ${JSON.stringify(options.tempDir.path())},
-	sessionId: ${JSON.stringify(`py-llm:${options.structured ? "struct" : "plain"}`)},
+	sessionId: ${JSON.stringify(`py-completion:${options.structured ? "struct" : "plain"}`)},
 	sessionFile: ${JSON.stringify(path.join(options.tempDir.path(), "session.jsonl"))},
 	toolSession: session,
 	kernelMode: "per-call",
@@ -165,11 +168,12 @@ process.exit(0);
 	const child = await $`bun ${scriptPath}`.cwd(repoRoot).quiet().nothrow();
 	const stdout = child.stdout.toString();
 	const stderr = child.stderr.toString();
-	if (child.exitCode !== 0) throw new Error(stderr || stdout || `Python llm subprocess exited with ${child.exitCode}`);
+	if (child.exitCode !== 0)
+		throw new Error(stderr || stdout || `Python completion subprocess exited with ${child.exitCode}`);
 	return (await Bun.file(resultPath).json()) as PythonResult;
 }
 
-describe("runEvalLlm", () => {
+describe("runEvalCompletion", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -178,9 +182,9 @@ describe("runEvalLlm", () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
 		const session = makeSession();
 
-		await runEvalLlm({ prompt: "q", model: "smol" }, { session });
-		await runEvalLlm({ prompt: "q", model: "default" }, { session });
-		await runEvalLlm({ prompt: "q", model: "slow" }, { session });
+		await runEvalCompletion({ prompt: "q", model: "smol" }, { session });
+		await runEvalCompletion({ prompt: "q", model: "default" }, { session });
+		await runEvalCompletion({ prompt: "q", model: "slow" }, { session });
 
 		const resolved = spy.mock.calls.map(call => {
 			const model = call[0] as Model<Api>;
@@ -193,7 +197,7 @@ describe("runEvalLlm", () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
 		const session = makeSession({ available: [SMOL, DEFAULT, SLOW], activeModel: "p/slow" });
 
-		await runEvalLlm({ prompt: "q", model: "default" }, { session });
+		await runEvalCompletion({ prompt: "q", model: "default" }, { session });
 
 		const model = spy.mock.calls[0]?.[0] as Model<Api>;
 		expect(`${model.provider}/${model.id}`).toBe("p/slow");
@@ -201,16 +205,36 @@ describe("runEvalLlm", () => {
 
 	it("returns the completion text in plain mode", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "the answer" }));
-		const result = await runEvalLlm({ prompt: "q", model: "smol" }, { session: makeSession() });
+		const result = await runEvalCompletion({ prompt: "q", model: "smol" }, { session: makeSession() });
 		expect(result.text).toBe("the answer");
 		expect(result.details).toEqual({ model: "p/smol", tier: "smol", structured: false });
+	});
+
+	it("supplies a non-empty systemPrompt when system is omitted (codex 'Instructions are required' guard)", async () => {
+		// The openai-codex Responses transformer drops `instructions` when no
+		// system prompt is provided, and the remote endpoint then 400s with
+		// "Instructions are required". runEvalCompletion must always carry a non-empty
+		// systemPrompt so `completion("…")` without a `system` argument works.
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+		await runEvalCompletion({ prompt: "q", model: "smol" }, { session: makeSession() });
+		const ctx = spy.mock.calls[0]?.[1] as { systemPrompt?: string[] };
+		expect(ctx.systemPrompt).toBeDefined();
+		expect(ctx.systemPrompt?.length).toBeGreaterThan(0);
+		expect(ctx.systemPrompt?.[0]).toMatch(/.+/);
+	});
+
+	it("honors an explicit system prompt instead of overriding it", async () => {
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+		await runEvalCompletion({ prompt: "q", model: "smol", system: "Be terse." }, { session: makeSession() });
+		const ctx = spy.mock.calls[0]?.[1] as { systemPrompt?: string[] };
+		expect(ctx.systemPrompt).toEqual(["Be terse."]);
 	});
 
 	it("forces a respond tool call and returns its arguments in structured mode", async () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(assistant({ toolCall: { name: "respond", arguments: { answer: 42 } } }));
-		const result = await runEvalLlm(
+		const result = await runEvalCompletion(
 			{ prompt: "q", model: "smol", schema: { type: "object", properties: { answer: { type: "number" } } } },
 			{ session: makeSession() },
 		);
@@ -226,7 +250,7 @@ describe("runEvalLlm", () => {
 
 	it("falls back to JSON embedded in text when the model skips the respond tool", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: 'here: {"answer": 7}' }));
-		const result = await runEvalLlm(
+		const result = await runEvalCompletion(
 			{ prompt: "q", model: "smol", schema: { type: "object" } },
 			{ session: makeSession() },
 		);
@@ -237,8 +261,8 @@ describe("runEvalLlm", () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
 		const session = makeSession({ available: [SMOL, DEFAULT, REASONING_SLOW] });
 
-		await runEvalLlm({ prompt: "q", model: "smol" }, { session });
-		await runEvalLlm({ prompt: "q", model: "slow" }, { session });
+		await runEvalCompletion({ prompt: "q", model: "smol" }, { session });
+		await runEvalCompletion({ prompt: "q", model: "slow" }, { session });
 
 		const smolOpts = spy.mock.calls[0]?.[2] as { reasoning?: unknown };
 		const slowOpts = spy.mock.calls[1]?.[2] as { reasoning?: unknown };
@@ -249,47 +273,49 @@ describe("runEvalLlm", () => {
 	it("does not request reasoning for the slow tier on a non-reasoning model", async () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
 		// SLOW is reasoning:false — must not trip requireSupportedEffort downstream.
-		const result = await runEvalLlm({ prompt: "q", model: "slow" }, { session: makeSession() });
+		const result = await runEvalCompletion({ prompt: "q", model: "slow" }, { session: makeSession() });
 		expect(result.text).toBe("ok");
 		const opts = spy.mock.calls[0]?.[2] as { reasoning?: unknown };
 		expect(opts.reasoning).toBeUndefined();
 	});
 
 	it("throws ToolError on invalid arguments", async () => {
-		await expect(runEvalLlm({ prompt: "" }, { session: makeSession() })).rejects.toBeInstanceOf(ToolError);
-		await expect(runEvalLlm({ prompt: "q", model: "huge" }, { session: makeSession() })).rejects.toBeInstanceOf(
-			ToolError,
-		);
+		await expect(runEvalCompletion({ prompt: "" }, { session: makeSession() })).rejects.toBeInstanceOf(ToolError);
+		await expect(
+			runEvalCompletion({ prompt: "q", model: "huge" }, { session: makeSession() }),
+		).rejects.toBeInstanceOf(ToolError);
 	});
 
 	it("throws ToolError when no model resolves for the tier", async () => {
 		const session = makeSession({ available: [DEFAULT], roles: { smol: "missing/model" } });
-		await expect(runEvalLlm({ prompt: "q", model: "smol" }, { session })).rejects.toBeInstanceOf(ToolError);
+		await expect(runEvalCompletion({ prompt: "q", model: "smol" }, { session })).rejects.toBeInstanceOf(ToolError);
 	});
 
 	it("throws ToolError when the resolved model has no API key", async () => {
 		const session = makeSession({ apiKey: null });
-		await expect(runEvalLlm({ prompt: "q", model: "smol" }, { session })).rejects.toBeInstanceOf(ToolError);
+		await expect(runEvalCompletion({ prompt: "q", model: "smol" }, { session })).rejects.toBeInstanceOf(ToolError);
 	});
 
 	it("maps error and aborted stop reasons to ToolError", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "boom" }));
-		await expect(runEvalLlm({ prompt: "q", model: "smol" }, { session: makeSession() })).rejects.toThrow("boom");
+		await expect(runEvalCompletion({ prompt: "q", model: "smol" }, { session: makeSession() })).rejects.toThrow(
+			"boom",
+		);
 
 		vi.spyOn(ai, "completeSimple").mockResolvedValueOnce(assistant({ stopReason: "aborted" }));
-		await expect(runEvalLlm({ prompt: "q", model: "smol" }, { session: makeSession() })).rejects.toBeInstanceOf(
-			ToolError,
-		);
+		await expect(
+			runEvalCompletion({ prompt: "q", model: "smol" }, { session: makeSession() }),
+		).rejects.toBeInstanceOf(ToolError);
 	});
 
 	it("throws ToolError when plain mode produces no text", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "" }));
-		await expect(runEvalLlm({ prompt: "q", model: "smol" }, { session: makeSession() })).rejects.toBeInstanceOf(
-			ToolError,
-		);
+		await expect(
+			runEvalCompletion({ prompt: "q", model: "smol" }, { session: makeSession() }),
+		).rejects.toBeInstanceOf(ToolError);
 	});
 
-	it("pauses the idle watchdog while a slow llm() request is in flight", async () => {
+	it("pauses the idle watchdog while a slow completion() request is in flight", async () => {
 		// A oneshot completion emits no status until it returns; delegated model
 		// time must be invisible to the eval timeout budget.
 		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
@@ -299,7 +325,7 @@ describe("runEvalLlm", () => {
 
 		const ops: string[] = [];
 		using idle = new IdleTimeout(60);
-		const result = await runEvalLlm(
+		const result = await runEvalCompletion(
 			{ prompt: "q", model: "smol" },
 			{
 				session: makeSession(),
@@ -313,12 +339,12 @@ describe("runEvalLlm", () => {
 		);
 
 		expect(result.text).toBe("the answer");
-		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, "llm"]);
+		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, "completion"]);
 		expect(idle.signal.aborted).toBe(false);
 	});
 });
 
-describe("llm() through eval runtimes", () => {
+describe("completion() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -328,13 +354,13 @@ describe("llm() through eval runtimes", () => {
 		await disposeAllKernelSessions();
 	});
 
-	it("exposes llm() in the JavaScript runtime", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-llm-js-");
+	it("exposes completion() in the JavaScript runtime", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-completion-js-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
-		const sessionId = `js-llm:${crypto.randomUUID()}`;
+		const sessionId = `js-completion:${crypto.randomUUID()}`;
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "hello from smol" }));
 
-		const result = await executeJs('return await llm("hi", { model: "smol" });', {
+		const result = await executeJs('return await completion("hi", { model: "smol" });', {
 			cwd: tempDir.path(),
 			sessionId,
 			session: makeSession(),
@@ -345,16 +371,16 @@ describe("llm() through eval runtimes", () => {
 		expect(result.output.trim()).toBe("hello from smol");
 	});
 
-	it("parses structured llm() output in the JavaScript runtime", async () => {
-		using tempDir = TempDir.createSync("@omp-eval-llm-js-struct-");
+	it("parses structured completion() output in the JavaScript runtime", async () => {
+		using tempDir = TempDir.createSync("@omp-eval-completion-js-struct-");
 		const sessionFile = path.join(tempDir.path(), "session.jsonl");
-		const sessionId = `js-llm-struct:${crypto.randomUUID()}`;
+		const sessionId = `js-completion-struct:${crypto.randomUUID()}`;
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(
 			assistant({ toolCall: { name: "respond", arguments: { ok: true, n: 3 } } }),
 		);
 
 		const result = await executeJs(
-			'const r = await llm("hi", { schema: { type: "object" } }); return JSON.stringify(r);',
+			'const r = await completion("hi", { schema: { type: "object" } }); return JSON.stringify(r);',
 			{ cwd: tempDir.path(), sessionId, session: makeSession(), sessionFile },
 		);
 
@@ -362,10 +388,10 @@ describe("llm() through eval runtimes", () => {
 		expect(JSON.parse(result.output.trim())).toEqual({ ok: true, n: 3 });
 	});
 
-	it("exposes llm() in the Python runtime", async () => {
-		const tempDir = TempDir.createSync("@omp-eval-llm-py-");
+	it("exposes completion() in the Python runtime", async () => {
+		const tempDir = TempDir.createSync("@omp-eval-completion-py-");
 		try {
-			const result = await runPythonLlmInSubprocess({ structured: false, tempDir });
+			const result = await runPythonCompletionInSubprocess({ structured: false, tempDir });
 			expect(result.exitCode).toBe(0);
 			expect(result.output.trim()).toBe("hello from python");
 		} finally {
@@ -373,10 +399,10 @@ describe("llm() through eval runtimes", () => {
 		}
 	});
 
-	it("parses structured llm() output in the Python runtime", async () => {
-		const tempDir = TempDir.createSync("@omp-eval-llm-py-struct-");
+	it("parses structured completion() output in the Python runtime", async () => {
+		const tempDir = TempDir.createSync("@omp-eval-completion-py-struct-");
 		try {
-			const result = await runPythonLlmInSubprocess({ structured: true, tempDir });
+			const result = await runPythonCompletionInSubprocess({ structured: true, tempDir });
 			expect(result.exitCode).toBe(0);
 			expect(JSON.parse(result.output.trim())).toEqual({ ok: true });
 		} finally {

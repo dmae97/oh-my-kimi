@@ -10,6 +10,111 @@ const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 
 /**
+ * Maximum encoded UTF-8 bytes per `process.stdout.write` call on Windows.
+ *
+ * Windows ConPTY ties viewport tracking to per-`WriteFile` boundaries: when a
+ * single write exceeds ~32-64 KB, the pseudo-console stops following the
+ * cursor and the host UI's viewport stays parked at whatever scroll position
+ * the write started from. The visible symptom is that a full-paint of a long
+ * session (resume, history rebuild, large permission dialog) shows only the
+ * first ~30 lines until any focus event forces the host to re-query the
+ * cursor. The data is delivered correctly — it's purely a viewport-sync bug.
+ *
+ * The cap is on **encoded UTF-8 bytes**, not JS code units, because
+ * `process.stdout.write(string)` UTF-8-encodes before handing off to
+ * `WriteFile`. A pure-CJK transcript row encodes to ~3 bytes per BMP code
+ * unit, so a code-unit-based cap of 16 KiB could land at ~48 KiB of actual
+ * `WriteFile` traffic and reintroduce the #2034 parked-viewport bug for
+ * non-ASCII content.
+ *
+ * 16 KiB is half the smallest observed Windows Terminal threshold (32 KiB),
+ * which keeps the per-write parked-viewport bug fixed by #2034 while halving
+ * the WriteFile count on multi-megabyte paints (a 3 MB session resume splits
+ * into ~192 chunks instead of ~384). Fewer WriteFiles means fewer chances for
+ * WT's viewport-following logic to lose track of the cursor during the burst,
+ * which mitigates the residual mid-paint drift the original 8 KiB cap left
+ * behind (#2095). Still well clear of the threshold so the other ConPTY hosts
+ * (Tabby, Hyper, VS Code) — where the exact limit is undocumented — keep
+ * their safety margin.
+ */
+const MAX_CONPTY_WRITE_CHUNK_BYTES = 16 * 1024;
+
+/**
+ * Split `data` into chunks whose encoded UTF-8 byte length is no greater than
+ * `maxChunkBytes`, preferring a line boundary (`\n`) as the cut point so
+ * escape sequences (which never contain `\n`) stay intact. The TUI's
+ * full-paint buffers are line-structured (`buffer += "\r\n"` between rows),
+ * so a newline almost always exists within the window. The fallback for a
+ * buffer with no newline in range is a hard cut at the last UTF-8 code-point
+ * boundary that still fits — the ConPTY viewport bug from a single oversized
+ * write is strictly worse than a one-frame escape-sequence glitch on a
+ * buffer the renderer effectively never produces.
+ *
+ * UTF-16 code units are walked manually rather than measuring with
+ * `Buffer.byteLength` per slice candidate: each code unit's UTF-8 width is
+ * known from its value (BMP `<0x80` → 1, `<0x800` → 2, surrogate pair → 4
+ * bytes across two units, other BMP → 3), and surrogate pairs are kept
+ * together so the chunker never splits a non-BMP character.
+ *
+ * Exported for unit testing of the chunking contract; `#safeWrite` is the
+ * sole production caller.
+ */
+export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_WRITE_CHUNK_BYTES): string[] {
+	// Fast path: whole buffer fits in one write.
+	if (Buffer.byteLength(data, "utf8") <= maxChunkBytes) return [data];
+	const chunks: string[] = [];
+	const len = data.length;
+	let pos = 0;
+	while (pos < len) {
+		let bytes = 0;
+		// Index just past the most recent `\n` we've consumed inside [pos, i):
+		// the natural cut point that leaves escape sequences intact.
+		let lastNewlineEnd = -1;
+		let i = pos;
+		while (i < len) {
+			const cu = data.charCodeAt(i);
+			let cuLen = 1;
+			let cuBytes: number;
+			if (cu < 0x80) {
+				cuBytes = 1;
+			} else if (cu < 0x800) {
+				cuBytes = 2;
+			} else if (cu >= 0xd800 && cu < 0xdc00) {
+				// High surrogate: pair with the following low surrogate (4 bytes
+				// across two code units); an unpaired surrogate UTF-8-encodes as
+				// the 3-byte U+FFFD replacement character.
+				const next = i + 1 < len ? data.charCodeAt(i + 1) : 0;
+				if (next >= 0xdc00 && next < 0xe000) {
+					cuBytes = 4;
+					cuLen = 2;
+				} else {
+					cuBytes = 3;
+				}
+			} else {
+				// BMP non-surrogate or unpaired low surrogate → 3 bytes.
+				cuBytes = 3;
+			}
+			if (bytes + cuBytes > maxChunkBytes && i > pos) {
+				// Would overflow the cap. Cut at the last newline if we found one,
+				// otherwise hard-cut at the current code-point boundary.
+				const cut = lastNewlineEnd > pos ? lastNewlineEnd : i;
+				chunks.push(data.slice(pos, cut));
+				pos = cut;
+				break;
+			}
+			bytes += cuBytes;
+			i += cuLen;
+			if (cu === 0x0a) lastNewlineEnd = i;
+		}
+		if (i >= len) {
+			chunks.push(data.slice(pos));
+			pos = len;
+		}
+	}
+	return chunks;
+}
+
+/**
  * Minimal terminal interface for TUI
  */
 
@@ -150,7 +255,17 @@ export interface Terminal {
 	onPrivateModeReport?(callback: (mode: number, supported: boolean) => void): void;
 }
 
-function isWindowsSubsystemForLinux(): boolean {
+/**
+ * True when stdout flows through a ConPTY pseudo-console (native win32, or
+ * Linux running under WSL where stdout still crosses into ConPTY at the
+ * `wslhost` boundary). ConPTY hosts share the per-WriteFile viewport-tracking
+ * quirks documented above and on {@link MAX_CONPTY_WRITE_CHUNK_BYTES}, so both
+ * `#safeWrite` and the renderer's post-big-paint settle gate hang off this
+ * single predicate.
+ */
+export function isConPTYHosted(): boolean {
+	if (process.platform === "win32") return true;
+	// WSL: stdout still crosses into ConPTY at the `wslhost` boundary.
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
 }
 
@@ -203,6 +318,8 @@ export class ProcessTerminal implements Terminal {
 	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
 	/** Whether DEC 2048 in-band resize notifications are currently enabled. */
 	#inBandResizeActive = false;
+	/** Reassembly buffer for a DEC 2048 in-band resize report split across stdin reads. */
+	#inBandResizeBuffer = "";
 	#reportedColumns?: number;
 	#reportedRows?: number;
 	#osc11PollTimer?: Timer;
@@ -295,7 +412,8 @@ export class ProcessTerminal implements Terminal {
 		// Windows Terminal under WSL has been observed to close the hosting tab
 		// after repeated OSC 11/DA1 probes. Keep the initial/event-driven probes,
 		// but avoid background polling there.
-		if (!isWindowsSubsystemForLinux()) {
+		const isWSL = process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+		if (!isWSL) {
 			this.#startOsc11Poll();
 		}
 
@@ -436,6 +554,46 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 
+			// In-band resize report (DEC 2048) split across stdin reads. The report
+			// is `\x1b[48;rows;cols;yPx;xPx t`; when the StdinBuffer flush timeout
+			// elapses mid-sequence — common during a rapid resize that keeps the
+			// event loop busy — the `\x1b[48;…` prefix arrives as one event and the
+			// tail (`…;xPx t`) arrives as bare character events that would otherwise
+			// leak into the prompt as literal keystrokes. Reassemble until the
+			// terminator, then fall through to the resize handler below. A
+			// reassembled sequence that turns out not to be a resize report (e.g. a
+			// split kitty `\x1b[48;…u` for a digit key) is forwarded to the input
+			// handler rather than dropped.
+			const inBandResizePartialPattern = /^\x1b\[4[\d;]*$/;
+			const isInBandResizePartial = this.#inBandResizeActive && inBandResizePartialPattern.test(sequence);
+			if (this.#inBandResizeBuffer && sequence.startsWith("\x1b")) {
+				// A new escape interrupted the partial; the stale partial is
+				// unrecoverable. If the new escape is itself an in-band prefix,
+				// restart reassembly with it; otherwise let it flow through below.
+				this.#inBandResizeBuffer = isInBandResizePartial ? sequence : "";
+				if (isInBandResizePartial) return;
+			} else if (this.#inBandResizeBuffer || isInBandResizePartial) {
+				this.#inBandResizeBuffer += sequence;
+				if (this.#inBandResizeBuffer.length > 256) {
+					this.#inBandResizeBuffer = "";
+					return;
+				}
+				const lastCode = this.#inBandResizeBuffer.charCodeAt(this.#inBandResizeBuffer.length - 1);
+				if (lastCode >= 0x40 && lastCode <= 0x7e) {
+					// Terminator arrived: let the resize handler below claim it, or
+					// fall through to the input handler if it is not a resize report.
+					sequence = this.#inBandResizeBuffer;
+					this.#inBandResizeBuffer = "";
+				} else if (!inBandResizePartialPattern.test(this.#inBandResizeBuffer)) {
+					// Diverged from a valid in-band prefix — drop the garbled report.
+					this.#inBandResizeBuffer = "";
+					return;
+				} else {
+					// Still accumulating the report.
+					return;
+				}
+			}
+
 			// In-band resize report (DEC mode 2048). Unsolicited and not tied to a
 			// sentinel: update reported geometry + cell size, then drive the resize
 			// handler so the renderer reflows.
@@ -504,10 +662,19 @@ export class ProcessTerminal implements Terminal {
 			}
 
 			const match = sequence.match(kittyResponsePattern);
-			if (match && !this.#modifyOtherKeysActive) {
+			if (match) {
 				if (this.#modifyOtherKeysTimeout) {
 					clearTimeout(this.#modifyOtherKeysTimeout);
 					this.#modifyOtherKeysTimeout = undefined;
+				}
+				// A DA1 sentinel that beat the kitty reply may have already
+				// engaged the modifyOtherKeys fallback (terminals such as
+				// Superset/xterm-on-Electron answer DA1 before `\x1b[?u`).
+				// Kitty is strictly preferred — undo the fallback so the two
+				// modes do not stack. See #2042.
+				if (this.#modifyOtherKeysActive) {
+					this.#safeWrite("\x1b[>4;0m");
+					this.#modifyOtherKeysActive = false;
 				}
 				// Any reply to `\x1b[?u` means the terminal speaks the kitty keyboard
 				// protocol. The reported flag value is the *current* stack-top — fresh
@@ -909,6 +1076,7 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99Capabilities.clear();
 		setOsc99Supported(false);
 		this.#privateCsiResponseBuffer = "";
+		this.#inBandResizeBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
 		this.#privateModeSupport.clear();
@@ -978,7 +1146,25 @@ export class ProcessTerminal implements Terminal {
 		// files). They serve no purpose there and would surface as visible noise.
 		if (!process.stdout.isTTY) return;
 		try {
-			process.stdout.write(data);
+			// Windows ConPTY drops viewport tracking when a single write exceeds
+			// ~32-64 KB: the host UI's scroll position stays parked at wherever
+			// the write began, even though every byte landed in scrollback. Split
+			// large paints into newline-aligned chunks so each underlying
+			// `WriteFile` stays well below the threshold. The gate also covers
+			// WSL — `process.platform === "linux"` there, but stdout still
+			// crosses into ConPTY at the `wslhost` boundary, so the same per-
+			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
+			// path. The cap is on encoded UTF-8 bytes, not JS code units, because
+			// `process.stdout.write(string)` UTF-8-encodes before `WriteFile`,
+			// and a code-unit cap would let CJK transcript rows expand past the
+			// threshold. See #2034 and #2095.
+			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
+				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
+					process.stdout.write(chunk);
+				}
+			} else {
+				process.stdout.write(data);
+			}
 		} catch (err) {
 			// Any write failure means terminal is dead - no recovery possible
 			this.#dead = true;
