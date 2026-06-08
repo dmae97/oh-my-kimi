@@ -49,6 +49,7 @@ import type {
 	AgentMessage,
 	AgentTool,
 	AgentToolResult,
+	AsideMessage,
 	StreamFn,
 } from "./types";
 import { yieldIfDue } from "./utils/yield";
@@ -465,6 +466,23 @@ function cloneAssistantMessageForToolCallCap(message: AssistantMessage): Assista
 	};
 }
 
+/**
+ * Resolve aside entries at the moment the loop is about to inject them. Each entry
+ * is either a ready {@link AgentMessage} or a sync thunk evaluated here so the
+ * producer can make the final inject-or-drop decision (return null) against
+ * up-to-the-injection state — e.g. dropping late diagnostics a newer edit
+ * superseded. Kept sync so it can never stall the loop.
+ */
+function resolveAsides(entries: AsideMessage[] | undefined): AgentMessage[] {
+	if (!entries || entries.length === 0) return [];
+	const out: AgentMessage[] = [];
+	for (const entry of entries) {
+		const message = typeof entry === "function" ? entry() : entry;
+		if (message) out.push(message);
+	}
+	return out;
+}
+
 async function runLoopBody(
 	currentContext: AgentContext,
 	newMessages: AgentMessage[],
@@ -648,13 +666,13 @@ async function runLoopBody(
 			stream.push({ type: "turn_end", message, toolResults });
 
 			const steering = steeringMessagesFromExecution ?? ((await config.getSteeringMessages?.()) || []);
-			const asides = (await config.getAsideMessages?.()) || [];
+			const asides = resolveAsides(await config.getAsideMessages?.());
 			pendingMessages = asides.length > 0 ? [...steering, ...asides] : steering;
 		}
 
 		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
 		await config.onBeforeYield?.();
-		const asideMessages = (await config.getAsideMessages?.()) || [];
+		const asideMessages = resolveAsides(await config.getAsideMessages?.());
 		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
 		if (asideMessages.length > 0 || followUpMessages.length > 0) {
 			// Set as pending so the inner loop processes them before stopping.

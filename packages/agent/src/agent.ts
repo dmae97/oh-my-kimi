@@ -33,6 +33,7 @@ import type {
 	AgentState,
 	AgentTool,
 	AgentToolContext,
+	AsideMessage,
 	StreamFn,
 	ToolCallContext,
 } from "./types";
@@ -319,7 +320,7 @@ export class Agent {
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 	#onBeforeYield?: () => Promise<void> | void;
-	#asideMessageProvider?: () => AgentMessage[] | Promise<AgentMessage[]>;
+	#asideMessageProvider?: () => AsideMessage[] | Promise<AsideMessage[]>;
 	#telemetry?: AgentLoopConfig["telemetry"];
 	#appendOnlyContext?: AppendOnlyContextManager;
 
@@ -635,7 +636,7 @@ export class Agent {
 	 * completions, late LSP diagnostics) drained at each step boundary. Never
 	 * aborts in-flight tools. See `AgentLoopConfig.getAsideMessages`.
 	 */
-	setAsideMessageProvider(fn: (() => AgentMessage[] | Promise<AgentMessage[]>) | undefined): void {
+	setAsideMessageProvider(fn: (() => AsideMessage[] | Promise<AsideMessage[]>) | undefined): void {
 		this.#asideMessageProvider = fn;
 	}
 

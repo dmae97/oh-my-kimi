@@ -1191,7 +1191,7 @@ export class AgentSession {
 		// Background-job completions / late diagnostics are pulled into the run at
 		// each step boundary as non-interrupting asides (see Agent.getAsideMessages),
 		// so they reach the model between requests without waiting for a yield.
-		this.agent.setAsideMessageProvider(() => this.yieldQueue.drainMessages());
+		this.agent.setAsideMessageProvider(() => this.yieldQueue.drainLazy());
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;

@@ -103,21 +103,21 @@ export class YieldQueue {
 	}
 
 	/**
-	 * Build and remove all queued messages, applying each dispatcher's staleness
-	 * filter. No injection side effects — used for pull-based delivery at agent
-	 * step boundaries (see `Agent.setAsideMessageProvider`), so background-job
-	 * completions and late diagnostics reach the model between requests without
-	 * the agent having to stop.
+	 * Snapshot and remove all queued entries, returning one lazy thunk per kind.
+	 * Each thunk applies the dispatcher's staleness filter and builds the batched
+	 * message only when called — so the consumer (the agent loop) decides, at the
+	 * moment it injects, whether the message is still worth delivering (a thunk may
+	 * return null to skip). Background-job completions and late diagnostics reach
+	 * the model between requests without the agent having to stop.
 	 */
-	drainMessages(): AgentMessage[] {
-		const messages: AgentMessage[] = [];
+	drainLazy(): Array<() => AgentMessage | null> {
+		const thunks: Array<() => AgentMessage | null> = [];
 		for (const [kind, dispatcher] of this.#dispatchers) {
 			const entries = this.#drain(kind);
 			if (entries.length === 0) continue;
-			const message = this.#build(kind, dispatcher, entries);
-			if (message) messages.push(message);
+			thunks.push(() => this.#build(kind, dispatcher, entries));
 		}
-		return messages;
+		return thunks;
 	}
 
 	clear(): void {

@@ -152,22 +152,45 @@ describe("YieldQueue", () => {
 		expect(harness.streamingMessages.map(messageText)).toEqual(["second", "first"]);
 	});
 
-	test("drainMessages builds non-stale entries, clears the queue, returns nothing on re-drain", async () => {
+	test("drainLazy snapshots+clears immediately but defers build+staleness to the thunk", () => {
 		const harness = createHarness(true);
+		const staleIds = new Set<string>();
 		harness.queue.register<Entry>("items", {
-			isStale: entry => entry.stale === true,
+			isStale: entry => staleIds.has(entry.id),
 			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
 		});
 
-		harness.queue.enqueue("items", { id: "keep" });
-		harness.queue.enqueue("items", { id: "drop", stale: true });
+		harness.queue.enqueue("items", { id: "a" });
+		harness.queue.enqueue("items", { id: "b" });
 
-		const drained = harness.queue.drainMessages();
-		expect(drained.map(messageText)).toEqual(["keep"]);
-		// Pull-based drain has no injection side effects and empties the queue.
+		// Snapshot + clear happens at drain; the queue is emptied immediately.
+		const thunks = harness.queue.drainLazy();
+		expect(thunks).toHaveLength(1);
+		expect(harness.queue.has()).toBe(false);
+
+		// A mutation AFTER drainLazy but BEFORE the thunk runs supersedes "b".
+		staleIds.add("b");
+
+		// The thunk evaluates staleness at call time (injection), dropping "b".
+		const message = thunks[0]!();
+		expect(message && messageText(message)).toBe("a");
+		// No injection side effects from the pull path.
 		expect(harness.streamingMessages).toHaveLength(0);
 		expect(harness.idleBatches).toHaveLength(0);
-		expect(harness.queue.has()).toBe(false);
-		expect(harness.queue.drainMessages()).toEqual([]);
+	});
+
+	test("drainLazy thunk returns null when everything is stale by injection time", () => {
+		const harness = createHarness(true);
+		let stale = false;
+		harness.queue.register<Entry>("items", {
+			isStale: () => stale,
+			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+		});
+		harness.queue.enqueue("items", { id: "x" });
+
+		const thunks = harness.queue.drainLazy();
+		stale = true; // superseded between drain and injection
+
+		expect(thunks[0]!()).toBeNull();
 	});
 });

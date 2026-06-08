@@ -841,6 +841,34 @@ describe("agentLoop with AgentMessage", () => {
 		);
 		expect(sawAsideInContext).toBe(true);
 	});
+
+	it("evaluates aside thunks at injection and skips ones that return null", async () => {
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [] };
+		const mock = createMockModel({ responses: [{ content: ["done"] }] });
+		let polls = 0;
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			// A lazy aside that decides, at injection time, NOT to inject (e.g. superseded).
+			getAsideMessages: async () => {
+				polls++;
+				return [() => null];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("hi")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The thunk was consulted...
+		expect(polls).toBeGreaterThan(0);
+		// ...but a null result injects nothing and triggers no wasted continuation turn.
+		const userStarts = events.filter(e => e.type === "message_start" && e.message.role === "user");
+		expect(userStarts).toHaveLength(1); // only the original prompt
+		expect(mock.calls).toHaveLength(1);
+	});
 });
 
 it("refreshes tools and system prompt between same-turn model calls", async () => {
