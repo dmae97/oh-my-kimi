@@ -1821,6 +1821,13 @@ describe("Editor component", () => {
 			expect(editor.getCursor()).toEqual({ line: 0, col: 2 });
 		});
 
+		it("strips control characters from pasted text but keeps newlines", () => {
+			const editor = new Editor(defaultEditorTheme);
+			// BEL (\x07) and NUL (\x00) must be removed; the newline must survive.
+			editor.handleInput("\x1b[200~a\x07b\x00c\ndef\x1b[201~");
+			expect(editor.getText()).toBe("abc\ndef");
+		});
+
 		it("undoes the last paste when a transient #undo trigger is executed", () => {
 			const editor = new Editor(defaultEditorTheme);
 

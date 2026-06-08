@@ -1627,11 +1627,10 @@ export class Editor implements Component, Focusable {
 			// Convert tabs to spaces (4 spaces per tab)
 			const tabExpandedText = cleanText.replace(/\t/g, "    ");
 
-			// Filter out non-printable characters except newlines
-			let filteredText = tabExpandedText
-				.split("")
-				.filter(char => char === "\n" || char.charCodeAt(0) >= 32)
-				.join("");
+			// Strip control characters except newline (tabs already expanded above,
+			// CRs already normalized). Single regex pass instead of split/filter/join
+			// to avoid allocating a per-code-unit array for large pastes.
+			let filteredText = tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
 
 			// If pasting a file path (starts with /, ~, or .) and the character before
 			// the cursor is a word character, prepend a space for better readability
