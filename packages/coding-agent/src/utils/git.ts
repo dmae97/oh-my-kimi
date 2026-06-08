@@ -682,12 +682,17 @@ function selectHunks(file: FileHunks, selector: HunkSelection["hunks"]): FileHun
 	return file.hunks;
 }
 
-export function validateHunkSelections(
+export function createHunkSelectionValidator(
 	rawDiff: string,
+): (selections: readonly HunkSelection[]) => HunkSelectionValidationError[] {
+	const fileDiffMap = new Map(parseFileDiffs(rawDiff).map(entry => [entry.filename, entry]));
+	return selections => validateHunkSelectionsFromMap(fileDiffMap, selections);
+}
+
+function validateHunkSelectionsFromMap(
+	fileDiffMap: ReadonlyMap<string, FileDiff>,
 	selections: readonly HunkSelection[],
 ): HunkSelectionValidationError[] {
-	const fileDiffs = parseFileDiffs(rawDiff);
-	const fileDiffMap = new Map(fileDiffs.map(entry => [entry.filename, entry]));
 	const errors: HunkSelectionValidationError[] = [];
 
 	for (const selection of selections) {
@@ -705,6 +710,13 @@ export function validateHunkSelections(
 	}
 
 	return errors;
+}
+
+export function validateHunkSelections(
+	rawDiff: string,
+	selections: readonly HunkSelection[],
+): HunkSelectionValidationError[] {
+	return createHunkSelectionValidator(rawDiff)(selections);
 }
 
 function parseStatusPorcelain(text: string): GitStatusSummary {
