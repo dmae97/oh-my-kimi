@@ -1,0 +1,180 @@
+/**
+ * Issue #2113 — `kimik2 does not work on the latest omp`
+ *
+ * Reporter: with only `MOONSHOT_API_KEY` set, selecting `kimi-k2.6` and
+ * sending any text leaves the agent stuck on "Working..." with no output.
+ *
+ * Root cause: the `moonshot` provider only bundled `kimi-k2.5`, and the
+ * `moonshotModelManagerOptions` discovery mapper only promoted ids
+ * containing `"thinking"` to `reasoning: true`. `kimi-k2.6` fell through
+ * with `reasoning: false`, so the openai-completions `buildParams` z.ai
+ * branch was skipped entirely and Moonshot received a request with no
+ * `thinking` parameter — Moonshot K2.6 stalls under that shape (the same
+ * native-API quirk documented in the #1838 fix that introduced
+ * `thinking.keep` for K2.6).
+ *
+ * The fix marks every `kimi-k2.x` id as reasoning + vision in the
+ * moonshot discovery mapper and stamps default thinking metadata.
+ */
+import { afterEach, describe, expect, it } from "bun:test";
+import { Effort } from "../src/effort";
+import { getBundledModel } from "../src/models";
+import { moonshotModelManagerOptions } from "../src/provider-models/openai-compat";
+import { streamOpenAICompletions } from "../src/providers/openai-completions";
+import type { AssistantMessage, Context, Model } from "../src/types";
+
+const originalFetch = global.fetch;
+
+afterEach(() => {
+	global.fetch = originalFetch;
+});
+
+function moonshotKimiModel(id: string, reasoning: boolean): Model<"openai-completions"> {
+	return {
+		...getBundledModel("openai", "gpt-4o-mini"),
+		api: "openai-completions",
+		provider: "moonshot",
+		baseUrl: "https://api.moonshot.ai/v1",
+		id,
+		reasoning,
+	};
+}
+
+function basicContext(): Context {
+	return {
+		messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+	};
+}
+
+function encodeSseChunks(chunks: ReadonlyArray<Record<string, unknown>>): string {
+	const lines = chunks.map(c => `data: ${JSON.stringify(c)}\n\n`);
+	lines.push("data: [DONE]\n\n");
+	return lines.join("");
+}
+
+function buildMockMoonshotResponse(): Response {
+	const body = encodeSseChunks([
+		{
+			id: "chatcmpl-k26-1",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "kimi-k2.6",
+			choices: [{ index: 0, delta: { role: "assistant", content: "Hello!" }, finish_reason: null }],
+		},
+		{
+			id: "chatcmpl-k26-1",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "kimi-k2.6",
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+		},
+	]);
+	return new Response(body, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
+
+interface CapturedRequest {
+	url: string;
+	body: Record<string, unknown>;
+}
+
+async function runHiTurn(
+	model: Model<"openai-completions">,
+): Promise<{ captured: CapturedRequest; assistant: AssistantMessage }> {
+	const captured: CapturedRequest = { url: "", body: {} };
+	const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		captured.url = url;
+		const raw = typeof init?.body === "string" ? init.body : "";
+		captured.body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+		return buildMockMoonshotResponse();
+	};
+	global.fetch = Object.assign(fetchImpl, { preconnect: originalFetch.preconnect });
+
+	const stream = streamOpenAICompletions(model, basicContext(), { apiKey: "test-key" });
+	for await (const _ of stream) {
+		// drain until terminal event
+	}
+	const assistant = await stream.result();
+	return { captured, assistant };
+}
+
+describe("issue #2113 — moonshot kimi-k2.6 discovery and wire format", () => {
+	it("moonshot discovery mapper marks kimi-k2.6 as reasoning + vision with thinking metadata", async () => {
+		const opts = moonshotModelManagerOptions({ apiKey: "test-key" });
+		const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			expect(url).toContain("api.moonshot.ai/v1/models");
+			const body = {
+				object: "list",
+				data: [
+					{ id: "kimi-k2.5", object: "model", owned_by: "moonshot" },
+					{ id: "kimi-k2.6", object: "model", owned_by: "moonshot" },
+					{ id: "kimi-k2-thinking", object: "model", owned_by: "moonshot" },
+				],
+			};
+			return new Response(JSON.stringify(body), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		};
+		global.fetch = Object.assign(fetchImpl, { preconnect: originalFetch.preconnect });
+
+		const models = await opts.fetchDynamicModels?.();
+		expect(models).toBeDefined();
+		const byId = new Map(models?.map(m => [m.id, m]));
+
+		const k25 = byId.get("kimi-k2.5");
+		expect(k25?.reasoning).toBe(true);
+		expect(k25?.input).toEqual(["text", "image"]);
+		expect(k25?.thinking).toBeDefined();
+
+		const k26 = byId.get("kimi-k2.6");
+		expect(k26?.reasoning).toBe(true);
+		expect(k26?.input).toEqual(["text", "image"]);
+		expect(k26?.thinking).toEqual({ mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High });
+
+		const thinkingOnly = byId.get("kimi-k2-thinking");
+		expect(thinkingOnly?.reasoning).toBe(true);
+		expect(thinkingOnly?.thinking).toBeDefined();
+	});
+
+	it("wire body for moonshot kimi-k2.6 carries an explicit thinking parameter", async () => {
+		// The discovery mapper now stamps reasoning=true on Moonshot K2.6, so the
+		// openai-completions z.ai branch fires and emits `thinking: {type}`. Without
+		// this, Moonshot K2.6 stalls on first turn (the original #2113 symptom).
+		const model = moonshotKimiModel("kimi-k2.6", true);
+		const { captured, assistant } = await runHiTurn(model);
+
+		expect(captured.url).toContain("api.moonshot.ai/v1/chat/completions");
+		expect(captured.body.thinking).toEqual({ type: "disabled" });
+		expect(assistant.errorMessage).toBeUndefined();
+		const textBlock = assistant.content.find(b => b.type === "text");
+		expect(textBlock).toBeDefined();
+	});
+
+	it("wire body includes thinking.keep='all' when reasoning is explicitly requested", async () => {
+		const model = moonshotKimiModel("kimi-k2.6", true);
+		const captured: CapturedRequest = { url: "", body: {} };
+		const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			captured.url = url;
+			const raw = typeof init?.body === "string" ? init.body : "";
+			captured.body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+			return buildMockMoonshotResponse();
+		};
+		global.fetch = Object.assign(fetchImpl, { preconnect: originalFetch.preconnect });
+
+		const stream = streamOpenAICompletions(model, basicContext(), {
+			apiKey: "test-key",
+			reasoning: "high",
+		});
+		for await (const _ of stream) {
+			// drain
+		}
+
+		expect(captured.body.thinking).toEqual({ type: "enabled", keep: "all" });
+	});
+});
