@@ -27,6 +27,7 @@ export const __piNativesV15_10_4 = nativeBindings.__piNativesV15_10_4;
 export const applyBashFixups = nativeBindings.applyBashFixups;
 export const astEdit = nativeBindings.astEdit;
 export const astGrep = nativeBindings.astGrep;
+export const astMatch = nativeBindings.astMatch;
 export const blockRangeAt = nativeBindings.blockRangeAt;
 export const copyToClipboard = nativeBindings.copyToClipboard;
 export const countTokens = nativeBindings.countTokens;

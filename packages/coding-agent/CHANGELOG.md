@@ -1,14 +1,16 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `astCondition` to TTSR rule frontmatter as a syntax-aware alternative to regex `condition`, enabling AST-based matching for edit/write tool snapshots
+- Added a built-in `ts-redundant-clear-guard` rule that flags redundant guards around `clearTimeout`, `clearInterval`, and `clearImmediate` calls
 - Added support for paste marker highlighting with accent styling (`[Paste #N, +X lines]`/`[Paste #N, Y chars]`) in the prompt editor, matching the visual treatment of image references
 - Added pixel dimensions to pasted/loaded image placeholders in the prompt — the marker now reads `[Image #N, WxH]` (falling back to `[Image #N]` when the header can't be decoded).
 
 ### Changed
 
+- Changed TTSR rule bucketing and matching so rules with only `astCondition` are treated as TTSR rules and evaluated in the interrupt flow using reconstructed edit/write source snapshots
 - Normalized image content before it enters model context so attached images are downscaled and preprocessed for prompts, steering messages, follow-ups, and custom agent messages
 - Changed image marker format to include pixel dimensions when available (`[Image #N, WxH]`), falling back to bare `[Image #N]` when header cannot be decoded
 - Changed the prompt editor to highlight large-paste placeholders (`[Paste #N, +X lines]`/`[Paste #N, Y chars]`) with the same accent styling as image references (bold, no hyperlink), and to delete image/paste markers atomically: a single backspace or forward-delete removes the whole marker instead of leaving a broken `[Paste #N, +X lines` behind.
@@ -28,7 +30,8 @@
 - Fixed clipboard-pasted images being rejected when steering or following up during compaction. Instead of bailing with "Retry after it completes to send images", the message and its images are now queued via `queueCompactionMessage` and forwarded to the session (steer/follow-up/prompt) when the compaction queue flushes.
 - Fixed edit tool result previews to show only current-file lines and collapse long inserted blocks instead of echoing removed content.
 - Fixed `generateDiffString` to omit the mid-skip `...` placeholder between two nearby edits, conveying the elided gap via the jump in line numbers instead (consistent with how leading/trailing context skips already render). The placeholder row was indistinguishable from a genuine `...` context line and wasted a row in compact previews.
-- Fixed the `ask` tool hanging when the model emitted two `ask` calls in one tool batch. The interactive selector is a single shared UI surface (`ExtensionUiController.showHookSelector` has no queue and overwrites `ctx.hookSelector` on each call), so concurrent asks clobbered each other: the second stole focus and orphaned the first, whose select promise hung until the user aborted the whole turn (surfacing a stray `Ask input was cancelled`). `ask` now declares `concurrency: "exclusive"`, so the agent loop serializes the batch and each question's selector runs to completion.
+- Fixed concurrent interactive dialogs clobbering each other on the shared editor surface. `ExtensionUiController` presents the selector / input / editor modals by swapping a component into the single `editorContainer` and stealing focus, with no serialization — so a second `select`/`input`/`editor` request (from a hook, extension, the `ask` tool, or an internal flow) opened while one was already up would clear the container and re-focus, orphaning the first dialog. Its promise then hung until the caller's signal aborted (surfacing a stray `Ask input was cancelled` on top of the answered call). These modals are now serialized through `#presentDialog`: at most one shows at a time and the rest queue (FIFO); a queued request whose signal aborts before its turn resolves `undefined` and is never shown. The first dialog is still presented synchronously, so single-dialog timing is unchanged.
+- Fixed the `ask` tool potentially hanging when the model emitted two `ask` calls in one tool batch. `ask` now declares `concurrency: "exclusive"`, so the agent loop serializes the batch and each question's selector runs to completion before the next starts, instead of racing for the shared selector surface.
 
 ## [15.10.4] - 2026-06-08
 

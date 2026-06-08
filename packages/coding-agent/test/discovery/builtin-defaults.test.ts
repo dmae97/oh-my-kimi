@@ -26,6 +26,7 @@ const EXPECTED_RULE_NAMES = [
 	"ts-no-return-type",
 	"ts-no-tiny-functions",
 	"ts-promise-with-resolvers",
+	"ts-redundant-clear-guard",
 	"ts-set-map",
 ].sort();
 
@@ -52,12 +53,20 @@ describe("builtin-defaults rule provider", () => {
 		expect(rules.every(r => r._source.provider === BUILTIN_DEFAULTS_PROVIDER_ID)).toBe(true);
 	});
 
-	it("parses every bundled rule as a TTSR rule (non-empty condition and scope)", async () => {
+	it("parses every bundled rule as a TTSR rule (non-empty condition/astCondition and scope)", async () => {
 		const rules = await loadBuiltinRules();
 		for (const rule of rules) {
-			expect(rule.condition?.length, `${rule.name} condition`).toBeGreaterThan(0);
+			const conditionCount = (rule.condition?.length ?? 0) + (rule.astCondition?.length ?? 0);
+			expect(conditionCount, `${rule.name} condition/astCondition`).toBeGreaterThan(0);
 			expect(rule.scope?.length, `${rule.name} scope`).toBeGreaterThan(0);
 		}
+	});
+
+	it("bundles ast-grep conditions for the redundant-clear-guard rule", async () => {
+		const rules = await loadBuiltinRules();
+		const rule = rules.find(r => r.name === "ts-redundant-clear-guard");
+		expect(rule?.condition).toBeUndefined();
+		expect(rule?.astCondition?.length).toBeGreaterThan(0);
 	});
 
 	it("parses YAML list-form conditions from the embedded text", async () => {

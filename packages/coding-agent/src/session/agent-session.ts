@@ -1674,89 +1674,18 @@ export class AgentSession {
 			}
 
 			if (matchContext && "delta" in assistantEvent) {
+				const targetMessageTimestamp = event.message.role === "assistant" ? event.message.timestamp : undefined;
 				const matches = this.#checkTtsrStream(assistantEvent.delta, matchContext, streamingToolCall);
-				if (matches.length > 0) {
-					// Decide first: a non-interrupting tool-source match attaches to the
-					// specific tool call's result instead of driving a loop-wide follow-up.
-					const shouldInterrupt = this.#shouldInterruptForTtsrMatch(matches, matchContext);
-					const perToolId = shouldInterrupt ? undefined : this.#extractTtsrToolCallId(matchContext);
-					if (perToolId) {
-						this.#addPerToolTtsrInjections(perToolId, matches);
-						this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
-					} else {
-						// Queue rules for injection; mark as injected only after successful enqueue.
-						this.#addPendingTtsrInjections(matches);
-
-						if (shouldInterrupt) {
-							// Abort the stream immediately — do not gate on extension callbacks
-							this.#ttsrAbortPending = true;
-							this.#ensureTtsrResumePromise();
-							this.agent.abort(this.#formatTtsrAbortReason(matches));
-							// Notify extensions (fire-and-forget, does not block abort)
-							this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
-							// Schedule retry after a short delay
-							const retryToken = ++this.#ttsrRetryToken;
-							const generation = this.#promptGeneration;
-							const targetMessageTimestamp =
-								event.message.role === "assistant" ? event.message.timestamp : undefined;
-							this.#schedulePostPromptTask(
-								async () => {
-									if (this.#ttsrRetryToken !== retryToken) {
-										this.#resolveTtsrResume();
-										return;
-									}
-
-									const targetAssistantIndex = this.#findTtsrAssistantIndex(targetMessageTimestamp);
-									if (
-										!this.#ttsrAbortPending ||
-										this.#promptGeneration !== generation ||
-										targetAssistantIndex === -1
-									) {
-										this.#ttsrAbortPending = false;
-										this.#pendingTtsrInjections = [];
-										this.#perToolTtsrInjections.clear();
-										this.#resolveTtsrResume();
-										return;
-									}
-									this.#ttsrAbortPending = false;
-									this.#perToolTtsrInjections.clear();
-									const ttsrSettings = this.#ttsrManager?.getSettings();
-									if (ttsrSettings?.contextMode === "discard") {
-										// Remove the partial/aborted assistant turn from agent state
-										this.agent.replaceMessages(this.agent.state.messages.slice(0, targetAssistantIndex));
-									}
-									// Inject TTSR rules as system reminder before retry
-									const injection = this.#getTtsrInjectionContent();
-									if (injection) {
-										const details = { rules: injection.rules.map(rule => rule.name) };
-										this.agent.appendMessage({
-											role: "custom",
-											customType: "ttsr-injection",
-											content: injection.content,
-											display: false,
-											details,
-											attribution: "agent",
-											timestamp: Date.now(),
-										});
-										this.sessionManager.appendCustomMessageEntry(
-											"ttsr-injection",
-											injection.content,
-											false,
-											details,
-											"agent",
-										);
-										this.#markTtsrInjected(details.rules);
-									}
-									try {
-										await this.agent.continue();
-									} catch {
-										this.#resolveTtsrResume();
-									}
-								},
-								{ delayMs: 50 },
-							);
-							return;
-						}
+				if (matches.length > 0 && this.#handleTtsrMatches(matches, matchContext, targetMessageTimestamp)) {
+					return;
+				}
+				// ast-grep `astCondition` rules match against the reconstructed edit/write
+				// snapshot, which only exists for tool argument streams. The native worker
+				// call is async, so this path is awaited and self-throttled by the manager.
+				if (matchContext.source === "tool" && this.#ttsrManager?.hasAstRules()) {
+					const astMatches = await this.#checkTtsrAstStream(matchContext, streamingToolCall);
+					if (astMatches.length > 0 && this.#handleTtsrMatches(astMatches, matchContext, targetMessageTimestamp)) {
+						return;
 					}
 				}
 			}
@@ -2428,17 +2357,132 @@ export class AgentSession {
 		if (!manager) {
 			return [];
 		}
-		if (toolCall) {
-			const tools = this.agent.state.tools;
-			const tool =
-				tools.find(t => t.name === toolCall.name) ??
-				tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
-			const digest = tool?.matcherDigest?.(toolCall.arguments ?? {});
-			if (digest !== undefined) {
-				return manager.checkSnapshot(digest, matchContext);
-			}
+		const digest = this.#resolveTtsrMatcherDigest(toolCall);
+		if (digest !== undefined) {
+			return manager.checkSnapshot(digest, matchContext);
 		}
 		return manager.checkDelta(delta, matchContext);
+	}
+
+	/** Reconstruct the tool's normalized source snapshot via its `matcherDigest`, if any. */
+	#resolveTtsrMatcherDigest(toolCall: ToolCall | undefined): string | undefined {
+		if (!toolCall) {
+			return undefined;
+		}
+		const tools = this.agent.state.tools;
+		const tool =
+			tools.find(t => t.name === toolCall.name) ??
+			tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
+		return tool?.matcherDigest?.(toolCall.arguments ?? {});
+	}
+
+	/**
+	 * Match ast-grep `astCondition` rules against the reconstructed tool snapshot.
+	 *
+	 * Only edit/write tool streams expose a `matcherDigest`, which is the real source
+	 * the call introduces; AST matching needs that (and a language inferred from the
+	 * path argument), so non-digest streams never produce AST matches.
+	 */
+	async #checkTtsrAstStream(matchContext: TtsrMatchContext, toolCall: ToolCall | undefined): Promise<Rule[]> {
+		const manager = this.#ttsrManager;
+		if (!manager) {
+			return [];
+		}
+		const digest = this.#resolveTtsrMatcherDigest(toolCall);
+		if (digest === undefined) {
+			return [];
+		}
+		return manager.checkAstSnapshot(digest, matchContext);
+	}
+
+	/**
+	 * Route TTSR matches to either a per-tool injection or a stream-interrupting
+	 * retry. Returns true when the stream was aborted and the caller should stop
+	 * processing this event.
+	 */
+	#handleTtsrMatches(
+		matches: Rule[],
+		matchContext: TtsrMatchContext,
+		targetMessageTimestamp: number | undefined,
+	): boolean {
+		// Decide first: a non-interrupting tool-source match attaches to the
+		// specific tool call's result instead of driving a loop-wide follow-up.
+		const shouldInterrupt = this.#shouldInterruptForTtsrMatch(matches, matchContext);
+		const perToolId = shouldInterrupt ? undefined : this.#extractTtsrToolCallId(matchContext);
+		if (perToolId) {
+			this.#addPerToolTtsrInjections(perToolId, matches);
+			this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
+			return false;
+		}
+
+		// Queue rules for injection; mark as injected only after successful enqueue.
+		this.#addPendingTtsrInjections(matches);
+		if (!shouldInterrupt) {
+			return false;
+		}
+
+		// Abort the stream immediately — do not gate on extension callbacks
+		this.#ttsrAbortPending = true;
+		this.#ensureTtsrResumePromise();
+		this.agent.abort(this.#formatTtsrAbortReason(matches));
+		// Notify extensions (fire-and-forget, does not block abort)
+		this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
+		// Schedule retry after a short delay
+		const retryToken = ++this.#ttsrRetryToken;
+		const generation = this.#promptGeneration;
+		this.#schedulePostPromptTask(
+			async () => {
+				if (this.#ttsrRetryToken !== retryToken) {
+					this.#resolveTtsrResume();
+					return;
+				}
+
+				const targetAssistantIndex = this.#findTtsrAssistantIndex(targetMessageTimestamp);
+				if (!this.#ttsrAbortPending || this.#promptGeneration !== generation || targetAssistantIndex === -1) {
+					this.#ttsrAbortPending = false;
+					this.#pendingTtsrInjections = [];
+					this.#perToolTtsrInjections.clear();
+					this.#resolveTtsrResume();
+					return;
+				}
+				this.#ttsrAbortPending = false;
+				this.#perToolTtsrInjections.clear();
+				const ttsrSettings = this.#ttsrManager?.getSettings();
+				if (ttsrSettings?.contextMode === "discard") {
+					// Remove the partial/aborted assistant turn from agent state
+					this.agent.replaceMessages(this.agent.state.messages.slice(0, targetAssistantIndex));
+				}
+				// Inject TTSR rules as system reminder before retry
+				const injection = this.#getTtsrInjectionContent();
+				if (injection) {
+					const details = { rules: injection.rules.map(rule => rule.name) };
+					this.agent.appendMessage({
+						role: "custom",
+						customType: "ttsr-injection",
+						content: injection.content,
+						display: false,
+						details,
+						attribution: "agent",
+						timestamp: Date.now(),
+					});
+					this.sessionManager.appendCustomMessageEntry(
+						"ttsr-injection",
+						injection.content,
+						false,
+						details,
+						"agent",
+					);
+					this.#markTtsrInjected(details.rules);
+				}
+				try {
+					await this.agent.continue();
+				} catch {
+					this.#resolveTtsrResume();
+				}
+			},
+			{ delayMs: 50 },
+		);
+		return true;
 	}
 
 	/** Extract path-like arguments from tool call payload for TTSR glob matching. */
@@ -4579,7 +4623,8 @@ export class AgentSession {
 								content: msg.content,
 								display: msg.display,
 								details: msg.details,
-								attribution: msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
+								attribution:
+									msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
 								timestamp: Date.now(),
 							}),
 						);
