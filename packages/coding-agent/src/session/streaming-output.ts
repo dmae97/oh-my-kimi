@@ -1082,10 +1082,18 @@ export class OutputSink {
 	}
 
 	/**
-	 * Replay the rolling tail ring back into the artifact sink and inject a
-	 * single notice line so a reader of `artifact://<id>` sees
-	 * `<head>` + `[ARTIFACT TRUNCATED: …]` + `<tail>`. No-op when the cap was
-	 * never hit (head budget never exhausted, tail ring empty).
+	 * Replay the rolling tail ring back into the artifact sink. When bytes
+	 * were actually dropped from the middle (the head budget was exhausted
+	 * *and* the tail ring evicted), a single `[ARTIFACT TRUNCATED: …]`
+	 * notice is injected between head and tail so a reader of
+	 * `artifact://<id>` understands the gap. When the total stream simply
+	 * spilled past the head budget but still fits below `artifactMaxBytes`,
+	 * `droppedBytes` is zero — head + tail together are the verbatim stream
+	 * and the notice is suppressed so we don't corrupt the artifact with a
+	 * misleading "0 B elided" marker (PR #2083 review by codex).
+	 *
+	 * No-op when the cap was never hit at all (head budget never exhausted,
+	 * tail ring empty).
 	 */
 	#flushArtifactTailIfCapped(): void {
 		if (!this.#file) return;
@@ -1094,14 +1102,16 @@ export class OutputSink {
 		const droppedBytes = Math.max(0, this.#artifactTailIncomingBytes - tailBytes);
 		if (tailBytes === 0 && droppedBytes === 0) return;
 
-		const headWritten = this.#artifactHeadBytesWritten;
-		const totalCapped = headWritten + this.#artifactTailIncomingBytes;
-		const headSep = headWritten > 0 ? "\n" : "";
-		const tailSep = tailBytes > 0 && !this.#artifactTailRing.startsWith("\n") ? "\n" : "";
-		const notice =
-			`${headSep}[ARTIFACT TRUNCATED: kept first ${formatBytes(headWritten)} + last ${formatBytes(tailBytes)} ` +
-			`of ${formatBytes(totalCapped)}; ${formatBytes(droppedBytes)} elided from the middle]${tailSep}`;
-		this.#file.sink.write(notice);
+		if (droppedBytes > 0) {
+			const headWritten = this.#artifactHeadBytesWritten;
+			const totalCapped = headWritten + this.#artifactTailIncomingBytes;
+			const headSep = headWritten > 0 ? "\n" : "";
+			const tailSep = tailBytes > 0 && !this.#artifactTailRing.startsWith("\n") ? "\n" : "";
+			const notice =
+				`${headSep}[ARTIFACT TRUNCATED: kept first ${formatBytes(headWritten)} + last ${formatBytes(tailBytes)} ` +
+				`of ${formatBytes(totalCapped)}; ${formatBytes(droppedBytes)} elided from the middle]${tailSep}`;
+			this.#file.sink.write(notice);
+		}
 		if (tailBytes > 0) {
 			this.#file.sink.write(this.#artifactTailRing);
 		}

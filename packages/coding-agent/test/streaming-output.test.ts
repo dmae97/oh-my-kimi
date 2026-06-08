@@ -366,6 +366,31 @@ describe("OutputSink", () => {
 		expect(artifactText).not.toContain("[ARTIFACT TRUNCATED:");
 	});
 
+	test("artifact stays verbatim when spillover exceeds head budget but still fits inside the cap", async () => {
+		// Regression for the PR #2083 review: when the head budget is filled
+		// but the rest still fits in the tail ring, droppedBytes is zero —
+		// the file MUST be the verbatim stream with no `[ARTIFACT TRUNCATED: …]`
+		// marker spliced into the middle.
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "spilled.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-spilled",
+			spillThreshold: 8,
+			artifactMaxBytes: 32,
+			artifactHeadBytes: 16,
+		});
+
+		// 24 bytes total: head takes 16, tail ring receives 8 (fits, no eviction).
+		const payload = "0123456789ABCDEFghijklmn";
+		await sink.push(payload);
+		await sink.dump();
+		const artifactText = await Bun.file(artifactPath).text();
+
+		expect(artifactText).toBe(payload);
+		expect(artifactText).not.toContain("[ARTIFACT TRUNCATED:");
+	});
+
 	test("artifact cap stays bounded across many small streaming chunks", async () => {
 		const dir = await createTempDir();
 		const artifactPath = path.join(dir, "stream.log");
