@@ -3,6 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	AstMatchStrictness,
+	astMatch,
 	executeShell,
 	FileType,
 	fuzzyFind,
@@ -672,6 +674,46 @@ describe("pi-natives", () => {
 			const assertion = MacOSPowerAssertion.start({ reason: "pi-natives test" });
 			assertion.stop();
 			assertion.stop();
+		});
+	});
+
+	describe("astMatch", () => {
+		it("matches a pattern against an in-memory source string", async () => {
+			const result = await astMatch({
+				source: 'function greet() {\n\tconsole.log("hi");\n}',
+				lang: "ts",
+				patterns: ["console.log($MSG)"],
+				strictness: AstMatchStrictness.Smart,
+				includeMeta: true,
+			});
+			expect(result.totalMatches).toBe(1);
+			expect(result.matches[0]?.text).toBe('console.log("hi")');
+			expect(result.matches[0]?.metaVariables?.MSG).toBe('"hi"');
+		});
+
+		it("enforces metavariable equality within a pattern", async () => {
+			const same = await astMatch({
+				source: "if (x) clearTimeout(x);",
+				lang: "ts",
+				patterns: ["if ($X) clearTimeout($X)"],
+			});
+			const diff = await astMatch({
+				source: "if (x) clearTimeout(y);",
+				lang: "ts",
+				patterns: ["if ($X) clearTimeout($X)"],
+			});
+			expect(same.totalMatches).toBe(1);
+			expect(diff.totalMatches).toBe(0);
+		});
+
+		it("reports parse errors for incomplete source without throwing", async () => {
+			const result = await astMatch({ source: "console.log(", lang: "ts", patterns: ["console.log($A)"] });
+			expect(result.totalMatches).toBe(0);
+			expect(result.parseErrors?.length).toBeGreaterThan(0);
+		});
+
+		it("rejects an empty language", async () => {
+			await expect(astMatch({ source: "const a = 1;", lang: "  ", patterns: ["const $A = $B"] })).rejects.toThrow();
 		});
 	});
 });

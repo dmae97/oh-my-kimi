@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { formatBytes, readImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
 import { resolveReadPath } from "../tools/path-utils";
-import { formatDimensionNote, resizeImage, type ImageResizeOptions } from "./image-resize";
+import { formatDimensionNote, type ImageResizeOptions, resizeImage } from "./image-resize";
 
 export const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 export const SUPPORTED_INPUT_IMAGE_MIME_TYPES = SUPPORTED_IMAGE_MIME_TYPES;

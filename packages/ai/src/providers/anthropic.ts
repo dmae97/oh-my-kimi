@@ -277,7 +277,6 @@ function cloneAnthropicCacheControl(cacheControl: AnthropicCacheControl): Anthro
 	return { ...cacheControl };
 }
 
-
 type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_config"]>;
 
 const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
@@ -1453,7 +1452,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const baseUrl =
 				resolveAnthropicBaseUrl(model, options?.apiKey ?? getEnvApiKey(model.provider) ?? "") ??
 				"https://api.anthropic.com";
-			const providerSessionState = getAnthropicProviderSessionState(options?.providerSessionState, baseUrl, model.id);
+			const providerSessionState = getAnthropicProviderSessionState(
+				options?.providerSessionState,
+				baseUrl,
+				model.id,
+			);
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let strictFallbackErrorMessage: string | undefined;
@@ -1666,7 +1669,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 							const openBlock = openBlocks.get(event.index);
 							if (!openBlock) {
-								throw createAnthropicStreamEnvelopeError(`received content_block_delta for unopened index ${event.index}`);
+								throw createAnthropicStreamEnvelopeError(
+									`received content_block_delta for unopened index ${event.index}`,
+								);
 							}
 							const block = blocks[openBlock.contentIndex];
 							if (event.delta.type === "text_delta") {
@@ -1683,7 +1688,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								});
 							} else if (event.delta.type === "thinking_delta") {
 								if (openBlock.kind !== "thinking" || block?.type !== "thinking") {
-									throw createAnthropicStreamEnvelopeError(`received thinking_delta for ${openBlock.kind} block`);
+									throw createAnthropicStreamEnvelopeError(
+										`received thinking_delta for ${openBlock.kind} block`,
+									);
 								}
 								streamedReplayUnsafeContent = true;
 								block.thinking += event.delta.thinking;
@@ -1695,7 +1702,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								});
 							} else if (event.delta.type === "input_json_delta") {
 								if (openBlock.kind !== "toolCall" || block?.type !== "toolCall") {
-									throw createAnthropicStreamEnvelopeError(`received input_json_delta for ${openBlock.kind} block`);
+									throw createAnthropicStreamEnvelopeError(
+										`received input_json_delta for ${openBlock.kind} block`,
+									);
 								}
 								streamedReplayUnsafeContent = true;
 								block.partialJson += event.delta.partial_json;
@@ -1712,7 +1721,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								});
 							} else if (event.delta.type === "signature_delta") {
 								if (openBlock.kind !== "thinking" || block?.type !== "thinking") {
-									throw createAnthropicStreamEnvelopeError(`received signature_delta for ${openBlock.kind} block`);
+									throw createAnthropicStreamEnvelopeError(
+										`received signature_delta for ${openBlock.kind} block`,
+									);
 								}
 								streamedReplayUnsafeContent = true;
 								block.thinkingSignature = block.thinkingSignature || "";
@@ -1724,11 +1735,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 							const openBlock = openBlocks.get(event.index);
 							if (!openBlock) {
-								throw createAnthropicStreamEnvelopeError(`received content_block_stop for unopened index ${event.index}`);
+								throw createAnthropicStreamEnvelopeError(
+									`received content_block_stop for unopened index ${event.index}`,
+								);
 							}
 							const block = blocks[openBlock.contentIndex];
 							if (!block || block.type !== openBlock.kind) {
-								throw createAnthropicStreamEnvelopeError(`content_block_stop kind mismatch for index ${event.index}`);
+								throw createAnthropicStreamEnvelopeError(
+									`content_block_stop kind mismatch for index ${event.index}`,
+								);
 							}
 							openBlocks.delete(event.index);
 							delete (block as { index?: number }).index;
@@ -2189,7 +2204,10 @@ function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, model:
 
 	const maxAllowedTokens = Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, model.maxTokens);
 	const currentMaxTokens = Math.min(params.max_tokens ?? maxAllowedTokens, maxAllowedTokens);
-	const raisedMaxTokens = Math.min(Math.max(currentMaxTokens, budgetTokens + OUTPUT_FALLBACK_BUFFER), maxAllowedTokens);
+	const raisedMaxTokens = Math.min(
+		Math.max(currentMaxTokens, budgetTokens + OUTPUT_FALLBACK_BUFFER),
+		maxAllowedTokens,
+	);
 	params.max_tokens = raisedMaxTokens;
 
 	if (budgetTokens + OUTPUT_FALLBACK_BUFFER <= raisedMaxTokens) return;
@@ -2900,7 +2918,6 @@ function pickAnthropicEffectiveScalarType(schema: Record<string, unknown>): stri
 	return undefined;
 }
 
-
 function anthropicPerTypeKeep(scalarType: string | undefined): Set<string> | undefined {
 	switch (scalarType) {
 		case "object":
@@ -3070,7 +3087,6 @@ function hasAnthropicSchemaDefiningKeyword(schema: Record<string, unknown>): boo
 	}
 	return schema.$defs !== undefined || schema.definitions !== undefined;
 }
-
 
 function makeAnthropicNullableSchema(schema: unknown, budget: AnthropicStrictBudget): unknown | undefined {
 	if (isRecord(schema)) {

@@ -20,10 +20,10 @@ import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeakInAssistantMessage,
 	extractHarmonyRemoved,
-	recoverHarmonyToolCall,
 	type HarmonyDetection,
 	type HarmonyRecoveredToolCall,
 	isHarmonyLeakMitigationTarget,
+	recoverHarmonyToolCall,
 	signalListLabel,
 } from "./harmony-leak";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
@@ -1085,7 +1085,10 @@ async function streamAssistantResponse(
 	}
 }
 
-function retainCompletedToolCalls(message: AssistantMessage, completedToolCallIds: ReadonlySet<string>): AssistantMessage {
+function retainCompletedToolCalls(
+	message: AssistantMessage,
+	completedToolCallIds: ReadonlySet<string>,
+): AssistantMessage {
 	if (message.stopReason !== "error" && message.stopReason !== "aborted") return message;
 	let changed = false;
 	const content = message.content.filter(block => {
