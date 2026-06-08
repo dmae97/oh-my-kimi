@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `/plan-review` command that manually (re-)opens the plan-review overlay while plan mode is active. Since there is no fixed plan filename, it reviews the newest `local://<slug>-plan.md` the agent wrote — useful for pulling the review back up after dismissing it, or reviewing a plan the agent wrote without calling `resolve`.
+
 ## [15.10.5] - 2026-06-08
 
 ### Added
@@ -32,9 +36,11 @@
 - Changed steady-state health indicators (LSP server ready, OAuth logged-in, plugin-doctor checks) from a success checkmark to a colored `status.enabled` dot, so failures stand out instead of every line reading as a check
 - Changed one-shot MCP/SSH/debug confirmation messages from a generic checkmark to contextual action glyphs (add/remove, connect/enable/disable toggles, reload, job-completed), reflecting what happened rather than just "success"
 - Derived the auth-broker OAuth callback ports (`CALLBACK_PORTS`) and the paste-code login-provider set from the `@oh-my-pi/pi-ai` provider registry, removing the duplicated `CALLBACK_SERVER_PROVIDERS` tables in the model selector and the setup-wizard sign-in scene.
+- Reverted the `task` tool's result-header glyph from the `⇶` signature icon back to the quiet `status.done` bullet (`•`): white while a subagent is running, accent once it finishes. The reviewer verdict line and per-agent result lines use the same bullet.
 
 ### Fixed
 
+- Fixed the `task` tool rendering a success bullet and a `success` frame state for detail-less error results (e.g. an argument-validation failure that never executes): the header now shows the error glyph with an error border and `error` state, and surfaces the dispatched agent name.
 - Fixed package subpath exports for status-line, setup-wizard, tool-discovery, and gallery fixture modules so rewritten test imports resolve through `@oh-my-pi/pi-coding-agent`.
 - Fixed runtime model provider discovery so extension-registered providers are now refreshed after extension load and extension-supplied models appear without restarting
 - Fixed task-row shimmer timing so every running description starts its highlight on the first character together and reaches the last character together, regardless of text length.

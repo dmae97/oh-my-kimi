@@ -65,7 +65,12 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
-import { humanizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
+import {
+	humanizePlanTitle,
+	type PlanApprovalDetails,
+	resolveApprovedPlan,
+	resolvePlanTitle,
+} from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
@@ -2263,6 +2268,33 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		await this.#startGoalFromObjective(objective);
+	}
+
+	/** Manually (re-)open the plan-review overlay — bound to `/plan-review`. Lets
+	 *  the operator pull the review back up after dismissing it, or review a plan
+	 *  the agent wrote without calling `resolve`. There is no fixed plan filename:
+	 *  `getPlanReferencePath()` is empty until a plan is actually approved (and does
+	 *  not survive a restart), so this drives off the newest `local://<slug>-plan.md`
+	 *  the agent wrote — the files persist in the session artifacts dir, so the scan
+	 *  works before any review and across restarts. */
+	async openPlanReview(): Promise<void> {
+		if (!this.planModeEnabled) {
+			this.showWarning("Plan mode is not active.");
+			return;
+		}
+		const noPlan = "No plan to review yet — write one to a local://<slug>-plan.md file first.";
+		const [planFilePath] = await this.#listLocalPlanFiles();
+		if (!planFilePath) {
+			this.showWarning(noPlan);
+			return;
+		}
+		const planContent = await this.#readPlanFile(planFilePath);
+		if (planContent === null) {
+			this.showWarning(noPlan);
+			return;
+		}
+		const { title } = resolvePlanTitle({ planContent, planFilePath });
+		await this.handlePlanApproval({ planFilePath, title, planExists: true });
 	}
 
 	async handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
