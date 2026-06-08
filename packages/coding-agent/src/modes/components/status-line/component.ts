@@ -120,6 +120,18 @@ function tokensForMessage(msg: AgentMessage): number {
 	return tokens;
 }
 
+interface MessageTokenTotalsCache {
+	messagesRef: readonly AgentMessage[];
+	stableCount: number;
+	stableTokens: number;
+	lastStableMessage: AgentMessage | undefined;
+	lastStableFingerprint: string | undefined;
+}
+
+function hasContextSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return segments.includes("context_pct") || segments.includes("context_total");
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // StatusLineComponent
 // ═══════════════════════════════════════════════════════════════════════════
@@ -159,20 +171,19 @@ export class StatusLineComponent implements Component {
 	} | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
-	// Context breakdown — incremental cache. Replaces the previous 2-second
-	// TTL design (which re-walked every message on each refresh and produced
-	// ~1.1 s sync freezes on 2,000+ message sessions because `updateEditorTopBorder`
-	// is called on every agent event in event-controller). The new scheme
-	// caches by message-object identity (a Symbol-keyed sidecar on each
-	// message) plus a cheap content fingerprint, so in-place mutations of
-	// an existing message (post-hoc error attachment, retry-truncated
-	// branch rebuild, replaceMessages with the same length) are detected
-	// and recomputed.
+	// Context breakdown — incremental rolling cache. The status line refreshes
+	// on every agent event, so the hot path must not re-tokenize the full
+	// message list. Stable messages are accumulated once; normal streaming
+	// refreshes only recompute the current tail message and newly appended
+	// entries. History rewrites/compaction replace or shrink the message array
+	// and rebuild this cache. Stable messages are treated as immutable after
+	// promotion, matching the normal append-only session flow.
 	// Cached non-message total (system prompt + tools + skills). Invalidated
 	// when the inputs-identity fingerprint changes (model swap, skill toggle,
 	// tool registration).
 	#nonMessageTokensCache: number | undefined;
 	#nonMessageInputsKey: string | undefined;
+	#messageTokenTotalsCache: MessageTokenTotalsCache | undefined;
 
 	constructor(private readonly session: AgentSession) {
 		this.#settings = {
@@ -503,22 +514,77 @@ export class StatusLineComponent implements Component {
 			this.#nonMessageInputsKey = inputsKey;
 		}
 
-		// 2) Message tokens — incremental. The sidecar cache lives on the
-		//    message object itself (Symbol-keyed), keyed by identity and
-		//    validated by a cheap content fingerprint. Mutations that
-		//    replace messages (replaceMessages, branch rebuild, compaction)
-		//    yield fresh objects → cache miss → recompute. In-place
-		//    mutations on the same object are caught by fingerprint
-		//    mismatch. The LAST message is always recomputed because it
-		//    may still be growing during streaming.
-		let messagesTokens = 0;
-		const lastIdx = messages.length - 1;
-		for (let i = 0; i < messages.length; i++) {
-			messagesTokens += i === lastIdx ? estimateTokens(messages[i]) : tokensForMessage(messages[i]);
-		}
+		// 2) Message tokens — incremental rolling total. The sidecar cache lives
+		//    on each stable message object (all but the current tail). Normal
+		//    streaming turns only recompute the last message and newly appended
+		//    entries. Full rebuild only when the message array is replaced,
+		//    shrinks, or the recently-promoted stable tail mutates in place.
+		const messagesTokens = this.#getCachedMessageTokens(messages);
 
 		const usedTokens = this.#nonMessageTokensCache + messagesTokens;
 		return { usedTokens, contextWindow };
+	}
+
+	#getCachedMessageTokens(messages: readonly AgentMessage[]): number {
+		const cache = this.#messageTokenTotalsCache;
+		if (!cache || cache.messagesRef !== messages || messages.length <= cache.stableCount) {
+			return this.#rebuildMessageTokenTotals(messages);
+		}
+
+		let stableTokens = cache.stableTokens;
+		let stableCount = cache.stableCount;
+		const stableLimit = Math.max(0, messages.length - 1);
+
+		if (
+			cache.lastStableMessage &&
+			stableCount > 0 &&
+			messages[stableCount - 1] === cache.lastStableMessage &&
+			cache.lastStableFingerprint !== undefined &&
+			cache.lastStableFingerprint !== messageFingerprint(cache.lastStableMessage)
+		) {
+			return this.#rebuildMessageTokenTotals(messages);
+		}
+
+		while (stableCount < stableLimit) {
+			const promoted = messages[stableCount]!;
+			stableTokens += tokensForMessage(promoted);
+			stableCount++;
+		}
+
+		const lastStableMessage = stableCount > 0 ? messages[stableCount - 1] : undefined;
+		const lastStableFingerprint = lastStableMessage ? messageFingerprint(lastStableMessage) : undefined;
+		const lastMessage = messages.at(-1);
+		const lastTokens = lastMessage ? estimateTokens(lastMessage) : 0;
+		this.#messageTokenTotalsCache = {
+			messagesRef: messages,
+			stableCount,
+			stableTokens,
+			lastStableMessage,
+			lastStableFingerprint,
+		};
+		return stableTokens + lastTokens;
+	}
+
+	#rebuildMessageTokenTotals(messages: readonly AgentMessage[]): number {
+		let stableTokens = 0;
+		const stableLimit = Math.max(0, messages.length - 1);
+		for (let i = 0; i < stableLimit; i++) {
+			stableTokens += tokensForMessage(messages[i]!);
+		}
+
+		const lastStableMessage = stableLimit > 0 ? messages[stableLimit - 1] : undefined;
+		const lastStableFingerprint = lastStableMessage ? messageFingerprint(lastStableMessage) : undefined;
+		const lastMessage = messages.at(-1);
+		const lastTokens = lastMessage ? estimateTokens(lastMessage) : 0;
+
+		this.#messageTokenTotalsCache = {
+			messagesRef: messages,
+			stableCount: stableLimit,
+			stableTokens,
+			lastStableMessage,
+			lastStableFingerprint,
+		};
+		return stableTokens + lastTokens;
 	}
 
 	/**
@@ -535,7 +601,11 @@ export class StatusLineComponent implements Component {
 		return `${modelId}|${sp.length}:${sp[0]?.length ?? 0}|${tools.length}|${skills.length}`;
 	}
 
-	#buildSegmentContext(width: number, segmentOptions: StatusLineSettings["segmentOptions"]): SegmentContext {
+	#buildSegmentContext(
+		width: number,
+		segmentOptions: StatusLineSettings["segmentOptions"],
+		includeContext: boolean,
+	): SegmentContext {
 		const state = this.session.state;
 
 		// Trigger background fetch (5-min TTL); render uses cached value
@@ -555,10 +625,13 @@ export class StatusLineComponent implements Component {
 			tokensPerSecond: this.#getTokensPerSecond(),
 		};
 
-		// Context usage — aligned with /context command so both surfaces report the same value
-		const breakdown = this.getCachedContextBreakdown();
-		const contextTokens = breakdown.usedTokens;
-		const contextWindow = breakdown.contextWindow || state.model?.contextWindow || 0;
+		let contextTokens = 0;
+		let contextWindow = state.model?.contextWindow ?? this.session.model?.contextWindow ?? 0;
+		if (includeContext) {
+			const breakdown = this.getCachedContextBreakdown();
+			contextTokens = breakdown.usedTokens;
+			contextWindow = breakdown.contextWindow || contextWindow;
+		}
 		const contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
 
 		return {
@@ -626,7 +699,9 @@ export class StatusLineComponent implements Component {
 
 	#buildStatusLine(width: number): string {
 		const effectiveSettings = this.#resolveSettings();
-		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions);
+		const includeContext =
+			hasContextSegment(effectiveSettings.leftSegments) || hasContextSegment(effectiveSettings.rightSegments);
+		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions, includeContext);
 		const separatorDef = getSeparator(effectiveSettings.separator ?? "powerline-thin", theme);
 
 		const bgAnsi = theme.getBgAnsi("statusLineBg");
