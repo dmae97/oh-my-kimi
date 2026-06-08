@@ -381,6 +381,22 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 	}
 }
 
+/**
+ * Friendly CLI failure raised by {@link createSessionManager} when the user's
+ * session-resolution flags (`--resume`/`--fork`/cross-project prompts) cannot
+ * be satisfied. {@link runRootCommand} catches it and prints a clean stderr
+ * message instead of letting it surface as `[Uncaught Exception]`
+ * (see issue #2084).
+ */
+export class SessionResolutionError extends Error {
+	readonly hint?: string;
+	constructor(message: string, hint?: string) {
+		super(message);
+		this.name = "SessionResolutionError";
+		this.hint = hint;
+	}
+}
+
 type MissingCwdMoveResult =
 	| { status: "not-needed" }
 	| { status: "declined" }
@@ -400,7 +416,7 @@ async function moveMissingCwdSessionIfNeeded(
 
 	const movePromptResult = await askToMoveSession(session);
 	if (movePromptResult === "unavailable") {
-		throw new Error(
+		throw new SessionResolutionError(
 			`Session "${sessionArg}" belongs to a directory that no longer exists (${sourceCwd}); run interactively to move it into the current project.`,
 		);
 	}
@@ -463,7 +479,7 @@ export async function createSessionManager(
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
-			throw new Error("--fork requires session persistence");
+			throw new SessionResolutionError("--fork requires session persistence");
 		}
 		const forkSource = parsed.fork;
 		if (forkSource.includes("/") || forkSource.includes("\\") || forkSource.endsWith(".jsonl")) {
@@ -471,7 +487,10 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(forkSource, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new Error(`Session "${forkSource}" not found.`);
+			throw new SessionResolutionError(
+				`Session "${forkSource}" not found.`,
+				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
+			);
 		}
 		return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 	}
@@ -486,7 +505,10 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(sessionArg, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new Error(`Session "${sessionArg}" not found.`);
+			throw new SessionResolutionError(
+				`Session "${sessionArg}" not found.`,
+				"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.",
+			);
 		}
 		if (match.scope === "local") {
 			const moveResult = await moveMissingCwdSessionIfNeeded(
@@ -522,7 +544,7 @@ export async function createSessionManager(
 				}
 				const forkPromptResult = await askToForkSession(match.session);
 				if (forkPromptResult === "unavailable") {
-					throw new Error(
+					throw new SessionResolutionError(
 						`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
 					);
 				}
@@ -919,14 +941,29 @@ export async function runRootCommand(
 		);
 	}
 
-	// Create session manager based on CLI flags
-	let sessionManager = await logger.time(
-		"createSessionManager",
-		createSessionManager,
-		parsedArgs,
-		cwd,
-		settingsInstance,
-	);
+	// Create session manager based on CLI flags. SessionResolutionError signals a
+	// user-facing failure (unknown --resume/--fork id, non-interactive fork
+	// prompt, --fork with --no-session): print + exit cleanly instead of letting
+	// it surface as `[Uncaught Exception]` (see issue #2084).
+	let sessionManager: SessionManager | undefined;
+	try {
+		sessionManager = await logger.time(
+			"createSessionManager",
+			createSessionManager,
+			parsedArgs,
+			cwd,
+			settingsInstance,
+		);
+	} catch (error: unknown) {
+		if (error instanceof SessionResolutionError) {
+			process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
+			if (error.hint) {
+				process.stderr.write(`${chalk.dim(error.hint)}\n`);
+			}
+			process.exit(1);
+		}
+		throw error;
+	}
 
 	// User declined the cross-project fork prompt — exit cleanly with a friendly
 	// message rather than letting the decline bubble up as an uncaught exception
