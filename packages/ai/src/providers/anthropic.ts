@@ -1700,6 +1700,22 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						throw createAnthropicStreamEnvelopeError("stream ended before terminal stop signal");
 					}
 
+					// An open tool_use block — one that never received its
+					// `content_block_stop` — means the stream was truncated mid-tool-call.
+					// In practice this is a transport drop that a transparent reconnect
+					// splices back together: the reconnect's `message_start` is deduped
+					// above, yet the orphaned block survives with its seed `{}` (or a
+					// partial-parse) arguments. Emitting it would dispatch a tool call the
+					// model never finished generating. Surface it as a truncated envelope so
+					// the existing retry/error path engages instead of shipping bogus args.
+					if (
+						blocks.some(
+							block => block.type === "toolCall" && (block as { partialJson?: string }).partialJson !== undefined,
+						)
+					) {
+						throw createAnthropicStreamEnvelopeError("stream ended with an unterminated tool_use block");
+					}
+
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
 						throw new Error(output.errorMessage ?? "An unknown error occurred");
 					}

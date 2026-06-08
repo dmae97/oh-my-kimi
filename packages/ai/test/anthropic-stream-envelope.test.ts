@@ -199,6 +199,43 @@ function createMalformedToolUseEvents(): MockAnthropicEvent[] {
 	];
 }
 
+function createUnterminatedToolUseSplicedReconnectEvents(): MockAnthropicEvent[] {
+	return [
+		{
+			type: "message_start",
+			message: {
+				id: "msg_tool_truncated",
+				usage: { input_tokens: 12, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+			},
+		},
+		// Tool call begins streaming but the transport drops before any argument
+		// bytes — and before `content_block_stop` — arrive, so `arguments` is still
+		// the seed `{}`.
+		{
+			type: "content_block_start",
+			index: 0,
+			content_block: { type: "tool_use", id: "tool_truncated", name: "lookup_weather", input: {} },
+		},
+		{ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "" } },
+		// A transparent reconnect splices a fresh message envelope onto the same
+		// stream. The duplicate `message_start` is deduped, but the orphaned tool
+		// block above is never closed and the reconnect supplies the terminal stop.
+		{
+			type: "message_start",
+			message: {
+				id: "msg_reconnect",
+				usage: { input_tokens: 12, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+			},
+		},
+		{
+			type: "message_delta",
+			delta: { stop_reason: "end_turn" },
+			usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+		},
+		{ type: "message_stop" },
+	];
+}
+
 function countEvents(events: AssistantMessageEvent[], type: AssistantMessageEvent["type"]): number {
 	return events.filter(event => event.type === type).length;
 }
@@ -432,6 +469,32 @@ describe("anthropic stream envelope handling", () => {
 			throw new Error("Expected toolCall content in terminal error payload");
 		}
 		expect("partialJson" in toolCall).toBe(false);
+	});
+
+	it("surfaces an error instead of dispatching a tool call left open by a spliced reconnect", async () => {
+		let attempt = 0;
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
+			attempt += 1;
+			return createMockRequest(createUnterminatedToolUseSplicedReconnectEvents()) as never;
+		});
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		// The tool call started streaming (replay-unsafe), so the truncated envelope
+		// cannot be retried — it must be surfaced as an error rather than emitting a
+		// completed turn whose tool call carries the seed `{}` arguments.
+		expect(attempt).toBe(1);
+		expect(countEvents(events, "toolcall_start")).toBe(1);
+		expect(countEvents(events, "toolcall_end")).toBe(0);
+		expect(countEvents(events, "done")).toBe(0);
+		expect(countEvents(events, "error")).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("unterminated tool_use block");
 	});
 	it("parses raw SSE directly so unknown events do not fail Anthropic streams", async () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
