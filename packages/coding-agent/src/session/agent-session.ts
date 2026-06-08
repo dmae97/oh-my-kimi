@@ -33,6 +33,7 @@ import {
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
+
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
 	AUTO_HANDOFF_THRESHOLD_FOCUS,
@@ -4330,9 +4331,12 @@ export class AgentSession {
 	}
 
 	async #normalizeAgentMessageImages<T extends AgentMessage>(message: T): Promise<T> {
-		const content = await this.#normalizeMessageContentImages(message.content);
-		if (content === message.content) return message;
-		return { ...message, content } as T;
+		if (!("content" in message)) return message;
+		const content = message.content;
+		if (typeof content !== "string" && !Array.isArray(content)) return message;
+		const normalized = await this.#normalizeMessageContentImages(content as string | (TextContent | ImageContent)[]);
+		if (normalized === content) return message;
+		return { ...message, content: normalized } as T;
 	}
 
 	/**

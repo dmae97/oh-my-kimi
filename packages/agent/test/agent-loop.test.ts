@@ -517,7 +517,7 @@ describe("agentLoop with AgentMessage", () => {
 		expect(turnEndEvent.toolResults.map(result => result.toolCallId)).toEqual(["tool-2", "tool-1"]);
 	});
 
-	it("emits an explicit warning toolResult when assistant aborts after issuing tool calls", async () => {
+	it("drops incomplete tool calls when assistant aborts before toolcall_end", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],
 			messages: [],
@@ -528,8 +528,10 @@ describe("agentLoop with AgentMessage", () => {
 		const mock = createMockModel();
 		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
 
-		// Custom stream: emit a partial start with a tool call, abort, then push done.
-		// The mock provider doesn't model "abort between start and done"; do it inline.
+		// Custom stream: emit a partial assistant that already contains a tool
+		// call, then abort before any `toolcall_end` event proves that the args
+		// completed. The agent must not synthesize a toolResult for that partial
+		// call; replaying it would preserve unsafe/incomplete arguments.
 		const streamFn = () => {
 			const stream = new AssistantMessageEventStream();
 			queueMicrotask(() => {
@@ -556,16 +558,16 @@ describe("agentLoop with AgentMessage", () => {
 			(e): e is Extract<AgentEvent, { type: "message_end" }> =>
 				e.type === "message_end" && e.message.role === "toolResult",
 		);
-		expect(toolResultEvent).toBeDefined();
-		if (toolResultEvent?.message.role !== "toolResult") return;
-		expect(toolResultEvent.message.isError).toBe(true);
-		expect(toolResultEvent.message.toolCallId).toBe("tool-1");
-		expect(toolResultEvent.message.content[0]?.type).toBe("text");
-		if (toolResultEvent.message.content[0]?.type === "text") {
-			const text = toolResultEvent.message.content[0].text;
-			expect(text).toContain("Tool execution was aborted");
-			expect(text).not.toContain("Tool execution was aborted.:");
-		}
+		expect(toolResultEvent).toBeUndefined();
+
+		const assistantEnd = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_end" }> =>
+				e.type === "message_end" && e.message.role === "assistant",
+		);
+		expect(assistantEnd).toBeDefined();
+		if (assistantEnd?.message.role !== "assistant") return;
+		expect(assistantEnd.message.stopReason).toBe("aborted");
+		expect(assistantEnd.message.content.some(block => block.type === "toolCall")).toBe(false);
 	});
 
 	it("should skip remaining tool calls when steering is queued", async () => {
@@ -1193,6 +1195,9 @@ describe("agentLoopContinue with AgentMessage", () => {
 						},
 					],
 					stopReason: "length",
+				},
+				{
+					content: ["ok, I will split the write into smaller chunks"],
 				},
 			],
 		});

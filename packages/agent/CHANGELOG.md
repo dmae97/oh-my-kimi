@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed agent-loop stream invariants so `agentLoopContinue` no longer mutates the caller's message array, emitted assistant events snapshot mutable provider content, terminal provider events win over late abort signals, transformed tool arguments are reflected consistently in hooks/events, and successful run-end telemetry fires from the same finalization path as failures.
 - Fixed tool result parsing to mark assistant tool outputs with unsupported content block shapes as errors and include a diagnostic text block
 - Fixed GPT-5 Harmony leakage handling by recovering valid leaked tool calls when possible and discarding leaked partial assistant output before retrying
 - Fixed tool-call cancellation handling so aborted tools are marked aborted with an explicit reason and do not report generic errors

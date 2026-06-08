@@ -184,7 +184,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(hiddenUtility.defaultHeaders["anthropic-beta"]).toContain("redact-thinking-2026-02-12");
 	});
 
-	it("matches CC system-block layout: billing and instruction uncached, context cached in order", () => {
+	it("matches CC system-block layout: billing and instruction uncached, single breakpoint on the last context block", () => {
 		// We mimic Claude Code's billing+instruction system layout but do NOT emit
 		// the `scope: "global"` field that CC attaches to its middle breakpoint —
 		// `prompt-caching-scope-2026-01-05` only works against canonical
@@ -201,10 +201,12 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(blocks?.[0].cache_control).toBeUndefined();
 		expect(blocks?.[1].text).toBe(claudeCodeSystemInstruction);
 		expect(blocks?.[1].cache_control).toBeUndefined();
+		// Only the LAST system block carries the cache breakpoint: a single trailing
+		// `cache_control` caches the entire system prefix as one entry, conserving the
+		// 4-breakpoint budget (`enforceCacheControlLimit`) for message-level caching.
 		expect(blocks?.[2]).toEqual({
 			type: "text",
 			text: "Use citations when possible",
-			cache_control: { type: "ephemeral" },
 		});
 		expect(blocks?.[3]).toEqual({
 			type: "text",
