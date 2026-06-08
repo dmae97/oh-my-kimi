@@ -316,6 +316,97 @@ describe("OutputSink", () => {
 		expect(dumped.output).toBe("abc");
 	});
 
+	test("caps artifact-on-disk size: head + notice + tail when stream exceeds cap", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "capped.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-cap",
+			spillThreshold: 16,
+			artifactMaxBytes: 32,
+			artifactHeadBytes: 16,
+		});
+
+		// Push 64 raw bytes; cap is 32 (16 head + 16 tail). Expect head=first 16,
+		// notice in the middle, tail=last 16, total file size between 32 and
+		// 32 + notice length.
+		const payload = "0123456789ABCDEF".repeat(4); // 64 bytes
+		await sink.push(payload);
+		await sink.dump();
+		const artifactText = await Bun.file(artifactPath).text();
+
+		expect(artifactText.startsWith("0123456789ABCDEF")).toBe(true);
+		expect(artifactText.endsWith("0123456789ABCDEF")).toBe(true);
+		expect(artifactText).toContain("[ARTIFACT TRUNCATED:");
+		expect(artifactText).toContain("elided from the middle");
+		// Strip the notice (with surrounding separators) and assert head + tail are
+		// preserved verbatim at exactly the budget bytes.
+		const stripped = artifactText.replace(/\n?\[ARTIFACT TRUNCATED:[^\]]+\]\n?/g, "");
+		expect(byteLength(stripped)).toBe(32);
+	});
+
+	test("artifact cap stays a no-op when total stream fits inside the cap", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "small.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-small",
+			spillThreshold: 4,
+			artifactMaxBytes: 64,
+			artifactHeadBytes: 32,
+		});
+
+		// Forces spill (in-memory tail) but file should stay verbatim.
+		await sink.push("abcde");
+		await sink.push("fghij");
+		await sink.dump();
+		const artifactText = await Bun.file(artifactPath).text();
+
+		expect(artifactText).toBe("abcdefghij");
+		expect(artifactText).not.toContain("[ARTIFACT TRUNCATED:");
+	});
+
+	test("artifact cap stays bounded across many small streaming chunks", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "stream.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-stream",
+			spillThreshold: 16,
+			artifactMaxBytes: 32,
+			artifactHeadBytes: 16,
+		});
+
+		// 200 chunks * 4 bytes = 800 bytes streamed; cap is 32.
+		for (let i = 0; i < 200; i++) {
+			await sink.push(String(i % 10).repeat(4));
+		}
+		await sink.dump();
+		const artifactText = await Bun.file(artifactPath).text();
+
+		expect(artifactText).toContain("[ARTIFACT TRUNCATED:");
+		const stripped = artifactText.replace(/\n?\[ARTIFACT TRUNCATED:[^\]]+\]\n?/g, "");
+		expect(byteLength(stripped)).toBe(32);
+	});
+
+	test("artifactMaxBytes=0 restores unbounded artifact streaming", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "uncapped.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-uncapped",
+			spillThreshold: 16,
+			artifactMaxBytes: 0,
+		});
+
+		const payload = "X".repeat(1024);
+		await sink.push(payload);
+		await sink.dump();
+		const artifactText = await Bun.file(artifactPath).text();
+
+		expect(artifactText).toBe(payload);
+		expect(artifactText).not.toContain("[ARTIFACT TRUNCATED:");
+	});
 	test("createInput decodes streamed UTF-8 chunks correctly", async () => {
 		const sink = new OutputSink();
 		const writer = sink.createInput().getWriter();

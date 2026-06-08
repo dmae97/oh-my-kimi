@@ -320,6 +320,13 @@ export interface ToolSession {
 	 *  model for each file. Lazily initialized by `getDiagnosticsLedger`. */
 	diagnosticsLedger?: import("../lsp/diagnostics-ledger").DiagnosticsLedger;
 
+	/** Per-session ledger of consecutive byte-identical no-op edits, keyed by
+	 *  canonical file path. The hashline executor escalates a soft no-op hint
+	 *  to a thrown error once the same payload no-ops `NOOP_HARD_LIMIT` times,
+	 *  breaking subagent loops that ignore the textual hint (issue #2081).
+	 *  Lazily initialized by `getNoopLoopGuard`. */
+	noopLoopGuard?: import("../edit/hashline/noop-loop-guard").NoopLoopGuard;
+
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
 	/** Queue late LSP diagnostics (arrived after an edit/write returned) to be shown
