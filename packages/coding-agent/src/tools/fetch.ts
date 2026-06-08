@@ -22,6 +22,7 @@ import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
 import { specialHandlers } from "../web/scrapers";
+import { fetchGitHubApi, parseGitHubUrl } from "../web/scrapers/github";
 import type { RenderResult } from "../web/scrapers/types";
 import { finalizeOutput, loadPage, looksLikeHtml, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
@@ -1038,6 +1039,51 @@ async function handleSpecialUrls(
 	return null;
 }
 
+/**
+ * Resolve `https://github.com/<owner>/<repo>` (repo root) under `:raw` to the
+ * decoded README content fetched via the GitHub REST API. Returns `null` when
+ * the URL is not a repo root or the API call did not yield a usable payload,
+ * letting the caller fall back to the default raw HTML path.
+ *
+ * Why special-case raw: agents reaching for `:raw` on a repo root almost
+ * always want the bare README markdown, not the HTML shell GitHub serves at
+ * that URL (which is mostly client-rendered chrome). Documented `:raw` =
+ * "untouched bytes" remains the rule for every other URL shape, including
+ * `/blob/…` (already raw-rendered by the special handler).
+ */
+async function tryGithubRepoRawReadme(
+	url: string,
+	timeout: number,
+	signal: AbortSignal | undefined,
+	fetchedAt: string,
+): Promise<FetchRenderResult | null> {
+	const gh = parseGitHubUrl(url);
+	if (gh?.type !== "repo") return null;
+	const readmeResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/readme`, timeout, signal);
+	if (!readmeResult.ok || !readmeResult.data) return null;
+	const readme = readmeResult.data as { content?: string; encoding?: string; download_url?: string; path?: string };
+	if (readme.encoding !== "base64" || typeof readme.content !== "string") return null;
+	let decoded: string;
+	try {
+		decoded = Buffer.from(readme.content, "base64").toString("utf-8");
+	} catch {
+		return null;
+	}
+	const output = finalizeOutput(decoded);
+	const finalUrl =
+		typeof readme.download_url === "string" && readme.download_url.length > 0 ? readme.download_url : url;
+	return {
+		url,
+		finalUrl,
+		contentType: "text/markdown",
+		method: "github-raw-readme",
+		content: output.content,
+		fetchedAt,
+		truncated: output.truncated,
+		notes: [`Resolved github.com repo :raw to README (${readme.path ?? "README"})`],
+	};
+}
+
 // =============================================================================
 // Main Render Function
 // =============================================================================
@@ -1080,6 +1126,14 @@ async function renderUrl(
 	if (!raw) {
 		const specialResult = await handleSpecialUrls(url, timeout, signal, storage);
 		if (specialResult) return specialResult;
+	} else {
+		// Raw mode normally skips every special handler so the caller gets the
+		// page byte-for-byte. The github.com repo root is the lone exception:
+		// the HTML there is a giant JS-rendered shell that carries no README
+		// content, so `:raw` returns garbage in practice. Redirect to the
+		// canonical raw README via the GitHub API instead.
+		const githubRawRepo = await tryGithubRepoRawReadme(url, timeout, signal, fetchedAt);
+		if (githubRawRepo) return githubRawRepo;
 	}
 
 	// Step 2: Fetch page
