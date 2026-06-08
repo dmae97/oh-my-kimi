@@ -13,6 +13,7 @@ import {
 	claudeCodeSystemInstruction,
 	claudeCodeVersion,
 	claudeToolPrefix,
+	deriveClaudeDeviceId,
 	generateClaudeCloakingUserId,
 	isClaudeCloakingUserId,
 	mapStainlessArch,
@@ -54,7 +55,7 @@ function createAbortedSignal(): AbortSignal {
 
 type CaptureAnthropicOptions = {
 	isOAuth?: boolean;
-	metadata?: { user_id?: string };
+	metadata?: { user_id?: string; account_uuid?: string; accountId?: string; account_id?: string };
 	thinkingEnabled?: boolean;
 	reasoning?: Effort;
 	temperature?: number;
@@ -422,6 +423,18 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(isClaudeCloakingUserId(userId)).toBe(true);
 	});
 
+	it("scopes derived Claude device IDs to the account when known", () => {
+		const installId = "test-install-id";
+		const accountId = "12345678-1234-1234-1234-1234567890ab";
+		const otherAccountId = "abcdefab-cdef-abcd-efab-cdefabcdef12";
+		const deviceId = deriveClaudeDeviceId(installId, accountId);
+
+		expect(deviceId).toMatch(/^[0-9a-f]{64}$/);
+		expect(deviceId).toBe(deriveClaudeDeviceId(installId, accountId));
+		expect(deviceId).not.toBe(deriveClaudeDeviceId(installId, otherAccountId));
+		expect(deviceId).not.toBe(deriveClaudeDeviceId(installId));
+	});
+
 	it("injects Claude Code JSON metadata.user_id for OAuth requests when missing", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: ["Stay concise."],
@@ -451,6 +464,35 @@ describe("Anthropic request fingerprint alignment", () => {
 		const secondUserId = JSON.parse(second.metadata?.user_id ?? "{}") as { device_id?: string };
 
 		expect(firstUserId.device_id).toBe(secondUserId.device_id);
+	});
+
+	it("uses metadata account_uuid when generating OAuth device_id", async () => {
+		const sessionId = "167ec5b4-e711-4169-879f-84fa52679d9c";
+		const accountId = "12345678-1234-1234-1234-1234567890ab";
+		const otherAccountId = "abcdefab-cdef-abcd-efab-cdefabcdef12";
+		const first = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ metadata: { account_uuid: accountId }, sessionId },
+		)) as { metadata?: { user_id?: string } };
+		const second = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi again", timestamp: Date.now() }],
+			},
+			{ metadata: { account_uuid: otherAccountId }, sessionId },
+		)) as { metadata?: { user_id?: string } };
+		const firstUserId = JSON.parse(first.metadata?.user_id ?? "{}") as { account_uuid?: string; device_id?: string };
+		const secondUserId = JSON.parse(second.metadata?.user_id ?? "{}") as { account_uuid?: string; device_id?: string };
+
+		expect(firstUserId.account_uuid).toBe(accountId);
+		expect(secondUserId.account_uuid).toBe(otherAccountId);
+		expect(firstUserId.device_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(firstUserId.device_id).not.toBe(secondUserId.device_id);
 	});
 
 	it("uses the explicit session id for generated OAuth metadata", async () => {

@@ -13,7 +13,6 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -78,6 +77,7 @@ import type {
 import {
 	calculateRateLimitBackoffMs,
 	clearAnthropicFastModeFallback,
+	deriveClaudeDeviceId,
 	Effort,
 	getSupportedEfforts,
 	isContextOverflow,
@@ -606,14 +606,10 @@ function buildSessionMetadata(
 		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
 		if (typeof accountUuid === "string" && accountUuid.length > 0) {
 			userId.account_uuid = accountUuid;
-			// Claude Code's `device_id` is a stable 64-hex install identifier. Use
-			// omp's persistent install id as the root instead of deriving it from
-			// `account_uuid`: logging into a different Claude account on the same
-			// install should not make the device look new.
-			userId.device_id = crypto
-				.createHash("sha256")
-				.update(`omp-claude-device-id-v1:${getInstallId()}`)
-				.digest("hex");
+			// Claude Code's `device_id` is a stable 64-hex account-scoped install
+			// identifier. Include both omp's persistent install id and the Claude
+			// account UUID so two accounts on the same install do not share a device.
+			userId.device_id = deriveClaudeDeviceId(getInstallId(), accountUuid);
 		}
 	}
 	return { user_id: JSON.stringify(userId) };
@@ -3024,10 +3020,10 @@ export class AgentSession {
 	 * `metadata.user_id` shaped like real Claude Code's `getAPIMetadata` output:
 	 * `{ session_id, account_uuid, device_id }`. `account_uuid` is included only
 	 * when an Anthropic OAuth credential with a known account UUID is loaded;
-	 * `device_id` is derived from the persistent omp install id. Resolving live
-	 * keeps the value in sync with auth-state changes (login/logout, token
-	 * refresh that surfaces a new account uuid) without needing to re-call
-	 * `#syncAgentSessionId()` on every such event.
+	 * `device_id` is derived from both the persistent omp install id and that
+	 * account UUID. Resolving live keeps the value in sync with auth-state changes
+	 * (login/logout, token refresh that surfaces a new account UUID) without
+	 * needing to re-call `#syncAgentSessionId()` on every such event.
 	 */
 	#syncAgentSessionId(sessionId?: string): void {
 		const sid = this.#activeProviderSessionId(sessionId);

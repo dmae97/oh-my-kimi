@@ -630,20 +630,48 @@ export function generateClaudeCloakingUserId(): string {
 	return `user_${userHash}_account_${accountId}_session_${sessionId}`;
 }
 
-function deriveClaudeDeviceIdFromInstallId(): string {
-	return nodeCrypto.createHash("sha256").update(`omp-claude-device-id-v1:${getInstallId()}`).digest("hex");
+const CLAUDE_DEVICE_ID_INSTALL_HASH_DOMAIN = "omp-claude-device-id-v1:";
+const CLAUDE_DEVICE_ID_ACCOUNT_HASH_DOMAIN = "omp-claude-device-id-v2";
+
+export function deriveClaudeDeviceId(installId: string, accountId?: string): string {
+	const hash = nodeCrypto.createHash("sha256");
+	if (accountId && accountId.length > 0) {
+		return hash.update(CLAUDE_DEVICE_ID_ACCOUNT_HASH_DOMAIN).update("\0").update(installId).update("\0").update(accountId).digest("hex");
+	}
+	return hash.update(CLAUDE_DEVICE_ID_INSTALL_HASH_DOMAIN).update(installId).digest("hex");
 }
-function generateClaudeJsonUserId(sessionId?: string): string {
-	return JSON.stringify({
-		device_id: deriveClaudeDeviceIdFromInstallId(),
+
+function readMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+	const value = metadata?.[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readAnthropicMetadataAccountId(metadata: Record<string, unknown> | undefined): string | undefined {
+	return (
+		readMetadataString(metadata, "account_uuid") ??
+		readMetadataString(metadata, "accountId") ??
+		readMetadataString(metadata, "account_id")
+	);
+}
+
+function deriveClaudeDeviceIdFromInstallId(accountId?: string): string {
+	return deriveClaudeDeviceId(getInstallId(), accountId);
+}
+
+function generateClaudeJsonUserId(sessionId?: string, accountId?: string): string {
+	const userId: Record<string, string> = {
+		device_id: deriveClaudeDeviceIdFromInstallId(accountId),
 		session_id: sessionId ?? nodeCrypto.randomUUID().toLowerCase(),
-	});
+	};
+	if (accountId && accountId.length > 0) userId.account_uuid = accountId;
+	return JSON.stringify(userId);
 }
 
 function resolveAnthropicMetadataUserId(
 	userId: unknown,
 	isOAuthToken: boolean,
 	sessionId?: string,
+	accountId?: string,
 ): string | undefined {
 	if (typeof userId === "string") {
 		if (!isOAuthToken || isClaudeCloakingUserId(userId) || isClaudeJsonUserId(userId)) {
@@ -652,7 +680,7 @@ function resolveAnthropicMetadataUserId(
 	}
 
 	if (!isOAuthToken) return undefined;
-	return generateClaudeJsonUserId(sessionId);
+	return generateClaudeJsonUserId(sessionId, accountId);
 }
 const ANTHROPIC_BUILTIN_TOOL_NAMES = new Set(["web_search", "code_execution", "text_editor", "computer"]);
 export const applyClaudeToolPrefix = (name: string): string => {
@@ -2503,7 +2531,13 @@ function buildParams(
 	}
 
 	// Pre-compute metadata.
-	const metadataUserId = resolveAnthropicMetadataUserId(options?.metadata?.user_id, isOAuthToken, options?.sessionId);
+	const metadataAccountId = readAnthropicMetadataAccountId(options?.metadata);
+	const metadataUserId = resolveAnthropicMetadataUserId(
+		options?.metadata?.user_id,
+		isOAuthToken,
+		options?.sessionId,
+		metadataAccountId,
+	);
 	const metadata = metadataUserId ? { user_id: metadataUserId } : undefined;
 
 	// Pre-compute thinking + output_config effort.
