@@ -118,7 +118,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			const cjkLine = "字".repeat(200); // 200 code units, 600 UTF-8 bytes
 			const rows: string[] = [];
 			for (let i = 0; i < 200; i++) rows.push(cjkLine);
-			const data = rows.join("\n") + "\n";
+			const data = `${rows.join("\n")}\n`;
 			const max = 4 * 1024;
 			expect(Buffer.byteLength(data, "utf8")).toBeGreaterThan(max * 4);
 
