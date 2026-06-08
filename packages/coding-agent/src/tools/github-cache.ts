@@ -316,6 +316,31 @@ export function invalidate(
 	}
 }
 
+/**
+ * Drop every cached row for a given issue/PR number, regardless of repo,
+ * auth key, include_comments flag, or row kind ({@link CacheKind}). Best-effort:
+ * swallows DB failures the same way {@link invalidate} does.
+ *
+ * Used by the bash-side detector that reacts to `gh issue close` / `gh pr merge`
+ * style mutations. Repo + auth-key narrowing is intentionally skipped because
+ * the bash command often does not name the repo (defaults to cwd's `gh`
+ * config) and resolving the *current* repo from `cwd` for every bash call would
+ * be far more expensive than a write-amplified DELETE.
+ */
+export function invalidateAllForNumber(number: number, repo?: string): void {
+	const db = openDb();
+	if (!db) return;
+	try {
+		if (repo === undefined) {
+			db.prepare("DELETE FROM github_view_cache WHERE number = ?").run(number);
+		} else {
+			db.prepare("DELETE FROM github_view_cache WHERE number = ? AND repo = ?").run(number, normalizeRepo(repo));
+		}
+	} catch (err) {
+		logger.debug("github cache: invalidateAllForNumber failed", { err: String(err) });
+	}
+}
+
 /** Drop every cached row. Test helper. */
 export function clearAll(): void {
 	const db = openDb();
