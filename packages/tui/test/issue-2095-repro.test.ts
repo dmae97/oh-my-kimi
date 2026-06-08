@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type RenderScheduler, type RenderTimer, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2095
@@ -197,5 +197,89 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 		// must arrive after stop.
 		await Bun.sleep(200);
 		expect(writes.length).toBe(writesAtStop);
+	});
+
+	it("absorbs a mid-paint `requestRender(false)` (e.g. ImageBudget.endPass) into the trailing settle on win32 (#2095)", async () => {
+		// `ImageBudget.endPass()` (and any other mid-composition caller) can fire
+		// `requestRender(false)` from inside the in-flight paint, *before*
+		// `#armPostFullPaintSettle()` runs at the tail of the intent dispatch.
+		// That request sets `#renderRequested` / `#renderTimer` without going
+		// through the settle gate, and would otherwise fire on the standard
+		// 30 Hz throttle (~33 ms) — well inside the 150 ms settle window —
+		// defeating the coalescing. The arm must reclaim those flags and
+		// re-queue the request via the settle's trailing timer.
+		//
+		// A noop trailing render with unchanged cursor emits zero bytes, so
+		// `term.write` counting is too weak. We instead inject a recording
+		// `RenderScheduler` and assert directly on which timers were queued:
+		// every `scheduleRender(cb, delayMs)` call records `delayMs`, and the
+		// contract is that no short-delay (< 100 ms) timer is queued after
+		// the sessionReplace arm — only the settle's trailing timer at the
+		// full 150 ms window.
+		setPlatform("win32");
+		const term = new VirtualTerminal(80, 24, 4096);
+
+		type Scheduled = { delayMs: number };
+		const scheduled: Scheduled[] = [];
+		const recordingScheduler: RenderScheduler = {
+			now: () => performance.now(),
+			scheduleImmediate: cb => process.nextTick(cb),
+			scheduleRender: (cb, delayMs): RenderTimer => {
+				const entry: Scheduled = { delayMs };
+				scheduled.push(entry);
+				const handle = setTimeout(cb, delayMs);
+				return { cancel: () => clearTimeout(handle) };
+			},
+		};
+
+		const tui = new TUI(term, undefined, { renderScheduler: recordingScheduler });
+		let midPaintFired = false;
+		const midPaintRequester: Component = {
+			invalidate(): void {},
+			render(width: number): string[] {
+				const lines: string[] = [];
+				if (!midPaintFired) {
+					midPaintFired = true;
+					// Mirror `ImageBudget.endPass()` exactly: a synchronous
+					// non-forced `requestRender()` from inside the in-flight
+					// composition, before `#armPostFullPaintSettle()` runs.
+					tui.requestRender();
+				}
+				for (let i = 0; i < 200; i++) lines.push(`mid-paint row ${i.toString().padStart(5, "0")}`.slice(0, width));
+				return lines;
+			},
+		};
+		tui.addChild(midPaintRequester);
+
+		try {
+			tui.start();
+			await settle(term);
+			// Promote the next paint to `sessionReplace` so the settle arms.
+			midPaintFired = false; // re-arm for the sessionReplace paint
+			scheduled.length = 0; // discard timers from setup
+			tui.requestRender(true, { clearScrollback: true });
+			await settle(term);
+			expect(midPaintFired).toBe(true);
+
+			// The mid-paint requestRender(false) would, without the fix, queue a
+			// throttled render at MIN_RENDER_INTERVAL_MS (~33 ms). With the fix
+			// it's absorbed: every `scheduleRender` call recorded after the
+			// sessionReplace must be at the full settle window length (≈150 ms)
+			// or longer (e.g. multiplexer-resize debounce on resize bursts) —
+			// never the 33 ms throttle that would defeat the settle. The
+			// `settle()` helper above already waited 40 ms — long enough for
+			// the would-be throttled timer to have been scheduled if it leaked.
+			const shortDelayTimers = scheduled.filter(s => s.delayMs > 0 && s.delayMs < 100);
+			expect(shortDelayTimers).toEqual([]);
+			const settleTimers = scheduled.filter(s => s.delayMs >= 100);
+			expect(settleTimers.length).toBeGreaterThanOrEqual(1);
+
+			// Let the settle expire so the trailing render fires and any
+			// pending timers drain before the test tears down the TUI.
+			await Bun.sleep(200);
+			await settle(term);
+		} finally {
+			tui.stop();
+		}
 	});
 });

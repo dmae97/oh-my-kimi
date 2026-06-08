@@ -1316,15 +1316,46 @@ export class TUI extends Container {
 	 * deadline so back-to-back big paints do not double-fire the trailing
 	 * coalesced render, and the existing deferred timer is rescheduled to the
 	 * later deadline.
+	 *
+	 * Mid-composition callers (most notably `ImageBudget.endPass()`, which can
+	 * call `requestRender()` from inside the in-flight paint when a new image
+	 * trips the budget) queue their render *before* the settle exists, so they
+	 * fall through the gate and set `#renderRequested` / `#renderTimer` on the
+	 * 30 Hz throttle. Without absorbing those, the throttled follow-up fires
+	 * inside the 150 ms quiet window and reintroduces the cascade the settle
+	 * was meant to stop. Cancel both, then eagerly arm the trailing settle
+	 * timer so the in-flight request still rides one coalesced render at the
+	 * end of the window. See #2095.
 	 */
 	#armPostFullPaintSettle(): void {
 		if (!isConPTYHosted()) return;
 		const until = this.#renderScheduler.now() + TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS;
 		if (until <= this.#postFullPaintSettleUntilMs) return;
 		this.#postFullPaintSettleUntilMs = until;
+		const hadPendingRender = this.#renderRequested || this.#renderTimer !== undefined;
+		// Reclaim any render that was queued during the in-flight composition:
+		// `#renderRequested` was set before the settle existed and would
+		// otherwise fire on the standard throttle inside the window.
+		this.#renderRequested = false;
+		if (this.#renderTimer) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+		}
 		if (this.#postFullPaintSettleTimer) {
 			this.#postFullPaintSettleTimer.cancel();
 			this.#postFullPaintSettleTimer = undefined;
+		}
+		if (hadPendingRender) {
+			// Replay the absorbed request via the trailing settle timer so the
+			// caller's render still happens — just deferred to the end of the
+			// window. Subsequent `requestRender(false)` calls during the
+			// settle see this timer and fold into it (existing gate at L1263).
+			this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
+				this.#postFullPaintSettleTimer = undefined;
+				this.#postFullPaintSettleUntilMs = 0;
+				if (this.#stopped) return;
+				this.requestRender(false);
+			}, TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
 		}
 	}
 
