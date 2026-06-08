@@ -154,7 +154,7 @@ export function streamPiNative<TApi extends Api>(
 				typeof options?.apiKey === "string" ? options.apiKey : undefined,
 			);
 			const body = JSON.stringify({
-				modelId: model.id,
+				modelId: `${model.provider}/${model.id}`,
 				context,
 				options: buildWireOptions(options),
 				stream: true,

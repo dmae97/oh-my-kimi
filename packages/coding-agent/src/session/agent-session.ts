@@ -229,6 +229,7 @@ import {
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
 	SILENT_ABORT_MARKER,
+	SKILL_PROMPT_MESSAGE_TYPE,
 	stripImagesFromMessage,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
@@ -4335,6 +4336,44 @@ export class AgentSession {
 		return { ...message, content: normalized } as T;
 	}
 
+	#createMagicKeywordNotices(text: string): CustomMessage[] {
+		const timestamp = Date.now();
+		const turnBudget = parseTurnBudget(text);
+		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
+		const keywordNotices: CustomMessage[] = [];
+		if (containsUltrathink(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "ultrathink-notice",
+				content: ULTRATHINK_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		}
+		if (containsOrchestrate(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "orchestrate-notice",
+				content: ORCHESTRATE_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		}
+		if (containsWorkflow(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "workflow-notice",
+				content: WORKFLOW_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		}
+		return keywordNotices;
+	}
+
 	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
@@ -4376,42 +4415,7 @@ export class AgentSession {
 		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
 		// agent-initiated turns never trigger them.
-		const keywordNotices: CustomMessage[] = [];
-		if (!options?.synthetic) {
-			const timestamp = Date.now();
-			const turnBudget = parseTurnBudget(expandedText);
-			this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
-			if (containsUltrathink(expandedText)) {
-				keywordNotices.push({
-					role: "custom",
-					customType: "ultrathink-notice",
-					content: ULTRATHINK_NOTICE,
-					display: false,
-					attribution: "user",
-					timestamp,
-				});
-			}
-			if (containsOrchestrate(expandedText)) {
-				keywordNotices.push({
-					role: "custom",
-					customType: "orchestrate-notice",
-					content: ORCHESTRATE_NOTICE,
-					display: false,
-					attribution: "user",
-					timestamp,
-				});
-			}
-			if (containsWorkflow(expandedText)) {
-				keywordNotices.push({
-					role: "custom",
-					customType: "workflow-notice",
-					content: WORKFLOW_NOTICE,
-					display: false,
-					attribution: "user",
-					timestamp,
-				});
-			}
-		}
+		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
 
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
@@ -4481,11 +4485,24 @@ export class AgentSession {
 						.map(content => content.text)
 						.join("");
 
+		let keywordNotices: CustomMessage[] = [];
+		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
+			const details = message.details;
+			let skillArgs = "";
+			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
+				skillArgs = details.args;
+			}
+			keywordNotices = this.#createMagicKeywordNotices(skillArgs);
+		}
+
 		if (this.isStreaming) {
 			if (!options?.streamingBehavior) {
 				throw new AgentBusyError();
 			}
 			await this.sendCustomMessage(message, { deliverAs: options.streamingBehavior });
+			for (const notice of keywordNotices) {
+				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
+			}
 			return;
 		}
 
@@ -4499,7 +4516,10 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 
-		await this.#promptWithMessage(customMessage, textContent, options);
+		await this.#promptWithMessage(customMessage, textContent, {
+			...options,
+			appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
+		});
 	}
 
 	async #promptWithMessage(

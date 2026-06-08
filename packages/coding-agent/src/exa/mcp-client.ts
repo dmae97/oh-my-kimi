@@ -2,14 +2,14 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { CustomTool, CustomToolResult } from "../extensibility/custom-tools/types";
 import { type CallMcpOptions, callMCP } from "../mcp/json-rpc";
-import type {
-	ExaRenderDetails,
-	ExaSearchResponse,
-	MCPCallResponse,
-	MCPTool,
-	MCPToolsResponse,
-	MCPToolWrapperConfig,
-} from "./types";
+import type { ExaSearchResponse, MCPCallResponse, MCPTool, MCPToolsResponse, MCPToolWrapperConfig } from "./types";
+
+type MCPWrappedToolDetails = {
+	response?: ExaSearchResponse;
+	error?: string;
+	toolName?: string;
+	raw?: unknown;
+};
 
 /** Find EXA_API_KEY from Bun.env or .env files */
 export function findApiKey(): string | null {
@@ -296,7 +296,7 @@ export async function fetchMCPToolSchema(
  * This allows tools to be generated from MCP server schemas without hardcoding,
  * reducing drift when MCP servers add new parameters.
  */
-export class MCPWrappedTool implements CustomTool<TSchema, ExaRenderDetails> {
+export class MCPWrappedTool implements CustomTool<TSchema, MCPWrappedToolDetails> {
 	readonly name: string;
 	readonly label: string;
 
@@ -315,7 +315,7 @@ export class MCPWrappedTool implements CustomTool<TSchema, ExaRenderDetails> {
 		_onUpdate?: unknown,
 		_ctx?: unknown,
 		_signal?: AbortSignal,
-	): Promise<CustomToolResult<ExaRenderDetails>> {
+	): Promise<CustomToolResult<MCPWrappedToolDetails>> {
 		try {
 			const apiKey = findApiKey();
 			// Websets tools require an API key; basic Exa MCP tools work without one

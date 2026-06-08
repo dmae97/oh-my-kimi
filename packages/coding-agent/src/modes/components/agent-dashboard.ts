@@ -649,6 +649,11 @@ export class AgentDashboard extends Container {
 		this.#buildLayout();
 	}
 
+	#shouldSubmitCreateDescription(data: string): boolean {
+		if (matchesKey(data, "ctrl+enter")) return true;
+		return process.platform === "win32" && data === "\n" && this.#createDescription.trim().length > 0;
+	}
+
 	async #generateAgentFromDescription(rawDescription: string): Promise<void> {
 		const description = rawDescription.trim();
 		this.#createDescription = description;
@@ -1094,10 +1099,7 @@ export class AgentDashboard extends Container {
 				}
 				return;
 			}
-			if (
-				!this.#createGenerating &&
-				(matchesKey(data, "ctrl+enter") || (data.charCodeAt(0) === 10 && data.length > 1))
-			) {
+			if (!this.#createGenerating && this.#shouldSubmitCreateDescription(data)) {
 				this.#submitCreateDescription();
 				return;
 			}
