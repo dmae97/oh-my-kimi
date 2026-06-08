@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `BlockResolution` type and surfaced resolved block spans on `ApplyResult.blockResolutions` / `PatchSectionResult.blockResolutions`. `resolveBlockEdits` now accepts an `onResolved` callback that reports each `replace block N:` / `delete block N` anchor's resolved `[start, end]` span (and whether it was a delete). Spans are surfaced only on the no-drift apply paths, where the resolved line numbers line up with the tag the caller read.
+
+### Changed
+
+- Reworked the `edit` tool prompt (`prompt.md`): added a `replace block N` vs `replace N..M` decision rule, documented that a leading decorator/attribute/doc-comment is a separate node not swept into the block (point N at the first decorator line, or use `replace N..M` for a Rust-style `///` sibling comment), reframed the blast-radius guidance so "block replace" no longer reads as the dangerous option, and added a decorated-definition example.
+
 ## [15.10.2] - 2026-06-08
 
 ### Fixed
