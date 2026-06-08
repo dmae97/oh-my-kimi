@@ -227,6 +227,10 @@
 
 - Removed the special Anthropic `claude-opus-4-8` tool-call batch cap; sessions no longer abort an in-flight provider stream after a fixed number of completed tool calls.
 
+### Added
+
+- Added a structured memory runtime surface for extensions and UI integrations to query backend status, search memories, and save explicit memories across the configured memory backend.
+
 ## [15.10.4] - 2026-06-08
 
 ### Added

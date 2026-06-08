@@ -15,6 +15,10 @@
 - Added an optional `fetch` option to `extractFacts` to control the transport used for remote extraction calls
 - Added support for passing a custom `fetch` implementation through `complete` and `summarizeMemories` via remote LLM options
 
+### Changed
+
+- Reworked the in-memory fallback vector search to build a normalized exact vector index per query, reducing repeated cosine-normalization work and matching the shape needed for future quantized index backends.
+
 ## [15.9.1] - 2026-06-04
 
 ### Breaking Changes
