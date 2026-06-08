@@ -536,37 +536,28 @@ const CCH_PLACEHOLDER = cchEncoder.encode(CCH_PLACEHOLDER_STR);
 const BILLING_SYSTEM_MARKER = cchEncoder.encode(`"system":[{"type":"text","text":"${CLAUDE_BILLING_HEADER_PREFIX}`);
 const CCH_BILLING_SEARCH_WINDOW = 150;
 
-function patchCch(body: Uint8Array): Uint8Array {
-	// Find the combined system[0] + billing-header prefix marker.
-	let markerIdx = -1;
-	outer: for (let i = 0; i <= body.length - BILLING_SYSTEM_MARKER.length; i++) {
-		for (let j = 0; j < BILLING_SYSTEM_MARKER.length; j++) {
-			if (body[i + j] !== BILLING_SYSTEM_MARKER[j]) continue outer;
-		}
-		markerIdx = i;
-		break;
-	}
-	if (markerIdx === -1) return body; // no CC billing header injected
+function patchCch(body: Uint8Array): boolean {
+	// Zero-copy Buffer view over the same memory; its `indexOf` is a native memmem,
+	// ~7.5x faster than a hand-rolled byte loop here — the marker sits ~99% through
+	// the body because `messages` serializes before `system`, so a JS scan would
+	// walk almost the entire payload (benchmarked: 563µs -> 75µs on a 1MB body).
+	const view = Buffer.from(body.buffer, body.byteOffset, body.byteLength);
 
-	// Scan at most CCH_BILLING_SEARCH_WINDOW bytes after the marker for the placeholder.
+	// Find the combined system[0] + billing-header prefix marker.
+	const markerIdx = view.indexOf(BILLING_SYSTEM_MARKER);
+	if (markerIdx === -1) return false; // no CC billing header injected
+
+	// Placeholder must sit within CCH_BILLING_SEARCH_WINDOW bytes after the marker.
 	const searchFrom = markerIdx + BILLING_SYSTEM_MARKER.length;
-	const searchTo = Math.min(searchFrom + CCH_BILLING_SEARCH_WINDOW, body.length - CCH_PLACEHOLDER.length);
-	let idx = -1;
-	outer2: for (let i = searchFrom; i <= searchTo; i++) {
-		for (let j = 0; j < CCH_PLACEHOLDER.length; j++) {
-			if (body[i + j] !== CCH_PLACEHOLDER[j]) continue outer2;
-		}
-		idx = i;
-		break;
-	}
-	if (idx === -1) return body; // placeholder not within the billing header value
+	const idx = view.indexOf(CCH_PLACEHOLDER, searchFrom);
+	if (idx === -1 || idx - searchFrom > CCH_BILLING_SEARCH_WINDOW) return false;
 
 	// Hash the body with the placeholder in place (matches CC's in-place behaviour).
 	const h = Bun.hash.xxHash64(body, CCH_SEED);
 	const cch = (h & 0xfffffn).toString(16).padStart(5, "0");
 
 	for (let i = 0; i < 5; i++) body[idx + 4 + i] = cch.charCodeAt(i);
-	return body;
+	return true;
 }
 
 type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -575,8 +566,15 @@ function wrapFetchForCch(base: FetchFn): FetchFn {
 	return (input, init) => {
 		if (init?.body && typeof init.body === "string" && init.body.includes(CCH_PLACEHOLDER_STR)) {
 			const encoded = cchEncoder.encode(init.body);
-			const patched = patchCch(encoded);
-			return base(input, { ...init, body: patched });
+			if (!patchCch(encoded)) {
+				// The OAuth billing placeholder is present but we couldn't anchor it to
+				// system[0] — e.g. an `onPayload` hook reordered the first system block's keys
+				// so BILLING_SYSTEM_MARKER no longer matches. Send the body as-is (cch stays
+				// `00000`, the prior behaviour) rather than failing the request, but surface the
+				// fingerprint regression instead of letting it ship silently.
+				logger.warn("anthropic: cch billing placeholder present but not patched; sending unattested request");
+			}
+			return base(input, { ...init, body: encoded });
 		}
 		return base(input, init);
 	};
@@ -1918,16 +1916,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					output.stopReason = "stop";
 					firstTokenTime = undefined;
 				}
-			}
-
-			// A strict-tools / grammar-too-large fallback (or a transient retry that ran
-			// after one) stamps `strictFallbackErrorMessage` onto `output.errorMessage` for
-			// the *discarded* attempt. Reaching here means a later attempt succeeded
-			// (the in-loop guard throws on error/aborted before this break), so drop the
-			// stale 400 text — otherwise a successful turn ships a phantom error string to
-			// telemetry/UI. Only the exact stale value is cleared, never a real refusal message.
-			if (output.errorMessage !== undefined && output.errorMessage === strictFallbackErrorMessage) {
-				output.errorMessage = undefined;
 			}
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

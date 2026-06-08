@@ -34,6 +34,18 @@ const cityObjectSchema = {
 
 type MockAnthropicEvent = Record<string, unknown>;
 type MockAnthropicStream = AsyncIterable<MockAnthropicEvent>;
+
+// Provider session state is keyed per endpoint+model (`anthropic-messages:<baseUrl>\0<id>`),
+// with a legacy unscoped `anthropic-messages` key still honored. Look up the strict-tools
+// flag without depending on the exact key shape.
+function anthropicStrictToolsDisabled(map: Map<string, ProviderSessionState>): boolean | undefined {
+	for (const [key, value] of map) {
+		if (key === "anthropic-messages" || key.startsWith("anthropic-messages:")) {
+			return (value as { strictToolsDisabled?: boolean }).strictToolsDisabled;
+		}
+	}
+	return undefined;
+}
 type MockAnthropicRequest = {
 	withResponse(): Promise<{
 		data: MockAnthropicStream;
@@ -381,10 +393,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(events, "done")).toBe(1);
 		expect(countEvents(events, "error")).toBe(0);
 		expect(strictFlags).toEqual([[true], [false]]);
-		expect(
-			(providerSessionState.get("anthropic-messages") as { strictToolsDisabled?: boolean } | undefined)
-				?.strictToolsDisabled,
-		).toBe(true);
+		expect(anthropicStrictToolsDisabled(providerSessionState)).toBe(true);
 
 		const nextStream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
 		const nextEvents: AssistantMessageEvent[] = [];
@@ -434,10 +443,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(events, "error")).toBe(1);
 		expect(countEvents(events, "done")).toBe(0);
 		expect(strictFlags).toEqual([[true]]);
-		expect(
-			(providerSessionState.get("anthropic-messages") as { strictToolsDisabled?: boolean } | undefined)
-				?.strictToolsDisabled,
-		).toBe(false);
+		expect(anthropicStrictToolsDisabled(providerSessionState)).toBe(false);
 	});
 
 	it("does not retry malformed envelopes after partial tool-call content starts streaming", async () => {

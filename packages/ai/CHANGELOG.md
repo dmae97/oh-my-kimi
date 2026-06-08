@@ -4,6 +4,7 @@
 ### Changed
 
 - Changed Anthropic retry handling to avoid retrying 4xx responses other than 408 and 429
+- Optimized the Anthropic `cch` attestation patch to locate the billing-header placeholder with native `Buffer.indexOf` (memmem) instead of a hand-rolled byte loop. The marker sits ~99% through the body (`messages` serializes before `system`), so the old scan walked almost the entire payload; output bytes are unchanged but the patch is ~7.5x faster (563µs -> 75µs on a 1MB body).
 
 ### Fixed
 

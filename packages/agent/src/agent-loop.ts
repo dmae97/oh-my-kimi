@@ -740,8 +740,16 @@ async function runLoopBody(
 			stream.push({ type: "turn_end", message, toolResults });
 
 			const steering = steeringMessagesFromExecution ?? ((await config.getSteeringMessages?.()) || []);
-			const asides = resolveAsides(await config.getAsideMessages?.());
-			pendingMessages = asides.length > 0 ? [...steering, ...asides] : steering;
+			if (hasMoreToolCalls) {
+				// Mid-work: fold any non-interrupting asides into the next turn alongside steering.
+				const asides = resolveAsides(await config.getAsideMessages?.());
+				pendingMessages = asides.length > 0 ? [...steering, ...asides] : steering;
+			} else {
+				// Stop boundary: only steering (live user input) forces another turn here. Leave
+				// asides for the outer drain below so a passive aside can't trigger an extra model
+				// turn ahead of a queued follow-up — the outer drain batches asides + follow-ups together.
+				pendingMessages = steering;
+			}
 		}
 
 		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
@@ -1428,12 +1436,17 @@ async function executeToolCalls(
 						toolSignal,
 					);
 					if (after) {
-						result = {
+						// Re-normalize the post-hook result: `afterToolCall` is untyped user/extension
+						// code and may return malformed `content` (non-array / invalid blocks), which
+						// would otherwise be persisted verbatim and corrupt the session — the same
+						// hazard `coerceToolResult` guards on the execute path.
+						const coerced = coerceToolResult({
 							content: after.content ?? result.content,
 							details: after.details ?? result.details,
 							isError: after.isError ?? result.isError,
-						};
-						isError = after.isError ?? isError;
+						});
+						result = coerced.result;
+						isError = coerced.malformed || (after.isError ?? isError);
 					}
 				} catch (e) {
 					caughtError = e;
@@ -1448,10 +1461,15 @@ async function executeToolCalls(
 
 		const interrupted = interruptState.triggered;
 		const abortedDuringExecution = toolSignal.aborted && isError;
-		if (interrupted) {
+		if (interrupted && isError) {
+			// Steering/abort fired AND this tool failed — it was cut off before producing a
+			// usable result, so report it as skipped.
 			record.skipped = true;
 			emitToolResult(record, createSkippedToolResult(), true);
 		} else {
+			// No interrupt, or the tool finished (successfully or with a genuine error) before
+			// the interrupt landed. Keep its real result: a completed tool already ran its side
+			// effects, so the model must see what actually happened rather than a false "skipped".
 			emitToolResult(record, result, isError);
 		}
 
@@ -1459,7 +1477,7 @@ async function executeToolCalls(
 		const errorMessageForSpan =
 			caughtError === undefined && isError && firstTextBlock?.type === "text" ? firstTextBlock.text : undefined;
 		const status =
-			interrupted || abortedDuringExecution
+			(interrupted && isError) || abortedDuringExecution
 				? "aborted"
 				: caughtError instanceof ToolCallBlockedError
 					? "blocked"
