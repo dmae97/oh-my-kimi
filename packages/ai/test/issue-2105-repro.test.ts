@@ -70,6 +70,13 @@ describe("AIML API built-in provider (issue #2105)", () => {
 			"gpt-4o-mini-tts",
 			"google/veo-3.1-first-last-image-to-video",
 			"text-embedding-3-large",
+			"bytedance/seedance-1-0-lite-i2v",
+			"dall-e-3",
+			"flux-2",
+			"google/veo-3.1-i2v",
+			"imagen-3.0-generate-002",
+			"sora-2-i2v",
+			"whisper-large",
 		]) {
 			expect(isLikelyAimlApiChatModelId(modelId)).toBe(false);
 		}

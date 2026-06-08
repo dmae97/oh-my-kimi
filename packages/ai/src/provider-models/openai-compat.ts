@@ -865,10 +865,17 @@ export function xaiOAuthModelManagerOptions(
 // ---------------------------------------------------------------------------
 
 const AIML_API_NON_CHAT_MODEL_ID_PATTERN =
-	/(?:^|[/:._-])(?:audio|embed|embedding|embeddings|image|speech|tts|video)(?:$|[/:._-])/i;
+	/(?:^|[/:._-])(?:audio|embed|embedding|embeddings|i2i|i2v|image|speech|t2i|t2v|tts|video)(?:$|[/:._-])/i;
+
+const AIML_API_NON_CHAT_MODEL_ID_SUBSTRINGS = ["dall-e", "dalle", "flux", "imagen", "sora", "veo", "whisper"] as const;
 
 export function isLikelyAimlApiChatModelId(id: string): boolean {
-	return !AIML_API_NON_CHAT_MODEL_ID_PATTERN.test(id);
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) return false;
+	return (
+		!AIML_API_NON_CHAT_MODEL_ID_PATTERN.test(normalized) &&
+		!AIML_API_NON_CHAT_MODEL_ID_SUBSTRINGS.some(token => normalized.includes(token))
+	);
 }
 
 export interface AimlApiModelManagerConfig {
