@@ -1,3 +1,2 @@
 export * from "./mcp-client";
-export { renderExaCall, renderExaResult } from "./render";
-export type * from "./types";
+export type { ExaSearchResponse, MCPCallResponse, MCPTool, MCPToolsResponse, MCPToolWrapperConfig } from "./types";

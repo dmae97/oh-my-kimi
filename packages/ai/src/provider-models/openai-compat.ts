@@ -872,11 +872,7 @@ export interface AimlApiModelManagerConfig {
 export function aimlApiModelManagerOptions(
 	config?: AimlApiModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions(
-		"aimlapi" as Parameters<typeof getBundledModels>[0],
-		"https://api.aimlapi.com/v1",
-		config,
-	);
+	return createSimpleOpenAICompletionsOptions("aimlapi", "https://api.aimlapi.com/v1", config);
 }
 
 // ---------------------------------------------------------------------------

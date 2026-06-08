@@ -59,7 +59,7 @@ afterEach(async () => {
 });
 
 describe("AgentDashboard create editor", () => {
-	test("keeps new-agent descriptions as multiline editor text", async () => {
+	test("keeps carriage return as multiline editor text", async () => {
 		await initTheme(false);
 		const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 24, {});
 
@@ -76,17 +76,38 @@ describe("AgentDashboard create editor", () => {
 		expect(rendered).not.toContain("Description is required.");
 	});
 
-	test("submits new-agent descriptions on Windows Ctrl+Enter LF sequence", async () => {
+	test("submits multiline new-agent descriptions on CSI-u Ctrl+Enter", async () => {
 		await initTheme(false);
 		const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 24, {});
 
 		dashboard.handleInput("n");
-		typeText(dashboard, "single line");
-		dashboard.handleInput("\n\r");
+		typeText(dashboard, "first line");
+		dashboard.handleInput("\r");
+		typeText(dashboard, "second line");
+		dashboard.handleInput("\x1b[13;5u");
 		await Bun.sleep(0);
 		const rendered = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
 
 		expect(rendered).toContain("Model registry unavailable in current session.");
+		expect(rendered).not.toContain("Description is required.");
+	});
+
+	test("keeps bare LF as multiline editor text on non-Windows terminals", async () => {
+		if (process.platform === "win32") return;
+		await initTheme(false);
+		const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 24, {});
+
+		dashboard.handleInput("n");
+		typeText(dashboard, "first line");
+		dashboard.handleInput("\n");
+		typeText(dashboard, "second line");
+		const rendered = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
+
+		expect(rendered).toContain("> first line");
+		expect(rendered).toContain("  second line");
+		expect(rendered).toContain("Ctrl+Enter: generate");
+		expect(rendered).toContain("Enter: newline");
+		expect(rendered).not.toContain("Model registry unavailable in current session.");
 		expect(rendered).not.toContain("Description is required.");
 	});
 });

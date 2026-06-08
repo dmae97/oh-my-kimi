@@ -60,7 +60,6 @@ import { WriteTool } from "./write";
 import { YieldTool } from "./yield";
 
 export * from "../edit";
-export type * from "../exa/types";
 export * from "../goals";
 export * from "../lsp";
 export * from "../session/streaming-output";
