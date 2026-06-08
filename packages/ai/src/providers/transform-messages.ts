@@ -209,7 +209,8 @@ export function transformMessages<TApi extends Api>(
 						// Only an aborted/errored turn's final (mid-stream) block can hold a
 						// partial signature; abandoned tool-use turns strip all. Drop the
 						// untrustworthy signature so the encoder can downgrade the block to text.
-						const signatureUntrustworthy = abandonedToolUse || (invalidStopReason && blockIndex === lastBlockIndex);
+						const signatureUntrustworthy =
+							abandonedToolUse || (invalidStopReason && blockIndex === lastBlockIndex);
 						const sanitized =
 							signatureUntrustworthy && block.thinkingSignature
 								? { ...block, thinkingSignature: undefined }
