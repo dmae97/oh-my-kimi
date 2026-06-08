@@ -71,6 +71,7 @@ export class WorkerCore {
 		this.#runtime = new JsRuntime({
 			initialCwd: snapshot.cwd,
 			sessionId: snapshot.sessionId,
+			localRoots: snapshot.localRoots,
 		});
 		return this.#runtime;
 	}

@@ -29,11 +29,11 @@ display(value) → None
 print(value, ...) → None
     Print to the cell's text output.
 read(path, offset?=1, limit?=None) → str
-    Read file contents as text. offset/limit are 1-indexed line bounds.
+    Read file contents as text. offset/limit are 1-indexed line bounds. Accepts `local://…` (resolved to the session-local root, same place `read local://…` reads).
 write(path, content) → str
-    Write content to a file (creates parent directories). Returns the resolved path.
+    Write content to a file (creates parent directories). Returns the resolved path. Accepts `local://…` to persist artifacts across turns / share with subagents.
 append(path, content) → str
-    Append content to a file. Returns the resolved path.
+    Append content to a file. Returns the resolved path. Accepts `local://…`.
 tree(path?=".", max_depth?=3, show_hidden?=False) → str
     Render a directory tree.
 diff(a, b) → str

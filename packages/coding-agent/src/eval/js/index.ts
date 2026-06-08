@@ -1,5 +1,5 @@
 import type { ToolSession } from "../../tools";
-import type { ExecutorBackend, ExecutorBackendExecOptions, ExecutorBackendResult } from "../backend";
+import { type ExecutorBackend, type ExecutorBackendExecOptions, type ExecutorBackendResult, resolveEvalUrlRoots } from "../backend";
 import { executeJs } from "./executor";
 
 const JS_SESSION_PREFIX = "js:";
@@ -30,6 +30,7 @@ export default {
 			onChunk: opts.onChunk,
 			onStatus: opts.onStatus,
 			session: opts.session,
+			localRoots: resolveEvalUrlRoots(opts.session),
 		});
 		return {
 			output: result.output,

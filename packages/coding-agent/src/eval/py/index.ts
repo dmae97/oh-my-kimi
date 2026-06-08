@@ -1,5 +1,5 @@
 import type { ToolSession } from "../../tools";
-import type { ExecutorBackend, ExecutorBackendExecOptions, ExecutorBackendResult } from "../backend";
+import { type ExecutorBackend, type ExecutorBackendExecOptions, type ExecutorBackendResult, resolveEvalUrlRoots } from "../backend";
 import { executePython, type PythonExecutorOptions } from "./executor";
 import { checkPythonKernelAvailability } from "./kernel";
 
@@ -34,6 +34,7 @@ export default {
 			kernelMode,
 			sessionFile: opts.sessionFile,
 			artifactsDir: opts.session.getArtifactsDir?.() ?? undefined,
+			localRoots: resolveEvalUrlRoots(opts.session),
 			kernelOwnerId: opts.kernelOwnerId,
 			reset: opts.reset,
 			artifactPath: opts.artifactPath,

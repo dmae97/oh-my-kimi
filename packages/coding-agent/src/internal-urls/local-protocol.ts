@@ -134,6 +134,19 @@ export function resolveLocalUrlToPath(input: string | InternalUrl, options: Loca
 }
 
 /**
+ * On-disk roots the eval helpers (`read`/`write`/`append`) substitute for
+ * internal-URL schemes so e.g. `write("local://x.md")` lands where a later
+ * `read local://x.md` resolves — instead of a literal `local:/` directory under
+ * the cwd (a stdlib `pathlib.Path`/`path.resolve` collapses `local://` to
+ * `local:/`). Keyed by scheme without the `://`. Currently only `local`, but the
+ * shape is a map so additional file-backed schemes can be added without
+ * re-plumbing the worker boundary.
+ */
+export function buildEvalUrlRoots(options: LocalProtocolOptions): Record<string, string> {
+	return { local: resolveLocalRoot(options) };
+}
+
+/**
  * Protocol handler for local:// URLs.
  *
  * URL forms:

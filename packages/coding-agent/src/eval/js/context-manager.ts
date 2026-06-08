@@ -68,6 +68,7 @@ export async function executeInVmContext(options: {
 	sessionId: string;
 	cwd: string;
 	session: ToolSession;
+	localRoots?: Record<string, string>;
 	reset?: boolean;
 	code: string;
 	filename: string;
@@ -100,7 +101,7 @@ export async function executeInVmContext(options: {
 	}
 	const session = await acquireSession(
 		options.sessionKey,
-		{ cwd: options.cwd, sessionId: options.sessionId },
+		{ cwd: options.cwd, sessionId: options.sessionId, localRoots: options.localRoots },
 		options.timeoutMs,
 	);
 	return await runOnce(session, options);
@@ -132,6 +133,7 @@ async function runOnce(
 		sessionId: string;
 		cwd: string;
 		session: ToolSession;
+		localRoots?: Record<string, string>;
 		code: string;
 		filename: string;
 		runState: VmRunState;
@@ -171,7 +173,7 @@ async function runOnce(
 			runId,
 			code: options.code,
 			filename: options.filename,
-			snapshot: { cwd: options.cwd, sessionId: options.sessionId },
+			snapshot: { cwd: options.cwd, sessionId: options.sessionId, localRoots: options.localRoots },
 		});
 		return await promise;
 	} finally {

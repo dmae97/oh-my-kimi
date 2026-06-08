@@ -57,6 +57,13 @@ export interface PythonExecutorOptions {
 	artifactPath?: string;
 	artifactId?: string;
 	/**
+	 * On-disk roots the prelude helpers (`read`/`write`/`append`) substitute for
+	 * internal-URL schemes (e.g. `{ local: "/…/artifacts/local" }`). Exported to
+	 * the kernel as `PI_EVAL_LOCAL_ROOTS` (JSON) so `write("local://x")` lands
+	 * where `read local://x` resolves instead of a literal `local:/` directory.
+	 */
+	localRoots?: Record<string, string>;
+	/**
 	 * ToolSession used to resolve host-side `tool.<name>(args)` calls made from
 	 * the Python prelude's bridge proxy. When omitted, the bridge env vars are
 	 * not injected and any `tool.foo(...)` raises in Python.
@@ -275,6 +282,7 @@ const MANAGED_KERNEL_ENV_KEYS = [
 	"PI_TOOL_BRIDGE_URL",
 	"PI_TOOL_BRIDGE_TOKEN",
 	"PI_TOOL_BRIDGE_SESSION",
+	"PI_EVAL_LOCAL_ROOTS",
 ] as const;
 
 function buildKernelEnvPatch(options: {
@@ -282,13 +290,16 @@ function buildKernelEnvPatch(options: {
 	artifactsDir?: string;
 	bridgeSessionId?: string;
 	bridge?: { url: string; token: string };
+	localRoots?: Record<string, string>;
 }): KernelRuntimeEnv {
+	const localRoots = options.localRoots;
 	return {
 		PI_SESSION_FILE: options.sessionFile ?? null,
 		PI_ARTIFACTS_DIR: options.artifactsDir ?? null,
 		PI_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
 		PI_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
 		PI_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
+		PI_EVAL_LOCAL_ROOTS: localRoots && Object.keys(localRoots).length > 0 ? JSON.stringify(localRoots) : null,
 	};
 }
 
@@ -297,6 +308,7 @@ function buildKernelEnv(options: {
 	artifactsDir?: string;
 	bridgeSessionId?: string;
 	bridge?: { url: string; token: string };
+	localRoots?: Record<string, string>;
 }): Record<string, string> | undefined {
 	const patch = buildKernelEnvPatch(options);
 	const env: Record<string, string> = {};
