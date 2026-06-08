@@ -11,6 +11,7 @@
 - Added a built-in `ts-no-test-timers` rule that flags real timers (`Bun.sleep`, `setTimeout`, `setInterval`) in `*.test.ts` files, steering toward fake timers (`vi.useFakeTimers()` / `vi.advanceTimersByTime()`)
 - Added support for paste marker highlighting with accent styling (`[Paste #N, +X lines]`/`[Paste #N, Y chars]`) in the prompt editor, matching the visual treatment of image references
 - Added pixel dimensions to pasted/loaded image placeholders in the prompt — the marker now reads `[Image #N, WxH]` (falling back to `[Image #N]` when the header can't be decoded).
+- The bundled shell now treats `nohup` as a builtin: `nohup … &` runs the command without masking `SIGHUP` or detaching it, so agent-started daemons stay tied to this agent's lifetime instead of leaking as orphans when the agent exits. Updated the bash tool prompt's daemon guidance to match (dropped the `nohup … & / setsid … & / disown` detach recommendation in favor of a large `timeout` plus the persistent session).
 
 ### Changed
 

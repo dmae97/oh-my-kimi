@@ -1151,7 +1151,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const renderArgs = toBashRenderArgs(args, config);
 			const cmdLines = args ? formatBashCommandLines(renderArgs, uiTheme) : undefined;
 			const isError = result.isError === true;
-			const icon = options.isPartial ? "pending" : isError ? "error" : "success";
+			const icon = options.isPartial ? "pending" : isError ? "error" : "done";
 			const header =
 				config.showHeader === false
 					? undefined
@@ -1249,7 +1249,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					return outputBlock.render(
 						{
 							header,
-							state: options.isPartial ? "pending" : isError ? "error" : "success",
+							state: options.isPartial ? "pending" : isError ? "error" : "done",
 							sections: [
 								{
 									lines: options.isPartial
