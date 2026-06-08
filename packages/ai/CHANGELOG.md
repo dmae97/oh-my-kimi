@@ -5,6 +5,8 @@
 ### Removed
 
 - Removed the synthetic `<turn-aborted>` developer guidance note that `transformMessages` injected after an aborted/errored assistant turn (and its `turn-aborted-guidance.md` prompt). The per-call synthetic `"aborted"` tool results already tell the model the turn's tools were terminated, so the extra "verify current state before retrying" note was redundant — and it biased the model toward second-guessing a deliberate user interrupt when the turn was resumed.
+- Removed the legacy Anthropic first-user-message skip for `<system-reminder>` blocks now that synthetic reminders no longer travel as user messages.
+
 
 ## [15.10.2] - 2026-06-08
 ### Added

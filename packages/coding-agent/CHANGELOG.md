@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Changed hidden custom messages and file-mention context to reach providers as `developer` messages instead of user-authored turns, so system reminders no longer pollute compacted user history.
+
 - Rewrote the plan-mode active prompt (`prompts/system/plan-mode-active.md`) from scratch to stop producing shallow plans. Reframed the artifact as an **execution spec** a fresh agent runs after the planning conversation is cleared/compacted (zero design decisions for the implementer) rather than a brevity-capped summary. Folded high-consensus requirements into the existing sections as inline, conditional rules — no new boilerplate sections: ordered Approach steps that keep the build/tests green after each step (sequencing); exact signatures/literals for new or load-bearing symbols (contracts); full callsite list + clean cutover for renames/signature-changes/removals; Verification that must exercise the new behavior (input → observable output) with run preconditions, not just build/typecheck; Assumptions restricted to user-overridable choices plus pre-decided fallbacks for load-bearing assumptions; a provenance rule (plan facts must come from a read this session; unverified claims flagged inline); and bans on conversation back-references and decision-free sections (Non-Goals/Alternatives/Risks/Future Work). Kept the decision-complete self-check and the brevity-vs-completeness tiebreak (completeness wins). Render contract (Handlebars vars/conditionals) unchanged; verified across all `planExists`/`reentry`/`iterative` branch combinations.
 
 ### Removed

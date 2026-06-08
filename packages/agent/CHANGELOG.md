@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed core custom and hook messages to convert to `developer` messages for provider context.
+
 ### Removed
 
 - Removed the now-dead `<turn-aborted>` marker from the OpenAI compaction output user-message filter, since `transformMessages` no longer emits that note.
+- Removed stale synthetic user-message tag filters from OpenAI remote compaction output preservation; developer messages are now dropped by role instead.
+
 
 ## [15.10.2] - 2026-06-08
 
