@@ -451,10 +451,10 @@ function normalizeMaxToolCallsPerTurn(value: number | undefined): number | undef
 	return normalized > 0 ? normalized : undefined;
 }
 
-function cloneAssistantMessageForToolCallCap(message: AssistantMessage): AssistantMessage {
+function cloneAssistantMessageForToolCallCap(message: AssistantMessage, throughContentIndex: number): AssistantMessage {
 	return {
 		...message,
-		content: message.content.map(block => {
+		content: message.content.slice(0, throughContentIndex + 1).map(block => {
 			if (block.type === "toolCall") {
 				return { ...block, arguments: structuredClone(block.arguments) };
 			}
@@ -973,7 +973,7 @@ async function streamAssistantResponse(
 								if (event.type === "toolcall_end" && maxToolCallsPerTurn !== undefined) {
 									completedToolCalls++;
 									if (completedToolCalls >= maxToolCallsPerTurn) {
-										cappedMessage = cloneAssistantMessageForToolCallCap(partialMessage);
+										cappedMessage = cloneAssistantMessageForToolCallCap(partialMessage, event.contentIndex);
 										toolCallCapAbortController?.abort();
 										const capped = await finishCappedAssistantMessage();
 										if (capped) return capped;
