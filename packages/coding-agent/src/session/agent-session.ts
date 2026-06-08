@@ -4009,6 +4009,11 @@ export class AgentSession {
 		return this.#obfuscator.obfuscate(text);
 	}
 
+	#obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation {
+		if (!preparation.previousSummary || !this.#obfuscator?.hasSecrets()) return preparation;
+		return { ...preparation, previousSummary: this.#obfuscator.obfuscate(preparation.previousSummary) };
+	}
+
 	#deobfuscateFromProvider(text: string): string {
 		if (!this.#obfuscator?.hasSecrets()) return text;
 		return this.#obfuscator.deobfuscate(text);
@@ -6196,8 +6201,8 @@ export class AgentSession {
 						customInstructions,
 						compactionAbortController.signal,
 						{
-							promptOverride: compactionPrep.hookPrompt,
-							extraContext: compactionPrep.hookContext,
+							promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+							extraContext: this.#obfuscateForProvider(compactionPrep.hookContext),
 							remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
 							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						},
@@ -7365,7 +7370,7 @@ export class AgentSession {
 
 			try {
 				return await compact(
-					preparation,
+					this.#obfuscatePreparationForProvider(preparation),
 					candidate,
 					apiKey,
 					this.#obfuscateTextForProvider(customInstructions),
@@ -7661,20 +7666,27 @@ export class AgentSession {
 					let attempt = 0;
 					while (true) {
 						try {
-							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
-								promptOverride: compactionPrep.hookPrompt,
-								extraContext: compactionPrep.hookContext,
-								remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
-								metadata: this.agent.metadataForProvider(candidate.provider),
-								initiatorOverride: "agent",
-								convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
-								telemetry,
-								// Honor the user's /model thinking selection on the
-								// auto-compaction path — the most-fired compaction
-								// site. Clamped per-model inside compact() via
-								// resolveCompactionEffort.
-								thinkingLevel: this.thinkingLevel,
-							});
+							compactResult = await compact(
+								this.#obfuscatePreparationForProvider(preparation),
+								candidate,
+								apiKey,
+								undefined,
+								autoCompactionSignal,
+								{
+									promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+									extraContext: this.#obfuscateForProvider(compactionPrep.hookContext),
+									remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
+									metadata: this.agent.metadataForProvider(candidate.provider),
+									initiatorOverride: "agent",
+									convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+									telemetry,
+									// Honor the user's /model thinking selection on the
+									// auto-compaction path — the most-fired compaction
+									// site. Clamped per-model inside compact() via
+									// resolveCompactionEffort.
+									thinkingLevel: this.thinkingLevel,
+								},
+							);
 							break;
 						} catch (error) {
 							if (autoCompactionSignal.aborted) {

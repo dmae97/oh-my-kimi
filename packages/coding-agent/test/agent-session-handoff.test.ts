@@ -169,6 +169,41 @@ describe("AgentSession handoff", () => {
 		expect(result?.document).not.toContain(placeholder);
 	});
 
+	it("obfuscates previous compaction summary before forwarding to compact()", async () => {
+		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
+		const entries = sessionManager.getBranch();
+		const lastEntryId = entries[entries.length - 1]?.id;
+		if (!lastEntryId) throw new Error("Expected a seeded entry id");
+		const fixedPreparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId: lastEntryId,
+			messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "old" }], timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 100,
+			previousSummary: `summary ${HANDOFF_SECRET}`,
+			previousPreserveData: undefined,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: compactionModule.DEFAULT_COMPACTION_SETTINGS,
+		};
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockResolvedValue({
+			summary: "new summary",
+			shortSummary: undefined,
+			firstKeptEntryId: lastEntryId,
+			tokensBefore: 100,
+			details: {},
+		});
+
+		await session.compact();
+
+		const call = compactSpy.mock.calls[0];
+		if (!call) throw new Error("Expected compact call");
+		expect(call[0].previousSummary).toBe(`summary ${placeholder}`);
+		expect(call[0].previousSummary).not.toContain(HANDOFF_SECRET);
+	});
+
 	it("runs context maintenance before sending an oversized pending prompt", async () => {
 		session.settings.set("compaction.thresholdTokens", 50);
 		session.settings.set("compaction.keepRecentTokens", 1);
