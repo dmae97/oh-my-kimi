@@ -1,13 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added clickable file path hyperlinks to read tool outputs (read-call rows, grouped summaries, and inline previews) using resolved or absolute file targets with selector-based line anchors for quick navigation
+- Added a resolved-span echo to `replace block`/`delete block` edits: a successful block op now prints `replace block N → resolved lines A-B (K lines)` between the section header and the diff preview, so the model can confirm tree-sitter matched the construct it intended (e.g. catch a decorator left outside the block) instead of inferring the span from the diff after the fact.
 
 ### Changed
 
+- Changed the `find` tool to process each explicit multi-path target separately before merging results so searches stay scoped to the requested paths
+- Changed multi-path `find` handling so invalid extra targets no longer fail the whole query and now return matches from valid targets only
 - Changed background-job completion and late LSP diagnostic delivery to inject at the next agent step boundary (mid-run), via the new non-interrupting "aside" channel, instead of only when the agent reaches a yield/follow-up point. The model now sees these notifications between its own requests without the turn having to end first, and in-flight tools are never interrupted; `job`-poll acknowledgement still suppresses results the agent already saw.
 - Changed late LSP diagnostics after edit or write to surface in the chat transcript as `Late diagnostics` entries rendered through the same grouped tree renderer the `edit`/`write` tools use (per-file nodes, severity icons, `:line:col` locations), and to honor the global tool-output expand toggle (collapsed entries cap at 5 diagnostics with a `… N more` hint)
 - Changed delayed diagnostics delivery to batch late results in one message per flush instead of a raw hidden custom payload
@@ -21,6 +23,8 @@
 
 ### Fixed
 
+- Fixed duplicate `find` matches in multi-target queries by deduplicating overlapping paths in merged results
+- Fixed `find` partial updates to avoid repeated streamed rows while scans are still running
 - Fixed stale late diagnostics from older edits being shown after a file was edited again
 - Fixed read output paths so selector suffixes are preserved when corrected paths were returned without selectors
 - Fixed `read` surfacing a misleading red "Operation aborted" on a plain-file or directory read when a turn was interrupted mid-read. Those reads are deterministic and fast, so `execute` now runs them to completion instead of cancelling them; slower/non-deterministic reads (archive, sqlite, document, image, summary, conflict scan, URL) stay cancellable.

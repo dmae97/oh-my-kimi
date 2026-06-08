@@ -572,9 +572,14 @@ export interface ResolvedMultiSearchPath {
 	targets?: ResolvedSearchTarget[];
 }
 
-export interface ResolvedMultiFindPattern {
+export interface ResolvedFindTarget {
 	basePath: string;
 	globPattern: string;
+	hasGlob: boolean;
+}
+
+export interface ResolvedMultiFindPattern {
+	targets: ResolvedFindTarget[];
 	scopePath: string;
 }
 
@@ -782,30 +787,22 @@ async function resolveFindPatternItems(
 		return undefined;
 	}
 
-	const parsedItems = await Promise.all(
-		patternItems.map(async item => {
-			const parsedPattern = parseFindPattern(item);
-			const absoluteBasePath = resolveToCwd(parsedPattern.basePath, cwd);
-			const stat = await fs.promises.stat(absoluteBasePath);
-			return { raw: item, parsedPattern, absoluteBasePath, stat };
-		}),
-	);
-
-	const commonBasePath = findCommonBasePath(parsedItems.map(item => item.absoluteBasePath));
-	const combinedPatterns = parsedItems.map(item => {
-		const relativeBasePath = normalizePosixPath(path.relative(commonBasePath, item.absoluteBasePath)) || ".";
-		if (item.parsedPattern.hasGlob) {
-			return joinRelativeGlob(relativeBasePath, item.parsedPattern.globPattern);
-		}
-		if (item.stat.isDirectory()) {
-			return joinRelativeGlob(relativeBasePath, "**/*");
-		}
-		return relativeBasePath === "." ? path.basename(item.absoluteBasePath) : relativeBasePath;
+	// Each path becomes its own walk root. Collapsing to a shared common ancestor
+	// (and filtering with a brace-union glob) would force the walker to traverse
+	// and stat every unrelated sibling under that ancestor — two paths under
+	// $HOME would scan all of $HOME. The find tool fans these targets out in
+	// parallel instead, so every scan stays bounded to exactly one requested path.
+	const targets = patternItems.map(item => {
+		const parsedPattern = parseFindPattern(item);
+		return {
+			basePath: resolveToCwd(parsedPattern.basePath, cwd),
+			globPattern: parsedPattern.globPattern,
+			hasGlob: parsedPattern.hasGlob,
+		};
 	});
 
 	return {
-		basePath: commonBasePath,
-		globPattern: buildBraceUnion(combinedPatterns) ?? "**/*",
+		targets,
 		scopePath: toScopeDisplay(patternItems, cwd),
 	};
 }
