@@ -18,6 +18,7 @@ import {
 	supportsMidConversationSystemMessages,
 } from "../model-thinking";
 import { calculateCost } from "../models";
+import { isUsageLimitError } from "../rate-limit-utils";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
 	Api,
@@ -1036,11 +1037,25 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"content_block_stop",
 ]);
 
+/**
+ * Anthropic keepalive `ping` events carry no message content, but they prove the
+ * upstream connection is alive during long server-side gaps (extended thinking,
+ * slow tool execution). They are normally dropped before reaching the consumer;
+ * we instead surface them as lightweight markers so the idle watchdog
+ * (`iterateWithIdleTimeout`) resets its deadline on every ping. Without this, a
+ * connection that is demonstrably still streaming pings still trips
+ * "Anthropic stream stalled while waiting for the next event". The message-event
+ * branches in `streamAnthropic` match none of these markers, so they are ignored.
+ */
+type RawMessagePingEvent = { type: "ping" };
+type AnthropicStreamEvent = RawMessageStreamEvent | RawMessagePingEvent;
+const ANTHROPIC_PING_EVENT: RawMessagePingEvent = { type: "ping" };
+
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
 	onSseEvent?: AnthropicOptions["onSseEvent"],
-): AsyncGenerator<RawMessageStreamEvent> {
+): AsyncGenerator<AnthropicStreamEvent> {
 	if (!response.body) {
 		throw new Error("Attempted to iterate over an Anthropic response with no body");
 	}
@@ -1052,6 +1067,12 @@ async function* iterateAnthropicEvents(
 		notifyRawSseEvent(onSseEvent, sse);
 		if (sse.event === "error") {
 			throw new Error(sse.data);
+		}
+
+		if (sse.event === "ping") {
+			// Surface keepalives so the idle watchdog treats them as liveness.
+			yield ANTHROPIC_PING_EVENT;
+			continue;
 		}
 
 		if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
@@ -1104,7 +1125,7 @@ async function getAnthropicStreamResponse(
 	signal?: AbortSignal,
 	onSseEvent?: AnthropicOptions["onSseEvent"],
 ): Promise<{
-	events: AsyncIterable<RawMessageStreamEvent>;
+	events: AsyncIterable<AnthropicStreamEvent>;
 	response: Response;
 	requestId: string | null;
 	recordsRawSseEvents: boolean;
@@ -1126,9 +1147,9 @@ async function getAnthropicStreamResponse(
 }
 
 async function* observeDecodedAnthropicSdkEvents(
-	events: AsyncIterable<RawMessageStreamEvent>,
+	events: AsyncIterable<AnthropicStreamEvent>,
 	observer: (event: RawSseEvent) => void,
-): AsyncGenerator<RawMessageStreamEvent> {
+): AsyncGenerator<AnthropicStreamEvent> {
 	for await (const event of events) {
 		const data = JSON.stringify(event);
 		// Reconstructed from decoded SDK event; not literal wire bytes.
@@ -1207,6 +1228,14 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
 	if (provider === "github-copilot" && isCopilotTransientModelError(error)) return true;
+	// Account-level usage/quota limits ("usage_limit_reached", "exceed your
+	// account's rate limit", "quota exceeded") are persistent — the server
+	// parks the credential for minutes-to-hours (see the long `retry-after`).
+	// Retrying the same key with the provider's seconds-scale backoff never
+	// helps; these are owned by the credential-rotation layer (auth-gateway /
+	// `streamSimple` a/b/c policy), so surface them immediately instead of
+	// burning the retry budget here.
+	if (isUsageLimitError(error.message)) return false;
 	const msg = error.message.toLowerCase();
 	if (
 		isUnexpectedSocketCloseMessage(msg) ||
@@ -1415,7 +1444,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							requestTimeoutMs,
 						);
 					}
-					let anthropicStream: AsyncIterable<RawMessageStreamEvent>;
+					let anthropicStream: AsyncIterable<AnthropicStreamEvent>;
 					let response: Response;
 					let requestId: string | null;
 					let recordsRawSseEvents: boolean;

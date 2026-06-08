@@ -558,8 +558,8 @@ describe("Duplicate Tool Results Regression", () => {
 			];
 			const context: Context = { messages };
 			const wireMessages = convertMessages(providerModel, context, detectCompat(providerModel));
-			const assistantIds = assistantWireMessages(wireMessages).flatMap(message =>
-				message.tool_calls?.map(toolCall => toolCall.id) ?? [],
+			const assistantIds = assistantWireMessages(wireMessages).flatMap(
+				message => message.tool_calls?.map(toolCall => toolCall.id) ?? [],
 			);
 
 			expect(assistantIds, providerModel.provider).toEqual([duplicateId, expectedDuplicateId]);
