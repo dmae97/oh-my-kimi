@@ -139,12 +139,10 @@ describe("task result detail-less state", () => {
 	it("renders a detail-less success with the accent bullet, not an error glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
-		const component = taskToolRenderer.renderResult(
-			{ content: [{ type: "text", text: "done" }] },
-			options,
-			theme,
-			{ agent: "explore", tasks: [] },
-		);
+		const component = taskToolRenderer.renderResult({ content: [{ type: "text", text: "done" }] }, options, theme, {
+			agent: "explore",
+			tasks: [],
+		});
 		const stripped = Bun.stripANSI(component.render(120).join("\n"));
 
 		expect(stripped).toContain(theme.status.done);

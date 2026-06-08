@@ -641,9 +641,7 @@ function renderAgentProgress(
 		}
 	} else {
 		const glyph =
-			progress.status === "completed"
-				? theme.styledSymbol("status.done", "accent")
-				: theme.fg(iconColor, icon);
+			progress.status === "completed" ? theme.styledSymbol("status.done", "accent") : theme.fg(iconColor, icon);
 		statusLine = `${indent}${glyph} ${theme.fg("accent", titlePart)}`;
 	}
 
