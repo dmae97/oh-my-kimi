@@ -966,8 +966,7 @@ export function encodeStream(
 								cur = state.open;
 								cur.currentPartText = "";
 							} else {
-								closeOpenFunctionCalls();
-								if (state.open) closeOpen();
+								if (state.open && state.open.kind !== "function_call") closeOpen();
 								cur = openMessage();
 							}
 							const part = { type: "output_text", text: "", annotations: [] as never[] };
@@ -1018,8 +1017,7 @@ export function encodeStream(
 							break;
 						}
 						case "thinking_start": {
-							closeOpenFunctionCalls();
-							if (state.open) closeOpen();
+							if (state.open && state.open.kind !== "function_call") closeOpen();
 							openReasoning(ev.partial, ev.contentIndex);
 							break;
 						}
