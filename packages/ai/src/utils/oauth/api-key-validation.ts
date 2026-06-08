@@ -5,6 +5,14 @@ type OpenAICompatibleValidationOptions = {
 	model: string;
 	signal?: AbortSignal;
 };
+type AnthropicCompatibleValidationOptions = {
+	provider: string;
+	apiKey: string;
+	baseUrl: string;
+	model: string;
+	signal?: AbortSignal;
+};
+
 
 type ModelListValidationOptions = {
 	provider: string;
@@ -14,6 +22,12 @@ type ModelListValidationOptions = {
 };
 
 const VALIDATION_TIMEOUT_MS = 15_000;
+
+function normalizeAnthropicCompatibleBaseUrl(baseUrl: string): string {
+	const trimmed = baseUrl.trim().replace(/\/+$/, "");
+	return trimmed.endsWith("/v1") ? trimmed.slice(0, -3) : trimmed;
+}
+
 
 /**
  * Validate an API key against an OpenAI-compatible chat completions endpoint.
@@ -35,6 +49,46 @@ export async function validateOpenAICompatibleApiKey(options: OpenAICompatibleVa
 			messages: [{ role: "user", content: "ping" }],
 			max_tokens: 1,
 			temperature: 0,
+		}),
+		signal,
+	});
+
+	if (response.ok) {
+		return;
+	}
+
+	let details = "";
+	try {
+		details = (await response.text()).trim();
+	} catch {
+		// ignore body parse errors, status is enough
+	}
+
+	const message = details
+		? `${options.provider} API key validation failed (${response.status}): ${details}`
+		: `${options.provider} API key validation failed (${response.status})`;
+	throw new Error(message);
+}
+
+/**
+ * Validate an API key against an Anthropic-compatible messages endpoint.
+ */
+export async function validateAnthropicCompatibleApiKey(options: AnthropicCompatibleValidationOptions): Promise<void> {
+	const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
+	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+	const baseUrl = normalizeAnthropicCompatibleBaseUrl(options.baseUrl);
+
+	const response = await fetch(`${baseUrl}/v1/messages`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"anthropic-version": "2023-06-01",
+			"x-api-key": options.apiKey,
+		},
+		body: JSON.stringify({
+			model: options.model,
+			messages: [{ role: "user", content: "ping" }],
+			max_tokens: 1,
 		}),
 		signal,
 	});

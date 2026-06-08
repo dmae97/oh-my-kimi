@@ -86,6 +86,7 @@ function createSuccessfulAnthropicEvents(text: string): MockAnthropicEvent[] {
 				cache_creation_input_tokens: 0,
 			},
 		},
+		{ type: "message_stop" },
 	];
 }
 
