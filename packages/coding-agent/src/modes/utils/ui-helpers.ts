@@ -25,12 +25,13 @@ import type { CompactionQueuedMessage, InteractiveModeContext } from "../../mode
 import {
 	type CustomMessage,
 	isSilentAbort,
+	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
-import { formatBytes, formatDuration } from "../../tools/render-utils";
+import { formatBytes, formatDuration, replaceTabs, shortenPath } from "../../tools/render-utils";
 
 type TextBlock = { type: "text"; text: string };
 interface RenderInitialMessagesOptions {
@@ -164,6 +165,34 @@ export class UiHelpers {
 								.filter(Boolean)
 								.join(" ");
 							block.addChild(new Text(line, 1, 0));
+						}
+						this.ctx.chatContainer.addChild(block);
+						break;
+					}
+					if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
+						const details = (
+							message as CustomMessage<{
+								files?: Array<{
+									path?: string;
+									summary?: string;
+									errored?: boolean;
+									messages?: string[];
+								}>;
+							}>
+						).details;
+						const files = details?.files ?? [];
+						const block = new TranscriptBlock();
+						for (const file of files) {
+							const errored = file.errored ?? false;
+							const colorKey = errored ? "error" : "warning";
+							const icon = errored ? theme.status.error : theme.status.warning;
+							const shortPath = file.path ? shortenPath(file.path) : "unknown";
+							const summary = file.summary ? ` ${theme.fg("dim", `(${file.summary})`)}` : "";
+							const header = `${theme.fg(colorKey, `${icon} Late diagnostics`)} ${theme.fg("accent", shortPath)}${summary}`;
+							block.addChild(new Text(header, 1, 0));
+							for (const line of file.messages ?? []) {
+								block.addChild(new Text(theme.fg("muted", `  ${replaceTabs(line)}`), 0, 0));
+							}
 						}
 						this.ctx.chatContainer.addChild(block);
 						break;

@@ -14,7 +14,7 @@ import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
-import type { ToolSession } from "../tools";
+import type { DeferredDiagnosticsEntry, ToolSession } from "../tools";
 import { truncateForPrompt } from "../tools/approval";
 import { isInternalUrlPath } from "../tools/path-utils";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
@@ -306,6 +306,9 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #editMode?: EditMode;
 	readonly #dedupDiagnostics: boolean;
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
+	/** Per-path edit counter. A late-diagnostics entry captures the version at
+	 *  fetch time; a newer edit to the same path bumps it, marking the entry stale. */
+	readonly #editVersionByPath = new Map<string, number>();
 
 	constructor(private readonly session: ToolSession) {
 		const {
@@ -502,10 +505,12 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const deferredController = new AbortController();
+		const editVersion = (this.#editVersionByPath.get(path) ?? 0) + 1;
+		this.#editVersionByPath.set(path, editVersion);
 		return {
 			onDeferredDiagnostics: (lateDiagnostics: FileDiagnosticsResult) => {
 				this.#pendingDeferredFetches.delete(path);
-				this.#injectLateDiagnostics(path, lateDiagnostics);
+				this.#injectLateDiagnostics(path, lateDiagnostics, editVersion);
 			},
 			signal: deferredController.signal,
 			finalize: (diagnostics: FileDiagnosticsResult | undefined) => {
@@ -518,24 +523,20 @@ export class EditTool implements AgentTool<TInput> {
 		};
 	}
 
-	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult): void {
+	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult, editVersion: number): void {
 		const effective = this.#dedupDiagnostics
 			? getDiagnosticsLedger(this.session).reduce(path, diagnostics)
 			: diagnostics;
 		if (this.#dedupDiagnostics && effective.messages.length === 0) return;
 
-		const summary = effective.summary ?? "";
-		const lines = effective.messages ?? [];
-		const body = [`Late LSP diagnostics for ${path} (arrived after the edit tool returned):`, summary, ...lines]
-			.filter(Boolean)
-			.join("\n");
-
-		this.session.queueDeferredMessage?.({
-			role: "custom",
-			customType: "lsp-late-diagnostic",
-			content: body,
-			display: false,
-			timestamp: Date.now(),
-		});
+		const entry: DeferredDiagnosticsEntry = {
+			path,
+			summary: effective.summary ?? "",
+			messages: effective.messages ?? [],
+			errored: effective.errored,
+			// Drop at flush time if a later edit to the same file superseded this fetch.
+			isStale: () => this.#editVersionByPath.get(path) !== editVersion,
+		};
+		this.session.queueDeferredDiagnostics?.(entry);
 	}
 }

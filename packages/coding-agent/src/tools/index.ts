@@ -117,6 +117,28 @@ export type {
 	DiscoverableToolSource,
 } from "../tool-discovery/tool-index";
 
+/**
+ * A late LSP diagnostics result that arrived after the edit/write tool already
+ * returned. Surfaced to the model and the transcript via
+ * {@link ToolSession.queueDeferredDiagnostics}, batched through the session
+ * yield queue like background-job results.
+ */
+export interface DeferredDiagnosticsEntry {
+	/** Absolute path the diagnostics belong to (the renderer shortens it). */
+	path: string;
+	/** One-line severity summary, e.g. "2 errors". */
+	summary: string;
+	/** Formatted, ready-to-display diagnostic lines. */
+	messages: string[];
+	/** True when any message is error severity. */
+	errored: boolean;
+	/**
+	 * Evaluated at flush time: drop the entry when a newer edit to the same file
+	 * has superseded it, so the model never sees diagnostics for stale content.
+	 */
+	isStale(): boolean;
+}
+
 /** Session context for tool factories */
 export interface ToolSession {
 	/** Current working directory */
@@ -284,6 +306,10 @@ export interface ToolSession {
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
+	/** Queue late LSP diagnostics (arrived after an edit/write returned) to be shown
+	 *  in the transcript and delivered to the model at the next yield, like background
+	 *  job results. */
+	queueDeferredDiagnostics?(entry: DeferredDiagnosticsEntry): void;
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
 	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
