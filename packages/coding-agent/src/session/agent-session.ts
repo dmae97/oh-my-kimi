@@ -7837,16 +7837,32 @@ export class AgentSession {
 				return "handled";
 			}
 			const reclaimed = result.toolResultsDropped + result.blocksDropped > 0;
-			// Overflow needs the input to actually shrink before the retry; if shake
-			// reclaimed nothing, summarization is the only remaining recovery.
-			if (reason === "overflow" && !reclaimed) {
+			// Detect the dead-loop reported in issue #2119: the threshold check fires,
+			// shake runs, but the resulting context is still above the configured
+			// threshold. The next agent_end would re-trigger shake, which has nothing
+			// new to drop on the second pass, so the loop spins until the user kills it.
+			// Same hazard for "incomplete" (the retry would re-hit the length cap) and
+			// for the existing "overflow + nothing reclaimed" case. In every recovery
+			// reason we hand off to the summarization-driven context-full path so the
+			// situation actually resolves; "idle" is exempt because its 60s+ timer
+			// re-checks usage before re-firing and cannot dead-loop on its own.
+			const contextWindow = this.model?.contextWindow ?? 0;
+			const compactionSettings = this.settings.getGroup("compaction");
+			const postShakeTokens = contextWindow > 0 ? this.#estimatePendingPromptTokens([]) : 0;
+			const stillOverThreshold = shouldCompact(postShakeTokens, contextWindow, compactionSettings);
+			const shouldFallBack = reason !== "idle" && ((reason === "overflow" && !reclaimed) || stillOverThreshold);
+			if (shouldFallBack) {
+				const errorMessage = reclaimed
+					? `Auto-shake reclaimed ~${result.tokensFreed} tokens but context is still above the threshold; falling back to context-full compaction.`
+					: "Auto-shake found nothing eligible to drop; falling back to context-full compaction.";
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
 					action,
 					result: undefined,
 					aborted: false,
 					willRetry: false,
-					skipped: true,
+					skipped: !reclaimed,
+					errorMessage,
 				});
 				return "fallback";
 			}
