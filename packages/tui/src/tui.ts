@@ -531,6 +531,9 @@ export class TUI extends Container {
 	#clearScrollbackOnNextRender = false;
 	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
+	// Focus changes are local live chrome (menus/editor/cursor), so the next
+	// frame may repaint an unknown-at-bottom viewport without waiting for a checkpoint.
+	#focusChangedSinceLastRender = false;
 	#eagerNativeScrollbackRebuild = false;
 	// Set when eager mode is switched off; applied after the next frame is
 	// classified so teardown frames from the same event batch still render
@@ -715,12 +718,16 @@ export class TUI extends Container {
 	}
 
 	setFocus(component: Component | null): void {
+		const previousFocusedComponent = this.#focusedComponent;
 		// Clear focused flag on old component
-		if (isFocusable(this.#focusedComponent)) {
-			this.#focusedComponent.focused = false;
+		if (isFocusable(previousFocusedComponent)) {
+			previousFocusedComponent.focused = false;
 		}
 
 		this.#focusedComponent = component;
+		if (previousFocusedComponent !== component) {
+			this.#focusChangedSinceLastRender = true;
+		}
 
 		// Set focused flag on new component and keep its software/hardware cursor
 		// rendering mode aligned with TUI's single cursor-visibility preference.
@@ -1663,7 +1670,9 @@ export class TUI extends Container {
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const eagerEraseScrollbackRisk = this.#hasEagerEraseScrollbackRisk();
 		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !eagerEraseScrollbackRisk;
-		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender;
+		const focusChanged = this.#focusChangedSinceLastRender;
+		this.#focusChangedSinceLastRender = false;
+		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender || focusChanged;
 		const allowUnknownViewportMutation = explicitViewportMutation || eagerRebuildAllowed;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
