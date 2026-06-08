@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.7] - 2026-06-08
+
 ### Fixed
 
 - Fixed MCP OAuth fallback rendering to show a short terminal hyperlink and keep the raw authorization URL on one unwrapped copy line ([#2121](https://github.com/can1357/oh-my-pi/issues/2121)).
