@@ -6,6 +6,10 @@
 
 - Changed core custom and hook messages to convert to `developer` messages for provider context.
 
+### Fixed
+
+- Fixed the compaction spinner freezing (only repainting on a terminal resize) when compacting very large codex/OpenAI contexts. `buildOpenAiNativeHistory` re-collected the full known/custom tool-call id sets on every history-bearing message, rescanning the entire growing native history each time — O(N²) in history items — which blocked the event loop for seconds and starved the loader's animation timer and render scheduler. The sets are now maintained incrementally (linear), so building the compaction request no longer monopolizes the main thread.
+
 ### Removed
 
 - Removed the now-dead `<turn-aborted>` marker from the OpenAI compaction output user-message filter, since `transformMessages` no longer emits that note.

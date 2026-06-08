@@ -192,24 +192,27 @@ function trimOpenAiCompactInput(
 	return trimmed;
 }
 
-function collectKnownOpenAiCallIds(items: Array<Record<string, unknown>>): Set<string> {
-	const knownCallIds = new Set<string>();
+// Register every tool-call id in `items` (and the subset using the custom-tool
+// wire shape) into the running sets. The history builder maintains both sets
+// incrementally as native history is appended, so this only scans the
+// newly-added items (or, after a full-snapshot replace, the fresh input) rather
+// than re-scanning the whole growing history per message — the latter was
+// O(N²) and blocked the event loop for seconds while compacting large codex
+// contexts (frozen spinner until the next forced render).
+function addOpenAiCallIds(
+	items: Array<Record<string, unknown>>,
+	knownCallIds: Set<string>,
+	customCallIds: Set<string>,
+): void {
 	for (const item of items) {
-		if ((item.type === "function_call" || item.type === "custom_tool_call") && typeof item.call_id === "string") {
+		if (typeof item.call_id !== "string") continue;
+		if (item.type === "function_call") {
 			knownCallIds.add(item.call_id);
-		}
-	}
-	return knownCallIds;
-}
-
-function collectCustomOpenAiCallIds(items: Array<Record<string, unknown>>): Set<string> {
-	const customCallIds = new Set<string>();
-	for (const item of items) {
-		if (item.type === "custom_tool_call" && typeof item.call_id === "string") {
+		} else if (item.type === "custom_tool_call") {
+			knownCallIds.add(item.call_id);
 			customCallIds.add(item.call_id);
 		}
 	}
-	return customCallIds;
 }
 
 // ============================================================================
@@ -237,16 +240,16 @@ export function buildOpenAiNativeHistory(
 	const transformedMessages = transformMessages(messages, model, id => normalizeOpenAiCompactionToolCallId(id));
 
 	let msgIndex = 0;
-	let knownCallIds = collectKnownOpenAiCallIds(input);
-	let customCallIds = collectCustomOpenAiCallIds(input);
+	const knownCallIds = new Set<string>();
+	const customCallIds = new Set<string>();
+	addOpenAiCallIds(input, knownCallIds, customCallIds);
 	for (const message of transformedMessages) {
 		if (message.role === "user" || message.role === "developer") {
 			const providerPayload = (message as { providerPayload?: AssistantMessage["providerPayload"] }).providerPayload;
 			const historyItems = getOpenAIResponsesHistoryItems(providerPayload, model.provider);
 			if (historyItems) {
 				input.push(...historyItems);
-				knownCallIds = collectKnownOpenAiCallIds(input);
-				customCallIds = collectCustomOpenAiCallIds(input);
+				addOpenAiCallIds(historyItems, knownCallIds, customCallIds);
 				msgIndex++;
 				continue;
 			}
@@ -289,11 +292,13 @@ export function buildOpenAiNativeHistory(
 			if (providerPayload) {
 				if (providerPayload.dt) {
 					input.push(...providerPayload.items);
+					addOpenAiCallIds(providerPayload.items, knownCallIds, customCallIds);
 				} else {
 					input.splice(0, input.length, ...providerPayload.items);
+					knownCallIds.clear();
+					customCallIds.clear();
+					addOpenAiCallIds(input, knownCallIds, customCallIds);
 				}
-				knownCallIds = collectKnownOpenAiCallIds(input);
-				customCallIds = collectCustomOpenAiCallIds(input);
 				msgIndex++;
 				continue;
 			}
