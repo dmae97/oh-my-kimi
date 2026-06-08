@@ -9,6 +9,9 @@
 
 ### Changed
 
+- Changed settings reads to cache pre-split schema paths and resolved values, with coarse invalidation on source/cwd changes.
+- Changed status-line rendering to cache merged effective settings until `updateSettings()` changes the configuration.
+- Changed `CustomEditor` app shortcut dispatch to parse each input packet once and match against precomputed canonical key sets, preserving the existing shortcut precedence while avoiding repeated key reparses.
 - Changed `lsp references` to retry only when no references or only the queried declaration are returned, using two fixed 250ms retries for project-aware servers
 - Changed `read` handling of `https://github.com/<owner>/<repo>:raw` to use raw page rendering only, removing the GitHub API README fallback
 - Changed model resolution to apply provider-priority ordering when selecting models for roles and ambiguous patterns, using `modelProviderOrder` settings and built-in provider priority so first-party providers are preferred over relays in tie cases
@@ -17,6 +20,7 @@
 
 ### Fixed
 
+- Fixed working-message loader session accents so spinner/message color math is cached per session name, session-accent setting, and theme luminance while still updating immediately on renames, setting toggles, and theme changes.
 - Fixed startup model fallback selection so sessions now prefer each provider’s configured default model before choosing the first available authenticated model
 - Fixed implicit model selection path for tools and sessions by honoring persisted model-provider order when no explicit pattern is provided
 - Fixed the working spinner appearing to ignore Esc for 2-3 seconds when an interrupt lands mid-tool. Esc fires the abort synchronously, but the agent loop only stops the loader at `agent_end`, which it cannot reach until every in-flight tool settles in `executeToolCalls`' `await Promise.allSettled(...)` — and process/subagent/kernel-owning tools tear down gracefully (SIGTERM, 2-3s grace, SIGKILL), so the loader kept showing the unchanged "Working…/<intent>" line and read as a dropped keypress. The loader now switches to "Interrupting…" the instant Esc requests the abort and freezes intent-driven label updates until the turn unwinds (`EventController.notifyInterrupting`), so the interrupt is acknowledged immediately even while teardown completes.

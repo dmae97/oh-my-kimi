@@ -1972,6 +1972,7 @@ export class SessionManager {
 	#inMemoryArtifactCounter = 0;
 	readonly #blobStore: BlobStore;
 	#suppressBreadcrumb = false;
+	#sessionNameChangedCallbacks = new Set<() => void>();
 
 	private constructor(
 		private cwd: string,
@@ -2743,6 +2744,23 @@ export class SessionManager {
 		return this.#sessionName;
 	}
 
+	onSessionNameChanged(cb: () => void): () => void {
+		this.#sessionNameChangedCallbacks.add(cb);
+		return () => {
+			this.#sessionNameChangedCallbacks.delete(cb);
+		};
+	}
+
+	#fireSessionNameChanged(): void {
+		for (const cb of [...this.#sessionNameChangedCallbacks]) {
+			try {
+				cb();
+			} catch (err) {
+				logger.warn("SessionManager: session name change hook failed", { error: String(err) });
+			}
+		}
+	}
+
 	/** Strip C0/C1 control characters (includes ESC, so removes ANSI sequences) and collapse whitespace. */
 	static #sanitizeName(name: string): string {
 		return name
@@ -2778,6 +2796,7 @@ export class SessionManager {
 		if (this.persist && sessionFile && this.storage.existsSync(sessionFile)) {
 			await this.#rewriteFile();
 		}
+		this.#fireSessionNameChanged();
 		return true;
 	}
 

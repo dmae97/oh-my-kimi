@@ -72,7 +72,7 @@ export interface SettingsOptions {
 /**
  * Get a nested value from an object by path segments.
  */
-function getByPath(obj: RawSettings, segments: string[]): unknown {
+function getByPath(obj: RawSettings, segments: readonly string[]): unknown {
 	let current: unknown = obj;
 	for (const segment of segments) {
 		if (current === null || current === undefined || typeof current !== "object") {
@@ -82,6 +82,10 @@ function getByPath(obj: RawSettings, segments: string[]): unknown {
 	}
 	return current;
 }
+
+const SETTING_PATH_SEGMENTS: Record<SettingPath, readonly string[]> = Object.fromEntries(
+	(Object.keys(SETTINGS_SCHEMA) as SettingPath[]).map(settingPath => [settingPath, settingPath.split(".")]),
+) as unknown as Record<SettingPath, readonly string[]>;
 
 /**
  * Set a nested value in an object by path segments.
@@ -196,6 +200,8 @@ export class Settings {
 	#overrides: RawSettings = {};
 	/** Merged view (global + project + overrides) */
 	#merged: RawSettings = {};
+	/** Cached resolved values from the merged view, including defaults/path scoping */
+	#resolvedCache = new Map<SettingPath, unknown>();
 
 	/** Paths modified during this session (for partial save) */
 	#modified = new Set<string>();
@@ -282,13 +288,15 @@ export class Settings {
 	 * Returns the merged value from global + project + overrides, or the default.
 	 */
 	get<P extends SettingPath>(path: P): SettingValue<P> {
-		const segments = path.split(".");
-		const value = getByPath(this.#merged, segments);
-		if (value !== undefined) {
-			const pathScopedValue = resolvePathScopedStringArray(path, value, this.#cwd);
-			return (pathScopedValue ?? value) as SettingValue<P>;
+		if (this.#resolvedCache.has(path)) {
+			return this.#resolvedCache.get(path) as SettingValue<P>;
 		}
-		return getDefault(path);
+
+		const value = getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]);
+		const resolved =
+			value !== undefined ? (resolvePathScopedStringArray(path, value, this.#cwd) ?? value) : getDefault(path);
+		this.#resolvedCache.set(path, resolved);
+		return resolved as SettingValue<P>;
 	}
 
 	/**
@@ -302,6 +310,7 @@ export class Settings {
 		setByPath(this.#global, segments, value);
 		this.#modified.add(path);
 		this.#rebuildMerged();
+		const next = this.get(path);
 		this.#queueSave();
 
 		// Trigger hook if exists
@@ -309,21 +318,25 @@ export class Settings {
 		if (hook) {
 			hook(value, prev);
 		}
+		this.#fireEffectiveSettingChanged(path, next, prev);
 	}
 
 	/**
 	 * Apply runtime overrides (not persisted).
 	 */
 	override<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+		const prev = this.get(path);
 		const segments = path.split(".");
 		setByPath(this.#overrides, segments, value);
 		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
 	}
 
 	/**
 	 * Clear a runtime override.
 	 */
 	clearOverride(path: SettingPath): void {
+		const prev = this.get(path);
 		const segments = path.split(".");
 		let current = this.#overrides;
 		for (let i = 0; i < segments.length - 1; i++) {
@@ -333,6 +346,14 @@ export class Settings {
 		}
 		delete current[segments[segments.length - 1]];
 		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
+	}
+
+	#fireEffectiveSettingChanged(path: SettingPath, value: unknown, prev: unknown): void {
+		if (Object.is(value, prev)) return;
+		if (path === "statusLine.sessionAccent") {
+			fireStatusLineSessionAccentChanged();
+		}
 	}
 
 	/**
@@ -842,6 +863,7 @@ export class Settings {
 	#rebuildMerged(): void {
 		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#project);
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
+		this.#resolvedCache.clear();
 	}
 
 	#fireAllHooks(): void {
@@ -936,6 +958,30 @@ export function onAppendOnlyModeChanged(cb: (value: string) => void): () => void
 	appendOnlyModeCallbacks.add(cb);
 	return () => {
 		appendOnlyModeCallbacks.delete(cb);
+	};
+}
+
+/** Callbacks invoked when `statusLine.sessionAccent` changes at runtime. */
+const statusLineSessionAccentCallbacks = new Set<() => void>();
+
+function fireStatusLineSessionAccentChanged(): void {
+	for (const cb of [...statusLineSessionAccentCallbacks]) {
+		try {
+			cb();
+		} catch (err) {
+			logger.warn("Settings: statusLine.sessionAccent hook failed", { error: String(err) });
+		}
+	}
+}
+
+/**
+ * Subscribe to session-accent setting changes.
+ * Returns an unsubscribe function. Callers should re-read settings in the callback.
+ */
+export function onStatusLineSessionAccentChanged(cb: () => void): () => void {
+	statusLineSessionAccentCallbacks.add(cb);
+	return () => {
+		statusLineSessionAccentCallbacks.delete(cb);
 	};
 }
 
