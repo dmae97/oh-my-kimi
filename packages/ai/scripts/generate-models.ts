@@ -406,6 +406,9 @@ async function generateModels() {
 			modelsDevAuthoritativeProviders.add(model.provider);
 		}
 	}
+	if (catalogProviderModels.some(model => model.provider === "aimlapi")) {
+		modelsDevAuthoritativeProviders.add("aimlapi");
+	}
 	// Merge previous models.json entries as fallback for provider/model pairs not
 	// fetched dynamically. Providers that models.dev covers authoritatively keep
 	// the upstream list exactly, so retired entries from the previous snapshot do

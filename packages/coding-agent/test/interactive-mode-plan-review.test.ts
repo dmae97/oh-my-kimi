@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
@@ -916,5 +917,60 @@ describe("InteractiveMode plan review rendering", () => {
 		const rendered = renderAssistant(message);
 		expect(rendered).not.toContain(USER_INTERRUPT_LABEL);
 		expect(rendered).not.toContain("Operation aborted");
+	});
+
+	describe("openPlanReview (manual /plan-review)", () => {
+		const localPath = (url: string): string =>
+			resolveLocalUrlToPath(url, {
+				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+				getSessionId: () => session.sessionManager.getSessionId(),
+			});
+
+		it("forwards the newest local plan file and its heading title to the approval flow", async () => {
+			await Bun.write(localPath("local://old-plan.md"), "# Old plan\n\nstale body");
+			await Bun.write(localPath("local://auth-refactor-plan.md"), "# Auth refactor\n\nfresh body");
+			// #listLocalPlanFiles sorts by mtime, newest first — pin mtimes so the
+			// "latest plan" selection is deterministic regardless of write timing.
+			await fs.utimes(localPath("local://old-plan.md"), new Date(1_000), new Date(1_000));
+			await fs.utimes(localPath("local://auth-refactor-plan.md"), new Date(2_000), new Date(2_000));
+
+			mode.planModeEnabled = true;
+			// The default points at a file that never exists; the scan must still find
+			// the real plan, and getPlanReferencePath() is empty before any approval.
+			mode.planModePlanFilePath = "local://PLAN.md";
+			const approval = vi.spyOn(mode, "handlePlanApproval").mockResolvedValue();
+
+			await mode.openPlanReview();
+
+			expect(approval).toHaveBeenCalledTimes(1);
+			expect(approval).toHaveBeenCalledWith({
+				planFilePath: "local://auth-refactor-plan.md",
+				title: "Auth-refactor",
+				planExists: true,
+			});
+		});
+
+		it("warns and does not start approval when plan mode is inactive", async () => {
+			await Bun.write(localPath("local://auth-plan.md"), "# Auth\n\nbody");
+			mode.planModeEnabled = false;
+			const approval = vi.spyOn(mode, "handlePlanApproval").mockResolvedValue();
+			const warn = vi.spyOn(mode, "showWarning");
+
+			await mode.openPlanReview();
+
+			expect(approval).not.toHaveBeenCalled();
+			expect(warn).toHaveBeenCalledWith("Plan mode is not active.");
+		});
+
+		it("warns when no plan file has been written yet", async () => {
+			mode.planModeEnabled = true;
+			const approval = vi.spyOn(mode, "handlePlanApproval").mockResolvedValue();
+			const warn = vi.spyOn(mode, "showWarning");
+
+			await mode.openPlanReview();
+
+			expect(approval).not.toHaveBeenCalled();
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining("No plan to review"));
+		});
 	});
 });

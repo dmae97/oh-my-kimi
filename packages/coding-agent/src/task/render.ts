@@ -632,7 +632,7 @@ function renderAgentProgress(
 	const indent = prefix ? `${prefix} ` : "";
 	let statusLine: string;
 	if (progress.status === "running") {
-		const bullet = theme.fg("accent", "•");
+		const bullet = theme.styledSymbol("status.done", "text");
 		const name = theme.fg("accent", description ? theme.bold(displayId) : displayId);
 		statusLine = `${indent}${bullet} ${name}`;
 		if (description) {
@@ -640,7 +640,9 @@ function renderAgentProgress(
 			statusLine += `${theme.fg("accent", ":")} ${desc}`;
 		}
 	} else {
-		statusLine = `${indent}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
+		const glyph =
+			progress.status === "completed" ? theme.styledSymbol("status.done", "accent") : theme.fg(iconColor, icon);
+		statusLine = `${indent}${glyph} ${theme.fg("accent", titlePart)}`;
 	}
 
 	// Show retry-blocked badge so the parent immediately sees that a child
@@ -809,7 +811,7 @@ function renderReviewResult(
 	const verdictColor = summary.overall_correctness === "correct" ? "success" : "error";
 	const isCorrect = summary.overall_correctness === "correct";
 	const verdictIcon = isCorrect
-		? theme.styledSymbol("tool.task", "accent")
+		? theme.styledSymbol("status.done", "accent")
 		: theme.fg(verdictColor, theme.status.error);
 	lines.push(
 		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${verdictIcon} ${theme.fg(
@@ -916,7 +918,7 @@ function renderAgentResult(
 		: needsWarning
 			? theme.status.warning
 			: success
-				? theme.styledSymbol("tool.task", "accent")
+				? theme.styledSymbol("status.done", "accent")
 				: theme.status.error;
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
@@ -1074,7 +1076,7 @@ function renderAgentResult(
  * Render the tool result.
  */
 export function renderResult(
-	result: { content: Array<{ type: string; text?: string }>; details?: TaskToolDetails },
+	result: { content: Array<{ type: string; text?: string }>; details?: TaskToolDetails; isError?: boolean },
 	options: RenderResultOptions,
 	theme: Theme,
 	args?: TaskParams,
@@ -1085,18 +1087,25 @@ export function renderResult(
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
-		const header = renderStatusLine(
-			{ iconOverride: theme.styledSymbol("tool.task", "accent"), title: "Task" },
-			theme,
-		);
+		const errored = result.isError === true;
+		const header = errored
+			? renderStatusLine({ icon: "error", title: "Task", description: args?.agent }, theme)
+			: renderStatusLine(
+					{
+						iconOverride: theme.styledSymbol("status.done", "accent"),
+						title: "Task",
+						description: args?.agent,
+					},
+					theme,
+				);
 		return framedBlock(theme, width => ({
 			header,
 			sections: [
 				...(contextSectionRenderer ? [contextSectionRenderer(width)] : []),
 				...(text ? [{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] }] : []),
 			],
-			state: "success",
-			borderColor: "borderMuted",
+			state: errored ? "error" : "success",
+			borderColor: errored ? "error" : "borderMuted",
 			width,
 		}));
 	}
@@ -1116,7 +1125,8 @@ export function renderResult(
 	const metaLabel = countLabel ? (agentName ? `${countLabel}: ${agentName}` : countLabel) : agentName;
 	const header = renderStatusLine(
 		{
-			icon,
+			icon: icon === "success" ? undefined : icon,
+			iconOverride: icon === "success" ? theme.styledSymbol("status.done", "accent") : undefined,
 			title: "Task",
 			meta: metaLabel ? [metaLabel] : undefined,
 		},
