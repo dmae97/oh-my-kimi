@@ -175,8 +175,9 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	for (const provider of getBundledProviders()) {
 		if (!providersWithCreds.has(provider)) continue;
 		for (const model of getBundledModels(provider as GeneratedProvider)) {
-			// First-write-wins so a canonical model id collisions across providers
-			// stick to the provider listed first by getBundledProviders.
+			// Always set the qualified key (no collision possible)
+			modelById.set(`${model.provider}/${model.id}`, model);
+			// Bare id as fallback for legacy clients (first-write-wins)
 			if (!modelById.has(model.id)) modelById.set(model.id, model);
 		}
 	}
