@@ -4004,6 +4004,11 @@ export class AgentSession {
 		return this.#obfuscator.obfuscateObject(value);
 	}
 
+	#obfuscateTextForProvider(text: string | undefined): string | undefined {
+		if (!text || !this.#obfuscator?.hasSecrets()) return text;
+		return this.#obfuscator.obfuscate(text);
+	}
+
 	#deobfuscateFromProvider(text: string): string {
 		if (!this.#obfuscator?.hasSecrets()) return text;
 		return this.#obfuscator.deobfuscate(text);
@@ -6384,7 +6389,7 @@ export class AgentSession {
 				{
 					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
 					tools: obfuscateProviderTools(this.#obfuscator, this.agent.state.tools),
-					customInstructions,
+					customInstructions: this.#obfuscateTextForProvider(customInstructions),
 					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 					initiatorOverride: "agent",
 					metadata: this.agent.metadataForProvider(model.provider),
@@ -7359,17 +7364,24 @@ export class AgentSession {
 			if (!apiKey) continue;
 
 			try {
-				return await compact(preparation, candidate, apiKey, customInstructions, signal, {
-					...options,
-					metadata: this.agent.metadataForProvider(candidate.provider),
-					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
-					telemetry,
-					// Honor the user's /model thinking selection (incl. `off`) on
-					// the manual `/compact` path. Clamped per-model inside compact()
-					// via resolveCompactionEffort so unsupported-effort models
-					// (xai-oauth/grok-build) don't trip requireSupportedEffort.
-					thinkingLevel: this.thinkingLevel,
-				});
+				return await compact(
+					preparation,
+					candidate,
+					apiKey,
+					this.#obfuscateTextForProvider(customInstructions),
+					signal,
+					{
+						...options,
+						metadata: this.agent.metadataForProvider(candidate.provider),
+						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+						telemetry,
+						// Honor the user's /model thinking selection (incl. `off`) on
+						// the manual `/compact` path. Clamped per-model inside compact()
+						// via resolveCompactionEffort so unsupported-effort models
+						// (xai-oauth/grok-build) don't trip requireSupportedEffort.
+						thinkingLevel: this.thinkingLevel,
+					},
+				);
 			} catch (error) {
 				if (!this.#isCompactionAuthFailure(error)) {
 					throw error;
@@ -9526,7 +9538,7 @@ export class AgentSession {
 				model,
 				apiKey,
 				signal: this.#branchSummaryAbortController.signal,
-				customInstructions: options.customInstructions,
+				customInstructions: this.#obfuscateTextForProvider(options.customInstructions),
 				reserveTokens: branchSummarySettings.reserveTokens,
 				metadata: this.agent.metadataForProvider(model.provider),
 				convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
