@@ -9,7 +9,6 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
-	type Context,
 	type CredentialDisabledEvent,
 	type Message,
 	type Model,
@@ -100,6 +99,7 @@ import {
 	deobfuscateSessionContext,
 	loadSecrets,
 	obfuscateMessages,
+	obfuscateProviderContext,
 	SecretObfuscator,
 } from "./secrets";
 import { AgentSession } from "./session/agent-session";
@@ -2139,10 +2139,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
-		const obfuscateProviderContext = (context: Context): Context => {
-			if (!obfuscator?.hasSecrets()) return context;
-			return obfuscator.obfuscateObject(context);
-		};
 
 		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
 			const withContext = await extensionRunner.emitContext(messages);
@@ -2221,7 +2217,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
 				const openrouterVariant =
 					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
-				return streamSimple(streamModel, obfuscateProviderContext(context), {
+				return streamSimple(streamModel, obfuscator ? obfuscateProviderContext(obfuscator, context) : context, {
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 				});

@@ -1,4 +1,5 @@
-import type { Message } from "@oh-my-pi/pi-ai";
+import type { Context, Message, Tool } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { SessionContext } from "../session/session-manager";
 import { compileSecretRegex } from "./regex";
 
@@ -222,6 +223,31 @@ export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Messag
 	return obfuscator.obfuscateObject(messages);
 }
 
+/** Obfuscate provider request context without walking live tool schema instances. */
+export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefined, context: Context): Context {
+	if (!obfuscator?.hasSecrets()) return context;
+	return {
+		...context,
+		systemPrompt: obfuscator.obfuscateObject(context.systemPrompt),
+		messages: obfuscator.obfuscateObject(context.messages),
+		tools: obfuscateProviderTools(obfuscator, context.tools),
+	};
+}
+
+/** Convert tool schemas to wire JSON Schema before obfuscating provider-visible strings. */
+export function obfuscateProviderTools(
+	obfuscator: SecretObfuscator | undefined,
+	tools: Tool[] | undefined,
+): Tool[] | undefined {
+	if (!tools || !obfuscator?.hasSecrets()) return tools;
+	return tools.map(tool => ({
+		...tool,
+		description: obfuscator.obfuscate(tool.description),
+		parameters: obfuscator.obfuscateObject(toolWireSchema(tool)),
+		customFormat: tool.customFormat ? obfuscator.obfuscateObject(tool.customFormat) : undefined,
+	}));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -252,7 +278,7 @@ function deepWalkStrings<T>(obj: T, transform: (s: string) => string): T {
 		});
 		return (changed ? result : obj) as unknown as T;
 	}
-	if (obj !== null && typeof obj === "object") {
+	if (obj !== null && typeof obj === "object" && isPlainRecord(obj)) {
 		let changed = false;
 		const result: Record<string, unknown> = {};
 		for (const key of Object.keys(obj)) {
@@ -264,4 +290,9 @@ function deepWalkStrings<T>(obj: T, transform: (s: string) => string): T {
 		return (changed ? result : obj) as T;
 	}
 	return obj;
+}
+
+function isPlainRecord(obj: object): obj is Record<string, unknown> {
+	const prototype = Object.getPrototypeOf(obj);
+	return prototype === Object.prototype || prototype === null;
 }

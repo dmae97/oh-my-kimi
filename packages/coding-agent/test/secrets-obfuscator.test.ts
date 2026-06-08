@@ -3,9 +3,14 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import type { Message } from "@oh-my-pi/pi-ai";
-import { obfuscateMessages, SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import type { Context, Message } from "@oh-my-pi/pi-ai";
+import {
+	obfuscateMessages,
+	obfuscateProviderContext,
+	SecretObfuscator,
+} from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
+import { z } from "zod";
 
 describe("compileSecretRegex", () => {
 	it("adds global flag when not provided", () => {
@@ -65,6 +70,7 @@ describe("SecretObfuscator regex behavior", () => {
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
 		const payload = {
 			systemPrompt: [`workspace contains ${secret}`],
+			messages: [],
 			tools: [
 				{
 					name: "handoff",
@@ -77,11 +83,36 @@ describe("SecretObfuscator regex behavior", () => {
 			],
 		};
 
-		const obfuscated = obfuscator.obfuscateObject(payload);
+		const obfuscated = obfuscateProviderContext(obfuscator, payload);
 		const serialized = JSON.stringify(obfuscated);
 
 		expect(serialized).not.toContain(secret);
-		expect(obfuscator.deobfuscateObject(obfuscated)).toEqual(payload);
+		expect(obfuscator.deobfuscateObject(obfuscated).tools?.[0]?.description).toEqual(payload.tools[0]?.description);
+	});
+
+	it("redacts Zod tool schemas without cloning the live schema instance", () => {
+		const secret = "SUPER_SECRET_TOKEN_12345";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const parameters = z.object({
+			note: z.string().describe(`write ${secret}`),
+		});
+		const context: Context = {
+			messages: [],
+			tools: [
+				{
+					name: "extension_tool",
+					description: `preserve ${secret}`,
+					parameters,
+				},
+			],
+		};
+
+		const obfuscated = obfuscateProviderContext(obfuscator, context);
+
+		expect(obfuscator.obfuscateObject(parameters)).toBe(parameters);
+		expect(context.tools?.[0]?.parameters).toBe(parameters);
+		expect(obfuscated.tools?.[0]?.parameters).not.toBe(parameters);
+		expect(JSON.stringify(obfuscated)).not.toContain(secret);
 	});
 
 	it("obfuscates system reminders and assistant tool calls in messages", () => {

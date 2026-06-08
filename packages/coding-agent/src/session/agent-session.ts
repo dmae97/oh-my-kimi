@@ -184,7 +184,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
+import { deobfuscateSessionContext, obfuscateProviderTools, type SecretObfuscator } from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
 import {
 	AUTO_THINKING,
@@ -6383,7 +6383,7 @@ export class AgentSession {
 				apiKey,
 				{
 					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
-					tools: this.#obfuscateForProvider(this.agent.state.tools),
+					tools: obfuscateProviderTools(this.#obfuscator, this.agent.state.tools),
 					customInstructions,
 					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 					initiatorOverride: "agent",

@@ -12,6 +12,7 @@ import {
 	type Message,
 	type MessageAttribution,
 	type Model,
+	type Tool,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -19,7 +20,7 @@ import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
-import type { AgentMessage, AgentTool } from "../types";
+import type { AgentMessage } from "../types";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { type ConvertToLlm, convertToLlm, createBranchSummaryMessage, createCustomMessage } from "./messages";
 import {
@@ -690,7 +691,7 @@ export interface HandoffOptions {
 	/** Live agent system prompt — passed verbatim so providers hit the cached prefix. */
 	systemPrompt: string[];
 	/** Live agent tool list — same purpose. Forced to `toolChoice: "none"`. */
-	tools?: AgentTool<any>[];
+	tools?: Tool[];
 	customInstructions?: string;
 	convertToLlm?: ConvertToLlm;
 	initiatorOverride?: MessageAttribution;
