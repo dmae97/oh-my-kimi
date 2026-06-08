@@ -173,32 +173,45 @@ export function transformMessages<TApi extends Api>(
 					index === latestSurvivingAssistantIndex &&
 					model.api === "anthropic-messages" &&
 					assistantMsg.api === "anthropic-messages";
-				// Aborted/errored messages may have partially-streamed thinking signatures.
-				// A partial signature is invalid and will be rejected by the API, so we must
-				// strip signatures from thinking blocks in these messages.
+				// Thinking signatures can be untrustworthy for two distinct reasons with very
+				// different blast radii:
 				//
-				// Abandoned tool-use turns get the same treatment once they are no longer
-				// the latest assistant message. When a turn carries toolCall blocks but did
-				// NOT request tool execution (stopReason !== "toolUse" — e.g.
-				// adaptive-thinking Opus emitting tool calls and then ending the turn on
-				// `end_turn`/`stop`), the agent loop pairs those calls with placeholder
-				// tool_results to keep the tool_use/tool_result contract valid. Historical
-				// abandoned turns cannot safely replay their end_turn-bound signatures in
-				// that continuation, so stripping downgrades them to plain text downstream.
-				// Latest abandoned turns are exempt because Anthropic requires thinking
-				// blocks from its most recent response to remain byte-for-byte unmodified.
+				// 1. Aborted/errored turns: the stream stopped mid-block, so only the block
+				//    that was streaming at the abort point — always the FINAL content block —
+				//    can carry a partially-streamed (invalid) signature. Every earlier block
+				//    completed: Anthropic delivers a block's signature at its
+				//    `content_block_stop`, which necessarily fired before the next block began,
+				//    so those signatures are whole and valid. Stripping them would needlessly
+				//    discard a replayable thinking chain — e.g. interrupting during the visible
+				//    text output after thinking already finished leaves a fully-signed thinking
+				//    block that must be kept, or Anthropic rejects the replay with HTTP 400
+				//    "Invalid `signature` in `thinking` block".
+				//
+				// 2. Abandoned tool-use turns: a turn that carries toolCall blocks but did NOT
+				//    request tool execution (stopReason !== "toolUse" — e.g. adaptive-thinking
+				//    Opus emitting tool calls and then ending on `end_turn`/`stop`). The agent
+				//    loop pairs those calls with placeholder tool_results to keep the
+				//    tool_use/tool_result contract valid. The turn completed cleanly, but its
+				//    signatures are end_turn-bound and cannot be replayed in that synthesized
+				//    continuation, so EVERY thinking signature is stripped.
+				//
+				// Latest abandoned turns are exempt because Anthropic requires thinking blocks
+				// from its most recent response to remain byte-for-byte unmodified.
 				const invalidStopReason = assistantMsg.stopReason === "aborted" || assistantMsg.stopReason === "error";
 				const abandonedToolUse =
 					!invalidStopReason &&
 					assistantMsg.stopReason !== "toolUse" &&
 					assistantMsg.content.some(b => b.type === "toolCall");
-				const hasInvalidSignatures = invalidStopReason || abandonedToolUse;
+				const lastBlockIndex = assistantMsg.content.length - 1;
 
-				const transformedContent = assistantMsg.content.flatMap(block => {
+				const transformedContent = assistantMsg.content.flatMap((block, blockIndex) => {
 					if (block.type === "thinking") {
-						// Strip untrustworthy signatures so the encoder can downgrade to text.
+						// Only an aborted/errored turn's final (mid-stream) block can hold a
+						// partial signature; abandoned tool-use turns strip all. Drop the
+						// untrustworthy signature so the encoder can downgrade the block to text.
+						const signatureUntrustworthy = abandonedToolUse || (invalidStopReason && blockIndex === lastBlockIndex);
 						const sanitized =
-							hasInvalidSignatures && block.thinkingSignature
+							signatureUntrustworthy && block.thinkingSignature
 								? { ...block, thinkingSignature: undefined }
 								: block;
 						if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;

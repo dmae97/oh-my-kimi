@@ -11,9 +11,12 @@ import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage }
 //   * `stop_reason` is never replayed on the wire, so it does NOT constrain whether a
 //     continuation is valid — a tool_use turn replays fine with tool_results appended
 //     whether it ended on `tool_use` or `end_turn`.
-//   * Therefore the safe recovery for a historical turn whose signature is untrustworthy
-//     (abandoned `end_turn`+tool_use, or a half-streamed `aborted` turn) is to strip the
-//     signature and let the encoder downgrade the block to text — which the API accepts.
+//   * Therefore the safe recovery for a turn whose signature is untrustworthy is to strip it
+//     and let the encoder downgrade that block to text — which the API accepts. Two cases
+//     qualify: an abandoned `end_turn`+tool_use turn (all signatures are end_turn-bound and
+//     unreplayable), and the single mid-stream block of an `aborted`/`error` turn (only the
+//     block streaming at the abort point can hold a partial signature; earlier blocks
+//     completed and keep their valid, replayable signatures).
 //   * The latest assistant message is different: Anthropic requires thinking blocks from
 //     its most recent response to remain unmodified, so valid signatures must be preserved
 //     even when the turn is abandoned.
@@ -122,11 +125,64 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 
-	it("recovers a half-streamed aborted turn (partial/invalid signature) by downgrading to text", () => {
-		const blocks = assistantBlocks(buildHistory("aborted", "trunc"));
+	it("strips only the mid-stream final block of an aborted interleaved turn, keeping earlier signed thinking", () => {
+		// Interleaved thinking: a fully-signed thinking block and a tool_use completed, then the
+		// model began a second thinking block and was interrupted mid-stream. Only that trailing
+		// block can carry a partial (invalid) signature; the earlier one stays intact.
+		const user: UserMessage = { role: "user", content: "go", timestamp: 1 };
+		const aborted: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "first, list them", thinkingSignature: "sig_done" },
+				{ type: "toolCall", id: "toolu_1", name: "list", arguments: {} },
+				{ type: "thinking", thinking: "now decide", thinkingSignature: "trunc" },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			usage: emptyUsage,
+			stopReason: "aborted",
+			timestamp: 2,
+		};
+		const blocks = assistantBlocks([user, aborted]);
 		expectNoUnsignedThinking(blocks);
-		expect(blocks.some(b => b.type === "thinking")).toBe(false);
+		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_done")).toBe(true);
+		expect(blocks.some(b => b.type === "thinking" && b.signature === "trunc")).toBe(false);
+		expect(blocks.some(b => b.type === "text" && b.text === "now decide")).toBe(true);
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
+	});
+
+	it("replays completed signed thinking when an aborted turn is interrupted during output behind a gateway baseUrl", () => {
+		// Exact shape behind HTTP 400 "Invalid `signature` in `thinking` block": the model finished
+		// thinking (block fully signed) and the user interrupted while it streamed the visible text.
+		// The whole signature must replay as native signed thinking even when the first-party
+		// provider is routed through an LLM gateway baseUrl, which still reaches signature-enforcing
+		// Anthropic. Dropping it would emit signature:"" and 400 the gateway.
+		const gatewayModel: Model<"anthropic-messages"> = {
+			...model,
+			baseUrl: "https://llm2.example.com/abc/v1/messages",
+		};
+		const user: UserMessage = { role: "user", content: "deploy the update", timestamp: 1 };
+		const aborted: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "23 phones are ready to update", thinkingSignature: "sig_valid" },
+				{ type: "text", text: "Updating the phones now" },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			usage: emptyUsage,
+			stopReason: "aborted",
+			timestamp: 2,
+		};
+		const followUp: UserMessage = { role: "user", content: "don't update phones", timestamp: 3 };
+		const params = convertAnthropicMessages([user, aborted, followUp], gatewayModel, false);
+		const assistant = params.find(p => p.role === "assistant");
+		const blocks = (assistant?.content as WireBlock[] | undefined) ?? [];
+		expectNoUnsignedThinking(blocks);
+		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_valid")).toBe(true);
+		expect(blocks.some(b => b.type === "text" && b.text === "Updating the phones now")).toBe(true);
 	});
 });
 
