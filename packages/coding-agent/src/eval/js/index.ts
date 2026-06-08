@@ -1,5 +1,10 @@
 import type { ToolSession } from "../../tools";
-import { type ExecutorBackend, type ExecutorBackendExecOptions, type ExecutorBackendResult, resolveEvalUrlRoots } from "../backend";
+import {
+	type ExecutorBackend,
+	type ExecutorBackendExecOptions,
+	type ExecutorBackendResult,
+	resolveEvalUrlRoots,
+} from "../backend";
 import { executeJs } from "./executor";
 
 const JS_SESSION_PREFIX = "js:";

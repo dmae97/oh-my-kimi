@@ -50,7 +50,7 @@ describe("ReadToolGroupComponent", () => {
 		expect(rendered.toLowerCase()).not.toContain("ctrl+o");
 	});
 
-	it("uses the read-specific success mark for completed reads", () => {
+	it("uses the enabled dot for completed reads", () => {
 		const component = new ReadToolGroupComponent();
 		component.updateArgs({ path: "/tmp/example.ts" }, "read-success");
 		component.updateResult(

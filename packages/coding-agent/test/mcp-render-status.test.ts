@@ -110,13 +110,13 @@ describe("MCP tool rendering", () => {
 	it("replaces the pending call header with a success header after completion", async () => {
 		const uiTheme = await getRequiredTheme();
 		const pendingIcon = Bun.stripANSI(formatStatusIcon("pending", uiTheme));
-		const successIcon = Bun.stripANSI(formatStatusIcon("success", uiTheme));
+		const doneIcon = Bun.stripANSI(uiTheme.styledSymbol("tool.mcp", "accent"));
 
 		const rendered = await renderCompletedMCPTool(false);
 
 		expect(makeTool().mergeCallAndResult).toBe(true);
 		expect(makeDeferredTool().mergeCallAndResult).toBe(true);
-		expect(rendered).toContain(`${successIcon} sentry/search_events`);
+		expect(rendered).toContain(`${doneIcon} sentry/search_events`);
 		expect(rendered).not.toContain(`${pendingIcon} sentry/search_events`);
 	});
 

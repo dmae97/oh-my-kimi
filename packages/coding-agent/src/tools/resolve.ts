@@ -241,7 +241,7 @@ export const resolveToolRenderer = {
 		const isApply = action === "apply" && !result.isError;
 		const isFailedApply = action === "apply" && result.isError;
 		const bgColor = result.isError ? "error" : isApply ? "success" : "warning";
-		const icon = isApply ? uiTheme.status.success : uiTheme.status.error;
+		const icon = isApply ? uiTheme.styledSymbol("tool.resolve", "accent") : uiTheme.status.error;
 		const verb = isApply ? "Accept" : isFailedApply ? "Failed" : "Discard";
 		const separator = ": ";
 		const separatorIndex = label.indexOf(separator);

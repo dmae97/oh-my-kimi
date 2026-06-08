@@ -5,8 +5,9 @@
  * Gated by `PI_PYTHON_INTEGRATION=1` so CI without a real Python interpreter
  * (or sandboxes where subprocess spawning is restricted) does not fail.
  */
-import * as path from "node:path";
+
 import { afterEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { disposeAllKernelSessions, executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import { PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { TempDir } from "@oh-my-pi/pi-utils";

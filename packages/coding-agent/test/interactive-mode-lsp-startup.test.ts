@@ -116,7 +116,7 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 
 		expect(requestRenderSpy).toHaveBeenCalled();
 		expect(showStatusSpy).not.toHaveBeenCalled();
-		expect(findServerLine()).toContain(theme.status.success);
+		expect(findServerLine()).toContain(theme.status.enabled);
 		expect(findServerLine()).not.toContain(theme.status.pending);
 	});
 });

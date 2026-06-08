@@ -161,7 +161,7 @@ export class UiHelpers {
 							const typeLabel = job.type ? `[${job.type}]` : "[job]";
 							const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 							const line = [
-								theme.fg("success", `${theme.status.success} Background job completed`),
+								theme.fg("success", `${theme.status.done} Background job completed`),
 								theme.fg("dim", typeLabel),
 								theme.fg("accent", jobId),
 								duration ? theme.fg("dim", `(${duration})`) : undefined,

@@ -166,15 +166,17 @@ export function renderResult(
 			} else if (result.details?.action === "diagnostics" && text === "OK") {
 				label = "Diagnostics";
 				state = "success";
-				bodyLines = [`${theme.styledSymbol("status.success", "success")} ${theme.fg("dim", "OK")}`];
+				bodyLines = [`${theme.styledSymbol("tool.lsp", "accent")} ${theme.fg("dim", "OK")}`];
 			} else {
 				label = "Response";
 				bodyLines = renderGeneric(text, lines, expanded, theme);
 			}
 
 			const actionLabel = (request?.action ?? result.details?.action ?? label.toLowerCase()).replace(/_/g, " ");
-			const status = isPartial ? "running" : result.isError ? "error" : "success";
-			const icon = formatStatusIcon(status, theme, spinnerFrame);
+			const isSuccess = !isPartial && !result.isError;
+			const icon = isSuccess
+				? theme.styledSymbol("tool.lsp", "accent")
+				: formatStatusIcon(isPartial ? "running" : "error", theme, spinnerFrame);
 			const header = `${icon} LSP ${actionLabel}`;
 
 			return outputBlock.render(
@@ -325,7 +327,7 @@ function renderDiagnostics(
 			? theme.styledSymbol("status.error", "error")
 			: warnCount > 0
 				? theme.styledSymbol("status.warning", "warning")
-				: theme.styledSymbol("status.success", "success");
+				: theme.styledSymbol("tool.lsp", "accent");
 
 	const meta: string[] = [];
 	if (errorCount > 0) meta.push(`${errorCount} error${errorCount !== 1 ? "s" : ""}`);
@@ -407,7 +409,7 @@ function renderDiagnostics(
 function renderReferences(refMatch: RegExpMatchArray, lines: string[], expanded: boolean, theme: Theme): string[] {
 	const refCount = Number.parseInt(refMatch[1], 10);
 	const icon =
-		refCount > 0 ? theme.styledSymbol("status.success", "success") : theme.styledSymbol("status.warning", "warning");
+		refCount > 0 ? theme.styledSymbol("tool.lsp", "accent") : theme.styledSymbol("status.warning", "warning");
 
 	const locLines = lines.filter(l => /^\s*\S+:\d+:\d+/.test(l));
 
@@ -598,7 +600,7 @@ function renderGeneric(text: string, lines: string[], expanded: boolean, theme: 
 		hasError && !hasSuccess
 			? theme.styledSymbol("status.error", "error")
 			: hasSuccess && !hasError
-				? theme.styledSymbol("status.success", "success")
+				? theme.styledSymbol("tool.lsp", "accent")
 				: theme.styledSymbol("status.info", "accent");
 
 	if (expanded) {

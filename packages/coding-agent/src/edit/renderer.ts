@@ -260,6 +260,7 @@ function renderEditHeader(
 	uiTheme: Theme,
 	options: {
 		icon: "pending" | "success" | "error";
+		iconOverride?: string;
 		spinnerFrame?: number;
 		op?: Operation;
 		rawPath: string;
@@ -279,8 +280,16 @@ function renderEditHeader(
 	const formatted = formatEditDescription(options.rawPath, uiTheme, descriptionOptions);
 	const suffix = `${options.statsSuffix ?? ""}${options.extraSuffix ?? ""}`;
 	const buildHeader = (description: string): string =>
-		renderStatusLine({ icon: options.icon, spinnerFrame: options.spinnerFrame, title, description }, uiTheme) +
-		suffix;
+		renderStatusLine(
+			{
+				icon: options.icon,
+				iconOverride: options.iconOverride,
+				spinnerFrame: options.spinnerFrame,
+				title,
+				description,
+			},
+			uiTheme,
+		) + suffix;
 
 	const header = buildHeader(formatted.description);
 	const overflow = visibleWidth(header) - editHeaderLabelBudget(width, uiTheme);
@@ -633,6 +642,7 @@ function renderSingleFileResult(
 		const statsSuffix = headerDiff ? formatDiffStatsSuffix(headerDiff, uiTheme) : "";
 		const header = renderEditHeader(width, uiTheme, {
 			icon: isError ? "error" : "success",
+			iconOverride: !isError && !options.isPartial ? uiTheme.styledSymbol("tool.edit", "accent") : undefined,
 			op,
 			rawPath,
 			rename,

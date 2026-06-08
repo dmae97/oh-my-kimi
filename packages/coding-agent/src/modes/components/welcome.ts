@@ -185,7 +185,7 @@ export class WelcomeComponent implements Component {
 			for (const server of this.lspServers) {
 				const icon =
 					server.status === "ready"
-						? theme.styledSymbol("status.success", "success")
+						? theme.styledSymbol("status.enabled", "success")
 						: server.status === "connecting"
 							? theme.styledSymbol("status.pending", "muted")
 							: theme.styledSymbol("status.error", "error");

@@ -1574,6 +1574,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
+		// Discover runtime (extension) provider catalogs now that they are
+		// registered. The startup refreshInBackground() ran before extensions
+		// loaded, so dynamic extension providers are only discovered here. Runs in
+		// the background (cache-aware) so startup is never blocked on the fetch; the
+		// model list re-renders when the catalog arrives, like other dynamic providers.
+		void modelRegistry.refreshRuntimeProviders().catch(error => {
+			logger.warn("runtime provider discovery failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 
 		// Retry session-model candidates now that extension providers are
 		// registered. The initial restore runs before extensions load, so a role

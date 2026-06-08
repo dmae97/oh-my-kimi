@@ -807,12 +807,15 @@ function renderReviewResult(
 
 	// Verdict line
 	const verdictColor = summary.overall_correctness === "correct" ? "success" : "error";
-	const verdictIcon = summary.overall_correctness === "correct" ? theme.status.success : theme.status.error;
+	const isCorrect = summary.overall_correctness === "correct";
+	const verdictIcon = isCorrect
+		? theme.styledSymbol("tool.task", "accent")
+		: theme.fg(verdictColor, theme.status.error);
 	lines.push(
-		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${theme.fg(
-			verdictColor,
-			verdictIcon,
-		)} ${theme.fg("dim", `(${(summary.confidence * 100).toFixed(0)}% confidence)`)}`,
+		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${verdictIcon} ${theme.fg(
+			"dim",
+			`(${(summary.confidence * 100).toFixed(0)}% confidence)`,
+		)}`,
 	);
 
 	// Explanation preview (first ~80 chars when collapsed, full when expanded)
@@ -913,7 +916,7 @@ function renderAgentResult(
 		: needsWarning
 			? theme.status.warning
 			: success
-				? theme.status.success
+				? theme.styledSymbol("tool.task", "accent")
 				: theme.status.error;
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
@@ -1082,7 +1085,10 @@ export function renderResult(
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
-		const header = renderStatusLine({ icon: "success", title: "Task" }, theme);
+		const header = renderStatusLine(
+			{ iconOverride: theme.styledSymbol("tool.task", "accent"), title: "Task" },
+			theme,
+		);
 		return framedBlock(theme, width => ({
 			header,
 			sections: [

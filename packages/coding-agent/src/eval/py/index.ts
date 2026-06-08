@@ -1,5 +1,10 @@
 import type { ToolSession } from "../../tools";
-import { type ExecutorBackend, type ExecutorBackendExecOptions, type ExecutorBackendResult, resolveEvalUrlRoots } from "../backend";
+import {
+	type ExecutorBackend,
+	type ExecutorBackendExecOptions,
+	type ExecutorBackendResult,
+	resolveEvalUrlRoots,
+} from "../backend";
 import { executePython, type PythonExecutorOptions } from "./executor";
 import { checkPythonKernelAvailability } from "./kernel";
 

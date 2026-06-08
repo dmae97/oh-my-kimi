@@ -48,7 +48,7 @@ export function formatDoctorResults(checks: DoctorCheck[]): string {
 	for (const check of checks) {
 		const icon =
 			check.status === "ok"
-				? theme.status.success
+				? theme.status.enabled
 				: check.status === "warning"
 					? theme.status.warning
 					: theme.status.error;

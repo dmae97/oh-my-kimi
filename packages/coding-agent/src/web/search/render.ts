@@ -117,13 +117,21 @@ export function renderSearchResult(
 		: searchQueries[0]
 			? truncateToWidth(searchQueries[0], 80)
 			: undefined;
+	const success = sourceCount > 0;
 	const header = renderStatusLine(
-		{
-			icon: sourceCount > 0 ? "success" : "warning",
-			title: "Web Search",
-			description: providerLabel,
-			meta: [formatCount("source", sourceCount)],
-		},
+		success
+			? {
+					iconOverride: theme.styledSymbol("tool.webSearch", "accent"),
+					title: "Web Search",
+					description: providerLabel,
+					meta: [formatCount("source", sourceCount)],
+				}
+			: {
+					icon: "warning",
+					title: "Web Search",
+					description: providerLabel,
+					meta: [formatCount("source", sourceCount)],
+				},
 		theme,
 	);
 
