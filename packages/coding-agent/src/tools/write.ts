@@ -8,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -132,7 +132,7 @@ function stripWriteContent(session: ToolSession, content: string): { text: strin
 function maybeWriteSnapshotHeader(session: ToolSession, absolutePath: string, content: string): string | undefined {
 	if (!resolveFileDisplayMode(session).hashLines) return undefined;
 	const normalized = normalizeToLF(content);
-	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
+	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return formatHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag);
 }
 

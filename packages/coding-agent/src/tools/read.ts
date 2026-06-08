@@ -9,7 +9,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore, recordFileSnapshot } from "../edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore, recordFileSnapshot } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -131,7 +131,7 @@ function recordFullHashlineContext(
 ): HashlineHeaderContext | undefined {
 	if (!absolutePath || !path.isAbsolute(absolutePath)) return undefined;
 	const normalized = normalizeToLF(fullText);
-	const tag = getFileSnapshotStore(session).record(absolutePath, normalized);
+	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return {
 		header: formatHashlineHeader(displayPath, tag),
 		tag,
@@ -1750,15 +1750,25 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// Convert document via markit.
 			const result = await convertFileWithMarkit(absolutePath, signal);
 			if (result.ok) {
-				// Apply truncation to converted content
-				const truncation = truncateHead(result.content);
-				const outputText = truncation.content;
-
-				details = { truncation };
-				sourcePath = absolutePath;
-				truncationInfo = { result: truncation, options: { direction: "head", startLine: 1 } };
-
-				content = [{ type: "text", text: outputText }];
+				// Route the converted markdown through the in-memory text builder
+				// so line-range selectors (`file.pdf:50-100`, `:5-16,40-80`) and
+				// raw mode apply against the converted output. Without this,
+				// `file.pdf:50-100` silently returned the head of the document
+				// because only `truncateHead` was being applied.
+				if (isMultiRange(parsed) && parsed.kind === "lines") {
+					return this.#buildInMemoryMultiRangeResult(result.content, parsed.ranges, {
+						details: { resolvedPath: absolutePath },
+						sourcePath: absolutePath,
+						entityLabel: "document",
+					});
+				}
+				const { offset, limit } = selToOffsetLimit(parsed);
+				return this.#buildInMemoryTextResult(result.content, offset, limit, {
+					details: { resolvedPath: absolutePath },
+					sourcePath: absolutePath,
+					entityLabel: "document",
+					raw: isRawSelector(parsed),
+				});
 			} else if (result.error) {
 				content = [{ type: "text", text: `[Cannot read ${ext} file: ${result.error || "conversion failed"}]` }];
 			} else {
@@ -1944,7 +1954,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						// full file and any anchor validates while the file is unchanged.
 						const isWholeFile = offset === undefined && limit === undefined && !wasTruncated;
 						const tag = isWholeFile
-							? getFileSnapshotStore(this.session).record(absolutePath, normalizeToLF(collectedLines.join("\n")))
+							? getFileSnapshotStore(this.session).record(
+									canonicalSnapshotKey(absolutePath),
+									normalizeToLF(collectedLines.join("\n")),
+								)
 							: await recordFileSnapshot(this.session, absolutePath);
 						if (tag) {
 							hashContext = hashlineHeaderContext(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag);
