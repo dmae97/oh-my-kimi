@@ -2053,7 +2053,7 @@ describe("Editor component", () => {
 
 			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
 
-			expect(editor.getText()).toMatch(/\[paste #\d+ \+\d+ lines\]/);
+			expect(editor.getText()).toMatch(/\[Paste #\d+, \+\d+ lines\]/);
 			expect(editor.getExpandedText()).toBe(pastedText);
 		});
 
@@ -2081,6 +2081,61 @@ describe("Editor component", () => {
 			editor.handleInput("\r");
 
 			expect(submitted).toBe(pastedText);
+		});
+
+		it("formats a large single-line paste as a char-count marker", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const pastedText = "a".repeat(1500);
+
+			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
+
+			expect(editor.getText()).toMatch(/^\[Paste #\d+, 1500 chars\]$/);
+			expect(editor.getExpandedText()).toBe(pastedText);
+		});
+
+		it("deletes an entire paste marker on a single backspace when atomicTokenPattern is set", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.atomicTokenPattern = /\[(?:Image|Paste) #\d+(?:,[^\]\n]*)?\]/g;
+			const pastedText = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+
+			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
+			expect(editor.getText()).toMatch(/^\[Paste #\d+, \+\d+ lines\]$/);
+
+			// Cursor sits just after the marker; one backspace removes the whole token
+			// rather than corrupting it into stray `[Paste #1, +12 lines` text.
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("");
+		});
+
+		it("deletes an entire marker on forward-delete from its start", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.atomicTokenPattern = /\[(?:Image|Paste) #\d+(?:,[^\]\n]*)?\]/g;
+			editor.setText("[Image #1, 800x600]");
+
+			editor.handleInput("\x01"); // Ctrl+A → start of line
+			editor.handleInput("\x1b[3~"); // Delete (forward)
+			expect(editor.getText()).toBe("");
+		});
+
+		it("removes only the marker and keeps surrounding text on atomic backspace", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.atomicTokenPattern = /\[(?:Image|Paste) #\d+(?:,[^\]\n]*)?\]/g;
+			editor.setText("a [Paste #1, +12 lines] b");
+
+			editor.handleInput("\x05"); // Ctrl+E → end of line
+			editor.handleInput("\x1b[D"); // left over 'b'
+			editor.handleInput("\x1b[D"); // left over ' ' — cursor now just after ']'
+			editor.handleInput("\x7f"); // Backspace deletes the whole marker
+			expect(editor.getText()).toBe("a  b");
+		});
+
+		it("deletes a marker character-by-character when no atomicTokenPattern is set", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("[Paste #1, +12 lines]");
+
+			editor.handleInput("\x05"); // Ctrl+E → end of line
+			editor.handleInput("\x7f"); // Backspace removes only the closing bracket
+			expect(editor.getText()).toBe("[Paste #1, +12 lines");
 		});
 	});
 

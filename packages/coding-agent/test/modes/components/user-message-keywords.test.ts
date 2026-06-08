@@ -107,4 +107,25 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(raw).toContain("\x1b]8;id=");
 		expect(raw).toContain("file:///tmp/abc123.png");
 	});
+
+	it("highlights paste markers in the draft editor without a hyperlink", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setText("see [Paste #1, +30 lines] now");
+		const raw = editor.render(80).join("\n");
+		expect(Bun.stripANSI(raw)).toContain("[Paste #1, +30 lines]");
+		// The marker label is bold-wrapped (highlighted), unlike surrounding plain text.
+		expect(raw).toContain("\x1b[1m[Paste #1, +30 lines]");
+		// Paste markers are not clickable, so no OSC-8 hyperlink is emitted (contrast with images).
+		expect(raw).not.toContain("\x1b]8;id=");
+	});
+
+	it("hyperlinks the metadata-bearing image marker format", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.imageLinks = ["/tmp/omp-image.png"];
+		editor.setText("see [Image #1, 800x600] now");
+		const raw = editor.render(80).join("\n");
+		expect(Bun.stripANSI(raw)).toContain("[Image #1, 800x600]");
+		expect(raw).toContain("\x1b]8;id=");
+		expect(raw).toContain("file:///tmp/omp-image.png");
+	});
 });

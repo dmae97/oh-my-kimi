@@ -150,7 +150,7 @@ describe("HookEditorComponent default (hook) mode", () => {
 
 		component.handleInput(`\x1b[200~${pasted}\x1b[201~`);
 
-		expect(renderText(component)).toContain("[paste #1 +11 lines]");
+		expect(renderText(component)).toContain("[Paste #1, +11 lines]");
 
 		component.handleInput("\x1b[13;5u");
 
@@ -228,7 +228,7 @@ describe("HookEditorComponent prompt-style mode", () => {
 
 		component.handleInput(`\x1b[200~${pasted}\x1b[201~`);
 
-		expect(renderText(component)).toContain("[paste #1 +11 lines]");
+		expect(renderText(component)).toContain("[Paste #1, +11 lines]");
 
 		component.handleInput("\r");
 

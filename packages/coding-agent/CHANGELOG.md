@@ -1,6 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added support for paste marker highlighting with accent styling (`[Paste #N, +X lines]`/`[Paste #N, Y chars]`) in the prompt editor, matching the visual treatment of image references
+- Added pixel dimensions to pasted/loaded image placeholders in the prompt — the marker now reads `[Image #N, WxH]` (falling back to `[Image #N]` when the header can't be decoded).
+
+### Changed
+
+- Changed image marker format to include pixel dimensions when available (`[Image #N, WxH]`), falling back to bare `[Image #N]` when header cannot be decoded
+- Changed the prompt editor to highlight large-paste placeholders (`[Paste #N, +X lines]`/`[Paste #N, Y chars]`) with the same accent styling as image references (bold, no hyperlink), and to delete image/paste markers atomically: a single backspace or forward-delete removes the whole marker instead of leaving a broken `[Paste #N, +X lines` behind.
+
 ### Fixed
 
 - Fixed follow-up message submissions to forward pending clipboard-pasted images to `session.prompt` in both streaming and non-streaming flows

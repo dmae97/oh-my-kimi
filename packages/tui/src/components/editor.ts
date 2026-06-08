@@ -368,6 +368,15 @@ export class Editor implements Component, Focusable {
 	#pastes: Map<number, string> = new Map();
 	#pasteCounter: number = 0;
 
+	/** Optional pattern matching atomic placeholder tokens (e.g. `[Image #1, 800x600]` or
+	 *  `[Paste #2, +30 lines]`) that the editor treats as indivisible: a backspace or forward-delete
+	 *  landing on any character of a token removes the whole token instead of corrupting it into
+	 *  stray text. MUST be a global regex; the editor recompiles a private copy so its `lastIndex`
+	 *  is never shared with the caller. */
+	atomicTokenPattern: RegExp | undefined;
+	#atomicTokenSource: string | undefined;
+	#atomicTokenRe: RegExp | undefined;
+
 	// Bracketed paste mode buffering
 	#pasteHandler = new BracketedPasteHandler();
 
@@ -1389,7 +1398,7 @@ export class Editor implements Component, Focusable {
 	#expandPasteMarkers(text: string): string {
 		let result = text;
 		for (const [pasteId, pasteContent] of this.#pastes) {
-			const markerRegex = new RegExp(`\\[paste #${pasteId}( (\\+\\d+ lines|\\d+ chars))?\\]`, "g");
+			const markerRegex = new RegExp(`\\[Paste #${pasteId}(?:, (?:\\+\\d+ lines|\\d+ chars))?\\]`, "g");
 			result = result.replace(markerRegex, () => pasteContent);
 		}
 		return result;
@@ -1653,11 +1662,11 @@ export class Editor implements Component, Focusable {
 				const pasteId = this.#pasteCounter;
 				this.#pastes.set(pasteId, filteredText);
 
-				// Insert marker like "[paste #1 +123 lines]" or "[paste #1 1234 chars]"
+				// Insert marker like "[Paste #1, +123 lines]" or "[Paste #1, 1234 chars]"
 				const marker =
 					pastedLines.length > 10
-						? `[paste #${pasteId} +${pastedLines.length} lines]`
-						: `[paste #${pasteId} ${totalChars} chars]`;
+						? `[Paste #${pasteId}, +${pastedLines.length} lines]`
+						: `[Paste #${pasteId}, ${totalChars} chars]`;
 				this.#insertTextAtCursor(marker);
 
 				return;
@@ -1726,26 +1735,72 @@ export class Editor implements Component, Focusable {
 		if (this.onSubmit) this.onSubmit(result);
 	}
 
+	/** Resolve the compiled, global copy of `atomicTokenPattern`, rebuilt only when the source changes. */
+	#getAtomicTokenRe(): RegExp | undefined {
+		const pattern = this.atomicTokenPattern;
+		if (pattern === undefined) {
+			this.#atomicTokenSource = undefined;
+			this.#atomicTokenRe = undefined;
+			return undefined;
+		}
+		if (pattern.source !== this.#atomicTokenSource) {
+			this.#atomicTokenSource = pattern.source;
+			this.#atomicTokenRe = new RegExp(
+				pattern.source,
+				pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+			);
+		}
+		return this.#atomicTokenRe;
+	}
+
+	/** Find an atomic token on `line` whose span contains column `col` (`start <= col < end`). */
+	#atomicTokenAt(line: string, col: number): { start: number; end: number } | undefined {
+		const re = this.#getAtomicTokenRe();
+		if (re === undefined) return undefined;
+		re.lastIndex = 0;
+		for (;;) {
+			const match = re.exec(line);
+			if (match === null) break;
+			if (match[0].length === 0) {
+				re.lastIndex = match.index + 1;
+				continue;
+			}
+			const start = match.index;
+			const end = start + match[0].length;
+			if (col < start) break;
+			if (col < end) return { start, end };
+		}
+		return undefined;
+	}
+
 	#handleBackspace(): void {
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
 		if (this.#state.cursorCol > 0) {
-			// Delete grapheme before cursor (handles emojis, combining characters, etc.)
 			const line = this.#state.lines[this.#state.cursorLine] || "";
-			const beforeCursor = line.slice(0, this.#state.cursorCol);
+			// An atomic placeholder token (image/paste marker) deletes as a unit, so a single
+			// backspace never leaves a half-eaten `[Paste #1, +30 lines` behind as stray text.
+			const token = this.#atomicTokenAt(line, this.#state.cursorCol - 1);
+			if (token !== undefined) {
+				this.#state.lines[this.#state.cursorLine] = line.slice(0, token.start) + line.slice(token.end);
+				this.#setCursorCol(token.start);
+			} else {
+				// Delete grapheme before cursor (handles emojis, combining characters, etc.)
+				const beforeCursor = line.slice(0, this.#state.cursorCol);
 
-			// Find the last grapheme in the text before cursor
-			const graphemes = [...segmenter.segment(beforeCursor)];
-			const lastGrapheme = graphemes[graphemes.length - 1];
-			const graphemeLength = lastGrapheme ? lastGrapheme.segment.length : 1;
+				// Find the last grapheme in the text before cursor
+				const graphemes = [...segmenter.segment(beforeCursor)];
+				const lastGrapheme = graphemes[graphemes.length - 1];
+				const graphemeLength = lastGrapheme ? lastGrapheme.segment.length : 1;
 
-			const before = line.slice(0, this.#state.cursorCol - graphemeLength);
-			const after = line.slice(this.#state.cursorCol);
+				const before = line.slice(0, this.#state.cursorCol - graphemeLength);
+				const after = line.slice(this.#state.cursorCol);
 
-			this.#state.lines[this.#state.cursorLine] = before + after;
-			this.#setCursorCol(this.#state.cursorCol - graphemeLength);
+				this.#state.lines[this.#state.cursorLine] = before + after;
+				this.#setCursorCol(this.#state.cursorCol - graphemeLength);
+			}
 		} else if (this.#state.cursorLine > 0) {
 			// Merge with previous line
 			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
@@ -2217,17 +2272,25 @@ export class Editor implements Component, Focusable {
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 
 		if (this.#state.cursorCol < currentLine.length) {
-			// Delete grapheme at cursor position (handles emojis, combining characters, etc.)
-			const afterCursor = currentLine.slice(this.#state.cursorCol);
+			// An atomic placeholder token (image/paste marker) deletes as a unit.
+			const token = this.#atomicTokenAt(currentLine, this.#state.cursorCol);
+			if (token !== undefined) {
+				this.#state.lines[this.#state.cursorLine] =
+					currentLine.slice(0, token.start) + currentLine.slice(token.end);
+				this.#setCursorCol(token.start);
+			} else {
+				// Delete grapheme at cursor position (handles emojis, combining characters, etc.)
+				const afterCursor = currentLine.slice(this.#state.cursorCol);
 
-			// Find the first grapheme at cursor
-			const graphemes = [...segmenter.segment(afterCursor)];
-			const firstGrapheme = graphemes[0];
-			const graphemeLength = firstGrapheme ? firstGrapheme.segment.length : 1;
+				// Find the first grapheme at cursor
+				const graphemes = [...segmenter.segment(afterCursor)];
+				const firstGrapheme = graphemes[0];
+				const graphemeLength = firstGrapheme ? firstGrapheme.segment.length : 1;
 
-			const before = currentLine.slice(0, this.#state.cursorCol);
-			const after = currentLine.slice(this.#state.cursorCol + graphemeLength);
-			this.#state.lines[this.#state.cursorLine] = before + after;
+				const before = currentLine.slice(0, this.#state.cursorCol);
+				const after = currentLine.slice(this.#state.cursorCol + graphemeLength);
+				this.#state.lines[this.#state.cursorLine] = before + after;
+			}
 		} else if (this.#state.cursorLine < this.#state.lines.length - 1) {
 			// At end of line - merge with next line
 			const nextLine = this.#state.lines[this.#state.cursorLine + 1] || "";

@@ -729,8 +729,22 @@ export class InputController {
 		this.ctx.pendingImageLinks.push(imageLink);
 		this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
 		const imageNum = this.ctx.pendingImages.length;
-		this.ctx.editor.insertText(`[Image #${imageNum}] `);
+		const dims = await this.#imageDimensions(imageData);
+		const label = dims ? `[Image #${imageNum}, ${dims.width}x${dims.height}]` : `[Image #${imageNum}]`;
+		this.ctx.editor.insertText(`${label} `);
 		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+	}
+
+	/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
+	 *  header can't be decoded, so the caller falls back to a bare `[Image #N]`. */
+	async #imageDimensions(image: ImageContent): Promise<{ width: number; height: number } | undefined> {
+		try {
+			const { width, height } = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
+			if (width && height) return { width, height };
+		} catch {
+			// Unknown/corrupt header — fall back to a bare label.
+		}
+		return undefined;
 	}
 
 	async #normalizeAndInsertPastedImage(image: ImageContent, unsupportedMessage: string): Promise<boolean> {
