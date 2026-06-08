@@ -126,7 +126,7 @@ interface PythonSession {
 
 const sessions = new Map<string, PythonSession>();
 const startingSessions = new Map<string, Promise<PythonSession>>();
-const resettingSessions = new Set<string>();
+const resettingSessions = new Map<string, Promise<void>>();
 
 function normalizeSessionCwd(cwd: string): string {
 	return path.resolve(cwd);
@@ -611,17 +611,29 @@ async function executeOnSession(code: string, cwd: string, options: PythonExecut
 		options.bridgeSessionId = sessionId;
 	}
 	if (options.reset) {
-		if (resettingSessions.has(sessionKey)) {
-			throw new Error("Python kernel reset already in progress");
+		// Coalesce concurrent resets: if another reset is in flight for this
+		// session, await it instead of throwing — the caller's intent ("start
+		// from a clean kernel") is satisfied once that reset settles.
+		const inFlight = resettingSessions.get(sessionKey);
+		if (inFlight) await inFlight.catch(() => undefined);
+		else {
+			const resetPromise = resetSession(sessionKey);
+			resettingSessions.set(
+				sessionKey,
+				resetPromise.then(() => undefined),
+			);
+			try {
+				await resetPromise;
+			} finally {
+				resettingSessions.delete(sessionKey);
+			}
 		}
-		resettingSessions.add(sessionKey);
-		try {
-			await resetSession(sessionKey);
-		} finally {
-			resettingSessions.delete(sessionKey);
-		}
-	} else if (resettingSessions.has(sessionKey)) {
-		throw new Error("Python kernel reset in progress");
+	} else {
+		// A reset already in progress is an internal coordination state, not a
+		// user-visible failure. Wait for it to clear, then proceed with the
+		// requested execution on the freshly-restarted kernel.
+		const inFlight = resettingSessions.get(sessionKey);
+		if (inFlight) await inFlight.catch(() => undefined);
 	}
 	const session = await acquireSession(sessionKey, sessionId, cwd, options);
 	if (options.signal?.aborted) {

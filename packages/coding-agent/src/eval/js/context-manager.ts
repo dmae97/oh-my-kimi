@@ -52,7 +52,7 @@ interface JsSession {
 
 const sessions = new Map<string, JsSession>();
 const startingSessions = new Map<string, Promise<JsSession>>();
-const resettingSessions = new Set<string>();
+const resettingSessions = new Map<string, Promise<void>>();
 // Worker startup (module-graph import + WorkerCore construction) is infrastructure
 // cost, not user compute. Floor it independently of Bun's 5s default per-test timeout
 // so a slow cold-start under load isn't aborted mid-init — terminating a still-
@@ -73,17 +73,28 @@ export async function executeInVmContext(options: {
 	runState: VmRunState;
 }): Promise<{ value: unknown }> {
 	if (options.reset) {
-		if (resettingSessions.has(options.sessionKey)) {
-			throw new ToolError("JS context reset already in progress");
+		// Coalesce concurrent resets: an existing in-flight reset already
+		// produces a fresh context, so a follow-up `reset: true` cell should
+		// just wait for it rather than failing the user-visible call.
+		const inFlight = resettingSessions.get(options.sessionKey);
+		if (inFlight) await inFlight.catch(() => undefined);
+		else {
+			const resetPromise = resetVmContext(options.sessionKey);
+			resettingSessions.set(
+				options.sessionKey,
+				resetPromise.then(() => undefined),
+			);
+			try {
+				await resetPromise;
+			} finally {
+				resettingSessions.delete(options.sessionKey);
+			}
 		}
-		resettingSessions.add(options.sessionKey);
-		try {
-			await resetVmContext(options.sessionKey);
-		} finally {
-			resettingSessions.delete(options.sessionKey);
-		}
-	} else if (resettingSessions.has(options.sessionKey)) {
-		throw new ToolError("JS context reset in progress");
+	} else {
+		// Internal coordination: wait for any in-flight reset to settle and
+		// then run on the freshly-rebuilt context.
+		const inFlight = resettingSessions.get(options.sessionKey);
+		if (inFlight) await inFlight.catch(() => undefined);
 	}
 	const session = await acquireSession(
 		options.sessionKey,
