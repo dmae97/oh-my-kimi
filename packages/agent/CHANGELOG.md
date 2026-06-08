@@ -10,6 +10,7 @@
 
 - Removed the now-dead `<turn-aborted>` marker from the OpenAI compaction output user-message filter, since `transformMessages` no longer emits that note.
 - Removed stale synthetic user-message tag filters from OpenAI remote compaction output preservation; developer messages are now dropped by role instead.
+- Tool executions now receive the active turn `AbortSignal` unconditionally.
 
 
 ## [15.10.2] - 2026-06-08

@@ -1282,7 +1282,7 @@ async function executeToolCalls(
 				const rawResult = await tool.execute(
 					toolCall.id,
 					transformToolCallArguments ? transformToolCallArguments(effectiveArgs, toolCall.name) : effectiveArgs,
-					tool.nonAbortable ? undefined : toolSignal,
+					toolSignal,
 					partialResult => {
 						stream.push({
 							type: "tool_execution_update",

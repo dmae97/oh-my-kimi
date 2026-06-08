@@ -297,7 +297,6 @@ export class EditTool implements AgentTool<TInput> {
 	readonly name = "edit";
 	readonly label = "Edit";
 	readonly loadMode = "essential";
-	readonly nonAbortable = true;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 

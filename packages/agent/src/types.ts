@@ -423,8 +423,6 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	loadMode?: "essential" | "discoverable";
 	/** Short one-line summary used for tool discovery indexes. */
 	summary?: string;
-	/** If true, tool execution ignores abort signals (runs to completion) */
-	nonAbortable?: boolean;
 	/**
 	 * Concurrency mode for tool scheduling when multiple calls are in one turn.
 	 * - "shared": can run alongside other shared tools (default)

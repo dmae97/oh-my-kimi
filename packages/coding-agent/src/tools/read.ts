@@ -672,7 +672,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly loadMode = "essential";
 	readonly description: string;
 	readonly parameters = readSchema;
-	readonly nonAbortable = true;
 	readonly strict = true;
 
 	readonly #autoResizeImages: boolean;

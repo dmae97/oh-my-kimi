@@ -11,10 +11,12 @@
 ### Removed
 
 - Removed the animated pending border ("shimmer") on running `bash`, `eval`, and `ssh` execution blocks. While pending, a block now shows a static accent border instead of sweeping a dark segment around its bottom edge; `display.shimmer` still governs the working-status line and `task` row animations.
+- Read, write, and edit tools now honor the active turn `AbortSignal`.
 
 ### Fixed
 
 - LSP writethrough no longer burns the full diagnostics poll on every edit/write. `typescript-language-server` never echoes the document version in `publishDiagnostics` ([upstream #983](https://github.com/typescript-language-server/typescript-language-server/issues/983)), so the exact-version gate never passed; `waitForDiagnostics` now accepts an exact version match instantly and otherwise settles on the latest publish after a short quiescence window, dropping superseded in-flight diagnostics.
+- LSP writethrough no longer blocks the whole edit/write on slow diagnostics: it now waits only a short inline window (~500ms) for a settled result, then hands the in-flight fetch to the deferred channel so a slow or cold language server (e.g. a large-project `tsserver`) delivers its diagnostics as a follow-up message instead of stalling the tool 3–5s on every edit. The background fetch also gets a longer budget so slow servers still surface late rather than being dropped.
 
 - Fixed the `c`/`.` continue shortcut making the agent second-guess itself after an Esc interrupt. Continuing used to submit an *empty* user turn, which left the model with only the aborted-turn context — so it tended to restate the halted state and ask whether to proceed rather than just continuing. The shortcut now resumes with a hidden agent-authored `developer` directive ("keep going — don't stop to summarize or re-confirm the plan") instead of an empty turn. It still produces no visible transcript entry, same as before.
 - Fixed native scrollback commit boundaries to be computed generically from finalized transcript blocks and observed append-only live growth, so tall final tool results and streaming previews keep their scrolled-off heads on ED3-risk terminals without per-tool append-only predicates; live blocks that re-layout remain deferred until finalization or the next checkpoint.

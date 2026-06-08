@@ -249,7 +249,7 @@ Notes: ...
   - Uses `session.internalRouter` for internal URLs.
   - Uses `session.allocateOutputArtifact()` for cached/truncated URL output.
 - Background work / cancellation
-  - Most branches honor `AbortSignal`; the tool itself is marked `nonAbortable = true`, but helper paths still call `throwIfAborted(signal)`.
+  - Most branches honor `AbortSignal`; helper paths call `throwIfAborted(signal)` to stop promptly.
 
 ## Limits & Caps
 - Shared text truncation defaults from `packages/coding-agent/src/session/streaming-output.ts`:
