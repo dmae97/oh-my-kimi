@@ -45,6 +45,8 @@ export interface ReportBundleOptions {
 	heapSnapshot?: HeapSnapshot;
 	/** Work profile (for work scheduling reports) */
 	workProfile?: WorkProfile;
+	/** Raw provider SSE diagnostics captured by the session buffer */
+	rawSseText?: string;
 }
 
 export interface ReportBundleResult {
@@ -70,6 +72,7 @@ export interface DebugLogSource {
  * - env.json: Sanitized environment variables
  * - config.json: Resolved settings
  * - profile.cpuprofile: CPU profile (performance report only)
+ * - raw-sse.txt: Recent raw provider SSE diagnostics (when captured)
  * - profile.md: Markdown CPU profile (performance report only)
  * - heap.heapsnapshot: Heap snapshot (memory report only)
  * - work.folded: Work profile folded stacks (work report only)
@@ -107,6 +110,12 @@ export async function createReportBundle(options: ReportBundleOptions): Promise<
 	if (logs) {
 		data["logs.txt"] = logs;
 		files.push("logs.txt");
+	}
+
+	// Recent raw provider SSE diagnostics
+	if (options.rawSseText && options.rawSseText.trim().length > 0) {
+		data["raw-sse.txt"] = options.rawSseText;
+		files.push("raw-sse.txt");
 	}
 
 	// Session file

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime, spyOn, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { Loader, type LoaderMessageColorFn } from "@oh-my-pi/pi-tui/components/loader";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
@@ -91,7 +91,7 @@ describe("Loader component", () => {
 
 	it("requests render when animated message bytes change between spinner frames", () => {
 		vi.useFakeTimers();
-		vi.setSystemTime(1_000);
+		setSystemTime(new Date(1_000));
 		const ui = { requestRender: vi.fn() } as unknown as TUI;
 		const colorMessage = ((text: string) => `${text}-${Date.now()}`) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;

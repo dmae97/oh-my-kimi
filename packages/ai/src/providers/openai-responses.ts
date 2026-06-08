@@ -4,6 +4,7 @@ import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
+	ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -15,6 +16,7 @@ import type {
 	Model,
 	OpenAICompat,
 	ProviderSessionState,
+	RawSseEvent,
 	ServiceTier,
 	StreamFunction,
 	StreamOptions,
@@ -42,7 +44,7 @@ import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
-import { wrapFetchForSseDebug } from "../utils/sse-debug";
+import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -184,6 +186,18 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	stream_options?: { include_obfuscation?: boolean };
 };
 
+async function* observeDecodedOpenAIResponsesEvents(
+	events: AsyncIterable<ResponseStreamEvent>,
+	observer: (event: RawSseEvent) => void,
+): AsyncGenerator<ResponseStreamEvent> {
+	for await (const event of events) {
+		const data = JSON.stringify(event);
+		// Reconstructed from decoded SDK event; not literal wire bytes.
+		notifyRawSseEvent(observer, { event: event.type, data, raw: [`event: ${event.type}`, `data: ${data}`] });
+		yield event;
+	}
+}
+
 /**
  * Generate function for OpenAI Responses API
  */
@@ -208,6 +222,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new Error(OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
+		const onSseEvent = options?.onSseEvent;
+		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
 
 		try {
 			// Keep request routing on `sessionId` while allowing callers to pin a
@@ -222,7 +238,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.headers,
 				options?.initiatorOverride,
 				routingSessionId,
-				options?.onSseEvent,
 				options?.fetch,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
@@ -273,29 +288,27 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			stream.push({ type: "start", partial: output });
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
-			await processResponsesStream(
-				iterateWithIdleTimeout(openaiStream, {
-					idleTimeoutMs,
-					firstItemTimeoutMs: firstEventTimeoutMs,
-					firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
-					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
-					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
-					onIdle: () => requestAbortController.abort(),
-					abortSignal: options?.signal,
-					isProgressItem: isOpenAIResponsesProgressEvent,
-				}),
-				output,
-				stream,
-				model,
-				{
-					onFirstToken: () => {
-						if (!firstTokenTime) firstTokenTime = Date.now();
-					},
-					onOutputItemDone: item => {
-						nativeOutputItems.push(structuredCloneJSON<unknown>(item) as unknown as Record<string, unknown>);
-					},
+			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
+				idleTimeoutMs,
+				firstItemTimeoutMs: firstEventTimeoutMs,
+				firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
+				errorMessage: "OpenAI responses stream stalled while waiting for the next event",
+				onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+				onIdle: () => requestAbortController.abort(),
+				abortSignal: options?.signal,
+				isProgressItem: isOpenAIResponsesProgressEvent,
+			});
+			const observedOpenaiStream = rawSseObserver
+				? observeDecodedOpenAIResponsesEvents(timedOpenaiStream, rawSseObserver)
+				: timedOpenaiStream;
+			await processResponsesStream(observedOpenaiStream, output, stream, model, {
+				onFirstToken: () => {
+					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
-			);
+				onOutputItemDone: item => {
+					nativeOutputItems.push(structuredCloneJSON<unknown>(item) as unknown as Record<string, unknown>);
+				},
+			});
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
@@ -341,7 +354,6 @@ function createClient(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	sessionId?: string,
-	onSseEvent?: OpenAIResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
 ): {
 	client: OpenAI;
@@ -388,7 +400,7 @@ function createClient(
 			dangerouslyAllowBrowser: true,
 			maxRetries: 5,
 			defaultHeaders: headers,
-			fetch: onSseEvent ? wrapFetchForSseDebug(baseFetch, event => onSseEvent(event, model)) : baseFetch,
+			fetch: baseFetch,
 		}),
 		copilotPremiumRequests,
 		baseUrl,

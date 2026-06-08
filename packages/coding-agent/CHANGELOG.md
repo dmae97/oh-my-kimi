@@ -1,14 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `raw-sse.txt` to debug report bundles, exporting recent raw provider SSE diagnostics when captured
 - Added `/model` visibility for auto-selected role defaults: inferred `pi/smol`/`pi/slow`/designer choices now show as compact `[ROLE auto]` badges, while explicitly configured roles keep the existing solid badges and thinking labels.
 - Added credential provenance to the `/login` and `/logout` provider picker: each authenticated provider now shows where its credential comes from — `(login)`, `(api key)`, `(env: VAR_NAME)`, `(config)`, `(--api-key)`, or `(custom provider)` — so a real OAuth login is distinguishable from an env var that merely aliases the provider (e.g. `COPILOT_GITHUB_TOKEN`). The origin is also matched by the picker's type-to-search filter.
 
 ### Changed
 
+- Changed raw SSE debug export output to prepend dropped-record metadata so truncated sessions in debug bundles now report dropped record and character counts
 - Changed settings reads to cache pre-split schema paths and resolved values, with coarse invalidation on source/cwd changes.
 - Changed status-line rendering to cache merged effective settings until `updateSettings()` changes the configuration.
 - Changed `CustomEditor` app shortcut dispatch to parse each input packet once and match against precomputed canonical key sets, preserving the existing shortcut precedence while avoiding repeated key reparses.

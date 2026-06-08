@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added support for `impersonated_service_account` Application Default Credentials (ADC) in Vertex AI to enable chained impersonation without failing via 401 `invalid_client`.
@@ -9,6 +8,8 @@
 
 ### Changed
 
+- Changed `onSseEvent` recording for OpenAI Responses, Azure OpenAI Responses, OpenAI Completions, and Anthropic stream providers to emit reconstructed SSE events from decoded SDK stream items instead of wrapping raw fetch responses
+- Changed OpenAI Completions SSE diagnostics to include `event: "chat.completion.chunk"` in `onSseEvent` records for chunked responses
 - Changed the default Anthropic model in `DEFAULT_MODEL_PER_PROVIDER` from `claude-sonnet-4-6` to `claude-opus-4-6`, so sessions that fall back to the provider default (no configured `default` role, no `--model`, no restored session) now start on Claude Opus 4.6.
 
 ### Fixed
