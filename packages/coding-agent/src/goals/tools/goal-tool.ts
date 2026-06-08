@@ -209,7 +209,7 @@ export const goalToolRenderer = {
 
 		const header = renderStatusLine(
 			{
-				icon: "success",
+				iconOverride: uiTheme.styledSymbol("tool.goal", "accent"),
 				title: "Goal",
 				description,
 				badge: { label: goal.status, color: goalBadgeColor(goal.status) },

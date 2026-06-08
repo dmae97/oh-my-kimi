@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { supportsDeveloperRole } from "../src/providers/openai-responses";
-import type { Model } from "../src/types";
+import { supportsDeveloperRole } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { Model } from "@oh-my-pi/pi-ai/types";
 
 describe("supportsDeveloperRole", () => {
 	it("returns true for openai provider with official API base URL", () => {

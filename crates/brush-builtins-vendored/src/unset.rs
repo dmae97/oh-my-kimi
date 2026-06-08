@@ -42,11 +42,12 @@ impl builtins::Command for UnsetCommand {
 		&self,
 		context: brush_core::ExecutionContext<'_, SE>,
 	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		//
-		// TODO(nameref): implement nameref
-		//
 		if self.name_interpretation.name_references {
-			return brush_core::error::unimp("unset: name references are not yet implemented");
+			for name in &self.names {
+				unset_name_reference(context.shell, name)?;
+			}
+
+			return Ok(ExecutionResult::success());
 		}
 
 		let unspecified = self.name_interpretation.unspecified();
@@ -91,6 +92,27 @@ impl builtins::Command for UnsetCommand {
 		Ok(ExecutionResult::success())
 	}
 }
+fn unset_name_reference(
+	shell: &mut Shell<impl brush_core::ShellExtensions>,
+	name: &str,
+) -> Result<bool, brush_core::Error> {
+	let Ok(brush_parser::word::Parameter::Named(name)) =
+		brush_parser::word::parse_parameter(name, &shell.parser_options())
+	else {
+		return Ok(false);
+	};
+
+	if shell
+		.env()
+		.get(name.as_str())
+		.is_some_and(|(_, var)| var.is_treated_as_nameref())
+	{
+		shell.env_mut().unset(name.as_str()).map(|v| v.is_some())
+	} else {
+		Ok(false)
+	}
+}
+
 
 fn unset_array_index(
 	shell: &mut Shell<impl brush_core::ShellExtensions>,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { setBedrockProviderModule, streamBedrock } from "../src/providers/register-builtins";
-import type { AssistantMessage, Context, Model } from "../src/types";
-import type { AssistantMessageEventStream } from "../src/utils/event-stream";
+import { setBedrockProviderModule, streamBedrock } from "@oh-my-pi/pi-ai/providers/register-builtins";
+import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 function createModel(): Model<"bedrock-converse-stream"> {
 	return {

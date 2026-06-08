@@ -96,8 +96,8 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 ];
 
 import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
-import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
@@ -922,6 +922,9 @@ export class ModelRegistry {
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
+	// Runtime model managers registered by extensions via fetchDynamicModels.
+	// Keyed by provider name; use the same SQLite cache path as builtins.
+	#runtimeModelManagers: Map<string, { options: ModelManagerOptions<Api>; sourceId: string }> = new Map();
 	#rebuildPending: boolean = false;
 	#rebuildSuspended: number = 0;
 
@@ -994,6 +997,27 @@ export class ModelRegistry {
 				}
 			}
 			await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		} finally {
+			this.#resumeRebuild();
+		}
+	}
+
+	/**
+	 * Discover models for providers registered at runtime via `fetchDynamicModels`
+	 * (extension providers). Merges the discovered catalog into the existing model
+	 * set without reloading static models, so dynamically-discovered models from
+	 * other providers are preserved. No-op when no runtime providers are registered.
+	 *
+	 * Drives the same SQLite model cache as built-in providers, so the default
+	 * `online-if-uncached` strategy fetches at most once per cache TTL (24 h).
+	 */
+	async refreshRuntimeProviders(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
+		if (this.#runtimeModelManagers.size === 0) {
+			return;
+		}
+		this.#suspendRebuild();
+		try {
+			await this.#refreshRuntimeDiscoveries(strategy, new Set(this.#runtimeModelManagers.keys()));
 		} finally {
 			this.#resumeRebuild();
 		}
@@ -1664,6 +1688,10 @@ export class ModelRegistry {
 				continue;
 			}
 			options.push(descriptor.createOptions(key));
+		}
+		// Append runtime model managers registered by extensions via fetchDynamicModels.
+		for (const { options: managerOpts } of this.#runtimeModelManagers.values()) {
+			options.push(managerOpts);
 		}
 		return options;
 	}
@@ -2396,6 +2424,7 @@ export class ModelRegistry {
 		this.#runtimeProviderApiKeys.delete(providerName);
 		this.#runtimeProviderOverrides.delete(providerName);
 		this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+		this.#runtimeModelManagers.delete(providerName);
 		this.authStorage.removeConfigApiKey(providerName);
 	}
 
@@ -2559,6 +2588,47 @@ export class ModelRegistry {
 			return;
 		}
 
+		if (config.fetchDynamicModels) {
+			const fetcher = config.fetchDynamicModels;
+			const providerBaseUrl = config.baseUrl ?? "";
+			const providerApi = config.api;
+			const providerHeaders = config.headers;
+			const providerApiKey = config.apiKey;
+			const providerAuthHeader = config.authHeader;
+			const providerCompat = config.compat;
+			const managerOptions: ModelManagerOptions<Api> = {
+				providerId: providerName as Parameters<typeof createModelManager>[0]["providerId"],
+				staticModels: [],
+				cacheDbPath: this.#cacheDbPath,
+				cacheTtlMs: 24 * 60 * 60 * 1000,
+				dynamicModelsAuthoritative: true,
+				fetchDynamicModels: async () => {
+					const apiKey = await this.authStorage.peekApiKey(providerName);
+					const resolvedKey = isAuthenticated(apiKey) ? apiKey : undefined;
+					const modelDefs = await fetcher(resolvedKey);
+					const results: Model<Api>[] = [];
+					for (const modelDef of modelDefs) {
+						const overlay = buildCustomModelOverlay(
+							providerName,
+							modelDef.baseUrl ?? providerBaseUrl,
+							modelDef.api ?? providerApi,
+							providerHeaders,
+							providerApiKey,
+							providerAuthHeader,
+							providerCompat,
+							undefined,
+							modelDef as CustomModelDefinitionLike,
+						);
+						if (overlay) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
+					}
+					return results;
+				},
+			};
+			this.#runtimeModelManagers.set(providerName, { options: managerOptions, sourceId: sourceId ?? "" });
+			// Discovery is driven by refreshRuntimeProviders() after the drain — not
+			// here, so registration has no network side effect and callers can await.
+		}
+
 		if (
 			config.baseUrl ||
 			config.headers ||
@@ -2636,6 +2706,15 @@ export interface ProviderConfigInput {
 		getApiKey?(credentials: OAuthCredentials): string;
 		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 	};
+	/**
+	 * Async factory that fetches the live model list from the provider endpoint.
+	 * When present, the result is run through the same SQLite model-cache as
+	 * built-in providers (keyed by provider name, default 24 h TTL).
+	 * The factory receives the resolved API key (undefined when unauthenticated).
+	 */
+	fetchDynamicModels?: (
+		apiKey: string | undefined,
+	) => Promise<readonly NonNullable<ProviderConfigInput["models"]>[number][]>;
 	models?: Array<{
 		id: string;
 		name: string;

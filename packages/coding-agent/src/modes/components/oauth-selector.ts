@@ -1,5 +1,5 @@
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import {
 	Container,
 	extractPrintableText,
@@ -179,10 +179,10 @@ export class OAuthSelectorComponent extends Container {
 			return theme.fg("error", ` ${theme.status.error} invalid`) + source;
 		}
 		if (state === "valid") {
-			return theme.fg("success", ` ${theme.status.success} logged in`) + source;
+			return theme.fg("success", ` ${theme.status.enabled} logged in`) + source;
 		}
 		return this.#hasSelectableAuth(providerId)
-			? theme.fg("success", ` ${theme.status.success} logged in`) + source
+			? theme.fg("success", ` ${theme.status.enabled} logged in`) + source
 			: "";
 	}
 

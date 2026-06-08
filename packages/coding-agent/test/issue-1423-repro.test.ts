@@ -2,8 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getChangelogPath, getPackageDir, walkUpForPackageDir } from "../src/config";
-import { parseChangelog } from "../src/utils/changelog";
+import { getChangelogPath, getPackageDir, walkUpForPackageDir } from "@oh-my-pi/pi-coding-agent/config";
+import { parseChangelog } from "@oh-my-pi/pi-coding-agent/utils/changelog";
 
 /**
  * Regression: omp startup parsed the host project's `CHANGELOG.md` as if it

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { RawSseEvent } from "../src/types";
-import { notifyRawSseEvent } from "../src/utils/sse-debug";
+import type { RawSseEvent } from "@oh-my-pi/pi-ai/types";
+import { notifyRawSseEvent } from "@oh-my-pi/pi-ai/utils/sse-debug";
 
 describe("notifyRawSseEvent", () => {
 	it("dispatches diagnostic events without cloning raw lines", () => {

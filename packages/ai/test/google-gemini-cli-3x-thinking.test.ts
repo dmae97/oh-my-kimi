@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { streamSimple } from "../src/stream";
-import type { Context, Model } from "../src/types";
 
 interface GeminiCliThinkingConfig {
 	thinkingLevel?: string;

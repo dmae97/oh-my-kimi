@@ -13,17 +13,17 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
+import { WebSearchTool } from "@oh-my-pi/pi-coding-agent/web/search";
+import * as provider from "@oh-my-pi/pi-coding-agent/web/search/provider";
+import { searchAnthropic } from "@oh-my-pi/pi-coding-agent/web/search/providers/anthropic";
+import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
+import { searchBrave } from "@oh-my-pi/pi-coding-agent/web/search/providers/brave";
+import { withHardTimeout } from "@oh-my-pi/pi-coding-agent/web/search/providers/utils";
+import type { SearchProviderId, SearchResponse } from "@oh-my-pi/pi-coding-agent/web/search/types";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import type { AgentStorage } from "../../../src/session/agent-storage";
-import type { ToolSession } from "../../../src/tools";
-import { ToolAbortError } from "../../../src/tools/tool-errors";
-import { WebSearchTool } from "../../../src/web/search";
-import * as provider from "../../../src/web/search/provider";
-import { searchAnthropic } from "../../../src/web/search/providers/anthropic";
-import type { SearchParams } from "../../../src/web/search/providers/base";
-import { searchBrave } from "../../../src/web/search/providers/brave";
-import { withHardTimeout } from "../../../src/web/search/providers/utils";
-import type { SearchProviderId, SearchResponse } from "../../../src/web/search/types";
 
 const FAKE_SESSION = {} as ToolSession;
 const fakeStorage = {

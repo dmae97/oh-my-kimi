@@ -96,7 +96,7 @@ const OTHER_OPTION = "Other (type your own)";
 const RECOMMENDED_SUFFIX = " (Recommended)";
 
 function getDoneOptionLabel(): string {
-	return `${theme.status.success} Done selecting`;
+	return `${theme.symbol("tool.ask")} Done selecting`;
 }
 
 /** Add "(Recommended)" suffix to the option at the given index if not already present */
@@ -407,6 +407,12 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly description: string;
 	readonly parameters = askSchema;
 	readonly strict = true;
+	// Run alone in its tool batch. The interactive selector/editor is a single
+	// shared UI surface (`ExtensionUiController.showHookSelector` has no queue and
+	// overwrites `ctx.hookSelector` on each call), so two concurrent `ask` calls
+	// would clobber each other: the second steals focus and orphans the first,
+	// whose promise then hangs until the user aborts the whole turn.
+	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 
 	constructor(private readonly session: ToolSession) {
@@ -621,9 +627,7 @@ interface AskRenderArgs {
 /** Render a custom free-text answer as a status line plus indented continuation rows. */
 function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 	const lines = customInput.split("\n");
-	const out: string[] = [
-		` ${uiTheme.styledSymbol("status.success", "success")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`,
-	];
+	const out: string[] = [` ${uiTheme.styledSymbol("tool.ask", "accent")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`];
 	for (let i = 1; i < lines.length; i++) out.push(`   ${uiTheme.fg("toolOutput", lines[i])}`);
 	return out;
 }
@@ -814,7 +818,12 @@ export const askToolRenderer = {
 		const question = details.question;
 		const hasSelection =
 			details.customInput !== undefined || (details.selectedOptions && details.selectedOptions.length > 0);
-		const header = renderStatusLine({ icon: hasSelection ? "success" : "warning", title: "Ask" }, uiTheme);
+		const header = renderStatusLine(
+			hasSelection
+				? { iconOverride: uiTheme.styledSymbol("tool.ask", "accent"), title: "Ask" }
+				: { icon: "warning", title: "Ask" },
+			uiTheme,
+		);
 		const dOptions = details.options;
 		const dSelected = details.selectedOptions;
 		const dMulti = details.multi;

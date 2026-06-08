@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamAnthropic } from "../src/providers/anthropic";
-import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
-import type { RawMessageStreamEvent } from "../src/providers/anthropic-wire";
-import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import { streamOpenAIResponses } from "../src/providers/openai-responses";
-import type { Context, Model, RawSseEvent } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type { AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import type { RawMessageStreamEvent } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
+import { streamAzureOpenAIResponses } from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { Context, Model, RawSseEvent } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

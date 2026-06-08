@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { formatBytes, readImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
 import { resolveReadPath } from "../tools/path-utils";
-import { formatDimensionNote, resizeImage } from "./image-resize";
+import { formatDimensionNote, type ImageResizeOptions, resizeImage } from "./image-resize";
 
 export const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 export const SUPPORTED_INPUT_IMAGE_MIME_TYPES = SUPPORTED_IMAGE_MIME_TYPES;
@@ -48,6 +48,36 @@ export async function ensureSupportedImageInput(image: ImageContent): Promise<Im
 	} catch {
 		return null;
 	}
+}
+
+export interface NormalizeModelContextImagesOptions {
+	resize?: ImageResizeOptions;
+}
+
+/**
+ * Normalize image blocks before they enter agent/model context. This keeps
+ * provider request construction from having to resize an unbounded batch of
+ * large images on the streaming hot path. Images are processed sequentially on
+ * purpose: `resizeImage` may fan out multiple encoders for one image, so the
+ * outer image batch must stay bounded.
+ */
+export async function normalizeModelContextImages(
+	images: ImageContent[] | undefined,
+	options?: NormalizeModelContextImagesOptions,
+): Promise<ImageContent[] | undefined> {
+	if (!images || images.length === 0) return undefined;
+	const normalized: ImageContent[] = [];
+	for (const image of images) {
+		try {
+			const resized = await resizeImage(image, options?.resize);
+			normalized.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+		} catch {
+			// Preserve existing caller behavior for decode/resize failures: keep the
+			// user's image block rather than dropping it from the turn.
+			normalized.push(image);
+		}
+	}
+	return normalized;
 }
 
 export async function loadImageInput(options: LoadImageInputOptions): Promise<LoadedImageInput | null> {

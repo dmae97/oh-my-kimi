@@ -20,8 +20,10 @@ import tsNoAny from "./ts-no-any.md" with { type: "text" };
 import tsNoDeprecatedLeftovers from "./ts-no-deprecated-leftovers.md" with { type: "text" };
 import tsNoDynamicImport from "./ts-no-dynamic-import.md" with { type: "text" };
 import tsNoReturnType from "./ts-no-return-type.md" with { type: "text" };
+import tsNoTestTimers from "./ts-no-test-timers.md" with { type: "text" };
 import tsNoTinyFunctions from "./ts-no-tiny-functions.md" with { type: "text" };
 import tsPromiseWithResolvers from "./ts-promise-with-resolvers.md" with { type: "text" };
+import tsRedundantClearGuard from "./ts-redundant-clear-guard.md" with { type: "text" };
 import tsSetMap from "./ts-set-map.md" with { type: "text" };
 
 /** A bundled rule's stable name and raw markdown (frontmatter + body). */
@@ -44,7 +46,9 @@ export const BUILTIN_RULE_SOURCES: readonly BuiltinRuleSource[] = [
 	{ name: "ts-no-deprecated-leftovers", content: tsNoDeprecatedLeftovers },
 	{ name: "ts-no-dynamic-import", content: tsNoDynamicImport },
 	{ name: "ts-no-return-type", content: tsNoReturnType },
+	{ name: "ts-no-test-timers", content: tsNoTestTimers },
 	{ name: "ts-no-tiny-functions", content: tsNoTinyFunctions },
 	{ name: "ts-promise-with-resolvers", content: tsPromiseWithResolvers },
+	{ name: "ts-redundant-clear-guard", content: tsRedundantClearGuard },
 	{ name: "ts-set-map", content: tsSetMap },
 ];

@@ -1,7 +1,10 @@
 //! Function support for shells.
 
+use std::io::Write;
+
 use crate::{
-	ExecutionParameters, commands, error, extensions, functions, results::ExecutionWaitResult,
+	ExecutionParameters, commands, error, extensions, functions, jobs,
+	results::{ExecutionResult, ExecutionWaitResult},
 };
 
 impl<SE: extensions::ShellExtensions> crate::Shell<SE> {
@@ -117,7 +120,20 @@ impl<SE: extensions::ShellExtensions> crate::Shell<SE> {
 
 		match result.wait_with_cancel(params.cancel_token()).await? {
 			ExecutionWaitResult::Completed(result) => Ok(result.exit_code.into()),
-			ExecutionWaitResult::Stopped(..) => error::unimp("stopped child from function invocation"),
+			ExecutionWaitResult::Stopped(child) => {
+				let result = ExecutionResult::stopped();
+				let job = self.jobs_mut().add_as_current(jobs::Job::new(
+					[jobs::JobTask::External(child)],
+					name.to_owned(),
+					jobs::JobState::Stopped,
+				));
+				let formatted = job.to_string();
+
+				// N.B. We use the '\r' to overwrite any ^Z output.
+				writeln!(params.stderr(self), "\r{formatted}")?;
+
+				Ok(result.exit_code.into())
+			},
 		}
 	}
 }

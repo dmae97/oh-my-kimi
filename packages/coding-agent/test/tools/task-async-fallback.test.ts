@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { AsyncJobManager } from "../../src/async";
-import { Settings } from "../../src/config/settings";
-import { TaskTool } from "../../src/task";
-import * as discoveryModule from "../../src/task/discovery";
-import type { TaskParams } from "../../src/task/types";
-import type { ToolSession } from "../../src/tools";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import type { TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 function createSession(overrides: Partial<Record<string, unknown>> = {}): ToolSession {
 	return {

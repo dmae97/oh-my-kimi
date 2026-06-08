@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { UsageFetchContext } from "../src/usage";
-import { claudeUsageProvider } from "../src/usage/claude";
+import type { UsageFetchContext } from "@oh-my-pi/pi-ai/usage";
+import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
 
 function getHeaderCaseInsensitive(
 	headers: Headers | Record<string, string | ReadonlyArray<string>> | string[][] | undefined,

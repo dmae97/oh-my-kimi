@@ -71,9 +71,7 @@ function commonPrefixLength(prev: string[], cur: string[]): number {
 }
 
 function commonSuffixLength(prev: string[], cur: string[], prefixLength: number): number {
-	const prevLimit = prev.length - prefixLength;
-	const curLimit = cur.length - prefixLength;
-	const limit = Math.min(prevLimit, curLimit);
+	const limit = Math.min(prev.length - prefixLength, cur.length - prefixLength);
 	let i = 0;
 	while (i < limit && prev[prev.length - 1 - i] === cur[cur.length - 1 - i]) i++;
 	return i;
@@ -95,14 +93,23 @@ function deriveLiveCommitState(
 		const staticRender = prefixLength === previous.lines.length && prefixLength === current.length;
 		if (!staticRender) {
 			const suffixLength = commonSuffixLength(previous.lines, current, prefixLength);
-			const stablePreviousLength = prefixLength + suffixLength;
-			const appendGrew =
-				previous.lines.length > 0 &&
-				current.length > previous.lines.length &&
-				stablePreviousLength >= previous.lines.length;
-			if (appendGrew && !volatile) {
+			// Append-only growth never rewrites a row that may already have scrolled
+			// into native scrollback; it only grows the block at/near its tail. Three
+			// shapes qualify: a pure bottom append, an insertion above stable trailing
+			// chrome (a streaming tool's footer/border), and an in-place extension of
+			// the current line by one streamed token (line count unchanged). The first
+			// two preserve every previous row across a matching prefix + suffix; the
+			// last leaves a single divergent previous row that the current row merely
+			// lengthens. A divergent interior row that is genuinely rewritten means the
+			// block re-laid-out committed content — volatile, and never committed.
+			const preservedEveryRow = prefixLength + suffixLength >= previous.lines.length;
+			const tailExtendedInPlace =
+				prefixLength + suffixLength === previous.lines.length - 1 &&
+				prefixLength < current.length &&
+				current[prefixLength]!.startsWith(previous.lines[prefixLength]!);
+			if ((preservedEveryRow || tailExtendedInPlace) && current.length >= previous.lines.length && !volatile) {
 				appendOnly = true;
-			} else if (stablePreviousLength < previous.lines.length) {
+			} else if (!preservedEveryRow && !tailExtendedInPlace) {
 				volatile = true;
 				appendOnly = false;
 			}

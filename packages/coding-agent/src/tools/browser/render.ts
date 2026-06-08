@@ -146,7 +146,7 @@ function renderOpenOrCloseLine(
 	const action = (details?.action ?? args.action ?? "open") as "open" | "close" | "run";
 	const status = cellStatus(isPartial, isError);
 	const icon =
-		status === "complete" ? "success" : status === "error" ? "error" : status === "running" ? "running" : "pending";
+		status === "complete" ? "done" : status === "error" ? "error" : status === "running" ? "running" : "pending";
 
 	let title: string;
 	if (action === "close") {
@@ -163,7 +163,10 @@ function renderOpenOrCloseLine(
 	const url = details?.url ?? args.url;
 	if (url) meta.push(shortenPath(url));
 
-	const header = renderStatusLine({ icon, title, meta }, theme);
+	const header =
+		status === "complete"
+			? renderStatusLine({ iconOverride: theme.styledSymbol("tool.browser", "accent"), title, meta }, theme)
+			: renderStatusLine({ icon, title, meta }, theme);
 	if (!output) return new Text(header, 0, 0);
 	const outputLines = output.split("\n").map(line => theme.fg("toolOutput", replaceTabs(line)));
 	return new Text([header, ...outputLines].join("\n"), 0, 0);

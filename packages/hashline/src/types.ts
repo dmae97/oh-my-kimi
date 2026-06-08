@@ -103,9 +103,11 @@ export interface CompactDiffPreview {
 	removedLines: number;
 }
 
-/** Optional knobs for {@link buildCompactDiffPreview}. Reserved for future use. */
+/** Optional knobs for {@link buildCompactDiffPreview}. */
 export interface CompactDiffOptions {
-	/** Maximum entries kept on each side of an unchanged-context truncation (default 2). */
+	/** Added lines kept on each side of a long added-run elision (default 2). */
+	maxAddedRunContext?: number;
+	/** Back-compat alias for {@link maxAddedRunContext}. */
 	maxUnchangedRun?: number;
 }
 

@@ -3558,7 +3558,7 @@ export class SessionManager {
 			}
 			const relocated = sourceCwdGone && (mostRecent === null || (mostRecentIsBreadcrumb && !hasCurrentCwdSession));
 			if (relocated) {
-				process.stderr.write(`Re-rooting moved session from ${resolvedBreadcrumbCwd} to ${resolvedCwd}.\n`);
+				logger.info("Re-rooting moved session", { from: resolvedBreadcrumbCwd, to: resolvedCwd });
 				const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage);
 				await manager.moveTo(cwd, sessionDir);
 				return manager;

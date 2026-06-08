@@ -5,7 +5,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
-} from "../src/utils/idle-iterator";
+} from "@oh-my-pi/pi-ai/utils/idle-iterator";
 
 /**
  * Per-provider fallback overrides on the stream-watchdog helpers.
@@ -226,5 +226,34 @@ describe("iterateWithIdleTimeout", () => {
 
 		await Bun.sleep(20);
 		expect(firstItemTimedOut).toBe(false);
+	});
+
+	it("closes the upstream iterator when the consumer breaks early", async () => {
+		let upstreamClosed = false;
+		async function* source(): AsyncGenerator<string> {
+			try {
+				let n = 0;
+				while (true) {
+					await Bun.sleep(1);
+					yield `item-${n++}`;
+				}
+			} finally {
+				// Runs only if the wrapper forwards `.return()` to us.
+				upstreamClosed = true;
+			}
+		}
+
+		for await (const _item of iterateWithIdleTimeout(source(), {
+			idleTimeoutMs: 1_000,
+			errorMessage: "idle timeout",
+		})) {
+			break; // abandon the wrapper after the first item
+		}
+
+		// The wrapper must propagate the consumer's early termination to the source
+		// so the underlying SSE body / SDK stream (and its socket) is released
+		// instead of being left suspended.
+		await Bun.sleep(5);
+		expect(upstreamClosed).toBe(true);
 	});
 });

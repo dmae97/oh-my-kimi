@@ -33,9 +33,9 @@
  * own native format and would reject the extra key.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { AssistantMessage, Context, Model } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

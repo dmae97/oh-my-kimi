@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effort } from "../src/effort";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
+import { Effort } from "@oh-my-pi/pi-ai/effort";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

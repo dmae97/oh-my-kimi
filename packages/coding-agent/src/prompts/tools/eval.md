@@ -8,7 +8,7 @@ Cell fields:
 - `language` — {{#if py}}`"py"` for the IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` for the persistent JavaScript VM{{/if}}.
 - `code` — cell body, verbatim. Newlines, quotes, and indentation are JSON-encoded; no fences, no headers.
 - `title` (optional) — short label shown in the transcript (e.g. `"imports"`, `"load config"`).
-- `timeout` (optional) — per-cell wall-clock budget in seconds (1-600). Default 30. It bounds the cell's **own** work, but is paused while an `agent()`/`parallel()`/`completion()` call is in flight — so a long fanout or a slow completion runs to completion, while the cell itself is still bounded. Compute, `print`/stdout, `log()`/`phase()`, and ordinary tool calls all count against the budget; raise `timeout` for a cell that does heavy local work or long non-agent tool calls.
+- `timeout` (optional) — per-cell wall-clock budget in seconds (1-3600). Default 30. It bounds the cell's **own** work, but is paused while an `agent()`/`parallel()`/`completion()` call is in flight — so a long fanout or a slow completion runs to completion, while the cell itself is still bounded. Compute, `print`/stdout, `log()`/`phase()`, and ordinary tool calls all count against the budget; raise `timeout` for a cell that does heavy local work or long non-agent tool calls.
 - `reset` (optional) — wipe this cell's language kernel before running.{{#ifAll py js}} Reset is per-language: a `py` cell's reset does not touch the JavaScript VM and vice versa.{{/ifAll}}
 
 **Work incrementally:**
@@ -29,11 +29,11 @@ display(value) → None
 print(value, ...) → None
     Print to the cell's text output.
 read(path, offset?=1, limit?=None) → str
-    Read file contents as text. offset/limit are 1-indexed line bounds.
+    Read file contents as text. offset/limit are 1-indexed line bounds. Accepts `local://…` (resolved to the session-local root, same place `read local://…` reads).
 write(path, content) → str
-    Write content to a file (creates parent directories). Returns the resolved path.
+    Write content to a file (creates parent directories). Returns the resolved path. Accepts `local://…` to persist artifacts across turns / share with subagents.
 append(path, content) → str
-    Append content to a file. Returns the resolved path.
+    Append content to a file. Returns the resolved path. Accepts `local://…`.
 tree(path?=".", max_depth?=3, show_hidden?=False) → str
     Render a directory tree.
 diff(a, b) → str

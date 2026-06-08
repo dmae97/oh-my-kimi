@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Settings } from "../../src/config/settings";
-import type { Skill } from "../../src/extensibility/skills";
-import * as skillsModule from "../../src/extensibility/skills";
-import type { CreateAgentSessionResult } from "../../src/sdk";
-import * as sdkModule from "../../src/sdk";
-import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../../src/session/messages";
-import { runSubprocess } from "../../src/task/executor";
-import type { AgentDefinition } from "../../src/task/types";
-import { EventBus } from "../../src/utils/event-bus";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import * as skillsModule from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -60,7 +60,8 @@ function createMockSession(
 function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 	return {
 		session,
-		extensionsResult: {} as unknown as import("../../src/extensibility/extensions/types").LoadExtensionsResult,
+		extensionsResult:
+			{} as unknown as import("@oh-my-pi/pi-coding-agent/extensibility/extensions/types").LoadExtensionsResult,
 		setToolUIContext: () => {},
 		eventBus: new EventBus(),
 	};
@@ -89,7 +90,7 @@ describe("autoloadSkills in executor", () => {
 		settings: Settings.isolated(),
 		modelRegistry: {
 			refresh: async () => {},
-		} as unknown as import("../../src/config/model-registry").ModelRegistry,
+		} as unknown as import("@oh-my-pi/pi-coding-agent/config/model-registry").ModelRegistry,
 		enableLsp: false,
 	};
 

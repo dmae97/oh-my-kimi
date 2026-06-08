@@ -17,9 +17,9 @@ import {
 	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
 } from "../auth-storage";
+import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { UsageReport } from "../usage";
-import type { OAuthCredentials } from "../utils/oauth/types";
 import { type AuthBrokerClient, AuthBrokerStreamUnsupportedError } from "./client";
 import type { RefresherSchedule, SnapshotEntry, SnapshotResponse, SnapshotStreamEvent } from "./types";
 

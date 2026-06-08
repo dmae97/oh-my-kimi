@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
-import { canonicalSnapshotKey, getFileSnapshotStore } from "../../src/edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 
 interface SessionOwner {
 	fileSnapshotStore?: InMemorySnapshotStore;

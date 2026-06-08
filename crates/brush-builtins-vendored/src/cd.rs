@@ -1,6 +1,6 @@
 use std::{io::Write, path::PathBuf};
 
-use brush_core::{ExecutionResult, builtins, error};
+use brush_core::{ExecutionResult, builtins};
 use clap::Parser;
 
 /// Change the current shell working directory.
@@ -19,11 +19,6 @@ pub(crate) struct CdCommand {
 	#[arg(short = 'e')]
 	exit_on_failed_cwd_resolution: bool,
 
-	/// Show file with extended attributes as a dir with extended
-	/// attributes.
-	#[arg(short = '@')]
-	file_with_xattr_as_dir: bool,
-
 	/// By default it is the value of the HOME shell variable. If `TARGET_DIR` is
 	/// "-", it is converted to $OLDPWD.
 	target_dir: Option<PathBuf>,
@@ -36,11 +31,6 @@ impl builtins::Command for CdCommand {
 		&self,
 		context: brush_core::ExecutionContext<'_, SE>,
 	) -> Result<ExecutionResult, Self::Error> {
-		// TODO(cd): implement 'cd -@'
-		if self.file_with_xattr_as_dir {
-			return error::unimp("cd -@");
-		}
-
 		let mut should_print = false;
 		let mut target_dir = if let Some(target_dir) = &self.target_dir {
 			// `cd -', equivalent to `cd $OLDPWD'
@@ -72,11 +62,9 @@ impl builtins::Command for CdCommand {
 				.options()
 				.do_not_resolve_symlinks_when_changing_dir
 		{
-			// -e is only relevant in physical mode.
-			if self.exit_on_failed_cwd_resolution {
-				return error::unimp("cd -e");
-			}
-
+			// -e is only relevant in physical mode. `canonicalize()` is the
+			// cwd-resolution step this implementation supports; failures already
+			// propagate as a non-zero result before updating PWD/OLDPWD.
 			target_dir = context.shell.absolute_path(target_dir).canonicalize()?;
 		}
 

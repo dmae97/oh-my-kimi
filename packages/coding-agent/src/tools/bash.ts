@@ -1151,11 +1151,23 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const renderArgs = toBashRenderArgs(args, config);
 			const cmdLines = args ? formatBashCommandLines(renderArgs, uiTheme) : undefined;
 			const isError = result.isError === true;
-			const icon = options.isPartial ? "pending" : isError ? "error" : "success";
+			const isPartial = options.isPartial === true;
+			const success = !isPartial && !isError;
 			const header =
 				config.showHeader === false
 					? undefined
-					: renderStatusLine({ icon, title: config.resolveTitle(args, options) }, uiTheme);
+					: renderStatusLine(
+							success
+								? {
+										iconOverride: uiTheme.styledSymbol("tool.bash", "accent"),
+										title: config.resolveTitle(args, options),
+									}
+								: {
+										icon: isPartial ? "pending" : "error",
+										title: config.resolveTitle(args, options),
+									},
+							uiTheme,
+						);
 			const details = result.details;
 			const outputBlock = new CachedOutputBlock();
 

@@ -1,4 +1,5 @@
 import { $env } from "@oh-my-pi/pi-utils";
+import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import type {
 	UsageAmount,
 	UsageFetchContext,
@@ -10,7 +11,6 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
-import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 // (Refresh is the sole responsibility of AuthStorage; no provider-direct refresh here.)
 import { toNumber } from "./shared";
 

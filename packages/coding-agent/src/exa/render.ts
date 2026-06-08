@@ -93,7 +93,7 @@ export function renderExaResult(
 	const cost = response.costDollars?.total;
 	const time = response.searchTime;
 
-	const icon = formatStatusIcon(resultCount > 0 ? "success" : "warning", uiTheme);
+	const icon = resultCount > 0 ? uiTheme.styledSymbol("tool.exa", "accent") : formatStatusIcon("warning", uiTheme);
 
 	const metaParts = [formatCount("result", resultCount)];
 	if (cost !== undefined) metaParts.push(`cost:$${cost.toFixed(4)}`);

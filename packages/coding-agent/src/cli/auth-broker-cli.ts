@@ -30,6 +30,7 @@ import {
 	type OAuthCredential,
 	type OAuthProvider,
 	type OAuthProviderInfo,
+	PROVIDER_REGISTRY,
 	SqliteAuthCredentialStore,
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai";
@@ -75,13 +76,11 @@ const ACTIONS: readonly AuthBrokerAction[] = [
 ];
 
 /** Callback ports baked from the per-provider OAuth flow modules. */
-const CALLBACK_PORTS: Record<string, number> = {
-	anthropic: 54545,
-	"openai-codex": 1455,
-	"google-gemini-cli": 8085,
-	"google-antigravity": 51121,
-	"gitlab-duo": 8080,
-};
+const CALLBACK_PORTS: Record<string, number> = Object.fromEntries(
+	PROVIDER_REGISTRY.flatMap(provider =>
+		provider.callbackPort != null ? [[provider.id, provider.callbackPort] as [string, number]] : [],
+	),
+);
 
 function getTokenFilePath(): string {
 	return path.join(getConfigRootDir(), "auth-broker.token");

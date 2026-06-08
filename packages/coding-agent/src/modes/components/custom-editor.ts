@@ -1,6 +1,6 @@
 import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
-import { imageReferenceHyperlink, renderImageReferences } from "../image-references";
+import { imageReferenceHyperlink, PLACEHOLDER_REGEX, renderPlaceholders } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
 import { theme } from "../theme/theme";
 
@@ -76,16 +76,22 @@ export function extractBracketedImagePastePath(data: string): string | undefined
 export class CustomEditor extends Editor {
 	imageLinks?: readonly (string | undefined)[];
 
+	/** Treat image/paste markers as indivisible: a stray backspace deletes the whole token
+	 *  instead of corrupting `[Paste #1, +30 lines]` into plain text. */
+	override atomicTokenPattern = PLACEHOLDER_REGEX;
+
 	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflowz" keywords as the user types
 	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. Also make
 	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists. */
 	decorateText = (text: string): string =>
-		renderImageReferences(text, {
+		renderPlaceholders(text, {
 			renderText: value => highlightMagicKeywords(value),
-			renderReference: (value, index) =>
-				imageReferenceHyperlink(value, index, this.imageLinks, label =>
-					theme.fg("accent", `\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m`),
-				),
+			renderReference: (value, kind, index) =>
+				kind === "image"
+					? imageReferenceHyperlink(value, index, this.imageLinks, label =>
+							theme.fg("accent", `\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m`),
+						)
+					: theme.fg("accent", `\x1b[1m${value}\x1b[22m`),
 		});
 	onEscape?: () => void;
 	onClear?: () => void;

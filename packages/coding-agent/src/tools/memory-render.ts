@@ -49,10 +49,11 @@ function queryHeader(
 	icon: ToolUIStatus,
 	theme: Theme,
 	meta?: string[],
+	iconOverride?: string,
 ): string {
 	const trimmed = replaceTabs((query ?? "").trim());
 	const description = trimmed ? truncateToWidth(trimmed, 80, Ellipsis.Unicode) : undefined;
-	return renderStatusLine({ icon, title, description, meta }, theme);
+	return renderStatusLine({ icon, iconOverride, title, description, meta }, theme);
 }
 
 function retainComponent(contents: string[], header: string, getExpanded: () => boolean, theme: Theme): Component {
@@ -96,7 +97,11 @@ export const retainToolRenderer = {
 		// trailing period so it reads cleanly as a status meta segment.
 		const summary = resultText(result).replace(/\.$/, "");
 		const header = renderStatusLine(
-			{ icon: "success", title: "Retain", meta: summary ? [summary] : undefined },
+			{
+				iconOverride: theme.styledSymbol("tool.memory", "accent"),
+				title: "Retain",
+				meta: summary ? [summary] : undefined,
+			},
 			theme,
 		);
 		return retainComponent(contents, header, () => options.expanded, theme);
@@ -121,9 +126,11 @@ export const recallToolRenderer = {
 		const text = resultText(result);
 		const match = text.match(/^Found (\d+) relevant/);
 		const found = match ? Number(match[1]) : 0;
-		const icon: ToolUIStatus = found > 0 ? "success" : "warning";
 		const meta = [found > 0 ? `${found} found` : "no matches"];
-		const header = queryHeader("Recall", args?.query, icon, theme, meta);
+		const header =
+			found > 0
+				? queryHeader("Recall", args?.query, "success", theme, meta, theme.styledSymbol("tool.memory", "accent"))
+				: queryHeader("Recall", args?.query, "warning", theme, meta);
 		if (found === 0) {
 			return new Text(header, 0, 0);
 		}
@@ -163,7 +170,14 @@ export const reflectToolRenderer = {
 		if (result.isError) {
 			return new Text(formatErrorMessage(resultText(result) || "Reflect failed", theme), 0, 0);
 		}
-		const header = queryHeader("Reflect", args?.query, "success", theme);
+		const header = queryHeader(
+			"Reflect",
+			args?.query,
+			"success",
+			theme,
+			undefined,
+			theme.styledSymbol("tool.memory", "accent"),
+		);
 		const answer = resultText(result);
 		const answerLines = answer.split("\n").filter(line => line.trim().length > 0);
 		return createCachedComponent(

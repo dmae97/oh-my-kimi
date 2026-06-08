@@ -1571,7 +1571,9 @@ export async function computePatchDiff(
 		if (!normalizedOld && !normalizedNew) {
 			return { diff: "", firstChangedLine: undefined };
 		}
-		return generateUnifiedDiffString(normalizedOld, normalizedNew);
+		return generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
+			path: result.change.newPath ?? result.change.path,
+		});
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
@@ -1785,7 +1787,9 @@ export async function executePatchSingle(
 	if (result.change.type === "update" && result.change.oldContent && result.change.newContent) {
 		const normalizedOld = normalizeToLF(stripBom(result.change.oldContent).text);
 		const normalizedNew = normalizeToLF(stripBom(result.change.newContent).text);
-		diffResult = generateUnifiedDiffString(normalizedOld, normalizedNew);
+		diffResult = generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
+			path: result.change.newPath ?? result.change.path,
+		});
 	}
 
 	let resultText: string;

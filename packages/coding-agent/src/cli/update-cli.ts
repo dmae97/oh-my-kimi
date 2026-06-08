@@ -2,9 +2,10 @@
  * Update CLI command handler.
  *
  * Handles `omp update` to check for and install updates.
- * Uses bun if available, otherwise downloads binary from GitHub releases.
+ * Uses the installer that owns the active omp executable when it can be detected.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { $which, APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
@@ -14,6 +15,8 @@ import { theme } from "../modes/theme/theme";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
+const HOMEBREW_FORMULA = "can1357/tap/omp";
+const MISE_TOOL = "github:can1357/oh-my-pi";
 /**
  * Official npm registry origin.
  *
@@ -102,6 +105,46 @@ async function getBunGlobalBinDir(): Promise<string | undefined> {
 	}
 }
 
+async function getHomebrewFormulaPrefix(): Promise<string | undefined> {
+	if (!$which("brew")) return undefined;
+	for (const formula of [HOMEBREW_FORMULA, APP_NAME]) {
+		try {
+			const result = await $`brew --prefix ${formula}`.quiet().nothrow();
+			if (result.exitCode !== 0) continue;
+			const output = result.text().trim();
+			if (output.length > 0) return output;
+		} catch {}
+	}
+	return undefined;
+}
+
+async function getMiseBinDirs(): Promise<string[]> {
+	if (!$which("mise")) return [];
+	try {
+		const result = await $`mise bin-paths ${MISE_TOOL}`.quiet().nothrow();
+		if (result.exitCode !== 0) return [];
+		return result
+			.text()
+			.split(/\r?\n/)
+			.map(line => line.trim())
+			.filter(line => line.length > 0);
+	} catch {
+		return [];
+	}
+}
+
+function getMiseDataDir(): string {
+	const override = process.env.MISE_DATA_DIR;
+	if (override && override.length > 0) return override;
+	if (process.platform === "win32") {
+		const localAppData = process.env.LOCALAPPDATA;
+		if (localAppData && localAppData.length > 0) return path.join(localAppData, "mise");
+	}
+	const xdgDataHome = process.env.XDG_DATA_HOME;
+	if (xdgDataHome && xdgDataHome.length > 0) return path.join(xdgDataHome, "mise");
+	return path.join(os.homedir(), ".local", "share", "mise");
+}
+
 function normalizePathForComparison(filePath: string): string {
 	const normalized = path.normalize(filePath);
 	if (process.platform === "win32") return normalized.toLowerCase();
@@ -129,34 +172,61 @@ function isPathInDirectory(filePath: string, directoryPath: string): boolean {
 	// is a junction when Bun is installed via Scoop, so `bun pm bin -g` and the
 	// PATH-resolved omp path can refer to the same directory through different
 	// strings. path.resolve does not traverse junctions/symlinks; realpath does.
-	// Resolve the file's parent directory to tolerate the file itself not yet
-	// existing (e.g. a fresh install path) while still catching link-traversed
-	// equality once the directory exists.
-	const fileDir = tryRealpath(path.dirname(path.resolve(filePath)));
+	// Resolve both the file and its parent directory: the file catches manager
+	// links like Homebrew's `bin/omp -> Cellar/.../bin/omp`; the parent fallback
+	// still tolerates fresh install paths where the file does not exist yet.
 	const dirReal = tryRealpath(path.resolve(directoryPath));
-	if (!fileDir || !dirReal) return false;
+	if (!dirReal) return false;
+	const fileReal = tryRealpath(path.resolve(filePath));
+	if (fileReal && isPathInDirectoryLexical(fileReal, dirReal)) return true;
+	const fileDir = tryRealpath(path.dirname(path.resolve(filePath)));
+	if (!fileDir) return false;
 	const resolvedFile = path.join(fileDir, path.basename(filePath));
 	return isPathInDirectoryLexical(resolvedFile, dirReal);
 }
 
-type UpdateTarget = { method: "bun" } | { method: "binary"; path: string };
+type UpdateMethod = "brew" | "mise" | "bun" | "binary";
 
-function resolveUpdateMethod(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
-	if (!bunBinDir) return "binary";
-	return isPathInDirectory(ompPath, bunBinDir) ? "bun" : "binary";
+interface UpdateMethodResolutionOptions {
+	homebrewPrefix?: string;
+	miseBinDirs?: readonly string[];
+	miseDataDir?: string;
 }
 
-export function resolveUpdateMethodForTest(ompPath: string, bunBinDir: string | undefined): "bun" | "binary" {
-	return resolveUpdateMethod(ompPath, bunBinDir);
+type UpdateTarget = { method: "brew" } | { method: "mise" } | { method: "bun" } | { method: "binary"; path: string };
+
+function resolveUpdateMethod(
+	ompPath: string,
+	bunBinDir: string | undefined,
+	options: UpdateMethodResolutionOptions = {},
+): UpdateMethod {
+	const { homebrewPrefix, miseBinDirs = [], miseDataDir } = options;
+	if (homebrewPrefix && isPathInDirectory(ompPath, path.join(homebrewPrefix, "bin"))) return "brew";
+	if (miseBinDirs.some(dir => isPathInDirectory(ompPath, dir))) return "mise";
+	if (miseDataDir && isPathInDirectory(ompPath, path.join(miseDataDir, "shims"))) return "mise";
+	if (bunBinDir && isPathInDirectory(ompPath, bunBinDir)) return "bun";
+	return "binary";
+}
+
+export function resolveUpdateMethodForTest(
+	ompPath: string,
+	bunBinDir: string | undefined,
+	options: UpdateMethodResolutionOptions = {},
+): UpdateMethod {
+	return resolveUpdateMethod(ompPath, bunBinDir, options);
 }
 async function resolveUpdateTarget(): Promise<UpdateTarget> {
 	const bunBinDir = await getBunGlobalBinDir();
+	const homebrewPrefix = await getHomebrewFormulaPrefix();
+	const miseAvailable = $which("mise") !== undefined;
+	const miseBinDirs = miseAvailable ? await getMiseBinDirs() : [];
+	const miseDataDir = miseAvailable ? getMiseDataDir() : undefined;
 	const ompPath = resolveOmpPath();
 
 	if (ompPath) {
-		const method = resolveUpdateMethod(ompPath, bunBinDir);
-		if (method === "bun") return { method };
-		return { method, path: ompPath };
+		const method = resolveUpdateMethod(ompPath, bunBinDir, { homebrewPrefix, miseBinDirs, miseDataDir });
+		if (method === "binary") return { method, path: ompPath };
+		return { method };
 	}
 
 	if (bunBinDir) return { method: "bun" };
@@ -376,6 +446,18 @@ export function buildBunInstallArgs(expectedVersion: string, nativeTag: string =
 	return args;
 }
 
+export function buildHomebrewUpdateArgs(force: boolean): string[] {
+	return [force ? "reinstall" : "upgrade", HOMEBREW_FORMULA];
+}
+
+export function buildMiseUpgradeArgs(): string[] {
+	return ["upgrade", MISE_TOOL, "--bump"];
+}
+
+export function buildMiseForceInstallArgs(expectedVersion: string): string[] {
+	return ["install", "--force", `${MISE_TOOL}@${expectedVersion}`];
+}
+
 /**
  * Update via bun package manager.
  */
@@ -385,6 +467,42 @@ async function updateViaBun(expectedVersion: string): Promise<void> {
 	const result = await $`bun ${args}`.nothrow();
 	if (result.exitCode !== 0) {
 		throw new Error(`bun install failed with exit code ${result.exitCode}`);
+	}
+
+	await printVerification(expectedVersion);
+}
+
+async function updateViaHomebrew(expectedVersion: string, force: boolean): Promise<void> {
+	console.log(chalk.dim("Updating Homebrew formulae..."));
+	const update = await $`brew update`.nothrow();
+	if (update.exitCode !== 0) {
+		throw new Error(`brew update failed with exit code ${update.exitCode}`);
+	}
+
+	console.log(chalk.dim("Updating via Homebrew..."));
+	const args = buildHomebrewUpdateArgs(force);
+	const result = await $`brew ${args}`.nothrow();
+	if (result.exitCode !== 0) {
+		throw new Error(`brew ${args[0]} failed with exit code ${result.exitCode}`);
+	}
+
+	await printVerification(expectedVersion);
+}
+
+async function updateViaMise(expectedVersion: string, force: boolean): Promise<void> {
+	console.log(chalk.dim("Updating via mise..."));
+	const args = buildMiseUpgradeArgs();
+	const result = await $`mise ${args}`.nothrow();
+	if (result.exitCode !== 0) {
+		throw new Error(`mise upgrade failed with exit code ${result.exitCode}`);
+	}
+
+	if (force) {
+		const forceArgs = buildMiseForceInstallArgs(expectedVersion);
+		const forceResult = await $`mise ${forceArgs}`.nothrow();
+		if (forceResult.exitCode !== 0) {
+			throw new Error(`mise install --force failed with exit code ${forceResult.exitCode}`);
+		}
 	}
 
 	await printVerification(expectedVersion);
@@ -457,7 +575,11 @@ export async function runUpdateCommand(opts: { force: boolean; check: boolean })
 	// Choose update method based on the prioritized omp binary in PATH
 	try {
 		const target = await resolveUpdateTarget();
-		if (target.method === "bun") {
+		if (target.method === "brew") {
+			await updateViaHomebrew(release.version, opts.force);
+		} else if (target.method === "mise") {
+			await updateViaMise(release.version, opts.force);
+		} else if (target.method === "bun") {
 			await updateViaBun(release.version);
 		} else {
 			await updateViaBinaryAt(target.path, release.version);

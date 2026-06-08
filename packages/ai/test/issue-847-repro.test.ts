@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { ollamaModelManagerOptions } from "../src/provider-models/openai-compat";
+import { ollamaModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 
 const originalFetch = global.fetch;
 

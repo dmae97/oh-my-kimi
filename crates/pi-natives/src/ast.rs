@@ -128,6 +128,45 @@ pub struct AstFindResult {
 	pub parse_errors:       Option<Vec<String>>,
 }
 
+/// Options for `astMatch`: run ast-grep patterns against an in-memory source
+/// string instead of files on disk.
+#[napi(object)]
+pub struct AstMatchOptions<'env> {
+	/// Source code to match against (parsed in memory, never read from disk).
+	pub source:       String,
+	/// Language of `source` (required; e.g. "ts", "tsx", "rust", "python").
+	pub lang:         String,
+	/// ast-grep patterns to search for (OR across patterns).
+	pub patterns:     Vec<String>,
+	/// Rule selector for multi-rule ast-grep configurations.
+	pub selector:     Option<String>,
+	/// Pattern strictness; defaults to smart matching when omitted.
+	pub strictness:   Option<AstMatchStrictness>,
+	/// Maximum matches to return after `offset` (default applies when omitted).
+	pub limit:        Option<u32>,
+	/// Number of leading matches to skip before applying `limit`.
+	pub offset:       Option<u32>,
+	/// When true, include meta-variable bindings per match.
+	pub include_meta: Option<bool>,
+	/// Optional cancellation handle (library-specific).
+	pub signal:       Option<Unknown<'env>>,
+	/// Wall-clock timeout for the worker task in milliseconds.
+	pub timeout_ms:   Option<u32>,
+}
+
+/// Result of an in-memory `astMatch` run.
+#[napi(object)]
+pub struct AstMatchResult {
+	/// Page of matches after sort, offset, and limit.
+	pub matches:       Vec<AstFindMatch>,
+	/// Total matches found before paging (can exceed `matches.length`).
+	pub total_matches: u32,
+	/// True when results were truncated by `limit`.
+	pub limit_reached: bool,
+	/// Non-fatal parse or pattern-compile errors collected during the run.
+	pub parse_errors:  Option<Vec<String>>,
+}
+
 /// Options for `astEdit`: rewrite rules, scan scope, safety limits, and
 /// dry-run.
 #[napi(object)]
@@ -682,6 +721,117 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			total_matches,
 			files_with_matches: to_u32(files_with_matches.len()),
 			files_searched,
+			limit_reached,
+			parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
+		})
+	})
+}
+
+/// Match ast-grep patterns against an in-memory source string; returns a
+/// promise resolved on a worker thread.
+///
+/// This is the file-free counterpart to [`ast_grep`]: callers that already hold
+/// the source (streaming buffers, generated code, editor contents) avoid a
+/// temp-file round trip. `lang` is required since there is no path to infer it
+/// from.
+#[napi]
+pub fn ast_match(options: AstMatchOptions<'_>) -> task::Promise<AstMatchResult> {
+	let AstMatchOptions {
+		source,
+		lang,
+		patterns,
+		selector,
+		strictness,
+		limit,
+		offset,
+		include_meta,
+		signal,
+		timeout_ms,
+	} = options;
+
+	let ct = task::CancelToken::new(timeout_ms, signal);
+	let normalized_limit = limit.unwrap_or(DEFAULT_FIND_LIMIT).max(1);
+	let normalized_offset = offset.unwrap_or(0);
+
+	task::blocking("ast_match", ct, move |ct| {
+		let patterns = normalize_pattern_list(Some(patterns))?;
+		let strictness = resolve_strictness(strictness);
+		let include_meta = include_meta.unwrap_or(false);
+		let lang_str = lang.trim();
+		if lang_str.is_empty() {
+			return Err(Error::from_reason("`lang` is required for ast_match".to_string()));
+		}
+		let language = resolve_supported_lang(lang_str)?;
+
+		let mut parse_errors = Vec::new();
+		let mut compiled_patterns = Vec::with_capacity(patterns.len());
+		for pattern in &patterns {
+			ct.heartbeat()?;
+			match compile_pattern(pattern, selector.as_deref(), &strictness, language) {
+				Ok(compiled) => compiled_patterns.push(compiled),
+				Err(err) => parse_errors.push(format!("{pattern}: {err}")),
+			}
+		}
+
+		let mut all_matches = Vec::new();
+		let mut total_matches = 0u32;
+		if !compiled_patterns.is_empty() {
+			let ast = language.ast_grep(&source);
+			if ast.root().dfs().any(|node| node.is_error()) {
+				parse_errors.push("parse error (syntax tree contains error nodes)".to_string());
+			}
+			for pattern in &compiled_patterns {
+				ct.heartbeat()?;
+				for matched in ast.root().find_all(pattern.clone()) {
+					ct.heartbeat()?;
+					total_matches = total_matches.saturating_add(1);
+					let range = matched.range();
+					let start = matched.start_pos();
+					let end = matched.end_pos();
+					let meta_variables = if include_meta {
+						Some(HashMap::<String, String>::from(matched.get_env().clone()))
+					} else {
+						None
+					};
+					all_matches.push(AstFindMatch {
+						path: String::new(),
+						text: matched.text().into_owned(),
+						byte_start: to_u32(range.start),
+						byte_end: to_u32(range.end),
+						start_line: to_u32(start.line().saturating_add(1)),
+						start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
+						end_line: to_u32(end.line().saturating_add(1)),
+						end_column: to_u32(end.column(matched.get_node()).saturating_add(1)),
+						meta_variables,
+					});
+				}
+			}
+		}
+
+		all_matches.sort_by(|left, right| {
+			left
+				.start_line
+				.cmp(&right.start_line)
+				.then(left.start_column.cmp(&right.start_column))
+				.then(left.end_line.cmp(&right.end_line))
+				.then(left.end_column.cmp(&right.end_column))
+				.then(left.byte_start.cmp(&right.byte_start))
+				.then(left.byte_end.cmp(&right.byte_end))
+		});
+
+		let visible_matches = all_matches
+			.into_iter()
+			.skip(normalized_offset as usize)
+			.collect::<Vec<_>>();
+		let limit_reached = visible_matches.len() > normalized_limit as usize;
+		let matches = visible_matches
+			.into_iter()
+			.take(normalized_limit as usize)
+			.collect::<Vec<_>>();
+
+		Ok(AstMatchResult {
+			matches,
+			total_matches,
 			limit_reached,
 			parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
 		})

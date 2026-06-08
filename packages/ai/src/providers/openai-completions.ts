@@ -13,6 +13,8 @@ import packageJson from "../../package.json" with { type: "json" };
 import type { Effort } from "../effort";
 import { getSupportedEfforts } from "../model-thinking";
 import { calculateCost } from "../models";
+import { parseGitHubCopilotApiKey } from "../registry/oauth/github-copilot";
+import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import { getEnvApiKey } from "../stream";
 import {
 	type AssistantMessage,
@@ -53,8 +55,6 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
-import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
-import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";

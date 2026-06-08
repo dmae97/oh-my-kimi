@@ -15,7 +15,6 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { encodeTextSignatureV1 } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { AssistantMessage, Model, ProviderPayload, Usage } from "@oh-my-pi/pi-ai/types";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 import {
 	buildSessionContext,
 	type CompactionEntry,
@@ -25,7 +24,8 @@ import {
 	type SessionEntry,
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
-} from "../src/session/session-manager";
+} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { hookFetch } from "@oh-my-pi/pi-utils";
 import { e2eApiKey } from "./utilities";
 
 // ============================================================================

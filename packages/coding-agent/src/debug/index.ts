@@ -204,7 +204,7 @@ export class DebugSelectorComponent extends Container {
 			this.ctx.statusContainer.clear();
 
 			const block = new TranscriptBlock();
-			block.addChild(new Text(theme.fg("success", `${theme.status.success} Performance report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("success", `+ Performance report saved`), 1, 0));
 			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
 			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
 			this.ctx.present(block);
@@ -261,7 +261,7 @@ export class DebugSelectorComponent extends Container {
 			this.ctx.statusContainer.clear();
 
 			const block = new TranscriptBlock();
-			block.addChild(new Text(theme.fg("success", `${theme.status.success} Report bundle saved`), 1, 0));
+			block.addChild(new Text(theme.fg("success", `+ Report bundle saved`), 1, 0));
 			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
 			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
 			this.ctx.present(block);
@@ -298,7 +298,7 @@ export class DebugSelectorComponent extends Container {
 			this.ctx.statusContainer.clear();
 
 			const block = new TranscriptBlock();
-			block.addChild(new Text(theme.fg("success", `${theme.status.success} Memory report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("success", `+ Memory report saved`), 1, 0));
 			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
 			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
 			this.ctx.present(block);
@@ -480,11 +480,7 @@ export class DebugSelectorComponent extends Container {
 
 			this.ctx.present([
 				new Spacer(1),
-				new Text(
-					theme.fg("success", `${theme.status.success} Cleared ${result.removed} artifact directories`),
-					1,
-					0,
-				),
+				new Text(theme.fg("success", `- Cleared ${result.removed} artifact directories`), 1, 0),
 			]);
 		} catch (err) {
 			loader.stop();

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import type { Browser, CDPSession, Target } from "puppeteer-core";
 import {
 	buildStealthInjectionScriptForTest,
 	configureUserAgentTargetsForTest,
 	targetSupportsUserAgentOverrideForTest,
-} from "../../src/tools/browser/launch";
+} from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+import type { Browser, CDPSession, Target } from "puppeteer-core";
 
 type SentCommand = {
 	method: string;

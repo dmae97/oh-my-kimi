@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import * as connectionManager from "../../src/ssh/connection-manager";
+import * as connectionManager from "@oh-my-pi/pi-coding-agent/ssh/connection-manager";
 
 describe("buildRemoteCommand", () => {
 	it("includes -n and OpenSSH ControlMaster options on Unix-like platforms", async () => {

@@ -1081,7 +1081,7 @@ export const writeToolRenderer = {
 			: "";
 		const header = renderStatusLine(
 			{
-				icon: "success",
+				iconOverride: uiTheme.styledSymbol("tool.write", "accent"),
 				title: "Write",
 				description: `${langIcon} ${pathDisplay}${lineSuffix}${execSuffix}`,
 			},

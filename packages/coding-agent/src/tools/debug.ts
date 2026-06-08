@@ -594,8 +594,11 @@ export const debugToolRenderer = {
 		return markFramedBlockComponent({
 			render(width: number): string[] {
 				const action = (args?.action ?? result.details?.action ?? "debug").replaceAll("_", " ");
-				const status = options.isPartial ? "running" : result.isError ? "error" : "success";
-				const header = `${formatStatusIcon(status, theme, options.spinnerFrame)} Debug ${action}`;
+				const success = !options.isPartial && !result.isError;
+				const statusIcon = success
+					? theme.styledSymbol("tool.debug", "accent")
+					: formatStatusIcon(options.isPartial ? "running" : "error", theme, options.spinnerFrame);
+				const header = `${statusIcon} Debug ${action}`;
 				const summaryLines = result.details?.snapshot
 					? formatSessionSnapshot(result.details.snapshot).map(line => replaceTabs(line))
 					: [];

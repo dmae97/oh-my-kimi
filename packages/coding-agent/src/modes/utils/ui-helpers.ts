@@ -161,7 +161,7 @@ export class UiHelpers {
 							const typeLabel = job.type ? `[${job.type}]` : "[job]";
 							const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 							const line = [
-								theme.fg("success", `${theme.status.success} Background job completed`),
+								theme.fg("success", `${theme.status.done} Background job completed`),
 								theme.fg("dim", typeLabel),
 								theme.fg("accent", jobId),
 								duration ? theme.fg("dim", `(${duration})`) : undefined,
@@ -630,12 +630,18 @@ export class UiHelpers {
 		}
 	}
 
-	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.ctx.compactionQueuedMessages.push({ text, mode } as CompactionQueuedMessage);
+	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		const queuedImages = images && images.length > 0 ? images : undefined;
+		this.ctx.compactionQueuedMessages.push({ text, mode, images: queuedImages } as CompactionQueuedMessage);
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
+		this.ctx.editor.imageLinks = undefined;
+		this.ctx.pendingImages = [];
+		this.ctx.pendingImageLinks = [];
 		this.ctx.updatePendingMessagesDisplay();
-		this.ctx.showStatus("Queued message for after compaction");
+		this.ctx.showStatus(
+			queuedImages ? "Queued message with image for after compaction" : "Queued message for after compaction",
+		);
 	}
 
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
@@ -644,7 +650,9 @@ export class UiHelpers {
 			return;
 		}
 		await this.ctx.withLocalSubmission(message.text, () =>
-			message.mode === "followUp" ? this.ctx.session.followUp(message.text) : this.ctx.session.steer(message.text),
+			message.mode === "followUp"
+				? this.ctx.session.followUp(message.text, message.images)
+				: this.ctx.session.steer(message.text, message.images),
 		);
 	}
 
@@ -738,6 +746,7 @@ export class UiHelpers {
 			const promptPromise = this.ctx.session
 				.prompt(firstPrompt.text, {
 					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
+					images: firstPrompt.images,
 				})
 				.catch((error: unknown) => {
 					disposeFirstPrompt();

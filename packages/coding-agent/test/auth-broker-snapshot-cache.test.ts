@@ -3,12 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AuthBrokerServerHandle, AuthStorage, SqliteAuthCredentialStore, startAuthBroker } from "@oh-my-pi/pi-ai";
-import { discoverAuthStorage } from "../src/sdk";
+import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
 import {
 	readAuthBrokerSnapshotCache,
 	type SnapshotResponse,
 	writeAuthBrokerSnapshotCache,
-} from "../src/session/auth-storage";
+} from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 
 const ENV_KEYS = [
 	"OMP_AUTH_BROKER_URL",

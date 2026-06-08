@@ -8,6 +8,7 @@ import type {
 	Browser,
 	Dialog,
 	ElementHandle,
+	ElementScreenshotOptions,
 	HTTPResponse,
 	KeyInput,
 	Page,
@@ -77,6 +78,14 @@ const LEGACY_SELECTOR_PREFIXES = ["p-aria/", "p-text/", "p-xpath/", "p-pierce/"]
 type DialogPolicy = "accept" | "dismiss";
 type DragTarget = string | { readonly x: number; readonly y: number };
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string };
+
+/**
+ * Per-op ceiling for puppeteer-internal helpers that should resolve quickly
+ * (`observe`, `screenshot`, `extract`). Kept below the default 30s cell budget so a
+ * single stalled helper fails fast with a named error and leaves budget for the rest
+ * of the cell. Effective cap is `min(cellBudget, QUICK_OP_TIMEOUT_MS)`.
+ */
+const QUICK_OP_TIMEOUT_MS = 20_000;
 
 interface ScreenshotOptions {
 	selector?: string;
@@ -404,12 +413,36 @@ async function clickQueryHandlerText(
 	);
 }
 
+export interface InflightOp {
+	label: string;
+	startedAt: number;
+}
+
 interface ActiveRun {
 	id: string;
 	ac: AbortController;
 	displays: RunResultOk["displays"];
 	screenshots: ScreenshotResult[];
 	pendingTools: Map<string, { resolve(value: unknown): void; reject(error: Error): void }>;
+	/** Helper invocations currently awaiting the page/network, keyed by op id. */
+	inflight: Map<number, InflightOp>;
+	opCounter: number;
+}
+
+/** Human-readable label for a screenshot op, used in op tracking + timeout errors. */
+export function describeScreenshot(opts?: ScreenshotOptions): string {
+	if (opts?.selector) return `tab.screenshot({ selector: ${JSON.stringify(opts.selector)} })`;
+	if (opts?.fullPage) return "tab.screenshot({ fullPage: true })";
+	return "tab.screenshot()";
+}
+
+/** Summarize still-running helpers (oldest first) so a cell timeout names what stalled. */
+export function describeInflight(inflight: Map<number, InflightOp>): string {
+	const now = Date.now();
+	return [...inflight.values()]
+		.sort((a, b) => a.startedAt - b.startedAt)
+		.map(op => `${op.label} (${((now - op.startedAt) / 1000).toFixed(1)}s)`)
+		.join(", ");
 }
 
 export class WorkerCore {
@@ -560,13 +593,21 @@ export class WorkerCore {
 		const signal = AbortSignal.any([timeoutSignal, ac.signal]);
 		const displays: RunResultOk["displays"] = [];
 		const screenshots: ScreenshotResult[] = [];
-		const active: ActiveRun = { id: msg.id, ac, displays, screenshots, pendingTools: new Map() };
+		const active: ActiveRun = {
+			id: msg.id,
+			ac,
+			displays,
+			screenshots,
+			pendingTools: new Map(),
+			inflight: new Map(),
+			opCounter: 0,
+		};
 		this.#active = active;
 		try {
 			throwIfAborted(signal);
 			const page = this.#requirePage();
 			const browser = this.#requireBrowser();
-			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, displays, screenshots);
+			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, displays, screenshots, active);
 			const runtime = this.#ensureRuntime(msg.session);
 			runtime.setCwd(msg.session.cwd);
 			runtime.setRunScope({
@@ -580,11 +621,16 @@ export class WorkerCore {
 			});
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
-				rejectCancel(
-					timeoutSignal.aborted
-						? new ToolError(`Browser code execution timed out after ${msg.timeoutMs}ms`)
-						: new ToolAbortError(),
-				);
+				if (timeoutSignal.aborted) {
+					const stalled = describeInflight(active.inflight);
+					rejectCancel(
+						new ToolError(
+							`Browser code execution timed out after ${msg.timeoutMs}ms${stalled ? ` (stalled on ${stalled})` : ""}`,
+						),
+					);
+				} else {
+					rejectCancel(new ToolAbortError());
+				}
 				// Cancel in-flight tool calls so user code's awaited proxies reject promptly.
 				for (const pending of active.pendingTools.values()) {
 					pending.reject(new ToolAbortError());
@@ -670,6 +716,39 @@ export class WorkerCore {
 		else pending.reject(replyError(reply.error));
 	}
 
+	/**
+	 * Wrap a tab helper so it (a) registers in the active run's in-flight map for
+	 * timeout diagnostics and (b) honors an optional per-op deadline that fails fast
+	 * with a named error instead of silently consuming the whole cell budget. Pass
+	 * `Number.POSITIVE_INFINITY` for `perOpTimeoutMs` to bound the op only by the cell
+	 * budget (used for `evaluate` running user code and for locator helpers that already
+	 * carry puppeteer's own `.setTimeout(timeoutMs)`).
+	 */
+	async #runOp<T>(
+		active: ActiveRun,
+		label: string,
+		cellSignal: AbortSignal,
+		perOpTimeoutMs: number,
+		fn: (signal: AbortSignal) => Promise<T>,
+	): Promise<T> {
+		const opId = active.opCounter++;
+		active.inflight.set(opId, { label, startedAt: Date.now() });
+		const capped = Number.isFinite(perOpTimeoutMs) && perOpTimeoutMs > 0;
+		const opTimeout = capped ? AbortSignal.timeout(perOpTimeoutMs) : undefined;
+		const opSignal = opTimeout ? AbortSignal.any([cellSignal, opTimeout]) : cellSignal;
+		try {
+			return await fn(opSignal);
+		} catch (err) {
+			// Per-op deadline fired (not the cell budget, not an explicit abort) → named, actionable error.
+			if (opTimeout?.aborted && !cellSignal.aborted) {
+				throw new ToolError(`${label} timed out after ${perOpTimeoutMs}ms`);
+			}
+			throw err;
+		} finally {
+			active.inflight.delete(opId);
+		}
+	}
+
 	#createTabApi(
 		name: string,
 		timeoutMs: number,
@@ -677,98 +756,125 @@ export class WorkerCore {
 		session: SessionSnapshot,
 		displays: RunResultOk["displays"],
 		screenshots: ScreenshotResult[],
+		active: ActiveRun,
 	): TabApi {
 		const page = this.#requirePage();
+		const quickOpMs = Math.min(timeoutMs, QUICK_OP_TIMEOUT_MS);
+		const INF = Number.POSITIVE_INFINITY;
+		const op = <T>(label: string, perOpMs: number, fn: (sig: AbortSignal) => Promise<T>): Promise<T> =>
+			this.#runOp(active, label, signal, perOpMs, fn);
 		return {
 			name,
 			page,
 			signal,
 			url: () => page.url(),
-			title: () => page.title(),
-			goto: async (url, opts) => {
-				this.#clearElementCache();
-				await untilAborted(signal, () =>
+			title: () => op("tab.title()", INF, sig => untilAborted(sig, () => page.title())),
+			goto: (url, opts) =>
+				op(`tab.goto(${JSON.stringify(url)})`, INF, async sig => {
+					this.#clearElementCache();
 					// Default to "load" because dev servers with HMR/WS never reach networkidle.
-					page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: timeoutMs }),
-				);
-			},
-			observe: opts => this.#collectObservation({ ...opts, signal }),
-			screenshot: async opts => await this.#captureScreenshot(session, displays, screenshots, signal, opts),
-			extract: async (format = "markdown") => {
-				const html = (await untilAborted(signal, () => page.content())) as string;
-				const result = await extractReadableFromHtml(html, page.url(), format);
-				if (!result) {
-					throw new ToolError(`tab.extract(${JSON.stringify(format)}) found no readable content on ${page.url()}`);
-				}
-				const content = format === "markdown" ? result.markdown : result.text;
-				if (!content) {
-					throw new ToolError(
-						`tab.extract(${JSON.stringify(format)}) produced empty ${format} content for ${page.url()}`,
+					await untilAborted(sig, () =>
+						page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: timeoutMs }),
 					);
-				}
-				return content;
-			},
-			click: async selector => {
-				const resolved = normalizeSelector(selector);
-				if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, timeoutMs, signal);
-				else await untilAborted(signal, () => page.locator(resolved).setTimeout(timeoutMs).click());
-			},
-			type: async (selector, text) => {
-				const handle = (await untilAborted(signal, () =>
-					page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
-				)) as ElementHandle;
-				try {
-					await untilAborted(signal, () => handle.type(text, { delay: 0 }));
-				} finally {
-					await handle.dispose();
-				}
-			},
-			fill: async (selector, value) => {
-				await untilAborted(signal, () =>
-					page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).fill(value),
-				);
-			},
-			press: async (key, opts) => {
-				const selector = opts?.selector;
-				if (selector) await untilAborted(signal, () => page.focus(normalizeSelector(selector)));
-				await untilAborted(signal, () => page.keyboard.press(key));
-			},
-			scroll: async (deltaX, deltaY) => {
-				await untilAborted(signal, () => page.mouse.wheel({ deltaX, deltaY }));
-			},
-			drag: async (from, to) => await this.#drag(from, to, signal),
-			waitFor: async selector =>
-				(await untilAborted(signal, () =>
-					page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
-				)) as ElementHandle,
-			evaluate: async (fn, ...args) =>
-				(await untilAborted(signal, () =>
-					typeof fn === "string" ? page.evaluate(fn) : page.evaluate(fn as (...a: unknown[]) => unknown, ...args),
-				)) as never,
-			scrollIntoView: async selector => {
-				const handle = (await untilAborted(signal, () =>
-					page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
-				)) as ElementHandle;
-				try {
-					await untilAborted(signal, () =>
-						handle.evaluate(el => {
-							const target = el as unknown as {
-								scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
-							};
-							target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
-						}),
-					);
-				} finally {
-					await handle.dispose().catch(() => undefined);
-				}
-			},
-			select: async (selector, ...values) => await this.#select(selector, values, timeoutMs, signal),
-			uploadFile: async (selector, ...filePaths) =>
-				await this.#uploadFile(selector, filePaths, timeoutMs, signal, session),
-			waitForUrl: async (pattern, opts) => await this.#waitForUrl(pattern, opts?.timeout ?? timeoutMs, signal),
-			waitForResponse: async (pattern, opts) =>
-				await this.#waitForResponse(pattern, opts?.timeout ?? timeoutMs, signal),
-			id: async id => await this.#resolveCachedHandle(id),
+				}),
+			observe: opts => op("tab.observe()", quickOpMs, sig => this.#collectObservation({ ...opts, signal: sig })),
+			screenshot: opts =>
+				op(describeScreenshot(opts), quickOpMs, sig =>
+					this.#captureScreenshot(session, displays, screenshots, sig, opts),
+				),
+			extract: (format = "markdown") =>
+				op(`tab.extract(${JSON.stringify(format)})`, quickOpMs, async sig => {
+					const html = (await untilAborted(sig, () => page.content())) as string;
+					const result = await extractReadableFromHtml(html, page.url(), format);
+					if (!result) {
+						throw new ToolError(
+							`tab.extract(${JSON.stringify(format)}) found no readable content on ${page.url()}`,
+						);
+					}
+					const content = format === "markdown" ? result.markdown : result.text;
+					if (!content) {
+						throw new ToolError(
+							`tab.extract(${JSON.stringify(format)}) produced empty ${format} content for ${page.url()}`,
+						);
+					}
+					return content;
+				}),
+			click: selector =>
+				op(`tab.click(${JSON.stringify(selector)})`, INF, async sig => {
+					const resolved = normalizeSelector(selector);
+					if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, timeoutMs, sig);
+					else await untilAborted(sig, () => page.locator(resolved).setTimeout(timeoutMs).click());
+				}),
+			type: (selector, text) =>
+				op(`tab.type(${JSON.stringify(selector)})`, INF, async sig => {
+					const handle = (await untilAborted(sig, () =>
+						page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
+					)) as ElementHandle;
+					try {
+						await untilAborted(sig, () => handle.type(text, { delay: 0 }));
+					} finally {
+						await handle.dispose();
+					}
+				}),
+			fill: (selector, value) =>
+				op(`tab.fill(${JSON.stringify(selector)})`, INF, sig =>
+					untilAborted(sig, () => page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).fill(value)),
+				),
+			press: (key, opts) =>
+				op(`tab.press(${JSON.stringify(key)})`, INF, async sig => {
+					const selector = opts?.selector;
+					if (selector) await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
+					await untilAborted(sig, () => page.keyboard.press(key));
+				}),
+			scroll: (deltaX, deltaY) =>
+				op("tab.scroll()", INF, sig => untilAborted(sig, () => page.mouse.wheel({ deltaX, deltaY }))),
+			drag: (from, to) => op("tab.drag()", INF, sig => this.#drag(from, to, sig)),
+			waitFor: selector =>
+				op(
+					`tab.waitFor(${JSON.stringify(selector)})`,
+					INF,
+					async sig =>
+						(await untilAborted(sig, () =>
+							page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
+						)) as ElementHandle,
+				),
+			evaluate: (fn, ...args) =>
+				op("tab.evaluate()", INF, sig =>
+					untilAborted(sig, () =>
+						typeof fn === "string"
+							? page.evaluate(fn)
+							: page.evaluate(fn as (...a: unknown[]) => unknown, ...args),
+					),
+				) as never,
+			scrollIntoView: selector =>
+				op(`tab.scrollIntoView(${JSON.stringify(selector)})`, INF, async sig => {
+					const handle = (await untilAborted(sig, () =>
+						page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
+					)) as ElementHandle;
+					try {
+						await untilAborted(sig, () =>
+							handle.evaluate(el => {
+								const target = el as unknown as {
+									scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
+								};
+								target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+							}),
+						);
+					} finally {
+						await handle.dispose().catch(() => undefined);
+					}
+				}),
+			select: (selector, ...values) =>
+				op(`tab.select(${JSON.stringify(selector)})`, INF, sig => this.#select(selector, values, timeoutMs, sig)),
+			uploadFile: (selector, ...filePaths) =>
+				op(`tab.uploadFile(${JSON.stringify(selector)})`, INF, sig =>
+					this.#uploadFile(selector, filePaths, timeoutMs, sig, session),
+				),
+			waitForUrl: (pattern, opts) =>
+				op("tab.waitForUrl()", INF, sig => this.#waitForUrl(pattern, opts?.timeout ?? timeoutMs, sig)),
+			waitForResponse: (pattern, opts) =>
+				op("tab.waitForResponse()", INF, sig => this.#waitForResponse(pattern, opts?.timeout ?? timeoutMs, sig)),
+			id: id => this.#resolveCachedHandle(id),
 		};
 	}
 
@@ -832,7 +938,21 @@ export class WorkerCore {
 			)) as ElementHandle | null;
 			if (!handle) throw new ToolError("Screenshot selector did not resolve to an element");
 			try {
-				buffer = (await untilAborted(signal, () => handle.screenshot({ type: "png" }))) as Buffer;
+				// Bring the element into view with a single instant scroll instead of puppeteer's
+				// scrollIntoViewIfNeeded(), whose IntersectionObserver promise can stall indefinitely
+				// on continuously-animating pages (WebGL / backdrop-filter "glass" effects). Best-effort.
+				await untilAborted(signal, () =>
+					handle.evaluate(el => {
+						const target = el as unknown as {
+							scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
+						};
+						target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+					}),
+				).catch(() => undefined);
+				// scrollIntoView:false skips the same IntersectionObserver check inside screenshot();
+				// captureBeyondViewport (puppeteer's default) still renders the clipped region.
+				const shotOpts: ElementScreenshotOptions = { type: "png", scrollIntoView: false };
+				buffer = (await untilAborted(signal, () => handle.screenshot(shotOpts))) as Buffer;
 			} finally {
 				await handle.dispose().catch(() => undefined);
 			}

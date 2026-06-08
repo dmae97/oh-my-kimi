@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { streamBedrock } from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
+import { clearAwsCredentialCache } from "@oh-my-pi/pi-ai/providers/aws-credentials";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { streamBedrock } from "../src/providers/amazon-bedrock";
-import { clearAwsCredentialCache } from "../src/providers/aws-credentials";
-import type { Context, Model } from "../src/types";
 
 const model: Model<"bedrock-converse-stream"> = {
 	id: "zai.glm-5",

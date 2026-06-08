@@ -3,8 +3,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { SecretObfuscator } from "../src/secrets/obfuscator";
-import { compileSecretRegex } from "../src/secrets/regex";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
 
 describe("compileSecretRegex", () => {
 	it("adds global flag when not provided", () => {

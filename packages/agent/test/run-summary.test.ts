@@ -503,37 +503,38 @@ describe("aggregateAgentRunSummaries / aggregateAgentRunCoverage", () => {
 describe("onRunEnd is non-fatal", () => {
 	it("swallows thrown errors and still resolves agentLoop().result() normally", async () => {
 		const tracer = new RecordingTracer();
-		const warnings: unknown[][] = [];
-		const realWarn = console.warn;
-		console.warn = (...args: unknown[]) => {
-			warnings.push(args);
-		};
-		try {
-			const mock = createMockModel({ responses: [{ content: ["ok"] }] });
-			const stream = agentLoop(
-				[createUserMessage("hi")],
-				{ systemPrompt: ["sys"], messages: [], tools: [] },
-				{
-					model: mock.model,
-					convertToLlm: identityConverter,
-					telemetry: {
-						tracer,
-						onRunEnd: () => {
-							throw new Error("user code is buggy");
-						},
+		const warnings: { code: string; message: string }[] = [];
+		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
+		const stream = agentLoop(
+			[createUserMessage("hi")],
+			{ systemPrompt: ["sys"], messages: [], tools: [] },
+			{
+				model: mock.model,
+				convertToLlm: identityConverter,
+				telemetry: {
+					tracer,
+					onRunEnd: () => {
+						throw new Error("user code is buggy");
+					},
+					// The failure is surfaced through the telemetry-warning channel, not a
+					// rejection. `console.warn` is only the no-hook fallback inside
+					// `emitTelemetryWarning`, so capture via the hook for a deterministic assert.
+					onTelemetryWarning: warning => {
+						warnings.push({ code: warning.code, message: warning.message });
 					},
 				},
-				undefined,
-				mock.stream,
-			);
-			const messages = await stream.result();
-			expect(messages.length).toBe(2);
-		} finally {
-			console.warn = realWarn;
-		}
-		// The wrapper must surface the failure via console.warn, not via rejection.
+			},
+			undefined,
+			mock.stream,
+		);
+		const messages = await stream.result();
+		expect(messages.length).toBe(2);
+		// `fireOnRunEnd` can run in `runLoop`'s finally, after `result()` resolves — flush
+		// the trailing microtasks of the fire-and-forget agent loop before asserting.
+		await Bun.sleep(5);
+
 		expect(warnings.length).toBeGreaterThanOrEqual(1);
-		expect(String(warnings[0][0])).toContain("onRunEnd");
+		expect(warnings.some(w => w.code === "on_run_end_failed" && w.message.includes("onRunEnd"))).toBe(true);
 	});
 });
 

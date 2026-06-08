@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { Effort } from "../src/effort";
-import { ollamaModelManagerOptions } from "../src/provider-models/openai-compat";
-import { streamOllama } from "../src/providers/ollama";
-import type { Context, Model, Tool } from "../src/types";
+import { Effort } from "@oh-my-pi/pi-ai/effort";
+import { ollamaModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
+import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

@@ -355,7 +355,7 @@ const PREVIEW_LINE_WIDTH = 80;
 function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	switch (status) {
 		case "completed":
-			return "success";
+			return "done";
 		case "failed":
 			return "error";
 		case "cancelled":
@@ -468,11 +468,14 @@ export const jobToolRenderer = {
 						itemType: "job",
 						renderItem: job => {
 							const lines: string[] = [];
-							const icon = formatStatusIcon(
-								statusToIcon(job.status),
-								uiTheme,
-								job.status === "running" ? options.spinnerFrame : undefined,
-							);
+							const icon =
+								job.status === "completed"
+									? uiTheme.styledSymbol("tool.job", "accent")
+									: formatStatusIcon(
+											statusToIcon(job.status),
+											uiTheme,
+											job.status === "running" ? options.spinnerFrame : undefined,
+										);
 							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 							const idText = uiTheme.fg("muted", job.id);
 							const rawLabelLines = (job.label || "(no label)").split(/\r?\n/);

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import {
 	getOpenAICompletionsStreamIdleTimeoutFallbackMs,
 	isOpenAICompletionsProgressChunk,
 	streamOpenAICompletions,
-} from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
+} from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

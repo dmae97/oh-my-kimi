@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { DiscoverableTool } from "../../src/tool-discovery/tool-index";
+import type { DiscoverableTool } from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
 import {
 	buildDiscoverableToolSearchIndex,
 	collectDiscoverableTools,
@@ -10,7 +10,7 @@ import {
 	searchDiscoverableTools,
 	selectDiscoverableToolNamesByServer,
 	summarizeDiscoverableTools,
-} from "../../src/tool-discovery/tool-index";
+} from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
 
 // ─── Minimal AgentTool stub ───────────────────────────────────────────────────
 

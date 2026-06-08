@@ -17,8 +17,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
-import { runListModelsCommand } from "../src/cli/list-models";
-import { ModelRegistry } from "../src/config/model-registry";
+import { runListModelsCommand } from "@oh-my-pi/pi-coding-agent/cli/list-models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 
 let tmp: string;
 let extPath: string;

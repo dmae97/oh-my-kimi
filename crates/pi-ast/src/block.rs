@@ -8,10 +8,12 @@
 //! full span; pointing at a continuation line or a lone closing delimiter
 //! resolves to nothing.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Result, anyhow};
 use ast_grep_core::tree_sitter::LanguageExt;
 use serde::{Deserialize, Serialize};
-use tree_sitter::{Parser, Point};
+use tree_sitter::{Parser, Point, TreeCursor};
 
 use crate::summary::{node_content_end_line, node_start_line, resolve_language};
 
@@ -109,6 +111,141 @@ pub fn block_range_at(options: BlockRangeOptions) -> Result<Option<BlockRange>> 
 		start_line: node_start_line(node),
 		end_line:   node_content_end_line(node),
 	}))
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LineRange {
+	/// 1-indexed inclusive first visible line.
+	pub start_line: u32,
+	/// 1-indexed inclusive last visible line.
+	pub end_line:   u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnclosingBoundaryOptions {
+	/// Source code to inspect.
+	pub code:   String,
+	/// Language alias (e.g. "rust", "typescript") used before path inference.
+	pub lang:   Option<String>,
+	/// File path used to infer language by extension when `lang` is omitted.
+	pub path:   Option<String>,
+	/// 1-indexed inclusive visible line ranges (the lines actually shown).
+	pub ranges: Vec<LineRange>,
+}
+
+/// Sort, drop invalid, and merge adjacent/overlapping ranges so visibility
+/// tests can binary-search a non-overlapping list.
+fn normalize_ranges(mut ranges: Vec<LineRange>) -> Vec<LineRange> {
+	ranges.retain(|range| range.start_line > 0 && range.end_line >= range.start_line);
+	ranges.sort_by(|a, b| {
+		a.start_line
+			.cmp(&b.start_line)
+			.then(a.end_line.cmp(&b.end_line))
+	});
+	let mut merged: Vec<LineRange> = Vec::with_capacity(ranges.len());
+	for range in ranges {
+		if let Some(last) = merged.last_mut()
+			&& range.start_line <= last.end_line.saturating_add(1)
+		{
+			last.end_line = last.end_line.max(range.end_line);
+			continue;
+		}
+		merged.push(range);
+	}
+	merged
+}
+
+fn is_visible(merged: &[LineRange], line: u32) -> bool {
+	merged
+		.binary_search_by(|range| {
+			if line < range.start_line {
+				std::cmp::Ordering::Greater
+			} else if line > range.end_line {
+				std::cmp::Ordering::Less
+			} else {
+				std::cmp::Ordering::Equal
+			}
+		})
+		.is_ok()
+}
+
+/// Depth-first walk collecting boundary lines from every multi-line named node
+/// that straddles a visible-range edge. A single reused [`TreeCursor`] keeps
+/// the traversal allocation-free.
+fn collect_boundaries(cursor: &mut TreeCursor<'_>, merged: &[LineRange], out: &mut BTreeSet<u32>) {
+	let node = cursor.node();
+	// Skip the whole-file root: its only "boundary" is EOF, never a useful
+	// matching line (mirrors `block_range_at` excluding the root).
+	if node.is_named() && node.parent().is_some() {
+		let start = node_start_line(node);
+		let end = node_content_end_line(node);
+		if end > start {
+			let start_visible = is_visible(merged, start);
+			let end_visible = is_visible(merged, end);
+			// Opener shown, closer off-window → surface the closer (and vice
+			// versa). A node fully inside or fully outside the window adds
+			// nothing.
+			if start_visible && !end_visible {
+				out.insert(end);
+			} else if end_visible && !start_visible {
+				out.insert(start);
+			}
+		}
+	}
+	if cursor.goto_first_child() {
+		loop {
+			collect_boundaries(cursor, merged, out);
+			if !cursor.goto_next_sibling() {
+				break;
+			}
+		}
+		cursor.goto_parent();
+	}
+}
+
+/// Generalize "show the matching bracket" to every tree-sitter block: for each
+/// multi-line named node whose span crosses the visible window, return the
+/// boundary line sitting *outside* that window.
+///
+/// - node opens on a visible line but closes past the window → its closing line
+/// - node closes on a visible line but opens before the window → its opening
+///   line
+///
+/// Because the trigger is an endpoint *inside* the window, the result is
+/// bounded by the window size (not nesting depth), exactly like a bracket scan
+/// — but it also covers indentation languages (Python) and uses real syntactic
+/// spans.
+///
+/// Returns `None` when the language is unrecognized or the source fails to
+/// parse / carries a syntax error (caller falls back to a lexical bracket
+/// scan); `Some(sorted unique boundary lines)` otherwise (possibly empty).
+pub fn enclosing_block_boundaries(options: EnclosingBoundaryOptions) -> Result<Option<Vec<u32>>> {
+	let EnclosingBoundaryOptions { code, lang, path, ranges } = options;
+	let merged = normalize_ranges(ranges);
+	if code.is_empty() || merged.is_empty() {
+		return Ok(Some(Vec::new()));
+	}
+	let Some(language) = resolve_language(lang.as_deref(), path.as_deref()) else {
+		return Ok(None);
+	};
+	let mut parser = Parser::new();
+	parser
+		.set_language(&language.get_ts_language())
+		.map_err(|err| anyhow!("Failed to load tree-sitter language: {err}"))?;
+	let Some(tree) = parser.parse(&code, None) else {
+		return Ok(None);
+	};
+	let root = tree.root_node();
+	// A file-level syntax error makes error-recovery spans unreliable; defer to
+	// the lexical scanner rather than emit boundaries off a broken tree.
+	if root.has_error() {
+		return Ok(None);
+	}
+
+	let mut boundaries = BTreeSet::new();
+	let mut cursor = root.walk();
+	collect_boundaries(&mut cursor, &merged, &mut boundaries);
+	Ok(Some(boundaries.into_iter().collect()))
 }
 
 #[cfg(test)]
@@ -219,5 +356,64 @@ mod tests {
 	fn resolves_rust_struct_block() {
 		let code = "struct A;\nstruct B {\n    x: u32,\n}\n";
 		assert_eq!(resolve(code, "r.rs", 2), Some(BlockRange { start_line: 2, end_line: 4 }));
+	}
+
+	fn boundaries(code: &str, path: &str, ranges: &[(u32, u32)]) -> Option<Vec<u32>> {
+		enclosing_block_boundaries(EnclosingBoundaryOptions {
+			code:   code.to_string(),
+			lang:   None,
+			path:   Some(path.to_string()),
+			ranges: ranges
+				.iter()
+				.map(|&(start_line, end_line)| LineRange { start_line, end_line })
+				.collect(),
+		})
+		.expect("boundary resolution succeeds")
+	}
+
+	const TS_FN: &str = "function outer() {\n  const a = 1;\n  const b = 2;\n  const c = 3;\n  \
+	                     return a + b + c;\n}\nafter();\n";
+
+	#[test]
+	fn surfaces_closing_brace_for_visible_opener() {
+		// Window is the opening line only; its block closes on line 6.
+		assert_eq!(boundaries(TS_FN, "x.ts", &[(1, 1)]), Some(vec![6]));
+	}
+
+	#[test]
+	fn surfaces_opening_brace_for_visible_closer() {
+		// Window is the closing line only; its block opens on line 1.
+		assert_eq!(boundaries(TS_FN, "x.ts", &[(6, 6)]), Some(vec![1]));
+	}
+
+	#[test]
+	fn interior_only_window_adds_no_boundary() {
+		// Neither the opener (1) nor the closer (6) is visible, so the bracket
+		// scan would add nothing — and neither do we.
+		assert_eq!(boundaries(TS_FN, "x.ts", &[(3, 4)]), Some(vec![]));
+	}
+
+	#[test]
+	fn whole_file_window_adds_no_boundary() {
+		assert_eq!(boundaries(TS_FN, "x.ts", &[(1, 7)]), Some(vec![]));
+	}
+
+	#[test]
+	fn python_indentation_block_uses_syntactic_span() {
+		// Python has no closing delimiter — the def's span ends at the last
+		// body line. Showing the `def` header surfaces that end line.
+		let code = "def greet(name):\n    a = 1\n    b = 2\n    return a + b\n";
+		assert_eq!(boundaries(code, "g.py", &[(1, 1)]), Some(vec![4]));
+	}
+
+	#[test]
+	fn syntax_error_falls_back_to_none() {
+		let code = "function broken() {\n  if (y) {\n";
+		assert_eq!(boundaries(code, "b.ts", &[(1, 1)]), None);
+	}
+
+	#[test]
+	fn unrecognized_language_falls_back_to_none() {
+		assert_eq!(boundaries(TS_FN, "x.unknownext", &[(1, 1)]), None);
 	}
 }

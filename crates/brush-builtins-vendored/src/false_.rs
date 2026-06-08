@@ -1,4 +1,4 @@
-use brush_core::{ExecutionResult, builtins, error};
+use brush_core::{ExecutionResult, builtins};
 
 /// Return exit code 1.
 pub(crate) struct FalseCommand {}
@@ -13,7 +13,10 @@ impl builtins::SimpleCommand for FalseCommand {
 			builtins::ContentType::DetailedHelp => Ok("Returns a failure exit status.".into()),
 			builtins::ContentType::ShortUsage => Ok("false".into()),
 			builtins::ContentType::ShortDescription => Ok("false - fail".into()),
-			builtins::ContentType::ManPage => error::unimp("man page not yet implemented"),
+			builtins::ContentType::ManPage => Ok(
+				"NAME\n    false - Return an unsuccessful result.\n\nSYNOPSIS\n    false\n\nDESCRIPTION\n    Return an unsuccessful result.\n\n    Exit Status:\n    Always fails.\n\nSEE ALSO\n    bash(1)\n"
+					.into(),
+			),
 		}
 	}
 

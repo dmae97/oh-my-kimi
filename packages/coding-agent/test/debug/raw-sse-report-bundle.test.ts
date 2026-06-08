@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { RawSseDebugBuffer } from "@oh-my-pi/pi-coding-agent/debug/raw-sse-buffer";
+import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import { RawSseDebugBuffer } from "../../src/debug/raw-sse-buffer";
-import { createReportBundle } from "../../src/debug/report-bundle";
 
 const model: Model<"anthropic-messages"> = {
 	id: "claude-test",

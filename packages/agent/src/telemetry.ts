@@ -1869,7 +1869,8 @@ export function finishInvokeAgentSpan(
 
 /**
  * Invoke {@link AgentTelemetryConfig.onRunEnd} on `telemetry` if set. Throws
- are caught and logged via `console.warn` — telemetry callbacks NEVER turn a
+ * are caught and surfaced via the `onTelemetryWarning` hook (falling back to `console.warn`
+ * when no hook is set) — telemetry callbacks NEVER turn a
  * successful agent run into a failed one. Idempotent at the call site via
  * {@link AgentRunCollector.markRunEnded}; callers must check that before
  * calling this helper.

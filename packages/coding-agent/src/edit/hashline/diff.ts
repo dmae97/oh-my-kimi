@@ -230,7 +230,7 @@ export async function computeHashlineSectionDiff(
 		if (options.streaming) return buildStreamingSectionDiff(section, normalized);
 		const result = applyPreviewEdits({ section, absolutePath, normalized, snapshots, options });
 		if (normalized === result.text) return { error: `No changes would be made to ${section.path}.` };
-		return generateDiffString(normalized, result.text);
+		return generateDiffString(normalized, result.text, undefined, { path: section.path });
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}

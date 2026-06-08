@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
+import { CustomEditor, extractBracketedImagePastePath } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
 import { defaultEditorTheme } from "../../tui/test/test-themes";
-import { CustomEditor, extractBracketedImagePastePath } from "../src/modes/components/custom-editor";
 
 function ctrl(key: string): string {
 	return String.fromCharCode(key.toLowerCase().charCodeAt(0) & 31);

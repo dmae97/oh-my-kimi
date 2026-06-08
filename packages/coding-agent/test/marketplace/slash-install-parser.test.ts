@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "../../src/slash-commands/marketplace-install-parser";
+import {
+	parseMarketplaceInstallArgs,
+	parsePluginScopeArgs,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/marketplace-install-parser";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

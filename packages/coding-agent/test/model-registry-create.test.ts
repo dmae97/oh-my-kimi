@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ConfigFile } from "@oh-my-pi/pi-coding-agent/config/config-file";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { ModelsConfigSchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { ConfigFile } from "../src/config/config-file";
-import { ModelRegistry } from "../src/config/model-registry";
-import { ModelsConfigSchema } from "../src/config/models-config-schema";
 
 describe("ModelRegistry.create() factory (F6)", () => {
 	let tempDir: TempDir;

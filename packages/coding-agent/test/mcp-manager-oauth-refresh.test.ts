@@ -12,9 +12,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
-import { MCPManager } from "../src/mcp/manager";
-import * as oauthFlow from "../src/mcp/oauth-flow";
-import type { MCPServerConfig } from "../src/mcp/types";
+import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
+import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 
 const CREDENTIAL_ID = "mcp_oauth_test_1908";
 const TOKEN_URL = "https://example.com/oauth/token";

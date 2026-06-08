@@ -310,6 +310,52 @@ describe("StdinBuffer", () => {
 			expect(emittedPaste).toEqual(["Hello \u4e16\u754c \u{1f389}"]);
 			expect(emittedSequences).toEqual([]);
 		});
+
+		it("assembles paste when the end marker is split across chunks", () => {
+			processInput("\x1b[200~hello world\x1b[201");
+			expect(emittedPaste).toEqual([]);
+
+			processInput("~");
+			expect(emittedPaste).toEqual(["hello world"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("assembles paste when the start and end markers arrive one byte at a time", () => {
+			for (const ch of "\x1b[200~ab\x1b[201~") {
+				processInput(ch);
+			}
+			expect(emittedPaste).toEqual(["ab"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("preserves trailing input after a boundary-split end marker", () => {
+			processInput("\x1b[200~paste\x1b");
+			processInput("[201~x");
+			expect(emittedPaste).toEqual(["paste"]);
+			expect(emittedSequences).toEqual(["x"]);
+		});
+
+		it("does not end the paste on a partial end-marker prefix in the body", () => {
+			// Body contains the first five bytes of the end marker but no `~`.
+			processInput("\x1b[200~before\x1b[201");
+			expect(emittedPaste).toEqual([]);
+
+			processInput("after\x1b[201~");
+			expect(emittedPaste).toEqual(["before\x1b[201after"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("reconstructs a large paste delivered in many small chunks", () => {
+			const content = "0123456789abcdef".repeat(8192); // 128 KB
+			processInput("\x1b[200~");
+			for (let i = 0; i < content.length; i += 64) {
+				processInput(content.slice(i, i + 64));
+			}
+			processInput("\x1b[201~");
+
+			expect(emittedPaste).toEqual([content]);
+			expect(emittedSequences).toEqual([]);
+		});
 	});
 
 	describe("Destroy", () => {

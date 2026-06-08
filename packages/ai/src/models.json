@@ -38413,9 +38413,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.6,
-				"output": 2.4,
-				"cacheRead": 0.12,
+				"input": 0.3,
+				"output": 1.2,
+				"cacheRead": 0.06,
 				"cacheWrite": 0
 			},
 			"contextWindow": 512000,
@@ -40159,13 +40159,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.684,
-				"output": 3.42,
-				"cacheRead": 0.144,
+				"input": 0.6799999999999999,
+				"output": 3.41,
+				"cacheRead": 0.33999999999999997,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 262142,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
@@ -43304,13 +43304,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.684,
-				"output": 3.42,
-				"cacheRead": 0.144,
+				"input": 0.6799999999999999,
+				"output": 3.41,
+				"cacheRead": 0.33999999999999997,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 262142,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",

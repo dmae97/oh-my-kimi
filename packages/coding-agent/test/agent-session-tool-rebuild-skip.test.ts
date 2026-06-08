@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as z from "zod/v4";
-import { Settings } from "../src/config/settings";
-import type { CustomTool } from "../src/extensibility/custom-tools/types";
-import { AgentSession } from "../src/session/agent-session";
-import { SessionManager } from "../src/session/session-manager";
 
 // Cache-stability invariant: when MCP servers reconnect with byte-identical tool
 // definitions, `refreshMCPTools` must not rebuild the system prompt. A rebuild

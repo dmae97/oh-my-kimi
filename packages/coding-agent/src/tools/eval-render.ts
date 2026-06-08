@@ -172,7 +172,7 @@ function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spin
 		const status = agentEventStatus(event.status);
 		const iconStatus =
 			status === "completed"
-				? "success"
+				? "done"
 				: status === "failed"
 					? "error"
 					: status === "aborted"
@@ -182,10 +182,13 @@ function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spin
 							: "running";
 		const iconColor =
 			status === "completed" ? "success" : status === "failed" || status === "aborted" ? "error" : "accent";
-		const icon = formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined);
+		const icon =
+			status === "completed"
+				? theme.styledSymbol("tool.eval", "accent")
+				: theme.fg(iconColor, formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined));
 
 		const id = eventString(event.id) ?? "agent";
-		let line = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", theme.bold(id))}`;
+		let line = `${prefix} ${icon} ${theme.fg("accent", theme.bold(id))}`;
 
 		if (status === "failed" || status === "aborted") {
 			line += ` ${formatBadge(status, iconColor, theme)}`;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { AppendOnlyContextManager, AppendOnlyLog, StablePrefix } from "@oh-my-pi/pi-agent-core/append-only-context";
+import type { AgentContext, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { Message, Tool } from "@oh-my-pi/pi-ai";
-import { AppendOnlyContextManager, AppendOnlyLog, StablePrefix } from "../src/append-only-context";
-import type { AgentContext, AgentTool } from "../src/types";
 
 // ---------------------------------------------------------------------------
 // Helpers

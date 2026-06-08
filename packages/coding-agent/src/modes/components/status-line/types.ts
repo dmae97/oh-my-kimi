@@ -1,14 +1,29 @@
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../../config/settings-schema";
 import type { AgentSession } from "../../../session/agent-session";
-import type { StatusLineSegmentOptions, StatusLineSettings } from "../status-line";
 
-export type {
-	StatusLinePreset,
-	StatusLineSegmentId,
-	StatusLineSegmentOptions,
-	StatusLineSeparatorStyle,
-	StatusLineSettings,
-};
+export type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle };
+
+export interface StatusLineSegmentOptions {
+	model?: { showThinkingLevel?: boolean };
+	path?: { abbreviate?: boolean; maxLength?: number; stripWorkPrefix?: boolean };
+	git?: { showBranch?: boolean; showStaged?: boolean; showUnstaged?: boolean; showUntracked?: boolean };
+	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
+}
+
+export interface StatusLineSettings {
+	preset?: StatusLinePreset;
+	leftSegments?: StatusLineSegmentId[];
+	rightSegments?: StatusLineSegmentId[];
+	separator?: StatusLineSeparatorStyle;
+	segmentOptions?: StatusLineSegmentOptions;
+	showHookStatus?: boolean;
+	sessionAccent?: boolean;
+}
+
+export type EffectiveStatusLineSettings = Required<
+	Pick<StatusLineSettings, "leftSegments" | "rightSegments" | "separator" | "segmentOptions">
+> &
+	StatusLineSettings;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Segment Rendering

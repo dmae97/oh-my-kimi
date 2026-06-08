@@ -1,12 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { type Component, TERMINAL, Text, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { Settings } from "../src/config/settings";
-import { AssistantMessageComponent } from "../src/modes/components/assistant-message";
-import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
-import { TranscriptContainer } from "../src/modes/components/transcript-container";
-import { initTheme } from "../src/modes/theme/theme";
 
 type MutableTerminalInfo = {
 	eagerEraseScrollbackRisk: boolean;
@@ -67,6 +67,23 @@ describe("transcript reactive commit boundary", () => {
 			block.setLines(["top", "stable", "inserted", "bottom"]);
 			expect(chat.render(80)).toEqual(["top", "stable", "inserted", "bottom"]);
 			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
+		});
+	});
+
+	it("treats in-place growth of the trailing line as append-only", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			// Models a streaming assistant reply: stable head rows plus a current
+			// line that grows token-by-token without adding a new row — the dominant
+			// streaming shape, and the one a strict line-count-growth check missed,
+			// stranding the scrolled-off head outside tmux pane history.
+			const block = new MutableLiveBlock(["para one", "para two", "the quick brown"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			block.setLines(["para one", "para two", "the quick brown fox"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
 		});
 	});
 

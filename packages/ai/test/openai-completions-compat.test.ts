@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import {
 	applyOpenRouterRoutingVariant,
 	convertMessages,
 	detectCompat,
 	streamOpenAICompletions,
-} from "../src/providers/openai-completions";
-import { type ResolvedOpenAICompat, resolveOpenAICompat } from "../src/providers/openai-completions-compat";
-import type { AssistantMessage, Context, Model, OpenAICompat } from "../src/types";
+} from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { type ResolvedOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
+import type { AssistantMessage, Context, Model, OpenAICompat } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

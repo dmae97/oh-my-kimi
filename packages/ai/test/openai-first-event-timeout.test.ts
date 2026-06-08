@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import { streamOpenAIResponses } from "../src/providers/openai-responses";
-import { streamSimple } from "../src/stream";
-import type { Context, Model, TextContent } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { streamAzureOpenAIResponses } from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Context, Model, TextContent } from "@oh-my-pi/pi-ai/types";
 import { waitForDelayOrAbort } from "./helpers";
 
 const originalFetch = global.fetch;

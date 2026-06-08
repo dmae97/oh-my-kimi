@@ -881,7 +881,14 @@ export const todoToolRenderer = {
 			keys.add(task.content);
 		}
 		const allTasks = phases.flatMap(phase => phase.tasks);
-		const header = renderStatusLine({ icon: "success", title: "Todo", meta: [`${allTasks.length} tasks`] }, uiTheme);
+		const header = renderStatusLine(
+			{
+				iconOverride: uiTheme.styledSymbol("tool.todo", "accent"),
+				title: "Todo",
+				meta: [`${allTasks.length} tasks`],
+			},
+			uiTheme,
+		);
 		if (allTasks.length === 0) {
 			const fallback = result.content?.find(content => content.type === "text")?.text ?? "No todos";
 			return new Text(`${header}\n  ${uiTheme.fg("dim", fallback)}`, 0, 0);

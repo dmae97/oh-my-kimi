@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BeamMemory } from "../src/core/beam";
-import { Mnemopi } from "../src/core/memory";
+import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
+import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
 
 const roots: string[] = [];
 

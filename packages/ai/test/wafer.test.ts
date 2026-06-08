@@ -11,11 +11,14 @@
  * the case-sensitive id pass-through against the wire.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { createModelManager } from "../src/model-manager";
-import { getBundledModel } from "../src/models";
-import { waferPassModelManagerOptions, waferServerlessModelManagerOptions } from "../src/provider-models/openai-compat";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
+import { createModelManager } from "@oh-my-pi/pi-ai/model-manager";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import {
+	waferPassModelManagerOptions,
+	waferServerlessModelManagerOptions,
+} from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

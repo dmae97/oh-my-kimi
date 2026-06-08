@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BeamMemory } from "../src/core/beam";
+import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
 
 type TempDb = { dir: string; path: string };
 const tempDbs: TempDb[] = [];

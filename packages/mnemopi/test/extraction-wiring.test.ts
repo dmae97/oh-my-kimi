@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Mnemopi } from "../src/core/memory";
-import type { MnemopiLlmCompletion } from "../src/core/runtime-options";
+import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
+import type { MnemopiLlmCompletion } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 
 const instances: Mnemopi[] = [];
 

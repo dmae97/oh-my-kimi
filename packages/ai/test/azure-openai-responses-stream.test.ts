@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { type AzureOpenAIResponsesOptions, streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses";
-import type { Context, Model, Tool } from "../src/types";
+import {
+	type AzureOpenAIResponsesOptions,
+	streamAzureOpenAIResponses,
+} from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
+import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
 
 const originalFetch = global.fetch;
 

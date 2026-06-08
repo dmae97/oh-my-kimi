@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { RawSseDebugBuffer, rawSseRecordLines, resolveRawSseDebugBuffer } from "../../src/debug/raw-sse-buffer";
+import {
+	RawSseDebugBuffer,
+	rawSseRecordLines,
+	resolveRawSseDebugBuffer,
+} from "@oh-my-pi/pi-coding-agent/debug/raw-sse-buffer";
 
 const model: Model<"anthropic-messages"> = {
 	id: "claude-test",

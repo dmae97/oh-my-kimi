@@ -397,11 +397,8 @@ export class InputController {
 
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
-				if (this.ctx.pendingImages.length > 0) {
-					this.ctx.showStatus("Compaction in progress. Retry after it completes to send images.");
-					return;
-				}
-				this.ctx.queueCompactionMessage(text, "steer");
+				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+				this.ctx.queueCompactionMessage(text, "steer", images);
 				return;
 			}
 
@@ -636,7 +633,8 @@ export class InputController {
 		// the queued entry is later re-parsed into a skill invocation is a
 		// separate concern owned by the compaction-resume path.
 		if (this.ctx.session.isCompacting) {
-			this.ctx.queueCompactionMessage(text, "followUp");
+			const images = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
+			this.ctx.queueCompactionMessage(text, "followUp", images);
 			return;
 		}
 
@@ -657,11 +655,20 @@ export class InputController {
 			return;
 		}
 
+		// Forward any pending clipboard-pasted images alongside the queued text;
+		// otherwise the follow-up would drop the image (mirrors the Enter/steer path).
+		const images = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
+
 		if (this.ctx.session.isStreaming) {
 			this.ctx.editor.addToHistory(text);
 			this.ctx.editor.setText("");
-			await this.ctx.withLocalSubmission(text, () =>
-				this.ctx.session.prompt(text, { streamingBehavior: "followUp" }),
+			this.ctx.editor.imageLinks = undefined;
+			this.ctx.pendingImages = [];
+			this.ctx.pendingImageLinks = [];
+			await this.ctx.withLocalSubmission(
+				text,
+				() => this.ctx.session.prompt(text, { streamingBehavior: "followUp", images }),
+				{ imageCount: images?.length ?? 0 },
 			);
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.ui.requestRender();
@@ -671,7 +678,12 @@ export class InputController {
 		// Not streaming — just submit normally
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
-		await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text));
+		this.ctx.editor.imageLinks = undefined;
+		this.ctx.pendingImages = [];
+		this.ctx.pendingImageLinks = [];
+		await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text, { images }), {
+			imageCount: images?.length ?? 0,
+		});
 	}
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
@@ -717,8 +729,22 @@ export class InputController {
 		this.ctx.pendingImageLinks.push(imageLink);
 		this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
 		const imageNum = this.ctx.pendingImages.length;
-		this.ctx.editor.insertText(`[Image #${imageNum}] `);
+		const dims = await this.#imageDimensions(imageData);
+		const label = dims ? `[Image #${imageNum}, ${dims.width}x${dims.height}]` : `[Image #${imageNum}]`;
+		this.ctx.editor.insertText(`${label} `);
 		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+	}
+
+	/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
+	 *  header can't be decoded, so the caller falls back to a bare `[Image #N]`. */
+	async #imageDimensions(image: ImageContent): Promise<{ width: number; height: number } | undefined> {
+		try {
+			const { width, height } = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
+			if (width && height) return { width, height };
+		} catch {
+			// Unknown/corrupt header — fall back to a bare label.
+		}
+		return undefined;
 	}
 
 	async #normalizeAndInsertPastedImage(image: ImageContent, unsupportedMessage: string): Promise<boolean> {

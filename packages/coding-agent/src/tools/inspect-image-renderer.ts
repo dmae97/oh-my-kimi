@@ -53,12 +53,19 @@ export const inspectImageToolRenderer = {
 		const details = result.details;
 		const rawPath = details?.imagePath ?? args?.path ?? "";
 		const pathDisplay = rawPath ? shortenPath(rawPath) : "image";
+		const success = !result.isError;
 		const header = renderStatusLine(
-			{
-				icon: result.isError ? "error" : "success",
-				title: "Inspect",
-				description: pathDisplay,
-			},
+			success
+				? {
+						iconOverride: uiTheme.styledSymbol("tool.inspectImage", "accent"),
+						title: "Inspect",
+						description: pathDisplay,
+					}
+				: {
+						icon: "error",
+						title: "Inspect",
+						description: pathDisplay,
+					},
 			uiTheme,
 		);
 

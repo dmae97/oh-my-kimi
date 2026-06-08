@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [15.10.5] - 2026-06-08
+
+### Added
+
+- Added `maxAddedRunContext` option to control how many added lines are shown at each side of collapsed inserted runs, with `maxUnchangedRun` kept as a backward-compatible alias
+
+### Changed
+
+- Changed `buildCompactDiffPreview` to omit removed lines from the preview while preserving removal counts for offset tracking
+- Changed `buildCompactDiffPreview` to collapse long contiguous added runs with a bare `…` marker, keeping only the first and last `maxAddedRunContext` lines visible (the surrounding line numbers convey how many were elided)
+
+### Fixed
+
+- Fixed compact edit previews to omit deleted content, keep visible lines anchored to the current file, and collapse long inserted runs with a bare `…` elision marker.
+- Fixed compact edit previews to render added/current lines without diff-prefix padding and normalize adjacent ASCII/Unicode elision markers to one `…`.
+
 ## [15.10.3] - 2026-06-08
 
 ### Added

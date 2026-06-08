@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "15.10.4",
+	"version": "15.10.5",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -132,6 +132,14 @@
 		"./cli/*": {
 			"types": "./src/cli/*.ts",
 			"import": "./src/cli/*.ts"
+		},
+		"./cli/gallery-fixtures": {
+			"types": "./src/cli/gallery-fixtures/index.ts",
+			"import": "./src/cli/gallery-fixtures/index.ts"
+		},
+		"./cli/gallery-fixtures/*": {
+			"types": "./src/cli/gallery-fixtures/*.ts",
+			"import": "./src/cli/gallery-fixtures/*.ts"
 		},
 		"./cli/commands/*": {
 			"types": "./src/cli/commands/*.ts",
@@ -441,6 +449,14 @@
 			"types": "./src/modes/controllers/*.ts",
 			"import": "./src/modes/controllers/*.ts"
 		},
+		"./modes/setup-wizard": {
+			"types": "./src/modes/setup-wizard/index.ts",
+			"import": "./src/modes/setup-wizard/index.ts"
+		},
+		"./modes/setup-wizard/*": {
+			"types": "./src/modes/setup-wizard/*.ts",
+			"import": "./src/modes/setup-wizard/*.ts"
+		},
 		"./modes/rpc/*": {
 			"types": "./src/modes/rpc/*.ts",
 			"import": "./src/modes/rpc/*.ts"
@@ -497,6 +513,10 @@
 		"./task/*": {
 			"types": "./src/task/*.ts",
 			"import": "./src/task/*.ts"
+		},
+		"./tool-discovery/*": {
+			"types": "./src/tool-discovery/*.ts",
+			"import": "./src/tool-discovery/*.ts"
 		},
 		"./tools": {
 			"types": "./src/tools/index.ts",

@@ -5,11 +5,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { __resetVertexTokenCache } from "@oh-my-pi/pi-ai/providers/google-auth";
 import { complete, getEnvApiKey, stream } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { $which } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { __resetVertexTokenCache } from "../src/providers/google-auth";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)

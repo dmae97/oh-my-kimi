@@ -42,6 +42,11 @@ export interface RuntimeOptions {
 	 * via `setRunScope()` instead.
 	 */
 	extraGlobals?: Record<string, unknown>;
+	/**
+	 * On-disk roots the helpers substitute for internal-URL schemes (e.g.
+	 * `{ local: "/…/artifacts/local" }`). Stable for the worker's lifetime.
+	 */
+	localRoots?: Record<string, string>;
 }
 
 // Strict base64: characters from the standard alphabet plus optional `=` padding, and a
@@ -126,15 +131,18 @@ export class JsRuntime {
 	#env: Map<string, string>;
 	#als = new AsyncLocalStorage<RunContext>();
 	#moduleLoader: LocalModuleLoader;
+	#localRoots: Record<string, string>;
 
 	constructor(opts: RuntimeOptions) {
 		this.#cwd = opts.initialCwd;
 		this.sessionId = opts.sessionId;
 		this.#env = new Map();
 		this.#moduleLoader = new LocalModuleLoader(this.sessionId);
+		this.#localRoots = opts.localRoots ?? {};
 		this.helpers = createHelpers({
 			cwd: () => this.#activeCwd(),
 			env: this.#env,
+			localRoots: () => this.#localRoots,
 			emitStatus: event => this.#activeHooks("emitStatus")?.onDisplay({ type: "status", event }),
 		});
 		this.#install(opts.extraGlobals);

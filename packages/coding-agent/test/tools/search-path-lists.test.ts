@@ -7,16 +7,19 @@ import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { canonicalSnapshotKey } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import { SessionObserverOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/session-observer-overlay";
+import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
+import type {
+	ObservableSession,
+	SessionObserverRegistry,
+} from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { Text } from "@oh-my-pi/pi-tui";
-import { SessionObserverOverlayComponent } from "../../src/modes/components/session-observer-overlay";
-import { TreeSelectorComponent } from "../../src/modes/components/tree-selector";
-import type { ObservableSession, SessionObserverRegistry } from "../../src/modes/session-observer-registry";
-import { initTheme } from "../../src/modes/theme/theme";
-import type { SessionEntry, SessionTreeNode } from "../../src/session/session-manager";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {

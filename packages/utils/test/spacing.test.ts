@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getProjectDir, setProjectDir } from "../src/dirs";
-import { Snowflake } from "../src/snowflake";
-import { getIndentation, setDefaultTabWidth } from "../src/tab-spacing";
+import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils/dirs";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
+import { getIndentation, setDefaultTabWidth } from "@oh-my-pi/pi-utils/tab-spacing";
 
 describe("spacing", () => {
 	let tempDir = "";

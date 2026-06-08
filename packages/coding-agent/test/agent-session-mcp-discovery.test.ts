@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as z from "zod/v4";
-import { Settings } from "../src/config/settings";
-import type { CustomTool } from "../src/extensibility/custom-tools/types";
-import { AgentSession } from "../src/session/agent-session";
-import { SessionManager } from "../src/session/session-manager";
 
 function createModel(): Model<"openai-responses"> {
 	return {

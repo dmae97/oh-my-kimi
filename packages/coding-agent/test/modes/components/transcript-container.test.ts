@@ -1,12 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { type Component, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { resetSettingsForTest, Settings } from "../../../src/config/settings";
-import { AssistantMessageComponent } from "../../../src/modes/components/assistant-message";
-import { TranscriptContainer } from "../../../src/modes/components/transcript-container";
-import { initTheme } from "../../../src/modes/theme/theme";
-import { USER_INTERRUPT_LABEL } from "../../../src/session/messages";
 
 // Models a transcript block that re-lays-out (tool preview collapsing, assistant
 // message finalizing, late async result) after it has scrolled past the live

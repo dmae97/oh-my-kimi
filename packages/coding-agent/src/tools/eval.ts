@@ -30,7 +30,7 @@ const evalCellSchema = z.object({
 	language: z.enum(["py", "js"]).describe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM'),
 	code: z.string().describe("cell body, verbatim. Use top-level await freely."),
 	title: z.string().optional().describe('short label shown in transcript (e.g. "imports", "load config")'),
-	timeout: z.number().int().min(1).max(600).optional().describe("per-cell timeout in seconds (1-600, default 30)"),
+	timeout: z.number().int().min(1).max(3600).optional().describe("per-cell timeout in seconds (1-3600, default 30)"),
 	reset: z
 		.boolean()
 		.optional()

@@ -108,6 +108,22 @@ function getProfileConfigRoot(profile: string | undefined): string {
 	const root = getBaseConfigRoot();
 	return profile ? path.join(root, "profiles", profile) : root;
 }
+
+function readPiProfileFromEnvSafe(): string | undefined {
+	try {
+		return normalizeProfileName(process.env.PI_PROFILE);
+	} catch {
+		return undefined;
+	}
+}
+
+function getProfileAgentDir(profile: string): string {
+	return path.join(getProfileConfigRoot(profile), "agent");
+}
+
+function isProfileDerivedAgentDir(profile: string | undefined, agentDirEnv: string | undefined): boolean {
+	return profile !== undefined && agentDirEnv === getProfileAgentDir(profile);
+}
 // =============================================================================
 // Project directory
 // =============================================================================
@@ -291,22 +307,29 @@ class DirResolver {
 
 /**
  * Decide which `PI_CODING_AGENT_DIR` value to capture as the pre-profile
- * baseline. A value equal to the active profile's derived agent dir is
- * profile-derived (propagated by a parent's `setProfile`), so it must NOT be
- * snapshotted as the default-mode baseline — otherwise `setProfile(undefined)`
- * would resolve default mode to the profile's agent dir. Returns `undefined`
- * in that case so reset falls back to the standard `~/.omp/agent`.
+ * baseline. A value equal to a profile's derived agent dir is profile-derived
+ * (propagated by a parent's `setProfile`), so it must NOT be snapshotted as the
+ * default-mode baseline — otherwise default mode would resolve to the profile's
+ * agent dir. The profile source can be the active profile or a lower-priority
+ * `PI_PROFILE` that was bypassed because `OMP_PROFILE` explicitly selected the
+ * default profile. Returns `undefined` in those cases so reset falls back to the
+ * standard `~/.omp/agent`.
  */
 function resolvePreProfileAgentDir(
 	profile: string | undefined,
 	agentDirEnv: string | undefined,
-	activeAgentDir: string,
+	profileAgentDirSource: string | undefined = profile,
 ): string | undefined {
-	return profile !== undefined && agentDirEnv === activeAgentDir ? undefined : agentDirEnv;
+	return isProfileDerivedAgentDir(profile ?? profileAgentDirSource, agentDirEnv) ? undefined : agentDirEnv;
 }
+
 let activeProfile = readProfileFromEnvSafe();
+const moduleLoadProfileAgentDirSource = activeProfile ?? readPiProfileFromEnvSafe();
+const moduleLoadAgentDirOverride = activeProfile
+	? undefined
+	: resolvePreProfileAgentDir(undefined, process.env.PI_CODING_AGENT_DIR, moduleLoadProfileAgentDirSource);
 let dirs = new DirResolver({
-	agentDirOverride: activeProfile ? undefined : process.env.PI_CODING_AGENT_DIR,
+	agentDirOverride: moduleLoadAgentDirOverride,
 	profile: activeProfile,
 });
 /**
@@ -323,7 +346,7 @@ let dirs = new DirResolver({
 let preProfileAgentDirEnv: string | undefined = resolvePreProfileAgentDir(
 	activeProfile,
 	process.env.PI_CODING_AGENT_DIR,
-	dirs.agentDir,
+	moduleLoadProfileAgentDirSource,
 );
 // Anchor home for the resolver. Captured at module load to stay stable across
 // test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
@@ -360,7 +383,11 @@ export function setAgentDir(dir: string): void {
  * no business clearing it.
  */
 export function __resetProfileSnapshotForTests(): void {
-	preProfileAgentDirEnv = resolvePreProfileAgentDir(activeProfile, process.env.PI_CODING_AGENT_DIR, dirs.agentDir);
+	preProfileAgentDirEnv = resolvePreProfileAgentDir(
+		activeProfile,
+		process.env.PI_CODING_AGENT_DIR,
+		activeProfile ?? readPiProfileFromEnvSafe(),
+	);
 }
 
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
@@ -372,7 +399,11 @@ export function setProfile(profile: string | undefined): void {
 		// explicit override. Subsequent profile switches keep the original
 		// snapshot — the "pre-profile" baseline is the state before profiles
 		// entered the picture, not the state between two activations.
-		preProfileAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		preProfileAgentDirEnv = resolvePreProfileAgentDir(
+			undefined,
+			process.env.PI_CODING_AGENT_DIR,
+			readPiProfileFromEnvSafe(),
+		);
 	}
 	activeProfile = next;
 	if (activeProfile) {

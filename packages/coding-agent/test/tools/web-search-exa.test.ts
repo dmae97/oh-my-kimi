@@ -3,14 +3,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 import {
 	buildExaRequestBody,
 	ExaProvider,
 	normalizeSearchType,
 	searchExa,
 	synthesizeAnswer,
-} from "../../src/web/search/providers/exa";
+} from "@oh-my-pi/pi-coding-agent/web/search/providers/exa";
+import { hookFetch } from "@oh-my-pi/pi-utils";
 
 async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-exa-auth-"));

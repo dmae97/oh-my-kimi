@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { getThemeByName } from "../../src/modes/theme/theme";
-import { searchToolRenderer } from "../../src/tools/search";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);

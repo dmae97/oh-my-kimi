@@ -97,7 +97,7 @@ function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsR
 		};
 	}
 
-	const diff = generateDiffString(result.before, result.after);
+	const diff = generateDiffString(result.before, result.after, undefined, { path: result.path });
 	const preview = buildCompactDiffPreview(diff.diff);
 	const meta = outputMeta()
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])

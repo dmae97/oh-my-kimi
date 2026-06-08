@@ -807,12 +807,15 @@ function renderReviewResult(
 
 	// Verdict line
 	const verdictColor = summary.overall_correctness === "correct" ? "success" : "error";
-	const verdictIcon = summary.overall_correctness === "correct" ? theme.status.success : theme.status.error;
+	const isCorrect = summary.overall_correctness === "correct";
+	const verdictIcon = isCorrect
+		? theme.styledSymbol("tool.task", "accent")
+		: theme.fg(verdictColor, theme.status.error);
 	lines.push(
-		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${theme.fg(
-			verdictColor,
-			verdictIcon,
-		)} ${theme.fg("dim", `(${(summary.confidence * 100).toFixed(0)}% confidence)`)}`,
+		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${verdictIcon} ${theme.fg(
+			"dim",
+			`(${(summary.confidence * 100).toFixed(0)}% confidence)`,
+		)}`,
 	);
 
 	// Explanation preview (first ~80 chars when collapsed, full when expanded)
@@ -913,7 +916,7 @@ function renderAgentResult(
 		: needsWarning
 			? theme.status.warning
 			: success
-				? theme.status.success
+				? theme.styledSymbol("tool.task", "accent")
 				: theme.status.error;
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
@@ -1082,7 +1085,10 @@ export function renderResult(
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
-		const header = renderStatusLine({ icon: "success", title: "Task" }, theme);
+		const header = renderStatusLine(
+			{ iconOverride: theme.styledSymbol("tool.task", "accent"), title: "Task" },
+			theme,
+		);
 		return framedBlock(theme, width => ({
 			header,
 			sections: [
@@ -1102,11 +1108,17 @@ export function renderResult(
 	const isError = aborted || failed;
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
+	// Surface the dispatched agent type (e.g. `Reviewer`) alongside the count so
+	// the header reads `Task 16 agents: Reviewer`. All tasks in one call share a
+	// single `agent` type (top-level param), so one label covers the whole batch.
+	const agentName = args?.agent?.trim();
+	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
+	const metaLabel = countLabel ? (agentName ? `${countLabel}: ${agentName}` : countLabel) : agentName;
 	const header = renderStatusLine(
 		{
 			icon,
 			title: "Task",
-			meta: agentCount > 0 ? [`${agentCount} ${agentCount === 1 ? "agent" : "agents"}`] : undefined,
+			meta: metaLabel ? [metaLabel] : undefined,
 		},
 		theme,
 	);

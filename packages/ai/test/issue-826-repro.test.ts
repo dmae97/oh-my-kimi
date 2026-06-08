@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "../src/effort";
-import { streamAnthropic } from "../src/providers/anthropic";
-import type { Context, Model, Tool } from "../src/types";
+import { Effort } from "@oh-my-pi/pi-ai/effort";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
 
 const baseModel: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",

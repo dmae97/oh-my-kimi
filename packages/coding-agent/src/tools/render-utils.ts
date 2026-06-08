@@ -133,6 +133,8 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 	switch (status) {
 		case "success":
 			return theme.styledSymbol("status.success", "success");
+		case "done":
+			return theme.styledSymbol("status.done", "success");
 		case "error":
 			return theme.styledSymbol("status.error", "error");
 		case "warning":
@@ -276,7 +278,7 @@ export function formatCodeFrameLine(
 // Tool UI Helpers
 // =============================================================================
 
-export type ToolUIStatus = "success" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
+export type ToolUIStatus = "success" | "done" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
 export type ToolUIColor = "success" | "error" | "warning" | "accent" | "muted";
 
 export interface ToolUITitleOptions {

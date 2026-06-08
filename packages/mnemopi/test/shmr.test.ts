@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { initBeam } from "../src/core/beam";
+import { initBeam } from "@oh-my-pi/pi-mnemopi/core/beam";
 import {
 	clusterBySimilarity,
 	cosineSimilarity,
@@ -8,7 +8,7 @@ import {
 	getResonanceLog,
 	harmonize,
 	recallBeliefs,
-} from "../src/core/shmr";
+} from "@oh-my-pi/pi-mnemopi/core/shmr";
 
 describe("SHMR deterministic helpers", () => {
 	it("clusters related hashed embeddings by cosine similarity", () => {

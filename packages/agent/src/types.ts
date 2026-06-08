@@ -48,14 +48,6 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	interruptMode?: "immediate" | "wait";
 
 	/**
-	 * Maximum completed tool calls to accept from one streamed assistant turn before
-	 * cutting the provider stream and executing that batch. The cap is enforced on
-	 * `toolcall_end` so every executed call has complete arguments. Undefined disables
-	 * batching.
-	 */
-	maxToolCallsPerTurn?: number;
-
-	/**
 	 * Optional session identifier forwarded to LLM providers.
 	 * Used by providers that support session-based caching (e.g., OpenAI Codex).
 	 */

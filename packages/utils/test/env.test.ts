@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { filterProcessEnv, parseEnvFile } from "../src/env";
+import { filterProcessEnv, parseEnvFile } from "@oh-my-pi/pi-utils/env";
 
 const tempDirs: string[] = [];
 

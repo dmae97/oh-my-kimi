@@ -13,7 +13,6 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,6 +32,7 @@ import {
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
+
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
 	AUTO_HANDOFF_THRESHOLD_FOCUS,
@@ -77,6 +77,7 @@ import type {
 import {
 	calculateRateLimitBackoffMs,
 	clearAnthropicFastModeFallback,
+	deriveClaudeDeviceId,
 	Effort,
 	getSupportedEfforts,
 	isContextOverflow,
@@ -215,6 +216,7 @@ import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
+import { normalizeModelContextImages } from "../utils/image-loading";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
@@ -531,15 +533,6 @@ function formatRetryFallbackBaseSelector(selector: RetryFallbackSelector): strin
 }
 
 const IRC_REPLY_MAX_BYTES = 4096;
-export const ANTHROPIC_TOOL_CALL_BATCH_CAP = 4;
-const CLAUDE_OPUS_4_8_MODEL_ID = /(?:^|[./_-])claude-opus-4[.-]8\b/i;
-
-export function resolveToolCallBatchCapForModel(model: Model | undefined): number | undefined {
-	if (!model) return undefined;
-	return model.provider === "anthropic" && CLAUDE_OPUS_4_8_MODEL_ID.test(model.id)
-		? ANTHROPIC_TOOL_CALL_BATCH_CAP
-		: undefined;
-}
 
 /**
  * Collapse degenerate IRC ephemeral replies before they hit the relay.
@@ -613,14 +606,10 @@ function buildSessionMetadata(
 		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
 		if (typeof accountUuid === "string" && accountUuid.length > 0) {
 			userId.account_uuid = accountUuid;
-			// Claude Code's `device_id` is a stable 64-hex install identifier. Use
-			// omp's persistent install id as the root instead of deriving it from
-			// `account_uuid`: logging into a different Claude account on the same
-			// install should not make the device look new.
-			userId.device_id = crypto
-				.createHash("sha256")
-				.update(`omp-claude-device-id-v1:${getInstallId()}`)
-				.digest("hex");
+			// Claude Code's `device_id` is a stable 64-hex account-scoped install
+			// identifier. Include both omp's persistent install id and the Claude
+			// account UUID so two accounts on the same install do not share a device.
+			userId.device_id = deriveClaudeDeviceId(getInstallId(), accountUuid);
 		}
 	}
 	return { user_id: JSON.stringify(userId) };
@@ -1102,10 +1091,6 @@ export class AgentSession {
 		this.#flushPendingAgentEnd();
 	}
 
-	#syncToolCallBatchCap(model: Model | undefined = this.model): void {
-		this.agent.maxToolCallsPerTurn = resolveToolCallBatchCapForModel(model);
-	}
-
 	#flushPendingAgentEnd(): void {
 		const pending = this.#pendingAgentEndEmit;
 		if (!pending) return;
@@ -1224,7 +1209,6 @@ export class AgentSession {
 		this.#agentId = config.agentId;
 		this.#agentRegistry = config.agentRegistry;
 		this.#providerSessionId = config.providerSessionId;
-		this.#syncToolCallBatchCap();
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -1687,89 +1671,18 @@ export class AgentSession {
 			}
 
 			if (matchContext && "delta" in assistantEvent) {
+				const targetMessageTimestamp = event.message.role === "assistant" ? event.message.timestamp : undefined;
 				const matches = this.#checkTtsrStream(assistantEvent.delta, matchContext, streamingToolCall);
-				if (matches.length > 0) {
-					// Decide first: a non-interrupting tool-source match attaches to the
-					// specific tool call's result instead of driving a loop-wide follow-up.
-					const shouldInterrupt = this.#shouldInterruptForTtsrMatch(matches, matchContext);
-					const perToolId = shouldInterrupt ? undefined : this.#extractTtsrToolCallId(matchContext);
-					if (perToolId) {
-						this.#addPerToolTtsrInjections(perToolId, matches);
-						this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
-					} else {
-						// Queue rules for injection; mark as injected only after successful enqueue.
-						this.#addPendingTtsrInjections(matches);
-
-						if (shouldInterrupt) {
-							// Abort the stream immediately — do not gate on extension callbacks
-							this.#ttsrAbortPending = true;
-							this.#ensureTtsrResumePromise();
-							this.agent.abort(this.#formatTtsrAbortReason(matches));
-							// Notify extensions (fire-and-forget, does not block abort)
-							this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
-							// Schedule retry after a short delay
-							const retryToken = ++this.#ttsrRetryToken;
-							const generation = this.#promptGeneration;
-							const targetMessageTimestamp =
-								event.message.role === "assistant" ? event.message.timestamp : undefined;
-							this.#schedulePostPromptTask(
-								async () => {
-									if (this.#ttsrRetryToken !== retryToken) {
-										this.#resolveTtsrResume();
-										return;
-									}
-
-									const targetAssistantIndex = this.#findTtsrAssistantIndex(targetMessageTimestamp);
-									if (
-										!this.#ttsrAbortPending ||
-										this.#promptGeneration !== generation ||
-										targetAssistantIndex === -1
-									) {
-										this.#ttsrAbortPending = false;
-										this.#pendingTtsrInjections = [];
-										this.#perToolTtsrInjections.clear();
-										this.#resolveTtsrResume();
-										return;
-									}
-									this.#ttsrAbortPending = false;
-									this.#perToolTtsrInjections.clear();
-									const ttsrSettings = this.#ttsrManager?.getSettings();
-									if (ttsrSettings?.contextMode === "discard") {
-										// Remove the partial/aborted assistant turn from agent state
-										this.agent.replaceMessages(this.agent.state.messages.slice(0, targetAssistantIndex));
-									}
-									// Inject TTSR rules as system reminder before retry
-									const injection = this.#getTtsrInjectionContent();
-									if (injection) {
-										const details = { rules: injection.rules.map(rule => rule.name) };
-										this.agent.appendMessage({
-											role: "custom",
-											customType: "ttsr-injection",
-											content: injection.content,
-											display: false,
-											details,
-											attribution: "agent",
-											timestamp: Date.now(),
-										});
-										this.sessionManager.appendCustomMessageEntry(
-											"ttsr-injection",
-											injection.content,
-											false,
-											details,
-											"agent",
-										);
-										this.#markTtsrInjected(details.rules);
-									}
-									try {
-										await this.agent.continue();
-									} catch {
-										this.#resolveTtsrResume();
-									}
-								},
-								{ delayMs: 50 },
-							);
-							return;
-						}
+				if (matches.length > 0 && this.#handleTtsrMatches(matches, matchContext, targetMessageTimestamp)) {
+					return;
+				}
+				// ast-grep `astCondition` rules match against the reconstructed edit/write
+				// snapshot, which only exists for tool argument streams. The native worker
+				// call is async, so this path is awaited and self-throttled by the manager.
+				if (matchContext.source === "tool" && this.#ttsrManager?.hasAstRules()) {
+					const astMatches = await this.#checkTtsrAstStream(matchContext, streamingToolCall);
+					if (astMatches.length > 0 && this.#handleTtsrMatches(astMatches, matchContext, targetMessageTimestamp)) {
+						return;
 					}
 				}
 			}
@@ -2441,17 +2354,132 @@ export class AgentSession {
 		if (!manager) {
 			return [];
 		}
-		if (toolCall) {
-			const tools = this.agent.state.tools;
-			const tool =
-				tools.find(t => t.name === toolCall.name) ??
-				tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
-			const digest = tool?.matcherDigest?.(toolCall.arguments ?? {});
-			if (digest !== undefined) {
-				return manager.checkSnapshot(digest, matchContext);
-			}
+		const digest = this.#resolveTtsrMatcherDigest(toolCall);
+		if (digest !== undefined) {
+			return manager.checkSnapshot(digest, matchContext);
 		}
 		return manager.checkDelta(delta, matchContext);
+	}
+
+	/** Reconstruct the tool's normalized source snapshot via its `matcherDigest`, if any. */
+	#resolveTtsrMatcherDigest(toolCall: ToolCall | undefined): string | undefined {
+		if (!toolCall) {
+			return undefined;
+		}
+		const tools = this.agent.state.tools;
+		const tool =
+			tools.find(t => t.name === toolCall.name) ??
+			tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
+		return tool?.matcherDigest?.(toolCall.arguments ?? {});
+	}
+
+	/**
+	 * Match ast-grep `astCondition` rules against the reconstructed tool snapshot.
+	 *
+	 * Only edit/write tool streams expose a `matcherDigest`, which is the real source
+	 * the call introduces; AST matching needs that (and a language inferred from the
+	 * path argument), so non-digest streams never produce AST matches.
+	 */
+	async #checkTtsrAstStream(matchContext: TtsrMatchContext, toolCall: ToolCall | undefined): Promise<Rule[]> {
+		const manager = this.#ttsrManager;
+		if (!manager) {
+			return [];
+		}
+		const digest = this.#resolveTtsrMatcherDigest(toolCall);
+		if (digest === undefined) {
+			return [];
+		}
+		return manager.checkAstSnapshot(digest, matchContext);
+	}
+
+	/**
+	 * Route TTSR matches to either a per-tool injection or a stream-interrupting
+	 * retry. Returns true when the stream was aborted and the caller should stop
+	 * processing this event.
+	 */
+	#handleTtsrMatches(
+		matches: Rule[],
+		matchContext: TtsrMatchContext,
+		targetMessageTimestamp: number | undefined,
+	): boolean {
+		// Decide first: a non-interrupting tool-source match attaches to the
+		// specific tool call's result instead of driving a loop-wide follow-up.
+		const shouldInterrupt = this.#shouldInterruptForTtsrMatch(matches, matchContext);
+		const perToolId = shouldInterrupt ? undefined : this.#extractTtsrToolCallId(matchContext);
+		if (perToolId) {
+			this.#addPerToolTtsrInjections(perToolId, matches);
+			this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
+			return false;
+		}
+
+		// Queue rules for injection; mark as injected only after successful enqueue.
+		this.#addPendingTtsrInjections(matches);
+		if (!shouldInterrupt) {
+			return false;
+		}
+
+		// Abort the stream immediately — do not gate on extension callbacks
+		this.#ttsrAbortPending = true;
+		this.#ensureTtsrResumePromise();
+		this.agent.abort(this.#formatTtsrAbortReason(matches));
+		// Notify extensions (fire-and-forget, does not block abort)
+		this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
+		// Schedule retry after a short delay
+		const retryToken = ++this.#ttsrRetryToken;
+		const generation = this.#promptGeneration;
+		this.#schedulePostPromptTask(
+			async () => {
+				if (this.#ttsrRetryToken !== retryToken) {
+					this.#resolveTtsrResume();
+					return;
+				}
+
+				const targetAssistantIndex = this.#findTtsrAssistantIndex(targetMessageTimestamp);
+				if (!this.#ttsrAbortPending || this.#promptGeneration !== generation || targetAssistantIndex === -1) {
+					this.#ttsrAbortPending = false;
+					this.#pendingTtsrInjections = [];
+					this.#perToolTtsrInjections.clear();
+					this.#resolveTtsrResume();
+					return;
+				}
+				this.#ttsrAbortPending = false;
+				this.#perToolTtsrInjections.clear();
+				const ttsrSettings = this.#ttsrManager?.getSettings();
+				if (ttsrSettings?.contextMode === "discard") {
+					// Remove the partial/aborted assistant turn from agent state
+					this.agent.replaceMessages(this.agent.state.messages.slice(0, targetAssistantIndex));
+				}
+				// Inject TTSR rules as system reminder before retry
+				const injection = this.#getTtsrInjectionContent();
+				if (injection) {
+					const details = { rules: injection.rules.map(rule => rule.name) };
+					this.agent.appendMessage({
+						role: "custom",
+						customType: "ttsr-injection",
+						content: injection.content,
+						display: false,
+						details,
+						attribution: "agent",
+						timestamp: Date.now(),
+					});
+					this.sessionManager.appendCustomMessageEntry(
+						"ttsr-injection",
+						injection.content,
+						false,
+						details,
+						"agent",
+					);
+					this.#markTtsrInjected(details.rules);
+				}
+				try {
+					await this.agent.continue();
+				} catch {
+					this.#resolveTtsrResume();
+				}
+			},
+			{ delayMs: 50 },
+		);
+		return true;
 	}
 
 	/** Extract path-like arguments from tool call payload for TTSR glob matching. */
@@ -2992,10 +3020,10 @@ export class AgentSession {
 	 * `metadata.user_id` shaped like real Claude Code's `getAPIMetadata` output:
 	 * `{ session_id, account_uuid, device_id }`. `account_uuid` is included only
 	 * when an Anthropic OAuth credential with a known account UUID is loaded;
-	 * `device_id` is derived from the persistent omp install id. Resolving live
-	 * keeps the value in sync with auth-state changes (login/logout, token
-	 * refresh that surfaces a new account uuid) without needing to re-call
-	 * `#syncAgentSessionId()` on every such event.
+	 * `device_id` is derived from both the persistent omp install id and that
+	 * account UUID. Resolving live keeps the value in sync with auth-state changes
+	 * (login/logout, token refresh that surfaces a new account UUID) without
+	 * needing to re-call `#syncAgentSessionId()` on every such event.
 	 */
 	#syncAgentSessionId(sessionId?: string): void {
 		const sid = this.#activeProviderSessionId(sessionId);
@@ -4286,6 +4314,27 @@ export class AgentSession {
 		};
 	}
 
+	async #normalizeMessageContentImages(
+		content: string | (TextContent | ImageContent)[],
+	): Promise<string | (TextContent | ImageContent)[]> {
+		if (typeof content === "string") return content;
+		const images = content.filter((part): part is ImageContent => part.type === "image");
+		if (images.length === 0) return content;
+		const normalizedImages = await normalizeModelContextImages(images);
+		if (!normalizedImages) return content;
+		let imageIndex = 0;
+		return content.map(part => (part.type === "image" ? normalizedImages[imageIndex++]! : part));
+	}
+
+	async #normalizeAgentMessageImages<T extends AgentMessage>(message: T): Promise<T> {
+		if (!("content" in message)) return message;
+		const content = message.content;
+		if (typeof content !== "string" && !Array.isArray(content)) return message;
+		const normalized = await this.#normalizeMessageContentImages(content as string | (TextContent | ImageContent)[]);
+		if (normalized === content) return message;
+		return { ...message, content: normalized } as T;
+	}
+
 	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
@@ -4385,10 +4434,11 @@ export class AgentSession {
 		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTodoPrelude(expandedText) : undefined;
+		const normalizedImages = await normalizeModelContextImages(options?.images);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (options?.images) {
-			userContent.push(...options.images);
+		if (normalizedImages) {
+			userContent.push(...normalizedImages);
 		}
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
@@ -4405,6 +4455,7 @@ export class AgentSession {
 		try {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
+				images: normalizedImages,
 				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
 				appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 			});
@@ -4547,7 +4598,9 @@ export class AgentSession {
 					useHashLines: resolveFileDisplayMode(this).hashLines,
 					snapshotStore: getFileSnapshotStore(this),
 				});
-				messages.push(...fileMentionMessages);
+				for (const fileMentionMessage of fileMentionMessages) {
+					messages.push(await this.#normalizeAgentMessageImages(fileMentionMessage));
+				}
 			}
 
 			const beforeAgentStartSystemPrompt = await this.#buildSystemPromptForAgentStart(expandedText);
@@ -4563,15 +4616,18 @@ export class AgentSession {
 					const promptAttribution: "user" | "agent" | undefined =
 						"attribution" in message ? message.attribution : undefined;
 					for (const msg of result.messages) {
-						messages.push({
-							role: "custom",
-							customType: msg.customType,
-							content: msg.content,
-							display: msg.display,
-							details: msg.details,
-							attribution: msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
-							timestamp: Date.now(),
-						});
+						messages.push(
+							await this.#normalizeAgentMessageImages({
+								role: "custom",
+								customType: msg.customType,
+								content: msg.content,
+								display: msg.display,
+								details: msg.details,
+								attribution:
+									msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
+								timestamp: Date.now(),
+							}),
+						);
 					}
 				}
 
@@ -4779,11 +4835,12 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+		const normalizedImages = await normalizeModelContextImages(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#steeringMessages.push({ text: displayText });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images && images.length > 0) {
-			content.push(...images);
+		if (normalizedImages && normalizedImages.length > 0) {
+			content.push(...normalizedImages);
 		}
 		this.agent.steer({
 			role: "user",
@@ -4798,11 +4855,12 @@ export class AgentSession {
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
 	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+		const normalizedImages = await normalizeModelContextImages(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#followUpMessages.push({ text: displayText });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images && images.length > 0) {
-			content.push(...images);
+		if (normalizedImages && normalizedImages.length > 0) {
+			content.push(...normalizedImages);
 		}
 		this.agent.followUp({
 			role: "user",
@@ -4946,16 +5004,17 @@ export class AgentSession {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
+		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
 		if (this.isStreaming) {
 			if (options?.deliverAs === "nextTurn") {
-				this.#queueHiddenNextTurnMessage(appMessage, options?.triggerTurn ?? false);
+				this.#queueHiddenNextTurnMessage(normalizedAppMessage, options?.triggerTurn ?? false);
 				return;
 			}
 
 			if (options?.deliverAs === "followUp") {
-				this.agent.followUp(appMessage);
+				this.agent.followUp(normalizedAppMessage);
 			} else {
-				this.agent.steer(appMessage);
+				this.agent.steer(normalizedAppMessage);
 			}
 			return;
 		}
@@ -4963,16 +5022,16 @@ export class AgentSession {
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
 				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-					this.#queueHiddenNextTurnMessage(appMessage, false);
+					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 					return;
 				}
-				await this.agent.prompt(appMessage);
+				await this.agent.prompt(normalizedAppMessage);
 				return;
 			}
-			this.agent.appendMessage(appMessage);
+			this.agent.appendMessage(normalizedAppMessage);
 			this.sessionManager.appendCustomMessageEntry(
-				message.customType,
-				message.content,
+				normalizedAppMessage.customType,
+				normalizedAppMessage.content,
 				message.display,
 				message.details,
 				message.attribution ?? "agent",
@@ -4982,17 +5041,17 @@ export class AgentSession {
 
 		if (options?.triggerTurn) {
 			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-				this.#queueHiddenNextTurnMessage(appMessage, false);
+				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 				return;
 			}
-			await this.agent.prompt(appMessage);
+			await this.agent.prompt(normalizedAppMessage);
 			return;
 		}
 
-		this.agent.appendMessage(appMessage);
+		this.agent.appendMessage(normalizedAppMessage);
 		this.sessionManager.appendCustomMessageEntry(
-			message.customType,
-			message.content,
+			normalizedAppMessage.customType,
+			normalizedAppMessage.content,
 			message.display,
 			message.details,
 			message.attribution ?? "agent",
@@ -6749,9 +6808,13 @@ export class AgentSession {
 			return undefined;
 		}
 
-		if (!this.#toolRegistry.has("todo")) {
-			logger.warn("Eager todo enforcement skipped because todo is unavailable", {
-				activeToolNames: this.agent.state.tools.map(tool => tool.name),
+		// Must check the active tool set, not just the registry: tool discovery
+		// (tools.discoveryMode === "all") can register `todo` while hiding it from
+		// the exposed tools. Forcing a named tool_choice for an inactive tool makes
+		// the provider reject the request (HTTP 400).
+		if (!this.getActiveToolNames().includes("todo")) {
+			logger.warn("Eager todo enforcement skipped because todo is not active", {
+				activeToolNames: this.getActiveToolNames(),
 			});
 			return undefined;
 		}
@@ -6913,7 +6976,6 @@ export class AgentSession {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 		}
 		this.agent.setModel(model);
-		this.#syncToolCallBatchCap(model);
 
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
@@ -9109,7 +9171,6 @@ export class AgentSession {
 						this.#setModelWithProviderSessionReset(match);
 					} else {
 						this.agent.setModel(match);
-						this.#syncToolCallBatchCap(match);
 					}
 				}
 			}
@@ -9192,9 +9253,6 @@ export class AgentSession {
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
 			if (previousModel) {
 				this.agent.setModel(previousModel);
-				this.#syncToolCallBatchCap(previousModel);
-			} else {
-				this.#syncToolCallBatchCap(undefined);
 			}
 			this.#thinkingLevel = previousThinkingLevel;
 			this.#autoThinking = previousAutoThinking;

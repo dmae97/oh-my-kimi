@@ -3,30 +3,36 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { type BlobPutResult, blobExtensionForImageMimeType } from "../session/blob-store";
 import { fileHyperlink } from "../tui/hyperlink";
 
-const IMAGE_REFERENCE_REGEX = /\[Image #([1-9]\d*)\]/g;
+/** Matches `[Image #N]`/`[Image #N, WxH]` and `[Paste #N, +X lines]`/`[Paste #N, Y chars]` tokens.
+ *  Group 1 is the kind (`Image`/`Paste`), group 2 the 1-based index. The optional metadata
+ *  tail (`, …`) is captured loosely (no `]`/newline) so future label tweaks keep matching. */
+export const PLACEHOLDER_REGEX = /\[(Image|Paste) #([1-9]\d*)(?:,[^\]\n]*)?\]/g;
 
 type ImageBlobWriter = (data: Buffer, options?: { extension?: string }) => Promise<BlobPutResult>;
 type ImageBlobWriterSync = (data: Buffer, options?: { extension?: string }) => BlobPutResult;
 
-export interface ImageReferenceRenderers {
+export type PlaceholderKind = "image" | "paste";
+
+export interface PlaceholderRenderers {
 	renderText: (text: string) => string;
-	renderReference: (label: string, index: number) => string;
+	renderReference: (label: string, kind: PlaceholderKind, index: number) => string;
 }
 
-export function renderImageReferences(text: string, renderers: ImageReferenceRenderers): string {
-	IMAGE_REFERENCE_REGEX.lastIndex = 0;
+export function renderPlaceholders(text: string, renderers: PlaceholderRenderers): string {
+	PLACEHOLDER_REGEX.lastIndex = 0;
 	let result = "";
 	let last = 0;
 	let matched = false;
 
 	for (;;) {
-		const match = IMAGE_REFERENCE_REGEX.exec(text);
+		const match = PLACEHOLDER_REGEX.exec(text);
 		if (match === null) break;
 		matched = true;
 		if (match.index > last) {
 			result += renderers.renderText(text.slice(last, match.index));
 		}
-		result += renderers.renderReference(match[0], Number(match[1]));
+		const kind: PlaceholderKind = match[1] === "Paste" ? "paste" : "image";
+		result += renderers.renderReference(match[0], kind, Number(match[2]));
 		last = match.index + match[0].length;
 	}
 

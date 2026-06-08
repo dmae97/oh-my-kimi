@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { convertMessages, detectCompat } from "../src/providers/openai-completions";
-import type { AssistantMessage, Model } from "../src/types";
+import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { convertMessages, detectCompat } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai/types";
 
 function deepseekModel(overrides: Partial<Model<"openai-completions">>): Model<"openai-completions"> {
 	return {

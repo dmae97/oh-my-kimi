@@ -124,8 +124,11 @@ export async function* iterateWithIdleTimeout<T>(
 		firstItemTimeoutMs !== undefined && firstItemTimeoutMs > 0 ? Date.now() + firstItemTimeoutMs : undefined;
 	const abortSignal = options.abortSignal;
 	const iterator = iterable[Symbol.asyncIterator]();
+	let iteratorClosed = false;
 
 	const closeIterator = (): void => {
+		if (iteratorClosed) return;
+		iteratorClosed = true;
 		const returnPromise = iterator.return?.();
 		if (returnPromise) {
 			void returnPromise.catch(() => {});
@@ -212,6 +215,12 @@ export async function* iterateWithIdleTimeout<T>(
 			racers.push(promise);
 		}
 
+		// Tracks whether this iteration handed an item to the consumer and resumed
+		// normally. Any other exit — internal throw, `done` return, or the consumer
+		// abandoning us via `.return()`/`.throw()` at the `yield` below — must close
+		// the upstream iterator so the underlying SSE body / SDK stream (and its
+		// socket) is released instead of being left suspended.
+		let continuing = false;
 		try {
 			const outcome = await Promise.race(racers);
 			if (outcome.kind === "abort") {
@@ -247,7 +256,9 @@ export async function* iterateWithIdleTimeout<T>(
 				lastProgressAt = Date.now();
 			}
 			yield item;
+			continuing = true;
 		} finally {
+			if (!continuing) closeIterator();
 			if (timer !== undefined) clearTimeout(timer);
 			// Resolve dangling promises so the racers don't leak (Promise.race is one-shot).
 			resolveTimeout?.({ kind: "timeout" });

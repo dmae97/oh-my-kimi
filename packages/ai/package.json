@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-ai",
-	"version": "15.10.4",
+	"version": "15.10.5",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -120,13 +120,21 @@
 			"types": "./src/utils/discovery/*.ts",
 			"import": "./src/utils/discovery/*.ts"
 		},
-		"./utils/oauth": {
-			"types": "./src/utils/oauth/index.ts",
-			"import": "./src/utils/oauth/index.ts"
+		"./oauth": {
+			"types": "./src/registry/oauth/index.ts",
+			"import": "./src/registry/oauth/index.ts"
 		},
-		"./utils/oauth/*": {
-			"types": "./src/utils/oauth/*.ts",
-			"import": "./src/utils/oauth/*.ts"
+		"./oauth/*": {
+			"types": "./src/registry/oauth/*.ts",
+			"import": "./src/registry/oauth/*.ts"
+		},
+		"./registry": {
+			"types": "./src/registry/index.ts",
+			"import": "./src/registry/index.ts"
+		},
+		"./registry/oauth": {
+			"types": "./src/registry/oauth/index.ts",
+			"import": "./src/registry/oauth/index.ts"
 		},
 		"./utils/schema": {
 			"types": "./src/utils/schema/index.ts",

@@ -17,8 +17,8 @@ import {
 	resolveProfileEnv,
 	setAgentDir,
 	setProfile,
-} from "../src/dirs";
-import { Snowflake } from "../src/snowflake";
+} from "@oh-my-pi/pi-utils/dirs";
+import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 	const reader = stream.getReader();
@@ -316,6 +316,57 @@ describe("dirs module import behavior", () => {
 			});
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores inherited profile agent dir when OMP_PROFILE explicitly selects default", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-dirs-default-profile-"));
+		const probeConfigDir = `.omp-default-profile-${Snowflake.next()}`;
+		try {
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			const workAgentDir = path.join(os.homedir(), probeConfigDir, "profiles", "work", "agent");
+			const defaultAgentDir = path.join(os.homedir(), probeConfigDir, "agent");
+
+			for (const ompProfile of ["", "default"]) {
+				const probePath = path.join(root, `default-profile-${ompProfile || "empty"}.ts`);
+				await Bun.write(
+					probePath,
+					[
+						`import { getActiveProfile, getAgentDir } from ${JSON.stringify(dirsUrl)};`,
+						"process.stdout.write(JSON.stringify({",
+						"	activeProfile: getActiveProfile() ?? null,",
+						"	agentDir: getAgentDir(),",
+						"}));",
+					].join("\n"),
+				);
+
+				const childEnv: Record<string, string | undefined> = {
+					...process.env,
+					PI_CONFIG_DIR: probeConfigDir,
+					OMP_PROFILE: ompProfile,
+					PI_PROFILE: "work",
+					PI_CODING_AGENT_DIR: workAgentDir,
+				};
+				const proc = Bun.spawn([process.execPath, probePath], {
+					stdout: "pipe",
+					stderr: "pipe",
+					env: childEnv,
+				});
+				const [stdout, stderr, exitCode] = await Promise.all([
+					readStream(proc.stdout as ReadableStream<Uint8Array>),
+					readStream(proc.stderr as ReadableStream<Uint8Array>),
+					proc.exited,
+				]);
+
+				expect(exitCode, stderr).toBe(0);
+				expect(JSON.parse(stdout)).toEqual({
+					activeProfile: null,
+					agentDir: defaultAgentDir,
+				});
+			}
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+			await fs.rm(path.join(os.homedir(), probeConfigDir), { recursive: true, force: true });
 		}
 	});
 });

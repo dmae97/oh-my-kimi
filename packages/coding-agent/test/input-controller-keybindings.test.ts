@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
-import { InputController } from "../src/modes/controllers/input-controller";
-import type { InteractiveModeContext } from "../src/modes/types";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 
 type FakeEditor = {
@@ -237,8 +237,8 @@ describe("InputController keybinding setup", () => {
 		await controller.handleFollowUp();
 
 		expect(ctx.locallySubmittedUserSignatures.has("plain idle submit\u00000")).toBe(true);
-		// Idle submit calls prompt() with no streamingBehavior.
-		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit");
+		// Idle submit calls prompt() with no streamingBehavior (images forwarded, undefined here).
+		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit", { images: undefined });
 	});
 
 	it("removes the signature when an idle follow-up submission rejects", async () => {

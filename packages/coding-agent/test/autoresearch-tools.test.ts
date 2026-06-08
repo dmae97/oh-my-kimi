@@ -3,16 +3,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { createSessionRuntime } from "@oh-my-pi/pi-coding-agent/autoresearch/state";
+import { openAutoresearchStorage } from "@oh-my-pi/pi-coding-agent/autoresearch/storage";
+import { createInitExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/init-experiment";
+import { createLogExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/log-experiment";
+import { createRunExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/run-experiment";
+import { createUpdateNotesTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/update-notes";
+import type { LogDetails, RunDetails } from "@oh-my-pi/pi-coding-agent/autoresearch/types";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { createSessionRuntime } from "../src/autoresearch/state";
-import { openAutoresearchStorage } from "../src/autoresearch/storage";
-import { createInitExperimentTool } from "../src/autoresearch/tools/init-experiment";
-import { createLogExperimentTool } from "../src/autoresearch/tools/log-experiment";
-import { createRunExperimentTool } from "../src/autoresearch/tools/run-experiment";
-import { createUpdateNotesTool } from "../src/autoresearch/tools/update-notes";
-import type { LogDetails, RunDetails } from "../src/autoresearch/types";
-import type { ExtensionAPI, ExtensionContext } from "../src/extensibility/extensions";
 
 afterEach(() => {
 	vi.restoreAllMocks();

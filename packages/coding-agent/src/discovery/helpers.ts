@@ -169,7 +169,7 @@ export function buildRuleFromMarkdown(
 	},
 ): Rule {
 	const { frontmatter, body } = parseFrontmatter(content, { source: filePath });
-	const { condition, scope } = parseRuleConditionAndScope(frontmatter as RuleFrontmatter);
+	const { condition, astCondition, scope } = parseRuleConditionAndScope(frontmatter as RuleFrontmatter);
 
 	let globs: string[] | undefined;
 	if (Array.isArray(frontmatter.globs)) {
@@ -192,6 +192,7 @@ export function buildRuleFromMarkdown(
 		alwaysApply: frontmatter.alwaysApply === true,
 		description: typeof frontmatter.description === "string" ? frontmatter.description : undefined,
 		condition,
+		astCondition,
 		scope,
 		interruptMode,
 		_source: source,

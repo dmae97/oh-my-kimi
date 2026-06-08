@@ -15,12 +15,12 @@
  * (messages.length shrinks) resets the cache.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { computeNonMessageTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { countTokens } from "@oh-my-pi/pi-natives";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { StatusLineComponent } from "../src/modes/components/status-line";
-import { initTheme } from "../src/modes/theme/theme";
-import { computeNonMessageTokens, estimateToolSchemaTokens } from "../src/modes/utils/context-usage";
-import type { AgentSession } from "../src/session/agent-session";
 
 beforeAll(async () => {
 	resetSettingsForTest();

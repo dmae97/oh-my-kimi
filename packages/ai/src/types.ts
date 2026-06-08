@@ -28,6 +28,7 @@ import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
+import type { KnownProviderId } from "./registry";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
 export type { AssistantMessageEventStream } from "./utils/event-stream";
@@ -96,61 +97,12 @@ export interface ThinkingConfig {
 	mode: ThinkingControlMode;
 }
 
-export type KnownProvider =
-	| "alibaba-coding-plan"
-	| "amazon-bedrock"
-	| "anthropic"
-	| "google"
-	| "google-gemini-cli"
-	| "google-antigravity"
-	| "google-vertex"
-	| "openai"
-	| "openai-codex"
-	| "kimi-code"
-	| "minimax-code"
-	| "minimax-code-cn"
-	| "github-copilot"
-	| "fireworks"
-	| "firepass"
-	| "gitlab-duo"
-	| "cursor"
-	| "deepseek"
-	| "xai"
-	| "xai-oauth"
-	| "groq"
-	| "cerebras"
-	| "openrouter"
-	| "kilo"
-	| "vercel-ai-gateway"
-	| "zai"
-	| "zhipu-coding-plan"
-	| "mistral"
-	| "minimax"
-	| "opencode-go"
-	| "opencode-zen"
-	| "synthetic"
-	| "cloudflare-ai-gateway"
-	| "huggingface"
-	| "litellm"
-	| "moonshot"
-	| "nvidia"
-	| "nanogpt"
-	| "ollama"
-	| "ollama-cloud"
-	| "qianfan"
-	| "qwen-portal"
-	| "together"
-	| "venice"
-	| "vllm"
-	| "xiaomi"
-	| "xiaomi-token-plan-sgp"
-	| "xiaomi-token-plan-ams"
-	| "xiaomi-token-plan-cn"
-	| "wafer-pass"
-	| "wafer-serverless"
-	| "zenmux"
-	| "lm-studio";
-export type Provider = KnownProvider | string;
+export type KnownProvider = KnownProviderId;
+// `Provider` is any provider-id string; `KnownProvider` enumerates the built-in model
+// providers. Kept structurally `string` (the prior `KnownProvider | string` already
+// collapsed to `string`) so the registry-derived `KnownProvider` can reference the model
+// types below without forming a circular type-alias reference.
+export type Provider = string;
 
 import type { Effort } from "./effort";
 

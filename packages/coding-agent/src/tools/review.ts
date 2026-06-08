@@ -169,7 +169,7 @@ export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFind
 		}`;
 
 		return new Text(
-			`${theme.fg("success", theme.status.success)} ${icon} ${theme.fg(color, `[${label}]`)} ${theme.fg(
+			`${theme.styledSymbol("tool.review", "accent")} ${icon} ${theme.fg(color, `[${label}]`)} ${theme.fg(
 				"dim",
 				location,
 			)}`,

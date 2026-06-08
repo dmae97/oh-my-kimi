@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { searchSearXNG } from "@oh-my-pi/pi-coding-agent/web/search/providers/searxng";
 import { hookFetch } from "@oh-my-pi/pi-utils";
-import { resetSettingsForTest, Settings } from "../../src/config/settings";
-import { searchSearXNG } from "../../src/web/search/providers/searxng";
 
 describe("SearXNG web search provider", () => {
 	afterEach(() => {

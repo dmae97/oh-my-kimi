@@ -8,7 +8,7 @@
  */
 import * as os from "node:os";
 import { type AuthStorage, getBundledModels } from "@oh-my-pi/pi-ai";
-import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
+import { decodeJwt } from "@oh-my-pi/pi-ai/oauth/openai-codex";
 import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
 import type { SearchResponse, SearchSource } from "../../../web/search/types";

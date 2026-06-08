@@ -38,6 +38,7 @@ interface Rule {
   alwaysApply?: boolean;
   description?: string;
   condition?: string[];
+  astCondition?: string[];
   scope?: string[];
   interruptMode?: "never" | "prose-only" | "tool-only" | "always";
   _source: SourceMeta;
@@ -183,16 +184,16 @@ After rule discovery in `createAgentSession` (`sdk.ts`), `bucketRules(...)` appl
 
 1. Drop rules listed in `ttsr.disabledRules`.
 2. Drop rules from the `builtin-defaults` provider when `ttsr.builtinRules === false`.
-3. Register rules with non-empty `condition` into `TtsrManager`; if registration succeeds, the rule is TTSR-only.
+3. Register rules with a non-empty `condition` or `astCondition` into `TtsrManager`; if registration succeeds, the rule is TTSR-only.
 4. Put remaining `alwaysApply === true` rules into `alwaysApplyRules`.
 5. Put remaining rules with `description` into `rulebookRules`.
 
 ### Bucket behavior
 
-- **TTSR bucket**: any enabled rule with a non-empty parsed `condition` that `TtsrManager.addRule(...)` accepts. Takes priority over other buckets.
+- **TTSR bucket**: any enabled rule with a non-empty parsed `condition` (regex) or `astCondition` (ast-grep patterns) that `TtsrManager.addRule(...)` accepts. Takes priority over other buckets.
 - **Always-apply bucket**: `alwaysApply === true`, not TTSR. Full content injected into system prompt. Resolvable via `rule://`.
 - **Rulebook bucket**: must have description, must not be TTSR, must not be `alwaysApply`. Listed in system prompt by name+description; content read on demand via `rule://`.
-- A rule with both `condition` and `alwaysApply` goes to TTSR only if TTSR registration accepts it; otherwise it can fall through to always-apply.
+- A rule with both a trigger condition and `alwaysApply` goes to TTSR only if TTSR registration accepts it; otherwise it can fall through to always-apply.
 - A rule with both `alwaysApply` and `description` goes to always-apply only (not rulebook).
 
 ## 6. How metadata affects runtime surfaces
@@ -219,10 +220,11 @@ After rule discovery in `createAgentSession` (`sdk.ts`), `bucketRules(...)` appl
 - **Full rule content is auto-injected into the system prompt** (before the rulebook rules section).
 - Rule is also addressable via `rule://<name>` for re-reading.
 
-### `condition`, `scope`, and `interruptMode`
+### `condition`, `astCondition`, `scope`, and `interruptMode`
 
-- `condition` is the current TTSR trigger field; legacy `ttsr_trigger` / `ttsrTrigger` are accepted as fallback inputs during parsing.
-- `scope` narrows TTSR matching scope. A condition token that looks like a file glob becomes `tool:edit(<glob>)` and `tool:write(<glob>)` scope entries plus catch-all condition `.*`.
+- `condition` is the regex TTSR trigger field; legacy `ttsr_trigger` / `ttsrTrigger` are accepted as fallback inputs during parsing.
+- `astCondition` is the ast-grep trigger field: a string or list of structural patterns, kept verbatim (no glob inference). It only matches on edit/write tool streams, where the language is inferred from the file path. A rule may set `condition`, `astCondition`, or both.
+- `scope` narrows TTSR matching scope. A `condition` token that looks like a file glob becomes `tool:edit(<glob>)` and `tool:write(<glob>)` scope entries plus catch-all condition `.*`; `astCondition` tokens never trigger this shorthand.
 - `interruptMode` can override the global TTSR interrupt mode for the rule.
 
 ## 7. System prompt inclusion path
@@ -240,18 +242,18 @@ This is advisory/contextual: prompt text asks the model to read applicable rules
 
 ## 8. `rule://` internal URL behavior
 
-`RuleProtocolHandler` is registered with:
+`RuleProtocolHandler` resolves against the process-global active-rule snapshot
+installed once per top-level session in `sdk.ts`:
 
 ```ts
-new RuleProtocolHandler({
-  getRules: () => [...rulebookRules, ...alwaysApplyRules],
-});
+setActiveRules([...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()]);
 ```
 
 Implications:
 
-- `rule://<name>` resolves against both **rulebookRules** and **alwaysApplyRules**.
-- TTSR-only rules and rules with no description and no `alwaysApply` are not addressable via `rule://`.
+- `rule://<name>` resolves against **rulebookRules**, **alwaysApplyRules**, and **registered TTSR rules**.
+- TTSR rules are bucketed out before rulebook/always, but `ttsrManager.getRules()` re-adds them to the snapshot so a triggered rule (e.g. a builtin) stays addressable for re-reading.
+- Rules with no description, no `alwaysApply`, and no accepted TTSR condition are not addressable via `rule://`.
 - Resolution is exact name match.
 - Unknown names return error listing available rule names.
 - Returned content is raw `rule.content` (frontmatter stripped), content type `text/markdown`.
@@ -260,5 +262,5 @@ Implications:
 
 1. The rule providers currently loaded for `rules` are `native`, `agents`, `cursor`, `windsurf`, `cline`, and embedded `builtin-defaults`; provider files for other tools may parse other config formats but do not register rule loaders.
 2. `globs` metadata is surfaced to prompt/UI and is used as a global path gate for TTSR matching, but it is not used to automatically select rulebook rules for `rule://`.
-3. Rule selection for `rule://` includes rulebook and always-apply rules, but not TTSR-only rules.
+3. Rule selection for `rule://` includes rulebook, always-apply, and registered TTSR rules (so a triggered TTSR rule can be re-read), but not rules that registered no condition and carry neither a description nor `alwaysApply`.
 4. Discovery warnings (`loadCapability("rules").warnings`) are produced but `createAgentSession` does not currently surface/log them in this path.
