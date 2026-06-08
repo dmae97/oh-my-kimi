@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed an auto-compaction dead loop when `compaction.strategy` was `shake` and the configured threshold was low enough that a single shake pass could not bring the context below it (e.g. a 50K-token threshold on a session well above it). Each pass auto-continued, the next agent turn re-triggered the threshold check, and the second shake had nothing new to drop, so the session spun forever. The shake recovery path now estimates post-shake context and, when it is still above the threshold (or shake reclaimed nothing on overflow recovery), surfaces a one-shot warning and falls back to the summarization-driven `context-full` compaction so progress actually resumes ([#2119](https://github.com/can1357/oh-my-pi/issues/2119)).
 ### Added
 
 - Added a `/plan-review` command that manually (re-)opens the plan-review overlay while plan mode is active. Since there is no fixed plan filename, it reviews the newest `local://<slug>-plan.md` the agent wrote — useful for pulling the review back up after dismissing it, or reviewing a plan the agent wrote without calling `resolve`.
