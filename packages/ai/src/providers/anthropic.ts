@@ -1710,7 +1710,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					// the existing retry/error path engages instead of shipping bogus args.
 					if (
 						blocks.some(
-							block => block.type === "toolCall" && (block as { partialJson?: string }).partialJson !== undefined,
+							block =>
+								block.type === "toolCall" && (block as { partialJson?: string }).partialJson !== undefined,
 						)
 					) {
 						throw createAnthropicStreamEnvelopeError("stream ended with an unterminated tool_use block");

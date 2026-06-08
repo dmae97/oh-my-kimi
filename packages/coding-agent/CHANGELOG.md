@@ -12,8 +12,13 @@
 - Changed image marker format to include pixel dimensions when available (`[Image #N, WxH]`), falling back to bare `[Image #N]` when header cannot be decoded
 - Changed the prompt editor to highlight large-paste placeholders (`[Paste #N, +X lines]`/`[Paste #N, Y chars]`) with the same accent styling as image references (bold, no hyperlink), and to delete image/paste markers atomically: a single backspace or forward-delete removes the whole marker instead of leaving a broken `[Paste #N, +X lines` behind.
 
+### Changed
+
+- Browser tool helpers (`tab.*`) are now individually tracked and time-bounded: when a `run` cell hits its budget, the timeout error names the still-running helper(s) and how long each has been stalled (e.g. `... (stalled on tab.screenshot({ selector: ".x" }) (29.9s))`) instead of the opaque `Browser code execution timed out after 30000ms`. Page-coupled helpers that should resolve quickly (`observe`, `screenshot`, `extract`) also fail fast with a named per-op error at `min(cellBudget, 20s)`, leaving budget for the rest of the cell, rather than silently consuming the whole budget.
+
 ### Fixed
 
+- Fixed `tab.screenshot({ selector })` hanging for the entire cell budget on continuously-animating pages (WebGL / `backdrop-filter` "glass" effects). The element-screenshot path no longer routes through puppeteer's `scrollIntoViewIfNeeded()`, whose `IntersectionObserver` promise can stall indefinitely under heavy rendering; it now does a single instant `scrollIntoView` and captures with `scrollIntoView: false` (relying on `captureBeyondViewport`), so off-screen elements are still captured without the stall.
 - Fixed follow-up message submissions to forward pending clipboard-pasted images to `session.prompt` in both streaming and non-streaming flows
 - Fixed follow-up handling to clear consumed clipboard image state after submission so pasted images are not silently carried into later messages
 - Fixed clipboard-pasted images being rejected when steering or following up during compaction. Instead of bailing with "Retry after it completes to send images", the message and its images are now queued via `queueCompactionMessage` and forwarded to the session (steer/follow-up/prompt) when the compaction queue flushes.
