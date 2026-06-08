@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `maxAddedRunContext` option to control how many added lines are shown at each side of collapsed inserted runs, with `maxUnchangedRun` kept as a backward-compatible alias
+
+### Changed
+
+- Changed `buildCompactDiffPreview` to omit removed lines from the preview while preserving removal counts for offset tracking
+- Changed `buildCompactDiffPreview` to collapse long contiguous added runs with a `+<firstHiddenLine>…` marker, keeping only the first and last `maxAddedRunContext` lines visible
+
+### Fixed
+
+- Fixed compact edit previews to omit deleted content, keep visible lines anchored to the current file, and collapse long inserted runs with a `+N…` elision marker.
+- Fixed `buildCompactDiffPreview` to drop context-gap placeholder rows (`...`/`…`) from the model-facing preview, relying on the jump in emitted line numbers to convey the elision. The placeholder was byte-identical to a genuine context line whose text is `...`, and wasted a row; the diff producer still emits the marker for the human-facing TUI diff.
+
 ## [15.10.3] - 2026-06-08
 
 ### Added

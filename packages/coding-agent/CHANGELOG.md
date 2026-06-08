@@ -6,6 +6,7 @@
 - Fixed follow-up message submissions to forward pending clipboard-pasted images to `session.prompt` in both streaming and non-streaming flows
 - Fixed follow-up handling to clear consumed clipboard image state after submission so pasted images are not silently carried into later messages
 - Fixed clipboard-pasted images being rejected when steering or following up during compaction. Instead of bailing with "Retry after it completes to send images", the message and its images are now queued via `queueCompactionMessage` and forwarded to the session (steer/follow-up/prompt) when the compaction queue flushes.
+- Fixed edit tool result previews to show only current-file lines and collapse long inserted blocks instead of echoing removed content.
 
 ## [15.10.4] - 2026-06-08
 
