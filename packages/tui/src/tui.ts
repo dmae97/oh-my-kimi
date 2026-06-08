@@ -560,8 +560,12 @@ export class TUI extends Container {
 	// describes the screen. Tracking only the dimension delta misses this.
 	#resizeEventPending = false;
 	// Active multiplexer SIGWINCH debounce. Reset on each event so the timer
-	// only fires once the pane stops resizing.
+	// only fires once the pane stops resizing. Forced renders (resetDisplay,
+	// finishSixelProbe, …) issued during the settle window route through the
+	// same timer; their `clearScrollback` intent is OR'd into the deferred
+	// flag below so the settled paint still honours every caller's request.
 	#multiplexerResizeTimer: RenderTimer | undefined;
+	#deferredForcedClearScrollback = false;
 	#stopped = false;
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
@@ -883,34 +887,17 @@ export class TUI extends Container {
 				// event races those mid-reflow paints: the multiplexer's catch-up
 				// paint then partially overwrites the TUI output, which the user sees
 				// as a viewport flash or blank screen before the next throttled
-				// frame arrives (issue #2088). Coalesce SIGWINCHes inside the settle
-				// window so a single forced render fires once the pane is quiet —
-				// `#resizeEventPending` is set on every event so the eventual render
-				// still classifies as a resize.
+				// frame arrives (issue #2088). `#armMultiplexerResizeTimer` coalesces
+				// SIGWINCHes (and any forced repaints arriving during the settle
+				// window) into a single render once the pane is quiet —
+				// `#resizeEventPending` is set first so the eventual render still
+				// classifies as a resize.
 				this.#resizeEventPending = true;
 				if (!isMultiplexerSession()) {
 					this.requestRender(true);
 					return;
 				}
-				// Supersede any queued throttled render. A streamed-token tick that
-				// landed `requestRender(false)` in the same 30fps frame as the
-				// SIGWINCH would otherwise fire inside this settle window and paint
-				// at the new geometry while the multiplexer is still reflowing —
-				// the immediate-force path canceled `#renderTimer` via
-				// `#prepareForcedRender`, and the debounce path must do the same.
-				if (this.#renderTimer) {
-					this.#renderTimer.cancel();
-					this.#renderTimer = undefined;
-				}
-				this.#renderRequested = false;
-				if (this.#multiplexerResizeTimer) {
-					this.#multiplexerResizeTimer.cancel();
-				}
-				this.#multiplexerResizeTimer = this.#renderScheduler.scheduleRender(() => {
-					this.#multiplexerResizeTimer = undefined;
-					if (this.#stopped) return;
-					this.requestRender(true);
-				}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
+				this.#armMultiplexerResizeTimer(false);
 			},
 		);
 		for (const listener of this.#startListeners) {
@@ -1117,6 +1104,7 @@ export class TUI extends Container {
 			this.#multiplexerResizeTimer.cancel();
 			this.#multiplexerResizeTimer = undefined;
 		}
+		this.#deferredForcedClearScrollback = false;
 		// Place the parent shell on the first line after the rendered content. When
 		// that line is still inside the viewport, moving there and writing `\r` is
 		// enough; emitting `\r\n` would create an extra blank row. If the content
@@ -1191,6 +1179,15 @@ export class TUI extends Container {
 	resetDisplay(): void {
 		if (this.#stopped) return;
 		this.invalidate();
+		// A reset that lands inside a tmux/screen/zellij resize burst would
+		// paint mid-reflow and re-introduce the flash race (issue #2088).
+		// Fold it into the in-flight debounce instead; the settled paint runs
+		// the same `#prepareForcedRender(!isMultiplexerSession())` path via
+		// `requestRender(true)`, so the clear-scrollback intent is preserved.
+		if (this.#multiplexerResizeTimer) {
+			this.#armMultiplexerResizeTimer(!isMultiplexerSession());
+			return;
+		}
 		this.#prepareForcedRender(!isMultiplexerSession());
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;
@@ -1202,6 +1199,19 @@ export class TUI extends Container {
 		const allowUnknownViewportMutation = options?.allowUnknownViewportMutation === true;
 		this.#allowUnknownViewportMutationOnNextRender ||= allowUnknownViewportMutation;
 		if (force) {
+			// Forced repaints landing inside the multiplexer resize debounce
+			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
+			// `requestRender(true)`) would paint into a still-reflowing pane
+			// and reintroduce the flash race. Fold them into the in-flight
+			// debounce while preserving the caller's `clearScrollback` intent
+			// for the settled paint. The timer's own callback clears
+			// `#multiplexerResizeTimer` before re-entering `requestRender(true)`,
+			// so this guard only catches external callers — the deferred render
+			// itself proceeds straight to `#prepareForcedRender`.
+			if (this.#multiplexerResizeTimer) {
+				this.#armMultiplexerResizeTimer(options?.clearScrollback === true);
+				return;
+			}
 			this.#prepareForcedRender(options?.clearScrollback === true);
 			this.#renderRequested = true;
 			this.#renderScheduler.scheduleImmediate(() => {
@@ -1217,6 +1227,38 @@ export class TUI extends Container {
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
+	}
+
+	/**
+	 * Arm or extend the multiplexer-resize debounce so a single forced render
+	 * fires once the pane is quiet. Called by the SIGWINCH callback on every
+	 * resize event, and by `requestRender(true)` / `resetDisplay()` when they
+	 * land inside an in-flight settle window. Each call cancels the prior
+	 * timer, supersedes any queued throttled render (otherwise it would race
+	 * tmux's mid-reflow paint), and OR's the caller's `clearScrollback`
+	 * intent into `#deferredForcedClearScrollback` — the timer's callback
+	 * consumes that flag exactly once when it re-enters `requestRender(true)`.
+	 */
+	#armMultiplexerResizeTimer(clearScrollback: boolean): void {
+		this.#deferredForcedClearScrollback ||= clearScrollback;
+		if (this.#renderTimer) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+		}
+		this.#renderRequested = false;
+		if (this.#multiplexerResizeTimer) {
+			this.#multiplexerResizeTimer.cancel();
+		}
+		this.#multiplexerResizeTimer = this.#renderScheduler.scheduleRender(() => {
+			this.#multiplexerResizeTimer = undefined;
+			if (this.#stopped) {
+				this.#deferredForcedClearScrollback = false;
+				return;
+			}
+			const deferredClearScrollback = this.#deferredForcedClearScrollback;
+			this.#deferredForcedClearScrollback = false;
+			this.requestRender(true, { clearScrollback: deferredClearScrollback });
+		}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
 	}
 	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =

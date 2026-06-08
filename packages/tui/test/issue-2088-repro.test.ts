@@ -229,4 +229,77 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 			}
 		});
 	});
+
+	it("defers a forced repaint that lands inside the multiplexer settle window", async () => {
+		await withEnvPatch(TMUX_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const baselineRedraws = tui.fullRedraws;
+				const writes = captureWrites(term);
+
+				// A SIGWINCH starts the debounce. Then a `requestRender(true)`
+				// (e.g. from finishSixelProbe or an image-budget eviction)
+				// arrives mid-window. Without deferral it would paint
+				// immediately into a still-reflowing pane.
+				term.resize(80, 10);
+				await Bun.sleep(10);
+				tui.requestRender(true);
+
+				// Inside the window: still no paint. The forced render was
+				// folded into the in-flight debounce.
+				await Bun.sleep(20);
+				expect(tui.fullRedraws).toBe(baselineRedraws);
+				expect(writes.length).toBe(0);
+
+				// After the window: exactly one settled paint at the final
+				// geometry.
+				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
+				await settle(term);
+				expect(tui.fullRedraws - baselineRedraws).toBe(1);
+				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("defers resetDisplay() that lands inside the multiplexer settle window", async () => {
+		await withEnvPatch(TMUX_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const baselineRedraws = tui.fullRedraws;
+				const writes = captureWrites(term);
+
+				term.resize(80, 10);
+				await Bun.sleep(10);
+				tui.resetDisplay();
+
+				// resetDisplay normally repaints synchronously; here it must
+				// route through the multiplexer debounce so no paint lands
+				// while tmux is still reflowing.
+				await Bun.sleep(20);
+				expect(tui.fullRedraws).toBe(baselineRedraws);
+				expect(writes.length).toBe(0);
+
+				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
+				await settle(term);
+				expect(tui.fullRedraws - baselineRedraws).toBe(1);
+				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });
