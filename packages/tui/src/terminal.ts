@@ -10,7 +10,7 @@ const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 
 /**
- * Maximum bytes per `process.stdout.write` call on Windows.
+ * Maximum encoded UTF-8 bytes per `process.stdout.write` call on Windows.
  *
  * Windows ConPTY ties viewport tracking to per-`WriteFile` boundaries: when a
  * single write exceeds ~32-64 KB, the pseudo-console stops following the
@@ -20,43 +20,96 @@ const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
  * first ~30 lines until any focus event forces the host to re-query the
  * cursor. The data is delivered correctly — it's purely a viewport-sync bug.
  *
- * 8 KiB is well below the 32 KiB threshold reported on Windows Terminal and
- * leaves headroom for the other ConPTY hosts (Tabby, Hyper, VS Code) where
- * the exact limit is undocumented. The cost is a handful of extra syscalls
- * per full paint — invisible compared to the cost of the paint itself.
+ * The cap is on **encoded UTF-8 bytes**, not JS code units, because
+ * `process.stdout.write(string)` UTF-8-encodes before handing off to
+ * `WriteFile`. A pure-CJK transcript row encodes to ~3 bytes per BMP code
+ * unit, so a code-unit-based cap of 16 KiB could land at ~48 KiB of actual
+ * `WriteFile` traffic and reintroduce the #2034 parked-viewport bug for
+ * non-ASCII content.
+ *
+ * 16 KiB is half the smallest observed Windows Terminal threshold (32 KiB),
+ * which keeps the per-write parked-viewport bug fixed by #2034 while halving
+ * the WriteFile count on multi-megabyte paints (a 3 MB session resume splits
+ * into ~192 chunks instead of ~384). Fewer WriteFiles means fewer chances for
+ * WT's viewport-following logic to lose track of the cursor during the burst,
+ * which mitigates the residual mid-paint drift the original 8 KiB cap left
+ * behind (#2095). Still well clear of the threshold so the other ConPTY hosts
+ * (Tabby, Hyper, VS Code) — where the exact limit is undocumented — keep
+ * their safety margin.
  */
-const MAX_CONPTY_WRITE_CHUNK = 8 * 1024;
+const MAX_CONPTY_WRITE_CHUNK_BYTES = 16 * 1024;
 
 /**
- * Split `data` into chunks no larger than `maxChunkSize`, preferring a line
- * boundary (`\n`) as the cut point so escape sequences (which never contain
- * `\n`) stay intact. The TUI's full-paint buffers are line-structured
- * (`buffer += "\r\n"` between rows), so a newline almost always exists within
- * the window. The fallback for a buffer with no newline in range is a hard
- * cut at `maxChunkSize`: the ConPTY viewport bug from a single oversized
- * write is strictly worse than a one-frame escape-sequence glitch on a buffer
- * the renderer effectively never produces.
+ * Split `data` into chunks whose encoded UTF-8 byte length is no greater than
+ * `maxChunkBytes`, preferring a line boundary (`\n`) as the cut point so
+ * escape sequences (which never contain `\n`) stay intact. The TUI's
+ * full-paint buffers are line-structured (`buffer += "\r\n"` between rows),
+ * so a newline almost always exists within the window. The fallback for a
+ * buffer with no newline in range is a hard cut at the last UTF-8 code-point
+ * boundary that still fits — the ConPTY viewport bug from a single oversized
+ * write is strictly worse than a one-frame escape-sequence glitch on a
+ * buffer the renderer effectively never produces.
+ *
+ * UTF-16 code units are walked manually rather than measuring with
+ * `Buffer.byteLength` per slice candidate: each code unit's UTF-8 width is
+ * known from its value (BMP `<0x80` → 1, `<0x800` → 2, surrogate pair → 4
+ * bytes across two units, other BMP → 3), and surrogate pairs are kept
+ * together so the chunker never splits a non-BMP character.
  *
  * Exported for unit testing of the chunking contract; `#safeWrite` is the
  * sole production caller.
  */
-export function chunkForConPTY(data: string, maxChunkSize: number = MAX_CONPTY_WRITE_CHUNK): string[] {
-	if (data.length <= maxChunkSize) return [data];
+export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_WRITE_CHUNK_BYTES): string[] {
+	// Fast path: whole buffer fits in one write.
+	if (Buffer.byteLength(data, "utf8") <= maxChunkBytes) return [data];
 	const chunks: string[] = [];
+	const len = data.length;
 	let pos = 0;
-	while (pos < data.length) {
-		const remaining = data.length - pos;
-		if (remaining <= maxChunkSize) {
-			chunks.push(data.slice(pos));
-			break;
+	while (pos < len) {
+		let bytes = 0;
+		// Index just past the most recent `\n` we've consumed inside [pos, i):
+		// the natural cut point that leaves escape sequences intact.
+		let lastNewlineEnd = -1;
+		let i = pos;
+		while (i < len) {
+			const cu = data.charCodeAt(i);
+			let cuLen = 1;
+			let cuBytes: number;
+			if (cu < 0x80) {
+				cuBytes = 1;
+			} else if (cu < 0x800) {
+				cuBytes = 2;
+			} else if (cu >= 0xd800 && cu < 0xdc00) {
+				// High surrogate: pair with the following low surrogate (4 bytes
+				// across two code units); an unpaired surrogate UTF-8-encodes as
+				// the 3-byte U+FFFD replacement character.
+				const next = i + 1 < len ? data.charCodeAt(i + 1) : 0;
+				if (next >= 0xdc00 && next < 0xe000) {
+					cuBytes = 4;
+					cuLen = 2;
+				} else {
+					cuBytes = 3;
+				}
+			} else {
+				// BMP non-surrogate or unpaired low surrogate → 3 bytes.
+				cuBytes = 3;
+			}
+			if (bytes + cuBytes > maxChunkBytes && i > pos) {
+				// Would overflow the cap. Cut at the last newline if we found one,
+				// otherwise hard-cut at the current code-point boundary.
+				const cut = lastNewlineEnd > pos ? lastNewlineEnd : i;
+				chunks.push(data.slice(pos, cut));
+				pos = cut;
+				break;
+			}
+			bytes += cuBytes;
+			i += cuLen;
+			if (cu === 0x0a) lastNewlineEnd = i;
 		}
-		const windowEnd = pos + maxChunkSize;
-		// Prefer the last newline inside the window so escape sequences stay
-		// intact within their chunk; hard-cut at `windowEnd` otherwise.
-		const nl = data.lastIndexOf("\n", windowEnd - 1);
-		const cut = nl >= pos ? nl + 1 : windowEnd;
-		chunks.push(data.slice(pos, cut));
-		pos = cut;
+		if (i >= len) {
+			chunks.push(data.slice(pos));
+			pos = len;
+		}
 	}
 	return chunks;
 }
@@ -202,7 +255,17 @@ export interface Terminal {
 	onPrivateModeReport?(callback: (mode: number, supported: boolean) => void): void;
 }
 
-function isWindowsSubsystemForLinux(): boolean {
+/**
+ * True when stdout flows through a ConPTY pseudo-console (native win32, or
+ * Linux running under WSL where stdout still crosses into ConPTY at the
+ * `wslhost` boundary). ConPTY hosts share the per-WriteFile viewport-tracking
+ * quirks documented above and on {@link MAX_CONPTY_WRITE_CHUNK_BYTES}, so both
+ * `#safeWrite` and the renderer's post-big-paint settle gate hang off this
+ * single predicate.
+ */
+export function isConPTYHosted(): boolean {
+	if (process.platform === "win32") return true;
+	// WSL: stdout still crosses into ConPTY at the `wslhost` boundary.
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
 }
 
@@ -349,7 +412,8 @@ export class ProcessTerminal implements Terminal {
 		// Windows Terminal under WSL has been observed to close the hosting tab
 		// after repeated OSC 11/DA1 probes. Keep the initial/event-driven probes,
 		// but avoid background polling there.
-		if (!isWindowsSubsystemForLinux()) {
+		const isWSL = process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+		if (!isWSL) {
 			this.#startOsc11Poll();
 		}
 
@@ -1090,10 +1154,12 @@ export class ProcessTerminal implements Terminal {
 			// WSL — `process.platform === "linux"` there, but stdout still
 			// crosses into ConPTY at the `wslhost` boundary, so the same per-
 			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
-			// path. See #2034.
-			const conptyHosted = process.platform === "win32" || isWindowsSubsystemForLinux();
-			if (conptyHosted && data.length > MAX_CONPTY_WRITE_CHUNK) {
-				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK)) {
+			// path. The cap is on encoded UTF-8 bytes, not JS code units, because
+			// `process.stdout.write(string)` UTF-8-encodes before `WriteFile`,
+			// and a code-unit cap would let CJK transcript rows expand past the
+			// threshold. See #2034 and #2095.
+			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
+				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
 					process.stdout.write(chunk);
 				}
 			} else {

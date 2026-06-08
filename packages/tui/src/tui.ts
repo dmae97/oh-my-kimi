@@ -17,7 +17,7 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
-import type { Terminal } from "./terminal";
+import { isConPTYHosted, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
 	ImageProtocol,
@@ -494,6 +494,26 @@ export class TUI extends Container {
 	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
 	// a single forced render lets the multiplexer settle first.
 	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
+	// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
+	// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
+	// a transcript that overflows the viewport, scroll-pushing everything past
+	// the last `height` rows into native scrollback. Windows Terminal's
+	// viewport-follow logic gets lossy during that burst: spinner/blink-driven
+	// `requestRender(false)` calls firing inside the window each produce another
+	// diff write, and the WT host processes them faster than its viewport
+	// tracker can keep up — the visible tail ends up parked a few rows above
+	// the actual last row until any focus event (Alt+Tab) forces a host repaint.
+	// Coalescing every non-forced render inside this window into a single
+	// trailing render lets the host fully settle the big paint before any
+	// follow-up writes touch the buffer. The first-ever `initial` paint is
+	// deliberately exempt: nothing has been on screen yet, so no drift can
+	// have accumulated, and tests that start the TUI over an over-tall
+	// component depend on the next paint firing without delay. Only armed on
+	// ConPTY hosts (`isConPTYHosted()`); other terminals do not exhibit the
+	// drift and would just see an unnecessary post-paint latency. See #2095.
+	static readonly #CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
+	#postFullPaintSettleUntilMs = 0;
+	#postFullPaintSettleTimer: RenderTimer | undefined;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	#hardwareCursorState: HardwareCursorState | null = null;
@@ -1106,6 +1126,7 @@ export class TUI extends Container {
 			this.#multiplexerResizeTimer.cancel();
 			this.#multiplexerResizeTimer = undefined;
 		}
+		this.#clearPostFullPaintSettle();
 		this.#deferredForcedClearScrollback = false;
 		// Place the parent shell on the first line after the rendered content. When
 		// that line is still inside the viewport, moving there and writing `\r` is
@@ -1214,6 +1235,10 @@ export class TUI extends Container {
 				this.#armMultiplexerResizeTimer(options?.clearScrollback === true);
 				return;
 			}
+			// A forced render preempts the post-full-paint ConPTY settle: it owns
+			// the next paint and is going to redraw the buffer anyway, so the
+			// trailing coalesced render queued by the settle would only race it.
+			this.#clearPostFullPaintSettle();
 			this.#prepareForcedRender(options?.clearScrollback === true);
 			this.#renderRequested = true;
 			this.#renderScheduler.scheduleImmediate(() => {
@@ -1225,6 +1250,27 @@ export class TUI extends Container {
 				this.#doRender();
 			});
 			return;
+		}
+		// Coalesce non-forced renders inside the post-full-paint ConPTY settle
+		// window into one trailing render. Spinner/blink/streaming components
+		// otherwise fire `requestRender(false)` at 30 Hz while the host is still
+		// catching up with the previous big paint, and each follow-up viewport
+		// repaint nudges Windows Terminal's viewport tracker further off the
+		// last row (see #2095).
+		if (this.#postFullPaintSettleUntilMs > 0) {
+			const now = this.#renderScheduler.now();
+			if (now < this.#postFullPaintSettleUntilMs) {
+				if (this.#postFullPaintSettleTimer === undefined) {
+					this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
+						this.#postFullPaintSettleTimer = undefined;
+						this.#postFullPaintSettleUntilMs = 0;
+						if (this.#stopped) return;
+						this.requestRender(false);
+					}, this.#postFullPaintSettleUntilMs - now);
+				}
+				return;
+			}
+			this.#postFullPaintSettleUntilMs = 0;
 		}
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
@@ -1261,6 +1307,64 @@ export class TUI extends Container {
 			this.#deferredForcedClearScrollback = false;
 			this.requestRender(true, { clearScrollback: deferredClearScrollback });
 		}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
+	}
+
+	/**
+	 * Arm the post-full-paint settle window after an `#emitFullPaint` that
+	 * pushed content into native scrollback on a ConPTY host. Idempotent inside
+	 * the window: a later overflowing paint extends `until` to the later
+	 * deadline so back-to-back big paints do not double-fire the trailing
+	 * coalesced render, and the existing deferred timer is rescheduled to the
+	 * later deadline.
+	 *
+	 * Mid-composition callers (most notably `ImageBudget.endPass()`, which can
+	 * call `requestRender()` from inside the in-flight paint when a new image
+	 * trips the budget) queue their render *before* the settle exists, so they
+	 * fall through the gate and set `#renderRequested` / `#renderTimer` on the
+	 * 30 Hz throttle. Without absorbing those, the throttled follow-up fires
+	 * inside the 150 ms quiet window and reintroduces the cascade the settle
+	 * was meant to stop. Cancel both, then eagerly arm the trailing settle
+	 * timer so the in-flight request still rides one coalesced render at the
+	 * end of the window. See #2095.
+	 */
+	#armPostFullPaintSettle(): void {
+		if (!isConPTYHosted()) return;
+		const until = this.#renderScheduler.now() + TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS;
+		if (until <= this.#postFullPaintSettleUntilMs) return;
+		this.#postFullPaintSettleUntilMs = until;
+		const hadPendingRender = this.#renderRequested || this.#renderTimer !== undefined;
+		// Reclaim any render that was queued during the in-flight composition:
+		// `#renderRequested` was set before the settle existed and would
+		// otherwise fire on the standard throttle inside the window.
+		this.#renderRequested = false;
+		if (this.#renderTimer) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+		}
+		if (this.#postFullPaintSettleTimer) {
+			this.#postFullPaintSettleTimer.cancel();
+			this.#postFullPaintSettleTimer = undefined;
+		}
+		if (hadPendingRender) {
+			// Replay the absorbed request via the trailing settle timer so the
+			// caller's render still happens — just deferred to the end of the
+			// window. Subsequent `requestRender(false)` calls during the
+			// settle see this timer and fold into it (existing gate at L1263).
+			this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
+				this.#postFullPaintSettleTimer = undefined;
+				this.#postFullPaintSettleUntilMs = 0;
+				if (this.#stopped) return;
+				this.requestRender(false);
+			}, TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
+		}
+	}
+
+	#clearPostFullPaintSettle(): void {
+		if (this.#postFullPaintSettleTimer) {
+			this.#postFullPaintSettleTimer.cancel();
+			this.#postFullPaintSettleTimer = undefined;
+		}
+		this.#postFullPaintSettleUntilMs = 0;
 	}
 	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =
@@ -1927,6 +2031,7 @@ export class TUI extends Container {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
 				});
+				if (lines.length > height) this.#armPostFullPaintSettle();
 				this.#hasEverRendered = true;
 				return;
 			case "historyRebuild":
@@ -1935,6 +2040,7 @@ export class TUI extends Container {
 					clearViewport: true,
 					clearScrollback: !isMultiplexerSession(),
 				});
+				if (lines.length > height) this.#armPostFullPaintSettle();
 				return;
 			case "overlayRebuild":
 				this.#clearNativeScrollbackDirty();
@@ -1945,6 +2051,7 @@ export class TUI extends Container {
 					clearScrollback: !isMultiplexerSession(),
 				});
 				this.#emitViewportRepaint(lines, width, height, cursorPos);
+				if (baseLines.length > height) this.#armPostFullPaintSettle();
 				return;
 			case "liveRegionPinned":
 				this.#emitLiveRegionPinnedRepaint(
