@@ -103,8 +103,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 				id: "call-minimax-1",
 				name: "edit",
 				arguments: {
-					input:
-						'[foo.ts#A1B2]\nreplace 91..91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
+					input: '[foo.ts#A1B2]\nreplace 91..91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
 				},
 			},
 		]);

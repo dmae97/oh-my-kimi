@@ -878,7 +878,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								// payloads nor lose delta fragments. Degenerates to the previous "last wins"
 								// behaviour for the common single-chunk shape (no prior value to merge with).
 								const prev =
-									block.partialArgs && typeof block.partialArgs === "object" && !Array.isArray(block.partialArgs)
+									block.partialArgs &&
+									typeof block.partialArgs === "object" &&
+									!Array.isArray(block.partialArgs)
 										? (block.partialArgs as Record<string, unknown>)
 										: undefined;
 								const merged: Record<string, unknown> = prev ? { ...prev } : {};
