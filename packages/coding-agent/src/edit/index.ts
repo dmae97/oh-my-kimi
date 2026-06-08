@@ -306,8 +306,9 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #editMode?: EditMode;
 	readonly #dedupDiagnostics: boolean;
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
-	/** Per-path edit counter. A late-diagnostics entry captures the version at
-	 *  fetch time; a newer edit to the same path bumps it, marking the entry stale. */
+	/** Fallback per-path mutation counter used only when the session does not expose
+	 *  a shared one. Prefer `session.bumpFileMutationVersion` so write (and any other
+	 *  tool) mutating the same file also invalidates pending late-diagnostics. */
 	readonly #editVersionByPath = new Map<string, number>();
 
 	constructor(private readonly session: ToolSession) {
@@ -505,8 +506,7 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const deferredController = new AbortController();
-		const editVersion = (this.#editVersionByPath.get(path) ?? 0) + 1;
-		this.#editVersionByPath.set(path, editVersion);
+		const editVersion = this.#bumpFileVersion(path);
 		return {
 			onDeferredDiagnostics: (lateDiagnostics: FileDiagnosticsResult) => {
 				this.#pendingDeferredFetches.delete(path);
@@ -535,8 +535,22 @@ export class EditTool implements AgentTool<TInput> {
 			messages: effective.messages ?? [],
 			errored: effective.errored,
 			// Drop at flush time if a later edit to the same file superseded this fetch.
-			isStale: () => this.#editVersionByPath.get(path) !== editVersion,
+			isStale: () => this.#fileVersion(path) !== editVersion,
 		};
 		this.session.queueDeferredDiagnostics?.(entry);
+	}
+
+	/** Bump the file's mutation counter (session-global when available). */
+	#bumpFileVersion(path: string): number {
+		if (this.session.bumpFileMutationVersion) return this.session.bumpFileMutationVersion(path);
+		const next = (this.#editVersionByPath.get(path) ?? 0) + 1;
+		this.#editVersionByPath.set(path, next);
+		return next;
+	}
+
+	/** Read the file's current mutation counter (session-global when available). */
+	#fileVersion(path: string): number {
+		if (this.session.getFileMutationVersion) return this.session.getFileMutationVersion(path);
+		return this.#editVersionByPath.get(path) ?? 0;
 	}
 }
