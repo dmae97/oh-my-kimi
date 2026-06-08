@@ -484,6 +484,16 @@ export class TUI extends Container {
 	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
+	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
+	// SIGWINCH (and `process.stdout` already reports the new geometry) before
+	// the multiplexer finishes repainting the pane at the new size, and
+	// drag-resize/pane-close animations fire several events in flight. A forced
+	// render on each SIGWINCH races those mid-reflow paints — the multiplexer's
+	// catch-up paint then partially overwrites the TUI output, which the user
+	// sees as a viewport flash or blank screen before the next throttled frame
+	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
+	// a single forced render lets the multiplexer settle first.
+	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	#hardwareCursorState: HardwareCursorState | null = null;
@@ -551,6 +561,13 @@ export class TUI extends Container {
 	// between the viewport and scrollback, so the previous frame no longer
 	// describes the screen. Tracking only the dimension delta misses this.
 	#resizeEventPending = false;
+	// Active multiplexer SIGWINCH debounce. Reset on each event so the timer
+	// only fires once the pane stops resizing. Forced renders (resetDisplay,
+	// finishSixelProbe, …) issued during the settle window route through the
+	// same timer; their `clearScrollback` intent is OR'd into the deferred
+	// flag below so the settled paint still honours every caller's request.
+	#multiplexerResizeTimer: RenderTimer | undefined;
+	#deferredForcedClearScrollback = false;
 	#stopped = false;
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
@@ -860,12 +877,29 @@ export class TUI extends Container {
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
-				// Repaint immediately rather than via the throttled path: a resize must
-				// clear and replay at the fresh geometry before the terminal's reflow
-				// settles into a state a throttled frame would race. Forced render skips
-				// the 30fps coalescing window, matching resetDisplay()'s prompt repaint.
+				// Real terminals deliver SIGWINCH (and the equivalent ConPTY
+				// notification) atomically with the new `process.stdout` geometry, so
+				// a forced render must fire immediately: it clears and replays at the
+				// fresh size before the terminal's reflow settles into a state a
+				// throttled frame would race. Multiplexer panes (tmux/screen/zellij)
+				// do not give that guarantee. The host receives SIGWINCH while the
+				// multiplexer is still mid-reflow — it has not finished repainting
+				// the pane buffer at the new size — and a drag-resize or pane-close
+				// animation fires several events in flight. Forcing a render on each
+				// event races those mid-reflow paints: the multiplexer's catch-up
+				// paint then partially overwrites the TUI output, which the user sees
+				// as a viewport flash or blank screen before the next throttled
+				// frame arrives (issue #2088). `#armMultiplexerResizeTimer` coalesces
+				// SIGWINCHes (and any forced repaints arriving during the settle
+				// window) into a single render once the pane is quiet —
+				// `#resizeEventPending` is set first so the eventual render still
+				// classifies as a resize.
 				this.#resizeEventPending = true;
-				this.requestRender(true);
+				if (!isMultiplexerSession()) {
+					this.requestRender(true);
+					return;
+				}
+				this.#armMultiplexerResizeTimer(false);
 			},
 		);
 		for (const listener of this.#startListeners) {
@@ -1068,6 +1102,11 @@ export class TUI extends Container {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
+		if (this.#multiplexerResizeTimer) {
+			this.#multiplexerResizeTimer.cancel();
+			this.#multiplexerResizeTimer = undefined;
+		}
+		this.#deferredForcedClearScrollback = false;
 		// Place the parent shell on the first line after the rendered content. When
 		// that line is still inside the viewport, moving there and writing `\r` is
 		// enough; emitting `\r\n` would create an extra blank row. If the content
@@ -1142,6 +1181,15 @@ export class TUI extends Container {
 	resetDisplay(): void {
 		if (this.#stopped) return;
 		this.invalidate();
+		// A reset that lands inside a tmux/screen/zellij resize burst would
+		// paint mid-reflow and re-introduce the flash race (issue #2088).
+		// Fold it into the in-flight debounce instead; the settled paint runs
+		// the same `#prepareForcedRender(!isMultiplexerSession())` path via
+		// `requestRender(true)`, so the clear-scrollback intent is preserved.
+		if (this.#multiplexerResizeTimer) {
+			this.#armMultiplexerResizeTimer(!isMultiplexerSession());
+			return;
+		}
 		this.#prepareForcedRender(!isMultiplexerSession());
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;
@@ -1153,6 +1201,19 @@ export class TUI extends Container {
 		const allowUnknownViewportMutation = options?.allowUnknownViewportMutation === true;
 		this.#allowUnknownViewportMutationOnNextRender ||= allowUnknownViewportMutation;
 		if (force) {
+			// Forced repaints landing inside the multiplexer resize debounce
+			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
+			// `requestRender(true)`) would paint into a still-reflowing pane
+			// and reintroduce the flash race. Fold them into the in-flight
+			// debounce while preserving the caller's `clearScrollback` intent
+			// for the settled paint. The timer's own callback clears
+			// `#multiplexerResizeTimer` before re-entering `requestRender(true)`,
+			// so this guard only catches external callers — the deferred render
+			// itself proceeds straight to `#prepareForcedRender`.
+			if (this.#multiplexerResizeTimer) {
+				this.#armMultiplexerResizeTimer(options?.clearScrollback === true);
+				return;
+			}
 			this.#prepareForcedRender(options?.clearScrollback === true);
 			this.#renderRequested = true;
 			this.#renderScheduler.scheduleImmediate(() => {
@@ -1170,6 +1231,37 @@ export class TUI extends Container {
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 	}
 
+	/**
+	 * Arm or extend the multiplexer-resize debounce so a single forced render
+	 * fires once the pane is quiet. Called by the SIGWINCH callback on every
+	 * resize event, and by `requestRender(true)` / `resetDisplay()` when they
+	 * land inside an in-flight settle window. Each call cancels the prior
+	 * timer, supersedes any queued throttled render (otherwise it would race
+	 * tmux's mid-reflow paint), and OR's the caller's `clearScrollback`
+	 * intent into `#deferredForcedClearScrollback` — the timer's callback
+	 * consumes that flag exactly once when it re-enters `requestRender(true)`.
+	 */
+	#armMultiplexerResizeTimer(clearScrollback: boolean): void {
+		this.#deferredForcedClearScrollback ||= clearScrollback;
+		if (this.#renderTimer) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+		}
+		this.#renderRequested = false;
+		if (this.#multiplexerResizeTimer) {
+			this.#multiplexerResizeTimer.cancel();
+		}
+		this.#multiplexerResizeTimer = this.#renderScheduler.scheduleRender(() => {
+			this.#multiplexerResizeTimer = undefined;
+			if (this.#stopped) {
+				this.#deferredForcedClearScrollback = false;
+				return;
+			}
+			const deferredClearScrollback = this.#deferredForcedClearScrollback;
+			this.#deferredForcedClearScrollback = false;
+			this.requestRender(true, { clearScrollback: deferredClearScrollback });
+		}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
+	}
 	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =
 			(this.#previousWidth > 0 && this.#previousWidth !== this.terminal.columns) ||
@@ -1191,6 +1283,13 @@ export class TUI extends Container {
 
 	#scheduleRender(): void {
 		if (this.#stopped || this.#renderTimer || !this.#renderRequested) {
+			return;
+		}
+		// Defer any new throttled render scheduled inside the multiplexer
+		// resize settle window: it would race tmux's mid-reflow pane repaint.
+		// `#renderRequested` stays set so the eventual forced render — armed
+		// by the SIGWINCH callback — picks up the latest component state.
+		if (this.#multiplexerResizeTimer) {
 			return;
 		}
 		const elapsed = this.#renderScheduler.now() - this.#lastRenderAt;
