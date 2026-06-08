@@ -654,7 +654,6 @@ export class AgentDashboard extends Container {
 		this.#buildLayout();
 	}
 
-
 	async #generateAgentFromDescription(rawDescription: string): Promise<void> {
 		const description = rawDescription.trim();
 		this.#createDescription = description;
