@@ -2271,7 +2271,6 @@ function resolveAnthropicAdaptiveEffort(
 	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
 }
 
-
 function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): string {
 	for (const message of messages) {
 		if (message.role !== "user") continue;

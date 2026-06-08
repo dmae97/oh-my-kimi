@@ -103,4 +103,48 @@ describe("LSP diagnostics freshness", () => {
 		expect(result?.errored).toBe(false);
 		expect(await Bun.file(filePath).text()).toBe("export const value = 2;\n");
 	});
+
+	it("settles on the latest unversioned publish when the server never echoes a version", async () => {
+		const filePath = path.join(tempDir.path(), "example.ts");
+		const uri = fileToUri(filePath);
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async (mockClient, syncedFilePath) => {
+			const syncedUri = fileToUri(syncedFilePath);
+			mockClient.diagnostics.delete(syncedUri);
+			const openFile = mockClient.openFiles.get(syncedUri);
+			if (openFile) {
+				openFile.version += 1;
+			} else {
+				mockClient.openFiles.set(syncedUri, { version: 1, languageId: "typescript" });
+			}
+		});
+		vi.spyOn(lspClient, "notifySaved").mockImplementation(async (mockClient, savedFilePath) => {
+			const savedUri = fileToUri(savedFilePath);
+			setTimeout(() => {
+				publishDiagnostics(mockClient, savedUri, [createDiagnostic("stale error")], null);
+			}, 10);
+			setTimeout(() => {
+				publishDiagnostics(mockClient, savedUri, [createDiagnostic("real error")], null);
+			}, 150);
+		});
+
+		const writethrough = createLspWritethrough(tempDir.path(), {
+			enableFormat: false,
+			enableDiagnostics: true,
+		});
+		const t0 = Date.now();
+		const result = await writethrough(filePath, "export const value: number = 'x';\n");
+		const elapsed = Date.now() - t0;
+
+		expect(result).toBeDefined();
+		expect(result?.errored).toBe(true);
+		expect(result?.messages.some(m => m.includes("real error"))).toBe(true);
+		expect(result?.messages.some(m => m.includes("stale error"))).toBe(false);
+		expect(elapsed).toBeLessThan(1500);
+	});
 });

@@ -158,7 +158,6 @@ function shouldTrimOpenAiCompactInputItem(item: Record<string, unknown>): boolea
 	return item.type === "function_call_output" || (item.type === "message" && item.role === "developer");
 }
 
-
 function shouldKeepOpenAiCompactOutputItem(item: Record<string, unknown>): boolean {
 	if (item.type === "compaction" || item.type === "compaction_summary") return true;
 	if (item.type !== "message") return false;

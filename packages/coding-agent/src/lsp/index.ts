@@ -309,7 +309,7 @@ const DIAGNOSTICS_SETTLE_MS = 250;
  * diagnostics before handing slow servers off to the deferred late-injection
  * channel. Keeps the common fast-server case inline while letting an edit
  * return promptly when a server (e.g. a large-monorepo tsserver) is slow to
- * publish version-fresh diagnostics.
+ * publish fresh diagnostics.
  */
 const INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 500;
 /**
@@ -477,27 +477,15 @@ interface WaitForDiagnosticsOptions {
 	signal?: AbortSignal;
 	minVersion?: number;
 	expectedDocumentVersion?: number;
-	allowUnversioned?: boolean;
-}
-
-function getAcceptedDiagnostics(
-	publishedDiagnostics: PublishedDiagnostics | undefined,
-	expectedDocumentVersion?: number,
-	allowUnversioned = true,
-): Diagnostic[] | undefined {
-	if (!publishedDiagnostics) {
-		return undefined;
-	}
-	if (expectedDocumentVersion === undefined) {
-		return publishedDiagnostics.diagnostics;
-	}
-	if (publishedDiagnostics.version === expectedDocumentVersion) {
-		return publishedDiagnostics.diagnostics;
-	}
-	if (allowUnversioned && publishedDiagnostics.version == null) {
-		return publishedDiagnostics.diagnostics;
-	}
-	return undefined;
+	/**
+	 * Quiescence window (ms). typescript-language-server never echoes the document
+	 * version (issue #983) and emits diagnostics from several sources at different
+	 * times, so there is no single "complete, version-matched" publish to gate on.
+	 * When the server does not exact-version-match, accept the latest publish only
+	 * after no newer one has arrived for this long, letting an in-flight pre-edit
+	 * publish be superseded by the fresh one.
+	 */
+	settleMs?: number;
 }
 
 async function waitForDiagnostics(
@@ -505,26 +493,35 @@ async function waitForDiagnostics(
 	uri: string,
 	options: WaitForDiagnosticsOptions = {},
 ): Promise<Diagnostic[]> {
-	const { timeoutMs = 3000, signal, minVersion, expectedDocumentVersion, allowUnversioned = true } = options;
+	const { timeoutMs = 3000, signal, minVersion, expectedDocumentVersion, settleMs = DIAGNOSTICS_SETTLE_MS } = options;
 	const start = Date.now();
+	let settledRef: PublishedDiagnostics | undefined;
+	let settledAt = 0;
 	while (Date.now() - start < timeoutMs) {
 		throwIfAborted(signal);
 		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
-		const diagnostics = getAcceptedDiagnostics(
-			client.diagnostics.get(uri),
-			expectedDocumentVersion,
-			allowUnversioned,
-		);
-		if (diagnostics !== undefined && versionOk) {
-			return diagnostics;
+		const published = client.diagnostics.get(uri);
+		if (published && versionOk) {
+			// Server honored our exact document version → authoritative, accept now.
+			if (expectedDocumentVersion !== undefined && published.version === expectedDocumentVersion) {
+				return published.diagnostics;
+			}
+			// Unversioned/mismatched publish: wait for the stream to go quiet so an
+			// in-flight publish for the pre-edit content is superseded by the fresh one.
+			if (published !== settledRef) {
+				settledRef = published;
+				settledAt = Date.now();
+			} else if (Date.now() - settledAt >= settleMs) {
+				return published.diagnostics;
+			}
 		}
-		await Bun.sleep(100);
+		await Bun.sleep(DIAGNOSTICS_POLL_MS);
 	}
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 	if (!versionOk) {
 		return [];
 	}
-	return getAcceptedDiagnostics(client.diagnostics.get(uri), expectedDocumentVersion, allowUnversioned) ?? [];
+	return client.diagnostics.get(uri)?.diagnostics ?? [];
 }
 
 /** Project type detection result */
@@ -629,7 +626,6 @@ interface GetDiagnosticsForFileOptions {
 	signal?: AbortSignal;
 	minVersions?: ServerVersionMap;
 	expectedDocumentVersions?: ServerVersionMap;
-	allowUnversionedLspDiagnostics?: boolean;
 	/** Per-server wait budget (ms). Defaults to {@link SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS}. */
 	timeoutMs?: number;
 }
@@ -687,7 +683,7 @@ async function getDiagnosticsForFile(
 	servers: Array<[string, ServerConfig]>,
 	options: GetDiagnosticsForFileOptions = {},
 ): Promise<FileDiagnosticsResult | undefined> {
-	const { signal, minVersions, expectedDocumentVersions, allowUnversionedLspDiagnostics = true, timeoutMs } = options;
+	const { signal, minVersions, expectedDocumentVersions, timeoutMs } = options;
 	if (servers.length === 0) {
 		return undefined;
 	}
@@ -723,7 +719,6 @@ async function getDiagnosticsForFile(
 				signal,
 				minVersion,
 				expectedDocumentVersion,
-				allowUnversioned: allowUnversionedLspDiagnostics,
 			});
 			return { serverName, diagnostics };
 		}),
@@ -1039,11 +1034,10 @@ async function scheduleDeferredDiagnosticsFetch(args: {
  * language server.
  *
  * Blocks inline only briefly ({@link INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS}) for a
- * fresh, version-fresh result. Freshness is enforced by the pre-edit
- * `minVersions` baseline, so we accept unversioned publishes
- * (`allowUnversionedLspDiagnostics: true`) rather than waiting for an exact
- * per-document version echo that servers like typescript-language-server rarely
- * send in time. If nothing fresh arrives in the inline window and a deferred
+ * fresh result. Freshness is enforced by the pre-edit `minVersions` baseline:
+ * exact document-version matches return immediately, and unversioned/mismatched
+ * publishes must settle with no newer publish before inline acceptance. If
+ * nothing fresh arrives in the inline window and a deferred
  * channel is available, the in-flight fetch is handed off to deliver late via
  * `onDeferredDiagnostics`, and this returns `undefined` so the tool result
  * lands immediately. Without a deferred channel (direct/CI callers) it blocks
@@ -1070,7 +1064,6 @@ async function fetchDiagnosticsWithDeferral(args: {
 				signal,
 				minVersions,
 				expectedDocumentVersions,
-				allowUnversionedLspDiagnostics: true,
 			}),
 		);
 	}
@@ -1080,7 +1073,6 @@ async function fetchDiagnosticsWithDeferral(args: {
 		signal: deferred.signal,
 		minVersions,
 		expectedDocumentVersions,
-		allowUnversionedLspDiagnostics: true,
 		timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	});
 	const INLINE_TIMEOUT = Symbol("inline-diagnostics-timeout");
