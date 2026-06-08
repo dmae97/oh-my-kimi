@@ -27,6 +27,10 @@ class MutableLinesComponent implements Component {
 		this.#lines = [...lines];
 	}
 
+	setLines(lines: string[]): void {
+		this.#lines = [...lines];
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -178,6 +182,51 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 			await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
 			const lateRepaintBytes = writes.filter(chunk => chunk.includes("\x1b[H")).length;
 			expect(lateRepaintBytes).toBe(0);
+		});
+	});
+
+	it("supersedes a throttled render queued just before a multiplexer SIGWINCH", async () => {
+		await withEnvPatch(TMUX_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const tui = new TUI(term);
+			const lines = Array.from({ length: 20 }, (_v, i) => `line-${i}`);
+			const component = new MutableLinesComponent(lines);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const baselineRedraws = tui.fullRedraws;
+				const writes = captureWrites(term);
+
+				// A streamed token lands in the same 30fps frame as the SIGWINCH:
+				// `requestRender(false)` arms `#renderTimer`, then `term.resize`
+				// fires the SIGWINCH that arms the multiplexer debounce. If the
+				// queued throttled render were left active it would fire inside
+				// the 50 ms settle window and paint mid-reflow.
+				lines[19] = "line-19 streamed";
+				component.setLines(lines);
+				tui.requestRender();
+				term.resize(80, 10);
+
+				// During the debounce window: no paint must land. The queued
+				// throttled timer was canceled and any follow-on
+				// `requestRender(false)` is held off until the multiplexer
+				// settles.
+				await Bun.sleep(10);
+				expect(tui.fullRedraws).toBe(baselineRedraws);
+				expect(writes.length).toBe(0);
+
+				// After the settle window: exactly one forced render lands, at
+				// the new geometry, with the streamed token visible.
+				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
+				await settle(term);
+				expect(tui.fullRedraws - baselineRedraws).toBe(1);
+				expect(visible(term).at(-1)).toBe("line-19 streamed");
+			} finally {
+				tui.stop();
+			}
 		});
 	});
 });

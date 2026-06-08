@@ -892,6 +892,17 @@ export class TUI extends Container {
 					this.requestRender(true);
 					return;
 				}
+				// Supersede any queued throttled render. A streamed-token tick that
+				// landed `requestRender(false)` in the same 30fps frame as the
+				// SIGWINCH would otherwise fire inside this settle window and paint
+				// at the new geometry while the multiplexer is still reflowing —
+				// the immediate-force path canceled `#renderTimer` via
+				// `#prepareForcedRender`, and the debounce path must do the same.
+				if (this.#renderTimer) {
+					this.#renderTimer.cancel();
+					this.#renderTimer = undefined;
+				}
+				this.#renderRequested = false;
 				if (this.#multiplexerResizeTimer) {
 					this.#multiplexerResizeTimer.cancel();
 				}
@@ -1228,6 +1239,13 @@ export class TUI extends Container {
 
 	#scheduleRender(): void {
 		if (this.#stopped || this.#renderTimer || !this.#renderRequested) {
+			return;
+		}
+		// Defer any new throttled render scheduled inside the multiplexer
+		// resize settle window: it would race tmux's mid-reflow pane repaint.
+		// `#renderRequested` stays set so the eventual forced render — armed
+		// by the SIGWINCH callback — picks up the latest component state.
+		if (this.#multiplexerResizeTimer) {
 			return;
 		}
 		const elapsed = this.#renderScheduler.now() - this.#lastRenderAt;
