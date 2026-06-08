@@ -531,15 +531,6 @@ function formatRetryFallbackBaseSelector(selector: RetryFallbackSelector): strin
 }
 
 const IRC_REPLY_MAX_BYTES = 4096;
-export const ANTHROPIC_TOOL_CALL_BATCH_CAP = 4;
-const CLAUDE_OPUS_4_8_MODEL_ID = /(?:^|[./_-])claude-opus-4[.-]8\b/i;
-
-export function resolveToolCallBatchCapForModel(model: Model | undefined): number | undefined {
-	if (!model) return undefined;
-	return model.provider === "anthropic" && CLAUDE_OPUS_4_8_MODEL_ID.test(model.id)
-		? ANTHROPIC_TOOL_CALL_BATCH_CAP
-		: undefined;
-}
 
 /**
  * Collapse degenerate IRC ephemeral replies before they hit the relay.
@@ -1102,9 +1093,6 @@ export class AgentSession {
 		this.#flushPendingAgentEnd();
 	}
 
-	#syncToolCallBatchCap(model: Model | undefined = this.model): void {
-		this.agent.maxToolCallsPerTurn = resolveToolCallBatchCapForModel(model);
-	}
 
 	#flushPendingAgentEnd(): void {
 		const pending = this.#pendingAgentEndEmit;
@@ -1224,7 +1212,6 @@ export class AgentSession {
 		this.#agentId = config.agentId;
 		this.#agentRegistry = config.agentRegistry;
 		this.#providerSessionId = config.providerSessionId;
-		this.#syncToolCallBatchCap();
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -6913,7 +6900,6 @@ export class AgentSession {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 		}
 		this.agent.setModel(model);
-		this.#syncToolCallBatchCap(model);
 
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
@@ -9109,7 +9095,6 @@ export class AgentSession {
 						this.#setModelWithProviderSessionReset(match);
 					} else {
 						this.agent.setModel(match);
-						this.#syncToolCallBatchCap(match);
 					}
 				}
 			}
@@ -9192,9 +9177,6 @@ export class AgentSession {
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
 			if (previousModel) {
 				this.agent.setModel(previousModel);
-				this.#syncToolCallBatchCap(previousModel);
-			} else {
-				this.#syncToolCallBatchCap(undefined);
 			}
 			this.#thinkingLevel = previousThinkingLevel;
 			this.#autoThinking = previousAutoThinking;

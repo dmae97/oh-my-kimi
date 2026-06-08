@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Removed
+
+- Removed the `maxToolCallsPerTurn` option from `AgentOptions` and `AgentLoopConfig`, so assistant turns are no longer capped after a configured number of completed tool calls
 
 ## [15.10.3] - 2026-06-08
 
