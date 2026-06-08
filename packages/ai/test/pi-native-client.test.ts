@@ -114,7 +114,9 @@ describe("streamPiNative request shape", () => {
 		expect(headers.Authorization).toBe("Bearer gw-bearer");
 
 		const body = JSON.parse(captured.init?.body as string);
-		expect(body.modelId).toBe("claude-sonnet-4-5");
+		// Provider-qualified to avoid cross-provider id collisions; the gateway
+		// registry keys on `${provider}/${id}` first (see auth-gateway-cli runServe).
+		expect(body.modelId).toBe("anthropic/claude-sonnet-4-5");
 		expect(body.context).toEqual(baseContext);
 		expect(body.stream).toBe(true);
 		expect(body.options.temperature).toBe(0.7);
