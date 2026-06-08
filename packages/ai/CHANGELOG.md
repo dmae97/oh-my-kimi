@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.10.4] - 2026-06-08
 ### Added
 
 - Added `anthropic-client-platform` (`desktop_app`) and `anthropic-client-version` (`1.11187.4`) headers to the Anthropic request fingerprint for OAuth sessions
