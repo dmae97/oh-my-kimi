@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.5] - 2026-06-08
+
 ### Added
 
 - Added `atomicTokenPattern` to `Editor`: when set to a global regex matching placeholder tokens such as `[Image #1, 800x600]` or `[Paste #2, +30 lines]`, a single backspace or forward-delete landing anywhere on a token removes the whole token instead of corrupting it into stray text.

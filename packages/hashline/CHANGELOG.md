@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.5] - 2026-06-08
+
 ### Added
 
 - Added `maxAddedRunContext` option to control how many added lines are shown at each side of collapsed inserted runs, with `maxUnchangedRun` kept as a backward-compatible alias
