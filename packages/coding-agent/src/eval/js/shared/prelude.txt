@@ -57,9 +57,9 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 
 	const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
-	const llm = async (prompt, opts, ...rest) => {
-		const o = optionsArg("llm", opts, rest, "{ model, system, schema }");
-		const res = await globalThis.__omp_call_tool__("__llm__", { prompt, ...o });
+	const completion = async (prompt, opts, ...rest) => {
+		const o = optionsArg("completion", opts, rest, "{ model, system, schema }");
+		const res = await globalThis.__omp_call_tool__("__completion__", { prompt, ...o });
 		const text = res && typeof res === "object" ? res.text : res;
 		return hasOwn(o, "schema") ? JSON.parse(text) : text;
 	};
@@ -164,7 +164,7 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	globalThis.print = consoleBridge.log;
 	globalThis.display = display;
 	globalThis.tool = tool;
-	globalThis.llm = llm;
+	globalThis.completion = completion;
 	globalThis.output = output;
 	globalThis.agent = agent;
 	globalThis.parallel = parallel;

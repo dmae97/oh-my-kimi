@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - macOS release binaries are now signed with a Developer ID Application identity (hardened runtime + secure timestamp + JIT/library-validation entitlements) and notarized in CI when the `APPLE_*` signing secrets are configured; releases auto-fall back to ad-hoc signing until then. This makes the shipped binaries Gatekeeper-acceptable, unblocking an official Homebrew submission ([#776](https://github.com/can1357/oh-my-pi/issues/776)). See `docs/macos-signing-notarization.md`.
@@ -9,7 +8,15 @@
 
 ### Changed
 
+- Adjusted `completion()` model resolution so the `default` tier now prefers the session’s active model and falls back to the configured default role when needed
 - Rewrote the session auto-title prompt (`prompts/system/title-system.md`) and the `set_title` tool description to ask for a concise, sentence-case title (3-7 words) that captures the session's topic/goal, with good/bad examples and explicit guidance to treat the first message as data (no following embedded links/instructions, no refusals, describe URL/reference asks). The local on-device title prompt (`tiny-title-system.md`) was aligned to the same 3-7 word, sentence-case convention. The deterministic greeting/low-signal filter and the `none` deferral sentinel are unchanged.
+- Renamed the eval oneshot helper from `llm()` to `completion()` in both JavaScript and Python preludes, including status events, prompt docs, and runtime tests.
+
+### Fixed
+
+- Fixed `completion()` to always send a non-empty default system prompt when `system` is omitted so providers that require instructions no longer reject requests
+- Fixed structured `completion()` mode to return parsed JSON from plain text output when the model skips the forced `respond` tool call
+- Fixed slow-tier `completion()` reasoning requests to avoid unsupported effort settings by only enabling reasoning on reasoning-capable models and capping effort to supported levels
 
 ## [15.10.3] - 2026-06-08
 

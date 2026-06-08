@@ -246,7 +246,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		sh: "icon.package",
 		env: "icon.package",
 		batch: "icon.package",
-		llm: "icon.package",
+		completion: "icon.package",
 		log: "icon.package",
 		phase: "icon.package",
 	};
@@ -315,7 +315,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
 			break;
-		case "llm":
+		case "completion":
 			if (data.model) parts.push(String(data.model));
 			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
 			parts.push(`${data.chars ?? 0} chars`);
