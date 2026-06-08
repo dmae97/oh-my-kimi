@@ -89,7 +89,7 @@ import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
-import { resolveMemoryBackend } from "./memory-backend";
+import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
@@ -1791,6 +1791,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			cwd,
 			sessionManager,
 			modelRegistry,
+			() => (hasSession ? createSessionMemoryRuntimeContext(session, agentDir, cwd) : undefined),
 		);
 
 		credentialDisabledTarget = extensionRunner;
