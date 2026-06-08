@@ -6,6 +6,7 @@
  */
 import * as Diff from "diff";
 import { resolveToCwd } from "../tools/path-utils";
+import { findMatchingBracketContextLines } from "../utils/matching-brackets";
 import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch } from "./modes/replace";
 import { adjustIndentation, normalizeToLF, stripBom } from "./normalize";
 import { readEditFileText } from "./read-file";
@@ -52,6 +53,94 @@ export class ApplyPatchError extends Error {
 
 function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, content: string): string {
 	return `${prefix}${lineNum}|${content}`;
+}
+
+type DiffSource = "old" | "new";
+
+interface ParsedNumberedDiffRow {
+	prefix: "+" | "-" | " ";
+	lineNumber: number;
+	content: string;
+	source: DiffSource;
+}
+
+function parseNumberedDiffRow(row: string): ParsedNumberedDiffRow | undefined {
+	const match = /^([+\- ])(\d+)\|(.*)$/s.exec(row);
+	if (!match) return undefined;
+	const prefix = match[1] as "+" | "-" | " ";
+	const lineNumber = Number.parseInt(match[2], 10);
+	if (!Number.isFinite(lineNumber)) return undefined;
+	return {
+		prefix,
+		lineNumber,
+		content: match[3] ?? "",
+		source: prefix === "+" ? "new" : "old",
+	};
+}
+
+function isDiffChangeRow(row: string | undefined): boolean {
+	return row !== undefined && (row.startsWith("+") || row.startsWith("-"));
+}
+
+function adjustedContextInsertIndex(rows: readonly string[], index: number): number {
+	let start = index;
+	while (start > 0 && isDiffChangeRow(rows[start - 1])) start--;
+	let end = index;
+	while (end < rows.length && isDiffChangeRow(rows[end])) end++;
+	return index > start && index < end ? end : index;
+}
+
+function insertBracketContextRows(
+	rows: string[],
+	source: DiffSource,
+	contextLines: ReadonlyMap<number, string>,
+	seenRows: Set<string>,
+): void {
+	const context = [...contextLines].sort(([left], [right]) => left - right);
+	for (const [lineNumber, text] of context) {
+		const row = formatNumberedDiffLine(" ", lineNumber, text);
+		if (seenRows.has(row)) continue;
+
+		let insertIndex = rows.length;
+		let previousSourceLine: number | undefined;
+		let nextSourceLine: number | undefined;
+		for (let i = 0; i < rows.length; i++) {
+			const parsed = parseNumberedDiffRow(rows[i]);
+			if (!parsed || parsed.source !== source) continue;
+			if (parsed.lineNumber < lineNumber) {
+				previousSourceLine = parsed.lineNumber;
+				continue;
+			}
+			nextSourceLine = parsed.lineNumber;
+			insertIndex = i;
+			break;
+		}
+
+		const chunk: string[] = [];
+		if (previousSourceLine !== undefined && lineNumber > previousSourceLine + 1) chunk.push("...");
+		chunk.push(row);
+		if (nextSourceLine !== undefined && nextSourceLine > lineNumber + 1) chunk.push("...");
+
+		const adjustedIndex = adjustedContextInsertIndex(rows, insertIndex);
+		rows.splice(adjustedIndex, 0, ...chunk);
+		for (const inserted of chunk) seenRows.add(inserted);
+	}
+}
+
+function addMatchingBracketContextRows(rows: string[], oldLines: readonly string[], newLines: readonly string[]): void {
+	const oldVisible: number[] = [];
+	const newVisible: number[] = [];
+	const seenRows = new Set(rows);
+
+	for (const row of rows) {
+		const parsed = parseNumberedDiffRow(row);
+		if (!parsed) continue;
+		if (parsed.source === "old") oldVisible.push(parsed.lineNumber);
+		else newVisible.push(parsed.lineNumber);
+	}
+
+	insertBracketContextRows(rows, "old", findMatchingBracketContextLines(oldLines, oldVisible), seenRows);
+	insertBracketContextRows(rows, "new", findMatchingBracketContextLines(newLines, newVisible), seenRows);
 }
 
 /**
@@ -162,6 +251,8 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 		}
 	}
 
+	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"));
+
 	return { diff: output.join("\n"), firstChangedLine };
 }
 
@@ -219,6 +310,8 @@ export function generateUnifiedDiffString(oldContent: string, newContent: string
 			output.push(line);
 		}
 	}
+
+	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"));
 
 	return { diff: output.join("\n"), firstChangedLine };
 }

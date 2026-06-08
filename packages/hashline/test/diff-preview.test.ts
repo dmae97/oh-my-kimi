@@ -12,20 +12,8 @@ describe("buildCompactDiffPreview", () => {
 		});
 	});
 
-
 	it("renumbers context lines against the post-edit file after range expansion", () => {
-		const diff = [
-			" 1|a1",
-			" 2|a2",
-			"-3|a3",
-			"-4|a4",
-			"+3|X",
-			"+4|Y",
-			"+5|Z",
-			" 5|a5",
-			" 6|a6",
-			" 7|a7",
-		].join("\n");
+		const diff = [" 1|a1", " 2|a2", "-3|a3", "-4|a4", "+3|X", "+4|Y", "+5|Z", " 5|a5", " 6|a6", " 7|a7"].join("\n");
 
 		const preview = buildCompactDiffPreview(diff);
 

@@ -69,6 +69,57 @@ describe("read tool multi-range selector", () => {
 		expect(text).toContain("…");
 	});
 
+	it("includes the matching closing bracket line outside a forward range", async () => {
+		const filePath = path.join(tmpDir, "brackets.ts");
+		await fs.writeFile(
+			filePath,
+			[
+				"function outer() {",
+				"  const one = 1;",
+				"  const two = 2;",
+				"  const three = 3;",
+				"  const four = 4;",
+				"  return one + two + three + four;",
+				"}",
+				"after();",
+			].join("\n"),
+		);
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const text = textOutput(await tool.execute("call-bracket-close", { path: `${filePath}:1-1` }));
+
+		expect(text).toContain("function outer() {");
+		expect(text).toContain("…");
+		expect(text).toContain("}");
+		expect(text).not.toContain("const four");
+		expect(text).not.toContain("return one + two");
+	});
+
+	it("includes the matching opening bracket line outside a reverse range", async () => {
+		const filePath = path.join(tmpDir, "brackets.ts");
+		await fs.writeFile(
+			filePath,
+			[
+				"function outer() {",
+				"  const one = 1;",
+				"  const two = 2;",
+				"  const three = 3;",
+				"  const four = 4;",
+				"  return one + two + three + four;",
+				"}",
+				"after();",
+			].join("\n"),
+		);
+
+		const tool = new ReadTool(createSession(tmpDir));
+		const text = textOutput(await tool.execute("call-bracket-open", { path: `${filePath}:7-7` }));
+
+		expect(text.indexOf("function outer() {")).toBeLessThan(text.indexOf("}"));
+		expect(text).toContain("…");
+		expect(text).not.toContain("const one = 1");
+		expect(text).not.toContain("const four = 4");
+	});
+
 	it("merges overlapping ranges into a single contiguous block", async () => {
 		const filePath = path.join(tmpDir, "numbered.txt");
 		await fs.writeFile(filePath, makeNumberedContent(20));

@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Fixed read and edit previews to include the matching bracket line behind an ellipsis when a shown opening/closing bracket pairs outside the displayed range.
 - Fixed `tab.screenshot({ selector })` hanging for the entire cell budget on continuously-animating pages (WebGL / `backdrop-filter` "glass" effects). The element-screenshot path no longer routes through puppeteer's `scrollIntoViewIfNeeded()`, whose `IntersectionObserver` promise can stall indefinitely under heavy rendering; it now does a single instant `scrollIntoView` and captures with `scrollIntoView: false` (relying on `captureBeyondViewport`), so off-screen elements are still captured without the stall.
 - Fixed follow-up message submissions to forward pending clipboard-pasted images to `session.prompt` in both streaming and non-streaming flows
 - Fixed follow-up handling to clear consumed clipboard image state after submission so pasted images are not silently carried into later messages

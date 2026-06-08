@@ -54,6 +54,10 @@ type ReadToolResultDetails = {
 	};
 	conflictCount?: number;
 	displayReadTargets?: unknown;
+	displayContent?: {
+		text?: string;
+		startLine?: number;
+	};
 	meta?: {
 		source?: {
 			type?: string;
@@ -373,10 +377,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
 		entry.conflictCount = conflictCount;
 		entry.status = result.isError ? "error" : suffixResolution ? "warning" : "success";
-		// Store the text content for preview/expanded display
+		// Store clean display content for preview/expanded display when the read
+		// tool provides it; fall back to model-facing text for legacy results.
+		const displayContent =
+			typeof details?.displayContent?.text === "string" ? details.displayContent.text : undefined;
 		const textContent = result.content?.find(c => c.type === "text")?.text;
-		if (textContent !== undefined) {
-			entry.contentText = textContent;
+		if (displayContent !== undefined || textContent !== undefined) {
+			entry.contentText = displayContent ?? textContent;
 		}
 		this.#updateDisplay();
 	}

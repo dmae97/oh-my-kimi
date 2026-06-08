@@ -22,4 +22,28 @@ describe("generateDiffString", () => {
 		expect(diffLines).not.toContain(" 8|line 8");
 		expect(diffLines).not.toContain(" 12|line 12");
 	});
+
+	it("adds an elided matching bracket line when context stops before the closer", () => {
+		const oldLines = [
+			"function outer() {",
+			"  const value = 1;",
+			"  const two = 2;",
+			"  const three = 3;",
+			"  const four = 4;",
+			"  return value + two + three + four;",
+			"}",
+		];
+		const newLines = [...oldLines];
+		newLines[0] = "function renamed() {";
+
+		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1);
+		const diffLines = result.diff.split("\n");
+
+		expect(diffLines).toContain("-1|function outer() {");
+		expect(diffLines).toContain("+1|function renamed() {");
+		expect(diffLines).toContain("...");
+		expect(diffLines).toContain(" 7|}");
+		expect(diffLines).not.toContain(" 5|  const four = 4;");
+		expect(diffLines).not.toContain(" 6|  return value + two + three + four;");
+	});
 });
