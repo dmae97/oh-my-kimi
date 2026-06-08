@@ -5,7 +5,7 @@
  * offset tracking, but omitted from the preview. Added and context lines are
  * anchored to their post-edit positions so a follow-up edit can reuse visible
  * concrete lines directly. Long contiguous added runs are summarized with a
- * `+<firstHiddenLine>...` marker instead of echoing every inserted line.
+ * `+…` marker instead of echoing every inserted line.
  *
  * This is intentionally decoupled from the diff producer: anything that
  * emits the `<sign><lineNum>|<content>` shape works.
@@ -18,11 +18,6 @@ interface ParsedDiffLine {
 	kind: "+" | "-" | " ";
 	lineNumber: number;
 	content: string;
-}
-
-interface AddedPreviewLine {
-	lineNumber: number;
-	text: string;
 }
 
 function normalizeAddedRunContext(value: number | undefined): number {
@@ -44,18 +39,18 @@ function parseNumberedDiffLine(line: string): ParsedDiffLine | undefined {
 	return { kind, lineNumber, content: body.slice(sep + 1) };
 }
 
-function appendAddedRun(output: string[], run: AddedPreviewLine[], edgeLines: number): void {
+function appendAddedRun(output: string[], run: string[], edgeLines: number): void {
 	if (run.length === 0) return;
 
 	const collapseThreshold = edgeLines * 2 + 1;
 	if (run.length <= collapseThreshold) {
-		for (const line of run) output.push(line.text);
+		for (const text of run) output.push(text);
 		return;
 	}
 
-	for (let i = 0; i < edgeLines; i++) output.push(run[i].text);
-	output.push(`+${run[edgeLines].lineNumber}…`);
-	for (let i = run.length - edgeLines; i < run.length; i++) output.push(run[i].text);
+	for (let i = 0; i < edgeLines; i++) output.push(run[i]);
+	output.push("+…");
+	for (let i = run.length - edgeLines; i < run.length; i++) output.push(run[i]);
 }
 
 export function buildCompactDiffPreview(diff: string, options: CompactDiffOptions = {}): CompactDiffPreview {
@@ -64,7 +59,7 @@ export function buildCompactDiffPreview(diff: string, options: CompactDiffOption
 	let addedLines = 0;
 	let removedLines = 0;
 	const formatted: string[] = [];
-	const addedRun: AddedPreviewLine[] = [];
+	const addedRun: string[] = [];
 
 	const flushAddedRun = (): void => {
 		appendAddedRun(formatted, addedRun, addedRunContext);
@@ -87,7 +82,7 @@ export function buildCompactDiffPreview(diff: string, options: CompactDiffOption
 		switch (parsed.kind) {
 			case "+": {
 				addedLines++;
-				addedRun.push({ lineNumber: parsed.lineNumber, text: `+${parsed.lineNumber}:${parsed.content}` });
+				addedRun.push(`+${parsed.lineNumber}:${parsed.content}`);
 				break;
 			}
 			case "-":

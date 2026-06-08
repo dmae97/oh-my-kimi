@@ -42,7 +42,7 @@ describe("buildCompactDiffPreview", () => {
 
 		const preview = buildCompactDiffPreview(diff);
 
-		expect(preview.preview).toBe(["+10:line 1", "+11:line 2", "+12…", "+15:line 6", "+16:line 7"].join("\n"));
+		expect(preview.preview).toBe(["+10:line 1", "+11:line 2", "+…", "+15:line 6", "+16:line 7"].join("\n"));
 		expect(preview.addedLines).toBe(7);
 		expect(preview.removedLines).toBe(0);
 	});
