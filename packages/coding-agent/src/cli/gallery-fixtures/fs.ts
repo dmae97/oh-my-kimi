@@ -1,6 +1,7 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: sample source-code strings (read fixtures) intentionally contain literal ${...}.
 // Gallery fixtures for the filesystem tools (read, write, find).
-import type { GalleryFixture } from "./types";
+import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
+import type { GalleryFixture, GalleryFixtureState, GalleryResult } from "./types";
 
 const readSnippet = [
 	"export const findToolRenderer = {",
@@ -35,6 +36,66 @@ const writtenContent = [
 	"});",
 	"",
 ].join("\n");
+
+const groupedReadTargets = [
+	"packages/coding-agent/test/streaming-preview-height.test.ts:301-409",
+	"packages/coding-agent/test/tool-live-region-scrollback.test.ts:143-310",
+	"packages/tui/test/streaming-scrollback-defer.test.ts:89-464",
+];
+
+const groupedReadDelimitedPath = groupedReadTargets.join(",");
+const groupedReadRepeatedFile = "packages/coding-agent/src/task/render.ts";
+const groupedReadRepeatedRanges = `${groupedReadRepeatedFile}:507-605,1070-1194,1270-1274`;
+
+function textResult(text: string, details?: unknown, isError?: boolean): GalleryResult {
+	return { content: [{ type: "text", text }], details, isError };
+}
+
+function addGroupedReadArgs(component: ReadToolGroupComponent): void {
+	component.updateArgs({ path: groupedReadDelimitedPath }, "read-delimited");
+	component.updateArgs({ path: groupedReadRepeatedFile }, "read-full");
+	component.updateArgs({ path: groupedReadRepeatedRanges }, "read-ranges");
+}
+
+function renderReadGroupFixtureState(state: GalleryFixtureState, width: number, expanded: boolean): string[] {
+	const component = new ReadToolGroupComponent();
+	component.setExpanded(expanded);
+
+	if (state === "streaming") {
+		component.updateArgs(
+			{
+				path: [
+					"packages/coding-agent/test/streaming-preview-height.test.ts:301-409",
+					"packages/coding-agent/test/tool-live-region-scrollback.test.ts:143-",
+				].join(","),
+			},
+			"read-delimited",
+		);
+		return component.render(width);
+	}
+
+	addGroupedReadArgs(component);
+	if (state === "progress") return component.render(width);
+
+	component.updateResult(
+		textResult("Read three focused test ranges.", { displayReadTargets: groupedReadTargets }),
+		false,
+		"read-delimited",
+	);
+	component.updateResult(textResult("Read the full render module."), false, "read-full");
+
+	if (state === "error") {
+		component.updateResult(
+			textResult("Error: selector 1270-1274 is outside the file", undefined, true),
+			false,
+			"read-ranges",
+		);
+		return component.render(width);
+	}
+
+	component.updateResult(textResult("Read three render.ts ranges."), false, "read-ranges");
+	return component.render(width);
+}
 
 export const fsFixtures: Record<string, GalleryFixture> = {
 	read: {
@@ -79,6 +140,14 @@ export const fsFixtures: Record<string, GalleryFixture> = {
 				},
 			],
 		},
+	},
+
+	read_group: {
+		label: "Read Groups",
+		args: {},
+		result: textResult("Rendered grouped read calls."),
+		errorResult: textResult("Rendered grouped read errors.", undefined, true),
+		renderState: renderReadGroupFixtureState,
 	},
 
 	write: {

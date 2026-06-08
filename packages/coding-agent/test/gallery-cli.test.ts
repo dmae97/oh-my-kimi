@@ -68,6 +68,19 @@ describe("gallery harness", () => {
 		expect(stripped).not.toContain("LSP");
 	});
 
+	it("renders gallery-only read group fixtures", async () => {
+		const fixture = resolveFixture("read_group");
+		const success = Bun.stripANSI((await renderGalleryState("read_group", fixture, "success", 140)).join("\n"));
+		const renderPathMatches = success.match(/packages\/coding-agent\/src\/task\/render\.ts/g) ?? [];
+
+		expect(success).toContain("Read (7)");
+		expect(renderPathMatches).toHaveLength(1);
+		expect(success).toContain("full file");
+		expect(success).toContain(":507-605");
+		expect(success).toContain(":1070-1194");
+		expect(success).toContain(":1270-1274");
+	});
+
 	it("falls back to a generic fixture for registry tools without curated sample data", () => {
 		// resolveFixture never returns undefined for a registry tool, even one
 		// missing from the curated fixtures, so the gallery cannot crash on a newly

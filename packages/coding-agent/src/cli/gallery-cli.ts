@@ -105,6 +105,10 @@ export async function renderGalleryState(
 	width: number,
 	expanded = false,
 ): Promise<string[]> {
+	if (fixture.renderState) {
+		return await fixture.renderState(state, width, expanded);
+	}
+
 	const tool = fakeToolFor(name, fixture);
 	const streamingArgs = state === "streaming" ? (fixture.streamingArgs ?? fixture.args) : fixture.args;
 	// The component only calls `requestRender` during a static render;

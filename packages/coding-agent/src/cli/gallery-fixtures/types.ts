@@ -11,11 +11,18 @@ export interface GalleryResult {
 	isError?: boolean;
 }
 
+export type GalleryFixtureState = "streaming" | "progress" | "success" | "error";
+
 export interface GalleryFixture {
 	/** Display label for the tool header (defaults to the tool name). */
 	label?: string;
 	/** Edit mode for edit-like tools so the streaming preview dispatches correctly. */
 	editMode?: EditMode;
+	/**
+	 * Custom gallery-only renderer for fixtures that are not one ToolExecutionComponent
+	 * (for example the read-group transcript component).
+	 */
+	renderState?: (state: GalleryFixtureState, width: number, expanded: boolean) => string[] | Promise<string[]>;
 	/**
 	 * Set for tools whose real `AgentTool` attaches `renderCall`/`renderResult`
 	 * directly on the instance (e.g. `lsp`, `task`). The harness then attaches
