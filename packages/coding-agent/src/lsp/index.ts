@@ -341,13 +341,8 @@ function limitDiagnosticMessages(messages: string[]): string[] {
 const LOCATION_CONTEXT_LINES = 1;
 const REFERENCE_CONTEXT_LIMIT = 50;
 
-// References can come back thin (declaration only, or only same-file results)
-// when the project hasn't finished indexing dependent files. Retry with
-// exponential-ish backoff so slow indexers (tsserver on large monorepos,
-// rust-analyzer crate-wide refs) get a chance to populate cross-file refs
-// before we report them missing.
-const REFERENCES_RETRY_COUNT = 3;
-const REFERENCES_RETRY_DELAYS_MS = [250, 500, 1000] as const;
+const REFERENCES_RETRY_COUNT = 2;
+const REFERENCES_RETRY_DELAY_MS = 250;
 
 function comparePosition(a: Position, b: Position): number {
 	return a.line === b.line ? a.character - b.character : a.line - b.line;
@@ -359,16 +354,6 @@ function rangeContainsPosition(range: Location["range"], position: Position): bo
 
 function isOnlyQueriedDeclaration(locations: Location[], uri: string, position: Position): boolean {
 	return locations.length === 1 && locations[0]?.uri === uri && rangeContainsPosition(locations[0].range, position);
-}
-
-/**
- * True when every reported reference lives in the same file as the queried
- * position. Used as a (heuristic) signal that the project hasn't finished
- * indexing dependent files yet — for genuinely file-local symbols this just
- * wastes a couple of retries, which is acceptable.
- */
-function isOnlyInQueriedFile(locations: Location[], uri: string): boolean {
-	return locations.length > 0 && locations.every(loc => loc.uri === uri);
 }
 
 function normalizeLocationResult(result: Location | Location[] | LocationLink | LocationLink[] | null): Location[] {
@@ -2167,26 +2152,16 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						)) as Location[] | null;
 
 						const locations = result ?? [];
-						const lastAttempt = attempt === REFERENCES_RETRY_COUNT;
-						if (!isProjectAwareLspServer(serverConfig) || lastAttempt) {
+						if (!isProjectAwareLspServer(serverConfig) || attempt === REFERENCES_RETRY_COUNT) {
 							break;
 						}
-						// Retry when the result is "suspiciously thin" for a project-aware
-						// server: zero locations, just the queried declaration, or every
-						// location in the queried file. Any of those is consistent with
-						// dependent files not yet being indexed.
-						const looksThin =
-							locations.length === 0 ||
-							isOnlyQueriedDeclaration(locations, uri, position) ||
-							isOnlyInQueriedFile(locations, uri);
-						if (!looksThin) {
+						if (locations.length > 0 && !isOnlyQueriedDeclaration(locations, uri, position)) {
 							break;
 						}
 
 						await waitForProjectLoaded(client, signal);
 						throwIfAborted(signal);
-						const delayMs = REFERENCES_RETRY_DELAYS_MS[attempt] ?? REFERENCES_RETRY_DELAYS_MS.at(-1) ?? 250;
-						await untilAborted(signal, () => Bun.sleep(delayMs));
+						await untilAborted(signal, () => Bun.sleep(REFERENCES_RETRY_DELAY_MS));
 					}
 
 					if (!result || result.length === 0) {

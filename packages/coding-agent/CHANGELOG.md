@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `/model` visibility for auto-selected role defaults: inferred `pi/smol`/`pi/slow`/designer choices now show as compact `[ROLE auto]` badges, while explicitly configured roles keep the existing solid badges and thinking labels.
@@ -8,6 +9,8 @@
 
 ### Changed
 
+- Changed `lsp references` to retry only when no references or only the queried declaration are returned, using two fixed 250ms retries for project-aware servers
+- Changed `read` handling of `https://github.com/<owner>/<repo>:raw` to use raw page rendering only, removing the GitHub API README fallback
 - Changed model resolution to apply provider-priority ordering when selecting models for roles and ambiguous patterns, using `modelProviderOrder` settings and built-in provider priority so first-party providers are preferred over relays in tie cases
 - Changed model canonical variant selection to use the same provider-priority ordering instead of candidate order when deduplicating equivalent upstream models
 

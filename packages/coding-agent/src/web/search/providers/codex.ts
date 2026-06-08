@@ -115,29 +115,33 @@ interface CodexResponse {
 }
 
 /**
- * Recognizes Codex answers that are pure image placeholders — short prose that
- * only points at an attached/inline image and carries no information of its
- * own. Codex returns several variants ("(see attached image)", "see image
- * above", "[Attached image]", …) when the assistant produced a screenshot
- * instead of a textual answer; treat them all as non-answers so the chain
- * advances to a provider that actually returns text.
+ * Known Codex "image placeholder" answers — short prose the assistant emits in
+ * place of a real answer when it produced a screenshot instead of text. These
+ * carry no information, so callers treat them as non-answers and advance the
+ * chain to a provider that returns text. Extend by adding the normalized
+ * literal below; no regex tuning required.
  */
+const IMAGE_PLACEHOLDER_ANSWERS: ReadonlySet<string> = new Set([
+	"see attached image",
+	"attached image",
+	"see the attached image",
+	"see image",
+	"see image above",
+	"image above",
+	"see image below",
+	"image below",
+]);
+
 function isImagePlaceholderAnswer(text: string): boolean {
-	const trimmed = text.trim();
-	if (trimmed.length === 0 || trimmed.length > 80) return false;
-	// Strip surrounding brackets/parens/quotes and trailing punctuation.
-	const stripped = trimmed
+	// Strip surrounding brackets/quotes and trailing punctuation, lowercase,
+	// then match against the known-placeholder set.
+	const normalized = text
+		.trim()
 		.replace(/^[[("'`*_]+/, "")
 		.replace(/[\])"'`*_.!?]+$/, "")
 		.trim()
 		.toLowerCase();
-	return (
-		/^(?:please\s+)?(?:see|view|refer to)\s+(?:the\s+)?(?:above\s+|below\s+|attached\s+|enclosed\s+|inline\s+)?image[s]?(?:\s+(?:above|below|attached|enclosed|inline))?$/.test(
-			stripped,
-		) ||
-		/^(?:the\s+)?(?:above|below|attached|enclosed|inline)\s+image[s]?$/.test(stripped) ||
-		/^image[s]?\s+(?:above|below|attached|enclosed|inline)$/.test(stripped)
-	);
+	return IMAGE_PLACEHOLDER_ANSWERS.has(normalized);
 }
 
 function addSource(sources: SearchSource[], source: SearchSource): void {
