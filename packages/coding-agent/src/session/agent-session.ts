@@ -3532,6 +3532,8 @@ export class AgentSession {
 	 *
 	 * In `yolo` mode, skips the gate unless the user policy explicitly requires a
 	 * prompt or deny (matching the behaviour of the normal approval wrapper).
+	 * `--auto-approve` / `--yolo` CLI flags also reach here because `main.ts`
+	 * reflects them into a `tools.approvalMode` settings override at startup.
 	 */
 	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
 		const bridge = this.#clientBridge;

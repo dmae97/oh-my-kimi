@@ -988,6 +988,10 @@ export async function runRootCommand(
 		// Runtime override (not persisted): every settings.get("tools.approvalMode") downstream
 		// sees this value. The wrapper still honours --auto-approve / --yolo on top of it.
 		settingsInstance.override("tools.approvalMode", parsedArgs.approvalMode);
+	} else if (parsedArgs.autoApprove) {
+		// --auto-approve / --yolo without an explicit --approval-mode: reflect in settings so
+		// setup-time checks (e.g. #wrapToolForAcpPermission) also see the yolo intent.
+		settingsInstance.override("tools.approvalMode", "yolo");
 	}
 	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 		applyRpcDefaultSettingOverrides(settingsInstance);
