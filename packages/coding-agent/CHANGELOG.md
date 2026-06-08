@@ -28,6 +28,7 @@
 - Fixed clipboard-pasted images being rejected when steering or following up during compaction. Instead of bailing with "Retry after it completes to send images", the message and its images are now queued via `queueCompactionMessage` and forwarded to the session (steer/follow-up/prompt) when the compaction queue flushes.
 - Fixed edit tool result previews to show only current-file lines and collapse long inserted blocks instead of echoing removed content.
 - Fixed `generateDiffString` to omit the mid-skip `...` placeholder between two nearby edits, conveying the elided gap via the jump in line numbers instead (consistent with how leading/trailing context skips already render). The placeholder row was indistinguishable from a genuine `...` context line and wasted a row in compact previews.
+- Fixed the `ask` tool hanging when the model emitted two `ask` calls in one tool batch. The interactive selector is a single shared UI surface (`ExtensionUiController.showHookSelector` has no queue and overwrites `ctx.hookSelector` on each call), so concurrent asks clobbered each other: the second stole focus and orphaned the first, whose select promise hung until the user aborted the whole turn (surfacing a stray `Ask input was cancelled`). `ask` now declares `concurrency: "exclusive"`, so the agent loop serializes the batch and each question's selector runs to completion.
 
 ## [15.10.4] - 2026-06-08
 

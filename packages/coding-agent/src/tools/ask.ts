@@ -407,6 +407,12 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly description: string;
 	readonly parameters = askSchema;
 	readonly strict = true;
+	// Run alone in its tool batch. The interactive selector/editor is a single
+	// shared UI surface (`ExtensionUiController.showHookSelector` has no queue and
+	// overwrites `ctx.hookSelector` on each call), so two concurrent `ask` calls
+	// would clobber each other: the second steals focus and orphans the first,
+	// whose promise then hangs until the user aborts the whole turn.
+	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 
 	constructor(private readonly session: ToolSession) {
