@@ -1212,6 +1212,22 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const details = result.details;
 			const outputBlock = new CachedOutputBlock();
 
+			// Per-instance cache for the expensive inner lines computation. Mirrors
+			// the eval-renderer pattern (`eval-render.ts:709-752`): without this,
+			// every TUI repaint (one per keystroke when a long transcript is on
+			// screen) re-runs `split` / `replaceTabs` / `truncateToVisualLines` over
+			// the whole stored output for every bash row in scrollback. With a
+			// 50KB-tail bash result times hundreds of rows, that re-rendering is
+			// what pinned the main thread in issue #2081 and made keystrokes feel
+			// like the CPU was at 100%. The cache key includes every render input
+			// that materially affects the produced lines.
+			let cachedWidth: number | undefined;
+			let cachedPreviewLines: number | undefined;
+			let cachedExpanded: boolean | undefined;
+			let cachedRawOutput: string | undefined;
+			let cachedIsPartial: boolean | undefined;
+			let cachedLines: string[] | undefined;
+
 			return markFramedBlockComponent({
 				render: (width: number): readonly string[] => {
 					// REACTIVE: read mutable options at render time
@@ -1223,6 +1239,19 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					// Strip the LLM-facing notice appended by wrappedExecute so we don't
 					// double-print it alongside the styled warning line below.
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
+
+					const isPartial = options.isPartial === true;
+
+					if (
+						cachedLines !== undefined &&
+						cachedWidth === width &&
+						cachedPreviewLines === previewLines &&
+						cachedExpanded === expanded &&
+						cachedRawOutput === rawOutput &&
+						cachedIsPartial === isPartial
+					) {
+						return cachedLines;
+					}
 					const strippedOutput = stripOutputNotice(rawOutput, details?.meta);
 					const withoutExit = stripExitCodeNotice(strippedOutput, details?.exitCode);
 					const withoutWall = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
@@ -1299,25 +1328,38 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					if (timeoutLine) outputLines.push(timeoutLine);
 					if (warningLine) outputLines.push(warningLine);
 
-					return outputBlock.render(
+					const framed = outputBlock.render(
 						{
 							header,
-							state: options.isPartial ? "pending" : isError ? "error" : "success",
+							state: isPartial ? "pending" : isError ? "error" : "success",
 							sections: [
 								{
-									lines: options.isPartial
-										? capPreviewLines(cmdLines ?? [], uiTheme, { expanded })
-										: (cmdLines ?? []),
+									lines: isPartial ? capPreviewLines(cmdLines ?? [], uiTheme, { expanded }) : (cmdLines ?? []),
 								},
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
+
 						},
 						uiTheme,
 					);
+
+					cachedWidth = width;
+					cachedPreviewLines = previewLines;
+					cachedExpanded = expanded;
+					cachedRawOutput = rawOutput;
+					cachedIsPartial = isPartial;
+					cachedLines = framed;
+					return framed;
 				},
 				invalidate: () => {
 					outputBlock.invalidate();
+					cachedLines = undefined;
+					cachedWidth = undefined;
+					cachedPreviewLines = undefined;
+					cachedExpanded = undefined;
+					cachedRawOutput = undefined;
+					cachedIsPartial = undefined;
 				},
 			});
 		},
