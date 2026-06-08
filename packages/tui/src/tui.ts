@@ -439,6 +439,24 @@ type RenderIntent =
 	| { kind: "shrink" }
 	| { kind: "diff"; firstChanged: number; lastChanged: number; appendedLines: boolean };
 
+interface HardwareCursorState {
+	row: number;
+	col: number;
+	visible: boolean;
+}
+
+interface HardwareCursorUpdate {
+	toRow: number;
+	state: HardwareCursorState | null;
+	visible?: boolean;
+}
+
+interface CursorControlResult extends HardwareCursorUpdate {
+	seq: string;
+	toCol: number;
+	visible: boolean;
+}
+
 interface PreparedLine {
 	raw: string;
 	width: number;
@@ -466,6 +484,9 @@ export class TUI extends Container {
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
+	#hardwareCursorState: HardwareCursorState | null = null;
+	#hardwareCursorVisibilityKnown = false;
+	#hardwareCursorVisible = false;
 	#viewportTopRow = 0; // Content row currently mapped to screen row 0
 	#sixelProbePendingDa = false;
 	#sixelProbePendingGraphics = false;
@@ -618,6 +639,7 @@ export class TUI extends Container {
 		this.#syncTerminalCursorMode(this.#focusedComponent);
 		if (!enabled) {
 			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
 		}
 		this.requestRender();
 	}
@@ -720,6 +742,7 @@ export class TUI extends Container {
 			this.setFocus(component);
 		}
 		this.terminal.hideCursor();
+		this.#recordHardwareCursorHidden();
 		this.requestRender();
 
 		// Return handle for controlling this overlay
@@ -733,7 +756,10 @@ export class TUI extends Container {
 						const topVisible = this.#getTopmostVisibleOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
-					if (this.overlayStack.length === 0) this.terminal.hideCursor();
+					if (this.overlayStack.length === 0) {
+						this.terminal.hideCursor();
+						this.#recordHardwareCursorHidden();
+					}
 					this.requestRender();
 				}
 			},
@@ -766,7 +792,10 @@ export class TUI extends Container {
 		// Find topmost visible overlay, or fall back to preFocus
 		const topVisible = this.#getTopmostVisibleOverlay();
 		this.setFocus(topVisible?.component ?? overlay.preFocus);
-		if (this.overlayStack.length === 0) this.terminal.hideCursor();
+		if (this.overlayStack.length === 0) {
+			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
+		}
 		this.requestRender();
 	}
 
@@ -838,6 +867,7 @@ export class TUI extends Container {
 			}
 		}
 		this.terminal.hideCursor();
+		this.#recordHardwareCursorHidden();
 		this.#querySixelSupport();
 		this.#queryCellSize();
 		this.requestRender(true, { clearScrollback: options?.clearScrollback === true });
@@ -1049,6 +1079,7 @@ export class TUI extends Container {
 		}
 
 		this.terminal.showCursor();
+		this.#forgetHardwareCursorState();
 		this.terminal.stop();
 	}
 
@@ -1570,12 +1601,15 @@ export class TUI extends Container {
 		if (wantAlt && !this.#altActive) {
 			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
 			this.terminal.hideCursor();
+			this.#forgetHardwareCursorState();
+			this.#recordHardwareCursorHidden();
 			this.#altActive = true;
 			this.#altPreviousLines = [];
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			this.#forgetHardwareCursorState();
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 			// A resize while on the alt buffer reflowed the terminal's saved normal
@@ -1617,6 +1651,9 @@ export class TUI extends Container {
 		const prevHardwareCursorRow = this.#hardwareCursorRow;
 		const resizeEventOccurred = this.#resizeEventPending;
 		this.#resizeEventPending = false;
+		if (resizeEventOccurred) {
+			this.#forgetHardwareCursorState();
+		}
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		// A resize event with net-unchanged dimensions still reflowed the terminal
 		// buffer; classify it as a height change so the geometry branches repaint
@@ -2658,7 +2695,7 @@ export class TUI extends Container {
 	 * the end so cursor/viewport/scrollback accounting stays consistent.
 	 */
 
-	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursorRow: number): void {
+	#commit(lines: string[], width: number, height: number, viewportTop: number, hardwareCursor: HardwareCursorUpdate): void {
 		this.#deferredTailLine = undefined;
 		this.#previousLines = lines;
 		this.#previousVisibleOverlayComponents = this.#visibleOverlayComponentsThisRender;
@@ -2667,7 +2704,76 @@ export class TUI extends Container {
 		this.#previousHeight = height;
 		this.#cursorRow = Math.max(0, lines.length - 1);
 		this.#viewportTopRow = viewportTop;
-		this.#hardwareCursorRow = hardwareCursorRow;
+		this.#recordHardwareCursorUpdate(hardwareCursor);
+	}
+
+	#targetHardwareCursorState(
+		cursorPos: { row: number; col: number } | null,
+		totalLines: number,
+	): HardwareCursorState | null {
+		if (!cursorPos || totalLines <= 0) return null;
+		return {
+			row: Math.max(0, Math.min(cursorPos.row, totalLines - 1)),
+			col: Math.max(0, cursorPos.col),
+			visible: this.#showHardwareCursor,
+		};
+	}
+
+	#recordHardwareCursorState(state: HardwareCursorState): void {
+		this.#hardwareCursorRow = state.row;
+		this.#hardwareCursorState = state;
+		this.#hardwareCursorVisible = state.visible;
+		this.#hardwareCursorVisibilityKnown = true;
+	}
+
+	#recordHardwareCursorRowOnly(row: number, visible?: boolean): void {
+		this.#hardwareCursorRow = row;
+		this.#hardwareCursorState = null;
+		if (visible !== undefined) {
+			this.#hardwareCursorVisible = visible;
+			this.#hardwareCursorVisibilityKnown = true;
+		}
+	}
+
+	#recordHardwareCursorUpdate(update: HardwareCursorUpdate): void {
+		if (update.state) {
+			this.#recordHardwareCursorState(update.state);
+			return;
+		}
+		this.#recordHardwareCursorRowOnly(update.toRow, update.visible);
+	}
+
+	#recordHardwareCursorHidden(): void {
+		this.#hardwareCursorVisible = false;
+		this.#hardwareCursorVisibilityKnown = true;
+		if (!this.#hardwareCursorState) return;
+		this.#hardwareCursorState = { ...this.#hardwareCursorState, visible: false };
+	}
+
+	#forgetHardwareCursorState(): void {
+		this.#hardwareCursorState = null;
+		this.#hardwareCursorVisibilityKnown = false;
+	}
+
+	#sameHardwareCursorState(state: HardwareCursorState): boolean {
+		const current = this.#hardwareCursorState;
+		return (
+			current !== null &&
+			current.row === state.row &&
+			current.col === state.col &&
+			current.visible === state.visible
+		);
+	}
+
+	#preserveHardwareCursorUpdate(row: number): HardwareCursorUpdate {
+		if (this.#hardwareCursorState?.row === row) {
+			return { toRow: row, state: this.#hardwareCursorState, visible: this.#hardwareCursorState.visible };
+		}
+		return {
+			toRow: row,
+			state: null,
+			visible: this.#hardwareCursorVisibilityKnown ? this.#hardwareCursorVisible : undefined,
+		};
 	}
 
 	/**
@@ -2730,8 +2836,8 @@ export class TUI extends Container {
 		}
 		buffer += fillSequence;
 		const finalRow = Math.max(0, lines.length - 1);
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
@@ -2744,7 +2850,7 @@ export class TUI extends Container {
 		if (pushedNow > this.#scrollbackHighWater) {
 			this.#scrollbackHighWater = pushedNow;
 		}
-		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), toRow);
+		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), cursorControl);
 	}
 
 	/**
@@ -2788,14 +2894,14 @@ export class TUI extends Container {
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
 		this.#scrollbackHighWater = appendTo;
-		this.#commit(lines, width, height, viewportTop, toRow);
+		this.#commit(lines, width, height, viewportTop, cursorControl);
 	}
 	/**
 	 * Rewrite the visible viewport in place. Cursor home, clear each row,
@@ -2861,13 +2967,13 @@ export class TUI extends Container {
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
-		this.#commit(lines, width, height, viewportTop, toRow);
+		this.#commit(lines, width, height, viewportTop, cursorControl);
 	}
 
 	/** Topmost visible overlay requests the alternate-screen buffer. */
@@ -2980,13 +3086,13 @@ export class TUI extends Container {
 				}
 				cursorFromRow = viewportTop + lastChangedScreenRow;
 			}
-			const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, cursorFromRow);
-			buffer += seq;
+			const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, cursorFromRow);
+			buffer += cursorControl.seq;
 			buffer += this.#paintEndSequence;
 			this.terminal.write(buffer);
 
 			this.#maxLinesRendered = Math.max(lines.length, viewportTop + height);
-			this.#commit(lines, width, height, viewportTop, toRow);
+			this.#commit(lines, width, height, viewportTop, cursorControl);
 			return;
 		}
 
@@ -3020,8 +3126,8 @@ export class TUI extends Container {
 		const contentBottomRow = Math.min(viewportBottomRow, Math.max(viewportTop, lines.length - 1));
 		const parkUp = viewportBottomRow - contentBottomRow;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, contentBottomRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
@@ -3029,7 +3135,7 @@ export class TUI extends Container {
 		if (boundedAppendTo > this.#scrollbackHighWater) {
 			this.#scrollbackHighWater = boundedAppendTo;
 		}
-		this.#commit(lines, width, height, viewportTop, toRow);
+		this.#commit(lines, width, height, viewportTop, cursorControl);
 	}
 
 	/**
@@ -3098,7 +3204,7 @@ export class TUI extends Container {
 		this.#previousWidth = width;
 		this.#previousHeight = height;
 		this.#viewportTopRow = prevViewportTop;
-		this.#hardwareCursorRow = row;
+		this.#recordHardwareCursorRowOnly(row, false);
 	}
 
 	/**
@@ -3117,7 +3223,7 @@ export class TUI extends Container {
 	): void {
 		const extraLines = this.#previousLines.length - lines.length;
 		if (extraLines <= 0) {
-			this.#commit(lines, width, height, Math.max(0, lines.length - height), prevHardwareCursorRow);
+			this.#commit(lines, width, height, Math.max(0, lines.length - height), this.#preserveHardwareCursorUpdate(prevHardwareCursorRow));
 			this.#maxLinesRendered = lines.length;
 			return;
 		}
@@ -3152,13 +3258,13 @@ export class TUI extends Container {
 			buffer += `\x1b[${moveUp}A`;
 		}
 
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
 		this.#maxLinesRendered = lines.length;
-		this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
+		this.#commit(lines, width, height, Math.max(0, lines.length - height), cursorControl);
 	}
 
 	/**
@@ -3270,8 +3376,8 @@ export class TUI extends Container {
 		// so emitting them after the trailing-shrink cursor moves is safe.
 		buffer += fillSequence;
 
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
-		buffer += seq;
+		const cursorControl = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
+		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 
 		this.#writeDiffDebug(
@@ -3284,7 +3390,7 @@ export class TUI extends Container {
 			renderEnd,
 			finalCursorRow,
 			cursorPos,
-			toRow,
+			cursorControl.toRow,
 			buffer,
 		);
 		this.terminal.write(buffer);
@@ -3296,7 +3402,7 @@ export class TUI extends Container {
 				this.#scrollbackHighWater = pushedNow;
 			}
 		}
-		this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
+		this.#commit(lines, width, height, Math.max(0, lines.length - height), cursorControl);
 	}
 
 	/** Optional intent log under PI_DEBUG_REDRAW. */
@@ -3375,16 +3481,15 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 		totalLines: number,
 		fromRow: number,
-	): { seq: string; toRow: number } {
-		// No IME target or no content — hide cursor regardless of preference
-		if (!cursorPos || totalLines <= 0) return { seq: "\x1b[?25l", toRow: fromRow };
+	): CursorControlResult {
+		// No IME target or no content — hide cursor regardless of preference.
+		const target = this.#targetHardwareCursorState(cursorPos, totalLines);
+		if (!target) {
+			return { seq: "\x1b[?25l", toRow: fromRow, toCol: 0, visible: false, state: null };
+		}
 
-		// Clamp cursor position to valid range
-		const targetRow = Math.max(0, Math.min(cursorPos.row, totalLines - 1));
-		const targetCol = Math.max(0, cursorPos.col);
-
-		// Move cursor from current position to target
-		const rowDelta = targetRow - fromRow;
+		// Move cursor from current position to target.
+		const rowDelta = target.row - fromRow;
 		let seq = "";
 		if (rowDelta > 0) {
 			seq += `\x1b[${rowDelta}B`; // Move down
@@ -3392,10 +3497,14 @@ export class TUI extends Container {
 			seq += `\x1b[${-rowDelta}A`; // Move up
 		}
 		// Move to absolute column (1-indexed)
-		seq += `\x1b[${targetCol + 1}G`;
-		seq += this.#showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
+		seq += `\x1b[${target.col + 1}G`;
+		seq += target.visible ? "\x1b[?25h" : "\x1b[?25l";
 
-		return { seq, toRow: targetRow };
+		return { seq, toRow: target.row, toCol: target.col, visible: target.visible, state: target };
+	}
+	
+	#isHiddenCursorKnown(): boolean {
+		return this.#hardwareCursorVisibilityKnown && !this.#hardwareCursorVisible;
 	}
 
 	/**
@@ -3404,12 +3513,16 @@ export class TUI extends Container {
 	 * to embed the sequences into.
 	 */
 	#writeCursorPosition(cursorPos: { row: number; col: number } | null, totalLines: number): void {
-		if (!cursorPos || totalLines <= 0) {
+		const target = this.#targetHardwareCursorState(cursorPos, totalLines);
+		if (!target) {
+			if (this.#isHiddenCursorKnown()) return;
 			this.terminal.hideCursor();
+			this.#recordHardwareCursorHidden();
 			return;
 		}
-		const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
-		this.#hardwareCursorRow = toRow;
-		this.terminal.write(`${this.#cursorBeginSequence}${seq}${this.#cursorEndSequence}`);
+		if (this.#sameHardwareCursorState(target)) return;
+		const cursorControl = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
+		this.terminal.write(`${this.#cursorBeginSequence}${cursorControl.seq}${this.#cursorEndSequence}`);
+		this.#recordHardwareCursorUpdate(cursorControl);
 	}
 }
