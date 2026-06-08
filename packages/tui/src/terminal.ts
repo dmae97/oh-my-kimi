@@ -255,6 +255,8 @@ export class ProcessTerminal implements Terminal {
 	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
 	/** Whether DEC 2048 in-band resize notifications are currently enabled. */
 	#inBandResizeActive = false;
+	/** Reassembly buffer for a DEC 2048 in-band resize report split across stdin reads. */
+	#inBandResizeBuffer = "";
 	#reportedColumns?: number;
 	#reportedRows?: number;
 	#osc11PollTimer?: Timer;
@@ -485,6 +487,46 @@ export class ProcessTerminal implements Terminal {
 						// Still accumulating.
 						return;
 					}
+				}
+			}
+
+			// In-band resize report (DEC 2048) split across stdin reads. The report
+			// is `\x1b[48;rows;cols;yPx;xPx t`; when the StdinBuffer flush timeout
+			// elapses mid-sequence — common during a rapid resize that keeps the
+			// event loop busy — the `\x1b[48;…` prefix arrives as one event and the
+			// tail (`…;xPx t`) arrives as bare character events that would otherwise
+			// leak into the prompt as literal keystrokes. Reassemble until the
+			// terminator, then fall through to the resize handler below. A
+			// reassembled sequence that turns out not to be a resize report (e.g. a
+			// split kitty `\x1b[48;…u` for a digit key) is forwarded to the input
+			// handler rather than dropped.
+			const inBandResizePartialPattern = /^\x1b\[4[\d;]*$/;
+			const isInBandResizePartial = this.#inBandResizeActive && inBandResizePartialPattern.test(sequence);
+			if (this.#inBandResizeBuffer && sequence.startsWith("\x1b")) {
+				// A new escape interrupted the partial; the stale partial is
+				// unrecoverable. If the new escape is itself an in-band prefix,
+				// restart reassembly with it; otherwise let it flow through below.
+				this.#inBandResizeBuffer = isInBandResizePartial ? sequence : "";
+				if (isInBandResizePartial) return;
+			} else if (this.#inBandResizeBuffer || isInBandResizePartial) {
+				this.#inBandResizeBuffer += sequence;
+				if (this.#inBandResizeBuffer.length > 256) {
+					this.#inBandResizeBuffer = "";
+					return;
+				}
+				const lastCode = this.#inBandResizeBuffer.charCodeAt(this.#inBandResizeBuffer.length - 1);
+				if (lastCode >= 0x40 && lastCode <= 0x7e) {
+					// Terminator arrived: let the resize handler below claim it, or
+					// fall through to the input handler if it is not a resize report.
+					sequence = this.#inBandResizeBuffer;
+					this.#inBandResizeBuffer = "";
+				} else if (!inBandResizePartialPattern.test(this.#inBandResizeBuffer)) {
+					// Diverged from a valid in-band prefix — drop the garbled report.
+					this.#inBandResizeBuffer = "";
+					return;
+				} else {
+					// Still accumulating the report.
+					return;
 				}
 			}
 
@@ -970,6 +1012,7 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99Capabilities.clear();
 		setOsc99Supported(false);
 		this.#privateCsiResponseBuffer = "";
+		this.#inBandResizeBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
 		this.#privateModeSupport.clear();
