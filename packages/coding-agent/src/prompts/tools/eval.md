@@ -22,7 +22,7 @@ Cell fields:
 </instruction>
 
 <prelude>
-{{#ifAll py js}}Same helpers in both runtimes with the same positional argument order. Python: trailing options as keyword args. JavaScript: trailing options as a trailing object literal. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are a final object literal.{{/if}}{{/ifAll}}
+{{#ifAll py js}}Same helpers in both runtimes with the same positional argument order. Python: trailing options as keyword args. JavaScript: trailing options are a single trailing object literal, never positional — passing options positionally (or any extra positional arg) throws. JavaScript helpers are async and `await`able; Python helpers run synchronously.{{else}}{{#if py}}Helpers run synchronously. Trailing options are keyword arguments.{{/if}}{{#if js}}Helpers are async and `await`able. Trailing options are a single trailing object literal, never positional — passing options positionally (or any extra positional arg) throws.{{/if}}{{/ifAll}}
 ```
 display(value) → None
     Render a value in the current cell output.
@@ -48,6 +48,8 @@ llm(prompt, model?="default", system?=None, schema?=None) → str | dict
     Oneshot, stateless LLM call (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
 {{#if spawns}}agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
     Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
+{{#if js}}    In JS, pass options as one trailing object — never positional: agent(prompt, { agentType, context, schema }).
+{{/if}}
 {{/if}}
 parallel(thunks) → list
     Run thunks (callables) through a bounded pool, preserving input order. The pool is as wide as a `task` tool batch (tracks the `task.maxConcurrency` setting), so fan out as wide as the work divides — don't pre-shrink it. Barrier: returns once all finish; a thunk that throws propagates.
