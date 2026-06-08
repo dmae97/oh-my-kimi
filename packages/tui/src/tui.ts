@@ -494,7 +494,7 @@ export class TUI extends Container {
 	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
 	// a single forced render lets the multiplexer settle first.
 	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
-	// Post-paint settle window for ConPTY hosts. The `sessionReplace` / 
+	// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
 	// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
 	// a transcript that overflows the viewport, scroll-pushing everything past
 	// the last `height` rows into native scrollback. Windows Terminal's
