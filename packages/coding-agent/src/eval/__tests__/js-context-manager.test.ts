@@ -38,6 +38,55 @@ function makeSession(cwd: string): ToolSession {
 	};
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	let timeout: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+			}),
+		]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
+}
+
+async function waitForRealWorkerExitAfterClose(cwd: string): Promise<void> {
+	const worker = new originalWorker(new URL("../js/worker-entry.ts", import.meta.url).href, { type: "module" });
+	const ready = Promise.withResolvers<void>();
+	const runComplete = Promise.withResolvers<void>();
+	const closedAck = Promise.withResolvers<void>();
+	const workerClosed = Promise.withResolvers<void>();
+	const runId = `keep-alive:${crypto.randomUUID()}`;
+	const snapshot = { cwd, sessionId: `worker-exit:${crypto.randomUUID()}` };
+
+	worker.addEventListener("message", event => {
+		const msg = event.data as { type?: string; runId?: string; ok?: boolean };
+		if (msg.type === "ready") ready.resolve();
+		else if (msg.type === "result" && msg.runId === runId && msg.ok) runComplete.resolve();
+		else if (msg.type === "closed") closedAck.resolve();
+	});
+	worker.addEventListener("close", () => workerClosed.resolve());
+
+	try {
+		await withTimeout(ready.promise, 1_000, "worker ready");
+		worker.postMessage({
+			type: "run",
+			runId,
+			code: "globalThis.__keepAlive = setInterval(() => {}, 1000);\nundefined;",
+			filename: "keep-alive.js",
+			snapshot,
+		});
+		await withTimeout(runComplete.promise, 1_000, "worker run");
+		worker.postMessage({ type: "close" });
+		await withTimeout(closedAck.promise, 1_000, "worker closed ack");
+		await withTimeout(workerClosed.promise, 1_000, "worker close event");
+	} finally {
+		worker.terminate();
+	}
+}
+
 function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior): void {
 	class FakeWorker {
 		#messageListeners = new Set<(event: MessageEvent) => void>();
@@ -116,6 +165,12 @@ describe("JavaScript eval worker lifecycle", () => {
 			writable: true,
 			value: originalWorker,
 		});
+	});
+
+	it("exits a real worker on graceful close even with ref'ed user handles", async () => {
+		using tempDir = TempDir.createSync("@omp-js-worker-real-close-");
+
+		await waitForRealWorkerExitAfterClose(tempDir.path());
 	});
 
 	it("waits for the worker to close on reset instead of force-terminating it", async () => {
