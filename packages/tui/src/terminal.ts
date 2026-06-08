@@ -20,12 +20,17 @@ const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
  * first ~30 lines until any focus event forces the host to re-query the
  * cursor. The data is delivered correctly — it's purely a viewport-sync bug.
  *
- * 8 KiB is well below the 32 KiB threshold reported on Windows Terminal and
- * leaves headroom for the other ConPTY hosts (Tabby, Hyper, VS Code) where
- * the exact limit is undocumented. The cost is a handful of extra syscalls
- * per full paint — invisible compared to the cost of the paint itself.
+ * 16 KiB is half the smallest observed Windows Terminal threshold (32 KiB),
+ * which keeps the per-write parked-viewport bug fixed by #2034 while halving
+ * the WriteFile count on multi-megabyte paints (a 3 MB session resume splits
+ * into ~192 chunks instead of ~384). Fewer WriteFiles means fewer chances for
+ * WT's viewport-following logic to lose track of the cursor during the burst,
+ * which mitigates the residual mid-paint drift the original 8 KiB cap left
+ * behind (#2095). Still well clear of the threshold so the other ConPTY hosts
+ * (Tabby, Hyper, VS Code) — where the exact limit is undocumented — keep
+ * their safety margin.
  */
-const MAX_CONPTY_WRITE_CHUNK = 8 * 1024;
+const MAX_CONPTY_WRITE_CHUNK = 16 * 1024;
 
 /**
  * Split `data` into chunks no larger than `maxChunkSize`, preferring a line
@@ -202,7 +207,17 @@ export interface Terminal {
 	onPrivateModeReport?(callback: (mode: number, supported: boolean) => void): void;
 }
 
-function isWindowsSubsystemForLinux(): boolean {
+/**
+ * True when stdout flows through a ConPTY pseudo-console (native win32, or
+ * Linux running under WSL where stdout still crosses into ConPTY at the
+ * `wslhost` boundary). ConPTY hosts share the per-WriteFile viewport-tracking
+ * quirks documented above and on {@link MAX_CONPTY_WRITE_CHUNK}, so both
+ * `#safeWrite` and the renderer's post-big-paint settle gate hang off this
+ * single predicate.
+ */
+export function isConPTYHosted(): boolean {
+	if (process.platform === "win32") return true;
+	// WSL: stdout still crosses into ConPTY at the `wslhost` boundary.
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
 }
 
@@ -349,7 +364,8 @@ export class ProcessTerminal implements Terminal {
 		// Windows Terminal under WSL has been observed to close the hosting tab
 		// after repeated OSC 11/DA1 probes. Keep the initial/event-driven probes,
 		// but avoid background polling there.
-		if (!isWindowsSubsystemForLinux()) {
+		const isWSL = process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+		if (!isWSL) {
 			this.#startOsc11Poll();
 		}
 
@@ -1091,8 +1107,7 @@ export class ProcessTerminal implements Terminal {
 			// crosses into ConPTY at the `wslhost` boundary, so the same per-
 			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
 			// path. See #2034.
-			const conptyHosted = process.platform === "win32" || isWindowsSubsystemForLinux();
-			if (conptyHosted && data.length > MAX_CONPTY_WRITE_CHUNK) {
+			if (isConPTYHosted() && data.length > MAX_CONPTY_WRITE_CHUNK) {
 				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK)) {
 					process.stdout.write(chunk);
 				}

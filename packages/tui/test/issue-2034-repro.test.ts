@@ -41,7 +41,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 
 		it("splits a large multi-line buffer into pieces no larger than the chunk size", () => {
 			const data = buildFullPaint(2000, 60);
-			const max = 8 * 1024;
+			const max = 16 * 1024;
 			expect(data.length).toBeGreaterThan(max);
 
 			const chunks = chunkForConPTY(data, max);
@@ -144,7 +144,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			return writes;
 		}
 
-		it("splits >8 KiB writes into chunks on win32 so ConPTY can track the viewport", () => {
+		it("splits >16 KiB writes into chunks on win32 so ConPTY can track the viewport", () => {
 			Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();
@@ -155,12 +155,12 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			const conptyChunks = writes.filter(w => w.length > 0);
 			expect(conptyChunks.length).toBeGreaterThan(1);
 			for (const chunk of conptyChunks) {
-				expect(chunk.length).toBeLessThanOrEqual(8 * 1024);
+				expect(chunk.length).toBeLessThanOrEqual(16 * 1024);
 			}
 			expect(conptyChunks.join("")).toBe(payload);
 		});
 
-		it("splits >8 KiB writes inside WSL because stdout still crosses ConPTY at wslhost", () => {
+		it("splits >16 KiB writes inside WSL because stdout still crosses ConPTY at wslhost", () => {
 			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 			setEnv("WSL_DISTRO_NAME", "Ubuntu");
 			setEnv("WSL_INTEROP", "/run/WSL/123_interop");
@@ -173,7 +173,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			const conptyChunks = writes.filter(w => w.length > 0);
 			expect(conptyChunks.length).toBeGreaterThan(1);
 			for (const chunk of conptyChunks) {
-				expect(chunk.length).toBeLessThanOrEqual(8 * 1024);
+				expect(chunk.length).toBeLessThanOrEqual(16 * 1024);
 			}
 			expect(conptyChunks.join("")).toBe(payload);
 		});
