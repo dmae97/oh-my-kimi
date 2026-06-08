@@ -29,31 +29,21 @@ const probe: ShimmerPalette = {
 };
 
 /**
- * Visible cell indexes painted with the crest (high, code 33) color. Walks the
+ * Index of the first visible cell painted with the crest (high, code 33) color,
+ * or undefined when the band sits in the padding and no cell is lit. Walks the
  * coalesced `ESC[<code>m<chars>` runs that {@link shimmerText} emits.
  */
-function highIndices(rendered: string): number[] {
-	const indices: number[] = [];
+function crestStart(rendered: string): number | undefined {
 	const run = /\x1b\[(\d+)m([^\x1b]*)/g;
 	let idx = 0;
 	let m: RegExpExecArray | null = run.exec(rendered);
 	while (m !== null) {
 		const len = [...m[2]].length;
-		if (m[1] === "33") {
-			for (let i = 0; i < len; i++) indices.push(idx + i);
-		}
+		if (m[1] === "33" && len > 0) return idx;
 		idx += len;
 		m = run.exec(rendered);
 	}
-	return indices;
-}
-
-function crestCenter(rendered: string): number | undefined {
-	const indices = highIndices(rendered);
-	const first = indices[0];
-	const last = indices[indices.length - 1];
-	if (first === undefined || last === undefined) return undefined;
-	return (first + last) / 2;
+	return undefined;
 }
 
 describe("shimmerText", () => {
@@ -63,8 +53,9 @@ describe("shimmerText", () => {
 
 	it("uses a supplied raw ANSI color for the shimmer crest", () => {
 		vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
-		// At the beginning of the shared sweep the crest is on the first cell.
-		vi.spyOn(Date, "now").mockReturnValue(0);
+		// t chosen so the fixed-velocity band (30 cells/s) crest sits on the char:
+		// pos = (333/1000)*30 ≈ 10 = CLASSIC_PADDING, i.e. centered on index 0.
+		vi.spyOn(Date, "now").mockReturnValue(333);
 
 		const rendered = shimmerText("x", testTheme, {
 			low: "dim",
@@ -78,9 +69,8 @@ describe("shimmerText", () => {
 	});
 });
 
-describe("shimmer phase alignment", () => {
+describe("shimmer band velocity", () => {
 	const FRAME_MS = 1000 / 30;
-	const SWEEP_MS = 2000;
 	let nowMs = 0;
 
 	beforeEach(() => {
@@ -93,30 +83,45 @@ describe("shimmer phase alignment", () => {
 		vi.restoreAllMocks();
 	});
 
-	function renderLength(length: number): string {
-		return shimmerText("x".repeat(length), testTheme, probe);
+	function crestTrack(length: number, startMs: number, frames: number): (number | undefined)[] {
+		const text = "x".repeat(length);
+		const out: (number | undefined)[] = [];
+		for (let i = 0; i < frames; i++) {
+			nowMs = startMs + i * FRAME_MS;
+			out.push(crestStart(shimmerText(text, testTheme, probe)));
+		}
+		return out;
 	}
 
-	it("starts every string at the first cell and lands at the last cell", () => {
-		for (const length of [8, 40, 80]) {
-			nowMs = 0;
-			expect(highIndices(renderLength(length))).toContain(0);
-
-			nowMs = SWEEP_MS - 1;
-			expect(highIndices(renderLength(length))).toContain(length - 1);
+	it("advances the crest by at most one cell per 30fps frame", () => {
+		// L=40 → period 60 cells; at 30 cells/s that is a 2s sweep (60 frames).
+		// 75 frames covers a full sweep plus the padding gap into the next one.
+		const track = crestTrack(40, 0, 75);
+		let compared = 0;
+		for (let i = 1; i < track.length; i++) {
+			const a = track[i - 1];
+			const b = track[i];
+			if (a === undefined || b === undefined) continue; // skip the padding gap
+			expect(Math.abs(b - a)).toBeLessThanOrEqual(1);
+			compared++;
 		}
+		// Fail loudly rather than vacuously pass if the crest were never detected.
+		expect(compared).toBeGreaterThan(20);
 	});
 
-	it("keeps the crest at the same normalized position across string lengths", () => {
-		nowMs = 15 * FRAME_MS;
-		const shortCenter = crestCenter(renderLength(20));
-		const longCenter = crestCenter(renderLength(60));
-
-		expect(shortCenter).toBeDefined();
-		expect(longCenter).toBeDefined();
-		const shortPhase = shortCenter! / (20 - 1);
-		const longPhase = longCenter! / (60 - 1);
-
-		expect(Math.abs(shortPhase - longPhase)).toBeLessThanOrEqual(0.02);
+	it("moves the crest at a length-independent speed", () => {
+		// Starting where the crest enters at index 0 (pos = CLASSIC_PADDING = 10),
+		// the crest must travel the same number of cells over a fixed wall-clock
+		// window regardless of string length — the contract of fixed-velocity
+		// sweeping (a longer message must not shimmer faster).
+		const startMs = (10 / 30) * 1000; // pos = 10 cells → crest at index 0
+		const span = (track: (number | undefined)[]): number => {
+			const def = track.filter((v): v is number => v !== undefined);
+			return def.length ? def[def.length - 1] - def[0] : 0;
+		};
+		const shortSpan = span(crestTrack(20, startMs, 10));
+		const longSpan = span(crestTrack(60, startMs, 10));
+		expect(shortSpan).toBeGreaterThan(0);
+		expect(Math.abs(shortSpan - longSpan)).toBeLessThanOrEqual(1);
 	});
 });
