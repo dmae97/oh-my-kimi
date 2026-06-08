@@ -302,6 +302,22 @@ function isProjectAwareLspServer(serverConfig: ServerConfig): boolean {
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
+const DIAGNOSTICS_POLL_MS = 100;
+const DIAGNOSTICS_SETTLE_MS = 250;
+/**
+ * How long the edit/write writethrough blocks inline waiting for fresh
+ * diagnostics before handing slow servers off to the deferred late-injection
+ * channel. Keeps the common fast-server case inline while letting an edit
+ * return promptly when a server (e.g. a large-monorepo tsserver) is slow to
+ * publish version-fresh diagnostics.
+ */
+const INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 500;
+/**
+ * Inner per-server diagnostics wait budget for the background/deferred fetch.
+ * Longer than the inline cap (and the old 3s default) so a slow server still
+ * delivers late instead of giving up before it ever publishes.
+ */
+const DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS = 12_000;
 const MAX_GLOB_DIAGNOSTIC_TARGETS = 20;
 const WORKSPACE_SYMBOL_LIMIT = 200;
 const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
@@ -614,6 +630,8 @@ interface GetDiagnosticsForFileOptions {
 	minVersions?: ServerVersionMap;
 	expectedDocumentVersions?: ServerVersionMap;
 	allowUnversionedLspDiagnostics?: boolean;
+	/** Per-server wait budget (ms). Defaults to {@link SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS}. */
+	timeoutMs?: number;
 }
 
 /**
@@ -669,7 +687,7 @@ async function getDiagnosticsForFile(
 	servers: Array<[string, ServerConfig]>,
 	options: GetDiagnosticsForFileOptions = {},
 ): Promise<FileDiagnosticsResult | undefined> {
-	const { signal, minVersions, expectedDocumentVersions, allowUnversionedLspDiagnostics = true } = options;
+	const { signal, minVersions, expectedDocumentVersions, allowUnversionedLspDiagnostics = true, timeoutMs } = options;
 	if (servers.length === 0) {
 		return undefined;
 	}
@@ -701,7 +719,7 @@ async function getDiagnosticsForFile(
 			const minVersion = minVersions?.get(serverName);
 			const expectedDocumentVersion = expectedDocumentVersions?.get(serverName);
 			const diagnostics = await waitForDiagnostics(client, uri, {
-				timeoutMs: 3000,
+				timeoutMs: timeoutMs ?? SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 				signal,
 				minVersion,
 				expectedDocumentVersion,
@@ -1007,12 +1025,80 @@ async function scheduleDeferredDiagnosticsFetch(args: {
 			signal: combined,
 			minVersions: args.minVersions,
 			expectedDocumentVersions: args.expectedDocumentVersions,
+			timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 		});
 		if (args.signal.aborted || diagnostics === undefined) return;
 		args.callback(diagnostics);
 	} catch {
 		// Cancelled or LSP gave up; silently discard.
 	}
+}
+
+/**
+ * Fetch post-write diagnostics without making the edit/write block on a slow
+ * language server.
+ *
+ * Blocks inline only briefly ({@link INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS}) for a
+ * fresh, version-fresh result. Freshness is enforced by the pre-edit
+ * `minVersions` baseline, so we accept unversioned publishes
+ * (`allowUnversionedLspDiagnostics: true`) rather than waiting for an exact
+ * per-document version echo that servers like typescript-language-server rarely
+ * send in time. If nothing fresh arrives in the inline window and a deferred
+ * channel is available, the in-flight fetch is handed off to deliver late via
+ * `onDeferredDiagnostics`, and this returns `undefined` so the tool result
+ * lands immediately. Without a deferred channel (direct/CI callers) it blocks
+ * for the standard budget so the result is still returned inline.
+ */
+async function fetchDiagnosticsWithDeferral(args: {
+	dst: string;
+	cwd: string;
+	servers: Array<[string, ServerConfig]>;
+	minVersions: ServerVersionMap | undefined;
+	expectedDocumentVersions: ServerVersionMap | undefined;
+	transformDiagnostics?: ResolvedWritethroughOptions["transformDiagnostics"];
+	deferred?: { onDeferredDiagnostics: (diagnostics: FileDiagnosticsResult) => void; signal: AbortSignal };
+	signal?: AbortSignal;
+}): Promise<FileDiagnosticsResult | undefined> {
+	const { dst, cwd, servers, minVersions, expectedDocumentVersions, transformDiagnostics, deferred, signal } = args;
+	const apply = (d: FileDiagnosticsResult | undefined) =>
+		d && transformDiagnostics ? transformDiagnostics(dst, d) : d;
+
+	if (!deferred) {
+		// No late-injection channel: block for the standard budget and return inline.
+		return apply(
+			await getDiagnosticsForFile(dst, cwd, servers, {
+				signal,
+				minVersions,
+				expectedDocumentVersions,
+				allowUnversionedLspDiagnostics: true,
+			}),
+		);
+	}
+
+	// One background fetch with a generous inner budget; await it only briefly inline.
+	const fetchPromise = getDiagnosticsForFile(dst, cwd, servers, {
+		signal: deferred.signal,
+		minVersions,
+		expectedDocumentVersions,
+		allowUnversionedLspDiagnostics: true,
+		timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
+	});
+	const INLINE_TIMEOUT = Symbol("inline-diagnostics-timeout");
+	const raced = await Promise.race([
+		fetchPromise,
+		Bun.sleep(INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS).then(() => INLINE_TIMEOUT),
+	]);
+	if (raced !== INLINE_TIMEOUT) {
+		return apply(raced as FileDiagnosticsResult | undefined);
+	}
+	// Slow server: deliver late via the deferred channel; nothing inline. The
+	// deferred sink (edit tool) applies its own dedup, so pass the raw result.
+	void fetchPromise
+		.then(diagnostics => {
+			if (diagnostics && !deferred.signal.aborted) deferred.onDeferredDiagnostics(diagnostics);
+		})
+		.catch(() => {});
+	return undefined;
 }
 
 async function runLspWritethrough(
@@ -1047,6 +1133,7 @@ async function runLspWritethrough(
 	let formatter: FileFormatResult | undefined;
 	let diagnostics: FileDiagnosticsResult | undefined;
 	let timedOut = false;
+	let synced = false;
 	try {
 		const timeoutSignal = AbortSignal.timeout(5_000);
 		timeoutSignal.addEventListener(
@@ -1090,19 +1177,8 @@ async function runLspWritethrough(
 
 			// 5. Notify saved to LSP servers
 			await notifyFileSaved(dst, cwd, lspServers, operationSignal);
-
-			// 6. Get diagnostics from all servers (wait for fresh results)
-			if (enableDiagnostics) {
-				const fetched = await getDiagnosticsForFile(dst, cwd, servers, {
-					signal: operationSignal,
-					minVersions,
-					expectedDocumentVersions,
-					allowUnversionedLspDiagnostics: false,
-				});
-				diagnostics =
-					fetched && options.transformDiagnostics ? options.transformDiagnostics(dst, fetched) : fetched;
-			}
 		});
+		synced = true;
 	} catch {
 		if (timedOut) {
 			formatter = undefined;
@@ -1121,6 +1197,19 @@ async function runLspWritethrough(
 			}
 		}
 		await getWritePromise();
+	}
+
+	if (synced && enableDiagnostics) {
+		diagnostics = await fetchDiagnosticsWithDeferral({
+			dst,
+			cwd,
+			servers,
+			minVersions,
+			expectedDocumentVersions,
+			transformDiagnostics: options.transformDiagnostics,
+			deferred,
+			signal,
+		});
 	}
 
 	if (formatter !== undefined) {
