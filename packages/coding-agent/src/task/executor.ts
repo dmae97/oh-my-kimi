@@ -311,6 +311,15 @@ export interface YieldItem {
 	data?: unknown;
 	status?: "success" | "aborted";
 	error?: string;
+	/**
+	 * Set by the in-tool yield validator when it exhausted its retry budget
+	 * (MAX_SCHEMA_RETRIES) and accepted a schema-invalid payload anyway.
+	 * `finalizeSubprocessOutput` honors this by serializing the payload and
+	 * surfacing a stderr warning, instead of re-emitting `schema_violation`
+	 * — which would silently swap the subagent's "accepted" view for a
+	 * different, opaque error blob in the parent's view of the result.
+	 */
+	schemaOverridden?: boolean;
 }
 
 interface FinalizeSubprocessOutputArgs {
@@ -331,7 +340,8 @@ interface FinalizeSubprocessOutputResult {
 	abortedViaYield: boolean;
 	hasYield: boolean;
 }
-
+export const SUBAGENT_WARNING_SCHEMA_OVERRIDDEN =
+	"SYSTEM WARNING: Subagent exhausted schema-retry budget; result was accepted despite failing the output schema.";
 export const SUBAGENT_WARNING_NULL_YIELD = "SYSTEM WARNING: Subagent called yield with null data.";
 export const SUBAGENT_WARNING_MISSING_YIELD =
 	"SYSTEM WARNING: Subagent exited without calling yield tool after 3 reminders.";
@@ -384,29 +394,31 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
 				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
-				if (schemaError) {
-					rawOutput = `{"error":"schema_violation","message":"invalid output schema: ${schemaError.replace(/"/g, '\\"')}"}`;
-					stderr = `schema_violation: invalid output schema: ${schemaError}`;
-					exitCode = 1;
+				const overridden = lastYield?.schemaOverridden === true;
+				const completeData = normalizeCompleteData(submitData, reportFindings, validator);
+				const result =
+					schemaError || overridden
+						? { success: true as const }
+						: (validator?.validate(completeData) ?? { success: true as const });
+				if (!result.success) {
+					const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
+					const outcome = buildSchemaViolationOutcome(summary, completeData);
+					rawOutput = outcome.rawOutput;
+					stderr = outcome.stderr;
+					exitCode = outcome.exitCode;
 				} else {
-					const completeData = normalizeCompleteData(submitData, reportFindings, validator);
-					const result = validator?.validate(completeData) ?? { success: true as const };
-					if (!result.success) {
-						const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
-						const outcome = buildSchemaViolationOutcome(summary, completeData);
-						rawOutput = outcome.rawOutput;
-						stderr = outcome.stderr;
-						exitCode = outcome.exitCode;
-					} else {
-						try {
-							rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
-						} catch (err) {
-							const errorMessage = err instanceof Error ? err.message : String(err);
-							rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
-						}
-						exitCode = 0;
-						stderr = "";
+					try {
+						rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
+					} catch (err) {
+						const errorMessage = err instanceof Error ? err.message : String(err);
+						rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
 					}
+					exitCode = 0;
+					stderr = overridden
+						? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
+						: schemaError
+							? `invalid output schema: ${schemaError}`
+							: "";
 				}
 			}
 		}
