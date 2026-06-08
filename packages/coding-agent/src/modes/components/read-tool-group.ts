@@ -2,7 +2,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { InternalUrlRouter } from "../../internal-urls";
 import { getLanguageFromPath, theme } from "../../modes/theme/theme";
-import { splitPathAndSel } from "../../tools/path-utils";
+import { parseLineRanges, splitPathAndSel } from "../../tools/path-utils";
 import { PREVIEW_LIMITS, shortenPath } from "../../tools/render-utils";
 import { renderCodeCell } from "../../tui";
 import type { ToolExecutionHandle } from "./tool-execution";
@@ -51,6 +51,7 @@ type ReadToolResultDetails = {
 		to?: string;
 	};
 	conflictCount?: number;
+	displayReadTargets?: unknown;
 };
 
 type ReadToolGroupOptions = {
@@ -67,6 +68,7 @@ function getSuffixResolution(details: ReadToolResultDetails | undefined): ReadTo
 type ReadEntry = {
 	toolCallId: string;
 	path: string;
+	displayPaths?: string[];
 	status: "pending" | "success" | "warning" | "error";
 	correctedFrom?: string;
 	contentText?: string;
@@ -75,6 +77,149 @@ type ReadEntry = {
 
 /** Number of code lines to show in collapsed preview mode */
 const COLLAPSED_PREVIEW_LINES = PREVIEW_LIMITS.OUTPUT_COLLAPSED;
+
+type ReadDisplayTarget = {
+	entry: ReadEntry;
+	targetPath: string;
+	basePath: string;
+	selector?: string;
+};
+
+type ReadSummaryRow = {
+	targetPath: string;
+	basePath: string;
+	targets: ReadDisplayTarget[];
+};
+
+const READ_STATUS_RANK: Record<ReadEntry["status"], number> = {
+	success: 0,
+	pending: 1,
+	warning: 2,
+	error: 3,
+};
+
+const URL_LIKE_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function getDisplayReadTargets(details: ReadToolResultDetails | undefined): string[] | undefined {
+	if (!Array.isArray(details?.displayReadTargets)) return undefined;
+	const targets = details.displayReadTargets
+		.filter((target): target is string => typeof target === "string")
+		.map(target => target.trim())
+		.filter(target => target.length > 0);
+	return targets.length > 0 ? targets : undefined;
+}
+
+function selectorChunkIsLineRangeList(chunk: string): boolean {
+	const trimmed = chunk.trim();
+	if (!trimmed) return false;
+	try {
+		return parseLineRanges(trimmed) !== null;
+	} catch {
+		return false;
+	}
+}
+
+function nextTopLevelToken(input: string, start: number): string {
+	let braceDepth = 0;
+	for (let i = start; i < input.length; i++) {
+		const ch = input[i];
+		if (ch === "\\" && i + 1 < input.length) {
+			i++;
+			continue;
+		}
+		if (ch === "{") {
+			braceDepth++;
+			continue;
+		}
+		if (ch === "}") {
+			if (braceDepth > 0) braceDepth--;
+			continue;
+		}
+		if (braceDepth === 0 && (ch === "," || ch === ";")) {
+			return input.slice(start, i);
+		}
+	}
+	return input.slice(start);
+}
+
+function commaContinuesLineRangeSelector(input: string, partStart: number, commaIndex: number): boolean {
+	const currentPart = input.slice(partStart, commaIndex).trim();
+	if (!splitPathAndSel(currentPart).sel) return false;
+	return selectorChunkIsLineRangeList(nextTopLevelToken(input, commaIndex + 1));
+}
+
+function splitReadDisplayPathSpecs(rawPath: string): string[] {
+	const normalized = rawPath.trim();
+	if (!normalized || URL_LIKE_RE.test(normalized)) return [rawPath];
+
+	const parts: string[] = [];
+	let braceDepth = 0;
+	let partStart = 0;
+	for (let i = 0; i < normalized.length; i++) {
+		const ch = normalized[i];
+		if (ch === "\\" && i + 1 < normalized.length) {
+			i++;
+			continue;
+		}
+		if (ch === "{") {
+			braceDepth++;
+			continue;
+		}
+		if (ch === "}") {
+			if (braceDepth > 0) braceDepth--;
+			continue;
+		}
+		if (braceDepth !== 0 || (ch !== "," && ch !== ";")) continue;
+		if (ch === "," && commaContinuesLineRangeSelector(normalized, partStart, i)) continue;
+		parts.push(normalized.slice(partStart, i).trim());
+		partStart = i + 1;
+	}
+	parts.push(normalized.slice(partStart).trim());
+
+	const cleanParts = parts.filter(part => part.length > 0);
+	if (cleanParts.length <= 1) return [rawPath];
+	return cleanParts.every(part => splitPathAndSel(part).sel !== undefined) ? cleanParts : [rawPath];
+}
+
+function splitSelectorDisplayParts(sel: string | undefined): Array<string | undefined> {
+	if (!sel) return [undefined];
+	const chunks = sel.split(":");
+	if (chunks.length === 1) {
+		if (!selectorChunkIsLineRangeList(sel) || !sel.includes(",")) return [sel];
+		return sel
+			.split(",")
+			.map(chunk => chunk.trim())
+			.filter(chunk => chunk.length > 0);
+	}
+	if (chunks.length === 2) {
+		const [left, right] = chunks as [string, string];
+		const leftIsRange = selectorChunkIsLineRangeList(left);
+		const rightIsRange = selectorChunkIsLineRangeList(right);
+		if (leftIsRange && left.includes(",")) {
+			return left
+				.split(",")
+				.map(chunk => chunk.trim())
+				.filter(chunk => chunk.length > 0)
+				.map(chunk => `${chunk}:${right}`);
+		}
+		if (rightIsRange && right.includes(",")) {
+			return right
+				.split(",")
+				.map(chunk => chunk.trim())
+				.filter(chunk => chunk.length > 0)
+				.map(chunk => `${left}:${chunk}`);
+		}
+	}
+	return [sel];
+}
+
+function formatMergedSelectorParts(selectors: string[]): string {
+	if (selectors.length <= 3) return selectors.join(",");
+	const first = selectors[0]!;
+	const second = selectors[1]!;
+	const last = selectors[selectors.length - 1]!;
+	return `${first},${second},…,${last}`;
+}
 
 export class ReadToolGroupComponent extends Container implements ToolExecutionHandle {
 	#entries = new Map<string, ReadEntry>();
@@ -131,11 +276,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (isPartial) return;
 		const details = result.details as ReadToolResultDetails | undefined;
 		const suffixResolution = getSuffixResolution(details);
+		const displayPaths = getDisplayReadTargets(details);
 		if (suffixResolution) {
 			entry.path = suffixResolution.to;
 			entry.correctedFrom = suffixResolution.from;
+			entry.displayPaths = undefined;
 		} else {
 			entry.correctedFrom = undefined;
+			entry.displayPaths = displayPaths;
 		}
 		const conflictCount =
 			typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
@@ -164,42 +312,42 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#updateDisplay(): void {
 		const entries = [...this.#entries.values()];
+		const displayTargets = this.#displayTargetsForEntries(entries);
+		const displayRows = this.#buildSummaryRows(displayTargets);
 
 		// Clear previous children and rebuild the summary and preview blocks.
 		this.clear();
 		this.#text = new Text("", 0, 0);
 
-		if (entries.length === 0) {
+		if (displayRows.length === 0) {
 			this.#text.setText(` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold("Read"))}`);
 			this.addChild(this.#text);
 			return;
 		}
 
-		if (entries.length === 1) {
-			const entry = entries[0];
-			if (!this.#shouldRenderPreview(entry)) {
-				const statusSymbol = this.#formatStatus(entry.status);
-				const pathDisplay = this.#formatPath(entry);
+		if (displayRows.length === 1) {
+			const row = displayRows[0]!;
+			if (!this.#shouldRenderPreviewRow(row)) {
+				const statusSymbol = this.#formatStatus(this.#statusForTargets(row.targets));
+				const pathDisplay = this.#formatRowPath(row);
 				this.#text.setText(
 					` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd(),
 				);
 				this.addChild(this.#text);
 			}
-			if (this.#shouldRenderPreview(entry)) {
+			for (const entry of this.#previewEntriesForRow(row)) {
 				this.#addContentPreview(entry);
 			}
 			return;
 		}
 
-		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${entries.length})`)}`;
+		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${displayRows.length})`)}`;
 		const lines = [` ${theme.format.bullet} ${header}`];
 		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
-		const total = entriesWithoutPreview.length;
-		for (const [index, entry] of entriesWithoutPreview.entries()) {
-			const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
-			const statusPrefix = entry.status === "success" ? "" : `${this.#formatStatus(entry.status)} `;
-			const pathDisplay = this.#formatPath(entry);
-			lines.push(`   ${theme.fg("dim", connector)} ${statusPrefix}${pathDisplay}`.trimEnd());
+		const summaryTargets = this.#displayTargetsForEntries(entriesWithoutPreview);
+		const rows = this.#buildSummaryRows(summaryTargets);
+		for (const [index, row] of rows.entries()) {
+			this.#appendSummaryRow(lines, row, index, rows.length);
 		}
 
 		this.#text.setText(lines.join("\n"));
@@ -210,6 +358,141 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				this.#addContentPreview(entry);
 			}
 		}
+	}
+
+	#displayTargetsForEntries(entries: ReadEntry[]): ReadDisplayTarget[] {
+		const targets: ReadDisplayTarget[] = [];
+		for (const entry of entries) {
+			const pathSpecs = entry.displayPaths ?? splitReadDisplayPathSpecs(entry.path);
+			for (const pathSpec of pathSpecs) {
+				const split = splitPathAndSel(pathSpec);
+				for (const selector of splitSelectorDisplayParts(split.sel)) {
+					targets.push({
+						entry,
+						targetPath: selector ? `${split.path}:${selector}` : pathSpec,
+						basePath: split.path,
+						selector,
+					});
+				}
+			}
+		}
+		return targets;
+	}
+
+	#buildSummaryRows(targets: ReadDisplayTarget[]): ReadSummaryRow[] {
+		const selectorTargetsByBasePath = new Map<string, ReadDisplayTarget[]>();
+		for (const target of targets) {
+			if (!target.selector) continue;
+			const existing = selectorTargetsByBasePath.get(target.basePath);
+			if (existing) existing.push(target);
+			else selectorTargetsByBasePath.set(target.basePath, [target]);
+		}
+
+		const mergeableBasePaths = new Set<string>();
+		for (const [basePath, baseTargets] of selectorTargetsByBasePath) {
+			if (basePath && baseTargets.length > 1) {
+				mergeableBasePaths.add(basePath);
+			}
+		}
+
+		const emittedMergedRows = new Set<string>();
+		const rows: ReadSummaryRow[] = [];
+		for (const target of targets) {
+			if (target.selector && mergeableBasePaths.has(target.basePath)) {
+				if (!emittedMergedRows.has(target.basePath)) {
+					const mergedTargets = selectorTargetsByBasePath.get(target.basePath) ?? [target];
+					rows.push({
+						targetPath: `${target.basePath}:${formatMergedSelectorParts(
+							mergedTargets
+								.map(mergedTarget => mergedTarget.selector)
+								.filter(selector => selector !== undefined),
+						)}`,
+						basePath: target.basePath,
+						targets: mergedTargets,
+					});
+					emittedMergedRows.add(target.basePath);
+				}
+				continue;
+			}
+			rows.push({ targetPath: target.targetPath, basePath: target.basePath, targets: [target] });
+		}
+		return rows;
+	}
+
+	#appendSummaryRow(lines: string[], row: ReadSummaryRow, index: number, total: number): void {
+		const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
+		lines.push(`   ${theme.fg("dim", connector)} ${this.#formatRow(row)}`.trimEnd());
+	}
+
+	#formatRow(row: ReadSummaryRow): string {
+		const status = this.#statusForTargets(row.targets);
+		const statusPrefix = status === "success" ? "" : `${this.#formatStatus(status)} `;
+		return `${statusPrefix}${this.#formatRowPath(row)}`;
+	}
+
+	#formatRowPath(row: ReadSummaryRow): string {
+		return this.#formatPathValue(row.targetPath, {
+			correctedFrom: this.#correctedFromForTargets(row.targets),
+			conflictCount: this.#conflictCountForTargets(row.targets),
+		});
+	}
+
+	#statusForTargets(targets: ReadDisplayTarget[]): ReadEntry["status"] {
+		let status: ReadEntry["status"] = "success";
+		for (const target of targets) {
+			if (READ_STATUS_RANK[target.entry.status] > READ_STATUS_RANK[status]) {
+				status = target.entry.status;
+			}
+		}
+		return status;
+	}
+
+	#correctedFromForTargets(targets: ReadDisplayTarget[]): string | undefined {
+		for (const target of targets) {
+			if (target.entry.correctedFrom) return target.entry.correctedFrom;
+		}
+		return undefined;
+	}
+
+	#conflictCountForTargets(targets: ReadDisplayTarget[]): number | undefined {
+		let conflictCount = 0;
+		for (const target of targets) {
+			if (target.entry.conflictCount && target.entry.conflictCount > conflictCount) {
+				conflictCount = target.entry.conflictCount;
+			}
+		}
+		return conflictCount > 0 ? conflictCount : undefined;
+	}
+
+	#previewEntriesForRow(row: ReadSummaryRow): ReadEntry[] {
+		const entries: ReadEntry[] = [];
+		const seen = new Set<string>();
+		for (const target of row.targets) {
+			if (seen.has(target.entry.toolCallId) || !this.#shouldRenderPreview(target.entry)) continue;
+			entries.push(target.entry);
+			seen.add(target.entry.toolCallId);
+		}
+		return entries;
+	}
+
+	#shouldRenderPreviewRow(row: ReadSummaryRow): boolean {
+		return this.#previewEntriesForRow(row).length > 0;
+	}
+
+	#formatPathValue(value: string, options: { correctedFrom?: string; conflictCount?: number } = {}): string {
+		const filePath = shortenPath(value);
+		let pathDisplay = filePath ? theme.fg("accent", filePath) : theme.fg("toolOutput", "…");
+		if (options.correctedFrom) {
+			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(options.correctedFrom)})`);
+		}
+		pathDisplay += this.#formatConflictBadge(options.conflictCount);
+		return pathDisplay;
+	}
+
+	#formatConflictBadge(conflictCount: number | undefined): string {
+		if (!conflictCount || conflictCount <= 0) return "";
+		const n = conflictCount;
+		return ` ${theme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
 	}
 
 	/**
@@ -253,19 +536,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#shouldRenderPreview(entry: ReadEntry): boolean {
 		return this.#showContentPreview && entry.contentText !== undefined;
-	}
-
-	#formatPath(entry: ReadEntry): string {
-		const filePath = shortenPath(entry.path);
-		let pathDisplay = filePath ? theme.fg("accent", filePath) : theme.fg("toolOutput", "…");
-		if (entry.correctedFrom) {
-			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(entry.correctedFrom)})`);
-		}
-		if (entry.conflictCount && entry.conflictCount > 0) {
-			const n = entry.conflictCount;
-			pathDisplay += ` ${theme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
-		}
-		return pathDisplay;
 	}
 
 	#formatStatus(status: ReadEntry["status"]): string {

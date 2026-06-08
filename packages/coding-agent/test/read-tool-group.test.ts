@@ -68,6 +68,65 @@ describe("ReadToolGroupComponent", () => {
 		expect(plain).not.toContain(`${themeModule.theme.tree.last} ${themeModule.theme.status.enabled}`);
 	});
 
+	it("splits a single selector-delimited read argument into child rows", () => {
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/one.ts:1-2,/tmp/two.ts:3-4;/tmp/three.ts:5-6" }, "read-many");
+		component.updateResult({ content: [{ type: "text", text: "combined" }] }, false, "read-many");
+
+		const plain = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(plain).toContain("Read (3)");
+		expect(plain).toContain(`${themeModule.theme.tree.branch} /tmp/one.ts:1-2`);
+		expect(plain).toContain(`${themeModule.theme.tree.branch} /tmp/two.ts:3-4`);
+		expect(plain).toContain(`${themeModule.theme.tree.last} /tmp/three.ts:5-6`);
+	});
+
+	it("merges multi-range selectors into one file row", () => {
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/example.ts:5-10,20-30" }, "read-ranges");
+		component.updateResult({ content: [{ type: "text", text: "ranges" }] }, false, "read-ranges");
+
+		const plain = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(plain).toContain("Read /tmp/example.ts:5-10,20-30");
+		expect(plain).not.toContain("Read (2)");
+		expect(plain).not.toContain("full file");
+	});
+
+	it("merges repeated same-file ranges and truncates long selector lists", () => {
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/render.ts:507-605" }, "read-one");
+		component.updateArgs({ path: "/tmp/render.ts:1070-1194,1210-1240,1270-1274" }, "read-more");
+		component.updateResult({ content: [{ type: "text", text: "one" }] }, false, "read-one");
+		component.updateResult({ content: [{ type: "text", text: "more" }] }, false, "read-more");
+
+		const plain = Bun.stripANSI(component.render(120).join("\n"));
+		const pathMatches = plain.match(/\/tmp\/render\.ts/g) ?? [];
+
+		expect(pathMatches).toHaveLength(1);
+		expect(plain).toContain("/tmp/render.ts:507-605,1070-1194,…,1270-1274");
+		expect(plain).not.toContain("1210-1240");
+	});
+
+	it("uses result-provided recovered targets for delimited reads", () => {
+		const component = new ReadToolGroupComponent();
+		component.updateArgs({ path: "/tmp/one.ts /tmp/two.ts" }, "read-recovered");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "combined" }],
+				details: { displayReadTargets: ["/tmp/one.ts", "/tmp/two.ts"] },
+			},
+			false,
+			"read-recovered",
+		);
+
+		const plain = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(plain).toContain("Read (2)");
+		expect(plain).toContain(`${themeModule.theme.tree.branch} /tmp/one.ts`);
+		expect(plain).toContain(`${themeModule.theme.tree.last} /tmp/two.ts`);
+	});
+
 	it("renders warning previews with warning styling instead of success styling", () => {
 		const component = new ReadToolGroupComponent({ showContentPreview: true });
 		component.updateArgs({ path: "/tmp/example.ts" }, "read-1");

@@ -45,7 +45,7 @@ const groupedReadTargets = [
 
 const groupedReadDelimitedPath = groupedReadTargets.join(",");
 const groupedReadRepeatedFile = "packages/coding-agent/src/task/render.ts";
-const groupedReadRepeatedRanges = `${groupedReadRepeatedFile}:507-605,1070-1194,1270-1274`;
+const groupedReadRepeatedRanges = `${groupedReadRepeatedFile}:507-605,1070-1194,1210-1240,1270-1274`;
 
 function textResult(text: string, details?: unknown, isError?: boolean): GalleryResult {
 	return { content: [{ type: "text", text }], details, isError };
@@ -53,7 +53,6 @@ function textResult(text: string, details?: unknown, isError?: boolean): Gallery
 
 function addGroupedReadArgs(component: ReadToolGroupComponent): void {
 	component.updateArgs({ path: groupedReadDelimitedPath }, "read-delimited");
-	component.updateArgs({ path: groupedReadRepeatedFile }, "read-full");
 	component.updateArgs({ path: groupedReadRepeatedRanges }, "read-ranges");
 }
 
@@ -82,7 +81,6 @@ function renderReadGroupFixtureState(state: GalleryFixtureState, width: number, 
 		false,
 		"read-delimited",
 	);
-	component.updateResult(textResult("Read the full render module."), false, "read-full");
 
 	if (state === "error") {
 		component.updateResult(
@@ -93,7 +91,7 @@ function renderReadGroupFixtureState(state: GalleryFixtureState, width: number, 
 		return component.render(width);
 	}
 
-	component.updateResult(textResult("Read three render.ts ranges."), false, "read-ranges");
+	component.updateResult(textResult("Read four render.ts ranges."), false, "read-ranges");
 	return component.render(width);
 }
 

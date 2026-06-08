@@ -73,12 +73,11 @@ describe("gallery harness", () => {
 		const success = Bun.stripANSI((await renderGalleryState("read_group", fixture, "success", 140)).join("\n"));
 		const renderPathMatches = success.match(/packages\/coding-agent\/src\/task\/render\.ts/g) ?? [];
 
-		expect(success).toContain("Read (7)");
+		expect(success).toContain("Read (4)");
 		expect(renderPathMatches).toHaveLength(1);
-		expect(success).toContain("full file");
-		expect(success).toContain(":507-605");
-		expect(success).toContain(":1070-1194");
-		expect(success).toContain(":1270-1274");
+		expect(success).toContain("packages/coding-agent/src/task/render.ts:507-605,1070-1194,…,1270-1274");
+		expect(success).not.toContain("1210-1240");
+		expect(success).not.toContain("full file");
 	});
 
 	it("falls back to a generic fixture for registry tools without curated sample data", () => {

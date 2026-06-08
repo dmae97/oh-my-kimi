@@ -575,6 +575,8 @@ export interface ReadToolDetails {
 	summary?: { lines: number; elidedSpans: number; elidedLines: number };
 	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `⚠ N` badge). */
 	conflictCount?: number;
+	/** Paths recovered from a delimited read argument; used only by the TUI to render one call as multiple read rows. */
+	displayReadTargets?: string[];
 }
 
 type ReadParams = ReadToolInput;
@@ -704,6 +706,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const notice = `Note: interpreted as ${parts.length} paths: ${parts.join(", ")}`;
 		const notes = [notice];
 		const content: Array<TextContent | ImageContent> = [];
+		const displayReadTargets: string[] = [];
 		let pendingText = notice;
 		const flushText = () => {
 			if (pendingText.length === 0) return;
@@ -717,6 +720,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		for (const part of parts) {
 			try {
 				const result = await this.execute("read-delimited-part", { path: part }, signal);
+				displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
 				for (const block of result.content) {
 					if (block.type === "text") {
 						appendText(block.text);
@@ -730,12 +734,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const message = error instanceof Error ? error.message : String(error);
 				const errorNote = `Could not read ${part}: ${message}`;
 				notes.push(errorNote);
+				displayReadTargets.push(part);
 				appendText(`[${errorNote}]`);
 			}
 		}
 		flushText();
 
-		return toolResult<ReadToolDetails>({ notes }).content(content).done();
+		return toolResult<ReadToolDetails>({ notes, displayReadTargets }).content(content).done();
 	}
 
 	async #resolveArchiveReadPath(readPath: string, signal?: AbortSignal): Promise<ResolvedArchiveReadPath | null> {

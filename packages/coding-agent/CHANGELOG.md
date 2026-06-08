@@ -1,19 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
 - Rewrote the plan-mode active prompt (`prompts/system/plan-mode-active.md`) from scratch to stop producing shallow plans. Reframed the artifact as an **execution spec** a fresh agent runs after the planning conversation is cleared/compacted (zero design decisions for the implementer) rather than a brevity-capped summary. Folded high-consensus requirements into the existing sections as inline, conditional rules — no new boilerplate sections: ordered Approach steps that keep the build/tests green after each step (sequencing); exact signatures/literals for new or load-bearing symbols (contracts); full callsite list + clean cutover for renames/signature-changes/removals; Verification that must exercise the new behavior (input → observable output) with run preconditions, not just build/typecheck; Assumptions restricted to user-overridable choices plus pre-decided fallbacks for load-bearing assumptions; a provenance rule (plan facts must come from a read this session; unverified claims flagged inline); and bans on conversation back-references and decision-free sections (Non-Goals/Alternatives/Risks/Future Work). Kept the decision-complete self-check and the brevity-vs-completeness tiebreak (completeness wins). Render contract (Handlebars vars/conditionals) unchanged; verified across all `planExists`/`reentry`/`iterative` branch combinations.
 
-### Fixed
-
-- Fixed session search to return all sessions unchanged when the query is blank
-- Fixed duplicate session suggestions by deduplicating history matches by session path when merging metadata and prompt-history results
-- Fixed `/resume` search ranking so sessions whose prompts or metadata match the query now prefer prompt recency and recent literal matches instead of letting older earlier-title fuzzy matches outrank a just-used session.
-
 ### Removed
 
 - Removed the animated pending border ("shimmer") on running `bash`, `eval`, and `ssh` execution blocks. While pending, a block now shows a static accent border instead of sweeping a dark segment around its bottom edge; `display.shimmer` still governs the working-status line and `task` row animations.
+
+### Fixed
+
+- Fixed read-group summaries for multi-path `read` results to use result-provided display targets so each resolved path is shown as its own row
+- Fixed read-group range summaries to abbreviate long merged selectors with ellipsis to keep repeated-file range rows readable
+- Fixed read-group TUI summaries so a single delimited `read` call renders as separate read rows, and repeated reads of the same file collapse under one file with full-file/range children.
+- Fixed session search to return all sessions unchanged when the query is blank
+- Fixed duplicate session suggestions by deduplicating history matches by session path when merging metadata and prompt-history results
+- Fixed `/resume` search ranking so sessions whose prompts or metadata match the query now prefer prompt recency and recent literal matches instead of letting older earlier-title fuzzy matches outrank a just-used session.
 
 ## [15.10.2] - 2026-06-08
 ### Added
