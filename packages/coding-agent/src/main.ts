@@ -171,7 +171,8 @@ export async function submitInteractiveInput(
 
 	try {
 		using _keepalive = new EventLoopKeepalive();
-		// Continue shortcuts submit an already-started empty prompt with no optimistic user message.
+		// Continue shortcuts submit an already-started synthetic developer prompt with
+		// no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
@@ -182,6 +183,8 @@ export async function submitInteractiveInput(
 				display: input.display ?? false,
 				attribution: "agent",
 			});
+		} else if (input.synthetic) {
+			await session.prompt(input.text, { synthetic: true, expandPromptTemplates: false });
 		} else {
 			await session.prompt(input.text, { images: input.images });
 		}

@@ -168,7 +168,6 @@ function shouldKeepOpenAiCompactOutputUserMessage(item: Record<string, unknown>)
 		[/^<environment-context>[\s\S]*<\/environment-context>$/i, /<environment-context>/i],
 		[/^<skill>[\s\S]*<\/skill>$/i, /<skill>/i],
 		[/^<user-shell-command>[\s\S]*<\/user-shell-command>$/i, /<user-shell-command>/i],
-		[/^<turn-aborted>[\s\S]*<\/turn-aborted>$/i, /<turn-aborted>/i],
 		[/^<subagent-notification>[\s\S]*<\/subagent-notification>$/i, /<subagent-notification>/i],
 	] as const;
 	return content.every(part => {

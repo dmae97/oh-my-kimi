@@ -1,14 +1,4 @@
-import turnAbortedGuidance from "../prompts/turn-aborted-guidance.md" with { type: "text" };
-import type {
-	Api,
-	AssistantMessage,
-	DeveloperMessage,
-	Message,
-	Model,
-	ToolCall,
-	ToolResultMessage,
-	UserMessage,
-} from "../types";
+import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
@@ -142,7 +132,6 @@ function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number 
  * For aborted/errored turns, this function:
  * - Preserves tool call structure (unlike converting to text summaries)
  * - Injects synthetic "aborted" tool results
- * - Adds a <turn-aborted> guidance marker for the model
  */
 export function transformMessages<TApi extends Api>(
 	messages: Message[],
@@ -345,11 +334,6 @@ export function transformMessages<TApi extends Api>(
 			} as ToolResultMessage);
 			toolCallStatus.set(tc.id, ToolCallStatus.Aborted);
 		}
-		result.push({
-			role: "developer",
-			content: turnAbortedGuidance,
-			timestamp: pendingAbortedTimestamp + 1,
-		} as DeveloperMessage);
 		pendingAbortedToolCalls = new Map();
 		pendingAbortedTimestamp = undefined;
 	};
@@ -378,11 +362,6 @@ export function transformMessages<TApi extends Api>(
 			// (OpenAI completions `reasoning_text`, Google signed thought parts).
 			const originalMsg = messages[i]!;
 			if (originalMsg.role === "assistant" && shouldDropTruncatedThinkingOnlyAssistant(originalMsg)) {
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					// Still arm the aborted-turn note so downstream guidance fires.
-					pendingAbortedToolCalls = new Map();
-					pendingAbortedTimestamp = assistantMsg.timestamp;
-				}
 				continue;
 			}
 

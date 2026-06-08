@@ -963,10 +963,9 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 			transformed.filter(m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === orphanId).length,
 		).toBe(0);
 
-		// 2. No premature developer note for the orphan: a developer message would
-		//    break assistant→toolResult contiguity. The only developer message
-		//    allowed is the `turnAbortedGuidance` injected by
-		//    `flushPendingAbortedToolCalls` at its natural turn boundary.
+		// 2. No developer note for the orphan: a developer message would break
+		//    assistant→toolResult contiguity, and we no longer inject any synthetic
+		//    aborted-turn note at all.
 		const orphanNotes = transformed.filter(
 			(m): m is DeveloperMessage =>
 				m.role === "developer" &&
@@ -1078,7 +1077,6 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
  * Tests for Codex-style abort handling:
  * - Tool calls are preserved (not converted to text summaries)
  * - Synthetic "aborted" tool results are injected
- * - A <turn-aborted> guidance marker is added as synthetic user message
  */
 describe("Codex-style Abort Handling", () => {
 	const model: Model<"anthropic-messages"> = {
@@ -1135,39 +1133,6 @@ describe("Codex-style Abort Handling", () => {
 		// Text content should also be preserved
 		const textContent = assistantMsg.content.find(b => b.type === "text");
 		expect(textContent).toBeDefined();
-	});
-
-	it("should inject turn-aborted guidance marker as synthetic user message", () => {
-		const assistantMessage: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "toolCall", id: "toolu_marker_test", name: "bash", arguments: { command: "sleep 10" } }],
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-3-5-sonnet-20241022",
-			usage: {
-				input: 100,
-				output: 50,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 150,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "error",
-			errorMessage: "Request was aborted",
-			timestamp: 1000,
-		};
-
-		const messages = [{ role: "user" as const, content: "Run command", timestamp: 500 }, assistantMessage];
-
-		const transformed = transformMessages(messages, model);
-
-		// Should have: user, assistant, toolResult, developer(guidance)
-		expect(transformed.length).toBe(4);
-
-		// Last message should be the guidance marker
-		const guidanceMsg = transformed[3] as DeveloperMessage;
-		expect(guidanceMsg.role).toBe("developer");
-		expect(guidanceMsg.content).toContain("<turn-aborted>");
 	});
 
 	it("should inject synthetic 'aborted' tool results with isError true", () => {

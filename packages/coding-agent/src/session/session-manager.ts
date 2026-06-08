@@ -753,8 +753,8 @@ export function buildSessionContext(
 	// turn's tool results are off the selected path: its result children live on a
 	// sibling branch, or it is the leaf itself (results are children below it). Left
 	// in place, `transformMessages` fabricates one synthetic "aborted"/"No result
-	// provided" result per dangling call plus a `<turn-aborted>` developer note, which
-	// render as phantom failed calls and re-inject the failed batch into the model's
+	// provided" result per dangling call, which render as phantom failed calls and
+	// re-inject the failed batch into the model's
 	// context — the rewind/restore loop.
 	//
 	// Stripping is necessary but not sufficient: a *modified* assistant turn that still
