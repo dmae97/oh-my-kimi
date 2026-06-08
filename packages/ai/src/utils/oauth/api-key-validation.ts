@@ -13,7 +13,6 @@ type AnthropicCompatibleValidationOptions = {
 	signal?: AbortSignal;
 };
 
-
 type ModelListValidationOptions = {
 	provider: string;
 	apiKey: string;
@@ -27,7 +26,6 @@ function normalizeAnthropicCompatibleBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/, "");
 	return trimmed.endsWith("/v1") ? trimmed.slice(0, -3) : trimmed;
 }
-
 
 /**
  * Validate an API key against an OpenAI-compatible chat completions endpoint.
