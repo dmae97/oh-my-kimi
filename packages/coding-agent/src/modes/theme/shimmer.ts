@@ -1,17 +1,13 @@
 import { isSettingsInitialized, settings } from "../../config/settings";
 import type { Theme, ThemeColor } from "./theme";
 
-// ─── Animation velocity ──────────────────────────────────────────────────────
-// Band/head travel speed in border cells per second. Driving position by a fixed
-// velocity — instead of dividing a fixed sweep duration by the (length-derived)
-// period — makes smoothness independent of message length: at the loader's
-// default 30fps redraw cadence the band advances ≤1 cell per frame for any
-// string, so it never visibly steps. Sweep/round-trip durations now scale with
-// length. Keep ≤ the animated redraw fps (loader RENDER_INTERVAL_MS = 1000/30).
-const SHIMMER_SPEED_CELLS_PER_S = 30;
+// ─── Animation phase ─────────────────────────────────────────────────────────
+// Every shimmered string shares the same sweep phase. The bright point is
+// interpolated from the first visible cell to the last, so short and long task
+// rows start together and arrive at their final character together.
+const SHIMMER_SWEEP_MS = 2000;
 
 // ─── Classic sweep tunables ──────────────────────────────────────────────────
-const CLASSIC_PADDING = 10;
 const CLASSIC_BAND_HALF_WIDTH = 6;
 
 // ─── KITT scanner tunables ───────────────────────────────────────────────────
@@ -105,15 +101,21 @@ function compile(theme: ShimmerTheme, palette: ShimmerPalette): CompiledPalette 
 	return out;
 }
 
+function phaseFor(time: number): number {
+	const phase = (time % SHIMMER_SWEEP_MS) / SHIMMER_SWEEP_MS;
+	return phase < 0 ? phase + 1 : phase;
+}
+
+function lerp(start: number, end: number, phase: number): number {
+	return start + (end - start) * phase;
+}
+
 // ─── Intensity profiles ──────────────────────────────────────────────────────
-/** Smooth cosine bump sweeping left → right with edge padding. */
+/** Smooth cosine bump sweeping left → right across the visible text. */
 function classicIntensity(time: number, index: number, length: number): number {
-	const period = length + CLASSIC_PADDING * 2;
-	// Fixed-velocity, un-floored band position: advancing at a constant
-	// cells/second (not period / fixed-sweep) keeps the per-frame step ≤1 cell at
-	// the default cadence for any length, so long messages are no steppier.
-	const pos = ((time / 1000) * SHIMMER_SPEED_CELLS_PER_S) % period;
-	const dist = Math.abs(index + CLASSIC_PADDING - pos);
+	const range = length - 1;
+	const pos = range <= 0 ? 0 : lerp(0, range, phaseFor(time));
+	const dist = Math.abs(index - pos);
 	if (dist >= CLASSIC_BAND_HALF_WIDTH) return 0;
 	return 0.5 * (1 + Math.cos((Math.PI * dist) / CLASSIC_BAND_HALF_WIDTH));
 }
@@ -126,13 +128,10 @@ function classicIntensity(time: number, index: number, length: number): number {
 function kittIntensity(time: number, index: number, length: number): number {
 	const range = length - 1;
 	if (range <= 0) return 1;
-	// Fixed head velocity: a triangle ping-pong over a 2*range round trip at a
-	// constant cells/second, so the bright head advances ≤1 cell per frame at the
-	// default cadence regardless of bar length. Round-trip duration scales with length.
-	const cycleCells = 2 * range;
-	const sweep = ((time / 1000) * SHIMMER_SPEED_CELLS_PER_S) % cycleCells;
-	const goingRight = sweep < range;
-	const head = goingRight ? sweep : cycleCells - sweep;
+	const phase = phaseFor(time);
+	const goingRight = phase < 0.5;
+	const sweep = goingRight ? phase * 2 : (1 - phase) * 2;
+	const head = lerp(0, range, sweep);
 	const delta = index - head;
 	const abs = delta < 0 ? -delta : delta;
 	if (abs <= KITT_HEAD_HALF) return 1;
