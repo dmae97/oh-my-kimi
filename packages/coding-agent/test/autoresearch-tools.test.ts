@@ -510,70 +510,86 @@ describe("log_experiment", () => {
 
 	it("flags previously logged runs via flag_runs", async () => {
 		const dir = makeTempDir();
-		const { log } = await setupRun(dir);
-		const first = await log.execute(
-			"l1",
-			{ metric: 10, status: "keep", description: "baseline" },
-			undefined,
-			undefined,
-			createCtx(dir),
-		);
-		const firstId = (first.details as LogDetails).experiment.runNumber;
-		expect(firstId).not.toBeNull();
-
-		// New run + log that flags the previous run.
-		const harness = createPiHarness();
+		const storage = await openAutoresearchStorage(dir);
+		const session = storage.openSession({
+			name: "speed",
+			goal: null,
+			primaryMetric: "runtime_ms",
+			metricUnit: "ms",
+			direction: "lower",
+			preferredCommand: "bash autoresearch.sh",
+			branch: null,
+			baselineCommit: null,
+			maxIterations: null,
+			scopePaths: ["src"],
+			offLimits: ["forbidden"],
+			constraints: [],
+			secondaryMetrics: [],
+		});
+		const now = Date.now();
+		const firstRun = storage.insertRun({
+			sessionId: session.id,
+			segment: session.currentSegment,
+			command: "bash autoresearch.sh",
+			startedAt: now,
+			logPath: "",
+			preRunDirtyPaths: [],
+		});
+		const firstLogged = storage.markRunLogged({
+			runId: firstRun.id,
+			status: "keep",
+			description: "baseline",
+			metric: 10,
+			metrics: {},
+			asi: null,
+			commitHash: null,
+			confidence: null,
+			modifiedPaths: [],
+			scopeDeviations: [],
+			justification: null,
+			loggedAt: now,
+		});
+		const secondRun = storage.insertRun({
+			sessionId: session.id,
+			segment: session.currentSegment,
+			command: "bash autoresearch.sh",
+			startedAt: now + 1,
+			logPath: "",
+			preRunDirtyPaths: [],
+		});
+		storage.markRunCompleted({
+			runId: secondRun.id,
+			completedAt: now + 2,
+			durationMs: 1,
+			exitCode: 0,
+			timedOut: false,
+			parsedPrimary: 8,
+			parsedMetrics: { runtime_ms: 8 },
+			parsedAsi: null,
+		});
 		const runtime = createSessionRuntime();
-		// Re-hydrate runtime by re-running the tools chain.
-		const init = createInitExperimentTool({
+		const log = createLogExperimentTool({
 			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: harness.api,
+			pi: createPiHarness().api,
 		});
-		await init.execute(
-			"i",
-			{
-				name: "speed",
-				primary_metric: "runtime_ms",
-				metric_unit: "ms",
-				scope_paths: ["src"],
-				off_limits: ["forbidden"],
-			},
-			undefined,
-			undefined,
-			createCtx(dir),
-		);
-		const run = createRunExperimentTool({
-			dashboard: dashboardStub(),
-			getRuntime: () => runtime,
-			pi: harness.api,
-		});
-		await run.execute("r2", {}, undefined, undefined, createCtx(dir));
-		const log2 = createLogExperimentTool({
-			dashboard: dashboardStub(),
-			getRuntime: () => runtime,
-			pi: harness.api,
-		});
-		const second = await log2.execute(
+		const second = await log.execute(
 			"l2",
 			{
 				metric: 8,
 				status: "keep",
 				description: "improved",
-				flag_runs: [{ run_id: firstId as number, reason: "reward-hacked" }],
+				flag_runs: [{ run_id: firstLogged.id, reason: "reward-hacked" }],
 			},
 			undefined,
 			undefined,
 			createCtx(dir),
 		);
 		const details = second.details as LogDetails;
-		expect(details.flaggedRuns).toEqual([{ runId: firstId as number, reason: "reward-hacked" }]);
+		expect(details.flaggedRuns).toEqual([{ runId: firstLogged.id, reason: "reward-hacked" }]);
 
-		// Refresh storage to confirm DB row updated
-		const storage = await openAutoresearchStorage(dir);
-		const session = storage.getActiveSession();
-		const runs = storage.listLoggedRuns(session!.id);
-		const flagged = runs.find(r => r.id === firstId);
+		const runs = storage.listLoggedRuns(session.id);
+		const flagged = runs.find(r => r.id === firstLogged.id);
 		expect(flagged?.flagged).toBe(true);
 		expect(flagged?.flaggedReason).toBe("reward-hacked");
 	});
