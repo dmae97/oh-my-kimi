@@ -1917,12 +1917,23 @@ export function moonshotModelManagerOptions(
 						const reference = references.get(defaults.id);
 						const model = mapWithBundledReference(entry, defaults, reference);
 						const id = model.id.toLowerCase();
-						const isThinking = id.includes("thinking");
-						const isVision = id.includes("vision") || id.includes("vl") || id.includes("k2.5");
+						// Moonshot's K2.x family (K2.5, K2.6, kimi-k2-thinking, …) is reasoning-capable
+						// and vision-capable on the native API. Without these flags the openai-completions
+						// path skips the z.ai-format `thinking` block, and Moonshot K2.6 stalls on first
+						// turn because its endpoint expects an explicit `thinking: {type}` (#2113). Match
+						// the bundled K2.5 metadata for every K2.x id we discover.
+						const isKimiK2Reasoning = id.includes("thinking") || /(^|\/)kimi-k2(?:\.\d+)?(?:[-:]|$)/.test(id);
+						const isVision =
+							id.includes("vision") || id.includes("vl") || /(^|\/)kimi-k2(?:\.\d+)?(?:[-:]|$)/.test(id);
 						return {
 							...model,
-							reasoning: isThinking || model.reasoning,
+							reasoning: isKimiK2Reasoning || model.reasoning,
 							input: isVision ? ["text", "image"] : model.input,
+							thinking:
+								model.thinking ??
+								(isKimiK2Reasoning
+									? { mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High }
+									: undefined),
 						};
 					},
 				}),
