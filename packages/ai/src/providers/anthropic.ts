@@ -1116,7 +1116,8 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 
 /**
  * Iterate over Anthropic SSE events from a raw Response, preserving ping events
- * for liveness and rejecting malformed complete event envelopes.
+ * for liveness. Malformed event envelopes are logged and skipped (non-fatal)
+ * rather than aborting the stream.
  */
 type RawMessagePingEvent = { type: "ping" };
 type AnthropicStreamEvent = RawMessageStreamEvent | RawMessagePingEvent;
@@ -1153,7 +1154,7 @@ async function* iterateAnthropicEvents(
 		try {
 			const event = JSON.parse(sse.data) as RawMessageStreamEvent;
 			if (event.type !== sse.event) {
-				throw new Error(`event type ${event.type} does not match SSE event ${sse.event}`);
+				reportAnthropicEnvelopeAnomaly(`event type ${event.type} does not match SSE event ${sse.event}`);
 			}
 			if (event.type === "message_start") {
 				sawMessageStart = true;
@@ -1163,14 +1164,14 @@ async function* iterateAnthropicEvents(
 			yield event;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			throw new Error(
-				`Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`,
+			reportAnthropicEnvelopeAnomaly(
+				`could not parse SSE event ${sse.event}: ${message}; skipping frame; data=${sse.data}`,
 			);
 		}
 	}
 
 	if (sawMessageStart && !sawMessageEnd && !signal?.aborted) {
-		throw createAnthropicStreamEnvelopeError("stream ended before message_stop");
+		reportAnthropicEnvelopeAnomaly("stream ended before message_stop");
 	}
 }
 
@@ -1264,6 +1265,17 @@ const ANTHROPIC_STREAM_ENVELOPE_ERROR_PREFIX = "Anthropic stream envelope error:
 
 function createAnthropicStreamEnvelopeError(message: string): Error {
 	return new Error(`${ANTHROPIC_STREAM_ENVELOPE_ERROR_PREFIX} ${message}`);
+}
+
+/**
+ * Log a malformed-stream-envelope anomaly without aborting the turn. The strict
+ * parser would `throw createAnthropicStreamEnvelopeError(...)` here; we instead
+ * surface a warning and let the caller skip the offending event (or finalize what
+ * already streamed) so a non-conforming endpoint degrades to best-effort content
+ * rather than failing the request.
+ */
+function reportAnthropicEnvelopeAnomaly(detail: string): void {
+	logger.warn(`anthropic: ignoring malformed stream envelope: ${detail}`);
 }
 
 const ANTHROPIC_PRE_MESSAGE_START_EVENT_TYPES = new Set([
@@ -1497,6 +1509,30 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const blocks = output.content as Block[];
+			const finalizeStreamBlock = (block: Block, contentIndex: number): void => {
+				delete (block as { index?: number }).index;
+				if (block.type === "text") {
+					stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
+				} else if (block.type === "thinking") {
+					stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
+				} else if (block.type === "toolCall") {
+					const finalJson =
+						block.partialJson.length > 0 ? block.partialJson : JSON.stringify(block.arguments ?? {});
+					try {
+						block.arguments = JSON.parse(finalJson) as ToolCall["arguments"];
+					} catch (parseError) {
+						// Non-fatal: keep the best-effort arguments recovered by the throttled streaming
+						// parser instead of failing the turn on malformed/truncated tool-argument JSON.
+						reportAnthropicEnvelopeAnomaly(
+							`tool_use ${block.id} arguments are not valid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+						);
+						block.arguments = (block.arguments ?? {}) as ToolCall["arguments"];
+					}
+					delete (block as { partialJson?: string }).partialJson;
+					delete (block as { lastParseLen?: number }).lastParseLen;
+					stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+				}
+			};
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
@@ -1593,10 +1629,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 						if (event.type === "content_block_start") {
 							if (sawTerminalEnvelope) {
-								throw createAnthropicStreamEnvelopeError(`received ${event.type} after terminal stop signal`);
+								reportAnthropicEnvelopeAnomaly(`received ${event.type} after terminal stop signal`);
+								continue;
 							}
 							if (openBlocks.has(event.index)) {
-								throw createAnthropicStreamEnvelopeError(`duplicate content_block_start index ${event.index}`);
+								reportAnthropicEnvelopeAnomaly(`duplicate content_block_start index ${event.index}`);
+								continue;
 							}
 							if (!firstTokenTime) firstTokenTime = Date.now();
 							if (event.content_block.type === "text") {
@@ -1667,19 +1705,22 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 						} else if (event.type === "content_block_delta") {
 							if (sawTerminalEnvelope) {
-								throw createAnthropicStreamEnvelopeError(`received ${event.type} after terminal stop signal`);
+								reportAnthropicEnvelopeAnomaly(`received ${event.type} after terminal stop signal`);
+								continue;
 							}
 							const openBlock = openBlocks.get(event.index);
 							if (!openBlock) {
-								throw createAnthropicStreamEnvelopeError(
+								reportAnthropicEnvelopeAnomaly(
 									`received content_block_delta for unopened index ${event.index}`,
 								);
+								continue;
 							}
 							if (openBlock.kind === "ignored") continue;
 							const block = blocks[openBlock.contentIndex];
 							if (event.delta.type === "text_delta") {
 								if (openBlock.kind !== "text" || block?.type !== "text") {
-									throw createAnthropicStreamEnvelopeError(`received text_delta for ${openBlock.kind} block`);
+									reportAnthropicEnvelopeAnomaly(`received text_delta for ${openBlock.kind} block`);
+									continue;
 								}
 								streamedReplayUnsafeContent = true;
 								block.text += event.delta.text;
@@ -1691,9 +1732,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								});
 							} else if (event.delta.type === "thinking_delta") {
 								if (openBlock.kind !== "thinking" || block?.type !== "thinking") {
-									throw createAnthropicStreamEnvelopeError(
-										`received thinking_delta for ${openBlock.kind} block`,
-									);
+									reportAnthropicEnvelopeAnomaly(`received thinking_delta for ${openBlock.kind} block`);
+									continue;
 								}
 								streamedReplayUnsafeContent = true;
 								block.thinking += event.delta.thinking;
@@ -1705,9 +1745,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								});
 							} else if (event.delta.type === "input_json_delta") {
 								if (openBlock.kind !== "toolCall" || block?.type !== "toolCall") {
-									throw createAnthropicStreamEnvelopeError(
-										`received input_json_delta for ${openBlock.kind} block`,
-									);
+									reportAnthropicEnvelopeAnomaly(`received input_json_delta for ${openBlock.kind} block`);
+									continue;
 								}
 								streamedReplayUnsafeContent = true;
 								block.partialJson += event.delta.partial_json;
@@ -1724,9 +1763,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								});
 							} else if (event.delta.type === "signature_delta") {
 								if (openBlock.kind !== "thinking" || block?.type !== "thinking") {
-									throw createAnthropicStreamEnvelopeError(
-										`received signature_delta for ${openBlock.kind} block`,
-									);
+									reportAnthropicEnvelopeAnomaly(`received signature_delta for ${openBlock.kind} block`);
+									continue;
 								}
 								streamedReplayUnsafeContent = true;
 								block.thinkingSignature = block.thinkingSignature || "";
@@ -1734,13 +1772,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 						} else if (event.type === "content_block_stop") {
 							if (sawTerminalEnvelope) {
-								throw createAnthropicStreamEnvelopeError(`received ${event.type} after terminal stop signal`);
+								reportAnthropicEnvelopeAnomaly(`received ${event.type} after terminal stop signal`);
+								continue;
 							}
 							const openBlock = openBlocks.get(event.index);
 							if (!openBlock) {
-								throw createAnthropicStreamEnvelopeError(
-									`received content_block_stop for unopened index ${event.index}`,
-								);
+								reportAnthropicEnvelopeAnomaly(`received content_block_stop for unopened index ${event.index}`);
+								continue;
 							}
 							if (openBlock.kind === "ignored") {
 								openBlocks.delete(event.index);
@@ -1748,42 +1786,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 							const block = blocks[openBlock.contentIndex];
 							if (!block || block.type !== openBlock.kind) {
-								throw createAnthropicStreamEnvelopeError(
-									`content_block_stop kind mismatch for index ${event.index}`,
-								);
+								reportAnthropicEnvelopeAnomaly(`content_block_stop kind mismatch for index ${event.index}`);
+								openBlocks.delete(event.index);
+								continue;
 							}
 							openBlocks.delete(event.index);
-							delete (block as { index?: number }).index;
-							if (block.type === "text") {
-								streamedReplayUnsafeContent = true;
-								stream.push({
-									type: "text_end",
-									contentIndex: openBlock.contentIndex,
-									content: block.text,
-									partial: output,
-								});
-							} else if (block.type === "thinking") {
-								streamedReplayUnsafeContent = true;
-								stream.push({
-									type: "thinking_end",
-									contentIndex: openBlock.contentIndex,
-									content: block.thinking,
-									partial: output,
-								});
-							} else if (block.type === "toolCall") {
-								streamedReplayUnsafeContent = true;
-								const finalJson =
-									block.partialJson.length > 0 ? block.partialJson : JSON.stringify(block.arguments ?? {});
-								block.arguments = JSON.parse(finalJson) as ToolCall["arguments"];
-								delete (block as { partialJson?: string }).partialJson;
-								delete (block as { lastParseLen?: number }).lastParseLen;
-								stream.push({
-									type: "toolcall_end",
-									contentIndex: openBlock.contentIndex,
-									toolCall: block,
-									partial: output,
-								});
-							}
+							finalizeStreamBlock(block, openBlock.contentIndex);
 						} else if (event.type === "message_delta") {
 							const rawStopReason = event.delta.stop_reason;
 							if (rawStopReason) {
@@ -1840,17 +1848,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						throw createAnthropicStreamEnvelopeError("stream ended before message_start");
 					}
 					if (!sawMessageStop) {
-						throw createAnthropicStreamEnvelopeError("stream ended before message_stop");
+						reportAnthropicEnvelopeAnomaly("stream ended before message_stop");
 					}
 					if (openBlocks.size > 0) {
-						const firstOpenBlock = openBlocks.entries().next().value;
-						if (firstOpenBlock) {
-							const [openIndex, openBlock] = firstOpenBlock;
-							throw createAnthropicStreamEnvelopeError(
+						for (const [openIndex, openBlock] of openBlocks) {
+							reportAnthropicEnvelopeAnomaly(
 								`stream ended with an unterminated ${openBlock.kind} block at index ${openIndex}`,
 							);
+							if (openBlock.kind === "ignored" || openBlock.contentIndex < 0) continue;
+							const danglingBlock = blocks[openBlock.contentIndex];
+							if (danglingBlock) finalizeStreamBlock(danglingBlock, openBlock.contentIndex);
 						}
-						throw createAnthropicStreamEnvelopeError("stream ended with an unterminated content block");
+						openBlocks.clear();
 					}
 
 					if (output.stopReason === "aborted" || output.stopReason === "error") {

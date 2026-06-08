@@ -502,7 +502,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(anthropicStrictToolsDisabled(providerSessionState)).toBe(false);
 	});
 
-	it("does not retry malformed envelopes after partial tool-call content starts streaming", async () => {
+	it("finalizes a tool call with malformed argument JSON as best-effort content instead of erroring", async () => {
 		let attempt = 0;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
 			attempt += 1;
@@ -519,21 +519,22 @@ describe("anthropic stream envelope handling", () => {
 		expect(attempt).toBe(1);
 		expect(countEvents(events, "toolcall_start")).toBe(1);
 		expect(countEvents(events, "toolcall_delta")).toBe(1);
-		expect(countEvents(events, "toolcall_end")).toBe(0);
-		expect(countEvents(events, "error")).toBe(1);
-		expect(countEvents(events, "done")).toBe(0);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("Unterminated string");
+		expect(countEvents(events, "toolcall_end")).toBe(1);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(result.stopReason).toBe("stop");
 
 		const toolCall = result.content[0];
 		expect(toolCall?.type).toBe("toolCall");
 		if (toolCall?.type !== "toolCall") {
-			throw new Error("Expected toolCall content in terminal error payload");
+			throw new Error("Expected toolCall content in degraded payload");
 		}
+		// Best-effort arguments recovered by the throttled streaming parser are retained.
+		expect(toolCall.arguments).toEqual({ city: "Par" });
 		expect("partialJson" in toolCall).toBe(false);
 	});
 
-	it("surfaces an error instead of dispatching a tool call left open by a spliced reconnect", async () => {
+	it("finalizes a tool call left open by a spliced reconnect instead of erroring", async () => {
 		let attempt = 0;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
 			attempt += 1;
@@ -547,16 +548,21 @@ describe("anthropic stream envelope handling", () => {
 		}
 		const result = await stream.result();
 
-		// The tool call started streaming (replay-unsafe), so the truncated envelope
-		// cannot be retried — it must be surfaced as an error rather than emitting a
-		// completed turn whose tool call carries the seed `{}` arguments.
+		// Non-fatal: the unterminated tool block is finalized with its seed `{}` arguments and the
+		// turn completes rather than erroring. Downstream argument validation handles the incomplete call.
 		expect(attempt).toBe(1);
 		expect(countEvents(events, "toolcall_start")).toBe(1);
-		expect(countEvents(events, "toolcall_end")).toBe(0);
-		expect(countEvents(events, "done")).toBe(0);
-		expect(countEvents(events, "error")).toBe(1);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("unterminated toolCall block");
+		expect(countEvents(events, "toolcall_end")).toBe(1);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(result.stopReason).toBe("stop");
+
+		const toolCall = result.content[0];
+		expect(toolCall?.type).toBe("toolCall");
+		if (toolCall?.type !== "toolCall") {
+			throw new Error("Expected toolCall content in degraded payload");
+		}
+		expect(toolCall.arguments).toEqual({});
 	});
 	it("parses raw SSE directly so unknown events do not fail Anthropic streams", async () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
@@ -581,7 +587,7 @@ describe("anthropic stream envelope handling", () => {
 		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
 	});
 
-	it("surfaces an error when a raw SSE stream closes before message_stop", async () => {
+	it("degrades to best-effort content when a raw SSE stream closes before message_stop", async () => {
 		const incompleteFrames = createTextSuccessSseFrames("partial").filter(
 			frame => !frame.includes("event: message_stop"),
 		);
@@ -596,14 +602,13 @@ describe("anthropic stream envelope handling", () => {
 		}
 		const result = await stream.result();
 
-		expect(countEvents(events, "error")).toBe(1);
-		expect(countEvents(events, "done")).toBe(0);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("stream ended before message_stop");
+		expect(countEvents(events, "error")).toBe(0);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "partial" }]);
 	});
 
-	it("surfaces malformed raw SSE event JSON instead of repairing protocol frames", async () => {
+	it("skips malformed raw SSE event frames and degrades to best-effort content", async () => {
 		const malformedTextDelta =
 			'{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"line\\qbreak"}}';
 		const successEvents = createTextSuccessEvents("unused");
@@ -624,10 +629,12 @@ describe("anthropic stream envelope handling", () => {
 		}
 		const result = await stream.result();
 
-		expect(countEvents(events, "error")).toBe(1);
-		expect(countEvents(events, "done")).toBe(0);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("Could not parse Anthropic SSE event content_block_delta");
+		// The unparseable content_block_delta frame is dropped; the surrounding text block streams
+		// empty and the turn completes normally.
+		expect(countEvents(events, "error")).toBe(0);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "" }]);
 	});
 	it("surfaces a refusal fallback message when stop_details is null", async () => {
 		const refusalEvents: MockAnthropicEvent[] = [
