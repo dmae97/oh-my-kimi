@@ -341,8 +341,13 @@ function limitDiagnosticMessages(messages: string[]): string[] {
 const LOCATION_CONTEXT_LINES = 1;
 const REFERENCE_CONTEXT_LIMIT = 50;
 
-const REFERENCES_RETRY_COUNT = 2;
-const REFERENCES_RETRY_DELAY_MS = 250;
+// References can come back thin (declaration only, or only same-file results)
+// when the project hasn't finished indexing dependent files. Retry with
+// exponential-ish backoff so slow indexers (tsserver on large monorepos,
+// rust-analyzer crate-wide refs) get a chance to populate cross-file refs
+// before we report them missing.
+const REFERENCES_RETRY_COUNT = 3;
+const REFERENCES_RETRY_DELAYS_MS = [250, 500, 1000] as const;
 
 function comparePosition(a: Position, b: Position): number {
 	return a.line === b.line ? a.character - b.character : a.line - b.line;
@@ -354,6 +359,16 @@ function rangeContainsPosition(range: Location["range"], position: Position): bo
 
 function isOnlyQueriedDeclaration(locations: Location[], uri: string, position: Position): boolean {
 	return locations.length === 1 && locations[0]?.uri === uri && rangeContainsPosition(locations[0].range, position);
+}
+
+/**
+ * True when every reported reference lives in the same file as the queried
+ * position. Used as a (heuristic) signal that the project hasn't finished
+ * indexing dependent files yet — for genuinely file-local symbols this just
+ * wastes a couple of retries, which is acceptable.
+ */
+function isOnlyInQueriedFile(locations: Location[], uri: string): boolean {
+	return locations.length > 0 && locations.every(loc => loc.uri === uri);
 }
 
 function normalizeLocationResult(result: Location | Location[] | LocationLink | LocationLink[] | null): Location[] {
@@ -1261,7 +1276,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 		// Status action doesn't need a file
 		if (action === "status") {
-			const servers = Object.keys(config.servers);
+			const configuredNames = Object.keys(config.servers);
 			const lspmuxState = await detectLspmux();
 			const lspmuxStatus = lspmuxState.available
 				? lspmuxState.running
@@ -1269,14 +1284,40 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					: "lspmux: installed but server not running"
 				: "";
 
-			const serverStatus =
-				servers.length > 0
-					? `Active language servers: ${servers.join(", ")}`
-					: "No language servers configured for this project";
+			// `Object.keys(config.servers)` reflects what is *configured & resolvable
+			// on PATH* — it does NOT prove the server actually starts. A wrapper
+			// binary that exits immediately (e.g. rustup without the rust-analyzer
+			// component) still appears here. Distinguish "configured" from
+			// "started" (have a live in-process client) so callers cannot mistake
+			// presence-on-PATH for a working server.
+			const startedClients = getActiveClients();
+			const startedByConfigName = new Map<string, LspServerStatus>();
+			// getActiveClients() reports `name = client.config.command` (the
+			// unresolved binary name from defaults.json), so match against
+			// `serverConfig.command`, not the resolved path.
+			for (const [name, serverConfig] of Object.entries(config.servers)) {
+				const matched = startedClients.find(c => c.name === serverConfig.command);
+				if (matched) startedByConfigName.set(name, matched);
+			}
 
-			const output = lspmuxStatus ? `${serverStatus}\n${lspmuxStatus}` : serverStatus;
+			const lines: string[] = [];
+			if (configuredNames.length === 0) {
+				lines.push("No language servers configured for this project");
+			} else {
+				const labelled = configuredNames.map(name => {
+					const started = startedByConfigName.get(name);
+					if (!started) return `${name} (configured, not started)`;
+					return `${name} (${started.status})`;
+				});
+				lines.push(`Language servers: ${labelled.join(", ")}`);
+				lines.push(
+					"  note: 'configured, not started' means the binary resolves on PATH but no request has spawned it yet; 'ready' means a client process is live for this cwd.",
+				);
+			}
+			if (lspmuxStatus) lines.push(lspmuxStatus);
+
 			return {
-				content: [{ type: "text", text: output }],
+				content: [{ type: "text", text: lines.join("\n") }],
 				details: { action, success: true, request: params },
 			};
 		}
@@ -1505,7 +1546,26 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 
 			const lspParams = { files: pairs };
-			const servers = getLspServers(config);
+			// Filter to servers whose fileTypes match either the source or any
+			// destination path. Asking every configured server about a .md/.sql/.txt
+			// rename used to stack up willRenameFiles requests against irrelevant
+			// language servers and hit the wall-clock timeout. A server only has
+			// something useful to say about a rename if it understands one of the
+			// affected file extensions.
+			const allLspServers = getLspServers(config);
+			const relevantNames = new Set<string>();
+			const collectRelevant = (filePath: string) => {
+				for (const [name] of getLspServersForFile(config, filePath)) {
+					relevantNames.add(name);
+				}
+			};
+			collectRelevant(source);
+			collectRelevant(dest);
+			for (const pair of pairs) {
+				collectRelevant(uriToFile(pair.oldUri));
+				collectRelevant(uriToFile(pair.newUri));
+			}
+			const servers = allLspServers.filter(([name]) => relevantNames.has(name));
 			const respondingServers = new Set<string>();
 			const perServerEdits: Array<{ serverName: string; edit: WorkspaceEdit }> = [];
 			const serverNotes: string[] = [];
@@ -1829,8 +1889,15 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					throw new ToolAbortError();
 				}
 				const msg = err instanceof Error ? err.message : String(err);
+				// Echo a (truncated) preview of the params we sent so the caller can
+				// tell parse / shape errors (e.g. nested args dropped, missing field)
+				// apart from genuine server errors without spinning up another debug call.
+				const previewRaw = JSON.stringify(requestParams ?? null);
+				const preview = previewRaw.length > 400 ? `${previewRaw.slice(0, 397)}...` : previewRaw;
 				return {
-					content: [{ type: "text", text: `LSP error from ${chosenName} on ${method}: ${msg}` }],
+					content: [
+						{ type: "text", text: `LSP error from ${chosenName} on ${method}: ${msg}\n  params: ${preview}` },
+					],
 					details: { action, serverName: chosenName, success: false, request: params },
 				};
 			}
@@ -2100,16 +2167,26 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						)) as Location[] | null;
 
 						const locations = result ?? [];
-						if (!isProjectAwareLspServer(serverConfig) || attempt === REFERENCES_RETRY_COUNT) {
+						const lastAttempt = attempt === REFERENCES_RETRY_COUNT;
+						if (!isProjectAwareLspServer(serverConfig) || lastAttempt) {
 							break;
 						}
-						if (locations.length > 0 && !isOnlyQueriedDeclaration(locations, uri, position)) {
+						// Retry when the result is "suspiciously thin" for a project-aware
+						// server: zero locations, just the queried declaration, or every
+						// location in the queried file. Any of those is consistent with
+						// dependent files not yet being indexed.
+						const looksThin =
+							locations.length === 0 ||
+							isOnlyQueriedDeclaration(locations, uri, position) ||
+							isOnlyInQueriedFile(locations, uri);
+						if (!looksThin) {
 							break;
 						}
 
 						await waitForProjectLoaded(client, signal);
 						throwIfAborted(signal);
-						await untilAborted(signal, () => Bun.sleep(REFERENCES_RETRY_DELAY_MS));
+						const delayMs = REFERENCES_RETRY_DELAYS_MS[attempt] ?? REFERENCES_RETRY_DELAYS_MS.at(-1) ?? 250;
+						await untilAborted(signal, () => Bun.sleep(delayMs));
 					}
 
 					if (!result || result.length === 0) {

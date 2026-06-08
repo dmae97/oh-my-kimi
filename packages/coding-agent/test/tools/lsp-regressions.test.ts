@@ -1629,4 +1629,132 @@ for await (const chunk of Bun.stdin.stream()) {
 			tempDir.removeSync();
 		}
 	});
+
+	it("sendRequest respects an explicit timeoutMs and reports it in the error", async () => {
+		// Synthesise a minimal in-memory LSP client and never resolve the request
+		// so the per-request timer is the only thing that can fire.
+		const client: LspClient = {
+			name: "test-lsp",
+			cwd: process.cwd(),
+			config: { command: "test-lsp", fileTypes: [".ts"], rootMarkers: [] },
+			proc: { stdin: { write() {}, flush: async () => {} } } as unknown as LspClient["proc"],
+			requestId: 0,
+			diagnostics: new Map(),
+			diagnosticsVersion: 0,
+			openFiles: new Map(),
+			pendingRequests: new Map(),
+			messageBuffer: new Uint8Array(),
+			isReading: false,
+			lastActivity: Date.now(),
+			writeQueue: Promise.resolve(),
+			activeProgressTokens: new Set(),
+			projectLoaded: Promise.resolve(),
+			resolveProjectLoaded: () => {},
+		};
+		await expect(lspClient.sendRequest(client, "test/method", {}, undefined, 25)).rejects.toThrow(/after 25ms/);
+	});
+
+	it("sendRequest uses the signal as the deadline when no explicit timeout is set", async () => {
+		// With a signal but no explicit timeoutMs, the per-request 30s default
+		// MUST NOT fire — the signal owns the deadline. Otherwise `timeout: 60`
+		// on the LSP tool got truncated to 30000ms.
+		const client: LspClient = {
+			name: "test-lsp",
+			cwd: process.cwd(),
+			config: { command: "test-lsp", fileTypes: [".ts"], rootMarkers: [] },
+			proc: { stdin: { write() {}, flush: async () => {} } } as unknown as LspClient["proc"],
+			requestId: 0,
+			diagnostics: new Map(),
+			diagnosticsVersion: 0,
+			openFiles: new Map(),
+			pendingRequests: new Map(),
+			messageBuffer: new Uint8Array(),
+			isReading: false,
+			lastActivity: Date.now(),
+			writeQueue: Promise.resolve(),
+			activeProgressTokens: new Set(),
+			projectLoaded: Promise.resolve(),
+			resolveProjectLoaded: () => {},
+		};
+		const signal = AbortSignal.timeout(20);
+		await expect(lspClient.sendRequest(client, "test/method", {}, signal)).rejects.toThrow();
+		// If the per-request 30s timer had fired, the message would say "after 30000ms".
+		// We assert the negative: the rejection came from the signal, not the timer.
+		try {
+			await lspClient.sendRequest(client, "test/method", {}, AbortSignal.timeout(20));
+		} catch (err) {
+			expect(String(err)).not.toContain("30000ms");
+		}
+	});
+
+	it("rename_file skips the LSP loop when no configured server handles the file extension", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rename-irrelevant-");
+		try {
+			const sourceFile = path.join(tempDir.path(), "notes.md");
+			const destFile = path.join(tempDir.path(), "renamed.md");
+			await Bun.write(sourceFile, "# heading\n");
+
+			// Only a TS server is configured; .md should not trigger any willRenameFiles.
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-ts": { command: "test-ts", fileTypes: [".ts"], rootMarkers: [] } },
+				idleTimeoutMs: undefined,
+			});
+			const sendSpy = vi.spyOn(lspClient, "sendRequest");
+			const notifySpy = vi.spyOn(lspClient, "sendNotification");
+			const getClientSpy = vi.spyOn(lspClient, "getOrCreateClient");
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("rename-md", {
+				action: "rename_file",
+				file: sourceFile,
+				new_name: destFile,
+				timeout: 5,
+			});
+
+			expect(sendSpy).not.toHaveBeenCalled();
+			expect(notifySpy).not.toHaveBeenCalled();
+			expect(getClientSpy).not.toHaveBeenCalled();
+			expect(fs.existsSync(sourceFile)).toBe(false);
+			expect(fs.existsSync(destFile)).toBe(true);
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+			expect(output).toContain("Renamed");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("status distinguishes configured servers from started clients", async () => {
+		// `loadConfig` claims rust-analyzer + tsls are configured, but only
+		// tsls has actually been spawned. Status must reflect that — claiming
+		// rust-analyzer is 'active' when the process never started was the
+		// original bug.
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+			servers: {
+				"rust-analyzer": { command: "rust-analyzer", fileTypes: [".rs"], rootMarkers: ["Cargo.toml"] },
+				"typescript-language-server": {
+					command: "typescript-language-server",
+					fileTypes: [".ts"],
+					rootMarkers: ["tsconfig.json"],
+				},
+			},
+			idleTimeoutMs: undefined,
+		});
+		vi.spyOn(lspClient, "getActiveClients").mockReturnValue([
+			{ name: "typescript-language-server", status: "ready", fileTypes: [".ts"] },
+		]);
+
+		const tool = new LspTool({ cwd: process.cwd() } as ToolSession);
+		const result = await tool.execute("status-test", { action: "status" });
+		const output = result.content
+			.filter(block => block.type === "text")
+			.map(block => block.text)
+			.join("\n");
+
+		expect(output).toContain("rust-analyzer (configured, not started)");
+		expect(output).toContain("typescript-language-server (ready)");
+	});
 });

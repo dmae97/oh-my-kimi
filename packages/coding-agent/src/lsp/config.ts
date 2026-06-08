@@ -450,13 +450,23 @@ export function loadConfig(cwd: string): LspConfig {
  */
 export function getServersForFile(config: LspConfig, filePath: string): Array<[string, ServerConfig]> {
 	const ext = path.extname(filePath).toLowerCase();
+	const extNoDot = ext.startsWith(".") ? ext.slice(1) : ext;
 	const fileName = path.basename(filePath).toLowerCase();
 	const matches: Array<[string, ServerConfig]> = [];
 
 	for (const [name, serverConfig] of Object.entries(config.servers)) {
 		const supportsFile = serverConfig.fileTypes.some(fileType => {
+			// Accept both `.ts` and `ts` forms in user config / fixtures so a
+			// missing dot in `fileTypes` doesn't silently exclude the server
+			// from extension-based routing (e.g. rename_file's relevance filter).
 			const normalized = fileType.toLowerCase();
-			return normalized === ext || normalized === fileName;
+			const normalizedNoDot = normalized.startsWith(".") ? normalized.slice(1) : normalized;
+			return (
+				normalized === ext ||
+				normalized === fileName ||
+				normalizedNoDot === extNoDot ||
+				normalizedNoDot === fileName
+			);
 		});
 
 		if (supportsFile) {
