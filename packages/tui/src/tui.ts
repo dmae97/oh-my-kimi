@@ -3068,13 +3068,22 @@ export class TUI extends Container {
 
 		this.#maxLinesRendered = options.clearViewport ? lines.length : Math.max(this.#maxLinesRendered, lines.length);
 		if (options.clearScrollback) {
-			this.#scrollbackHighWater = 0;
 			this.#suppressNextSuffixScroll = lines.length > height;
 		}
 		const pushedNow = Math.max(0, lines.length - height);
-		if (pushedNow > this.#scrollbackHighWater) {
-			this.#scrollbackHighWater = pushedNow;
-		}
+		// A full repaint physically re-emits the entire transcript from row 0, so
+		// the rows committed to native scrollback by this paint are exactly
+		// `pushedNow`. Outside multiplexers an `\x1b[3J` above wiped pre-paint
+		// scrollback as well, so the assignment matches reality. Inside
+		// multiplexers `\x1b[3J` is a no-op and stale pre-paint rows remain in
+		// pane history, but those belong to the previous logical transcript and
+		// must drop out of the renderer's bookkeeping: leaving a stale
+		// `#scrollbackHighWater` above `pushedNow` mis-anchors the pinned emitter
+		// on every subsequent frame, pinning the input box to the top of the pane
+		// after a rewind/branch shrinks the transcript (issue #2130). When
+		// `clearViewport` is false (no current caller), keep the monotonic
+		// behavior so deferred paints do not lower the tracker.
+		this.#scrollbackHighWater = options.clearViewport ? pushedNow : Math.max(this.#scrollbackHighWater, pushedNow);
 		this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), cursorControl);
 	}
 

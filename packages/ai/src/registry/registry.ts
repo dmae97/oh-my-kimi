@@ -1,3 +1,4 @@
+import { aimlApiProvider } from "./aimlapi";
 import { alibabaCodingPlanProvider } from "./alibaba-coding-plan";
 import { amazonBedrockProvider } from "./amazon-bedrock";
 import { anthropicProvider } from "./anthropic";
@@ -79,6 +80,7 @@ const ALL = [
 	xaiOauthProvider,
 	gitlabDuoProvider,
 	alibabaCodingPlanProvider,
+	aimlApiProvider,
 	zhipuCodingPlanProvider,
 	qwenPortalProvider,
 	minimaxCodeProvider,
