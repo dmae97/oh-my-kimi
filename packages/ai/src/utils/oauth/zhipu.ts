@@ -36,7 +36,7 @@ export async function loginZhipuCodingPlan(options: OAuthController): Promise<st
 	// Prompt user to paste their API key
 	const apiKey = await options.onPrompt({
 		message: "Paste your Zhipu API key",
-		placeholder: "sk-...",
+		placeholder: "<id>.<secret>",
 	});
 
 	if (options.signal?.aborted) {
