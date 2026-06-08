@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.3] - 2026-06-08
+
 ### Added
 
 - Added clickable file path hyperlinks to read tool outputs (read-call rows, grouped summaries, and inline previews) using resolved or absolute file targets with selector-based line anchors for quick navigation
