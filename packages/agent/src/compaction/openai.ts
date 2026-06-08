@@ -158,37 +158,11 @@ function shouldTrimOpenAiCompactInputItem(item: Record<string, unknown>): boolea
 	return item.type === "function_call_output" || (item.type === "message" && item.role === "developer");
 }
 
-function shouldKeepOpenAiCompactOutputUserMessage(item: Record<string, unknown>): boolean {
-	if (item.role !== "user") return false;
-	const content = item.content;
-	if (!Array.isArray(content) || content.length === 0) return false;
-	const contextualFragmentPatterns = [
-		[/^<system-reminder>[\s\S]*<\/system-reminder>$/i, /<system-reminder>/i],
-		[/^#\s*AGENTS\.md instructions for\b[\s\S]*<\/INSTRUCTIONS>$/i, /# AGENTS.md instructions/],
-		[/^<environment-context>[\s\S]*<\/environment-context>$/i, /<environment-context>/i],
-		[/^<skill>[\s\S]*<\/skill>$/i, /<skill>/i],
-		[/^<user-shell-command>[\s\S]*<\/user-shell-command>$/i, /<user-shell-command>/i],
-		[/^<subagent-notification>[\s\S]*<\/subagent-notification>$/i, /<subagent-notification>/i],
-	] as const;
-	return content.every(part => {
-		if (!part || typeof part !== "object") return false;
-		const candidate = part as { type?: unknown; text?: unknown };
-		if (candidate.type === "input_image") return true;
-		if (candidate.type !== "input_text" || typeof candidate.text !== "string") return false;
-		const trimmed = candidate.text.trim();
-		if (trimmed.length === 0) return false;
-		return !contextualFragmentPatterns.some(([strictPattern, markerPattern]) => {
-			return strictPattern.test(trimmed) || markerPattern.test(trimmed);
-		});
-	});
-}
 
 function shouldKeepOpenAiCompactOutputItem(item: Record<string, unknown>): boolean {
 	if (item.type === "compaction" || item.type === "compaction_summary") return true;
 	if (item.type !== "message") return false;
-	if (item.role === "developer") return false;
-	if (item.role === "assistant") return true;
-	return shouldKeepOpenAiCompactOutputUserMessage(item);
+	return item.role === "assistant" || item.role === "user";
 }
 
 function trimOpenAiCompactInput(

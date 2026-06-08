@@ -1501,6 +1501,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					await awaitAbortable(
 						session.prompt(reminder, {
 							attribution: "agent",
+							synthetic: true,
 							...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
 						}),
 					);

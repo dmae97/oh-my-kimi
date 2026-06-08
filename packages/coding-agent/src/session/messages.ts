@@ -524,7 +524,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				case "custom":
 				case "hookMessage": {
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
-					const role = "user";
+					const role = "developer";
 					const attribution = m.attribution;
 					return {
 						role,
@@ -572,7 +572,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						}
 					}
 					return {
-						role: "user",
+						role: "developer",
 						content,
 						attribution: "user",
 						timestamp: m.timestamp,

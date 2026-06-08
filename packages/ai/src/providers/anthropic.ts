@@ -2271,19 +2271,6 @@ function resolveAnthropicAdaptiveEffort(
 	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
 }
 
-function startsWithAfterAsciiWhitespace(value: string, prefix: string): boolean {
-	let index = 0;
-	while (index < value.length) {
-		const code = value.charCodeAt(index);
-		if (code !== 9 && code !== 10 && code !== 13 && code !== 32) break;
-		index++;
-	}
-	return value.startsWith(prefix, index);
-}
-
-function isClaudeSyntheticUserText(value: string): boolean {
-	return startsWithAfterAsciiWhitespace(value, "<system-reminder>");
-}
 
 function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): string {
 	for (const message of messages) {
@@ -2291,13 +2278,10 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 		const { content } = message;
 		if (typeof content === "string") return content;
 		if (!Array.isArray(content)) return "";
-		let fallback: string | undefined;
 		for (const block of content) {
-			if (block.type !== "text") continue;
-			fallback ??= block.text;
-			if (!isClaudeSyntheticUserText(block.text)) return block.text;
+			if (block.type === "text") return block.text;
 		}
-		return fallback ?? "";
+		return "";
 	}
 	return "";
 }
