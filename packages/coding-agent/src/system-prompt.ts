@@ -10,6 +10,7 @@ import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
+import { expandAtImports } from "./discovery/at-imports";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import { hasObsidian } from "./internal-urls/vault-protocol";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
@@ -254,15 +255,20 @@ export async function loadProjectContextFiles(
 
 	const result = await loadCapability(contextFileCapability.id, { cwd: resolvedCwd });
 
-	// Convert ContextFile items and preserve depth info
-	const files = result.items.map(item => {
-		const contextFile = item as ContextFile;
-		return {
-			path: contextFile.path,
-			content: contextFile.content,
-			depth: contextFile.depth,
-		};
-	});
+	// Materialize ContextFile items, expanding any `@path/to/file` includes
+	// in their content. The expansion uses the file's own directory as the
+	// resolution base so relative imports work the same way Claude Code,
+	// Goose, and other tools document.
+	const files = await Promise.all(
+		result.items.map(async item => {
+			const contextFile = item as ContextFile;
+			return {
+				path: contextFile.path,
+				content: await expandAtImports(contextFile.content, contextFile.path),
+				depth: contextFile.depth,
+			};
+		}),
+	);
 
 	// Sort by depth (descending): higher depth (farther from cwd) comes first,
 	// so files closer to cwd appear later and are more prominent

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Expanded `@path/to/file` import references in CLAUDE.md / AGENTS.md / GEMINI.md (and the other discovered context-file flavors) when loading them into the system prompt, matching the convention used by Claude Code, Goose, and other agents. Imports resolve relative to the importing file's directory, support `~/...`, recurse up to 5 hops, and are skipped inside fenced code blocks and inline code spans so technical examples like `npm install @types/node` survive intact ([#2111](https://github.com/can1357/oh-my-pi/issues/2111)).
+
 ## [15.10.4] - 2026-06-08
 
 ### Added
