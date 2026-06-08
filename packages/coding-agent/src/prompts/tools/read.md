@@ -18,8 +18,8 @@ Append `:<sel>` to `path`. The bare path falls back to the default mode.
 - `:50` / `:50-` — read from line 50 onward.
 - `:50-200` — lines 50–200 inclusive.
 - `:50+150` — 150 lines starting at line 50.
-- `:20+1` — anchor on line 20 (single-range reads expand by ≤1 leading and ≤3 trailing context lines; if an emitted bracket pairs with a line outside the window, that matching line is included behind an ellipsis).
-- `:5-16,960-973` — multiple ranges in one call (sorted, overlaps merged). Multi-range mode returns exact requested bounds plus matching bracket lines when a shown bracket's pair sits outside those bounds.
+- `:20+1` — anchor on line 20 (single-range reads expand by ≤1 leading and ≤3 trailing context lines).
+- `:5-16,960-973` — multiple ranges in one call (sorted, overlaps merged). Multi-range mode returns exact bounds with no context padding.
 - `:raw` — verbatim text; no anchors, no summary, no line prefixes.
 - `:2-4:raw` or `:raw:2-4` — range AND verbatim; the two compose in either order.
 - `:conflicts` — one-line-per-block index of every unresolved git merge conflict.

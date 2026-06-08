@@ -35,8 +35,7 @@ describe("generateDiffString", () => {
 		];
 		const newLines = [...oldLines];
 		newLines[0] = "function renamed() {";
-
-		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1);
+		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
 		const diffLines = result.diff.split("\n");
 
 		expect(diffLines).toContain("-1|function outer() {");

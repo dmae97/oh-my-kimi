@@ -1,3 +1,6 @@
+import { enclosingBlockBoundaries } from "@oh-my-pi/pi-natives";
+import { logger } from "@oh-my-pi/pi-utils";
+
 const OPEN_TO_CLOSE: Record<string, string> = {
 	"(": ")",
 	"[": "]",
@@ -13,6 +16,12 @@ const CLOSE_TO_OPEN: Record<string, string> = {
 export interface LineSpan {
 	startLine: number;
 	endLine: number;
+}
+
+/** Where the source came from, so tree-sitter can pick a grammar. */
+export interface BlockContextSource {
+	path?: string;
+	lang?: string;
 }
 
 export type LineEntry = { kind: "line"; lineNumber: number; text: string; context: boolean } | { kind: "ellipsis" };
@@ -63,6 +72,57 @@ function hasEveryLineVisible(visible: ReadonlySet<number>, totalLines: number): 
 	return totalLines > 0 && visible.size >= totalLines;
 }
 
+/** Collapse a set of visible line numbers into sorted, merged inclusive spans. */
+function visibleSetToSpans(visible: ReadonlySet<number>): LineSpan[] {
+	const sorted = [...visible].sort((left, right) => left - right);
+	const spans: LineSpan[] = [];
+	for (const line of sorted) {
+		const previous = spans[spans.length - 1];
+		if (previous && line <= previous.endLine + 1) {
+			previous.endLine = line;
+			continue;
+		}
+		spans.push({ startLine: line, endLine: line });
+	}
+	return spans;
+}
+
+/**
+ * Tree-sitter-backed block boundaries. For each multi-line named node whose
+ * span crosses the visible window, the native side returns the boundary line
+ * outside that window (closer when the opener is shown, opener when the closer
+ * is shown). Returns `null` when the language is unrecognized or the source has
+ * a syntax error so the caller can fall back to a lexical bracket scan.
+ */
+function nativeBlockContext(
+	fullLines: readonly string[],
+	visible: ReadonlySet<number>,
+	source: BlockContextSource,
+): Map<number, string> | null {
+	if (!source.path && !source.lang) return null;
+	const ranges = visibleSetToSpans(visible);
+	if (ranges.length === 0) return new Map();
+	let boundaries: number[] | null;
+	try {
+		boundaries = enclosingBlockBoundaries({
+			code: fullLines.join("\n"),
+			path: source.path,
+			lang: source.lang,
+			ranges,
+		});
+	} catch (error) {
+		logger.debug("enclosingBlockBoundaries failed; using lexical bracket fallback", { error });
+		return null;
+	}
+	if (boundaries === null) return null;
+	const context = new Map<number, string>();
+	for (const lineNumber of boundaries) {
+		if (visible.has(lineNumber)) continue;
+		context.set(lineNumber, fullLines[lineNumber - 1] ?? "");
+	}
+	return context;
+}
+
 function findMatchingStackIndex(stack: readonly StackEntry[], opener: string): number {
 	for (let index = stack.length - 1; index >= 0; index--) {
 		if (stack[index].opener === opener) return index;
@@ -79,14 +139,14 @@ function isHashCommentStart(line: string, index: number): boolean {
 	return true;
 }
 
-export function findMatchingBracketContextLines(
-	fullLines: readonly string[],
-	visibleLinesInput: ReadonlySet<number> | readonly number[],
-): Map<number, string> {
-	const visible = visibleLinesInput instanceof Set ? visibleLinesInput : new Set(visibleLinesInput);
+/**
+ * Lexical bracket-matching fallback for sources tree-sitter can't parse
+ * (unknown extensions, syntax errors). Pairs `()[]{}` while skipping strings
+ * and line/block comments, and reports the matching line when one endpoint is
+ * visible and the other is not.
+ */
+function lexicalBracketContext(fullLines: readonly string[], visible: ReadonlySet<number>): Map<number, string> {
 	const context = new Map<number, string>();
-	if (visible.size === 0 || hasEveryLineVisible(visible, fullLines.length)) return context;
-
 	const stack: StackEntry[] = [];
 	let mode: ScannerMode = "code";
 	let escaped = false;
@@ -189,16 +249,40 @@ export function findMatchingBracketContextLines(
 	return context;
 }
 
-export function buildLineEntriesWithMatchingBracketContext(
+/**
+ * Resolve the off-window boundary lines for a visible window: tree-sitter
+ * syntactic spans first (covers brace and indentation languages), falling back
+ * to a lexical bracket scan when the grammar is unavailable. Returns a map of
+ * `lineNumber → source text` for the lines to surface, never including a line
+ * already visible.
+ */
+export function findBlockContextLines(
+	fullLines: readonly string[],
+	visibleInput: ReadonlySet<number> | readonly number[],
+	source: BlockContextSource = {},
+): Map<number, string> {
+	const visible = visibleInput instanceof Set ? visibleInput : new Set(visibleInput);
+	if (visible.size === 0 || hasEveryLineVisible(visible, fullLines.length)) return new Map();
+	return nativeBlockContext(fullLines, visible, source) ?? lexicalBracketContext(fullLines, visible);
+}
+
+/**
+ * Build display entries for `visibleSpans` plus any off-window block-boundary
+ * lines, in source order, with `{ kind: "ellipsis" }` markers inserted across
+ * non-contiguous gaps. `options.lineText` lets callers substitute display text
+ * (e.g. column-truncated lines) for a given line number.
+ */
+export function buildLineEntriesWithBlockContext(
 	fullLines: readonly string[],
 	visibleSpans: readonly LineSpan[],
+	source: BlockContextSource = {},
 	options: {
 		lineText?: (lineNumber: number, sourceText: string, context: boolean) => string;
 	} = {},
 ): LineEntry[] {
 	const spans = normalizeLineSpans(visibleSpans, fullLines.length);
 	const visible = visibleLineNumbers(spans);
-	const context = findMatchingBracketContextLines(fullLines, visible);
+	const context = findBlockContextLines(fullLines, visible, source);
 	const allLines = new Set<number>(visible);
 	for (const lineNumber of context.keys()) allLines.add(lineNumber);
 

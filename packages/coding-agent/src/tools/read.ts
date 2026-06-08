@@ -35,14 +35,10 @@ import {
 } from "../session/streaming-output";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, tryResolveInternalUrlSync } from "../tui";
 import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
+import { buildLineEntriesWithBlockContext, type LineEntry, lineEntriesToPlainText } from "../utils/block-context";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
-import {
-	buildLineEntriesWithMatchingBracketContext,
-	type LineEntry,
-	lineEntriesToPlainText,
-} from "../utils/matching-brackets";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "./archive-reader";
 import {
@@ -961,9 +957,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return prependHashlineHeader(formatted, hashContext);
 		};
 		const buildLineEntries = (endLineDisplay: number): LineEntry[] =>
-			buildLineEntriesWithMatchingBracketContext(allLines, [
-				{ startLine: startLineDisplay, endLine: endLineDisplay },
-			]);
+			buildLineEntriesWithBlockContext(allLines, [{ startLine: startLineDisplay, endLine: endLineDisplay }], {
+				path: options.sourcePath,
+			});
 
 		let outputText: string;
 		let truncationInfo:
@@ -1090,7 +1086,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (options.raw === true) {
 			outputText = rawParts.length > 0 ? rawParts.join("\n\n…\n\n") : "";
 		} else if (visibleSpans.length > 0) {
-			const entries = buildLineEntriesWithMatchingBracketContext(allLines, visibleSpans);
+			const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
 			const firstLine = entries.find(entry => entry.kind === "line");
 			if (firstLine?.kind === "line") {
 				details.displayContent = {
@@ -1220,16 +1216,21 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		let outputText: string;
 		if (!rawSelector && fullLines && visibleSpans.length > 0) {
-			const entries = buildLineEntriesWithMatchingBracketContext(fullLines, visibleSpans, {
-				lineText: (lineNumber, sourceText) => {
-					const visibleText = displayLineByNumber.get(lineNumber);
-					if (visibleText !== undefined) return visibleText;
-					if (maxColumns <= 0) return sourceText;
-					const truncated = truncateLine(sourceText, maxColumns);
-					if (truncated.wasTruncated) columnTruncated = maxColumns;
-					return truncated.text;
+			const entries = buildLineEntriesWithBlockContext(
+				fullLines,
+				visibleSpans,
+				{ path: absolutePath },
+				{
+					lineText: (lineNumber, sourceText) => {
+						const visibleText = displayLineByNumber.get(lineNumber);
+						if (visibleText !== undefined) return visibleText;
+						if (maxColumns <= 0) return sourceText;
+						const truncated = truncateLine(sourceText, maxColumns);
+						if (truncated.wasTruncated) columnTruncated = maxColumns;
+						return truncated.text;
+					},
 				},
-			});
+			);
 			const firstLine = entries.find(entry => entry.kind === "line");
 			displayContent = {
 				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
@@ -2100,9 +2101,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					};
 					const formatBracketAwareText = (): string | undefined => {
 						if (!bracketContextFullLines) return undefined;
-						const entries = buildLineEntriesWithMatchingBracketContext(
+						const entries = buildLineEntriesWithBlockContext(
 							bracketContextFullLines,
 							[{ startLine: startLineDisplay, endLine: displayedEndLine }],
+							{ path: absolutePath },
 							{
 								lineText: (lineNumber, sourceText) => {
 									const visibleText = displayLineByNumber.get(lineNumber);

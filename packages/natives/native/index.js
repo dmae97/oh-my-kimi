@@ -31,6 +31,7 @@ export const blockRangeAt = nativeBindings.blockRangeAt;
 export const copyToClipboard = nativeBindings.copyToClipboard;
 export const countTokens = nativeBindings.countTokens;
 export const detectMacOSAppearance = nativeBindings.detectMacOSAppearance;
+export const enclosingBlockBoundaries = nativeBindings.enclosingBlockBoundaries;
 export const encodeSixel = nativeBindings.encodeSixel;
 export const executeShell = nativeBindings.executeShell;
 export const extractSegments = nativeBindings.extractSegments;

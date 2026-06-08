@@ -6,7 +6,7 @@
  */
 import * as Diff from "diff";
 import { resolveToCwd } from "../tools/path-utils";
-import { findMatchingBracketContextLines } from "../utils/matching-brackets";
+import { type BlockContextSource, findBlockContextLines } from "../utils/block-context";
 import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch } from "./modes/replace";
 import { adjustIndentation, normalizeToLF, stripBom } from "./normalize";
 import { readEditFileText } from "./read-file";
@@ -127,7 +127,12 @@ function insertBracketContextRows(
 	}
 }
 
-function addMatchingBracketContextRows(rows: string[], oldLines: readonly string[], newLines: readonly string[]): void {
+function addMatchingBracketContextRows(
+	rows: string[],
+	oldLines: readonly string[],
+	newLines: readonly string[],
+	source: BlockContextSource,
+): void {
 	const oldVisible: number[] = [];
 	const newVisible: number[] = [];
 	const seenRows = new Set(rows);
@@ -139,15 +144,20 @@ function addMatchingBracketContextRows(rows: string[], oldLines: readonly string
 		else newVisible.push(parsed.lineNumber);
 	}
 
-	insertBracketContextRows(rows, "old", findMatchingBracketContextLines(oldLines, oldVisible), seenRows);
-	insertBracketContextRows(rows, "new", findMatchingBracketContextLines(newLines, newVisible), seenRows);
+	insertBracketContextRows(rows, "old", findBlockContextLines(oldLines, oldVisible, source), seenRows);
+	insertBracketContextRows(rows, "new", findBlockContextLines(newLines, newVisible, source), seenRows);
 }
 
 /**
  * Generate a unified diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateDiffString(oldContent: string, newContent: string, contextLines = 2): DiffResult {
+export function generateDiffString(
+	oldContent: string,
+	newContent: string,
+	contextLines = 2,
+	source: BlockContextSource = {},
+): DiffResult {
 	const parts = Diff.diffLines(oldContent, newContent);
 	const output: string[] = [];
 
@@ -251,7 +261,7 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 		}
 	}
 
-	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"));
+	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"), source);
 
 	return { diff: output.join("\n"), firstChangedLine };
 }
@@ -280,7 +290,12 @@ export interface ReplaceResult {
  * Generate a unified diff string without file headers.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateUnifiedDiffString(oldContent: string, newContent: string, contextLines = 3): DiffResult {
+export function generateUnifiedDiffString(
+	oldContent: string,
+	newContent: string,
+	contextLines = 3,
+	source: BlockContextSource = {},
+): DiffResult {
 	const patch = Diff.structuredPatch("", "", oldContent, newContent, "", "", { context: contextLines });
 	const output: string[] = [];
 	let firstChangedLine: number | undefined;
@@ -311,7 +326,7 @@ export function generateUnifiedDiffString(oldContent: string, newContent: string
 		}
 	}
 
-	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"));
+	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"), source);
 
 	return { diff: output.join("\n"), firstChangedLine };
 }
@@ -900,7 +915,7 @@ export async function computeEditDiff(
 			};
 		}
 
-		return generateDiffString(normalizedContent, result.content);
+		return generateDiffString(normalizedContent, result.content, undefined, { path });
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}

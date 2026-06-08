@@ -120,6 +120,37 @@ describe("read tool multi-range selector", () => {
 		expect(text).not.toContain("const four = 4");
 	});
 
+	it("uses tree-sitter syntactic spans for indentation languages (Python)", async () => {
+		const filePath = path.join(tmpDir, "module.py");
+		await fs.writeFile(
+			filePath,
+			[
+				"def greet(name):",
+				"    a = 1",
+				"    b = 2",
+				"    c = 3",
+				"    d = 4",
+				"    e = 5",
+				"    f = 6",
+				"    g = 7",
+				"    return a + b + c + d + e + f + g + len(name)",
+				"trailing = 1",
+			].join("\n"),
+		);
+
+		const tool = new ReadTool(createSession(tmpDir));
+		// Read only the `def` header (expands by a few trailing context lines).
+		// Python has no closing delimiter, so a bracket scan would surface
+		// nothing; tree-sitter surfaces the def's last body line (9) as the
+		// block boundary, behind an ellipsis for the skipped middle.
+		const text = textOutput(await tool.execute("call-py-def", { path: `${filePath}:1-1` }));
+
+		expect(text).toContain("def greet(name):");
+		expect(text).toContain("…");
+		expect(text).toContain("return a + b + c + d + e + f + g + len(name)");
+		expect(text).not.toContain("trailing = 1");
+	});
+
 	it("merges overlapping ranges into a single contiguous block", async () => {
 		const filePath = path.join(tmpDir, "numbered.txt");
 		await fs.writeFile(filePath, makeNumberedContent(20));

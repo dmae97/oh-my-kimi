@@ -429,6 +429,31 @@ export declare enum Ellipsis {
 }
 
 /**
+ * Matching-bracket context for an arbitrary tree-sitter language.
+ *
+ * For each multi-line named node whose span crosses the visible window, return
+ * the boundary line sitting *outside* that window (the closer when the opener
+ * is shown, the opener when the closer is shown). Covers brace and indentation
+ * languages alike using real syntactic spans.
+ *
+ * Returns `null` when the language is unrecognized or the source fails to
+ * parse / carries a syntax error (caller should fall back to a lexical scan);
+ * a sorted, unique list of 1-indexed boundary lines otherwise.
+ */
+export declare function enclosingBlockBoundaries(options: EnclosingBoundaryOptions): Array<number> | null
+
+export interface EnclosingBoundaryOptions {
+  /** Source code to inspect. */
+  code: string
+  /** Language alias (e.g. "rust", "typescript") used before path inference. */
+  lang?: string
+  /** File path used to infer language by extension when `lang` is omitted. */
+  path?: string
+  /** 1-indexed inclusive visible line ranges (the lines actually shown). */
+  ranges: Array<LineRange>
+}
+
+/**
  * Encode image bytes into a SIXEL escape sequence for terminal rendering.
  *
  * The input image is decoded and resized to the requested pixel dimensions
@@ -905,6 +930,13 @@ export declare enum KeyEventType {
   Repeat = 2,
   /** Key release event. */
   Release = 3
+}
+
+export interface LineRange {
+  /** 1-indexed inclusive first visible line. */
+  startLine: number
+  /** 1-indexed inclusive last visible line. */
+  endLine: number
 }
 
 /**
