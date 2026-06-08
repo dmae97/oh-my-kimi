@@ -95,4 +95,38 @@ describe("split_commit hunk selector validation", () => {
 		expect(result.details.errors).toContain("Commit 1: No hunks selected for src/a.ts");
 		expect(state.splitProposal).toBeUndefined();
 	});
+
+	it("allows deferred changelog targets that are not in the staged diff yet", async () => {
+		vi.spyOn(git, "diff").mockResolvedValue(STAGED_DIFF);
+		const state: CommitAgentState = {
+			overview: { files: ["src/a.ts", "src/b.ts"], stat: "", numstat: [], scopeCandidates: "", isWideScope: false },
+		};
+		const tool = createSplitCommitTool("/repo", state, ["packages/coding-agent/CHANGELOG.md"]);
+
+		const result = await tool.execute(
+			"split-commit",
+			{
+				commits: [
+					{
+						changes: [
+							{ path: "src/a.ts", hunks: { type: "all" } },
+							{ path: "src/b.ts", hunks: { type: "all" } },
+							{ path: "packages/coding-agent/CHANGELOG.md", hunks: { type: "all" } },
+						],
+						type: "fix",
+						scope: null,
+						summary: "Fixed deferred changelog validation",
+					},
+				],
+			},
+			undefined,
+			{} as never,
+		);
+
+		expect(result.details.valid).toBe(true);
+		expect(result.details.errors).not.toContain("Commit 1: No diff found for packages/coding-agent/CHANGELOG.md");
+		expect(state.splitProposal?.commits[0]?.changes.map(change => change.path)).toContain(
+			"packages/coding-agent/CHANGELOG.md",
+		);
+	});
 });

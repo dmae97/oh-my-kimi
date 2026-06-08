@@ -692,10 +692,7 @@ export function validateHunkSelections(
 
 	for (const selection of selections) {
 		const fileDiff = fileDiffMap.get(selection.path);
-		if (!fileDiff) {
-			errors.push({ path: selection.path, message: `No diff found for ${selection.path}` });
-			continue;
-		}
+		if (!fileDiff) continue;
 		if (selection.hunks.type === "all") continue;
 		if (fileDiff.isBinary) {
 			errors.push({ path: selection.path, message: `Cannot select hunks for binary file ${selection.path}` });
