@@ -4,7 +4,7 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
-import { isSilentAbort, resolveAbortLabel } from "../../session/messages";
+import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { resolveImageOptions } from "../../tools/render-utils";
 
 /**
@@ -240,7 +240,7 @@ export class AssistantMessageComponent extends Container {
 		// But only if there are no tool calls (tool execution components will show the error)
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (!hasToolCalls) {
-			if (message.stopReason === "aborted" && !isSilentAbort(message.errorMessage)) {
+			if (message.stopReason === "aborted" && shouldRenderAbortReason(message.errorMessage)) {
 				const abortMessage = resolveAbortLabel(message.errorMessage);
 				if (hasVisibleContent) {
 					this.#contentContainer.addChild(new Spacer(1));
@@ -256,7 +256,7 @@ export class AssistantMessageComponent extends Container {
 		}
 		if (
 			message.errorMessage &&
-			!isSilentAbort(message.errorMessage) &&
+			shouldRenderAbortReason(message.errorMessage) &&
 			message.stopReason !== "aborted" &&
 			message.stopReason !== "error"
 		) {

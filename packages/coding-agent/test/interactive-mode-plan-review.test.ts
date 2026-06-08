@@ -862,8 +862,8 @@ describe("InteractiveMode plan review rendering", () => {
 	//
 	// D1 asserts that the persisted `SILENT_ABORT_MARKER` suppresses the red abort
 	// line. D2 is the over-suppression regression guard — an aborted message with
-	// NO marker still renders the generic label. D3 covers a threaded interrupt
-	// reason rendering verbatim.
+	// NO marker still renders the generic label. D3 covers the Esc interrupt label:
+	// it remains persisted but does not render as a redundant assistant line.
 	// ==========================================================================
 
 	function renderAssistant(message: AssistantMessage, width = 120): string {
@@ -911,12 +911,10 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(rendered).toContain("Operation aborted");
 	});
 
-	it("D3: Replay of an aborted message carrying a user-interrupt reason renders it verbatim", () => {
-		// The Esc-interrupt reason persisted on errorMessage must render as-is,
-		// not collapse into the generic label.
+	it("D3: Replay of an aborted message carrying a user-interrupt reason suppresses the redundant line", () => {
 		const message = buildAbortedAssistantMessage({ content: [], errorMessage: USER_INTERRUPT_LABEL });
 		const rendered = renderAssistant(message);
-		expect(rendered).toContain(USER_INTERRUPT_LABEL);
+		expect(rendered).not.toContain(USER_INTERRUPT_LABEL);
 		expect(rendered).not.toContain("Operation aborted");
 	});
 });
