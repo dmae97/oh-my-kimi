@@ -182,6 +182,27 @@ function venvBinDir(venvPath: string): string {
 	return process.platform === "win32" ? path.join(venvPath, "Scripts") : path.join(venvPath, "bin");
 }
 
+function detectExplicitVenv(pythonPath: string): { venvPath: string; binDir: string } | undefined {
+	const binDir = path.dirname(pythonPath);
+	const venvPath = path.dirname(binDir);
+	if (fs.existsSync(path.join(venvPath, "pyvenv.cfg"))) {
+		return { venvPath, binDir };
+	}
+	return undefined;
+}
+
+export function resolveExplicitPythonRuntime(
+	interpreter: string,
+	cwd: string,
+	baseEnv: Record<string, string | undefined>,
+): PythonRuntime {
+	const pythonPath = path.isAbsolute(interpreter) ? interpreter : path.resolve(cwd, interpreter);
+	const venv = detectExplicitVenv(pythonPath);
+	if (venv) {
+		return { pythonPath, env: applyVenvEnv(baseEnv, venv.venvPath, venv.binDir), venvPath: venv.venvPath };
+	}
+	return { pythonPath, env: { ...baseEnv } };
+}
 /**
  * Enumerate candidate Python runtimes in priority order: an active/project venv,
  * the managed `~/.omp/python-env`, then the system interpreter on PATH. Every

@@ -17,7 +17,13 @@ import { Settings } from "../../config/settings";
 import { type KernelDisplayOutput, renderKernelDisplay } from "./display";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
-import { enumeratePythonRuntimes, filterEnv, type PythonRuntime, resolvePythonRuntime } from "./runtime";
+import {
+	enumeratePythonRuntimes,
+	filterEnv,
+	type PythonRuntime,
+	resolveExplicitPythonRuntime,
+	resolvePythonRuntime,
+} from "./runtime";
 import { hostHasInheritableConsole, shouldHideKernelWindow } from "./spawn-options";
 
 export type { KernelDisplayOutput, PythonStatusEvent } from "./display";
@@ -156,7 +162,10 @@ async function probePythonKernelAvailability(cwd: string): Promise<PythonKernelA
 		const settings = await Settings.init();
 		const { env } = settings.getShellConfig();
 		const baseEnv = filterEnv(env);
-		const runtimes = enumeratePythonRuntimes(cwd, baseEnv);
+		const explicitInterpreter = settings.get("python.interpreter")?.trim();
+		const runtimes = explicitInterpreter
+			? [resolveExplicitPythonRuntime(explicitInterpreter, cwd, baseEnv)]
+			: enumeratePythonRuntimes(cwd, baseEnv);
 		if (runtimes.length === 0) {
 			return { ok: false, reason: "Python executable not found on PATH" };
 		}
@@ -250,8 +259,12 @@ export class PythonKernel {
 		// PI_PYTHON_SKIP_CHECK), where no candidate was probed.
 		let runtime = availability.runtime;
 		if (!runtime) {
-			const { env: shellEnv } = (await Settings.init()).getShellConfig();
-			runtime = resolvePythonRuntime(options.cwd, filterEnv(shellEnv));
+			const settings = await Settings.init();
+			const { env: shellEnv } = settings.getShellConfig();
+			const explicitInterpreter = settings.get("python.interpreter")?.trim();
+			runtime = explicitInterpreter
+				? resolveExplicitPythonRuntime(explicitInterpreter, options.cwd, filterEnv(shellEnv))
+				: resolvePythonRuntime(options.cwd, filterEnv(shellEnv));
 		}
 		const spawnEnv: Record<string, string> = {};
 		for (const [key, value] of Object.entries(runtime.env)) {

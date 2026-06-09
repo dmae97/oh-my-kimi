@@ -2100,6 +2100,16 @@ export const SETTINGS_SCHEMA = {
 			description: "Whether to keep IPython kernel alive across calls",
 		},
 	},
+	"python.interpreter": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "editing",
+			label: "Python Interpreter",
+			description:
+				"Optional path to an exact Python executable. When set, automatic Python runtime discovery is skipped.",
+		},
+	},
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Tools

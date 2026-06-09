@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { enumeratePythonRuntimes, filterEnv, resolvePythonRuntime } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
+import {
+	enumeratePythonRuntimes,
+	filterEnv,
+	resolveExplicitPythonRuntime,
+	resolvePythonRuntime,
+} from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
 import * as piUtils from "@oh-my-pi/pi-utils";
 
 describe("Python gateway environment filtering", () => {
@@ -92,6 +97,35 @@ describe("enumeratePythonRuntimes", () => {
 		expect(resolvePythonRuntime(path.join(path.sep, "work"), {}).pythonPath).toBe(systemPy);
 	});
 
+	it("resolves an explicit interpreter without falling through to discovery", () => {
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python" ? systemPy : null));
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+		const explicitPy = path.join(path.sep, "custom", "python3.13");
+
+		const runtime = resolveExplicitPythonRuntime(explicitPy, path.join(path.sep, "work"), {
+			PATH: path.join(path.sep, "usr", "bin"),
+		});
+
+		expect(runtime.pythonPath).toBe(explicitPy);
+		expect(runtime.venvPath).toBeUndefined();
+		expect(runtime.env.PATH).toBe(path.join(path.sep, "usr", "bin"));
+	});
+
+	it("sets venv env vars for an explicit interpreter inside a virtualenv", () => {
+		const venvDir = path.join(path.sep, "work", ".venv");
+		const binDir = path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin");
+		const explicitPy = path.join(binDir, process.platform === "win32" ? "python.exe" : "python");
+		vi.spyOn(fs, "existsSync").mockImplementation(candidate => candidate === path.join(venvDir, "pyvenv.cfg"));
+
+		const runtime = resolveExplicitPythonRuntime(explicitPy, path.join(path.sep, "work"), {
+			PATH: path.join(path.sep, "usr", "bin"),
+		});
+
+		expect(runtime.venvPath).toBe(venvDir);
+		expect(runtime.env.VIRTUAL_ENV).toBe(venvDir);
+		expect(runtime.env.PATH).toBe(`${binDir}${path.delimiter}${path.join(path.sep, "usr", "bin")}`);
+	});
 	it("throws from resolvePythonRuntime when no interpreter can be found", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
 		vi.spyOn(piUtils, "$which").mockReturnValue(null);
