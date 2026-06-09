@@ -57,6 +57,39 @@ async function readSectionText(absolutePath: string, sectionPath: string): Promi
 	}
 }
 
+/**
+ * Streaming previews recompute on every streamed chunk; re-reading the target
+ * file from disk each tick dominates the cost on large files. Cache the raw
+ * section text keyed by mtime+size so any on-disk change invalidates
+ * naturally. Used by the streaming path only — the args-complete pass always
+ * reads fresh.
+ */
+const streamingTextCache = new Map<string, { mtimeMs: number; size: number; rawContent: string }>();
+const STREAMING_TEXT_CACHE_MAX = 8;
+
+async function readSectionTextCached(absolutePath: string, sectionPath: string): Promise<string> {
+	let stamp: { mtimeMs: number; size: number } | undefined;
+	try {
+		const stat = await Bun.file(absolutePath).stat();
+		stamp = { mtimeMs: stat.mtimeMs, size: stat.size };
+	} catch {
+		stamp = undefined;
+	}
+	if (stamp) {
+		const cached = streamingTextCache.get(absolutePath);
+		if (cached && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size) return cached.rawContent;
+	}
+	const rawContent = await readSectionText(absolutePath, sectionPath);
+	if (stamp) {
+		if (streamingTextCache.size >= STREAMING_TEXT_CACHE_MAX && !streamingTextCache.has(absolutePath)) {
+			const oldest = streamingTextCache.keys().next().value;
+			if (oldest !== undefined) streamingTextCache.delete(oldest);
+		}
+		streamingTextCache.set(absolutePath, { mtimeMs: stamp.mtimeMs, size: stamp.size, rawContent });
+	}
+	return rawContent;
+}
+
 function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 	return edits.some(edit => {
 		if (edit.kind === "delete") return true;
@@ -220,7 +253,9 @@ export async function computeHashlineSectionDiff(
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	try {
 		const absolutePath = resolveToCwd(section.path, cwd);
-		const rawContent = await readSectionText(absolutePath, section.path);
+		const rawContent = options.streaming
+			? await readSectionTextCached(absolutePath, section.path)
+			: await readSectionText(absolutePath, section.path);
 		const { text: content } = stripBom(rawContent);
 		const normalized = normalizeToLF(content);
 		// Streaming favors a stable, monotonic preview over an exact unified
