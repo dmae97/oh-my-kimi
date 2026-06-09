@@ -107,6 +107,16 @@ describe("model thinking metadata", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 		});
+		const mythos = createModel({
+			id: "claude-mythos-5",
+			api: "anthropic-messages",
+			provider: "anthropic",
+		});
+		const mythosBedrock = createModel({
+			id: "global.anthropic.claude-mythos-5",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+		});
 
 		expect(opus45.thinking?.mode).toBe("anthropic-budget-effort");
 		expect(opus46.thinking?.mode).toBe("anthropic-adaptive");
@@ -121,6 +131,12 @@ describe("model thinking metadata", () => {
 			minLevel: Effort.Minimal,
 			maxLevel: Effort.High,
 		});
+		expect(mythos.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.XHigh,
+		});
+		expect(mythosBedrock.thinking?.mode).toBe("anthropic-adaptive");
 		// Opus 4.6 has no real xhigh level — pi-ai aliases XHigh to Anthropic's "max".
 		expect(mapEffortToAnthropicAdaptiveEffort(opus46, Effort.XHigh)).toBe("max");
 		// Opus 4.7+ on the Messages API exposes the full five-tier scale, so pi-ai
@@ -130,6 +146,9 @@ describe("model thinking metadata", () => {
 		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.Medium)).toBe("high");
 		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.High)).toBe("xhigh");
 		expect(mapEffortToAnthropicAdaptiveEffort(opus47, Effort.XHigh)).toBe("max");
+		expect(mapEffortToAnthropicAdaptiveEffort(mythos, Effort.High)).toBe("xhigh");
+		expect(mapEffortToAnthropicAdaptiveEffort(mythos, Effort.XHigh)).toBe("max");
+		expect(mapEffortToAnthropicAdaptiveEffort(mythosBedrock, Effort.XHigh)).toBe("max");
 		// Bedrock Converse keeps the four-tier legacy mapping; xhigh aliases to "max".
 		expect(mapEffortToAnthropicAdaptiveEffort(opus47Bedrock, Effort.High)).toBe("high");
 		expect(mapEffortToAnthropicAdaptiveEffort(opus47Bedrock, Effort.XHigh)).toBe("max");
@@ -216,6 +235,34 @@ describe("generated model policies", () => {
 		expect(models[2]?.contextWindow).toBe(272000);
 		expect(models[3]?.contextWindow).toBe(272000);
 		expect(models[3]?.priority).toBe(1);
+	});
+
+	it("pins Claude Mythos 5 first-party Anthropic catalog metadata", () => {
+		const models: Model<Api>[] = [
+			{
+				id: "claude-mythos-5",
+				name: "Claude Mythos 5",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 200000,
+				maxTokens: 32000,
+			},
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[0]?.maxTokens).toBe(128_000);
+		expect(models[0]?.cost).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
+		expect(models[0]?.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			minLevel: Effort.Minimal,
+			maxLevel: Effort.XHigh,
+		});
 	});
 
 	it("normalizes Copilot generated fallback limits", () => {

@@ -3,10 +3,12 @@ import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { FetchImpl, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
+import type { Rule } from "../capability/rule";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
+import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
@@ -155,6 +157,21 @@ export interface ToolSession {
 	skills?: Skill[];
 	/** Pre-loaded prompt templates */
 	promptTemplates?: PromptTemplate[];
+	/** Pre-loaded rules (forwarded to subagents to skip re-discovery). */
+	rules?: Rule[];
+	/**
+	 * Pre-discovered extension source paths. Forwarded to subagents so they
+	 * skip the FS scan but still re-bind extensions to their own session-scoped
+	 * `ExtensionAPI` (cwd, eventBus, runtime). Inline extension factories
+	 * (`<inline-N>`) are NOT included — those are session-local.
+	 */
+	extensionPaths?: string[];
+	/**
+	 * Pre-discovered custom-tool source paths from `.omp/tools/`, `.claude/tools/`,
+	 * plugins, etc. Forwarded to subagents so they skip the FS scan but still
+	 * re-bind tools to their own session-scoped `CustomToolAPI`.
+	 */
+	customToolPaths?: ToolPathWithSource[];
 	/** Whether LSP integrations are enabled */
 	enableLsp?: boolean;
 	/** Whether an edit-capable tool is available in this session (controls hashline output) */

@@ -831,11 +831,20 @@ export interface AnthropicCompat {
 	supportsLongCacheRetention?: boolean;
 	/**
 	 * Whether mid-conversation `role: "system"` messages are accepted in the
-	 * `messages` array (Claude Opus 4.8+ on the first-party Claude API and
-	 * Claude Platform on AWS). When unset, auto-detected from the model id and
-	 * base URL. Not available on Bedrock, Vertex AI, or Microsoft Foundry.
+	 * `messages` array (Claude Opus 4.8+ and Claude Fable/Mythos 5 on the
+	 * first-party Claude API and Claude Platform on AWS). When unset,
+	 * auto-detected from the model id and base URL. Not available on Bedrock,
+	 * Vertex AI, or Microsoft Foundry.
 	 */
 	supportsMidConversationSystem?: boolean;
+	/**
+	 * Whether the model accepts a forced `tool_choice` (`{ type: "any" }` or
+	 * `{ type: "tool", name }`). Claude Fable/Mythos 5 reject forced tool use
+	 * outright ("tool_choice forces tool use is not compatible with this model");
+	 * the request builder downgrades forced choices to `auto` when this is false.
+	 * When unset, auto-detected from the model id. Default: true.
+	 */
+	supportsForcedToolChoice?: boolean;
 }
 
 /**

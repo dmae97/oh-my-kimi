@@ -103,6 +103,85 @@ describe("transcript reactive commit boundary", () => {
 			expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 		});
 	});
+
+	it("treats escape placement and pad drift on visually unchanged rows as append-only", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			// Field failure shape (streaming styled thinking): the previous last row
+			// carried the span-closing SGR before its width padding; when the
+			// paragraph wrapped onto a new row, the close moved to the new last row
+			// while the first row's visible cells stayed identical.
+			const sty = "\x1b[38;2;156;163;176m";
+			const block = new MutableLiveBlock([`${sty}alpha beta\x1b[39m   `]);
+			chat.addChild(block);
+
+			chat.render(80);
+			block.setLines([`${sty}alpha beta   `, `${sty}gamma\x1b[39m        `]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(2);
+		});
+	});
+
+	it("treats a wrap-shrink of the trailing line as append-only", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			// A streamed token extends the last word past the wrap column, so the
+			// word moves down onto an appended row and the previous bottom line
+			// shrinks. The bottom line is on screen by definition, so this is not a
+			// rewrite of committed-candidate rows.
+			const block = new MutableLiveBlock(["para one", "foo bar baz"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			block.setLines(["para one", "foo bar", "bazqux and more"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
+		});
+	});
+
+	it("re-earns append-only after a one-off interior rewrite heals", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			const block = new MutableLiveBlock(["top", "old", "bottom"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			// Interior rewrite (a codespan finalizing across a wrap) suspends commits.
+			block.setLines(["top", "new", "bottom"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
+
+			// Clean static frames re-arm the block...
+			for (let i = 0; i < 30; i++) chat.render(80);
+			// ...and the next append-shaped frame resumes committing the full block,
+			// so the pinned emitter can backfill the stalled gap contiguously.
+			block.setLines(["top", "new", "bottom", "appended"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
+		});
+	});
+
+	it("keeps a periodically rewriting block (spinner) deferred", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			const block = new MutableLiveBlock(["⠋ running", "body"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			const glyphs = ["⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠋"];
+			for (const glyph of glyphs) {
+				// Spinner advances every third frame; the static frames in between
+				// must never accumulate into a re-arm.
+				block.setLines([`${glyph} running`, "body"]);
+				chat.render(80);
+				chat.render(80);
+				chat.render(80);
+			}
+			block.setLines(["⠋ running", "body", "appended"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
+		});
+	});
 });
 
 describe("tool live-region scrollback", () => {
@@ -480,6 +559,12 @@ function makeAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function makeThinkingMessage(thinking: string): AssistantMessage {
+	const message = makeAssistantMessage("");
+	message.content = [{ type: "thinking", thinking }];
+	return message;
+}
+
 describe("assistant live-region scrollback", () => {
 	beforeAll(async () => {
 		await initTheme();
@@ -527,6 +612,62 @@ describe("assistant live-region scrollback", () => {
 				// The tail is still on screen, and nothing went missing in between.
 				expect(viewportText).toContain("MARK-39");
 				expect(scrollText).toContain("MARK-20");
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("commits scrolled-off styled thinking paragraphs to scrollback while streaming", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const component = new AssistantMessageComponent(undefined, false);
+			// Word-wrapped italic/colored paragraphs — the styled streaming shape the
+			// raw-byte append detector mis-classified as volatile (the span-closing
+			// SGR moves rows as the paragraph wraps), which froze the commit boundary
+			// and dropped every later paragraph that scrolled past the viewport top.
+			const paragraphs = Array.from(
+				{ length: 8 },
+				(_unused, i) =>
+					`PARA-${i} considering the resolver path and the descriptor defaults, the policy layer must keep the ` +
+					`reasoning flag intact while discovery maps an unknown model entry onto the bundled reference shape ` +
+					`so the runtime request stays correct across upstream metadata shifts.`,
+			);
+			const fullText = paragraphs.join("\n\n");
+			const words = fullText.split(" ");
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				// Stream a few words per frame so the in-flight bottom line extends,
+				// wraps, and sheds words onto new rows across many coalesced frames.
+				for (let i = 5; i <= words.length; i += 5) {
+					component.updateContent(makeThinkingMessage(words.slice(0, i).join(" ")));
+					tui.requestRender();
+					await term.waitForRender();
+				}
+
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
+
+				// Early paragraphs scrolled above the viewport: they must live in
+				// native scrollback, not vanish into the dropped gap.
+				expect(viewportText).not.toContain("PARA-0");
+				expect(scrollText).toContain("PARA-0");
+				expect(scrollText).toContain("PARA-4");
+				// The tail is still on screen.
+				expect(viewportText).toContain("PARA-7");
 			} finally {
 				tui.stop();
 				await term.flush();

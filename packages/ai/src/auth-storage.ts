@@ -31,7 +31,7 @@ import type {
 import { claudeRankingStrategy, claudeUsageProvider } from "./usage/claude";
 import { googleGeminiCliUsageProvider } from "./usage/gemini";
 import { githubCopilotUsageProvider } from "./usage/github-copilot";
-import { antigravityUsageProvider } from "./usage/google-antigravity";
+import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
 import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
 import { zaiUsageProvider } from "./usage/zai";
@@ -650,6 +650,7 @@ function resolveDefaultUsageProvider(provider: Provider): UsageProvider | undefi
 const DEFAULT_RANKING_STRATEGIES = new Map<Provider, CredentialRankingStrategy>([
 	["openai-codex", codexRankingStrategy],
 	["anthropic", claudeRankingStrategy],
+	["google-antigravity", antigravityRankingStrategy],
 ]);
 
 function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStrategy | undefined {

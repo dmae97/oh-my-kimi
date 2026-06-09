@@ -392,17 +392,36 @@ const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
 
-/** Returns the widened OpenAI stream watchdog floor for slow GLM coding-plan reasoning models. */
+// DeepSeek V4 reasoning models on the official api.deepseek.com emit no SSE
+// bytes while the model finishes its private chain-of-thought, which routinely
+// takes longer than the generic 100s first-event floor under load (issue
+// #2177). Mirror the GLM coding-plan widening: a 5-minute idle floor lifts the
+// first-event watchdog (it floors at idle) without changing the runtime
+// streaming behavior, so reasoning warm-ups stop aborting and retrying.
+const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+
+function isDirectDeepseekReasoningModel(model: Model<"openai-completions">): boolean {
+	if (!model.reasoning) return false;
+	if (model.provider === "deepseek") return true;
+	return model.baseUrl.toLowerCase().includes("api.deepseek.com");
+}
+
+/** Returns the widened OpenAI stream watchdog floor for slow reasoning models hosted on OpenAI-compatible endpoints. */
 export function getOpenAICompletionsStreamIdleTimeoutFallbackMs(
 	model: Model<"openai-completions">,
 ): number | undefined {
-	if (!GLM_CODING_PLAN_MODEL_PATTERN.test(model.id)) return undefined;
-	if (model.provider === "zhipu-coding-plan" || model.provider === "zai")
-		return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+	if (GLM_CODING_PLAN_MODEL_PATTERN.test(model.id)) {
+		if (model.provider === "zhipu-coding-plan" || model.provider === "zai")
+			return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
 
-	const baseUrl = model.baseUrl.toLowerCase();
-	if (baseUrl.includes("open.bigmodel.cn") || baseUrl.includes("api.z.ai")) {
-		return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+		const baseUrl = model.baseUrl.toLowerCase();
+		if (baseUrl.includes("open.bigmodel.cn") || baseUrl.includes("api.z.ai")) {
+			return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
+		}
+	}
+
+	if (isDirectDeepseekReasoningModel(model)) {
+		return DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS;
 	}
 
 	return undefined;
@@ -1523,6 +1542,7 @@ function maybeAddAnthropicCacheControl(compat: ResolvedOpenAICompat, messages: C
 
 		const content = msg.content;
 		if (typeof content === "string") {
+			if (content.trim().length === 0) continue;
 			msg.content = [
 				Object.assign({ type: "text" as const, text: content }, { cache_control: { type: "ephemeral" } }),
 			];
@@ -1531,10 +1551,12 @@ function maybeAddAnthropicCacheControl(compat: ResolvedOpenAICompat, messages: C
 
 		if (!Array.isArray(content)) continue;
 
-		// Find last text part and add cache_control
+		// Find last non-empty text part and add cache_control. Empty assistant
+		// content is valid for tool-call replay, but Anthropic/OpenRouter reject
+		// empty text blocks once cache_control turns it into structured content.
 		for (let j = content.length - 1; j >= 0; j--) {
 			const part = content[j];
-			if (part?.type === "text") {
+			if (part?.type === "text" && part.text.trim().length > 0) {
 				Object.assign(part, { cache_control: { type: "ephemeral" } });
 				return;
 			}

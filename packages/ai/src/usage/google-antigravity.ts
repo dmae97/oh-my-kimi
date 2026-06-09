@@ -1,5 +1,6 @@
 import { getAntigravityUserAgent } from "../providers/google-gemini-headers";
 import type {
+	CredentialRankingStrategy,
 	UsageAmount,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -298,4 +299,40 @@ export const antigravityUsageProvider: UsageProvider = {
 	id: "google-antigravity",
 	fetchUsage: fetchAntigravityUsage,
 	supports: params => params.provider === "google-antigravity",
+};
+
+const ANTIGRAVITY_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Credential ranking strategy for `google-antigravity`. Drives proactive
+ * multi-account selection in {@link AuthStorage} by reading the per-counter
+ * Antigravity usage reports.
+ *
+ * Antigravity reports one {@link UsageLimit} per backend counter (Google /
+ * Anthropic / OpenAI) per tier per window, and {@link fetchAntigravityUsage}
+ * sorts them ascending by `remainingFraction` — so `limits[0]` is always the
+ * most-pressured counter for the credential, and `limits[1]` (when present)
+ * is the next-most-pressured counter.
+ *
+ * `AuthStorage` compares the `secondary*` ranking metrics before `primary*`
+ * because other providers model a long-window budget as secondary. Antigravity
+ * does not expose a short/long split; every counter is a sibling bottleneck.
+ * Therefore the most-pressured counter goes in `secondary`, with the runner-up
+ * in `primary`, so proactive account selection always ranks the bottleneck
+ * before any healthier sibling counter.
+ *
+ * The Antigravity API exposes `resetTime` but not window duration, so the
+ * drain-rate calculation depends on `windowDefaults`. Antigravity quotas are
+ * effectively daily; 24h is the right fallback for both axes — any 5h tier
+ * still ranks correctly because both credentials are normalised against the
+ * same fallback.
+ */
+export const antigravityRankingStrategy: CredentialRankingStrategy = {
+	findWindowLimits(report) {
+		return { primary: report.limits[1], secondary: report.limits[0] };
+	},
+	windowDefaults: {
+		primaryMs: ANTIGRAVITY_DAILY_WINDOW_MS,
+		secondaryMs: ANTIGRAVITY_DAILY_WINDOW_MS,
+	},
 };

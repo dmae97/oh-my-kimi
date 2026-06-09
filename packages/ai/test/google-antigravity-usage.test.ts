@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
-import type { UsageFetchContext, UsageFetchParams } from "@oh-my-pi/pi-ai/usage";
-import { antigravityUsageProvider } from "@oh-my-pi/pi-ai/usage/google-antigravity";
+import type { UsageFetchContext, UsageFetchParams, UsageLimit } from "@oh-my-pi/pi-ai/usage";
+import { antigravityRankingStrategy, antigravityUsageProvider } from "@oh-my-pi/pi-ai/usage/google-antigravity";
 
 const accessTokenFixture = (() => {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -235,5 +235,62 @@ describe("antigravity usage provider", () => {
 			makeCtx(),
 		);
 		expect(report).toBeNull();
+	});
+});
+
+describe("antigravity ranking strategy", () => {
+	function makeLimit(remainingFraction: number, label = "Usage"): UsageLimit {
+		const usedFraction = 1 - remainingFraction;
+		return {
+			id: `google-antigravity:${label.toLowerCase()}`,
+			label,
+			scope: { provider: "google-antigravity" },
+			amount: {
+				unit: "percent",
+				remainingFraction,
+				usedFraction,
+				remaining: remainingFraction * 100,
+				used: usedFraction * 100,
+				limit: 100,
+			},
+			status: remainingFraction <= 0 ? "exhausted" : remainingFraction <= 0.1 ? "warning" : "ok",
+		};
+	}
+
+	it("maps the most-pressured counter to secondary because AuthStorage compares secondary first", () => {
+		// fetchAntigravityUsage sorts ascending by remainingFraction, so a real
+		// report's limits[0] is always the bottleneck. AuthStorage compares the
+		// secondary ranking metrics before primary, so Antigravity must put the
+		// bottleneck there; otherwise [5%, 90%] remaining can beat [40%, 40%]
+		// because the runner-up counter looks healthier.
+		const report = {
+			provider: "google-antigravity" as const,
+			fetchedAt: Date.now(),
+			limits: [makeLimit(0.05, "Anthropic"), makeLimit(0.4, "Google"), makeLimit(0.9, "OpenAI")],
+		};
+		const { primary, secondary } = antigravityRankingStrategy.findWindowLimits(report);
+		expect(secondary?.label).toBe("Anthropic");
+		expect(primary?.label).toBe("Google");
+	});
+
+	it("returns undefined windows when the credential has no usage limits", () => {
+		const report = {
+			provider: "google-antigravity" as const,
+			fetchedAt: Date.now(),
+			limits: [],
+		};
+		const { primary, secondary } = antigravityRankingStrategy.findWindowLimits(report);
+		expect(primary).toBeUndefined();
+		expect(secondary).toBeUndefined();
+	});
+
+	it("uses a 24h window default for drain-rate normalisation", () => {
+		// Antigravity's API exposes resetTime but not durationMs, so AuthStorage's
+		// drain-rate calculator falls back to windowDefaults. The constant has to
+		// match the daily quota Antigravity actually applies; if it drifts, two
+		// credentials with identical headroom but different windowIds will be
+		// ranked unfairly.
+		expect(antigravityRankingStrategy.windowDefaults.primaryMs).toBe(24 * 60 * 60 * 1000);
+		expect(antigravityRankingStrategy.windowDefaults.secondaryMs).toBe(24 * 60 * 60 * 1000);
 	});
 });

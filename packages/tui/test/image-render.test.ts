@@ -118,6 +118,7 @@ describe("terminal image rendering", () => {
 
 		const lines = image.render(20);
 
+		expect(lines[0]).toBe("\x1b[0m");
 		expect(lines).toHaveLength(2);
 		expect(lines[1]).toContain("\x1b[1A");
 		expect(lines[1]).toContain("c=2");
