@@ -3,7 +3,7 @@ import { getKeybindings } from "../keybindings";
 import { extractPrintableText } from "../keys";
 import type { SymbolTheme } from "../symbols";
 import type { Component } from "../tui";
-import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
+import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
 
 const DEFAULT_PRIMARY_COLUMN_WIDTH = 32;
@@ -50,7 +50,32 @@ export interface SelectListLayoutOptions {
 	truncatePrimary?: (context: SelectListTruncatePrimaryContext) => string;
 	/** Enable type-to-filter search when the item count exceeds maxVisible. Defaults to true. */
 	overflowSearch?: boolean;
+	/**
+	 * Wrap long descriptions onto continuation rows indented under the
+	 * description column instead of truncating. Defaults to false so existing
+	 * single-line consumers are unaffected. Navigation remains item-to-item;
+	 * the scrollbar tracks visual rows so the thumb stays correct when items
+	 * wrap unevenly.
+	 */
+	wrapDescription?: boolean;
 }
+
+type SelectItemLayout =
+	| {
+			kind: "description";
+			prefix: string;
+			truncatedValue: string;
+			spacing: string;
+			descriptionSingleLine: string;
+			descriptionStart: number;
+			remainingWidth: number;
+	  }
+	| {
+			kind: "primary";
+			prefix: string;
+			truncatedValue: string;
+			spacing: "";
+	  };
 
 export class SelectList implements Component {
 	#filteredItems: ReadonlyArray<SelectItem>;
@@ -107,23 +132,34 @@ export class SelectList implements Component {
 		// Render visible items
 		const overflow = this.#filteredItems.length > this.maxVisible;
 		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const wrapEnabled = this.layout.wrapDescription === true;
 		const rows: string[] = [];
-		for (let i = startIndex; i < endIndex; i++) {
+		let visualOffset = 0;
+		let visualTotal = 0;
+		for (let i = 0; i < this.#filteredItems.length; i++) {
 			const item = this.#filteredItems[i];
 			if (!item) continue;
-
-			const isSelected = i === this.#selectedIndex;
-			const descriptionText = item.description ? sanitizeSingleLine(item.description) : undefined;
-			rows.push(this.#renderItem(item, isSelected, rowWidth, descriptionText, primaryColumnWidth));
+			let rowCount = 1;
+			if (i >= startIndex && i < endIndex) {
+				const itemRows = this.#renderItem(item, i === this.#selectedIndex, rowWidth, primaryColumnWidth);
+				rowCount = itemRows.length;
+				rows.push(...itemRows);
+			} else if (wrapEnabled) {
+				// Wrap is opt-in, so non-wrap layouts keep the original
+				// constant-time path for items outside the visible window.
+				rowCount = this.#computeItemRowCount(item, rowWidth, primaryColumnWidth);
+			}
+			if (i < startIndex) visualOffset += rowCount;
+			visualTotal += rowCount;
 		}
 
 		const sv = new ScrollView(rows, {
 			height: rows.length,
 			scrollbar: "auto",
-			totalRows: this.#filteredItems.length,
+			totalRows: visualTotal,
 			theme: { track: t => this.theme.scrollInfo(t), thumb: t => this.theme.selectedPrefix(t) },
 		});
-		sv.setScrollOffset(startIndex);
+		sv.setScrollOffset(visualOffset);
 		lines.push(...sv.render(width));
 
 		// Add search status when relevant (scrollbar now indicates overflow)
@@ -182,13 +218,65 @@ export class SelectList implements Component {
 		item: SelectItem,
 		isSelected: boolean,
 		width: number,
-		descriptionSingleLine: string | undefined,
 		primaryColumnWidth: number,
-	): string {
+	): string[] {
+		const layout = this.#computeItemLayout(item, isSelected, width, primaryColumnWidth);
+		const { prefix, truncatedValue, spacing } = layout;
+
+		if (layout.kind === "description") {
+			const { descriptionSingleLine, descriptionStart, remainingWidth } = layout;
+			if (this.layout.wrapDescription) {
+				const wrapped = wrapTextWithAnsi(descriptionSingleLine, remainingWidth);
+				if (wrapped.length === 0) wrapped.push("");
+				const indent = padding(descriptionStart);
+				const first = wrapped[0] ?? "";
+				if (isSelected) {
+					const rows = [this.theme.selectedText(`${prefix}${truncatedValue}${spacing}${first}`)];
+					for (let i = 1; i < wrapped.length; i++) {
+						rows.push(this.theme.selectedText(`${indent}${wrapped[i]}`));
+					}
+					return rows;
+				}
+				const rows = [prefix + truncatedValue + this.theme.description(spacing + first)];
+				for (let i = 1; i < wrapped.length; i++) {
+					rows.push(this.theme.description(`${indent}${wrapped[i]}`));
+				}
+				return rows;
+			}
+
+			const truncatedDesc = truncateToWidth(descriptionSingleLine, remainingWidth, Ellipsis.Omit);
+			if (isSelected) {
+				return [this.theme.selectedText(`${prefix}${truncatedValue}${spacing}${truncatedDesc}`)];
+			}
+			return [prefix + truncatedValue + this.theme.description(spacing + truncatedDesc)];
+		}
+
+		if (isSelected) {
+			return [this.theme.selectedText(`${prefix}${truncatedValue}`)];
+		}
+		return [prefix + truncatedValue];
+	}
+
+	#computeItemRowCount(item: SelectItem, width: number, primaryColumnWidth: number): number {
+		// Selection style does not change row count; pass isSelected=false to
+		// keep the cheap path uniform for items outside the visible window.
+		const layout = this.#computeItemLayout(item, false, width, primaryColumnWidth);
+		if (layout.kind !== "description") return 1;
+		const wrapped = wrapTextWithAnsi(layout.descriptionSingleLine, layout.remainingWidth);
+		return Math.max(1, wrapped.length);
+	}
+
+	#computeItemLayout(
+		item: SelectItem,
+		isSelected: boolean,
+		width: number,
+		primaryColumnWidth: number,
+	): SelectItemLayout {
 		const prefix = isSelected
 			? `${this.theme.symbols.cursor} `
 			: padding(visibleWidth(this.theme.symbols.cursor) + 1);
 		const prefixWidth = visibleWidth(prefix);
+		const descriptionSingleLine = item.description ? sanitizeSingleLine(item.description) : undefined;
 
 		if (descriptionSingleLine && width > 40) {
 			const effectivePrimaryColumnWidth = Math.max(1, Math.min(primaryColumnWidth, width - prefixWidth - 4));
@@ -200,23 +288,26 @@ export class SelectList implements Component {
 			const remainingWidth = width - descriptionStart - 2; // -2 for safety
 
 			if (remainingWidth > MIN_DESCRIPTION_WIDTH) {
-				const truncatedDesc = truncateToWidth(descriptionSingleLine, remainingWidth, Ellipsis.Omit);
-				if (isSelected) {
-					return this.theme.selectedText(`${prefix}${truncatedValue}${spacing}${truncatedDesc}`);
-				}
-
-				const descText = this.theme.description(spacing + truncatedDesc);
-				return prefix + truncatedValue + descText;
+				return {
+					kind: "description",
+					prefix,
+					truncatedValue,
+					spacing,
+					descriptionSingleLine,
+					descriptionStart,
+					remainingWidth,
+				};
 			}
 		}
 
-		const maxWidth = width - prefixWidth - 2;
-		const truncatedValue = this.#truncatePrimary(item, isSelected, maxWidth, maxWidth);
-		if (isSelected) {
-			return this.theme.selectedText(`${prefix}${truncatedValue}`);
-		}
-
-		return prefix + truncatedValue;
+		const fallbackMax = width - prefixWidth - 2;
+		const truncatedValue = this.#truncatePrimary(item, isSelected, fallbackMax, fallbackMax);
+		return {
+			kind: "primary",
+			prefix,
+			truncatedValue,
+			spacing: "",
+		};
 	}
 
 	#getPrimaryColumnWidth(): number {
