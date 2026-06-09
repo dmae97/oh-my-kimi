@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Raised the stdin split-escape flush window from 10ms to 50ms: over laggy links (ssh, slow multiplexers) a CSI sequence split across reads was flushed as literal data, leaking `[` + `A` style fragments into the editor as typed text
+- Lengthened the OSC 11 appearance poll on terminals without Mode 2031 from 2s to 30s — each poll's query write cleared the user's active text selection, breaking copy every two seconds on Alacritty/Warp/older WezTerm
+- Rewrote `StdinBuffer.extractCompleteSequences` to index-based scanning: the previous per-iteration `slice` + `Array.from(remaining)[0]` made plain-text bursts O(n²), turning a 100KB non-bracketed paste into a multi-second freeze
+- Capped the editor undo stack at 100 entries with word-level coalescing of consecutive single-character inserts (matching `Input`), capped the kill ring at 60 entries, cached word-wrap layout per (line, width) so each render and key handler shares one wrap pass, and batched ≤1000-char single-line pastes into one insert + one trigger-detection pass instead of per-character replay
+
+### Fixed
+
+- Fixed crash recovery leaving the shell unusable: `emergencyTerminalRestore` (and `terminal.stop()`) never left the alt screen nor disabled mouse tracking, so a crash during a fullscreen overlay stranded the user on the alternate buffer with any-motion mouse reporting spewing escape garbage until a manual `reset`
+- Fixed bracketed paste with a lost `ESC[201~` end marker (ssh/tmux truncation) silently eating all subsequent input forever while growing memory unboundedly — paste mode now has an inactivity watchdog (1s) and a byte cap (64 MiB) that exit paste mode and deliver the accumulated bytes through the paste event
+- Fixed vertical cursor movement using UTF-16 code units as visual columns: Up/Down over emoji/CJK lines could land the cursor mid-surrogate-pair, rendering a lone surrogate and permanently corrupting the buffer on the next insert; movement now walks graphemes and snaps the target offset to a cluster boundary, also fixing column drift across wide glyphs
+- Fixed cursor positions inside whitespace trimmed at a word-wrap boundary mapping to no layout line — the cursor vanished and the viewport jumped to the buffer's last line; the preceding chunk now owns the skipped whitespace run
+- Fixed word-delete and kill-to-line operations (Ctrl+W/Alt+D/Ctrl+U/Ctrl+K) cutting through atomic paste markers, leaving `[Paste #1, +30` junk that no longer expanded to the pasted content on submit — delete ranges now extend over any atomic token they intersect
+- Fixed the kitty CSI-u printable dedup swallowing a real keystroke arbitrarily long after the duplicated event; the pending codepoint now expires after 25ms
+- Fixed `resetDisplay()` being a no-op on the alt screen: the redraw gesture could not repair a corrupted fullscreen modal because `#emitAltFrame` skipped identical-string repaints without consulting the force-repaint flag
+- Fixed the ghostty initial-image paint deferral consuming resize/cursor state before abandoning the frame, which could misclassify the deferred render's reflow and corrupt the paint — the deferral check now runs before any frame state is touched
+- Fixed the terminal-cursor inline-hint branch adding the full hint width to the line accounting even though the rendered hint was truncated, misaligning right padding whenever the hint overflowed
+- Fixed nested markdown list detection sniffing for hardcoded `\x1b[36m` (chalk cyan): every shipped theme emits truecolor/256-color SGR for bullets, so nested items doubled their indentation per level on all real themes; nesting is now tagged structurally by the list renderer. Ordered-list continuation lines also hang by the actual bullet width, so wrapped text under `10.`+ items aligns
+
 ## [15.10.10] - 2026-06-09
 ### Fixed
 
