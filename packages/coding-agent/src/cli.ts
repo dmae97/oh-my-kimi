@@ -161,26 +161,19 @@ export async function runCli(argv: string[]): Promise<void> {
 	if (await runWorkerEntrypoint(argv[0])) {
 		return;
 	}
-	const [{ run }, { commands, isSubcommand, reservedTopLevelWordMessage }] = await Promise.all([
+	const [{ run }, { commands, resolveCliArgv }] = await Promise.all([
 		import("@oh-my-pi/pi-utils/cli"),
 		import("./cli-commands"),
 	]);
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
-	const first = argv[0];
-	const reservedMessage = reservedTopLevelWordMessage(first);
-	if (reservedMessage) {
-		process.stderr.write(`error: ${reservedMessage}\n`);
+	const resolved = resolveCliArgv(argv);
+	if ("error" in resolved) {
+		process.stderr.write(`error: ${resolved.error}\n`);
 		process.exitCode = 1;
 		return;
 	}
-	const runArgv =
-		first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help"
-			? argv
-			: isSubcommand(first)
-				? argv
-				: ["launch", ...argv];
-	return run({ bin: APP_NAME, version: VERSION, argv: runArgv, commands, help: showHelp });
+	return run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, help: showHelp });
 }
 
 // Floating call instead of top-level await: TLA forces `--bytecode` (CJS

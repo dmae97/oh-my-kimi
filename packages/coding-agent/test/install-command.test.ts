@@ -24,11 +24,16 @@ describe("install command is registered as a top-level subcommand", () => {
 		expect(cli.isSubcommand("install")).toBe(true);
 	});
 
-	test("CLI runner rejects reserved management words instead of launching a prompt", async () => {
+	test("CLI runner rejects only bare reserved management words", async () => {
 		const cli = await import("@oh-my-pi/pi-coding-agent/cli-commands");
-		expect(cli.isSubcommand("extensions")).toBe(false);
-		expect(cli.reservedTopLevelWordMessage("extensions")).toContain("omp plugin list");
-		expect(cli.reservedTopLevelWordMessage("hello")).toBeUndefined();
+
+		expect(cli.resolveCliArgv(["extensions"])).toEqual({
+			error: '`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
+		});
+		expect(cli.resolveCliArgv(["extensions", "are", "not", "loading"])).toEqual({
+			argv: ["launch", "extensions", "are", "not", "loading"],
+		});
+		expect(cli.resolveCliArgv(["launch", "extensions"])).toEqual({ argv: ["launch", "extensions"] });
 	});
 });
 
