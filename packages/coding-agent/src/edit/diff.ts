@@ -55,13 +55,10 @@ function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, conten
 	return `${prefix}${lineNum}|${content}`;
 }
 
-type DiffSource = "old" | "new";
-
 interface ParsedNumberedDiffRow {
 	prefix: "+" | "-" | " ";
 	lineNumber: number;
 	content: string;
-	source: DiffSource;
 }
 
 function parseNumberedDiffRow(row: string): ParsedNumberedDiffRow | undefined {
@@ -70,12 +67,7 @@ function parseNumberedDiffRow(row: string): ParsedNumberedDiffRow | undefined {
 	const prefix = match[1] as "+" | "-" | " ";
 	const lineNumber = Number.parseInt(match[2], 10);
 	if (!Number.isFinite(lineNumber)) return undefined;
-	return {
-		prefix,
-		lineNumber,
-		content: match[3] ?? "",
-		source: prefix === "+" ? "new" : "old",
-	};
+	return { prefix, lineNumber, content: match[3] ?? "" };
 }
 
 function isDiffChangeRow(row: string | undefined): boolean {
@@ -92,7 +84,6 @@ function adjustedContextInsertIndex(rows: readonly string[], index: number): num
 
 function insertBracketContextRows(
 	rows: string[],
-	source: DiffSource,
 	contextLines: ReadonlyMap<number, string>,
 	seenRows: Set<string>,
 ): void {
@@ -106,7 +97,7 @@ function insertBracketContextRows(
 		let nextSourceLine: number | undefined;
 		for (let i = 0; i < rows.length; i++) {
 			const parsed = parseNumberedDiffRow(rows[i]);
-			if (!parsed || parsed.source !== source) continue;
+			if (!parsed || parsed.prefix === "+") continue;
 			if (parsed.lineNumber < lineNumber) {
 				previousSourceLine = parsed.lineNumber;
 				continue;
@@ -127,6 +118,16 @@ function insertBracketContextRows(
 	}
 }
 
+/**
+ * Insert off-window block-boundary rows (enclosing header, matching closing
+ * bracket, …) into a numbered diff. Context rows carry pre-edit line numbers —
+ * the renumbering contract of `buildCompactDiffPreview` — so boundary lines
+ * discovered in the new file are translated back to their pre-edit numbers
+ * and merged with the old-file pass before a single insertion sweep. Without
+ * the translation, a context line sitting in a net-offset region would be
+ * re-inserted under its post-edit number: duplicated, out of order, and
+ * renumbered incorrectly by the preview.
+ */
 function addMatchingBracketContextRows(
 	rows: string[],
 	oldLines: readonly string[],
@@ -136,16 +137,48 @@ function addMatchingBracketContextRows(
 	const oldVisible: number[] = [];
 	const newVisible: number[] = [];
 	const seenRows = new Set(rows);
+	// Change positions in new-file coordinates, used to translate an unchanged
+	// new-file line number back to its pre-edit equivalent.
+	const changes: { newPos: number; delta: 1 | -1 }[] = [];
+	let offset = 0;
 
 	for (const row of rows) {
 		const parsed = parseNumberedDiffRow(row);
 		if (!parsed) continue;
-		if (parsed.source === "old") oldVisible.push(parsed.lineNumber);
-		else newVisible.push(parsed.lineNumber);
+		switch (parsed.prefix) {
+			case "-":
+				oldVisible.push(parsed.lineNumber);
+				changes.push({ newPos: parsed.lineNumber + offset, delta: -1 });
+				offset--;
+				break;
+			case "+":
+				newVisible.push(parsed.lineNumber);
+				changes.push({ newPos: parsed.lineNumber, delta: 1 });
+				offset++;
+				break;
+			default:
+				// Context rows are visible in BOTH files: pre-edit number as
+				// written, post-edit number shifted by the net change so far.
+				oldVisible.push(parsed.lineNumber);
+				newVisible.push(parsed.lineNumber + offset);
+				break;
+		}
 	}
 
-	insertBracketContextRows(rows, "old", findBlockContextLines(oldLines, oldVisible, source), seenRows);
-	insertBracketContextRows(rows, "new", findBlockContextLines(newLines, newVisible, source), seenRows);
+	const toOldLineNumber = (newLineNumber: number): number => {
+		let shift = 0;
+		for (const change of changes) {
+			if (change.newPos <= newLineNumber) shift += change.delta;
+		}
+		return newLineNumber - shift;
+	};
+
+	const contextRows = findBlockContextLines(oldLines, oldVisible, source);
+	for (const [lineNumber, text] of findBlockContextLines(newLines, newVisible, source)) {
+		const oldLineNumber = toOldLineNumber(lineNumber);
+		if (!contextRows.has(oldLineNumber)) contextRows.set(oldLineNumber, text);
+	}
+	insertBracketContextRows(rows, contextRows, seenRows);
 }
 
 /**
