@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("AuthStorage MiniMax login", () => {
 	let tempDir: string;
@@ -25,13 +26,13 @@ describe("AuthStorage MiniMax login", () => {
 	});
 
 	test("replaces existing MiniMax Coding Plan API key on relogin", async () => {
-		using _hook = hookFetch(
-			() => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
-		);
+		const fetchMock: FetchImpl = async () =>
+			new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 
 		const loginCallbacks = {
 			onAuth: () => {},
 			onPrompt: async () => currentApiKey,
+			fetch: fetchMock,
 		};
 
 		await authStorage.login("minimax-code", loginCallbacks);

@@ -101,11 +101,23 @@ export async function acquireTab(
 			if (opts.dialogs !== undefined && opts.dialogs !== existing.dialogPolicy) {
 				await releaseTab(name, { kill: false });
 			} else {
+				const reuseSteps: string[] = [];
+				if (opts.viewport) {
+					const dsf = opts.viewport.deviceScaleFactor;
+					reuseSteps.push(
+						`await page.setViewport({ width: ${opts.viewport.width}, height: ${opts.viewport.height}, deviceScaleFactor: ${dsf === undefined ? "undefined" : String(dsf)} });`,
+					);
+				}
 				if (opts.url) {
+					reuseSteps.push(
+						`await tab.goto(${JSON.stringify(opts.url)}, { waitUntil: ${JSON.stringify(opts.waitUntil ?? "load")} });`,
+					);
+				}
+				if (reuseSteps.length) {
 					await runInTabWithSnapshot(
 						name,
 						{
-							code: `await tab.goto(${JSON.stringify(opts.url)}, { waitUntil: ${JSON.stringify(opts.waitUntil ?? "load")} });`,
+							code: reuseSteps.join("\n"),
 							timeoutMs: opts.timeoutMs,
 							signal: opts.signal,
 						},

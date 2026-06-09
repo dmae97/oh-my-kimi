@@ -1,6 +1,6 @@
 import { vi } from "bun:test";
 import { type Component, TUI } from "@oh-my-pi/pi-tui";
-import { ProcessTerminal } from "../src/terminal";
+import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 
 // Pristine descriptors, captured once at module load. Every dispose() restores
 // to these so the harness is full-suite safe across repeated create/dispose
@@ -13,10 +13,10 @@ const PRISTINE: Array<[NodeJS.Process["stdin"] | NodeJS.Process["stdout"], strin
 	[process.stdout, "rows", Object.getOwnPropertyDescriptor(process.stdout, "rows")],
 ];
 
-// One frame interval is 16ms (TUI.#MIN_RENDER_INTERVAL_MS); two frames of
+// One frame interval is ~33ms (TUI.#MIN_RENDER_INTERVAL_MS); two frames of
 // headroom keeps the scheduler-driven paint deterministic without slowing the
 // suite materially.
-const SETTLE_MS = 32;
+const SETTLE_MS = 67;
 
 /**
  * A root component that records the width it is asked to render at. The renderer

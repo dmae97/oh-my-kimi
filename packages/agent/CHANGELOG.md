@@ -2,6 +2,77 @@
 
 ## [Unreleased]
 
+## [15.10.8] - 2026-06-09
+### Added
+
+- Added optional `fetch` overrides to `SummaryOptions` and `compact`/`generateSummary` so remote compaction can use custom HTTP clients
+- Added optional `fetch` option to `ProxyStreamOptions` to control the HTTP request used by `streamProxy`
+- Added optional `fetch` overrides to `requestOpenAiRemoteCompaction` and `requestRemoteCompaction` for injectable HTTP transport
+- Added the upstream provider that served a request (`AssistantMessage.upstreamProvider`, e.g. OpenRouter's routed provider) as a `pi.gen_ai.response.upstream_provider` chat-span telemetry attribute, alongside the existing response id and time-to-first-chunk.
+
+## [15.10.5] - 2026-06-08
+### Removed
+
+- Removed the `maxToolCallsPerTurn` option from `AgentOptions` and `AgentLoopConfig`, so assistant turns are no longer capped after a configured number of completed tool calls
+
+### Fixed
+
+- Fixed stalled aborted assistant responses so the run now stops without waiting for provider iterator cleanup and returns the aborted message promptly
+- Fixed `afterToolCall` handling so it now runs for completed tool executions even after a run is aborted so tool post-processing still applies
+- Fixed `agentLoopDetailed().detailed()` so run telemetry and coverage are captured before `stream.result()` resolves.
+- Fixed agent-loop stream invariants so `agentLoopContinue` no longer mutates the caller's message array, emitted assistant events snapshot mutable provider content, terminal provider events win over late abort signals, transformed tool arguments are reflected consistently in hooks/events, and successful run-end telemetry fires from the same finalization path as failures.
+- Fixed tool result parsing to mark assistant tool outputs with unsupported content block shapes as errors and include a diagnostic text block
+- Fixed GPT-5 Harmony leakage handling by recovering valid leaked tool calls when possible and discarding leaked partial assistant output before retrying
+- Fixed tool-call cancellation handling so aborted tools are marked aborted with an explicit reason and do not report generic errors
+- Fixed tool-call completion so assistant messages on abort keep only completed tool-call blocks and continue processing tool calls when a length stop still included results
+- Fixed deliberate aborts (TTSR rule matches, user-interrupt labels) so a mid-stream tool-call block that never reached `toolcall_end` is retained on the aborted assistant message and paired with a placeholder result labeled by the abort reason, instead of being dropped; anonymous aborts (bare `abort()`) still drop incomplete tool calls whose partial arguments are unsafe to replay
+- Fixed runs that stopped with reason `length` after returning tool results so execution continues to handle additional tool calls
+
+## [15.10.3] - 2026-06-08
+
+### Added
+
+- Added a non-interrupting "aside" message channel to the agent loop (`AgentLoopConfig.getAsideMessages` / `Agent.setAsideMessageProvider`). Asides are drained at each step boundary (after a tool batch, before the next model call) and at the yield check, so passive notifications (e.g. background-job completions, late LSP diagnostics) reach the model *between requests* without waiting for the agent to stop and without aborting in-flight tools the way steering does.
+
+### Changed
+
+- Changed core custom and hook messages to convert to `developer` messages for provider context.
+
+### Fixed
+
+- Fixed the compaction spinner freezing (only repainting on a terminal resize) when compacting very large codex/OpenAI contexts. `buildOpenAiNativeHistory` re-collected the full known/custom tool-call id sets on every history-bearing message, rescanning the entire growing native history each time — O(N²) in history items — which blocked the event loop for seconds and starved the loader's animation timer and render scheduler. The sets are now maintained incrementally (linear), so building the compaction request no longer monopolizes the main thread.
+
+### Removed
+
+- Removed the now-dead `<turn-aborted>` marker from the OpenAI compaction output user-message filter, since `transformMessages` no longer emits that note.
+- Removed stale synthetic user-message tag filters from OpenAI remote compaction output preservation; developer messages are now dropped by role instead.
+- Tool executions now receive the active turn `AbortSignal` unconditionally.
+
+
+## [15.10.2] - 2026-06-08
+
+### Fixed
+
+- Fixed proxy stream silently returning a zero-token success response when the server disconnects without sending a `done` or `error` terminal SSE event. The stream now throws an error, surfacing the disconnect as an `error` event with `stopReason: "error"` and resolving `finalResultPromise`, instead of defaulting to `stopReason: "stop"` with empty content and leaving `stream.result()` callers hanging indefinitely.
+
+## [15.10.1] - 2026-06-07
+
+### Added
+
+- Added optional `promptCacheKey` support to `AgentOptions` and `Agent` via a new `promptCacheKey` property so providers can receive a caller-provided prompt cache key
+- Added optional `ApiKeyResolveContext` parameter to `getApiKey` in `AgentOptions` and `AgentLoopConfig` so key resolvers can receive retry context
+
+### Changed
+
+- Enabled streaming API calls to re-resolve credentials through the `getApiKey` callback when retries occur after authentication-related errors
+- `Agent.abort(reason?)` now forwards `reason` to the underlying `AbortController`, and the synthesized aborted assistant message carries that reason on `errorMessage` (string or non-`AbortError` `Error` message) instead of always defaulting to `"Request was aborted"`. Bare `abort()` is unchanged.
+
+### Fixed
+
+- Fixed handling of short-lived API keys so that expired tokens are retried with a refreshed value during 401/usage-limit failures
+- Ensured fallback API key resolution uses the initially configured static `apiKey` when `getApiKey` is present
+- Wrapped oneshot LLM completions (`instrumentedCompleteSimple`: handoff, compaction/branch summaries) in an `EventLoopKeepalive`. These run outside the agent `#runLoop`, so without the keepalive Bun's event loop stopped servicing timers while parked on the completion promise — freezing host spinners (e.g. the `/handoff` loader) until an unrelated terminal resize poked the loop into rendering again.
+
 ## [15.9.5] - 2026-06-05
 
 ### Fixed

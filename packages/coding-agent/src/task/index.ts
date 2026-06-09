@@ -158,6 +158,8 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"search_tool_bm25",
 ]);
 
+const PLAN_MODE_AGENT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(["ast_grep", "report_finding"]);
+
 export function isReadOnlyAgent(agent: AgentDefinition): boolean {
 	return !!agent.tools?.length && agent.tools.every(tool => READ_ONLY_TOOL_NAMES.has(tool));
 }
@@ -275,6 +277,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly renderResult = renderResult;
+	// Suppress the streaming call preview once a (partial or final) result exists
+	// so the task renders as ONE block that transitions in place — not a pending
+	// call frame stacked above the result frame. Mirrors `taskToolRenderer`.
+	readonly mergeCallAndResult = true;
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
 
@@ -673,7 +679,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 
 		const planModeState = this.session.getPlanModeState?.();
-		const planModeTools = ["read", "search", "find", "lsp", "web_search"];
+		const planModeBaseTools = ["read", "search", "find", "lsp", "web_search"];
+		const planModeTools = [
+			...planModeBaseTools,
+			...(agent.tools ?? []).filter(
+				tool => PLAN_MODE_AGENT_TOOL_ALLOWLIST.has(tool) && !planModeBaseTools.includes(tool),
+			),
+		];
 		const effectiveAgent: typeof agent = planModeState?.enabled
 			? {
 					...agent,

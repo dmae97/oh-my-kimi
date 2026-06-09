@@ -1,6 +1,6 @@
 //! Job management
 
-use std::{collections::VecDeque, fmt::Display};
+use std::{collections::VecDeque, fmt::Display, time::Duration};
 
 #[cfg(windows)]
 use std::os::windows::io::OwnedHandle;
@@ -11,6 +11,35 @@ use crate::{ExecutionResult, error, processes, sys, trace_categories, traps};
 
 pub(crate) type JobJoinHandle = tokio::task::JoinHandle<Result<ExecutionResult, error::Error>>;
 pub(crate) type JobResult = (Job, Result<ExecutionResult, error::Error>);
+
+const WAIT_NEXT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Selects a managed job by shell job ID or child process ID.
+#[derive(Clone, Copy)]
+pub enum JobSelector {
+	/// Shell-internal job ID.
+	JobId(usize),
+	/// Child process ID.
+	ProcessId(i32),
+}
+
+/// Result returned when waiting for a single managed job.
+pub struct WaitedJob {
+	/// Shell-internal job ID.
+	pub id: usize,
+	/// Process ID when known, otherwise the shell-internal job ID.
+	pub identifier: String,
+	/// Command line associated with the job.
+	pub command_line: String,
+	/// Exit status returned by the job.
+	pub result: ExecutionResult,
+}
+
+impl WaitedJob {
+	fn from_job(job: Job, result: ExecutionResult, identifier: String) -> Self {
+		Self { id: job.id, identifier, command_line: job.command_line, result }
+	}
+}
 
 /// Manages the jobs that are currently managed by the shell.
 #[derive(Default)]
@@ -42,17 +71,21 @@ impl JobTask {
 	}
 
 	/// Waits for the task to complete. Returns the result of the wait.
-	pub async fn wait(&mut self) -> Result<JobTaskWaitResult, error::Error> {
+	pub async fn wait(
+		&mut self,
+		wait_for_terminate: bool,
+	) -> Result<JobTaskWaitResult, error::Error> {
 		match self {
-			Self::External(process) => {
+			Self::External(process) => loop {
 				let wait_result = process.wait(None).await?;
 				match wait_result {
 					processes::ProcessWaitResult::Completed(output) => {
-						Ok(JobTaskWaitResult::Completed(output.into()))
+						break Ok(JobTaskWaitResult::Completed(output.into()));
 					},
-					processes::ProcessWaitResult::Stopped => Ok(JobTaskWaitResult::Stopped),
+					processes::ProcessWaitResult::Stopped if wait_for_terminate => {},
+					processes::ProcessWaitResult::Stopped => break Ok(JobTaskWaitResult::Stopped),
 					processes::ProcessWaitResult::Cancelled => {
-						Ok(JobTaskWaitResult::Completed(ExecutionResult::new(130)))
+						break Ok(JobTaskWaitResult::Completed(ExecutionResult::new(130)));
 					},
 				}
 			},
@@ -162,13 +195,108 @@ impl JobManager {
 		}
 	}
 
+	/// Tries to resolve the given job specification to a wait selector.
+	///
+	/// # Arguments
+	///
+	/// * `job_spec` - The job specification to resolve.
+	pub fn resolve_job_spec_selector(&self, job_spec: &str) -> Option<JobSelector> {
+		let remainder = job_spec.strip_prefix('%')?;
+
+		match remainder {
+			"%" | "+" => self.current_job().map(|job| JobSelector::JobId(job.id)),
+			"-" => self.prev_job().map(|job| JobSelector::JobId(job.id)),
+			s if s.chars().all(char::is_numeric) => {
+				let id = s.parse::<usize>().ok()?;
+				self
+					.jobs
+					.iter()
+					.any(|job| job.id == id)
+					.then_some(JobSelector::JobId(id))
+			},
+			_ => {
+				tracing::warn!(target: trace_categories::UNIMPLEMENTED, "unimplemented: job spec naming command: '{job_spec}'");
+				None
+			},
+		}
+	}
+
+	/// Returns whether a managed job contains the given process ID.
+	pub fn contains_process_id(&self, pid: i32) -> bool {
+		self.jobs.iter().any(|job| job.contains_process_id(pid))
+	}
+
+	/// Tries to resolve the given process ID to a managed job.
+	///
+	/// # Arguments
+	///
+	/// * `pid` - The process ID to resolve.
+	pub fn resolve_process_id(&mut self, pid: i32) -> Option<&mut Job> {
+		self.jobs.iter_mut().find(|job| job.contains_process_id(pid))
+	}
+
 	/// Waits for all managed jobs to complete.
 	pub async fn wait_all(&mut self) -> Result<Vec<Job>, error::Error> {
+		self.wait_all_with_policy(false).await
+	}
+
+	/// Waits for all managed jobs to terminate, ignoring stopped-state changes.
+	pub async fn wait_all_for_termination(&mut self) -> Result<Vec<Job>, error::Error> {
+		self.wait_all_with_policy(true).await
+	}
+
+	async fn wait_all_with_policy(
+		&mut self,
+		wait_for_terminate: bool,
+	) -> Result<Vec<Job>, error::Error> {
 		for job in &mut self.jobs {
-			job.wait().await?;
+			job.wait_with_policy(wait_for_terminate).await?;
 		}
 
 		Ok(self.sweep_completed_jobs())
+	}
+
+	/// Waits for the next matching managed job to complete.
+	pub async fn wait_next(
+		&mut self,
+		selectors: &[JobSelector],
+	) -> Result<Option<WaitedJob>, error::Error> {
+		loop {
+			let mut found_candidate = false;
+			let mut i = 0;
+			while i != self.jobs.len() {
+				if !selectors.is_empty()
+					&& !selectors
+						.iter()
+						.any(|selector| self.jobs[i].matches_selector(*selector))
+				{
+					i += 1;
+					continue;
+				}
+
+				found_candidate = true;
+				let identifier = self.jobs[i].wait_identifier();
+				if let Some(result) = self.jobs[i].poll_done()? {
+					let job = self.jobs.remove(i);
+					return result.map(|result| Some(WaitedJob::from_job(job, result, identifier)));
+				}
+				if matches!(self.jobs[i].state, JobState::Done) {
+					let job = self.jobs.remove(i);
+					return Ok(Some(WaitedJob::from_job(
+						job,
+						ExecutionResult::success(),
+						identifier,
+					)));
+				}
+				i += 1;
+			}
+
+			if !found_candidate {
+				return Ok(None);
+			}
+
+			tokio::time::sleep(WAIT_NEXT_POLL_INTERVAL).await;
+		}
 	}
 
 	/// Polls all managed jobs for completion.
@@ -371,10 +499,22 @@ impl Job {
 
 	/// Waits for the job to complete.
 	pub async fn wait(&mut self) -> Result<ExecutionResult, error::Error> {
+		self.wait_with_policy(false).await
+	}
+
+	/// Waits for the job to terminate, ignoring stopped-state changes.
+	pub async fn wait_for_termination(&mut self) -> Result<ExecutionResult, error::Error> {
+		self.wait_with_policy(true).await
+	}
+
+	async fn wait_with_policy(
+		&mut self,
+		wait_for_terminate: bool,
+	) -> Result<ExecutionResult, error::Error> {
 		let mut result = ExecutionResult::success();
 
 		while let Some(task) = self.tasks.back_mut() {
-			match task.wait().await? {
+			match task.wait(wait_for_terminate).await? {
 				JobTaskWaitResult::Completed(execution_result) => {
 					result = execution_result;
 					self.tasks.pop_back();
@@ -393,16 +533,17 @@ impl Job {
 
 	/// Moves the job to execute in the background.
 	pub fn move_to_background(&mut self) -> Result<(), error::Error> {
-		if matches!(self.state, JobState::Stopped) {
-			if let Some(pgid) = self.process_group_id() {
+		match &self.state {
+			JobState::Stopped => {
+				let pgid = self
+					.process_group_id()
+					.ok_or(error::ErrorKind::FailedToSendSignal)?;
 				sys::signal::continue_process(pgid)?;
 				self.state = JobState::Running;
 				Ok(())
-			} else {
-				Err(error::ErrorKind::FailedToSendSignal.into())
-			}
-		} else {
-			error::unimp("move job to background")
+			},
+			JobState::Running => Ok(()),
+			JobState::Unknown | JobState::Done => Err(error::ErrorKind::FailedToSendSignal.into()),
 		}
 	}
 
@@ -455,6 +596,26 @@ impl Job {
 		if aborted && self.tasks.is_empty() {
 			self.state = JobState::Done;
 		}
+	}
+
+	fn matches_selector(&self, selector: JobSelector) -> bool {
+		match selector {
+			JobSelector::JobId(id) => self.id == id,
+			JobSelector::ProcessId(pid) => self.contains_process_id(pid),
+		}
+	}
+
+	fn contains_process_id(&self, pid: i32) -> bool {
+		self.tasks.iter().any(|task| match task {
+			JobTask::External(process) => process.pid().is_some_and(|process_pid| process_pid == pid),
+			JobTask::Internal(_) => false,
+		})
+	}
+
+	fn wait_identifier(&self) -> String {
+		self
+			.representative_pid()
+			.map_or_else(|| self.id.to_string(), |pid| pid.to_string())
 	}
 
 	/// Tries to retrieve a "representative" pid for the job.

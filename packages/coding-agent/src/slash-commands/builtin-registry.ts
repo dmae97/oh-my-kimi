@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { SettingPath, SettingValue } from "../config/settings";
@@ -21,6 +21,7 @@ import {
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
 import type { InteractiveModeContext } from "../modes/types";
+import type { FreshSessionResult } from "../session/agent-session";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
@@ -50,6 +51,11 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.updateEditorTopBorder();
 	ctx.ui.requestRender();
+}
+
+function formatFreshSessionResult(result: FreshSessionResult): string {
+	const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
+	return `Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`;
 }
 
 const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): SlashCommandResult => {
@@ -91,6 +97,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (hadArgs && wasPlanModeEnabled) {
 				runtime.ctx.editor.addToHistory(command.text);
 			}
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "plan-review",
+		description: "Re-open the plan review for the latest plan (plan mode only)",
+		handleTui: async (_command, runtime) => {
+			await runtime.ctx.openPlanReview();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -771,6 +785,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "fresh",
+		description: "Reset provider stream state without changing the local transcript",
+		handle: async (_command, runtime) => {
+			const result = runtime.session.freshSession();
+			if (!result) {
+				await runtime.output(
+					"Wait for the current response to finish or abort it before refreshing provider state.",
+				);
+				return commandConsumed();
+			}
+			await runtime.output(formatFreshSessionResult(result));
+			return commandConsumed();
+		},
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleFreshCommand();
+		},
+	},
+	{
 		name: "drop",
 		description: "Delete the current session and start a new one",
 		handleTui: async (_command, runtime) => {
@@ -869,6 +902,17 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "tan",
+		description: "Run a full background agent on tangential work",
+		inlineHint: "<work>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const work = command.text.slice(`/${command.name}`.length).trim();
+			runtime.ctx.editor.setText("");
+			await runtime.ctx.handleTanCommand(work);
+		},
+	},
+	{
 		name: "omfg",
 		description: "Forge a TTSR rule from a complaint to stop a recurring behavior",
 		inlineHint: "<complaint>",
@@ -888,15 +932,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.showStatus("Nothing to retry");
 			}
 			runtime.ctx.editor.setText("");
-		},
-	},
-	{
-		name: "background",
-		aliases: ["bg"],
-		description: "Detach UI and continue running in background",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.editor.setText("");
-			runtime.handleBackgroundCommand();
 		},
 	},
 	{
@@ -934,7 +969,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const verb = (command.args.trim().split(/\s+/)[0] ?? "").toLowerCase() || "view";
-			const backend = resolveMemoryBackend(runtime.settings);
+			const backend = await resolveMemoryBackend(runtime.settings);
 			switch (verb) {
 				case "view": {
 					const payload = await backend.buildDeveloperInstructions(

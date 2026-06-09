@@ -11,7 +11,6 @@ export class SkillMessageComponent extends Container {
 
 	constructor(private readonly message: CustomMessage<SkillPromptDetails>) {
 		super();
-		this.addChild(new Spacer(1));
 
 		this.#box = new Box(1, 1, t => theme.bg("customMessageBg", t));
 		this.#rebuild();

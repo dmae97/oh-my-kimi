@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { SessionSelectorComponent } from "../../../src/modes/components/session-selector";
-import { initTheme, theme } from "../../../src/modes/theme/theme";
-import type { SessionInfo, SessionStatus } from "../../../src/session/session-manager";
+import { SessionSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/session-selector";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { SessionInfo, SessionStatus } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 beforeAll(async () => {
 	await initTheme();

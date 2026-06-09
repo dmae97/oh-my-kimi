@@ -9,10 +9,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionObserverOverlayComponent } from "../src/modes/components/session-observer-overlay";
-import type { ObservableSession } from "../src/modes/session-observer-registry";
-import { initTheme } from "../src/modes/theme/theme";
-import { SILENT_ABORT_MARKER } from "../src/session/messages";
+import { SessionObserverOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/session-observer-overlay";
+import type { ObservableSession } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 const SESSION_ID = "test-session-1";
 
@@ -29,7 +29,7 @@ function makeSubagentRegistry(sessions: ObservableSession[]) {
 		onChange: () => () => {},
 		setMainSession: () => {},
 		getActiveSubagentCount: () => sessions.filter(s => s.status === "active").length,
-	} as unknown as import("../src/modes/session-observer-registry").SessionObserverRegistry;
+	} as unknown as import("@oh-my-pi/pi-coding-agent/modes/session-observer-registry").SessionObserverRegistry;
 }
 
 describe("Observer overlay silent-abort regression", () => {

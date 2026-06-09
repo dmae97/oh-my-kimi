@@ -7,12 +7,15 @@
 import {
 	type AnthropicAuthConfig,
 	type AnthropicSystemBlock,
+	type ApiKey,
 	type AuthStorage,
 	buildAnthropicAuthConfig,
 	buildAnthropicSearchHeaders,
 	buildAnthropicSystemBlocks,
 	buildAnthropicUrl,
+	type FetchImpl,
 	stripClaudeToolPrefix,
+	withAuth,
 } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import type {
@@ -38,6 +41,7 @@ export interface AnthropicSearchParams {
 	max_tokens?: number;
 	temperature?: number;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 /**
@@ -87,6 +91,7 @@ async function callSearch(
 	maxTokens?: number,
 	temperature?: number,
 	signal?: AbortSignal,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<AnthropicApiResponse> {
 	const url = buildAnthropicUrl(auth);
 	const headers = buildAnthropicSearchHeaders(auth);
@@ -113,7 +118,7 @@ async function callSearch(
 		body.system = systemBlocks;
 	}
 
-	const response = await fetch(url, {
+	const response = await fetchImpl(url, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
@@ -247,18 +252,13 @@ export async function searchAnthropic(
 ): Promise<SearchResponse> {
 	const searchApiKey = $env.ANTHROPIC_SEARCH_API_KEY;
 	const searchBaseUrl = $env.ANTHROPIC_SEARCH_BASE_URL;
-	let auth: AnthropicAuthConfig | undefined;
+	const keyOrResolver: ApiKey | undefined = searchApiKey
+		? searchApiKey
+		: "authStorage" in params
+			? params.authStorage.resolver("anthropic", { sessionId: params.sessionId })
+			: undefined;
 
-	if (searchApiKey) {
-		auth = buildAnthropicAuthConfig(searchApiKey, searchBaseUrl);
-	} else if ("authStorage" in params) {
-		const apiKey = await params.authStorage.getApiKey("anthropic", params.sessionId, {
-			signal: params.signal,
-		});
-		if (apiKey) auth = buildAnthropicAuthConfig(apiKey, searchBaseUrl);
-	}
-
-	if (!auth) {
+	if (!keyOrResolver) {
 		throw new Error(
 			"No Anthropic credentials found. Set ANTHROPIC_SEARCH_API_KEY or ANTHROPIC_API_KEY, or configure Anthropic OAuth.",
 		);
@@ -267,14 +267,24 @@ export async function searchAnthropic(
 	const model = getModel();
 	const systemPrompt = "authStorage" in params ? params.systemPrompt : params.system_prompt;
 	const maxTokens = "authStorage" in params ? params.maxOutputTokens : params.max_tokens;
-	const response = await callSearch(
-		auth,
-		model,
-		params.query,
-		systemPrompt,
-		maxTokens,
-		params.temperature,
-		params.signal,
+	const response = await withAuth(
+		keyOrResolver,
+		key =>
+			callSearch(
+				buildAnthropicAuthConfig(key, searchBaseUrl),
+				model,
+				params.query,
+				systemPrompt,
+				maxTokens,
+				params.temperature,
+				params.signal,
+				params.fetch,
+			),
+		{
+			signal: params.signal,
+			missingKeyMessage:
+				"No Anthropic credentials found. Set ANTHROPIC_SEARCH_API_KEY or ANTHROPIC_API_KEY, or configure Anthropic OAuth.",
+		},
 	);
 
 	const result = parseResponse(response);

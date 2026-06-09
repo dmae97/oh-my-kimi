@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-
-import { xiaomiModelManagerOptions } from "../src/provider-models/openai-compat";
-import { loginXiaomi } from "../src/utils/oauth/xiaomi";
+import { xiaomiModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import { loginXiaomi } from "@oh-my-pi/pi-ai/registry/oauth/xiaomi";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const TOKEN_PLAN_SGP_HOST = "token-plan-sgp.xiaomimimo.com";
 const STANDARD_HOST = "api.xiaomimimo.com";
@@ -10,15 +9,16 @@ const STANDARD_HOST = "api.xiaomimimo.com";
 describe("issue-772: Xiaomi MiMo token-plan (tp-) keys", () => {
 	it("loginXiaomi validates tp- keys against the SGP token-plan host first", async () => {
 		const seen: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			seen.push(String(input));
 			return new Response("{}", { status: 200 });
-		});
+		};
 
 		await loginXiaomi({
 			onAuth: () => {},
 			onPrompt: async () => "tp-test-key",
 			onProgress: () => {},
+			fetch: fetchMock,
 		});
 
 		expect(seen).toHaveLength(1);
@@ -29,15 +29,15 @@ describe("issue-772: Xiaomi MiMo token-plan (tp-) keys", () => {
 
 	it("xiaomiModelManagerOptions discovers models from the SGP token-plan host when given a tp- key", async () => {
 		const seen: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			seen.push(String(input));
 			return new Response(JSON.stringify({ data: [] }), {
 				status: 200,
 				headers: { "content-type": "application/json" },
 			});
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: "tp-test-key" });
+		const opts = xiaomiModelManagerOptions({ apiKey: "tp-test-key", fetch: fetchMock });
 		await opts.fetchDynamicModels?.();
 
 		expect(seen.length).toBeGreaterThan(0);
@@ -48,15 +48,15 @@ describe("issue-772: Xiaomi MiMo token-plan (tp-) keys", () => {
 
 	it("xiaomiModelManagerOptions still uses the standard host for sk- keys", async () => {
 		const seen: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			seen.push(String(input));
 			return new Response(JSON.stringify({ data: [] }), {
 				status: 200,
 				headers: { "content-type": "application/json" },
 			});
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: "sk-test-key" });
+		const opts = xiaomiModelManagerOptions({ apiKey: "sk-test-key", fetch: fetchMock });
 		await opts.fetchDynamicModels?.();
 
 		expect(seen.length).toBeGreaterThan(0);

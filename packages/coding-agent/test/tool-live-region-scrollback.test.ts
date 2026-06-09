@@ -1,12 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { TERMINAL, Text, TUI } from "@oh-my-pi/pi-tui";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { type Component, TERMINAL, Text, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { Settings } from "../src/config/settings";
-import { AssistantMessageComponent } from "../src/modes/components/assistant-message";
-import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
-import { TranscriptContainer } from "../src/modes/components/transcript-container";
-import { initTheme } from "../src/modes/theme/theme";
 
 type MutableTerminalInfo = {
 	eagerEraseScrollbackRisk: boolean;
@@ -23,6 +23,87 @@ async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Pr
 		mutableTerminalInfo.eagerEraseScrollbackRisk = saved;
 	}
 }
+
+class MutableLiveBlock implements Component {
+	#lines: string[];
+	#finalized: boolean;
+
+	constructor(lines: string[], finalized = false) {
+		this.#lines = [...lines];
+		this.#finalized = finalized;
+	}
+
+	render(width: number): string[] {
+		return this.#lines.map(line => line.slice(0, width));
+	}
+
+	setLines(lines: string[]): void {
+		this.#lines = [...lines];
+	}
+
+	isTranscriptBlockFinalized(): boolean {
+		return this.#finalized;
+	}
+}
+
+function markerLines(prefix: string, count: number): string[] {
+	return Array.from({ length: count }, (_unused, i) => `${prefix}${i}`);
+}
+
+function stripRows(rows: string[]): string {
+	return rows.map(row => Bun.stripANSI(row).trimEnd()).join("\n");
+}
+
+describe("transcript reactive commit boundary", () => {
+	it("treats growth before stable trailing chrome as append-only", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			const block = new MutableLiveBlock(["top", "stable", "bottom"]);
+			chat.addChild(block);
+
+			expect(chat.render(80)).toEqual(["top", "stable", "bottom"]);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
+
+			block.setLines(["top", "stable", "inserted", "bottom"]);
+			expect(chat.render(80)).toEqual(["top", "stable", "inserted", "bottom"]);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
+		});
+	});
+
+	it("treats in-place growth of the trailing line as append-only", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			// Models a streaming assistant reply: stable head rows plus a current
+			// line that grows token-by-token without adding a new row — the dominant
+			// streaming shape, and the one a strict line-count-growth check missed,
+			// stranding the scrolled-off head outside tmux pane history.
+			const block = new MutableLiveBlock(["para one", "para two", "the quick brown"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			block.setLines(["para one", "para two", "the quick brown fox"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
+		});
+	});
+
+	it("marks interior live re-layout volatile and defers commit", async () => {
+		await withTerminalRisk(true, () => {
+			const chat = new TranscriptContainer();
+			const block = new MutableLiveBlock(["top", "old", "bottom"]);
+			chat.addChild(block);
+
+			chat.render(80);
+			block.setLines(["top", "new", "extra", "bottom"]);
+			expect(chat.render(80)).toEqual(["top", "new", "extra", "bottom"]);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
+
+			block.setLines(["top", "new", "extra", "more", "bottom"]);
+			chat.render(80);
+			expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
+		});
+	});
+});
 
 describe("tool live-region scrollback", () => {
 	beforeAll(async () => {
@@ -73,7 +154,7 @@ describe("tool live-region scrollback", () => {
 					.join("\n");
 				expect(bufferText).not.toContain("pending [1/1]");
 				expect(bufferText).toContain("const line9 = 9;");
-				expect(bufferText).toContain("… 10 more lines");
+				expect(bufferText).toContain("const line19 = 19;");
 			} finally {
 				component.stopAnimation();
 				tui.stop();
@@ -139,6 +220,244 @@ describe("tool live-region scrollback", () => {
 			}
 		});
 	});
+
+	it("commits the scrolled-off head of an over-tall expanded streaming write to scrollback", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 20);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const body = (n: number) => Array.from({ length: n }, (_unused, i) => `MARK-${i}`).join("\n");
+			const filePath = "packages/coding-agent/test/probe.txt";
+			// Expanded (Ctrl+O) lifts the tail-window cap, so the preview renders the
+			// whole content top-anchored — append-only growth as chunks stream in.
+			const component = new ToolExecutionComponent(
+				"write",
+				{ file_path: filePath, content: body(12) },
+				{},
+				undefined,
+				tui,
+				process.cwd(),
+			);
+			component.setExpanded(true);
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				for (const lineCount of [24, 40]) {
+					component.updateArgs({ file_path: filePath, content: body(lineCount) });
+					tui.requestRender();
+					await term.waitForRender();
+				}
+
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
+
+				// MARK-0 scrolled above the viewport: it must live in native scrollback
+				// (committed), not nowhere. Before the fix the tool block was not
+				// append-only, so its scrolled-off head was dropped — a yanked stream.
+				expect(viewportText).not.toContain("MARK-0");
+				expect(scrollText).toContain("MARK-0");
+				// The streaming tail stays on screen, and nothing went missing between.
+				expect(viewportText).toContain("MARK-39");
+				expect(viewportText).toContain("(streaming)");
+				expect(scrollText).toContain("MARK-20");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("commits the scrolled-off head of an over-tall pending task context to scrollback", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const context = (n: number) => Array.from({ length: n }, (_unused, i) => `- CTX-${i}`).join("\n");
+			const args = (n: number) => ({
+				agent: "task",
+				context: context(n),
+				tasks: [{ id: "alpha", description: "probe", assignment: "Inspect the task context." }],
+			});
+			const component = new ToolExecutionComponent("task", args(4), {}, undefined, tui, process.cwd());
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				for (const lineCount of [12, 24, 40]) {
+					component.updateArgs(args(lineCount));
+					tui.requestRender();
+					await term.waitForRender();
+				}
+
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
+
+				expect(viewportText).not.toContain("CTX-0");
+				expect(scrollText).toContain("CTX-0");
+				expect(scrollText).toContain("CTX-20");
+				expect(viewportText).toContain("CTX-39");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("commits the scrolled-off head of a tall finalized bottom tool result", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const content = markerLines("FINAL-", 40).join("\n");
+			const args = { path: "packages/coding-agent/test/finalized.txt" };
+			const component = new ToolExecutionComponent("read", args, {}, undefined, tui, process.cwd());
+			component.setExpanded(true);
+			component.updateResult(
+				{
+					content: [{ type: "text", text: content }],
+					details: { displayContent: { text: content, startLine: 1 } },
+				},
+				false,
+			);
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
+
+				expect(viewportText).not.toContain("FINAL-0");
+				expect(scrollText).toContain("FINAL-0");
+				expect(scrollText).toContain("FINAL-20");
+				expect(viewportText).toContain("FINAL-39");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("keeps a re-layouting live block's changed head out of scrollback", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const block = new MutableLiveBlock(markerLines("OLD-", 8));
+
+			try {
+				chat.addChild(block);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				block.setLines(markerLines("NEW-", 40));
+				tui.requestRender();
+				await term.waitForRender();
+
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
+
+				expect(viewportText).not.toContain("NEW-0");
+				expect(scrollText).not.toContain("NEW-0");
+				expect(scrollText).not.toContain("NEW-20");
+				expect(viewportText).toContain("NEW-39");
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
+
+	it("commits the scrolled-off head of an expanded eval whose output streams past the viewport", async () => {
+		if (process.platform === "win32") return;
+
+		await withTerminalRisk(true, async () => {
+			const term = new VirtualTerminal(120, 12);
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
+			const tui = new TUI(term);
+			const chat = new TranscriptContainer();
+			const title = "stream lots of output";
+			const code = "for (let i = 0; i < 40; i++) console.log('MARK-' + i);";
+			const args = { cells: [{ language: "js", title, code }] };
+			const component = new ToolExecutionComponent("eval", args, {}, undefined, tui, process.cwd());
+			component.setExpanded(true);
+			const out = (n: number) => Array.from({ length: n }, (_unused, i) => `MARK-${i}`).join("\n");
+			const partial = (output: string) =>
+				component.updateResult(
+					{
+						content: [{ type: "text", text: "" }],
+						details: { cells: [{ index: 0, title, code, language: "js", output, status: "running" }] },
+					},
+					true,
+				);
+
+			partial(out(4));
+
+			try {
+				chat.addChild(component);
+				tui.addChild(chat);
+				tui.start();
+				tui.setEagerNativeScrollbackRebuild(true);
+				await term.waitForRender();
+
+				for (const lineCount of [12, 24, 40]) {
+					partial(out(lineCount));
+					tui.requestRender();
+					await term.waitForRender();
+				}
+
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
+
+				// The streamed output head scrolled above the viewport: it must live in
+				// native scrollback (committed), not nowhere. The fixed code cell rides
+				// along as the stable prefix above it.
+				expect(viewportText).not.toContain("MARK-0");
+				expect(scrollText).toContain("MARK-0");
+				expect(scrollText).toContain("MARK-20");
+				// The streaming tail stays on screen, and nothing went missing between.
+				expect(viewportText).toContain("MARK-39");
+			} finally {
+				component.stopAnimation();
+				tui.stop();
+				await term.flush();
+			}
+		});
+	});
 });
 
 function makeAssistantMessage(text: string): AssistantMessage {
@@ -188,19 +507,18 @@ describe("assistant live-region scrollback", () => {
 				tui.setEagerNativeScrollbackRebuild(true);
 				await term.waitForRender();
 
-				// First a short reply that fits, then the full reply that overflows the
-				// 12-row viewport — the frame that scrolls the head above the top.
 				component.updateContent(makeAssistantMessage(markers.slice(0, 4).join("\n")));
 				tui.requestRender();
 				await term.waitForRender();
 
-				component.updateContent(makeAssistantMessage(markers.join("\n")));
-				tui.requestRender();
-				await term.waitForRender();
+				for (const lineCount of [12, 24, 40]) {
+					component.updateContent(makeAssistantMessage(markers.slice(0, lineCount).join("\n")));
+					tui.requestRender();
+					await term.waitForRender();
+				}
 
-				const strip = (rows: string[]) => rows.map(row => Bun.stripANSI(row).trimEnd()).join("\n");
-				const scrollText = strip(term.getScrollBuffer());
-				const viewportText = strip(term.getViewport());
+				const scrollText = stripRows(term.getScrollBuffer());
+				const viewportText = stripRows(term.getViewport());
 
 				// MARK-0 scrolled above the viewport: with the fix it lives in native
 				// scrollback (committed), not nowhere. The regression dropped it.

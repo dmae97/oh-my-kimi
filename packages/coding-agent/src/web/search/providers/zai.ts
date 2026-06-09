@@ -4,7 +4,7 @@
  * Calls Z.AI's remote MCP server (`webSearchPrime`) and adapts results into
  * the unified SearchResponse shape used by the web search tool.
  */
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import { asRecord, asString } from "../../../web/scrapers/utils";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -21,6 +21,7 @@ export interface ZaiSearchParams {
 	query: string;
 	num_results?: number;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 	authStorage: AuthStorage;
 	sessionId?: string;
 }
@@ -62,8 +63,13 @@ export async function findApiKey(
 	return (await authStorage.getApiKey("zai", sessionId, { signal })) ?? null;
 }
 
-async function callZaiTool(apiKey: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-	const response = await fetch(ZAI_MCP_URL, {
+async function callZaiTool(
+	apiKey: string,
+	args: Record<string, unknown>,
+	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<unknown> {
+	const response = await fetchImpl(ZAI_MCP_URL, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -158,6 +164,7 @@ async function callZaiTool(apiKey: string, args: Record<string, unknown>, signal
 
 async function callZaiSearch(apiKey: string, params: ZaiSearchParams): Promise<unknown> {
 	const count = params.num_results ?? DEFAULT_NUM_RESULTS;
+	const fetchImpl = params.fetch ?? fetch;
 	const attempts: Record<string, unknown>[] = [
 		{ query: params.query, count },
 		{ search_query: params.query, count },
@@ -167,7 +174,7 @@ async function callZaiSearch(apiKey: string, params: ZaiSearchParams): Promise<u
 	let lastError: unknown;
 	for (let i = 0; i < attempts.length; i++) {
 		try {
-			return await callZaiTool(apiKey, attempts[i], params.signal);
+			return await callZaiTool(apiKey, attempts[i], params.signal, fetchImpl);
 		} catch (error) {
 			lastError = error;
 			const isLastAttempt = i === attempts.length - 1;
@@ -278,12 +285,14 @@ function toSources(results: ZaiSearchResult[]): SearchSource[] {
 
 /** Execute Z.AI web search via remote MCP endpoint. */
 export async function searchZai(params: ZaiSearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
-	if (!apiKey) {
-		throw new Error("Z.AI credentials not found. Set ZAI_API_KEY or login with 'omp /login zai'.");
-	}
+	const keyOrResolver: ApiKey = params.authStorage.resolver("zai", {
+		sessionId: params.sessionId,
+	});
 
-	const rawResult = await callZaiSearch(apiKey, params);
+	const rawResult = await withAuth(keyOrResolver, key => callZaiSearch(key, params), {
+		signal: params.signal,
+		missingKeyMessage: "Z.AI credentials not found. Set ZAI_API_KEY or login with 'omp /login zai'.",
+	});
 	const payload = parseSearchPayload(rawResult);
 	let sources = toSources(payload.results);
 
@@ -299,6 +308,8 @@ export async function searchZai(params: ZaiSearchParams): Promise<SearchResponse
 	};
 }
 
+type ZaiProviderSearchParams = SearchParams & { fetch?: FetchImpl };
+
 /** Search provider for Z.AI web search MCP. */
 export class ZaiProvider extends SearchProvider {
 	readonly id = "zai";
@@ -309,12 +320,14 @@ export class ZaiProvider extends SearchProvider {
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
+		const { fetch: fetchOverride } = params as ZaiProviderSearchParams;
 		return searchZai({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
 			signal: params.signal,
 			authStorage: params.authStorage,
 			sessionId: params.sessionId,
+			fetch: fetchOverride,
 		});
 	}
 }

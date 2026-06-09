@@ -10,20 +10,10 @@
 		"allowArbitraryExtensions": true,
 		"verbatimModuleSyntax": true,
 		"noEmit": true,
-		"emitDeclarationOnly": false,
-		"declaration": true,
-		"declarationMap": true,
-		"sourceMap": true,
-		"inlineSources": true,
-		"inlineSourceMap": false,
 		"resolveJsonModule": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,
-		"experimentalDecorators": true,
-		"emitDecoratorMetadata": true,
-		"useDefineForClassFields": false,
 		"types": ["bun", "assets"],
-		"typeRoots": ["./types", "./node_modules/@types"],
-		"assumeChangesOnlyAffectDirectDependencies": true
+		"typeRoots": ["./types", "./node_modules/@types"]
 	}
 }

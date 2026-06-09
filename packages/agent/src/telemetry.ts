@@ -50,6 +50,7 @@ import {
 } from "@opentelemetry/api";
 import { AgentRunCollector, type AgentRunCoverage, type AgentRunSummary, type ToolStatus } from "./run-collector";
 import type { AgentTool } from "./types";
+import { EventLoopKeepalive } from "./utils/yield";
 
 /** Default tracer name. Override via {@link AgentTelemetryConfig.tracerName}. */
 export const DEFAULT_TRACER_NAME = "@oh-my-pi/pi-agent-core";
@@ -132,6 +133,7 @@ export const enum PiGenAIAttr {
 	RequestMessages = "pi.gen_ai.request.messages",
 	ResponseText = "pi.gen_ai.response.text",
 	ResponseToolCalls = "pi.gen_ai.response.tool_calls",
+	ResponseUpstreamProvider = "pi.gen_ai.response.upstream_provider",
 	UsageTotalTokens = "pi.gen_ai.usage.total_tokens",
 	UsageServerSideTools = "pi.gen_ai.usage.server_tool_requests",
 	CostEstimatedUsd = "pi.gen_ai.cost.estimated_usd",
@@ -1188,6 +1190,9 @@ export function failChatSpan(
 function applyChatResponseAttributes(span: Span, message: AssistantMessage): void {
 	span.setAttribute(GenAIAttr.ResponseModel, message.model);
 	if (message.responseId) span.setAttribute(GenAIAttr.ResponseId, message.responseId);
+	if (message.upstreamProvider) {
+		span.setAttribute(PiGenAIAttr.ResponseUpstreamProvider, message.upstreamProvider);
+	}
 	if (message.ttft != null) span.setAttribute(GenAIAttr.ResponseTimeToFirstChunk, message.ttft / 1000);
 	const finishReason = mapStopReason(message.stopReason);
 	if (finishReason) span.setAttribute(GenAIAttr.ResponseFinishReasons, [finishReason]);
@@ -1629,6 +1634,13 @@ export async function instrumentedCompleteSimple<TApi extends Api>(
 	options: SimpleStreamOptions,
 	span: InstrumentedChatSpanOptions,
 ): Promise<AssistantMessage> {
+	// Oneshot LLM calls (handoff, compaction/branch summaries) run outside the
+	// agent `#runLoop`, which is where the EventLoopKeepalive normally lives.
+	// Without it, Bun's JSC loop stops servicing timers while parked on the
+	// long-lived completion promise, freezing any host spinner (e.g. the
+	// `/handoff` Loader) until an unrelated I/O event (a terminal resize)
+	// pokes the loop. Keep the loop healthy for the duration of the call.
+	using _keepalive = new EventLoopKeepalive();
 	const { telemetry, parent, oneshotKind } = span;
 	const stepNumber = span.stepNumber ?? -1;
 	const reasoning = options.reasoning;
@@ -1861,7 +1873,8 @@ export function finishInvokeAgentSpan(
 
 /**
  * Invoke {@link AgentTelemetryConfig.onRunEnd} on `telemetry` if set. Throws
- are caught and logged via `console.warn` — telemetry callbacks NEVER turn a
+ * are caught and surfaced via the `onTelemetryWarning` hook (falling back to `console.warn`
+ * when no hook is set) — telemetry callbacks NEVER turn a
  * successful agent run into a failed one. Idempotent at the call site via
  * {@link AgentRunCollector.markRunEnded}; callers must check that before
  * calling this helper.

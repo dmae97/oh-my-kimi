@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { getKittyGraphics, type KittyGraphicsFeatures, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
+import { extractPrintableText } from "@oh-my-pi/pi-tui/keys";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	type CellDimensions,
 	getCellDimensions,
 	getTerminalInfo,
-	ImageProtocol,
 	setCellDimensions,
-	setTerminalImageProtocol,
-	TERMINAL,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -616,68 +613,83 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		expect(reports).toContainEqual({ mode: 2048, supported: true });
 		terminal.stop();
 	});
-});
 
-describe("ProcessTerminal Kitty graphics temp-file probe", () => {
-	const originalProtocol = TERMINAL.imageProtocol;
-	let originalGraphics: KittyGraphicsFeatures;
+	it("reassembles an in-band resize report split past the flush window without leaking the tail", () => {
+		// The reported bug: resizing rapidly keeps the event loop busy, so the
+		// StdinBuffer flush timeout (10ms) fires after the `\x1b[48;…` prefix but
+		// before the terminator. The tail then arrives as bare characters that
+		// leaked into the editor as literal text (e.g. `8;125;1156;1125t`).
+		vi.useFakeTimers();
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
 
-	beforeEach(() => {
-		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
-		originalGraphics = { ...getKittyGraphics() };
-		Bun.env.PI_TUI_KITTY_GRAPHICS_PROBE = "1";
-		setTerminalImageProtocol(ImageProtocol.Kitty);
-		setKittyGraphics({ transmissionMedium: "direct" });
-	});
+		process.stdin.emit("data", "\x1b[48;40;160");
+		vi.advanceTimersByTime(50); // flush window elapses mid-report
+		process.stdin.emit("data", ";800;1600t"); // tail arrives as bare chars
 
-	afterEach(() => {
-		vi.restoreAllMocks();
-		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
-		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
-		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
-		delete Bun.env.PI_TUI_KITTY_GRAPHICS_PROBE;
-		setTerminalImageProtocol(originalProtocol);
-		setKittyGraphics(originalGraphics);
-	});
-
-	function startProbed() {
-		const writes: string[] = [];
-		vi.spyOn(process, "kill").mockReturnValue(true);
-		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
-		vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
-		vi.spyOn(process.stdin, "setEncoding").mockImplementation(() => process.stdin);
-		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
-			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
-			return true;
-		});
-		const terminal = new ProcessTerminal();
-		terminal.start(
-			() => {},
-			() => {},
-		);
-		return { terminal, writes };
-	}
-
-	it("emits an a=q,t=t probe and promotes to temp-file transmission on OK", () => {
-		const { terminal, writes } = startProbed();
-		const probe = writes.find(w => w.includes("\x1b_Ga=q,t=t"));
-		expect(probe).toBeDefined();
-		const id = probe?.match(/i=(\d+)/)?.[1];
-		expect(id).toBeDefined();
-		expect(getKittyGraphics().transmissionMedium).toBe("direct");
-		process.stdin.emit("data", `\x1b_Gi=${id};OK\x1b\\`);
-		expect(getKittyGraphics().transmissionMedium).toBe("temp-file");
+		expect(received).toEqual([]);
+		expect(terminal.rows).toBe(40);
+		expect(terminal.columns).toBe(160);
+		expect(resizeCount()).toBe(1);
 		terminal.stop();
 	});
 
-	it("stays on direct transmission when the probe reports an error", () => {
-		const { terminal, writes } = startProbed();
-		const id = writes.find(w => w.includes("\x1b_Ga=q,t=t"))?.match(/i=(\d+)/)?.[1];
-		expect(id).toBeDefined();
-		process.stdin.emit("data", `\x1b_Gi=${id};ENOTSUP:bad\x1b\\`);
-		expect(getKittyGraphics().transmissionMedium).toBe("direct");
+	it("reassembles a well-formed report split at the type field (\\x1b[4 | 8;…t)", () => {
+		// Splitting right after `\x1b[4` is the exact shape from the bug report (ESC
+		// `[` `4` flushed, the rest leaking). Reassembly must catch the bare `\x1b[4`
+		// prefix and still apply the resize for a well-formed 5-field report.
+		vi.useFakeTimers();
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+		const { terminal, received } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y");
+
+		process.stdin.emit("data", "\x1b[4");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "8;40;125;1156;1125t");
+
+		expect(received).toEqual([]);
+		expect(terminal.rows).toBe(40);
+		expect(terminal.columns).toBe(125);
+		terminal.stop();
+	});
+
+	it("forwards a split report fragment as one escape sequence instead of leaking bare characters", () => {
+		// The reported symptom: a fragment like `8;125;1156;1125t` (the tail of
+		// `\x1b[48;125;1156;1125t`, missing a field) appeared as literal text in the
+		// editor because the tail arrived as individual printable characters. Even
+		// when the reassembled sequence is not a valid resize report, it must reach
+		// the input handler as ONE escape sequence — `extractPrintableText` then
+		// rejects it (it contains ESC), so no characters are inserted.
+		vi.useFakeTimers();
+		const { terminal, received } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+
+		process.stdin.emit("data", "\x1b[4");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "8;125;1156;1125t");
+
+		expect(received).toEqual(["\x1b[48;125;1156;1125t"]);
+		expect(received.every(seq => extractPrintableText(seq) === undefined)).toBe(true);
+		terminal.stop();
+	});
+
+	it("forwards a split kitty key colliding with the in-band prefix instead of swallowing it", () => {
+		// Kitty reports the '0' key (codepoint 48) as `\x1b[48;<mods>u`. If such a
+		// key is split past the flush window while in-band resize is active, the
+		// reassembled sequence is not a resize report and must reach the input
+		// handler — never be dropped as terminal noise.
+		vi.useFakeTimers();
+		const { terminal, received } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+
+		process.stdin.emit("data", "\x1b[48;5");
+		vi.advanceTimersByTime(50);
+		process.stdin.emit("data", "u");
+
+		expect(received).toEqual(["\x1b[48;5u"]);
 		terminal.stop();
 	});
 });

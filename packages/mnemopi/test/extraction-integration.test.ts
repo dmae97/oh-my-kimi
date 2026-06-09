@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { extractFacts } from "../src/core/extraction";
-import { type ChatMessage, ExtractionClient } from "../src/core/extraction/client";
-import { getExtractionStats, resetExtractionStats } from "../src/core/extraction/diagnostics";
-import { resetHostLlmBackendForTests } from "../src/core/llm-backends";
+import type { FetchImpl } from "@oh-my-pi/pi-ai";
+import { extractFacts } from "@oh-my-pi/pi-mnemopi/core/extraction";
+import { type ChatMessage, ExtractionClient } from "@oh-my-pi/pi-mnemopi/core/extraction/client";
+import { getExtractionStats, resetExtractionStats } from "@oh-my-pi/pi-mnemopi/core/extraction/diagnostics";
+import { resetHostLlmBackendForTests } from "@oh-my-pi/pi-mnemopi/core/llm-backends";
 
 const OLD_ENV = { ...process.env };
-const ORIGINAL_FETCH = globalThis.fetch;
 
 function restoreEnv(): void {
 	for (const key in process.env) {
@@ -20,7 +20,6 @@ function restoreEnv(): void {
 
 afterEach(() => {
 	restoreEnv();
-	globalThis.fetch = ORIGINAL_FETCH;
 	resetHostLlmBackendForTests();
 	resetExtractionStats();
 });
@@ -30,7 +29,7 @@ describe("extraction integration", () => {
 		process.env.MNEMOPI_LLM_ENABLED = "true";
 		process.env.MNEMOPI_LLM_BASE_URL = "http://fake-remote/v1";
 		let payloadJson = "";
-		globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const fetchMock: FetchImpl = async (_input, init) => {
 			payloadJson = String(init?.body);
 			return new Response(
 				JSON.stringify({
@@ -38,9 +37,9 @@ describe("extraction integration", () => {
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
-		}) as unknown as typeof fetch;
+		};
 
-		const facts = await extractFacts("I prefer deterministic tests.");
+		const facts = await extractFacts("I prefer deterministic tests.", { fetch: fetchMock });
 		expect(facts).toEqual(["Ada prefers deterministic tests"]);
 		const payload = JSON.parse(payloadJson) as {
 			temperature?: number;
@@ -55,7 +54,7 @@ describe("extraction integration", () => {
 
 	it("parses structured fact objects through ExtractionClient with fake HTTP", async () => {
 		let requestedUrl = "";
-		globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+		const fetchMock: FetchImpl = async input => {
 			requestedUrl = String(input);
 			return new Response(
 				JSON.stringify({
@@ -70,11 +69,12 @@ describe("extraction integration", () => {
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
-		}) as unknown as typeof fetch;
+		};
 
 		const client = new ExtractionClient({
 			apiKey: "sk-test",
 			baseUrl: "http://openrouter.test/api/v1",
+			fetch: fetchMock,
 		});
 		const facts = await client.extractFacts([{ role: "user", content: "Ada prefers deterministic tests." }]);
 		expect(requestedUrl).toBe("http://openrouter.test/api/v1/chat/completions");
@@ -87,15 +87,16 @@ describe("extraction integration", () => {
 	});
 
 	it("records malformed cloud JSON as a diagnostic failure", async () => {
-		globalThis.fetch = (async () =>
+		const fetchMock: FetchImpl = async () =>
 			new Response(JSON.stringify({ choices: [{ message: { content: "Here: [oops, not json]" } }] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
-			})) as unknown as typeof fetch;
+			});
 
 		const client = new ExtractionClient({
 			apiKey: "sk-test",
 			baseUrl: "http://openrouter.test/api/v1",
+			fetch: fetchMock,
 		});
 		expect(await client.extractFacts([{ role: "user", content: "Ada prefers tea." }])).toEqual([]);
 		const cloud = getExtractionStats().by_tier.cloud;

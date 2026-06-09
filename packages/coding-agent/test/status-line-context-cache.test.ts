@@ -15,10 +15,12 @@
  * (messages.length shrinks) resets the cache.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { StatusLineComponent } from "../src/modes/components/status-line";
-import { initTheme } from "../src/modes/theme/theme";
-import type { AgentSession } from "../src/session/agent-session";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { computeNonMessageTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { countTokens } from "@oh-my-pi/pi-natives";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -120,6 +122,38 @@ describe("StatusLineComponent incremental context breakdown cache", () => {
 		});
 		const v3 = comp.getCachedContextBreakdown();
 		expect(v3.usedTokens).toBeGreaterThan(v2.usedTokens);
+	});
+
+	it("non-message token shortcut matches previous category sum semantics", () => {
+		const session = makeSession({
+			messages: [],
+			systemPrompt: [
+				"You are an assistant.\n\n<skills>\n- code: Write code\n- review: Review code\n</skills>",
+				"Loaded context file",
+				"Runtime note",
+			],
+			tools: [
+				{
+					name: "bash",
+					description: "Run shell commands",
+					parameters: { type: "object", properties: { command: { type: "string" } } },
+				},
+			],
+			skills: [
+				{ name: "code", description: "Write code" },
+				{ name: "review", description: "Review code" },
+			],
+		});
+
+		const skillsTokens = countTokens(["code", "Write code", "review", "Review code"]);
+		const previousCategorySum =
+			Math.max(0, countTokens(session.systemPrompt?.[0] ?? "") - skillsTokens) +
+			countTokens((session.systemPrompt ?? []).slice(1)) +
+			estimateToolSchemaTokens(session.agent?.state?.tools ?? []) +
+			skillsTokens;
+
+		expect(new StatusLineComponent(session).getCachedContextBreakdown().usedTokens).toBe(previousCategorySum);
+		expect(computeNonMessageTokens(session)).toBe(previousCategorySum);
 	});
 
 	it("zero messages: produces only non-message tokens, no crash", () => {

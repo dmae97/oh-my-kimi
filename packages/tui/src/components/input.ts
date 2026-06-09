@@ -187,6 +187,12 @@ export class Input implements Component, Focusable {
 		}
 	}
 
+	/** Apply terminal paste semantics to text from non-bracketed paste transports
+	 *  (e.g. kitty's OSC 5522 enhanced clipboard read). Mirrors `Editor.pasteText`. */
+	pasteText(text: string): void {
+		this.#handlePaste(text);
+	}
+
 	#insertCharacter(text: string): void {
 		const isWordChunk = [...segmenter.segment(text)].every(seg => getWordNavKind(seg.segment) !== "whitespace");
 		// Undo coalescing: consecutive word typing coalesces into one undo unit.

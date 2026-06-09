@@ -3,10 +3,11 @@ import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { clampThinkingLevelForModel, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type ApiKey, clampThinkingLevelForModel, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
+
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveModelRoleValue } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import consolidationTemplate from "../prompts/memories/consolidation.md" with { type: "text" };
 import readPathTemplate from "../prompts/memories/read-path.md" with { type: "text" };
@@ -271,7 +272,10 @@ async function runPhase1(options: {
 			const result = await runStage1Job({
 				claim,
 				model: phase1Model,
-				apiKey: phase1ApiKey,
+				apiKey: modelRegistry.resolver(phase1Model.provider, {
+					sessionId: session.sessionId,
+					baseUrl: phase1Model.baseUrl,
+				}),
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
 				metadata: session.agent?.metadataForProvider(phase1Model.provider),
@@ -428,7 +432,10 @@ async function runPhase2(options: {
 			const consolidated = await runConsolidationModel({
 				memoryRoot,
 				model: phase2Model,
-				apiKey: phase2ApiKey,
+				apiKey: modelRegistry.resolver(phase2Model.provider, {
+					sessionId: session.sessionId,
+					baseUrl: phase2Model.baseUrl,
+				}),
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});
 			await applyConsolidation(memoryRoot, consolidated);
@@ -574,7 +581,7 @@ function extractPersistableMessages(payload: string): AgentMessage[] {
 async function runStage1Job(options: {
 	claim: Stage1Claim;
 	model: Model;
-	apiKey: string;
+	apiKey: ApiKey;
 	modelMaxTokens: number;
 	config: MemoryRuntimeConfig;
 	metadata?: Record<string, unknown>;
@@ -718,7 +725,7 @@ async function readRolloutSummaries(memoryRoot: string): Promise<string> {
 async function runConsolidationModel(options: {
 	memoryRoot: string;
 	model: Model;
-	apiKey: string;
+	apiKey: ApiKey;
 	metadata?: Record<string, unknown>;
 }): Promise<{
 	memoryMd: string;
@@ -1081,7 +1088,7 @@ async function resolveMemoryModel(options: {
 	if (requestedModel) {
 		const resolved = resolveModelRoleValue(requestedModel, modelRegistry.getAll(), {
 			settings: session.settings,
-			matchPreferences: { usageOrder: session.settings.getStorage()?.getModelUsageOrder() },
+			matchPreferences: getModelMatchPreferences(session.settings),
 			modelRegistry,
 		});
 		if (resolved.model) return resolved.model;

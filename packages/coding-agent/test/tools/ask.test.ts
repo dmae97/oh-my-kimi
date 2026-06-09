@@ -828,11 +828,12 @@ describe("AskTool multiline custom input rendering", () => {
 		expect(renderedText).toContain("second line");
 		expect(renderedText).toContain("third line");
 
-		// Count success icons — should be exactly one for the custom input block,
+		// Count tool.ask glyphs — should be exactly one for the custom input block,
 		// plus one for the question status icon (if present). The key contract is that
-		// continuation lines do NOT get their own success icon.
+		// continuation lines do NOT get their own glyph.
+		const askGlyph = theme!.symbol("tool.ask");
 		const successIconCount = (
-			renderedText.match(new RegExp(theme!.status.success.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
+			renderedText.match(new RegExp(askGlyph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
 		).length;
 		// One icon on the status line header + one on the custom input first line = 2 max
 		expect(successIconCount).toBeLessThanOrEqual(2);
@@ -843,7 +844,7 @@ describe("AskTool multiline custom input rendering", () => {
 			const trimmed = line.trim();
 			if (trimmed.includes("second line") || trimmed.includes("third line")) {
 				// These continuation lines must NOT start with a success icon
-				expect(trimmed.startsWith(theme!.status.success)).toBe(false);
+				expect(trimmed.startsWith(askGlyph)).toBe(false);
 			}
 		}
 	});
@@ -1153,6 +1154,57 @@ describe("AskTool option markers", () => {
 		expect(text).not.toContain(theme!.radio.unselected);
 	});
 
+	it("keeps option rows stable across repeated renders", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const options = [
+			{ label: "TypeScript" },
+			{ label: "Rust" },
+			{ label: "Python" },
+			{ label: "Go" },
+			{ label: "C" },
+			{ label: "C++" },
+			{ label: "Zig" },
+			{ label: "Java" },
+			{ label: "Swift" },
+			{ label: "Haskell" },
+		];
+		const renderedCall = askToolRenderer.renderCall(
+			{ questions: [{ id: "fav_lang", question: "Which programming language?", options }] },
+			{ expanded: true, isPartial: true },
+			theme!,
+		);
+
+		const firstCall = stripAnsi(renderedCall.render(120).join("\n"));
+		const secondCall = stripAnsi(renderedCall.render(120).join("\n"));
+		expect(secondCall).toBe(firstCall);
+		expect(secondCall.match(/TypeScript/g)?.length).toBe(1);
+		expect(secondCall.match(/Haskell/g)?.length).toBe(1);
+
+		const renderedResult = askToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					results: [
+						{
+							id: "fav_lang",
+							question: "Which programming language?",
+							options: options.map(option => option.label),
+							multi: false,
+							selectedOptions: ["Python"],
+						},
+					],
+				},
+			},
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const firstResult = stripAnsi(renderedResult.render(120).join("\n"));
+		const secondResult = stripAnsi(renderedResult.render(120).join("\n"));
+		expect(secondResult).toBe(firstResult);
+		expect(secondResult.match(/TypeScript/g)?.length).toBe(1);
+		expect(secondResult.match(/Haskell/g)?.length).toBe(1);
+	});
 	it("renders single-choice result selection with a filled radio marker", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();

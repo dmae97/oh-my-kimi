@@ -2,11 +2,13 @@ import { emergencyTerminalRestore } from "@oh-my-pi/pi-tui";
 import { postmortem } from "@oh-my-pi/pi-utils";
 
 /**
- * Run modes for the coding agent.
+ * Interactive mode and embeddable RPC client exports for the coding agent.
+ *
+ * Branch-specific runners live in their concrete modules so importing this
+ * barrel does not pull print, RPC server, or ACP server mode into the normal
+ * TUI graph.
  */
-export { runAcpMode } from "./acp";
 export { InteractiveMode, type InteractiveModeOptions } from "./interactive-mode";
-export { type PrintModeOptions, runPrintMode } from "./print-mode";
 export {
 	defineRpcClientTool,
 	type ModelInfo,
@@ -17,7 +19,6 @@ export {
 	type RpcClientToolResult,
 	type RpcEventListener,
 } from "./rpc/rpc-client";
-export { runRpcMode } from "./rpc/rpc-mode";
 export type {
 	RpcCommand,
 	RpcHostToolCallRequest,

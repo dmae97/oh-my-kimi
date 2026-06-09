@@ -15,7 +15,6 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { encodeTextSignatureV1 } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { AssistantMessage, Model, ProviderPayload, Usage } from "@oh-my-pi/pi-ai/types";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 import {
 	buildSessionContext,
 	type CompactionEntry,
@@ -25,7 +24,8 @@ import {
 	type SessionEntry,
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
-} from "../src/session/session-manager";
+} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { mockFetch } from "./helpers/fetch-mock";
 import { e2eApiKey } from "./utilities";
 
 // ============================================================================
@@ -349,23 +349,25 @@ describe("remote compaction setting", () => {
 			throw new Error("Expected compaction preparation");
 		}
 
-		const fetchSpy = vi.fn(
-			(_input, _init, _next) =>
+		const fetchHandler = vi.fn(
+			async (_input, _init) =>
 				new Response(JSON.stringify({ summary: "remote summary" }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				}),
 		);
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = mockFetch(fetchHandler);
 		const completeSpy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValueOnce(createAssistantMessage("Local history summary"))
 			.mockResolvedValueOnce(createAssistantMessage("Local turn summary"))
 			.mockResolvedValueOnce(createAssistantMessage("Local short summary"));
 
-		const result = await compact(preparation, model, "test-api-key");
+		const result = await compact(preparation, model, "test-api-key", undefined, undefined, {
+			fetch: fetchSpy,
+		});
 
-		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(fetchHandler).not.toHaveBeenCalled();
 		expect(completeSpy).toHaveBeenCalledTimes(3);
 		expect(result.summary).toContain("Local history summary");
 		expect(result.shortSummary).toBe("Local short summary");
@@ -429,26 +431,28 @@ describe("remote compaction setting", () => {
 			{ type: "message", role: "user", content: [{ type: "input_text", text: "Compacted retained user" }] },
 			{ type: "compaction", encrypted_content: "new_encrypted" },
 		];
-		const fetchSpy = vi.fn(
-			(_input, _init, _next) =>
+		const fetchHandler = vi.fn(
+			async (_input, _init) =>
 				new Response(JSON.stringify({ output: remoteOutput }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				}),
 		);
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = mockFetch(fetchHandler);
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple");
 		completeSimpleSpy
 			.mockResolvedValueOnce(createAssistantMessage("History summary"))
 			.mockResolvedValueOnce(createAssistantMessage("Turn prefix summary"))
 			.mockResolvedValueOnce(createAssistantMessage("Short summary"));
 
-		const result = await compact(preparation, model, "test-api-key");
-		const requestBody = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as {
+		const result = await compact(preparation, model, "test-api-key", undefined, undefined, {
+			fetch: fetchSpy,
+		});
+		const requestBody = JSON.parse(String(fetchHandler.mock.calls[0]?.[1]?.body)) as {
 			input: Array<Record<string, unknown>>;
 		};
 
-		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(fetchHandler).toHaveBeenCalledTimes(1);
 		expect(requestBody.input[0]).toEqual({
 			type: "message",
 			role: "user",
@@ -497,18 +501,18 @@ describe("remote compaction setting", () => {
 		});
 		if (!preparation) throw new Error("Expected compaction preparation");
 
-		const fetchSpy = vi.fn(
-			(_input, _init, _next) =>
+		const fetchHandler = vi.fn(
+			async (_input, _init) =>
 				new Response(JSON.stringify({ output: [{ type: "compaction", encrypted_content: "new_encrypted" }] }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				}),
 		);
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = mockFetch(fetchHandler);
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantMessage("Short summary"));
 
-		await compact(preparation, model, "test-api-key");
-		const requestBody = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as {
+		await compact(preparation, model, "test-api-key", undefined, undefined, { fetch: fetchSpy });
+		const requestBody = JSON.parse(String(fetchHandler.mock.calls[0]?.[1]?.body)) as {
 			input: Array<Record<string, unknown>>;
 		};
 
@@ -540,20 +544,20 @@ describe("remote compaction setting", () => {
 		});
 		if (!preparation) throw new Error("Expected compaction preparation");
 
-		const fetchSpy = vi.fn(
-			(_input, _init, _next) =>
+		const fetchHandler = vi.fn(
+			async (_input, _init) =>
 				new Response(JSON.stringify({ output: [{ type: "compaction", encrypted_content: "new_encrypted" }] }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				}),
 		);
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = mockFetch(fetchHandler);
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantMessage("Short summary"));
 
-		await compact(preparation, model, "test-api-key");
+		await compact(preparation, model, "test-api-key", undefined, undefined, { fetch: fetchSpy });
 
-		expect(fetchSpy).toHaveBeenCalledTimes(1);
-		expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
+		expect(fetchHandler).toHaveBeenCalledTimes(1);
+		expect(fetchHandler.mock.calls[0]?.[0]).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
 	});
 
 	it("preserves codex assistant text signature metadata in remote compaction history", async () => {
@@ -591,18 +595,18 @@ describe("remote compaction setting", () => {
 		});
 		if (!preparation) throw new Error("Expected compaction preparation");
 
-		const fetchSpy = vi.fn(
-			(_input, _init, _next) =>
+		const fetchHandler = vi.fn(
+			async (_input, _init) =>
 				new Response(JSON.stringify({ output: [{ type: "compaction", encrypted_content: "new_encrypted" }] }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				}),
 		);
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = mockFetch(fetchHandler);
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantMessage("Short summary"));
 
-		await compact(preparation, model, "test-api-key");
-		const requestBody = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as {
+		await compact(preparation, model, "test-api-key", undefined, undefined, { fetch: fetchSpy });
+		const requestBody = JSON.parse(String(fetchHandler.mock.calls[0]?.[1]?.body)) as {
 			input: Array<Record<string, unknown>>;
 		};
 		const assistantItem = requestBody.input.find(item => item.type === "message" && item.role === "assistant");
@@ -632,31 +636,27 @@ describe("remote compaction setting", () => {
 
 		const remoteOutput = [
 			{ type: "message", role: "developer", content: [{ type: "input_text", text: "stale developer" }] },
-			{
-				type: "message",
-				role: "user",
-				content: [{ type: "input_text", text: "<system-reminder>wrapped</system-reminder>" }],
-			},
 			{ type: "message", role: "user", content: [{ type: "input_text", text: "Real preserved user" }] },
 			{ type: "reasoning", encrypted_content: "secret" },
 			{ type: "function_call_output", call_id: "call_1", output: "ignored" },
 			{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Kept assistant" }] },
 			{ type: "compaction", encrypted_content: "new_encrypted" },
 		];
-		const fetchSpy = vi.fn(
-			(_input, _init, _next) =>
+		const fetchHandler = vi.fn(
+			async (_input, _init) =>
 				new Response(JSON.stringify({ output: remoteOutput }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				}),
 		);
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = mockFetch(fetchHandler);
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantMessage("Short summary"));
 
 		const result = await compact(preparation, model, "test-api-key", undefined, undefined, {
 			remoteInstructions: "BASE INSTRUCTIONS",
+			fetch: fetchSpy,
 		});
-		const requestBody = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as {
+		const requestBody = JSON.parse(String(fetchHandler.mock.calls[0]?.[1]?.body)) as {
 			instructions: string;
 		};
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { finalizeSubprocessOutput } from "../../src/task/executor";
-import { subprocessToolRegistry } from "../../src/task/subprocess-tool-registry";
-import { parseReportFindingDetails, toReviewFinding } from "../../src/tools/review";
+import { finalizeSubprocessOutput } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { subprocessToolRegistry } from "@oh-my-pi/pi-coding-agent/task/subprocess-tool-registry";
+import { parseReportFindingDetails, toReviewFinding } from "@oh-my-pi/pi-coding-agent/tools/review";
 
 describe("report_finding subprocess extraction", () => {
 	it("returns undefined for malformed finding details", () => {
@@ -130,5 +130,172 @@ describe("toReviewFinding", () => {
 			findings: Array<{ priority: number }>;
 		};
 		expect(parsed.findings[0].priority).toBe(2);
+	});
+});
+
+describe("findings injection respects active output schema", () => {
+	const finding = toReviewFinding({
+		title: "[P0] Example finding",
+		body: "Details",
+		priority: "P0",
+		confidence: 0.95,
+		file_path: "/tmp/example.ts",
+		line_start: 10,
+		line_end: 12,
+	});
+
+	// Reproduces #2070: a caller-supplied JSON Schema with
+	// `additionalProperties: false` and no `findings` property is silently
+	// rejected post-mortem after the in-tool yield accepted it, because the
+	// executor auto-injects `findings` from `report_finding`. The injection
+	// must respect the active schema so that "accepted in-tool ⇒ accepted
+	// post-mortem" is honored.
+	it("suppresses findings injection when the schema forbids additional properties", () => {
+		const callerSchema = {
+			type: "object",
+			additionalProperties: false,
+			required: ["verdict", "acceptance_summary"],
+			properties: {
+				verdict: { enum: ["accept", "needs-work", "honest-stop"] },
+				acceptance_summary: { type: "string" },
+			},
+		};
+		const data = { verdict: "accept", acceptance_summary: "All good." };
+
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data }],
+			reportFindings: [finding],
+			outputSchema: callerSchema,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const parsed = JSON.parse(result.rawOutput) as Record<string, unknown>;
+		expect(parsed).toEqual(data);
+		expect("findings" in parsed).toBe(false);
+	});
+
+	it("still injects findings when the schema declares them (bundled reviewer JTD)", () => {
+		// Mirrors the bundled reviewer agent's output: findings live under
+		// `optionalProperties`, so injection must continue to flow through.
+		const reviewerSchema = {
+			properties: {
+				overall_correctness: { enum: ["correct", "incorrect"] },
+				explanation: { type: "string" },
+				confidence: { type: "number" },
+			},
+			optionalProperties: {
+				findings: {
+					elements: {
+						properties: {
+							title: { type: "string" },
+							body: { type: "string" },
+							priority: { type: "number" },
+							confidence: { type: "number" },
+							file_path: { type: "string" },
+							line_start: { type: "number" },
+							line_end: { type: "number" },
+						},
+					},
+				},
+			},
+		};
+		const data = {
+			overall_correctness: "incorrect",
+			explanation: "Found one bug",
+			confidence: 0.9,
+		};
+
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data }],
+			reportFindings: [finding],
+			outputSchema: reviewerSchema,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const parsed = JSON.parse(result.rawOutput) as { findings: Array<{ priority: number }> };
+		expect(parsed.findings).toHaveLength(1);
+		expect(parsed.findings[0].priority).toBe(0);
+	});
+
+	it("still injects findings when no schema is declared (legacy free-form)", () => {
+		const data = { note: "freeform" };
+
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data }],
+			reportFindings: [finding],
+			outputSchema: undefined,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const parsed = JSON.parse(result.rawOutput) as { findings?: unknown[] };
+		expect(parsed.findings).toHaveLength(1);
+	});
+
+	it("still injects findings when additionalProperties is open", () => {
+		const openSchema = {
+			type: "object",
+			required: ["verdict"],
+			properties: { verdict: { type: "string" } },
+		};
+		const data = { verdict: "accept" };
+
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data }],
+			reportFindings: [finding],
+			outputSchema: openSchema,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const parsed = JSON.parse(result.rawOutput) as { findings?: unknown[]; verdict: string };
+		expect(parsed.verdict).toBe("accept");
+		expect(parsed.findings).toHaveLength(1);
+	});
+
+	it("suppresses injection on the fallback (no-yield) path when the schema forbids it", () => {
+		const callerSchema = {
+			type: "object",
+			additionalProperties: false,
+			required: ["verdict"],
+			properties: { verdict: { type: "string" } },
+		};
+		const rawJson = JSON.stringify({ data: { verdict: "accept" } });
+
+		const result = finalizeSubprocessOutput({
+			rawOutput: rawJson,
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: undefined,
+			reportFindings: [finding],
+			outputSchema: callerSchema,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const parsed = JSON.parse(result.rawOutput) as Record<string, unknown>;
+		expect(parsed).toEqual({ verdict: "accept" });
 	});
 });

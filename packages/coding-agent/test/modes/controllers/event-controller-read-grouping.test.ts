@@ -1,0 +1,154 @@
+/**
+ * Read-group accretion across assistant completions.
+ *
+ * Reasoning models (and codex-style providers) frequently emit one `read` per
+ * completion as `[thinking?, toolCall]` rather than batching parallel calls.
+ * The transcript should still collapse an uninterrupted run of those reads into
+ * a single {@link ReadToolGroupComponent}; a completion that renders visible
+ * content (non-empty text/thinking) is the only thing that breaks the run, so a
+ * fresh group starts after it.
+ *
+ * Regression: every completion used to reset the active group at `message_start`,
+ * so consecutive single-read completions never grouped (each rendered as its own
+ * one-entry block).
+ */
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-coding-agent/modes/components/read-tool-group";
+import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { Container } from "@oh-my-pi/pi-tui";
+
+beforeAll(async () => {
+	await initTheme(false, undefined, undefined, "dark", "light");
+});
+
+beforeEach(async () => {
+	resetSettingsForTest();
+	await Settings.init({ inMemory: true });
+});
+
+afterEach(() => {
+	resetSettingsForTest();
+	vi.restoreAllMocks();
+});
+
+type Block = AssistantMessage["content"][number];
+
+function read(path: string): Block {
+	return { type: "toolCall", id: `read-${path}`, name: "read", arguments: { path } } as Block;
+}
+
+function thinking(text: string): Block {
+	return { type: "thinking", thinking: text } as Block;
+}
+
+function assistantMessage(content: Block[]): AssistantMessage {
+	return {
+		role: "assistant",
+		content,
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		model: "gpt-5.5",
+		stopReason: "toolUse",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		timestamp: Date.now(),
+	};
+}
+
+function createFixture() {
+	const chatContainer = new Container();
+	const ctx = {
+		isInitialized: true,
+		init: vi.fn(async () => {}),
+		statusLine: { invalidate: vi.fn() },
+		updateEditorTopBorder: vi.fn(),
+		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn(), imageBudget: undefined },
+		chatContainer,
+		pendingTools: new Map(),
+		settings: { get: () => false },
+		toolOutputExpanded: false,
+		hideThinkingBlock: false,
+		setWorkingMessage: vi.fn(),
+		session: { getToolByName: () => undefined, extensionRunner: undefined },
+	} as unknown as InteractiveModeContext;
+	return { controller: new EventController(ctx), chatContainer };
+}
+
+/** Drive one assistant completion: message_start then a single full message_update. */
+async function streamCompletion(controller: EventController, content: Block[]): Promise<void> {
+	const message = assistantMessage(content);
+	await controller.handleEvent({ type: "message_start", message } as AgentSessionEvent);
+	await controller.handleEvent({ type: "message_update", message } as AgentSessionEvent);
+}
+
+function readGroups(chatContainer: Container): ReadToolGroupComponent[] {
+	return chatContainer.children.filter((c): c is ReadToolGroupComponent => c instanceof ReadToolGroupComponent);
+}
+
+function header(group: ReadToolGroupComponent): string {
+	return Bun.stripANSI(group.render(120).join("\n")).split("\n")[0] ?? "";
+}
+
+describe("EventController read-group accretion", () => {
+	it("collapses a run of single-read completions into one group (mixed/empty thinking)", async () => {
+		const { controller, chatContainer } = createFixture();
+
+		// Mirrors the reported session: first read carries reasoning, the rest have
+		// empty or absent thinking. None of them should break the run. Distinct files
+		// keep one aggregated row per read so the count reflects the run size.
+		await streamCompletion(controller, [thinking("Considering performance optimizations"), read("a.ts:180-250")]);
+		await streamCompletion(controller, [thinking(""), read("b.ts:1-120")]);
+		await streamCompletion(controller, [read("c.ts:1-220")]);
+		await streamCompletion(controller, [read("d.ts:450-535")]);
+
+		const groups = readGroups(chatContainer);
+		expect(groups.length).toBe(1);
+		expect(header(groups[0]!)).toContain("Read (4)");
+	});
+
+	it("starts a new group after a completion that renders visible reasoning", async () => {
+		const { controller, chatContainer } = createFixture();
+
+		await streamCompletion(controller, [read("a.ts:1-50")]);
+		await streamCompletion(controller, [read("b.ts:1-50")]);
+		// Visible reasoning is a separator: the next reads form a distinct group.
+		await streamCompletion(controller, [thinking("Now let me check the other files"), read("c.ts:1-40")]);
+		await streamCompletion(controller, [read("d.ts:1-40")]);
+
+		const groups = readGroups(chatContainer);
+		expect(groups.length).toBe(2);
+		expect(header(groups[0]!)).toContain("Read (2)");
+		expect(header(groups[1]!)).toContain("Read (2)");
+	});
+
+	it("keeps the active group repaintable until it is finalized", async () => {
+		const { controller, chatContainer } = createFixture();
+
+		await streamCompletion(controller, [read("a.ts:1-50")]);
+		const [group] = readGroups(chatContainer);
+		// While it is the active run the block must stay in the live region so its
+		// header can re-layout from `Read <path>` to `Read (N)` on risk terminals.
+		expect(group!.isTranscriptBlockFinalized()).toBe(false);
+
+		// Settle the read so the group has no in-flight result. A finalized group
+		// only commits to native scrollback once its pending entries resolve, so an
+		// unsettled read would keep it live even after the run breaks.
+		group!.updateResult({ content: [{ type: "text", text: "x" }], isError: false }, false, "read-a.ts:1-50");
+		expect(group!.isTranscriptBlockFinalized()).toBe(false);
+
+		// A visible-reasoning completion breaks the run and finalizes the prior group.
+		await streamCompletion(controller, [thinking("done exploring"), read("b.ts:1-50")]);
+		expect(group!.isTranscriptBlockFinalized()).toBe(true);
+	});
+});

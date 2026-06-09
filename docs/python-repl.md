@@ -27,7 +27,7 @@ Tool params:
     language: "py" | "js";
     code: string;
     title?: string;
-    timeout?: number; // seconds, clamped to 1..600, default 30. Inactivity budget — see "Cell timeout".
+    timeout?: number; // seconds, clamped to 1..3600, default 30. Inactivity budget — see "Cell timeout".
     reset?: boolean; // reset this cell's selected runtime before execution
   }>;
 }
@@ -166,9 +166,9 @@ Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, 
 
 ### Cell timeout
 
-Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`llm()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
+Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`completion()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
 
-The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/llm is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
+The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/completion is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
 
 ### Kernel execution cancellation
 
@@ -232,7 +232,7 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
 
 - **Python backend not available** — Check `eval.py`, `PI_PY`, and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, use a `js` cell.
 - **No Python on PATH** — Install a system Python 3.8+ or place a venv at `~/.omp/python-env`. `omp setup python --check` reports the resolved interpreter.
-- **Execution hangs then times out** — Increase tool `timeout` (max 600s) if workload is legitimate. For stuck native code, cancellation triggers `SIGINT` first then escalates; the session restarts on the next request.
+- **Execution hangs then times out** — Increase tool `timeout` (max 3600s) if workload is legitimate. For stuck native code, cancellation triggers `SIGINT` first then escalates; the session restarts on the next request.
 - **stdin/input prompts in Python code** — `input()` is not supported; pass data programmatically.
 - **Working directory errors** — Tool validates `cwd` exists and is a directory before execution.
 

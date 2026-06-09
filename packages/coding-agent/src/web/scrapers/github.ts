@@ -1,14 +1,28 @@
 import { $env, ptree } from "@oh-my-pi/pi-utils";
 import type { RenderResult, SpecialHandler } from "./types";
-import { buildResult, loadPage } from "./types";
+import { buildResult, formatMediaDuration, loadPage } from "./types";
 
 interface GitHubUrl {
-	type: "blob" | "tree" | "repo" | "issue" | "issues" | "pull" | "pulls" | "discussion" | "discussions" | "other";
+	type:
+		| "blob"
+		| "tree"
+		| "repo"
+		| "issue"
+		| "issues"
+		| "pull"
+		| "pulls"
+		| "discussion"
+		| "discussions"
+		| "actions-run"
+		| "actions-job"
+		| "other";
 	owner: string;
 	repo: string;
 	ref?: string;
 	path?: string;
 	number?: number;
+	runId?: number;
+	jobId?: number;
 }
 
 interface GitHubIssueComment {
@@ -20,7 +34,7 @@ interface GitHubIssueComment {
 /**
  * Parse GitHub URL into components
  */
-function parseGitHubUrl(url: string): GitHubUrl | null {
+export function parseGitHubUrl(url: string): GitHubUrl | null {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "github.com") return null;
@@ -54,6 +68,20 @@ function parseGitHubUrl(url: string): GitHubUrl | null {
 				return { type: "pulls", owner, repo };
 			case "pulls":
 				return { type: "pulls", owner, repo };
+			case "actions": {
+				// /actions/runs/{runId}                      → run summary + jobs
+				// /actions/runs/{runId}/job/{jobId}          → single job (web URL uses singular "job")
+				// /actions/runs/{runId}/jobs/{jobId}         → single job (API-style plural)
+				if (subParts[0] === "runs" && /^\d+$/.test(subParts[1] ?? "")) {
+					const runId = parseInt(subParts[1], 10);
+					const seg = subParts[2];
+					if ((seg === "job" || seg === "jobs") && /^\d+$/.test(subParts[3] ?? "")) {
+						return { type: "actions-job", owner, repo, runId, jobId: parseInt(subParts[3], 10) };
+					}
+					return { type: "actions-run", owner, repo, runId };
+				}
+				return { type: "other", owner, repo };
+			}
 			case "discussions":
 				if (subParts.length > 0 && /^\d+$/.test(subParts[0])) {
 					return { type: "discussion", owner, repo, number: parseInt(subParts[0], 10) };
@@ -371,6 +399,212 @@ async function renderGitHubRepo(
 	return { content: md, ok: true };
 }
 
+interface GitHubActionsStep {
+	name: string;
+	status: string;
+	conclusion: string | null;
+	number: number;
+	started_at: string | null;
+	completed_at: string | null;
+}
+
+interface GitHubActionsJob {
+	id: number;
+	run_id: number;
+	name: string;
+	status: string;
+	conclusion: string | null;
+	started_at: string | null;
+	completed_at: string | null;
+	html_url: string | null;
+	steps?: GitHubActionsStep[];
+	runner_name?: string | null;
+	labels?: string[];
+	workflow_name?: string | null;
+	head_branch?: string | null;
+	head_sha?: string;
+}
+
+interface GitHubActionsRun {
+	id: number;
+	name?: string | null;
+	display_title?: string;
+	run_number: number;
+	run_attempt?: number;
+	event: string;
+	status: string;
+	conclusion: string | null;
+	head_branch?: string | null;
+	head_sha?: string;
+	html_url: string;
+	created_at: string;
+	updated_at: string;
+	run_started_at?: string;
+	actor?: { login: string };
+	triggering_actor?: { login: string };
+}
+
+/** Combine status + conclusion into a single label, e.g. `completed (failure)`. */
+function statusLabel(status: string, conclusion: string | null | undefined): string {
+	return conclusion ? `${status} (${conclusion})` : status;
+}
+
+/** Wall-clock duration between two ISO timestamps, formatted HH:MM:SS / MM:SS. Empty when unknown. */
+function actionDuration(start?: string | null, end?: string | null): string {
+	if (!start || !end) return "";
+	const ms = Date.parse(end) - Date.parse(start);
+	if (!Number.isFinite(ms) || ms < 0) return "";
+	return formatMediaDuration(Math.round(ms / 1000));
+}
+
+/** Escape `|` so step/job names can't break a markdown table row. */
+function escapeCell(text: string): string {
+	return text.replaceAll("|", "\\|");
+}
+
+/**
+ * Strip the per-line ISO-8601 timestamp prefix GitHub prepends to every job log line.
+ * Cuts ~28 bytes/line of noise while preserving the message text. Also drops the leading
+ * UTF-8 BOM GitHub puts at the start of the log file (otherwise the first line's timestamp
+ * survives because `^` no longer sits before a digit).
+ */
+export function stripActionsLogTimestamps(logs: string): string {
+	return logs.replace(/^\uFEFF/, "").replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z /gm, "");
+}
+
+/** Render a job's steps as a markdown table. Empty string when there are no steps. */
+function renderActionsSteps(steps?: GitHubActionsStep[]): string {
+	if (!steps || steps.length === 0) return "";
+	let md = "| # | Step | Status | Conclusion | Duration |\n";
+	md += "|---|------|--------|------------|----------|\n";
+	for (const step of steps) {
+		const dur = actionDuration(step.started_at, step.completed_at) || "-";
+		md += `| ${step.number} | ${escapeCell(step.name)} | ${step.status} | ${step.conclusion ?? "-"} | ${dur} |\n`;
+	}
+	return `${md}\n`;
+}
+
+/** Run-level metadata lines shared by the run and job renderers. */
+function renderActionsRunMeta(run: GitHubActionsRun): string {
+	let md = `**Workflow:** ${run.name ?? "(unknown)"}\n`;
+	md += `**Run:** #${run.run_number}`;
+	if (run.run_attempt && run.run_attempt > 1) md += ` (attempt ${run.run_attempt})`;
+	md += ` · ${statusLabel(run.status, run.conclusion)}\n`;
+	if (run.head_branch) {
+		md += `**Branch:** ${run.head_branch}${run.head_sha ? ` @ ${run.head_sha.slice(0, 7)}` : ""}\n`;
+	}
+	const actor = run.triggering_actor?.login ?? run.actor?.login;
+	md += `**Event:** ${run.event}${actor ? ` · by @${actor}` : ""}\n`;
+	const started = run.run_started_at ?? run.created_at;
+	const dur = actionDuration(started, run.updated_at);
+	md += `Started: ${started}${dur ? ` · Duration: ${dur}` : ""}\n`;
+	md += `URL: ${run.html_url}\n`;
+	return md;
+}
+
+/** Fetch a job's plain-text logs. Returns null when unavailable (no token / expired / private). */
+async function fetchGitHubJobLogs(
+	owner: string,
+	repo: string,
+	jobId: number,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	const headers: Record<string, string> = {
+		Accept: "application/vnd.github+json",
+		"X-GitHub-Api-Version": "2022-11-28",
+	};
+	const token = $env.GITHUB_TOKEN || $env.GH_TOKEN;
+	if (token) headers.Authorization = `Bearer ${token}`;
+
+	// 302 → signed log URL on a different origin; fetch strips Authorization on the cross-origin hop.
+	const result = await loadPage(`https://api.github.com/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`, {
+		timeout,
+		headers,
+		signal,
+	});
+	return result.ok && result.content ? result.content : null;
+}
+
+/**
+ * Render a workflow run: run metadata plus a per-job breakdown. Steps are listed for any job that
+ * did not succeed (the debugging-relevant ones); successful jobs collapse to a single line.
+ */
+async function renderGitHubActionsRun(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
+	const runResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/actions/runs/${gh.runId}`, timeout, signal);
+	if (!runResult.ok || !runResult.data) return { content: "", ok: false };
+
+	const run = runResult.data as GitHubActionsRun;
+	let md = `# ${run.display_title || run.name || `Run #${run.run_number}`}\n\n`;
+	md += renderActionsRunMeta(run);
+	md += `\n---\n\n`;
+
+	const jobsResult = await fetchGitHubApi(
+		`/repos/${gh.owner}/${gh.repo}/actions/runs/${gh.runId}/jobs?per_page=100`,
+		timeout,
+		signal,
+	);
+	if (jobsResult.ok && jobsResult.data) {
+		const jobs = (jobsResult.data as { jobs?: GitHubActionsJob[] }).jobs ?? [];
+		md += `## Jobs (${jobs.length})\n\n`;
+		for (const job of jobs) {
+			const dur = actionDuration(job.started_at, job.completed_at);
+			md += `### ${escapeCell(job.name)} — ${statusLabel(job.status, job.conclusion)}${dur ? ` (${dur})` : ""}\n\n`;
+			if (job.conclusion !== "success") {
+				md += renderActionsSteps(job.steps);
+			}
+		}
+	}
+
+	return { content: md, ok: true };
+}
+
+/**
+ * Render a single workflow job: run context, step table, and the full job logs.
+ */
+async function renderGitHubActionsJob(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
+	const jobResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/actions/jobs/${gh.jobId}`, timeout, signal);
+	if (!jobResult.ok || !jobResult.data) return { content: "", ok: false };
+
+	const job = jobResult.data as GitHubActionsJob;
+
+	// Best-effort run context for nicer headers; the job render stands on its own without it.
+	const runResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/actions/runs/${job.run_id}`, timeout, signal);
+	const run = runResult.ok && runResult.data ? (runResult.data as GitHubActionsRun) : null;
+
+	let md = `# ${escapeCell(job.name)}\n\n`;
+	if (run) {
+		md += renderActionsRunMeta(run);
+	} else if (job.workflow_name) {
+		md += `**Workflow:** ${job.workflow_name}\n`;
+		if (job.head_branch) md += `**Branch:** ${job.head_branch}\n`;
+	}
+	const dur = actionDuration(job.started_at, job.completed_at);
+	md += `**Job:** ${escapeCell(job.name)} · ${statusLabel(job.status, job.conclusion)}${dur ? ` · ${dur}` : ""}\n`;
+	if (job.runner_name) md += `**Runner:** ${job.runner_name}\n`;
+	if (job.html_url) md += `URL: ${job.html_url}\n`;
+	md += `\n---\n\n`;
+
+	const steps = renderActionsSteps(job.steps);
+	if (steps) md += `## Steps\n\n${steps}`;
+
+	const logs = await fetchGitHubJobLogs(gh.owner, gh.repo, job.id, timeout, signal);
+	md += `## Logs\n\n`;
+	md += logs
+		? stripActionsLogTimestamps(logs)
+		: "*Logs unavailable — requires a GITHUB_TOKEN/GH_TOKEN with read access, or the run's logs have expired.*\n";
+
+	return { content: md, ok: true };
+}
+
 /**
  * Handle GitHub URLs specially
  */
@@ -442,6 +676,24 @@ export const handleGitHub: SpecialHandler = async (
 			const result = await renderGitHubRepo(gh, timeout, signal);
 			if (result.ok) {
 				return buildResult(result.content, { url, method: "github-repo", fetchedAt, notes });
+			}
+			break;
+		}
+
+		case "actions-run": {
+			notes.push(`Fetched via GitHub API`);
+			const result = await renderGitHubActionsRun(gh, timeout, signal);
+			if (result.ok) {
+				return buildResult(result.content, { url, method: "github-actions-run", fetchedAt, notes });
+			}
+			break;
+		}
+
+		case "actions-job": {
+			notes.push(`Fetched via GitHub API`);
+			const result = await renderGitHubActionsJob(gh, timeout, signal);
+			if (result.ok) {
+				return buildResult(result.content, { url, method: "github-actions-job", fetchedAt, notes });
 			}
 			break;
 		}

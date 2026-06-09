@@ -83,9 +83,9 @@ describe("bashToolRenderer", () => {
 		expect(lines.length).toBeGreaterThanOrEqual(3);
 		const header = lines[0]!;
 		const body = lines.slice(1, -1).join("\n");
-		// The header carries the title only; the command lives inside the framed body
-		// (not inline on the status line as the old one-liner preview rendered it).
-		expect(header).toContain("Bash");
+		// Bash commands already carry a `$` prompt in the body, so the frame header
+		// stays a plain rule instead of repeating "Bash" in the title bar.
+		expect(header).not.toContain("Bash");
 		expect(header).not.toContain("sleep 30");
 		expect(body).toContain("$ sleep 30");
 	});
@@ -125,6 +125,29 @@ describe("bashToolRenderer", () => {
 		// Notice text must not appear in the output region — the styled label is the
 		// only place wall time is shown so users don't read it twice.
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
+	});
+
+	it("folds raw output artifact notices into the status footer", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "filtered\n[raw output: artifact://13]\n\nWall time: 0.08 seconds" }],
+				details: { timeoutSeconds: 300, wallTimeMs: 80 },
+				isError: false,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "bun run check:types" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("filtered");
+		expect(rendered).toContain("Wall: 0.08s");
+		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).toContain("Artifact: 13");
+		expect(rendered).not.toContain("[raw output: artifact://13]");
+		expect(rendered).not.toContain("artifact://13");
 	});
 	it("renders the exit status in the footer and strips the textual exit notice for failed commands", async () => {
 		const theme = await getThemeByName("dark");

@@ -17,6 +17,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
+import { buildModelProviderPriorityRank } from "./model-provider-priority";
 import { isAuthenticated, kNoAuth, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
 import type { Settings } from "./settings";
 
@@ -117,6 +118,43 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 	};
 }
 
+const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+
+/**
+ * Split a trailing `@<upstream>` provider-routing selector off a model pattern.
+ *
+ * `openrouter/z-ai/glm-4.7@cerebras` -> base `openrouter/z-ai/glm-4.7`, upstream
+ * `cerebras`. A `:thinking` suffix after the slug is kept on the base
+ * (`...@cerebras:high` -> base `...:high`). Returns undefined when there is no
+ * `@` or the suffix is not a bare provider slug, so model ids that legitimately
+ * contain `@` (`claude-opus-4-8@default`, `workers-ai/@cf/...`) are never split.
+ */
+function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
+	const at = pattern.lastIndexOf("@");
+	if (at <= 0) return undefined;
+	const rest = pattern.slice(at + 1);
+	const colon = rest.indexOf(":");
+	const upstream = colon === -1 ? rest : rest.slice(0, colon);
+	if (!UPSTREAM_ROUTING_SLUG.test(upstream)) return undefined;
+	const trailing = colon === -1 ? "" : rest.slice(colon);
+	return { base: pattern.slice(0, at) + trailing, upstream };
+}
+
+/** OpenRouter and Vercel AI Gateway are the aggregators that honor per-request upstream routing. */
+function supportsUpstreamRouting(model: Model<Api>): boolean {
+	return model.baseUrl.includes("openrouter.ai") || model.baseUrl.includes("ai-gateway.vercel.sh");
+}
+
+/** Pin a resolved aggregator model to a single upstream provider via its compat routing block. */
+function applyUpstreamRouting(model: Model<Api>, upstream: string): Model<Api> {
+	const aggregatorModel = model as Model<"openai-completions">;
+	const routing = { only: [upstream] };
+	const compat = model.baseUrl.includes("ai-gateway.vercel.sh")
+		? { ...aggregatorModel.compat, vercelGatewayRouting: routing }
+		: { ...aggregatorModel.compat, openRouterRouting: routing };
+	return { ...model, compat } as Model<Api>;
+}
+
 const kProviderModelIndex = Symbol("model-resolver.providerIndex");
 type ModelsWithProviderIndex = readonly Model<Api>[] & {
 	[kProviderModelIndex]?: Map<string, Model<Api> | null>;
@@ -179,7 +217,9 @@ export function resolveProviderModelReference(
 export interface ModelMatchPreferences {
 	/** Most-recently-used model keys (provider/modelId) to prefer when ambiguous. */
 	usageOrder?: string[];
-	/** Providers to deprioritize when no recent usage is available. */
+	/** Provider precedence used for ambiguous unqualified model patterns. */
+	providerOrder?: readonly string[];
+	/** Providers to deprioritize when no recent usage or provider priority is available. */
 	deprioritizeProviders?: string[];
 }
 
@@ -194,6 +234,7 @@ type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "ge
 interface ModelPreferenceContext {
 	modelUsageRank: Map<string, number>;
 	providerUsageRank: Map<string, number>;
+	providerPriorityRank: Map<string, number>;
 	deprioritizedProviders: Set<string>;
 	modelOrder: Map<string, number>;
 }
@@ -215,14 +256,35 @@ function buildPreferenceContext(
 			providerUsageRank.set(parsed.provider, i);
 		}
 	}
-
-	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? ["openrouter"]);
+	const providerPriorityRank = buildModelProviderPriorityRank(preferences?.providerOrder);
+	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? []);
 	const modelOrder = new Map<string, number>();
 	for (let i = 0; i < availableModels.length; i += 1) {
 		modelOrder.set(formatModelString(availableModels[i]), i);
 	}
 
-	return { modelUsageRank, providerUsageRank, deprioritizedProviders, modelOrder };
+	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, modelOrder };
+}
+
+export function getModelMatchPreferences(
+	settings?: Partial<Pick<Settings, "get" | "getStorage">>,
+): ModelMatchPreferences {
+	return {
+		usageOrder: settings?.getStorage?.()?.getModelUsageOrder(),
+		providerOrder: settings?.get?.("modelProviderOrder"),
+	};
+}
+
+function mergeModelMatchPreferences(
+	settings: Settings | undefined,
+	preferences: ModelMatchPreferences | undefined,
+): ModelMatchPreferences {
+	const settingsPreferences = getModelMatchPreferences(settings);
+	return {
+		usageOrder: preferences?.usageOrder ?? settingsPreferences.usageOrder,
+		providerOrder: preferences?.providerOrder ?? settingsPreferences.providerOrder,
+		deprioritizeProviders: preferences?.deprioritizeProviders,
+	};
 }
 
 function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceContext): Model<Api> {
@@ -234,6 +296,12 @@ function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceCo
 		const bUsage = context.modelUsageRank.get(bKey);
 		if (aUsage !== undefined || bUsage !== undefined) {
 			return (aUsage ?? Number.POSITIVE_INFINITY) - (bUsage ?? Number.POSITIVE_INFINITY);
+		}
+
+		const aProviderPriority = context.providerPriorityRank.get(a.provider.toLowerCase());
+		const bProviderPriority = context.providerPriorityRank.get(b.provider.toLowerCase());
+		if (aProviderPriority !== undefined || bProviderPriority !== undefined) {
+			return (aProviderPriority ?? Number.POSITIVE_INFINITY) - (bProviderPriority ?? Number.POSITIVE_INFINITY);
 		}
 
 		const aProviderUsage = context.providerUsageRank.get(a.provider);
@@ -411,6 +479,8 @@ export interface ParsedModelResult {
 	model: Model<Api> | undefined;
 	/** Thinking level if explicitly specified in pattern, undefined otherwise */
 	thinkingLevel?: ThinkingLevel;
+	/** Upstream provider slug from an `@upstream` routing selector, if present. */
+	upstream?: string;
 	warning: string | undefined;
 	explicitThinkingLevel: boolean;
 }
@@ -492,7 +562,20 @@ export function parseModelPattern(
 	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
 ): ParsedModelResult {
 	const context = buildPreferenceContext(availableModels, preferences);
-	return parseModelPatternWithContext(pattern, availableModels, context, options);
+	const direct = parseModelPatternWithContext(pattern, availableModels, context, options);
+	if (direct.model) return direct;
+
+	// No direct match: a trailing `@upstream` may be a provider-routing selector.
+	// Only honor it when the base resolves to an aggregator model (OpenRouter /
+	// Vercel Gateway); otherwise `@` stays part of the id and `direct` stands.
+	const routing = splitUpstreamRouting(pattern);
+	if (routing) {
+		const routed = parseModelPatternWithContext(routing.base, availableModels, context, options);
+		if (routed.model && supportsUpstreamRouting(routed.model)) {
+			return { ...routed, model: applyUpstreamRouting(routed.model, routing.upstream), upstream: routing.upstream };
+		}
+	}
+	return direct;
 }
 
 const PREFIX_MODEL_ROLE = "pi/";
@@ -618,8 +701,9 @@ export function resolveModelRoleValue(
 	}
 
 	let warning: string | undefined;
+	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
 	for (const effectivePattern of effectivePatterns) {
-		const resolved = parseModelPattern(effectivePattern, availableModels, options?.matchPreferences, {
+		const resolved = parseModelPattern(effectivePattern, availableModels, matchPreferences, {
 			modelRegistry: options?.modelRegistry,
 		});
 		if (resolved.model) {
@@ -720,7 +804,7 @@ export function resolveModelOverride(
 ): { model?: Model<Api>; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
 	const availableModels = modelRegistry.getAvailable();
-	const matchPreferences = { usageOrder: settings?.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	for (const pattern of modelPatterns) {
 		const { model, thinkingLevel, explicitThinkingLevel } = resolveModelRoleValue(pattern, availableModels, {
 			settings,
@@ -800,7 +884,7 @@ export function resolveRoleSelection(
 	availableModels: Model<Api>[],
 	modelRegistry?: CanonicalModelRegistry,
 ): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
-	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	for (const role of roles) {
 		const resolved = resolveModelRoleValue(settings.getModelRole(role), availableModels, {
 			settings,
@@ -1111,7 +1195,7 @@ export function resolveCliModel(options: {
 	}
 
 	const candidates = provider ? availableModels.filter(model => model.provider === provider) : availableModels;
-	const { model, thinkingLevel, warning } = parseModelPattern(pattern, candidates, preferences, {
+	const { model, thinkingLevel, warning, upstream } = parseModelPattern(pattern, candidates, preferences, {
 		allowInvalidThinkingSelectorFallback: false,
 		modelRegistry,
 	});
@@ -1140,6 +1224,9 @@ export function resolveCliModel(options: {
 				selector = modelRegistry.getCanonicalId?.(canonicalResolved) ?? canonicalCandidate;
 			}
 		}
+	}
+	if (selector !== undefined && upstream) {
+		selector = `${selector}@${upstream}`;
 	}
 
 	return {

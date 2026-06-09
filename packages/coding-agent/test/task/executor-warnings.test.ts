@@ -3,7 +3,8 @@ import {
 	finalizeSubprocessOutput,
 	SUBAGENT_WARNING_MISSING_YIELD,
 	SUBAGENT_WARNING_NULL_YIELD,
-} from "../../src/task/executor";
+	SUBAGENT_WARNING_SCHEMA_OVERRIDDEN,
+} from "@oh-my-pi/pi-coding-agent/task/executor";
 
 describe("subagent warning injection", () => {
 	it("injects null-data warning when yield is success without data", () => {
@@ -130,5 +131,64 @@ describe("subagent warning injection", () => {
 		expect(result.rawOutput).toBe("plain text notes");
 		expect(result.rawOutput.includes("SYSTEM WARNING")).toBe(false);
 		expect(result.exitCode).toBe(0);
+	});
+
+	it("honors schemaOverridden flag from yield and surfaces data with warning", () => {
+		// Reviewer subagent exhausted its in-tool schema-retry budget, then was
+		// accepted with empty finding objects. Without honoring the override, the
+		// executor's post-mortem validator silently rejected the same payload with
+		// `schema_violation`, opaquely swapping the agent's accepted output for an
+		// error blob. Reports #2, #8, #11, #16, #17, #20.
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data: { findings: [{}, {}] }, schemaOverridden: true }],
+			outputSchema: {
+				type: "object",
+				required: ["findings"],
+				properties: {
+					findings: {
+						type: "array",
+						minItems: 1,
+						items: {
+							type: "object",
+							required: ["severity", "file", "line"],
+							properties: {
+								severity: { type: "string" },
+								file: { type: "string" },
+								line: { type: "number" },
+							},
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_SCHEMA_OVERRIDDEN);
+		expect(JSON.parse(result.rawOutput)).toEqual({ findings: [{}, {}] });
+	});
+
+	it("treats malformed output schemas as no validation instead of schema_violation", () => {
+		// Empty-string schema is a caller mistake; the yield tool already degrades
+		// to a loose schema and accepts the data. The executor's finalizer used to
+		// emit `schema_violation: invalid output schema` even though yield accepted
+		// it, which surprised users dispatching prose review batches. Report #60.
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data: { verdict: "looks good" } }],
+			outputSchema: "",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.rawOutput)).toEqual({ verdict: "looks good" });
+		expect(result.stderr.startsWith("invalid output schema:")).toBe(true);
 	});
 });

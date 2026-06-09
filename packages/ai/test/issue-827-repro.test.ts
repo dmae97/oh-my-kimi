@@ -7,17 +7,11 @@
  * — when a forced tool_choice is sent to a Kimi reasoning model, we strip
  * reasoning for that single turn rather than dropping `tool_choice` outright.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
 import * as z from "zod/v4";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 const echoTool: Tool = {
 	name: "echo",

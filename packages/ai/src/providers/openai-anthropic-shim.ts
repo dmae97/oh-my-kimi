@@ -44,6 +44,9 @@ export function streamOpenAIAnthropicShim(
 ): AssistantMessageEventStream {
 	const stream = new AssistantMessageEventStream();
 	const format = options?.format ?? config.defaultFormat;
+	// The resolver form of `apiKey` is resolved upstream in `streamSimple`;
+	// this shim only ever receives a static bearer string.
+	const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
 
 	(async () => {
 		try {
@@ -74,7 +77,7 @@ export function streamOpenAIAnthropicShim(
 					: undefined;
 
 				const innerStream = streamAnthropic(anthropicModel, context, {
-					apiKey: options?.apiKey,
+					apiKey,
 					temperature: options?.temperature,
 					topP: options?.topP,
 					topK: options?.topK,
@@ -103,7 +106,7 @@ export function streamOpenAIAnthropicShim(
 
 				const reasoningEffort = options?.reasoning;
 				const innerStream = streamOpenAICompletions(openaiModel, context, {
-					apiKey: options?.apiKey,
+					apiKey,
 					temperature: options?.temperature,
 					topP: options?.topP,
 					topK: options?.topK,

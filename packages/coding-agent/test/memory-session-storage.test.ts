@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MemorySessionStorage } from "../src/session/session-storage";
+import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 describe("MemorySessionStorage indexed mirror", () => {
 	test("writeLineSync builds the same content as a single writeTextSync of the join", async () => {

@@ -1017,7 +1017,7 @@ Core pipeline in `renderUrl(url, timeout, raw, signal)`:
    - HTML-to-text conversion (`renderHtmlToText`)
 7. If HTML conversion is low-quality (`isLowQualityOutput`), try document-link extraction (`extractDocumentLinks`) + markit.
 
-`renderHtmlToText(...)` fallback order is explicit in code: Jina reader endpoint (`https://r.jina.ai/<url>`), then `trafilatura` (via `ensureTool`), then `lynx`, then native `htmlToMarkdown`.
+`renderHtmlToText(...)` tries reader backends in priority order: native in-process `htmlToMarkdown`, then `trafilatura` (via `ensureTool`), then `lynx`, then Parallel extract, then the Jina reader endpoint (`https://r.jina.ai/<url>`). The `providers.fetch` setting picks the order — `auto` uses the default above; selecting a specific backend tries it first, then the rest as fallbacks. Every backend's output must clear the same quality gate (`>100` chars and not `isLowQualityOutput`); if none clears it, the highest-priority substantial-but-low-quality output is surfaced so step 7's targeted fallbacks still run. native operates on already-fetched HTML (instant, no network), so it both wins the common case and survives a stalled remote backend.
 
 ### Scraper registry role (`web/scrapers/index.ts`)
 

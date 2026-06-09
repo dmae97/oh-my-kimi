@@ -3,7 +3,7 @@
  *
  * A cell's `timeout` bounds time while the Python kernel or JS VM is in control.
  * Host-side bridge calls can {@link pause} the watchdog so delegated
- * `agent()`/`parallel()`/`llm()` work is ignored completely, then {@link resume}
+ * `agent()`/`parallel()`/`completion()` work is ignored completely, then {@link resume}
  * starts a fresh timeout window once the runtime gets control back.
  *
  * The active timer self-reschedules instead of being torn down on every

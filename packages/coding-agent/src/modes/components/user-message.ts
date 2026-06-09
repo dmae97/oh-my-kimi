@@ -1,6 +1,6 @@
-import { Container, Markdown, Spacer } from "@oh-my-pi/pi-tui";
+import { Container, Markdown } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
-import { imageReferenceHyperlink, renderImageReferences } from "../image-references";
+import { imageReferenceHyperlink, renderPlaceholders } from "../image-references";
 import { highlightMagicKeywords } from "../magic-keywords";
 
 // OSC 133 shell integration: marks prompt zones for terminal multiplexers
@@ -15,7 +15,7 @@ export class UserMessageComponent extends Container {
 	constructor(text: string, synthetic = false, imageLinks?: readonly (string | undefined)[]) {
 		super();
 		const bgColor = (value: string) => theme.bg("userMessageBg", value);
-		// Paint the magic keywords ("ultrathink"/"orchestrate"/"workflow") inside the rendered
+		// Paint the magic keywords ("ultrathink"/"orchestrate"/"workflowz") inside the rendered
 		// bubble too — matching the live editor glow. The Markdown component routes code spans and
 		// fenced blocks through its own code styling (never `color`), so those are already excluded;
 		// `highlightMagicKeywords` additionally restores the bubble's own foreground after each
@@ -26,11 +26,13 @@ export class UserMessageComponent extends Container {
 			: (value: string) => theme.fg("userMessageText", highlightMagicKeywords(value, keywordReset));
 		const imageLabel = (value: string) => theme.fg("accent", `\x1b[1m\x1b[4m${value}\x1b[24m\x1b[22m`);
 		const color = (value: string) =>
-			renderImageReferences(value, {
+			renderPlaceholders(value, {
 				renderText: baseText,
-				renderReference: (label, index) => imageReferenceHyperlink(label, index, imageLinks, imageLabel),
+				renderReference: (label, kind, index) =>
+					kind === "image"
+						? imageReferenceHyperlink(label, index, imageLinks, imageLabel)
+						: theme.fg("accent", `\x1b[1m${label}\x1b[22m`),
 			});
-		this.addChild(new Spacer(1));
 		this.addChild(
 			new Markdown(text, 1, 1, getMarkdownTheme(), {
 				bgColor,

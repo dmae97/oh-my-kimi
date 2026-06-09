@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AssistantMessageEventStream, clearCustomApis, Effort, getCustomApi } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { getOAuthProviders, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { Snowflake } from "@oh-my-pi/pi-utils";
@@ -192,6 +192,9 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("extension-registered models survive refresh('online') cycle", async () => {
+		// ModelRegistry has no fetch injection seam; refresh("online") may hit real
+		// network. The contract under test is overlay survival, not discovery success —
+		// the online path is exercised but provider failures are intentionally swallowed.
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",

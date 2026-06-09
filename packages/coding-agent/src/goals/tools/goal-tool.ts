@@ -8,9 +8,9 @@ import type { Theme, ThemeColor } from "../../modes/theme/theme";
 import goalDescription from "../../prompts/tools/goal.md" with { type: "text" };
 import { formatDuration } from "../../slash-commands/helpers/format";
 import type { ToolSession } from "../../tools";
-import { formatErrorMessage, TRUNCATE_LENGTHS } from "../../tools/render-utils";
+import { formatErrorDetail, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import { ToolError } from "../../tools/tool-errors";
-import { renderStatusLine, truncateToWidth } from "../../tui";
+import { framedBlock, renderStatusLine, truncateToWidth } from "../../tui";
 import { completionBudgetReport, remainingTokens } from "../runtime";
 import type { Goal, GoalStatus, GoalToolDetails } from "../state";
 
@@ -173,8 +173,7 @@ export const goalToolRenderer = {
 		if (args.op === "create" && args.token_budget !== undefined) {
 			meta.push(`budget ${formatNumber(args.token_budget)}`);
 		}
-		const text = renderStatusLine({ icon: "pending", title: "Goal", description, meta }, uiTheme);
-		return new Text(text, 0, 0);
+		return new Text(renderStatusLine({ icon: "pending", title: "Goal", description, meta }, uiTheme), 0, 0);
 	},
 
 	renderResult(
@@ -190,51 +189,62 @@ export const goalToolRenderer = {
 
 		if (result.isError) {
 			const header = renderStatusLine({ icon: "error", title: "Goal", description }, uiTheme);
-			const body = formatErrorMessage(fallbackText || "Goal tool failed", uiTheme);
-			return new Text([header, body].join("\n"), 0, 0);
+			return framedBlock(uiTheme, width => ({
+				header,
+				sections: [{ lines: formatErrorDetail(fallbackText || "Goal tool failed", uiTheme).split("\n") }],
+				state: "error",
+				borderColor: "error",
+				width,
+			}));
 		}
 
 		const goal = details?.goal ?? null;
 		if (!goal) {
-			const header = renderStatusLine({ icon: "warning", title: "Goal", description }, uiTheme);
-			const body = uiTheme.fg("muted", "No active goal.");
-			return new Text([header, body].join("\n"), 0, 0);
+			return new Text(
+				renderStatusLine({ icon: "warning", title: "Goal", description, meta: ["no active goal"] }, uiTheme),
+				0,
+				0,
+			);
 		}
 
-		const lines: string[] = [];
-		lines.push(
-			renderStatusLine(
-				{
-					icon: "success",
-					title: "Goal",
-					description,
-					badge: { label: goal.status, color: goalBadgeColor(goal.status) },
-				},
-				uiTheme,
-			),
+		const header = renderStatusLine(
+			{
+				iconOverride: uiTheme.styledSymbol("tool.goal", "accent"),
+				title: "Goal",
+				description,
+				badge: { label: goal.status, color: goalBadgeColor(goal.status) },
+			},
+			uiTheme,
 		);
 
+		const lines: string[] = [];
 		const objectiveText = truncateToWidth(goal.objective.trim(), TRUNCATE_LENGTHS.LONG);
-		lines.push(`  ${uiTheme.italic(uiTheme.fg("muted", `"${objectiveText}"`))}`);
+		lines.push(uiTheme.italic(uiTheme.fg("muted", `"${objectiveText}"`)));
 
 		const used = formatNumber(goal.tokensUsed);
 		const tokensLine =
 			goal.tokenBudget !== undefined
 				? `${used} / ${formatNumber(goal.tokenBudget)} tokens (${formatNumber(Math.max(0, goal.tokenBudget - goal.tokensUsed))} left)`
 				: `${used} tokens`;
-		lines.push(`  ${uiTheme.fg("dim", tokensLine)}`);
-
+		const metaParts = [tokensLine];
 		if (goal.timeUsedSeconds > 0) {
-			lines.push(`  ${uiTheme.fg("dim", `${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`)}`);
+			metaParts.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
 		}
+		lines.push(uiTheme.fg("dim", metaParts.join(" · ")));
 
 		const report = details?.completionBudgetReport;
+		const sections: Array<{ label?: string; lines: string[] }> = [{ lines }];
 		if (report) {
-			lines.push("");
-			lines.push(uiTheme.italic(uiTheme.fg("muted", report)));
+			sections.push({ label: "Report", lines: report.split("\n").map(line => uiTheme.fg("muted", line)) });
 		}
 
-		return new Text(lines.join("\n"), 0, 0);
+		return framedBlock(uiTheme, width => ({
+			header,
+			sections,
+			state: "success",
+			borderColor: "borderMuted",
+			width,
+		}));
 	},
 
 	mergeCallAndResult: true,

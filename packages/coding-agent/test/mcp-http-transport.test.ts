@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { connectToServer } from "@oh-my-pi/pi-coding-agent/mcp/client";
+import { resolveSSEConnectTimeoutMs } from "@oh-my-pi/pi-coding-agent/mcp/transports/http";
+import type { MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import type { Server } from "bun";
-import { connectToServer } from "../src/mcp/client";
-import { resolveSSEConnectTimeoutMs } from "../src/mcp/transports/http";
-import type { MCPServerConnection } from "../src/mcp/types";
 
 let activeServer: Server<undefined> | undefined;
 

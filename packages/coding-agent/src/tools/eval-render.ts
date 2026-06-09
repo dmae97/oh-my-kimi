@@ -16,9 +16,8 @@ import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } f
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import { borderShimmerTick, markFramedBlockComponent, renderCodeCell } from "../tui";
+import { markFramedBlockComponent, renderCodeCell } from "../tui";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
@@ -40,14 +39,6 @@ import {
 	wrapBrackets,
 } from "./render-utils";
 export const EVAL_DEFAULT_PREVIEW_LINES = 10;
-/**
- * Rows of source kept in the *pending* eval preview. The window follows the
- * streaming edge (newest lines pinned to the bottom) so you can watch the code
- * being written, while staying bounded — a volatile tool block taller than the
- * viewport would otherwise strand its scrolled-off head out of native scrollback
- * on ED3-risk terminals. Matches the streaming windows used by edit/write.
- */
-export const EVAL_STREAMING_PREVIEW_LINES = 12;
 
 function languageForHighlighter(language: EvalLanguage | undefined): "python" | "javascript" {
 	return language === "js" ? "javascript" : "python";
@@ -181,7 +172,7 @@ function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spin
 		const status = agentEventStatus(event.status);
 		const iconStatus =
 			status === "completed"
-				? "success"
+				? "done"
 				: status === "failed"
 					? "error"
 					: status === "aborted"
@@ -191,10 +182,13 @@ function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spin
 							: "running";
 		const iconColor =
 			status === "completed" ? "success" : status === "failed" || status === "aborted" ? "error" : "accent";
-		const icon = formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined);
+		const icon =
+			status === "completed"
+				? theme.styledSymbol("tool.eval", "accent")
+				: theme.fg(iconColor, formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined));
 
 		const id = eventString(event.id) ?? "agent";
-		let line = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", theme.bold(id))}`;
+		let line = `${prefix} ${icon} ${theme.fg("accent", theme.bold(id))}`;
 
 		if (status === "failed" || status === "aborted") {
 			line += ` ${formatBadge(status, iconColor, theme)}`;
@@ -255,7 +249,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		sh: "icon.package",
 		env: "icon.package",
 		batch: "icon.package",
-		llm: "icon.package",
+		completion: "icon.package",
 		log: "icon.package",
 		phase: "icon.package",
 	};
@@ -324,7 +318,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
 			break;
-		case "llm":
+		case "completion":
 			if (data.model) parts.push(String(data.model));
 			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
 			parts.push(`${data.chars ?? 0} chars`);
@@ -499,8 +493,7 @@ export const evalToolRenderer = {
 
 		return markFramedBlockComponent({
 			render: (width: number): string[] => {
-				const animate = options.isPartial && shimmerEnabled();
-				const key = `${animate ? borderShimmerTick() : 0}|${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+				const key = `${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -517,17 +510,10 @@ export const evalToolRenderer = {
 							title: cell.title,
 							status: "pending",
 							width,
-							codeMaxLines: EVAL_STREAMING_PREVIEW_LINES,
-							// Follow the streaming edge with a bounded tail window so the
-							// newest source stays visible as it is written, instead of
-							// rendering every line of a >100-line `code` — which would
-							// overflow the viewport and, because a tool block is volatile
-							// (it collapses to a capped result), strand its scrolled-off head
-							// out of native scrollback, cutting the box top. `Ctrl+O` lifts
-							// the window via `expanded` for a deliberate full view.
-							codeTail: true,
+							// Always render the full source: the code is fixed input, not the
+							// streaming part, so it is never compacted.
+							codeMaxLines: Number.POSITIVE_INFINITY,
 							expanded: options.expanded,
-							animate,
 						},
 						uiTheme,
 					);
@@ -590,8 +576,7 @@ export const evalToolRenderer = {
 				render: (width: number): string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const animate = options.isPartial && shimmerEnabled();
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${animate ? borderShimmerTick() : 0}`;
+					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
 					}
@@ -628,10 +613,11 @@ export const evalToolRenderer = {
 								duration: cell.durationMs,
 								output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
 								outputMaxLines: outputLines.length,
-								codeMaxLines: expanded ? Number.POSITIVE_INFINITY : EVAL_DEFAULT_PREVIEW_LINES,
+								// Code is fixed input — always shown in full, never compacted.
+								// Only `output` honors the collapsed preview cap above.
+								codeMaxLines: Number.POSITIVE_INFINITY,
 								expanded,
 								width,
-								animate,
 							},
 							uiTheme,
 						);
@@ -760,6 +746,7 @@ export const evalToolRenderer = {
 			},
 		};
 	},
+
 	mergeCallAndResult: true,
 	inline: true,
 };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatAmzDate, getSigningKey, signRequest, toHex } from "../src/providers/aws-sigv4";
+import { formatAmzDate, getSigningKey, signRequest, toHex } from "@oh-my-pi/pi-ai/providers/aws-sigv4";
 
 // Canonical AWS SigV4 test vectors. Sourced from the
 // `aws-sig-v4-test-suite` published with the SigV4 spec.

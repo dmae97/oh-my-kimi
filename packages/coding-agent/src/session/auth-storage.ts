@@ -10,6 +10,8 @@ export type {
 	AuthCredentialStore,
 	AuthStorageData,
 	AuthStorageOptions,
+	CredentialOrigin,
+	CredentialOriginKind,
 	OAuthCredential,
 	SerializedAuthStorage,
 	SnapshotResponse,

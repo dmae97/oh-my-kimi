@@ -8,7 +8,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -199,6 +199,33 @@ describe("editToolRenderer", () => {
 		expect(rendered).not.toContain(" …");
 	});
 
+	it("omits changed-line suffixes from completed edit headers and middle-elides long paths", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated transcript-container.test.ts" }],
+				details: {
+					diff: "+1│const value = 2;",
+					firstChangedLine: 251,
+					op: "update",
+					path: "/tmp/project/packages/coding-agent/test/modes/components/transcript-container.test.ts",
+				},
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "packages/coding-agent/test/modes/components/transcript-container.test.ts" },
+		);
+
+		const wideHeader = Bun.stripANSI(component.render(160)[0]);
+		expect(wideHeader).toContain("packages/coding-agent/test/modes/components/transcript-container.test.ts");
+		expect(wideHeader).not.toContain(":251");
+
+		const narrowHeader = Bun.stripANSI(component.render(72)[0]);
+		expect(narrowHeader).toContain("…");
+		expect(narrowHeader).toContain("container.test.ts");
+		expect(narrowHeader).not.toContain(":251");
+	});
+
 	it("computes the hashline preview diff once a single-line edit finishes streaming", async () => {
 		await getUiTheme();
 		const uiStub = { requestRender() {} } as unknown as TUI;
@@ -303,5 +330,51 @@ describe("editToolRenderer", () => {
 
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("plain streamed text");
+	});
+
+	it("renders change stats inline on the result header with no separate metadata or stats row", async () => {
+		const uiTheme = await getUiTheme();
+		const diff = [" 115│ ctx", "-116│ old", "+117│ new one", "+118│ new two"].join("\n");
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated demo.go" }],
+				details: { diff, op: "update" },
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "demo.go" },
+		);
+
+		const lines = Bun.stripANSI(component.render(160).join("\n")).split("\n");
+		// Stats ride on the header line next to the path…
+		expect(lines[0]).toContain("demo.go");
+		expect(lines[0]).toContain("+2");
+		expect(lines[0]).toContain("-1");
+		expect(lines[0]).toContain("+2/-1");
+		// …only there (no standalone stats row), and the diff starts immediately
+		// below the header (no blank line, no lone lang-icon metadata row).
+		expect(lines[1]).toContain("115│ ctx");
+		expect(lines.filter(line => line.includes("+2/-1"))).toHaveLength(1);
+	});
+
+	it("renders completed edit gutters without inherited frame padding", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated demo.ts" }],
+				details: {
+					diff: "+1│const renamedIdentifier = computeValueFromSomeVeryLongInputName();",
+					op: "update",
+				},
+			},
+			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
+			uiTheme,
+			{ file_path: "demo.ts" },
+		);
+
+		const lines = component.render(48).map(line => Bun.stripANSI(line));
+		expect(lines.every(line => visibleWidth(line) === 48)).toBe(true);
+		expect(lines[1]).toStartWith("│+1│");
+		expect(lines[1]).not.toStartWith("│ +1│");
 	});
 });

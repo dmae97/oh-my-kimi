@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::{Shell, error, extensions, interp};
+use crate::{Shell, error, expansion, extensions, interp};
 
 /// Behavior for loading profile files.
 #[derive(Default)]
@@ -130,14 +130,24 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
 					"BASH_ENV"
 				};
 
-				if self.env.is_set(env_var_name) {
-					//
-					// TODO(well-known-vars): look at $ENV/BASH_ENV; source its expansion if that
-					// file exists
-					//
-					return error::unimp(
-						"load config from $ENV/BASH_ENV for non-interactive, non-login shell",
-					);
+				if let Some(config_path) = self.env_str(env_var_name) {
+					let config_path = config_path.into_owned();
+					let options = expansion::ExpanderOptions {
+						brace_expand:    false,
+						pathname_expand: false,
+						..Default::default()
+					};
+					let expanded_path = expansion::basic_expand_word_with_options(
+						self,
+						&params,
+						config_path.as_str(),
+						&options,
+					)
+					.await?;
+
+					if !expanded_path.is_empty() {
+						self.source_if_exists(PathBuf::from(expanded_path), &params).await?;
+					}
 				}
 			}
 		}

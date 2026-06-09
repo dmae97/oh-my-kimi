@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	type BlockResolution,
 	type BlockResolver,
 	type BlockSpan,
 	computeFileHash,
@@ -85,6 +86,31 @@ describe("resolveBlockEdits", () => {
 			"could not resolve a syntactic block beginning on line 7",
 		);
 	});
+
+	it("fires onResolved with the resolved span for replace and delete blocks", () => {
+		const seen: BlockResolution[] = [];
+		// stubResolver maps line N → span [N, N+1].
+		resolveBlockEdits(parsePatch("replace block 2:\n+A\n+B").edits, "ignored", PATH, stubResolver, {
+			onResolved: resolution => seen.push(resolution),
+		});
+		resolveBlockEdits(parsePatch("delete block 5").edits, "ignored", PATH, stubResolver, {
+			onResolved: resolution => seen.push(resolution),
+		});
+
+		expect(seen).toEqual([
+			{ anchorLine: 2, start: 2, end: 3, isDelete: false },
+			{ anchorLine: 5, start: 5, end: 6, isDelete: true },
+		]);
+	});
+
+	it("does not fire onResolved for a dropped unresolvable block", () => {
+		const seen: BlockResolution[] = [];
+		resolveBlockEdits(parsePatch("replace block 2:\n+X").edits, "ignored", PATH, () => null, {
+			onUnresolved: "drop",
+			onResolved: resolution => seen.push(resolution),
+		});
+		expect(seen).toHaveLength(0);
+	});
 });
 
 describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
@@ -129,6 +155,17 @@ describe("Patcher with a block resolver", () => {
 		expect(fs.get(PATH)).toBe("function x() {\n  if (y || z) {\n  }\n}\n");
 	});
 
+	it("surfaces the resolved span on the section result (hash-match path)", async () => {
+		const fs = new InMemoryFilesystem([[PATH, text]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, text);
+		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
+
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace block 2:\n+  if (y || z) {\n+  }`));
+
+		expect(result.sections[0]?.blockResolutions).toEqual([{ anchorLine: 2, start: 2, end: 3, isDelete: false }]);
+	});
+
 	it("resolves against the tagged snapshot and recovers onto drifted content", async () => {
 		const snapshotText = "line0\nline1\nline2\nline3\nline4\n";
 		// The live file gained a trailing line after the read minted the tag.
@@ -145,6 +182,9 @@ describe("Patcher with a block resolver", () => {
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("line0\nNEW\nline3\nline4\nline5\n");
 		expect(result.sections[0]?.warnings.some(w => /Recovered/.test(w))).toBe(true);
+		// Drift routed the resolution through recovery, where line numbers shift,
+		// so the (now-misleading) span is intentionally not surfaced.
+		expect(result.sections[0]?.blockResolutions).toBeUndefined();
 	});
 
 	it("rejects a block edit whose tag was never recorded for this path", async () => {

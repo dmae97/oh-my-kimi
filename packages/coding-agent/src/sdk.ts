@@ -10,7 +10,6 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CredentialDisabledEvent,
-	isUsageLimitError,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
@@ -24,7 +23,6 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
 	$flag,
-	extractRetryHint,
 	getAgentDbPath,
 	getAgentDir,
 	getAuthBrokerSnapshotCachePath,
@@ -36,14 +34,16 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
-import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
+import { createApiKeyResolver } from "./config/api-key-resolver";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
+	defaultModelPerProvider,
 	formatModelString,
+	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
 	resolveAllowedModels,
@@ -57,7 +57,6 @@ import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { defaultEvalSessionId } from "./eval/session-id";
-import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
 	type LoadedCustomCommand,
@@ -90,8 +89,9 @@ import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./mcp";
 import { resolveMemoryBackend } from "./memory-backend";
-import { getMnemopiSessionState, type MnemopiSessionState } from "./mnemopi/state";
+import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
+import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	collectEnvSecrets,
@@ -111,7 +111,12 @@ import {
 	type SnapshotResponse,
 	writeAuthBrokerSnapshotCache,
 } from "./session/auth-storage";
-import { type CustomMessage, convertToLlm, wrapSteeringForModel } from "./session/messages";
+import {
+	type CustomMessage,
+	convertToLlm,
+	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	wrapSteeringForModel,
+} from "./session/messages";
 import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
@@ -144,10 +149,12 @@ import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
+	type DeferredDiagnosticsEntry,
 	discoverStartupLspServers,
 	EditTool,
 	EvalTool,
 	FindTool,
+	filterInitialToolsForDiscoveryAll,
 	getSearchTools,
 	HIDDEN_TOOLS,
 	isImageProviderPreference,
@@ -230,6 +237,42 @@ function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): CustomMessag
 	};
 }
 
+type LateDiagnosticsDetails = {
+	files: Array<{ path: string; summary: string; errored: boolean; messages: string[] }>;
+};
+
+function buildLateDiagnosticsBatchMessage(
+	entries: DeferredDiagnosticsEntry[],
+): CustomMessage<LateDiagnosticsDetails> | null {
+	if (entries.length === 0) return null;
+	const files = entries.map(entry => ({
+		path: entry.path,
+		summary: entry.summary,
+		messages: entry.messages,
+		errored: entry.errored,
+	}));
+	const details: LateDiagnosticsDetails = {
+		files: files.map(file => ({
+			path: file.path,
+			summary: file.summary,
+			errored: file.errored,
+			messages: file.messages,
+		})),
+	};
+	return {
+		role: "custom",
+		customType: LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+		content: prompt.render(lateDiagnosticTemplate, {
+			multiple: files.length > 1,
+			files,
+		}),
+		display: true,
+		attribution: "agent",
+		details,
+		timestamp: Date.now(),
+	};
+}
+
 function buildMcpNotificationBatchMessage(entries: McpNotificationEntry[]): AgentMessage | null {
 	const resources: McpNotificationEntry[] = [];
 	const seen = new Set<string>();
@@ -282,6 +325,8 @@ export interface CreateAgentSessionOptions {
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
+	/** Optional provider-facing prompt cache key, distinct from request lineage. */
+	providerPromptCacheKey?: string;
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];
@@ -710,6 +755,7 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		parameters: tool.parameters,
 		hidden: tool.hidden,
 		deferrable: tool.deferrable,
+		approval: typeof tool.approval === "function" ? tool.approval.bind(tool) : tool.approval,
 		mcpServerName: tool.mcpServerName,
 		mcpToolName: tool.mcpToolName,
 		execute: (toolCallId, params, signal, onUpdate, ctx) =>
@@ -1031,9 +1077,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const hasServiceTierEntry = existingBranch.some(entry => entry.type === "service_tier_change");
 
 	const hasExplicitModel = options.model !== undefined || options.modelPattern !== undefined;
-	const modelMatchPreferences = {
-		usageOrder: settings.getStorage()?.getModelUsageOrder(),
-	};
+	const modelMatchPreferences = getModelMatchPreferences(settings);
 	const allowedModels = await logger.time("resolveAllowedModels", () =>
 		resolveAllowedModels(modelRegistry, settings, modelMatchPreferences),
 	);
@@ -1150,6 +1194,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Discover rules and bucket them in one pass to avoid repeated scans over large rule sets.
 	const { ttsrManager, rulebookRules, alwaysApplyRules } = await logger.time("discoverTtsrRules", async () => {
+		const { TtsrManager } = await import("./export/ttsr");
 		const ttsrSettings = settings.getGroup("ttsr");
 		const ttsrManager = new TtsrManager(ttsrSettings);
 		const rulesResult =
@@ -1266,6 +1311,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) return formatModelString(model);
 			return undefined;
 		};
+		// Per-path mutation counter shared across edit/write tools. Late-diagnostics
+		// entries capture it at fetch time and are dropped at injection if a newer
+		// mutation (any tool) bumped it in the meantime.
+		const fileMutationVersions = new Map<string, number>();
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
@@ -1295,7 +1344,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
-			getMnemopiSessionState: () => getMnemopiSessionState(session),
+			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
@@ -1311,6 +1360,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			recordEvalSubagentUsage: output => sessionManager.recordEvalSubagentOutput(output),
 			getClientBridge: () => session?.clientBridge,
 			getCompactContext: () => session.formatCompactContext(),
+			queueDeferredDiagnostics: entry => session?.yieldQueue.enqueue(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, entry),
+			bumpFileMutationVersion: path => {
+				const next = (fileMutationVersions.get(path) ?? 0) + 1;
+				fileMutationVersions.set(path, next);
+				return next;
+			},
+			getFileMutationVersion: path => fileMutationVersions.get(path) ?? 0,
 			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
 			isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
@@ -1372,7 +1428,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const getArtifactsDir = () => sessionManager.getArtifactsDir();
 		if (!options.parentTaskPrefix) {
 			setActiveSkills(skills);
-			setActiveRules([...rulebookRules, ...alwaysApplyRules]);
+			// Include TTSR rules so `rule://<name>` can resolve them too. They are
+			// registered with the manager and bucketed out before rulebook/always,
+			// so without this a TTSR-only rule (e.g. a triggered builtin) is not
+			// addressable and `rule://` reports "Available: none".
+			setActiveRules([...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()]);
 			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
 		const localProtocolOptions = options.localProtocolOptions ?? {
@@ -1472,7 +1532,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
-		inlineExtensions.push(createAutoresearchExtension);
+		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
@@ -1515,6 +1575,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
+		// Discover runtime (extension) provider catalogs now that they are
+		// registered. The startup refreshInBackground() ran before extensions
+		// loaded, so dynamic extension providers are only discovered here. Runs in
+		// the background (cache-aware) so startup is never blocked on the fetch; the
+		// model list re-renders when the catalog arrives, like other dynamic providers.
+		void modelRegistry.refreshRuntimeProviders().catch(error => {
+			logger.warn("runtime provider discovery failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 
 		// Retry session-model candidates now that extension providers are
 		// registered. The initial restore runs before extensions load, so a role
@@ -1553,9 +1623,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Resolve deferred --model pattern now that extension models are registered.
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();
-			const matchPreferences = {
-				usageOrder: settings.getStorage()?.getModelUsageOrder(),
-			};
+			const matchPreferences = getModelMatchPreferences(settings);
 			const { model: resolved } = parseModelPattern(options.modelPattern, availableModels, matchPreferences, {
 				modelRegistry,
 			});
@@ -1574,10 +1642,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			for (const candidate of fallbackCandidates) {
-				if (await hasModelApiKey(candidate)) {
-					model = candidate;
+			// Prefer each provider's configured default model
+			// (DEFAULT_MODEL_PER_PROVIDER) over raw catalog order. Without this the
+			// first-run fallback picks whatever model sorts first in models.json for
+			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
+			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
+			// findInitialModel's precedence.
+			for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
+				const preferred = fallbackCandidates.find(
+					candidate => candidate.provider === provider && candidate.id === defaultId,
+				);
+				if (preferred && (await hasModelApiKey(preferred))) {
+					model = preferred;
 					break;
+				}
+			}
+			// Otherwise, first available model with a valid API key.
+			if (!model) {
+				for (const candidate of fallbackCandidates) {
+					if (await hasModelApiKey(candidate)) {
+						model = candidate;
+						break;
+					}
 				}
 			}
 			if (model) {
@@ -1607,9 +1693,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// `ExtensionToolWrapper` installed below is the only place the per-tool approval gate runs.
 		// A conditional runner means the approval system silently disappears for users with no
 		// extensions, contradicting non-yolo `tools.approvalMode` settings without feedback.
-		// (Today `createAutoresearchExtension` is unconditionally pushed below, so this scenario
-		// is unreachable; the unconditional construction makes that invariant explicit instead of
-		// implicit, so a future change to make autoresearch optional cannot silently re-open the hole.)
+		// (The builtin autoresearch extension is unconditionally loaded above, so this scenario
+		// is unreachable; unconditional runner construction keeps that invariant explicit and
+		// prevents future optional extensions from silently re-opening the hole.)
 		const extensionRunner: ExtensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
 			extensionsResult.runtime,
@@ -1749,7 +1835,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
-			const memoryBackend = resolveMemoryBackend(settings);
+			const memoryBackend = await resolveMemoryBackend(settings);
 			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
 			// Build combined append prompt: memory instructions + MCP server instructions
@@ -1880,19 +1966,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// from the initial set unless they were explicitly requested or restored from persistence.
 		// The model finds them via search_tool_bm25 and activates them on demand.
 		if (effectiveDiscoveryMode === "all") {
-			const essentialBuiltinNames = new Set(computeEssentialBuiltinNames(settings));
-			const explicitlyRequestedToolNames = new Set(options.toolNames?.map(name => name.toLowerCase()) ?? []);
-			// Back-compat: persisted activations live under selectedMCPToolNames today (built-in
-			// activation persistence is a follow-up). MCP names won't collide with built-in names.
-			const restoredDiscoveredNames = new Set(existingSession.selectedMCPToolNames);
-			initialToolNames = initialToolNames.filter(name => {
-				const tool = toolRegistry.get(name);
-				if (!tool?.loadMode) return true; // not a built-in — leave MCP/custom/extension to existing logic
-				if (tool.loadMode === "essential") return true;
-				if (essentialBuiltinNames.has(name)) return true;
-				if (explicitlyRequestedToolNames.has(name)) return true;
-				if (restoredDiscoveredNames.has(name)) return true;
-				return false;
+			// Tools a forced tool_choice will target must stay active, or the named
+			// choice references a tool absent from the request (provider 400). Eager
+			// todos force a named `todo` choice on the first turn.
+			const forceActive = new Set<string>();
+			if (settings.get("todo.eager") && settings.get("todo.enabled") && toolRegistry.has("todo")) {
+				forceActive.add("todo");
+			}
+			initialToolNames = filterInitialToolsForDiscoveryAll(initialToolNames, {
+				loadModeOf: name => toolRegistry.get(name)?.loadMode,
+				essentialNames: new Set(computeEssentialBuiltinNames(settings)),
+				explicitlyRequested: new Set(options.toolNames?.map(name => name.toLowerCase()) ?? []),
+				// Back-compat: persisted activations live under selectedMCPToolNames today (built-in
+				// activation persistence is a follow-up). MCP names won't collide with built-in names.
+				restored: new Set(existingSession.selectedMCPToolNames),
+				forceActive,
 			});
 		}
 
@@ -2002,6 +2090,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onPayload,
 			onResponse,
 			sessionId: providerSessionId,
+			promptCacheKey: options.providerPromptCacheKey,
 			transformContext,
 			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
 			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
@@ -2018,9 +2107,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
-			getApiKey: async provider => {
+			getApiKey: async (provider, ctx) => {
 				// Read agent.sessionId at call time so credential selection stays aligned
 				// with metadataResolver after /new, fork, resume, or branch switches.
+				// Retry steps (ctx carries an auth error) drive the central a/b/c
+				// policy — force-refresh the same account, then rotate to a sibling —
+				// and may legitimately yield no key when every account is exhausted.
+				if (ctx?.error !== undefined) {
+					return createApiKeyResolver(modelRegistry, provider, { sessionId: agent.sessionId })(ctx);
+				}
 				const key = await modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
 				if (!key) {
 					throw new Error(`No API key found for provider "${provider}"`);
@@ -2034,40 +2129,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return streamSimple(streamModel, context, {
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
-					onAuthError: async (provider, oldKey, error) => {
-						const message = error instanceof Error ? error.message : String(error);
-						// streamSimple invokes this for both 401 auth failures AND
-						// rotatable usage-limit errors (Codex usage_limit_reached,
-						// Anthropic usage_limit_reached, etc.). The two need
-						// different storage actions: a real 401 means the credential
-						// is bad and should be marked suspect; a usage limit just
-						// means this account is parked until reset and should be
-						// temporarily blocked so a sibling can pick the request up.
-						if (isUsageLimitError(message)) {
-							const retryAfterMs = extractRetryHint(undefined, message);
-							const switched = await modelRegistry.authStorage.markUsageLimitReached(provider, agent.sessionId, {
-								retryAfterMs,
-								signal: streamOptions?.signal,
-							});
-							logger.debug("Retrying provider request after usage-limit block", {
-								provider,
-								switched,
-								retryAfterMs,
-								error: message,
-							});
-							if (!switched) return undefined;
-							return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
-						}
-						await modelRegistry.authStorage.invalidateCredentialMatching(provider, oldKey, {
-							signal: streamOptions?.signal,
-							sessionId: agent.sessionId,
-						});
-						logger.debug("Retrying provider request after credential invalidation", {
-							provider,
-							error: message,
-						});
-						return modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
-					},
 				});
 			},
 			cursorExecHandlers,
@@ -2177,6 +2238,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
 			build: buildMcpNotificationBatchMessage,
 		});
+		session.yieldQueue.register<DeferredDiagnosticsEntry>(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, {
+			isStale: entry => entry.isStale(),
+			build: buildLateDiagnosticsBatchMessage,
+		});
 
 		// Attach the live session to the pre-registered ref so peers can route IRC
 		// messages here. Refresh sessionFile in case it was unavailable at pre-register
@@ -2267,19 +2332,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		logger.time("startMemoryStartupTask", () =>
-			Promise.resolve(
-				resolveMemoryBackend(settings).start({
-					session,
-					settings,
-					modelRegistry,
-					agentDir,
-					taskDepth,
-					parentHindsightSessionState: options.parentHindsightSessionState,
-					parentMnemopiSessionState: options.parentMnemopiSessionState,
-				}),
-			),
-		);
+		logger.time("startMemoryStartupTask", async () => {
+			const memoryBackend = await resolveMemoryBackend(settings);
+			await memoryBackend.start({
+				session,
+				settings,
+				modelRegistry,
+				agentDir,
+				taskDepth,
+				parentHindsightSessionState: options.parentHindsightSessionState,
+				parentMnemopiSessionState: options.parentMnemopiSessionState,
+			});
+		});
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
 		// Skip when reusing a parent's manager — the parent owns the callbacks.

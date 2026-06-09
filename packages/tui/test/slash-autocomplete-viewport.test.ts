@@ -49,11 +49,10 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await new Promise<void>(resolve => process.nextTick(resolve));
 	// Each keystroke arms Editor's autocomplete debounce (100ms) before the
 	// provider is re-queried, and the resulting onAutocompleteUpdate render is
-	// throttled by the TUI's MIN_RENDER_INTERVAL_MS (16ms). 120ms left only a
-	// ~4ms margin once the debounce fires, which macOS setTimeout jitter
-	// reliably overran — the stale (unfiltered) menu was still being painted at
-	// capture time, pushing the live editor row out of a 6-row viewport
-	// (issue #1979). Stay well above 100+16ms so the post-debounce render lands
+	// throttled by the TUI's MIN_RENDER_INTERVAL_MS (~33ms). 120ms no longer
+	// covers debounce plus render jitter, so capture could still see the stale
+	// (unfiltered) menu and push the live editor row out of a 6-row viewport
+	// (issue #1979). Stay well above 100+33ms so the post-debounce render lands
 	// before getViewport() runs.
 	await Bun.sleep(250);
 	await term.flush();

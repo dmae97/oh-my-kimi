@@ -1,6 +1,5 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
 import { KeybindingsManager } from "../../config/keybindings";
 import type {
 	CompactOptions,
@@ -31,6 +30,11 @@ export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
 	#hookWidgetsBelow = new Map<string, ExtensionUiComponent>();
+	// Single-file dialog surface (`editorContainer` + focus) is shared by the
+	// selector / input / editor modals, so only one may be presented at a time;
+	// the rest queue. See `#presentDialog`.
+	#dialogActive = false;
+	#dialogQueue: Array<() => void> = [];
 	constructor(private ctx: InteractiveModeContext) {}
 
 	/**
@@ -176,10 +180,10 @@ export class ExtensionUiController {
 				this.ctx.streamingMessage = undefined;
 				this.ctx.pendingTools.clear();
 
-				this.ctx.chatContainer.addChild(new Spacer(1));
-				this.ctx.chatContainer.addChild(
+				this.ctx.present([
+					new Spacer(1),
 					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				);
+				]);
 				await this.ctx.reloadTodos();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
 
@@ -326,10 +330,6 @@ export class ExtensionUiController {
 					.then(() => this.#applyCustomMessageDisplay(wasStreaming, message.display))
 					.catch((err: unknown) => {
 						const errorText = `Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`;
-						if (this.ctx.isBackgrounded) {
-							logger.error(errorText);
-							return;
-						}
 						this.ctx.showError(errorText);
 					});
 			},
@@ -374,9 +374,6 @@ export class ExtensionUiController {
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			waitForIdle: () => this.ctx.session.agent.waitForIdle(),
 			reload: async () => {
-				if (this.ctx.isBackgrounded) {
-					return;
-				}
 				await this.ctx.session.reload();
 				this.ctx.chatContainer.clear();
 				this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
@@ -384,9 +381,6 @@ export class ExtensionUiController {
 				this.ctx.showStatus("Reloaded session");
 			},
 			newSession: async options => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				// Stop any loading animation
 				if (this.ctx.loadingAnimation) {
 					this.ctx.loadingAnimation.stop();
@@ -415,19 +409,16 @@ export class ExtensionUiController {
 				this.ctx.streamingMessage = undefined;
 				this.ctx.pendingTools.clear();
 
-				this.ctx.chatContainer.addChild(new Spacer(1));
-				this.ctx.chatContainer.addChild(
+				this.ctx.present([
+					new Spacer(1),
 					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				);
+				]);
 				await this.ctx.reloadTodos();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
 
 				return { cancelled: false };
 			},
 			branch: async entryId => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				const result = await this.ctx.session.branch(entryId);
 				if (result.cancelled) {
 					return { cancelled: true };
@@ -443,9 +434,6 @@ export class ExtensionUiController {
 				return { cancelled: false };
 			},
 			navigateTree: async (targetId, options) => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				const result = await this.ctx.session.navigateTree(targetId, { summarize: options?.summarize });
 				if (result.cancelled) {
 					return { cancelled: true };
@@ -464,9 +452,6 @@ export class ExtensionUiController {
 			},
 			compact: async instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
 			switchSession: async sessionPath => {
-				if (this.ctx.isBackgrounded) {
-					return { cancelled: true };
-				}
 				this.clearHookWidgets();
 				const result = await this.ctx.session.switchSession(sessionPath);
 				if (!result) {
@@ -480,36 +465,6 @@ export class ExtensionUiController {
 		};
 
 		extensionRunner.initialize(actions, contextActions, commandActions, uiContext);
-	}
-
-	createBackgroundUiContext(): ExtensionUIContext {
-		return {
-			select: async (_title: string, _options: ExtensionUISelectItem[], _dialogOptions) => undefined,
-			confirm: async (_title: string, _message: string, _dialogOptions) => false,
-			input: async (_title: string, _placeholder?: string, _dialogOptions?: unknown) => undefined,
-			notify: () => {},
-			onTerminalInput: () => () => {},
-			setStatus: () => {},
-			setWorkingMessage: () => {},
-			setWidget: () => {},
-			setTitle: () => {},
-			custom: async () => undefined as never,
-			setEditorText: () => {},
-			pasteToEditor: () => {},
-			getEditorText: () => "",
-			editor: async () => undefined,
-			get theme() {
-				return theme;
-			},
-			getAllThemes: () => Promise.resolve([]),
-			getTheme: () => Promise.resolve(undefined),
-			setTheme: () => Promise.resolve({ success: false, error: "Background mode" }),
-			setFooter: () => {},
-			setHeader: () => {},
-			setEditorComponent: () => {},
-			getToolsExpanded: () => false,
-			setToolsExpanded: () => {},
-		};
 	}
 
 	/**
@@ -531,7 +486,7 @@ export class ExtensionUiController {
 						ui: uiContext,
 						getContextUsage: () => this.ctx.session.getContextUsage(),
 						compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
-						hasUI: !this.ctx.isBackgrounded,
+						hasUI: true,
 						cwd: this.ctx.sessionManager.getCwd(),
 						sessionManager: this.ctx.session.sessionManager,
 						modelRegistry: this.ctx.session.modelRegistry,
@@ -557,22 +512,14 @@ export class ExtensionUiController {
 	 * Show a tool error in the chat.
 	 */
 	showToolError(toolName: string, error: string): void {
-		if (this.ctx.isBackgrounded) {
-			logger.error(`Tool "${toolName}" error: ${error}`);
-			return;
-		}
 		const errorText = new Text(theme.fg("error", `Tool "${toolName}" error: ${error}`), 1, 0);
-		this.ctx.chatContainer.addChild(errorText);
-		this.ctx.ui.requestRender();
+		this.ctx.present(errorText);
 	}
 
 	/**
 	 * Set hook status text in the footer.
 	 */
 	setHookStatus(key: string, text: string | undefined): void {
-		if (this.ctx.isBackgrounded) {
-			return;
-		}
 		this.ctx.statusLine.setHookStatus(key, text);
 		this.ctx.ui.requestRender();
 	}
@@ -586,58 +533,47 @@ export class ExtensionUiController {
 		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
-		const { promise, finish, attachAbort } = this.#createHookDialogState(
-			() => this.hideHookSelector(),
-			dialogOptions?.signal,
-		);
-		const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
-		this.ctx.hookSelector = new HookSelectorComponent(
-			title,
-			options,
-			option => {
-				this.hideHookSelector();
-				finish(option);
-			},
-			() => {
-				this.hideHookSelector();
-				finish(undefined);
-			},
-			{
-				onLeft: dialogOptions?.onLeft
-					? () => {
-							this.hideHookSelector();
-							dialogOptions.onLeft?.();
-							finish(undefined);
-						}
-					: undefined,
-				onRight: dialogOptions?.onRight
-					? () => {
-							this.hideHookSelector();
-							dialogOptions.onRight?.();
-							finish(undefined);
-						}
-					: undefined,
-				onExternalEditor: dialogOptions?.onExternalEditor,
-				helpText: dialogOptions?.helpText,
-				initialIndex: dialogOptions?.initialIndex,
-				timeout: dialogOptions?.timeout,
-				onTimeout: dialogOptions?.onTimeout,
-				tui: this.ctx.ui,
-				outline: dialogOptions?.outline,
-				disabledIndices: dialogOptions?.disabledIndices,
-				selectionMarker: dialogOptions?.selectionMarker,
-				checkedIndices: dialogOptions?.checkedIndices,
-				markableCount: dialogOptions?.markableCount,
-				maxVisible,
-				slider: extra?.slider,
-			},
-		);
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.hookSelector);
-		this.ctx.ui.setFocus(this.ctx.hookSelector);
-		this.ctx.ui.requestRender();
-		attachAbort();
-		return promise;
+		return this.#presentDialog(dialogOptions?.signal, settle => {
+			const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
+			this.ctx.hookSelector = new HookSelectorComponent(
+				title,
+				options,
+				option => settle(option),
+				() => settle(undefined),
+				{
+					onLeft: dialogOptions?.onLeft
+						? () => {
+								dialogOptions.onLeft?.();
+								settle(undefined);
+							}
+						: undefined,
+					onRight: dialogOptions?.onRight
+						? () => {
+								dialogOptions.onRight?.();
+								settle(undefined);
+							}
+						: undefined,
+					onExternalEditor: dialogOptions?.onExternalEditor,
+					helpText: dialogOptions?.helpText,
+					initialIndex: dialogOptions?.initialIndex,
+					timeout: dialogOptions?.timeout,
+					onTimeout: dialogOptions?.onTimeout,
+					tui: this.ctx.ui,
+					outline: dialogOptions?.outline,
+					disabledIndices: dialogOptions?.disabledIndices,
+					selectionMarker: dialogOptions?.selectionMarker,
+					checkedIndices: dialogOptions?.checkedIndices,
+					markableCount: dialogOptions?.markableCount,
+					maxVisible,
+					slider: extra?.slider,
+				},
+			);
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(this.ctx.hookSelector);
+			this.ctx.ui.setFocus(this.ctx.hookSelector);
+			this.ctx.ui.requestRender();
+			return () => this.hideHookSelector();
+		});
 	}
 	/**
 	 * Hide the hook selector.
@@ -667,33 +603,24 @@ export class ExtensionUiController {
 		placeholder?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
-		const { promise, finish, attachAbort } = this.#createHookDialogState(
-			() => this.hideHookInput(),
-			dialogOptions?.signal,
-		);
-		this.ctx.hookInput = new HookInputComponent(
-			title,
-			placeholder,
-			value => {
-				this.hideHookInput();
-				finish(value);
-			},
-			() => {
-				this.hideHookInput();
-				finish(undefined);
-			},
-			{
-				timeout: dialogOptions?.timeout,
-				onTimeout: dialogOptions?.onTimeout,
-				tui: this.ctx.ui,
-			},
-		);
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.hookInput);
-		this.ctx.ui.setFocus(this.ctx.hookInput);
-		this.ctx.ui.requestRender();
-		attachAbort();
-		return promise;
+		return this.#presentDialog(dialogOptions?.signal, settle => {
+			this.ctx.hookInput = new HookInputComponent(
+				title,
+				placeholder,
+				value => settle(value),
+				() => settle(undefined),
+				{
+					timeout: dialogOptions?.timeout,
+					onTimeout: dialogOptions?.onTimeout,
+					tui: this.ctx.ui,
+				},
+			);
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(this.ctx.hookInput);
+			this.ctx.ui.setFocus(this.ctx.hookInput);
+			this.ctx.ui.requestRender();
+			return () => this.hideHookInput();
+		});
 	}
 
 	/**
@@ -717,31 +644,21 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined> {
-		const { promise, finish, attachAbort } = this.#createHookDialogState(
-			() => this.hideHookEditor(),
-			dialogOptions?.signal,
-		);
-		this.ctx.hookEditor = new HookEditorComponent(
-			this.ctx.ui,
-			title,
-			prefill,
-			value => {
-				this.hideHookEditor();
-				finish(value);
-			},
-			() => {
-				this.hideHookEditor();
-				finish(undefined);
-			},
-			editorOptions,
-		);
-
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(this.ctx.hookEditor);
-		this.ctx.ui.setFocus(this.ctx.hookEditor);
-		this.ctx.ui.requestRender();
-		attachAbort();
-		return promise;
+		return this.#presentDialog(dialogOptions?.signal, settle => {
+			this.ctx.hookEditor = new HookEditorComponent(
+				this.ctx.ui,
+				title,
+				prefill,
+				value => settle(value),
+				() => settle(undefined),
+				editorOptions,
+			);
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(this.ctx.hookEditor);
+			this.ctx.ui.setFocus(this.ctx.hookEditor);
+			this.ctx.ui.requestRender();
+			return () => this.hideHookEditor();
+		});
 	}
 
 	/**
@@ -860,14 +777,9 @@ export class ExtensionUiController {
 
 	showExtensionError(extensionPath: string, error: string): void {
 		const errorText = new Text(theme.fg("error", `Extension "${extensionPath}" error: ${error}`), 1, 0);
-		this.ctx.chatContainer.addChild(errorText);
-		this.ctx.ui.requestRender();
+		this.ctx.present(errorText);
 	}
 	async #handleInteractiveCompact(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
-		if (this.ctx.isBackgrounded) {
-			await this.#compactSession(instructionsOrOptions);
-			return;
-		}
 		await this.ctx.executeCompaction(instructionsOrOptions, false);
 	}
 
@@ -892,42 +804,83 @@ export class ExtensionUiController {
 	#applyCustomMessageDisplay(wasStreaming: boolean, shouldDisplay: boolean | undefined): void {
 		// For non-streaming cases with display=true, update UI
 		// (streaming cases update via message_end event)
-		if (!this.ctx.isBackgrounded && !wasStreaming && shouldDisplay) {
+		if (!wasStreaming && shouldDisplay) {
 			this.ctx.rebuildChatFromMessages();
 		}
 	}
 
-	#createHookDialogState(
-		hide: () => void,
+	/**
+	 * Present a modal dialog on the shared editor surface, serializing against any
+	 * dialog already open. `present` builds the component, swaps it into
+	 * `editorContainer`, steals focus, and returns a `hide` closure; it is invoked
+	 * with a single `settle` callback that the component fires on submit/cancel.
+	 *
+	 * Because selector / input / editor all clear `editorContainer` and re-focus,
+	 * showing a second one while the first is open would orphan the first — its
+	 * promise would hang until the caller's signal aborts. So at most one dialog is
+	 * presented at a time and the rest queue (FIFO). `settle` (or an abort) hides
+	 * the current dialog and hands the surface to the next queued request. A request
+	 * whose signal aborts before its turn resolves `undefined` and is never shown.
+	 */
+	#presentDialog(
 		signal: AbortSignal | undefined,
-	): {
-		promise: Promise<string | undefined>;
-		finish: (value: string | undefined) => void;
-		attachAbort: () => void;
-	} {
-		const { promise, resolve } = Promise.withResolvers<string | undefined>();
+		present: (settle: (value: string | undefined) => void) => () => void,
+	): Promise<string | undefined> {
+		const { promise, resolve, reject } = Promise.withResolvers<string | undefined>();
 		let settled = false;
-		const onAbort = () => {
-			hide();
-			if (!settled) {
-				settled = true;
-				resolve(undefined);
-			}
-		};
-		const finish = (value: string | undefined) => {
+		let started = false;
+		let hide: (() => void) | undefined;
+
+		function onAbort(): void {
+			settle(undefined);
+		}
+
+		const settle = (value: string | undefined): void => {
 			if (settled) return;
 			settled = true;
 			signal?.removeEventListener("abort", onAbort);
+			if (started) {
+				hide?.();
+				this.#dialogActive = false;
+				this.#advanceDialogQueue();
+			}
 			resolve(value);
 		};
-		const attachAbort = () => {
-			if (!signal) return;
-			if (signal.aborted) {
-				onAbort();
-			} else {
-				signal.addEventListener("abort", onAbort, { once: true });
+
+		const startPresentation = (): void => {
+			if (settled) {
+				// Aborted before its turn arrived — never present, hand off the surface.
+				this.#advanceDialogQueue();
+				return;
+			}
+			started = true;
+			this.#dialogActive = true;
+			try {
+				hide = present(settle);
+			} catch (error) {
+				settled = true;
+				signal?.removeEventListener("abort", onAbort);
+				this.#dialogActive = false;
+				reject(error);
+				this.#advanceDialogQueue();
 			}
 		};
-		return { promise, finish, attachAbort };
+
+		if (signal?.aborted) {
+			resolve(undefined);
+			return promise;
+		}
+		signal?.addEventListener("abort", onAbort, { once: true });
+
+		if (this.#dialogActive) {
+			this.#dialogQueue.push(startPresentation);
+		} else {
+			startPresentation();
+		}
+		return promise;
+	}
+
+	#advanceDialogQueue(): void {
+		this.#dialogQueue.shift()?.();
 	}
 }

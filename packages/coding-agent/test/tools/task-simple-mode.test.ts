@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
-import { Settings } from "../../src/config/settings";
-import { TaskTool } from "../../src/task";
-import * as discoveryModule from "../../src/task/discovery";
-import type { TaskParams } from "../../src/task/types";
-import type { ToolSession } from "../../src/tools";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import type { TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 const TEST_AGENTS = [
 	{

@@ -5,7 +5,6 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 function createRuntime() {
 	const showModelSelector = vi.fn();
 	const setText = vi.fn();
-	const handleBackgroundCommand = vi.fn();
 	return {
 		showModelSelector,
 		setText,
@@ -13,9 +12,7 @@ function createRuntime() {
 			ctx: {
 				editor: { setText } as unknown as InteractiveModeContext["editor"],
 				showModelSelector,
-				handleBackgroundCommand,
 			} as unknown as InteractiveModeContext,
-			handleBackgroundCommand,
 		},
 	};
 }

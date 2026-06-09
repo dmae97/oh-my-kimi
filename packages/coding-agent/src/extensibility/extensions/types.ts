@@ -7,7 +7,13 @@
  * - Register commands, keyboard shortcuts, and CLI flags
  * - Interact with the user via UI primitives
  */
-import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentMessage,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ThinkingLevel,
+	ToolApproval,
+} from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	Api,
@@ -22,7 +28,7 @@ import type {
 	TextContent,
 	TSchema,
 } from "@oh-my-pi/pi-ai";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
@@ -392,6 +398,9 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	defaultInactive?: boolean;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
+	/** Tool approval tier. Defaults to `"exec"` when omitted.
+	 *  `"read"`: read-only operations. `"write"`: mutations. `"exec"`: code execution. */
+	approval?: ToolApproval;
 	/** MCP server name for discovery/search metadata when this tool fronts an MCP server. */
 	mcpServerName?: string;
 	/** Original MCP tool name for discovery/search metadata. */
@@ -1125,6 +1134,13 @@ export interface ProviderConfig {
 		/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */
 		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 	};
+	/**
+	 * Async factory that fetches the live model list from the provider endpoint.
+	 * Runs through the same SQLite model-cache as built-in providers (keyed by
+	 * provider name, default 24 h TTL). Receives the resolved API key (undefined
+	 * when unauthenticated). Mutually exclusive with `models`.
+	 */
+	fetchDynamicModels?: (apiKey: string | undefined) => Promise<readonly ProviderModelConfig[]>;
 }
 
 /** Configuration for a model within a provider. */

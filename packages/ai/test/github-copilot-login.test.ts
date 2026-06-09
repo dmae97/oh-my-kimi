@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginGitHubCopilot } from "../src/utils/oauth/github-copilot";
+import { loginGitHubCopilot } from "@oh-my-pi/pi-ai/registry/oauth/github-copilot";
 
-const originalFetch = global.fetch;
 const FAST_POLL_OPTIONS = { pollIntervalFloorMs: 0, pollIntervalScaleMs: 1 } as const;
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -56,11 +54,11 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const onAuth = vi.fn();
 		const credentials = await loginGitHubCopilot({
 			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
 			onAuth,
 			onPrompt: mockOnPrompt(""),
 		});
@@ -93,10 +91,10 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
 			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt("ghe.example.com"),
 		});
@@ -125,10 +123,10 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
 			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt("   "),
 		});
@@ -192,10 +190,10 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
 			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
 		});
@@ -221,10 +219,10 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		await expect(
 			loginGitHubCopilot({
+				fetch: fetchMock as unknown as typeof fetch,
 				onAuth: vi.fn(),
 				onPrompt: mockOnPrompt(""),
 			}),
@@ -248,11 +246,11 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		await expect(
 			loginGitHubCopilot({
 				...FAST_POLL_OPTIONS,
+				fetch: fetchMock as unknown as typeof fetch,
 				onAuth: vi.fn(),
 				onPrompt: mockOnPrompt(""),
 			}),
@@ -279,10 +277,10 @@ describe("loginGitHubCopilot", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const credentials = await loginGitHubCopilot({
 			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
 		});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { sanitizeText } from "../src/sanitize-text";
+import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
 import {
 	parseJsonlLenient,
 	readJsonl,
@@ -7,7 +7,7 @@ import {
 	readSseEvents,
 	readSseJson,
 	type ServerSentEvent,
-} from "../src/stream";
+} from "@oh-my-pi/pi-utils/stream";
 
 const encoder = new TextEncoder();
 

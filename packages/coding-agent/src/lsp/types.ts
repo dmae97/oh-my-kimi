@@ -356,6 +356,16 @@ export interface ServerConfig {
 	disabled?: boolean;
 	/** Per-server warmup timeout in milliseconds. Overrides the global WARMUP_TIMEOUT_MS for this server during startup. */
 	warmupTimeoutMs?: number;
+	/**
+	 * Per-server overrides for rust-analyzer workspace-ready polling. When omitted, the module
+	 * defaults are used. Primarily a tuning/test seam to bound the multi-second settle window.
+	 */
+	workspaceReadyTimings?: {
+		timeoutMs?: number;
+		pollMs?: number;
+		settleMs?: number;
+		statusRequestTimeoutMs?: number;
+	};
 	capabilities?: ServerCapabilities;
 	/** If true, this is a linter/formatter server (e.g., Biome) - used only for diagnostics/actions, not type intelligence */
 	isLinter?: boolean;

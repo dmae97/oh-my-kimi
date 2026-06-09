@@ -1,16 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginKilo } from "../src/utils/oauth/kilo";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
+import { describe, expect, it, vi } from "bun:test";
+import { loginKilo } from "@oh-my-pi/pi-ai/registry/kilo";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 describe("kilo oauth login", () => {
 	it("returns OAuth credentials when device authorization is approved", async () => {
-		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+		const fetchMock: FetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = typeof input === "string" ? input : input.toString();
 			if (url === "https://api.kilo.ai/api/device-auth/codes") {
 				expect(init?.method).toBe("POST");
@@ -31,10 +25,9 @@ describe("kilo oauth login", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const onAuth = vi.fn();
-		const credentials = await loginKilo({ onAuth });
+		const credentials = await loginKilo({ onAuth, fetch: fetchMock });
 
 		expect(onAuth).toHaveBeenCalledWith({
 			url: "https://kilo.ai/verify",
@@ -47,13 +40,15 @@ describe("kilo oauth login", () => {
 	});
 
 	it("surfaces rate-limit errors from device authorization start", async () => {
-		global.fetch = vi.fn(async () => new Response(null, { status: 429 })) as unknown as typeof fetch;
+		const fetchMock: FetchImpl = vi.fn(async () => new Response(null, { status: 429 }));
 
-		await expect(loginKilo({})).rejects.toThrow("Too many pending authorization requests. Please try again later.");
+		await expect(loginKilo({ fetch: fetchMock })).rejects.toThrow(
+			"Too many pending authorization requests. Please try again later.",
+		);
 	});
 
 	it("surfaces denied device authorization state", async () => {
-		const fetchMock = vi.fn(async (input: string | URL) => {
+		const fetchMock: FetchImpl = vi.fn(async (input: string | URL | Request) => {
 			const url = typeof input === "string" ? input : input.toString();
 			if (url === "https://api.kilo.ai/api/device-auth/codes") {
 				return new Response(
@@ -70,8 +65,7 @@ describe("kilo oauth login", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		await expect(loginKilo({})).rejects.toThrow("Authorization was denied");
+		await expect(loginKilo({ fetch: fetchMock })).rejects.toThrow("Authorization was denied");
 	});
 });

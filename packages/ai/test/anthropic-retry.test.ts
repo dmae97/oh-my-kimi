@@ -55,6 +55,23 @@ describe("isProviderRetryableError", () => {
 		expect(isProviderRetryableError(new Error("Bad request"))).toBe(false);
 	});
 
+	it("does not retry persistent account usage/quota limits despite rate-limit wording", () => {
+		// Account-level 429 that says "rate limit" but is really a parked
+		// credential (long retry-after). Must surface immediately so the
+		// credential-rotation layer takes over instead of looping on backoff.
+		expect(
+			isProviderRetryableError(
+				new Error(
+					'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+				),
+			),
+		).toBe(false);
+		expect(isProviderRetryableError(new Error("usage_limit_reached"))).toBe(false);
+		expect(isProviderRetryableError(new Error("You have hit your ChatGPT usage limit"))).toBe(false);
+		// A generic transient rate limit (no account/usage framing) still retries.
+		expect(isProviderRetryableError(new Error("Rate limit exceeded"))).toBe(true);
+	});
+
 	it("retries Copilot transient model_not_supported only for github-copilot provider", () => {
 		const err = new Error("400 The requested model is not supported.");
 		(err as unknown as { status: number; code: string }).status = 400;

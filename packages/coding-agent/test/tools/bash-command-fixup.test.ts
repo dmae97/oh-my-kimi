@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { applyBashFixups, type BashFixupResult } from "../../src/tools/bash-command-fixup";
+import { applyBashFixups, type BashFixupResult } from "@oh-my-pi/pi-coding-agent/tools/bash-command-fixup";
 
 function fixup(command: string): BashFixupResult {
 	return applyBashFixups(command);

@@ -5,6 +5,14 @@ import { ToolError } from "./tool-errors";
 const SQLITE_MAGIC = new Uint8Array([
 	0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
 ]);
+
+export function looksLikeSqlite(bytes: Uint8Array): boolean {
+	if (bytes.byteLength < SQLITE_MAGIC.byteLength) return false;
+	for (const [index, byte] of SQLITE_MAGIC.entries()) {
+		if (bytes[index] !== byte) return false;
+	}
+	return true;
+}
 const SQLITE_PATH_PATTERN = /\.(?:sqlite3?|db3?)(?=(?::|\?|$))/gi;
 const DEFAULT_QUERY_LIMIT = 20;
 const DEFAULT_SCHEMA_SAMPLE_LIMIT = 5;
@@ -443,18 +451,7 @@ export function parseSqlitePathCandidates(filePath: string): SqlitePathCandidate
 
 export async function isSqliteFile(absolutePath: string): Promise<boolean> {
 	try {
-		const bytes = await Bun.file(absolutePath).slice(0, SQLITE_MAGIC.byteLength).bytes();
-		if (bytes.length !== SQLITE_MAGIC.byteLength) {
-			return false;
-		}
-
-		for (const [index, byte] of SQLITE_MAGIC.entries()) {
-			if (bytes[index] !== byte) {
-				return false;
-			}
-		}
-
-		return true;
+		return looksLikeSqlite(await Bun.file(absolutePath).slice(0, SQLITE_MAGIC.byteLength).bytes());
 	} catch {
 		return false;
 	}

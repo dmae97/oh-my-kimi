@@ -56,7 +56,7 @@ A forced render (`requestRender(true)`) queues a viewport repaint or explicit se
 4. Creates a `StdinBuffer` to split partial escape chunks into complete sequences.
 5. Queries Kitty keyboard protocol support (`CSI ? u`), then enables protocol flags if supported; otherwise enables modifyOtherKeys fallback after a short timeout.
 6. Queries OSC 11 background color and Mode 2031 appearance notifications for dark/light theme detection.
-7. Queries OSC 99 notification capabilities and Kitty temp-file graphics support.
+7. Queries OSC 99 notification capabilities.
 8. Starts periodic OSC 11 polling only where safe, then probes DEC private modes 2026/2048/2031 via DECRQM.
 
 `StdinBuffer` behavior:
@@ -198,18 +198,6 @@ Escape exits inactive mode by clearing editor text and restoring border color; w
 1. Registers one-shot `SIGCONT` handler to restart TUI and force render.
 2. Stops TUI before suspend.
 3. Sends `SIGTSTP` to process group.
-
-### Background mode (`/background` or `/bg`)
-
-`handleBackgroundCommand()`:
-
-- Rejects when idle.
-- Switches tool UI context to non-interactive (`hasUI=false`) so interactive UI tools fail fast.
-- Stops loaders/status line and unsubscribes foreground event handler.
-- Subscribes background event handler (primarily waits for `agent_end`).
-- Stops TUI and sends `SIGTSTP` (POSIX job control path).
-
-On `agent_end` in background with no queued work, controller sends completion notification and shuts down.
 
 ## Cancellation paths
 

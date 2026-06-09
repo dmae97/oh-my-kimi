@@ -11,7 +11,7 @@ function createContext() {
 	const chatContainer = { addChild: vi.fn(), removeChild: vi.fn() };
 	const ctx = {
 		isInitialized: true,
-		isBackgrounded: false,
+		settings: { get: () => false },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		pendingTools,
@@ -19,6 +19,7 @@ function createContext() {
 		hideThinkingBlock: false,
 		editor: { getText: vi.fn(() => "") },
 		flushPendingModelSwitch: vi.fn(),
+		sessionManager: { getSessionName: () => undefined },
 		session: {
 			agent: { state: { messages: [] } },
 			isCompacting: false,

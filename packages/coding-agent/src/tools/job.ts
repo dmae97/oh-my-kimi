@@ -355,7 +355,7 @@ const PREVIEW_LINE_WIDTH = 80;
 function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	switch (status) {
 		case "completed":
-			return "success";
+			return "done";
 		case "failed":
 			return "error";
 		case "cancelled":
@@ -396,7 +396,7 @@ export const jobToolRenderer = {
 	inline: true,
 
 	renderCall(args: JobRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const text = renderStatusLine({ icon: "pending", title: "Job", description: describeTarget(args) }, uiTheme);
+		const text = renderStatusLine({ icon: "pending", title: describeTarget(args) || "Job" }, uiTheme);
 		return new Text(text, 0, 0);
 	},
 
@@ -410,7 +410,7 @@ export const jobToolRenderer = {
 
 		if (jobs.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
-			const header = renderStatusLine({ icon: "warning", title: "Job", description: describeTarget(args) }, uiTheme);
+			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
 		}
 
@@ -433,8 +433,7 @@ export const jobToolRenderer = {
 			{
 				icon: headerIcon,
 				spinnerFrame: counts.running > 0 ? options.spinnerFrame : undefined,
-				title: "Job",
-				description,
+				title: description,
 				meta,
 			},
 			uiTheme,
@@ -469,11 +468,14 @@ export const jobToolRenderer = {
 						itemType: "job",
 						renderItem: job => {
 							const lines: string[] = [];
-							const icon = formatStatusIcon(
-								statusToIcon(job.status),
-								uiTheme,
-								job.status === "running" ? options.spinnerFrame : undefined,
-							);
+							const icon =
+								job.status === "completed"
+									? uiTheme.styledSymbol("tool.job", "accent")
+									: formatStatusIcon(
+											statusToIcon(job.status),
+											uiTheme,
+											job.status === "running" ? options.spinnerFrame : undefined,
+										);
 							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 							const idText = uiTheme.fg("muted", job.id);
 							const rawLabelLines = (job.label || "(no label)").split(/\r?\n/);

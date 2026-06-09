@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort, getBundledModel } from "@oh-my-pi/pi-ai";
-import { generateCommitMessage } from "../src/utils/commit-message-generator";
-import { generateSessionTitle } from "../src/utils/title-generator";
+import { generateCommitMessage } from "@oh-my-pi/pi-coding-agent/utils/commit-message-generator";
+import { generateSessionTitle } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 
 function getModelOrThrow(id: string) {
 	const model = getBundledModel("anthropic", id);
@@ -43,6 +43,7 @@ describe("role thinking helper propagation", () => {
 		const registry = {
 			getAvailable: () => [model],
 			getApiKey: async () => "test-key",
+			resolver: vi.fn(() => async () => "test-key"),
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",
@@ -66,6 +67,7 @@ describe("role thinking helper propagation", () => {
 		const registry = {
 			getAvailable: () => [model],
 			getApiKey: async () => "test-key",
+			resolver: vi.fn(() => async () => "test-key"),
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",

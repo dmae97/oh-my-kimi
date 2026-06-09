@@ -7,7 +7,7 @@ import {
 	MnemopiPlugin,
 	PluginManager,
 	resetManager,
-} from "../src/core/plugins";
+} from "@oh-my-pi/pi-mnemopi/core/plugins";
 
 class CountingPlugin extends MnemopiPlugin {
 	override name = "counting";

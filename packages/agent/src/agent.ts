@@ -3,6 +3,7 @@
  */
 import { isPromise } from "node:util/types";
 import {
+	type ApiKeyResolveContext,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type CursorExecHandlers,
@@ -21,7 +22,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { agentLoop, agentLoopContinue } from "./agent-loop";
+import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
 import type {
@@ -32,6 +33,7 @@ import type {
 	AgentState,
 	AgentTool,
 	AgentToolContext,
+	AsideMessage,
 	StreamFn,
 	ToolCallContext,
 } from "./types";
@@ -109,12 +111,6 @@ export interface AgentOptions {
 	interruptMode?: "immediate" | "wait";
 
 	/**
-	 * Maximum completed tool calls to accept from one streamed assistant turn before
-	 * executing the batch. Undefined disables batching.
-	 */
-	maxToolCallsPerTurn?: number;
-
-	/**
 	 * API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic")
 	 */
 	kimiApiFormat?: "openai" | "anthropic";
@@ -133,6 +129,11 @@ export interface AgentOptions {
 	 */
 	sessionId?: string;
 	/**
+	 * Optional prompt cache key forwarded to LLM providers.
+	 * When omitted, providers may fall back to sessionId.
+	 */
+	promptCacheKey?: string;
+	/**
 	 * Shared provider state map for session-scoped transport/session caches.
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
@@ -141,7 +142,7 @@ export interface AgentOptions {
 	 * Resolves an API key dynamically for each LLM call.
 	 * Useful for expiring tokens (e.g., GitHub Copilot OAuth).
 	 */
-	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
 
 	/**
 	 * Inspect or replace provider payloads before they are sent.
@@ -281,8 +282,8 @@ export class Agent {
 	#steeringMode: "all" | "one-at-a-time";
 	#followUpMode: "all" | "one-at-a-time";
 	#interruptMode: "immediate" | "wait";
-	#maxToolCallsPerTurn?: number;
 	#sessionId?: string;
+	#promptCacheKey?: string;
 	#metadata?: Record<string, unknown>;
 	#metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	#providerSessionState?: Map<string, ProviderSessionState>;
@@ -312,6 +313,7 @@ export class Agent {
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 	#onBeforeYield?: () => Promise<void> | void;
+	#asideMessageProvider?: () => AsideMessage[] | Promise<AsideMessage[]>;
 	#telemetry?: AgentLoopConfig["telemetry"];
 	#appendOnlyContext?: AppendOnlyContextManager;
 
@@ -319,7 +321,7 @@ export class Agent {
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
 
 	streamFn: StreamFn;
-	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
 	/**
 	 * Hook invoked after tool arguments are validated and before execution.
 	 * Reassign at any time to swap the implementation (e.g. on extension reload).
@@ -341,9 +343,9 @@ export class Agent {
 		this.#steeringMode = opts.steeringMode || "one-at-a-time";
 		this.#followUpMode = opts.followUpMode || "one-at-a-time";
 		this.#interruptMode = opts.interruptMode || "immediate";
-		this.#maxToolCallsPerTurn = opts.maxToolCallsPerTurn;
 		this.streamFn = opts.streamFn || streamSimple;
 		this.#sessionId = opts.sessionId;
+		this.#promptCacheKey = opts.promptCacheKey;
 		this.#providerSessionState = opts.providerSessionState;
 		this.#thinkingBudgets = opts.thinkingBudgets;
 		this.#temperature = opts.temperature;
@@ -388,6 +390,20 @@ export class Agent {
 	 */
 	set sessionId(value: string | undefined) {
 		this.#sessionId = value;
+	}
+
+	/**
+	 * Get the prompt cache key forwarded to providers.
+	 */
+	get promptCacheKey(): string | undefined {
+		return this.#promptCacheKey;
+	}
+
+	/**
+	 * Set the prompt cache key forwarded to providers.
+	 */
+	set promptCacheKey(value: string | undefined) {
+		this.#promptCacheKey = value;
 	}
 
 	/**
@@ -564,14 +580,6 @@ export class Agent {
 		this.#maxRetryDelayMs = value;
 	}
 
-	get maxToolCallsPerTurn(): number | undefined {
-		return this.#maxToolCallsPerTurn;
-	}
-
-	set maxToolCallsPerTurn(value: number | undefined) {
-		this.#maxToolCallsPerTurn = value;
-	}
-
 	get state(): AgentState {
 		return this.#state;
 	}
@@ -605,6 +613,15 @@ export class Agent {
 
 	setOnBeforeYield(fn: (() => Promise<void> | void) | undefined): void {
 		this.#onBeforeYield = fn;
+	}
+
+	/**
+	 * Provide a source of non-interrupting "aside" messages (e.g. background-job
+	 * completions, late LSP diagnostics) drained at each step boundary. Never
+	 * aborts in-flight tools. See `AgentLoopConfig.getAsideMessages`.
+	 */
+	setAsideMessageProvider(fn: (() => AsideMessage[] | Promise<AsideMessage[]>) | undefined): void {
+		this.#asideMessageProvider = fn;
 	}
 
 	emitExternalEvent(event: AgentEvent) {
@@ -768,8 +785,8 @@ export class Agent {
 		this.#state.messages.length = 0;
 	}
 
-	abort() {
-		this.#abortController?.abort();
+	abort(reason?: unknown) {
+		this.#abortController?.abort(reason);
 	}
 
 	waitForIdle(): Promise<void> {
@@ -934,8 +951,8 @@ export class Agent {
 			serviceTier: this.#serviceTier,
 			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,
-			maxToolCallsPerTurn: this.#maxToolCallsPerTurn,
 			sessionId: this.#sessionId,
+			promptCacheKey: this.#promptCacheKey,
 			metadata: this.#metadataResolver ? undefined : this.#metadata,
 			metadataResolver: this.#metadataResolver,
 			providerSessionState: this.#providerSessionState,
@@ -976,6 +993,7 @@ export class Agent {
 				return this.#dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
+			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
 			telemetry: this.#telemetry,
 		};
@@ -1053,8 +1071,12 @@ export class Agent {
 				}
 			}
 		} catch (err) {
-			const errorMessage = err instanceof Error ? err.message : String(err);
 			const stoppedForAbort = this.#abortController?.signal.aborted === true;
+			const errorMessage = stoppedForAbort
+				? abortReasonText(this.#abortController?.signal)
+				: err instanceof Error
+					? err.message
+					: String(err);
 			const shouldEmitVisibleOutputBlockedError = !stoppedForAbort && isAnthropicOutputBlockedError(errorMessage);
 			const assistantPartial = partial?.role === "assistant" ? partial : undefined;
 			const hadAssistantStart = assistantPartial !== undefined;

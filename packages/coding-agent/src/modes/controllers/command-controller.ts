@@ -13,7 +13,6 @@ import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi
 import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
-import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
 	diffMentalModelContent,
@@ -29,6 +28,7 @@ import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
+import { TranscriptBlock } from "../../modes/components/transcript-container";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/context-usage";
@@ -47,13 +47,13 @@ import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 
 function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown: string): void {
-	ctx.chatContainer.addChild(new Spacer(1));
-	ctx.chatContainer.addChild(new DynamicBorder());
-	ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
-	ctx.chatContainer.addChild(new Spacer(1));
-	ctx.chatContainer.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
-	ctx.chatContainer.addChild(new DynamicBorder());
-	ctx.ui.requestRender();
+	const block = new TranscriptBlock();
+	block.addChild(new DynamicBorder());
+	block.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
+	block.addChild(new Spacer(1));
+	block.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
+	block.addChild(new DynamicBorder());
+	ctx.present(block);
 }
 
 export class CommandController {
@@ -131,6 +131,7 @@ export class CommandController {
 		}
 
 		try {
+			const { loadCustomShare } = await import("../../export/custom-share");
 			const customShare = await loadCustomShare();
 			if (customShare) {
 				const loader = new BorderedLoader(this.ctx.ui, theme, "Sharing...");
@@ -334,9 +335,7 @@ export class CommandController {
 			}
 		}
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(info, 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
 	async handleJobsCommand(): Promise<void> {
@@ -353,9 +352,7 @@ export class CommandController {
 
 		if (snapshot.running.length === 0 && snapshot.recent.length === 0) {
 			info += `\n${theme.fg("dim", "No async jobs yet.")}\n`;
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new Text(info, 1, 0));
-			this.ctx.ui.requestRender();
+			this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 			return;
 		}
 
@@ -375,9 +372,7 @@ export class CommandController {
 			}
 		}
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(info.trimEnd(), 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(info.trimEnd(), 1, 0)]);
 	}
 
 	async handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {
@@ -403,9 +398,7 @@ export class CommandController {
 
 		const availableWidth = Math.max(40, (this.ctx.ui.terminal.columns ?? 100) - 2);
 		const output = renderUsageReports(usageReports, theme, Date.now(), availableWidth);
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
-		this.ctx.ui.requestRender();
+		this.ctx.present([new Spacer(1), new Text(output, 1, 0)]);
 	}
 
 	async handleChangelogCommand(showFull = false): Promise<void> {
@@ -426,13 +419,13 @@ export class CommandController {
 			? ""
 			: `\n\n${theme.fg("dim", "Use")} ${theme.bold("/changelog full")} ${theme.fg("dim", "to view the complete changelog.")}`;
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Markdown(changelogMarkdown + hint, 1, 1, getMarkdownTheme()));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.ui.requestRender();
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder());
+		block.addChild(new Text(theme.bold(theme.fg("accent", title)), 1, 0));
+		block.addChild(new Spacer(1));
+		block.addChild(new Markdown(changelogMarkdown + hint, 1, 1, getMarkdownTheme()));
+		block.addChild(new DynamicBorder());
+		this.ctx.present(block);
 	}
 
 	handleHotkeysCommand(): void {
@@ -452,20 +445,20 @@ export class CommandController {
 			return;
 		}
 		const output = renderContextUsage(breakdown, theme);
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(output, 1, 0));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.ui.requestRender();
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder());
+		block.addChild(new Text(theme.bold(theme.fg("accent", "Context Usage")), 1, 0));
+		block.addChild(new Spacer(1));
+		block.addChild(new Text(output, 1, 0));
+		block.addChild(new DynamicBorder());
+		this.ctx.present(block);
 	}
 
 	async handleMemoryCommand(text: string): Promise<void> {
 		const argumentText = text.slice(7).trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
 		const agentDir = this.ctx.settings.getAgentDir();
-		const backend = resolveMemoryBackend(this.ctx.settings);
+		const backend = await resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
 			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings, this.ctx.session);
@@ -473,13 +466,13 @@ export class CommandController {
 				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
 			}
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
-			this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Memory Injection Payload")), 1, 0));
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new Markdown(payload, 1, 1, getMarkdownTheme()));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
-			this.ctx.ui.requestRender();
+			const block = new TranscriptBlock();
+			block.addChild(new DynamicBorder());
+			block.addChild(new Text(theme.bold(theme.fg("accent", "Memory Injection Payload")), 1, 0));
+			block.addChild(new Spacer(1));
+			block.addChild(new Markdown(payload, 1, 1, getMarkdownTheme()));
+			block.addChild(new DynamicBorder());
+			this.ctx.present(block);
 			return;
 		}
 
@@ -800,14 +793,25 @@ export class CommandController {
 		this.ctx.streamingMessage = undefined;
 		this.ctx.pendingTools.clear();
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1));
+		this.ctx.present([new Spacer(1), new Text(`${theme.fg("accent", `${theme.status.success} ${label}`)}`, 1, 1)]);
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender(true, { clearScrollback: true });
 	}
 
 	async handleClearCommand(): Promise<void> {
 		await this.#runNewSessionFlow();
+	}
+
+	async handleFreshCommand(): Promise<void> {
+		const result = this.ctx.session.freshSession();
+		if (!result) {
+			this.ctx.showWarning("Wait for the current response to finish or abort it before refreshing provider state.");
+			return;
+		}
+		const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorTopBorder();
+		this.ctx.showStatus(`Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`);
 	}
 
 	async handleDropCommand(): Promise<void> {
@@ -840,11 +844,10 @@ export class CommandController {
 
 		const sessionFile = this.ctx.session.sessionFile;
 		const shortPath = sessionFile ? sessionFile.split("/").pop() : "new session";
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
+		this.ctx.present([
+			new Spacer(1),
 			new Text(`${theme.fg("accent", `${theme.status.success} Session forked to ${shortPath}`)}`, 1, 1),
-		);
-		this.ctx.ui.requestRender();
+		]);
 	}
 
 	async handleMoveCommand(targetPath: string): Promise<void> {
@@ -878,11 +881,10 @@ export class CommandController {
 			await this.ctx.sessionManager.moveTo(resolvedPath);
 			await this.ctx.applyCwdChange(resolvedPath);
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			this.ctx.present([
+				new Spacer(1),
 				new Text(`${theme.fg("accent", `${theme.status.success} Session moved to ${resolvedPath}`)}`, 1, 1),
-			);
-			this.ctx.ui.requestRender();
+			]);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -913,7 +915,7 @@ export class CommandController {
 			this.ctx.pendingMessagesContainer.addChild(this.ctx.bashComponent);
 			this.ctx.pendingBashComponents.push(this.ctx.bashComponent);
 		} else {
-			this.ctx.chatContainer.addChild(this.ctx.bashComponent);
+			this.ctx.present(this.ctx.bashComponent);
 		}
 		this.ctx.ui.requestRender();
 
@@ -954,7 +956,7 @@ export class CommandController {
 			this.ctx.pendingMessagesContainer.addChild(this.ctx.pythonComponent);
 			this.ctx.pendingPythonComponents.push(this.ctx.pythonComponent);
 		} else {
-			this.ctx.chatContainer.addChild(this.ctx.pythonComponent);
+			this.ctx.present(this.ctx.pythonComponent);
 		}
 		this.ctx.ui.requestRender();
 
@@ -1143,10 +1145,10 @@ export class CommandController {
 			this.ctx.updateEditorBorderColor();
 			await this.ctx.reloadTodos();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			this.ctx.present([
+				new Spacer(1),
 				new Text(`${theme.fg("accent", `${theme.status.success} New session started with handoff context`)}`, 1, 1),
-			);
+			]);
 			if (result.savedPath) {
 				this.ctx.showStatus(`Handoff document saved to: ${result.savedPath}`);
 			}
@@ -1272,6 +1274,8 @@ function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: numbe
 	if (email) return email;
 	const accountId = (report.metadata?.accountId as string | undefined) ?? limit.scope.accountId;
 	if (accountId) return accountId;
+	const projectId = (report.metadata?.projectId as string | undefined) ?? limit.scope.projectId;
+	if (projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
@@ -1280,6 +1284,8 @@ function formatUnlimitedReportLabel(report: UsageReport, index: number): string 
 	if (email) return email;
 	const accountId = report.metadata?.accountId as string | undefined;
 	if (accountId) return accountId;
+	const projectId = report.metadata?.projectId as string | undefined;
+	if (projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
@@ -1365,6 +1371,13 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 		return `${formatNumber(remainingPct)}% free`;
 	}
 
+	// Count unique accounts from limit scopes — not limits.length.
+	const uniqueAccountIds = new Set(
+		limits.map(limit => limit.scope.accountId).filter((id): id is string => typeof id === "string" && id.length > 0),
+	);
+	if (uniqueAccountIds.size > 0) return `${uniqueAccountIds.size} ${uniqueAccountIds.size === 1 ? "acct" : "accts"}`;
+	// No account IDs available — keep the pre-existing fallback so providers
+	// that don't populate scope.accountId still show a summary.
 	return `${limits.length} accts`;
 }
 

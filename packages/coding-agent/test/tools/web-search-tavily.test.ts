@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import { searchTavily } from "../../src/web/search/providers/tavily";
-import type { SearchProviderError } from "../../src/web/search/types";
+import { searchTavily } from "@oh-my-pi/pi-coding-agent/web/search/providers/tavily";
+import type { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 describe("Tavily web search provider", () => {
 	beforeEach(() => {
@@ -21,6 +20,12 @@ describe("Tavily web search provider", () => {
 		hasAuth() {
 			return Boolean(process.env.TAVILY_API_KEY);
 		},
+		resolver(_provider: string) {
+			return async () => process.env.TAVILY_API_KEY ?? undefined;
+		},
+		async rotateSessionCredential() {
+			return false;
+		},
 	} as unknown as AuthStorage;
 
 	function makeParams(query: string) {
@@ -34,7 +39,7 @@ describe("Tavily web search provider", () => {
 	it("maps Tavily responses into SearchResponse and forwards recency filters", async () => {
 		let requestBody: Record<string, unknown> | null = null;
 
-		using _hook = hookFetch(async (_input, init) => {
+		const fetchMock = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			requestBody = JSON.parse(String(init?.body ?? "null")) as Record<string, unknown>;
 			return new Response(
 				JSON.stringify({
@@ -55,9 +60,14 @@ describe("Tavily web search provider", () => {
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
-		});
+		};
 
-		const response = await searchTavily({ ...makeParams("latest ai news"), numSearchResults: 2, recency: "week" });
+		const response = await searchTavily({
+			...makeParams("latest ai news"),
+			numSearchResults: 2,
+			recency: "week",
+			fetch: fetchMock,
+		});
 		// Recency must not couple to topic — topic should be absent (Tavily defaults to general)
 		expect(requestBody).toMatchObject({
 			query: "latest ai news",
@@ -90,15 +100,15 @@ describe("Tavily web search provider", () => {
 	});
 
 	it("surfaces structured API errors", async () => {
-		using _hook = hookFetch(
-			() =>
+		const fetchMock = (): Promise<Response> =>
+			Promise.resolve(
 				new Response(JSON.stringify({ detail: { error: "invalid api key" } }), {
 					status: 401,
 					headers: { "Content-Type": "application/json" },
 				}),
-		);
+			);
 
-		await expect(searchTavily(makeParams("bad auth"))).rejects.toEqual(
+		await expect(searchTavily({ ...makeParams("bad auth"), fetch: fetchMock })).rejects.toEqual(
 			expect.objectContaining({
 				provider: "tavily",
 				status: 401,

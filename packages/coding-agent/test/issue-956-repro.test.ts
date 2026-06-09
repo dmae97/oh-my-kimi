@@ -2,10 +2,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as mcpClient from "@oh-my-pi/pi-coding-agent/mcp/client";
+import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { getConfigRootDir, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
-import * as mcpClient from "../src/mcp/client";
-import { MCPCommandController } from "../src/modes/controllers/mcp-command-controller";
-import { initTheme } from "../src/modes/theme/theme";
 
 const originalProjectDir = getProjectDir();
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -80,6 +80,10 @@ describe("issue #956: interactive /mcp test", () => {
 		const disconnectServer = vi.spyOn(mcpClient, "disconnectServer").mockResolvedValue();
 		const controller = new MCPCommandController({
 			chatContainer: { addChild },
+			present: (content: unknown) => {
+				for (const item of Array.isArray(content) ? content : [content]) addChild(item);
+				requestRender();
+			},
 			ui: { requestRender },
 			editor: {},
 			showError,

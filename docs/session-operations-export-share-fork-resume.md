@@ -1,4 +1,4 @@
-# Session Operations: export, dump, share, fork, resume/continue
+# Session Operations: export, dump, share, fresh, fork, resume/continue
 
 This document describes operator-visible behavior for session export/share/fork/resume operations as currently implemented.
 
@@ -19,12 +19,13 @@ This document describes operator-visible behavior for session export/share/fork/
 | `/export [path]`                        | Interactive slash command | No                                    | No                                                                                 | HTML file                                                       |
 | `--export <session.jsonl> [outputPath]` | CLI startup fast-path     | No runtime session mutation           | No active session; reads target file                                               | HTML file                                                       |
 | `/share`                                | Interactive slash command | No                                    | No                                                                                 | Temp HTML + share URL/gist                                      |
+| `/fresh`                               | Interactive slash command | Yes (provider-facing in-memory id/state only) | No; keeps current session file/header                                               | None                                                            |
 | `/fork`                                 | Interactive slash command | Yes (active session identity changes) | Creates new session file and switches current session to it (persistent mode only) | Copies artifact directory to new session namespace when present |
 | `--fork <id\|path>`                     | CLI startup               | Yes after session creation            | Creates a new session fork from the selected source into current cwd/session dir   | None                                                            |
 | `/resume`                               | Interactive slash command | Yes (active in-memory state replaced) | Switches to selected existing session file                                         | None                                                            |
 | `--resume`                              | CLI startup picker        | Yes after session creation            | Opens selected existing session file                                               | None                                                            |
-| `--resume <id\|path>`                   | CLI startup               | Yes after session creation            | Opens existing session; global cross-project match can fork into current project   | None                                                            |
-| `--continue`                            | CLI startup               | Yes after session creation            | Opens terminal breadcrumb or most-recent session; creates new one if none exists   | None                                                            |
+| `--resume <id\|path>`                   | CLI startup               | Yes after session creation            | Opens existing session; global cross-project match re-roots (moved dir) or forks into current project   | None                                                            |
+| `--continue`                            | CLI startup               | Yes after session creation            | Opens terminal breadcrumb (re-roots it if its dir was moved) or most-recent session; creates new one if none exists   | None                                                            |
 
 ## Export and dump
 
@@ -214,19 +215,23 @@ Notes:
 
 Cross-project id match behavior:
 
-- If matched session cwd differs from current cwd, CLI asks:
-  - `Session found in different project ... Fork into current directory? [y/N]`
-- On yes: `SessionManager.forkFrom(match.path, cwd, sessionDir)` creates a new local forked file.
-- On no/non-TTY default: command errors.
+- If matched session cwd differs from current cwd, behavior depends on whether the matched session's recorded directory still exists:
+  - **Directory gone (moved/renamed, e.g. `git worktree move`)**: CLI asks `Session's directory no longer exists (...). Move (re-root) it into the current directory? [Y/n]`.
+    - On yes (default): `SessionManager.open(match.path)` then `manager.moveTo(cwd)` re-roots the existing session into the current directory (no duplicate file).
+    - On no: command cancels (returns no session). On non-TTY: command errors.
+  - **Directory still exists (genuinely different project)**: CLI asks `Session found in different project ... Fork into current directory? [y/N]`.
+    - On yes: `SessionManager.forkFrom(match.path, cwd, sessionDir)` creates a new local forked file.
+    - On no: command cancels. On non-TTY: command errors.
 
 ## CLI `--continue`
 
 `SessionManager.continueRecent(cwd, sessionDir)`:
 
 1. Resolves session dir for current cwd.
-2. Reads terminal-scoped breadcrumb first.
-3. Falls back to most recently modified session file.
-4. Opens found session; if none exists, creates new session.
+2. Reads the terminal-scoped breadcrumb.
+3. If the breadcrumb points at a session recorded under a different cwd whose directory no longer exists (moved/renamed) **and** the current directory has no sessions of its own, re-roots that session into the current directory via `moveTo` instead of starting fresh.
+4. Otherwise, if the breadcrumb's cwd matches the current cwd, uses the breadcrumb session; else falls back to the most recently modified session file.
+5. Opens the found session; if none exists, creates a new session.
 
 This is startup-only behavior; there is no interactive `/continue` slash command.
 

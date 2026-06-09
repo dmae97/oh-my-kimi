@@ -1,6 +1,7 @@
 import { describe, expect, it, type Mock, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
 type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
@@ -112,7 +113,11 @@ function createContext(): {
 
 	ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender } as unknown as InteractiveModeContext["ui"],
+		ui: {
+			requestRender,
+			addInputListener: vi.fn(),
+			addStartListener: vi.fn(),
+		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
 		retryLoader: undefined,
@@ -149,6 +154,7 @@ function createContext(): {
 		addMessageToChat,
 		cancelPendingSubmission,
 		ensureLoadingAnimation,
+		notifyInterrupting: vi.fn(),
 		finishPendingSubmission: vi.fn(),
 		flushPendingBashComponents: vi.fn(),
 		markPendingSubmissionStarted: vi.fn(() => true),
@@ -245,6 +251,9 @@ describe("InputController escape behavior", () => {
 		expect(spies.cancelPendingSubmission).toHaveBeenCalledTimes(1);
 		expect(spies.clearQueue).toHaveBeenCalledTimes(1);
 		expect(spies.abort).toHaveBeenCalledTimes(1);
+		// The Esc interrupt threads a user-facing reason so the aborted turn and its
+		// synthetic tool results read as a deliberate interrupt, not "Request was aborted".
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
 	});
 
 	it("prefers aborting bash before aborting an overlapping stream", () => {

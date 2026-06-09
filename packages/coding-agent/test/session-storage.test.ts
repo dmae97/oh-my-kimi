@@ -10,7 +10,7 @@ describe("FileSessionStorage.deleteSessionWithArtifacts", () => {
 
 	beforeEach(async () => {
 		tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-storage-"));
-		const { FileSessionStorage } = await import("../src/session/session-storage");
+		const { FileSessionStorage } = await import("@oh-my-pi/pi-coding-agent/session/session-storage");
 		storage = new FileSessionStorage();
 	});
 

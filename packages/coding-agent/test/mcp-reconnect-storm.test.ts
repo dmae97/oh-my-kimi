@@ -16,8 +16,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MCPManager } from "../src/mcp/manager";
-import type { MCPStdioServerConfig } from "../src/mcp/types";
+import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import type { MCPStdioServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "crash-after-init-mcp.ts");
 const BUN_EXEC = process.execPath;
@@ -52,10 +52,19 @@ describe("MCP reconnect storm (issue #1592)", () => {
 
 		try {
 			await manager.connectServers({ crashy: config }, {});
-			// Give the reconnect loop generous time to fire. With the bug this
-			// produced thousands of processes within a second; with the fix the
-			// circuit breaker caps the per-server spawn budget.
-			await Bun.sleep(3000);
+			// Wait for the circuit breaker to trip rather than blind-sleeping a
+			// fixed budget. During the storm `getConnectionStatus` is always
+			// "connected" or "connecting" (`#pendingReconnections` is set
+			// synchronously before any await in `#doReconnect`); it only reports
+			// "disconnected" once `#tripReconnectBreaker` opens, tears down the
+			// stale connection, and detaches `onClose` so no further spawns fire.
+			// That makes the terminal state a race-free signal: poll for it and
+			// return the instant the storm is capped instead of waiting out a
+			// fixed 3s. Generous deadline stays well under the 15s test timeout.
+			const deadline = Date.now() + 10_000;
+			while (manager.getConnectionStatus("crashy") !== "disconnected" && Date.now() < deadline) {
+				await Bun.sleep(5);
+			}
 
 			const spawns = countSpawns();
 			// `RECONNECT_BURST_LIMIT` (5) is the per-server reconnect cap inside

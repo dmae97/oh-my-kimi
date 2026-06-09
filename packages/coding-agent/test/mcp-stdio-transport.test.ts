@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { StdioTransport, writeFrame } from "../src/mcp/transports/stdio";
+import { StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
 
 // ---------------------------------------------------------------------------
 // writeFrame — the seam that catches synchronous FileSink throws AND neutralizes

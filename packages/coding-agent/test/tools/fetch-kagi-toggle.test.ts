@@ -10,7 +10,8 @@ import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
 import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
 import * as scraperUtils from "@oh-my-pi/pi-coding-agent/web/scrapers/utils";
 import * as natives from "@oh-my-pi/pi-natives";
-import { hookFetch, ptree, Snowflake } from "@oh-my-pi/pi-utils";
+import { ptree, Snowflake } from "@oh-my-pi/pi-utils";
+import { asGlobalFetch } from "../helpers/fetch-mock";
 
 const withMissingSystemPython = () => {
 	const whichSpy = vi.spyOn(Bun, "which").mockImplementation(() => null);
@@ -34,7 +35,7 @@ describe("read tool URL selector shorthands", () => {
 		fs.rmSync(testDir, { recursive: true, force: true });
 	});
 
-	const createSession = (): ToolSession => {
+	const createSession = (settingsOverrides: Partial<Record<SettingPath, unknown>> = {}): ToolSession => {
 		const sessionFile = path.join(testDir, "session.jsonl");
 		const artifactsDir = sessionFile.slice(0, -6);
 		let nextArtifactId = 0;
@@ -53,6 +54,7 @@ describe("read tool URL selector shorthands", () => {
 			},
 			settings: Settings.isolated({
 				"fetch.enabled": true,
+				...settingsOverrides,
 			}),
 		};
 	};
@@ -475,7 +477,6 @@ describe("read tool URL handling", () => {
 				content: "",
 			};
 		});
-		using hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
 		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
 		vi.spyOn(natives, "htmlToMarkdown").mockResolvedValue(renderedMarkdown);
 
@@ -490,11 +491,11 @@ describe("read tool URL handling", () => {
 		expect(requestedUrls).not.toContain("https://bun.com/llms.txt");
 		expect(requestedUrls).not.toContain("https://bun.com/llms.md");
 		void missingSystemPython;
-		void hook;
 	});
 
 	it("uses section-scoped llms.txt fallback without requesting the site-wide file", async () => {
 		const session = createSession();
+		session.fetch = asGlobalFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
 		const tool = new ReadTool(session);
 		const pageUrl = "https://example.com/docs/reference/widget";
 		const pageHtml = "<html><body><nav>Docs</nav><main><h1>Widget</h1></main></body></html>";
@@ -557,7 +558,6 @@ describe("read tool URL handling", () => {
 				content: "",
 			};
 		});
-		using hook = hookFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
 		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue("/usr/bin/trafilatura");
 
 		const result = await tool.execute("fetch-section-llms", { path: pageUrl });
@@ -573,13 +573,38 @@ describe("read tool URL handling", () => {
 		expect(requestedUrls).not.toContain("https://example.com/llms.txt");
 		expect(requestedUrls).not.toContain("https://example.com/llms.md");
 		void missingSystemPython;
-		void hook;
 	});
-	it("prefers Parallel extract before other HTML renderers when configured", async () => {
+	it("prefers Parallel extract first when providers.fetch is set to parallel", async () => {
 		process.env.PARALLEL_API_KEY = "test-parallel-key";
-		const session = createSession();
+		const session = createSession({ "providers.fetch": "parallel" });
 		const tool = new ReadTool(session);
 		const pageUrl = "https://example.com/parallel-page";
+		session.fetch = asGlobalFetch(input => {
+			if (String(input) === "https://api.parallel.ai/v1beta/extract") {
+				return new Response(
+					JSON.stringify({
+						extract_id: "extract-fetch-1",
+						results: [
+							{
+								url: pageUrl,
+								title: "Parallel Page",
+								excerpts: [
+									"Parallel-rendered content that is comfortably longer than one hundred characters. ".repeat(
+										2,
+									),
+								],
+								full_content: null,
+							},
+						],
+						errors: [],
+						warnings: null,
+						usage: null,
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("blocked", { status: 500, statusText: "Blocked" });
+		});
 		const pageHtml = "<html><body><main><h1>Parallel Page</h1></main></body></html>";
 		const ensureToolSpy = vi.spyOn(toolsManager, "ensureTool");
 		const htmlToMarkdownSpy = vi.spyOn(natives, "htmlToMarkdown");
@@ -612,34 +637,6 @@ describe("read tool URL handling", () => {
 				content: "",
 			};
 		});
-		using parallelExtractHook = hookFetch(input => {
-			const requestedUrl = String(input);
-			if (requestedUrl === "https://api.parallel.ai/v1beta/extract") {
-				return new Response(
-					JSON.stringify({
-						extract_id: "extract-fetch-1",
-						results: [
-							{
-								url: pageUrl,
-								title: "Parallel Page",
-								excerpts: [
-									"Parallel-rendered content that is comfortably longer than one hundred characters. ".repeat(
-										2,
-									),
-								],
-								full_content: null,
-							},
-						],
-						errors: [],
-						warnings: null,
-						usage: null,
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-
-			return new Response("blocked", { status: 500, statusText: "Blocked" });
-		});
 
 		const result = await tool.execute("fetch-parallel-html", { path: pageUrl });
 		const textBlock = result.content.find(content => content.type === "text");
@@ -649,7 +646,6 @@ describe("read tool URL handling", () => {
 		expect(textBlock?.text).toContain("Parallel-rendered content");
 		expect(ensureToolSpy).not.toHaveBeenCalled();
 		expect(htmlToMarkdownSpy).not.toHaveBeenCalled();
-		void parallelExtractHook;
 	});
 
 	it("reuses cached output for repeated plain URL reads", async () => {

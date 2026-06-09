@@ -12,6 +12,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+	clearClaudePluginRootsCache,
+	listClaudePluginRoots,
+	resolveActiveProjectRegistryPath,
+} from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import type { InstalledPluginEntry } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import {
 	addInstalledPlugin,
@@ -19,11 +24,6 @@ import {
 	readInstalledPluginsRegistry,
 	writeInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
-import {
-	clearClaudePluginRootsCache,
-	listClaudePluginRoots,
-	resolveActiveProjectRegistryPath,
-} from "../../src/discovery/helpers";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import {
 	buildRequestBody,
 	searchTavily,
 	type TavilySearchParams,
 } from "@oh-my-pi/pi-coding-agent/web/search/providers/tavily";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 
 describe("Tavily buildRequestBody", () => {
 	afterEach(() => {
@@ -57,6 +57,7 @@ describe("Tavily searchTavily request shape (integration)", () => {
 		async getApiKey() {
 			return process.env.TAVILY_API_KEY ?? undefined;
 		},
+		resolver: vi.fn(() => async () => process.env.TAVILY_API_KEY ?? undefined),
 		hasAuth() {
 			return Boolean(process.env.TAVILY_API_KEY);
 		},
@@ -75,8 +76,9 @@ describe("Tavily searchTavily request shape (integration)", () => {
 		process.env.TAVILY_API_KEY = "test-key";
 
 		let capturedBody: Record<string, unknown> | undefined;
-		using _hook = hookFetch(async (input, init) => {
-			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url =
+				typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
 			if (url === "https://api.tavily.com/search") {
 				capturedBody = JSON.parse(init?.body as string);
 				return new Response(
@@ -96,9 +98,12 @@ describe("Tavily searchTavily request shape (integration)", () => {
 				);
 			}
 			return new Response("not mocked", { status: 500 });
-		});
+		};
 
-		const response = await searchTavily(makeParams("Bun runtime latest release notes", { recency: "week" }));
+		const response = await searchTavily({
+			...makeParams("Bun runtime latest release notes", { recency: "week" }),
+			fetch: fetchMock,
+		});
 
 		expect(capturedBody).toBeDefined();
 		expect(capturedBody).not.toHaveProperty("topic");
@@ -115,8 +120,9 @@ describe("Tavily searchTavily request shape (integration)", () => {
 		process.env.TAVILY_API_KEY = "test-key";
 
 		let capturedBody: Record<string, unknown> | undefined;
-		using _hook = hookFetch(async (input, init) => {
-			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url =
+				typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
 			if (url === "https://api.tavily.com/search") {
 				capturedBody = JSON.parse(init?.body as string);
 				return new Response(JSON.stringify({ answer: "", results: [], request_id: "req-0" }), {
@@ -125,9 +131,9 @@ describe("Tavily searchTavily request shape (integration)", () => {
 				});
 			}
 			return new Response("not mocked", { status: 500 });
-		});
+		};
 
-		await searchTavily(makeParams("bun sqlite"));
+		await searchTavily({ ...makeParams("bun sqlite"), fetch: fetchMock });
 
 		expect(capturedBody).toBeDefined();
 		expect(capturedBody).not.toHaveProperty("topic");

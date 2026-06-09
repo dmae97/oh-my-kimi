@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { buildAnthropicAuthConfig, buildAnthropicSearchHeaders, buildAnthropicUrl } from "../src/utils/anthropic-auth";
-import { AnthropicOAuthFlow, refreshAnthropicToken } from "../src/utils/oauth/anthropic";
+import { AnthropicOAuthFlow, refreshAnthropicToken } from "@oh-my-pi/pi-ai/registry/oauth/anthropic";
+import {
+	buildAnthropicAuthConfig,
+	buildAnthropicSearchHeaders,
+	buildAnthropicUrl,
+} from "@oh-my-pi/pi-ai/utils/anthropic-auth";
 import { withEnv } from "./helpers";
 
-const originalFetch = global.fetch;
-
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -45,9 +46,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new AnthropicOAuthFlow({});
+		const flow = new AnthropicOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-123", "http://localhost:54545/callback");
 
 		const result = await flow.exchangeToken("code-123", "state-123", "http://localhost:54545/callback");
@@ -76,9 +76,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new AnthropicOAuthFlow({});
+		const flow = new AnthropicOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-123", "http://localhost:54545/callback");
 		await flow.exchangeToken("code-123#state-override", "state-123", "http://localhost:54545/callback");
 
@@ -103,9 +102,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new AnthropicOAuthFlow({});
+		const flow = new AnthropicOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-123", "http://localhost:54545/callback");
 		await flow.exchangeToken("code-123#", "state-explicit", "http://localhost:54545/callback");
 
@@ -131,9 +129,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const result = await refreshAnthropicToken("refresh-123");
+		const result = await refreshAnthropicToken("refresh-123", fetchMock as unknown as typeof fetch);
 
 		expect(result.access).toBe("new-access-token");
 		expect(result.refresh).toBe("new-refresh-token");
@@ -156,9 +153,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new AnthropicOAuthFlow({});
+		const flow = new AnthropicOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-123", "http://localhost:54545/callback");
 		const result = await flow.exchangeToken("code-123", "state-123", "http://localhost:54545/callback");
 
@@ -181,9 +177,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const result = await refreshAnthropicToken("refresh-123");
+		const result = await refreshAnthropicToken("refresh-123", fetchMock as unknown as typeof fetch);
 
 		expect(result.accountId).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 		expect(result.email).toBe("refreshed@example.com");
@@ -218,9 +213,8 @@ describe("anthropic oauth alignment", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new AnthropicOAuthFlow({});
+		const flow = new AnthropicOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-noaccount", "http://localhost:54545/callback");
 		const result = await flow.exchangeToken("code-noaccount", "state-noaccount", "http://localhost:54545/callback");
 
@@ -247,9 +241,8 @@ describe("anthropic oauth alignment", () => {
 				headers: { "Content-Type": "application/json" },
 			});
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new AnthropicOAuthFlow({});
+		const flow = new AnthropicOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-noaccount", "http://localhost:54545/callback");
 		const result = await flow.exchangeToken("code-noaccount", "state-noaccount", "http://localhost:54545/callback");
 
@@ -388,6 +381,6 @@ describe("buildAnthropicSearchHeaders", () => {
 	it("includes the web-search beta in Anthropic-Beta", () => {
 		const auth = buildAnthropicAuthConfig("sk-ant-api-key");
 		const headers = buildAnthropicSearchHeaders(auth);
-		expect(headers["Anthropic-Beta"]).toContain("web-search-2025-03-05");
+		expect(headers["anthropic-beta"]).toContain("web-search-2025-03-05");
 	});
 });

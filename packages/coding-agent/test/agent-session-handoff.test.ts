@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -14,25 +14,66 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession handoff", () => {
+	// Immutable across the whole file: the model registry's synchronous bundled-model
+	// load dominates per-test setup (~100ms each), and the auth store + bundled model
+	// never change. Build them once. Per-test mutable state (session, session file,
+	// emitted events) is rebuilt in beforeEach.
+	let sharedDir: TempDir;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
+	let model: Model;
+
 	let tempDir: TempDir;
 	let session: AgentSession;
 	let sessionManager: SessionManager;
-	let authStorage: AuthStorage;
-	let modelRegistry: ModelRegistry;
 	let events: AgentSessionEvent[];
+
+	/** Poll `predicate` until it holds (returns as soon as the state is reached) or the
+	 *  deadline elapses. Replaces blind settle sleeps for tests with a positive signal. */
+	async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (!predicate()) {
+			if (Date.now() >= deadline) {
+				throw new Error("Timed out waiting for condition");
+			}
+			await Bun.sleep(1);
+		}
+	}
+
+	/** Drain post-turn maintenance deterministically for negative tests (those proving
+	 *  maintenance did NOT run, where there is no positive signal to poll on). Post-turn
+	 *  work is scheduled fire-and-forget: a single event-loop turn lets the handler run to
+	 *  its decision and register any compaction pass as a tracked post-prompt task, then
+	 *  `waitForIdle()` drains that task to completion. */
+	async function drainMaintenance(): Promise<void> {
+		await Bun.sleep(0);
+		await session.waitForIdle();
+	}
+
+	beforeAll(async () => {
+		sharedDir = TempDir.createSync("@pi-handoff-shared-");
+		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		modelRegistry = new ModelRegistry(authStorage);
+
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundled) {
+			throw new Error("Expected built-in anthropic model to exist");
+		}
+		model = bundled;
+	});
+
+	afterAll(async () => {
+		authStorage.close();
+		try {
+			await sharedDir.remove();
+		} catch {}
+	});
 
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-handoff-");
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		events = [];
-
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
 
 		const agent = new Agent({
 			initialState: {
@@ -85,7 +126,6 @@ describe("AgentSession handoff", () => {
 		if (session) {
 			await session.dispose();
 		}
-		authStorage.close();
 		try {
 			await tempDir.remove();
 		} catch {}
@@ -97,7 +137,7 @@ describe("AgentSession handoff", () => {
 		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue(handoffText);
 
 		const result = await session.handoff();
-		await Bun.sleep(20);
+		await drainMaintenance();
 
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(result?.document).toBe(handoffText);
@@ -123,7 +163,11 @@ describe("AgentSession handoff", () => {
 		});
 
 		await session.prompt("pending prompt ".repeat(120));
-		await Bun.sleep(20);
+		await waitFor(
+			() =>
+				compactSpy.mock.calls.length === 1 &&
+				events.some(event => event.type === "auto_compaction_end" && event.aborted === false),
+		);
 
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		expect(promptSpy).toHaveBeenCalledTimes(1);
@@ -177,7 +221,7 @@ describe("AgentSession handoff", () => {
 			isError: false,
 		});
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await Bun.sleep(20);
+		await drainMaintenance();
 
 		expect(handoffSpy).not.toHaveBeenCalled();
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
@@ -259,7 +303,7 @@ describe("AgentSession handoff", () => {
 		const handoffSpy = vi.spyOn(session, "handoff");
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await Bun.sleep(20);
+		await drainMaintenance();
 
 		expect(handoffSpy).not.toHaveBeenCalled();
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
@@ -307,7 +351,7 @@ describe("AgentSession handoff", () => {
 
 		session.agent.emitExternalEvent({ type: "message_end", message: overflowAssistant });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowAssistant] });
-		await Bun.sleep(20);
+		await waitFor(() => events.filter(event => event.type === "auto_compaction_end").length === 1);
 
 		expect(handoffSpy).not.toHaveBeenCalled();
 		const startEvents = events.filter(event => event.type === "auto_compaction_start");
@@ -352,7 +396,11 @@ describe("AgentSession handoff", () => {
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await Bun.sleep(20);
+		await waitFor(
+			() =>
+				handoffSpy.mock.calls.length === 1 &&
+				events.filter(event => event.type === "auto_compaction_end").length === 1,
+		);
 
 		expect(handoffSpy).toHaveBeenCalledTimes(1);
 		expect(handoffSpy).toHaveBeenCalledWith(expect.stringContaining("Threshold-triggered maintenance"), {
@@ -500,7 +548,8 @@ describe("AgentSession handoff", () => {
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await Bun.sleep(20);
+		await waitFor(() => handoffSpy.mock.calls.length === 1);
+		await session.waitForIdle();
 
 		expect(handoffSpy).toHaveBeenCalledTimes(1);
 		// The bug surfaced as agent.continue() racing the deferred handoff. With the fix,
@@ -554,7 +603,7 @@ describe("AgentSession handoff", () => {
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
 		// Let the deferred handoff post-prompt task enter the generateHandoff await.
-		await Bun.sleep(20);
+		await waitFor(() => session.isGeneratingHandoff);
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(session.isGeneratingHandoff).toBe(true);
 
@@ -601,7 +650,7 @@ describe("AgentSession handoff", () => {
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await Bun.sleep(20);
+		await waitFor(() => events.filter(event => event.type === "auto_compaction_end").length === 1);
 
 		expect(handoffSpy).toHaveBeenCalledTimes(1);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");

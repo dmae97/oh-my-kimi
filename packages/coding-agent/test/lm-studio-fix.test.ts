@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("ModelRegistry LM Studio Fixes", () => {
 	let tempDir: string;
@@ -26,24 +27,28 @@ describe("ModelRegistry LM Studio Fixes", () => {
 	});
 
 	test("auto-discovers both ollama and lm-studio models independently", async () => {
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = input => {
 			const url = String(input);
 			if (url.includes(":11434/api/tags")) {
-				return new Response(JSON.stringify({ models: [{ name: "ollama-model" }] }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
+				return Promise.resolve(
+					new Response(JSON.stringify({ models: [{ name: "ollama-model" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					}),
+				);
 			}
 			if (url.includes(":1234/v1/models")) {
-				return new Response(JSON.stringify({ data: [{ id: "lm-studio-model" }] }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
+				return Promise.resolve(
+					new Response(JSON.stringify({ data: [{ id: "lm-studio-model" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					}),
+				);
 			}
-			return new Response(null, { status: 404 });
-		});
+			return Promise.resolve(new Response(null, { status: 404 }));
+		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const allModels = registry.getAll();

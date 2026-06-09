@@ -252,7 +252,6 @@ export const sshToolRenderer = {
 						state: "pending",
 						sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: _options.expanded }) }],
 						width,
-						animate: true,
 					},
 					uiTheme,
 				),
@@ -274,7 +273,10 @@ export const sshToolRenderer = {
 		const details = result.details;
 		const host = args?.host || "…";
 		const command = args?.command ?? "";
-		const header = renderStatusLine({ icon: "success", title: "SSH", description: `[${host}]` }, uiTheme);
+		const header = renderStatusLine(
+			{ iconOverride: uiTheme.styledSymbol("tool.ssh", "accent"), title: "SSH", description: `[${host}]` },
+			uiTheme,
+		);
 		const cmdLines = formatSshCommandLines(command, uiTheme);
 		const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
 		const outputBlock = new CachedOutputBlock();

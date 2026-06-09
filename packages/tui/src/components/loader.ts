@@ -3,20 +3,19 @@ import { sliceByColumn, visibleWidth } from "../utils";
 import { Text } from "./text";
 
 /**
- * Loader component that drives display refresh at ~60fps so callers whose
- * message colorizer is time-dependent (e.g. shimmer/KITT) animate smoothly.
+ * Loader component. Spinner frames advance at `SPINNER_ADVANCE_MS`.
  *
- * Two cadences are interleaved on a single timer:
- *   - **Render tick** (every `RENDER_INTERVAL_MS`) → asks the TUI to redraw.
- *     The TUI already throttles at 16ms (`MIN_RENDER_INTERVAL_MS`), so this
- *     is the natural upper bound; static messageColorFns produce identical
- *     output and the differ drops the no-op redraw at ~zero cost.
- *   - **Spinner advance** (every `SPINNER_ADVANCE_MS`) → bumps the spinner
- *     frame index. Decoupled from the render cadence so the spinner keeps
- *     its classic ~12.5fps step pace regardless of shimmer state.
+ * Message colorizers that are time-dependent can opt into 30fps redraws by
+ * setting `animated` to `true` on the function object.
  */
-const RENDER_INTERVAL_MS = 16;
+const RENDER_INTERVAL_MS = 1000 / 30;
 const SPINNER_ADVANCE_MS = 80;
+
+type ColorFn = (str: string) => string;
+
+export type LoaderMessageColorFn = ColorFn & {
+	readonly animated?: true;
+};
 
 export class Loader extends Text {
 	#frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -27,8 +26,8 @@ export class Loader extends Text {
 
 	constructor(
 		ui: TUI,
-		private spinnerColorFn: (str: string) => string,
-		private messageColorFn: (str: string) => string,
+		private spinnerColorFn: ColorFn,
+		private messageColorFn: LoaderMessageColorFn,
 		private message: string = "Loading...",
 		spinnerFrames?: string[],
 	) {
@@ -54,14 +53,17 @@ export class Loader extends Text {
 	start() {
 		this.#lastSpinnerTick = performance.now();
 		this.#updateDisplay();
+		const intervalMs = this.messageColorFn.animated === true ? RENDER_INTERVAL_MS : SPINNER_ADVANCE_MS;
 		this.#intervalId = setInterval(() => {
 			const now = performance.now();
-			if (now - this.#lastSpinnerTick >= SPINNER_ADVANCE_MS) {
-				this.#currentFrame = (this.#currentFrame + 1) % this.#frames.length;
-				this.#lastSpinnerTick = now;
+			const elapsed = now - this.#lastSpinnerTick;
+			if (elapsed >= SPINNER_ADVANCE_MS) {
+				const steps = Math.floor(elapsed / SPINNER_ADVANCE_MS);
+				this.#currentFrame = (this.#currentFrame + steps) % this.#frames.length;
+				this.#lastSpinnerTick += steps * SPINNER_ADVANCE_MS;
 			}
 			this.#updateDisplay();
-		}, RENDER_INTERVAL_MS);
+		}, intervalMs);
 	}
 
 	stop() {
@@ -71,15 +73,23 @@ export class Loader extends Text {
 		}
 	}
 
+	/** Lifecycle teardown: stop the animation timer. Idempotent. */
+	dispose() {
+		this.stop();
+	}
+
 	setMessage(message: string) {
+		if (message === this.message) {
+			return;
+		}
 		this.message = message;
 		this.#updateDisplay();
 	}
 
 	#updateDisplay() {
 		const frame = this.#frames[this.#currentFrame];
-		this.setText(`${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`);
-		if (this.#ui) {
+		const text = `${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`;
+		if (this.setText(text) && this.#ui) {
 			this.#ui.requestRender();
 		}
 	}

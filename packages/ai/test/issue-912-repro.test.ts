@@ -1,12 +1,6 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { stream } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 function makeCopilotResponsesModel(baseUrl: string): Model<"openai-responses"> {
 	return {
@@ -58,7 +52,7 @@ describe("issue #912 — github-copilot abort propagation", () => {
 		// signal — this is the regression vector. Real Bun fetch normally
 		// propagates abort to the body reader, but we cannot rely on it for
 		// every transport (HTTP/2, intermediaries, native sockets).
-		global.fetch = (async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+		const fetchMock = (async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			if (!url.endsWith("/responses")) {
 				throw new Error(`Unexpected fetch to ${url}`);
@@ -88,6 +82,7 @@ describe("issue #912 — github-copilot abort propagation", () => {
 		const providerStream = stream(model, makeContext(), {
 			apiKey: JSON.stringify({ token: "ghu_test_token", enterpriseUrl: undefined }),
 			signal: controller.signal,
+			fetch: fetchMock,
 		});
 
 		await fetchInvoked.promise;

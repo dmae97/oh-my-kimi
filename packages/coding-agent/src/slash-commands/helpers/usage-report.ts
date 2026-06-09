@@ -26,6 +26,8 @@ function formatUsageReportAccount(report: UsageReport, limit: UsageLimit, index:
 	if (typeof email === "string" && email) return email;
 	const accountId = report.metadata?.accountId ?? limit.scope.accountId;
 	if (typeof accountId === "string" && accountId) return accountId;
+	const projectId = report.metadata?.projectId ?? limit.scope.projectId;
+	if (typeof projectId === "string" && projectId) return projectId;
 	return `account ${index + 1}`;
 }
 

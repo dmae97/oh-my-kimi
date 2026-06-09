@@ -16,6 +16,7 @@ function makeRule(partial: Partial<Rule>): Rule {
 		alwaysApply: partial.alwaysApply,
 		description: partial.description,
 		condition: partial.condition,
+		astCondition: partial.astCondition,
 		scope: partial.scope,
 		interruptMode: partial.interruptMode,
 		_source: partial._source ?? source("native"),
@@ -32,6 +33,18 @@ describe("bucketRules", () => {
 		expect(rulebookRules).toHaveLength(0);
 		expect(alwaysApplyRules).toHaveLength(0);
 		expect(mgr.checkDelta("contains FORBIDDEN token", { source: "text" }).map(r => r.name)).toEqual(["no-foo"]);
+	});
+
+	it("registers an ast-only rule as TTSR and excludes it from rulebook/always buckets", () => {
+		const mgr = new TtsrManager();
+		const ttsr = makeRule({ name: "no-console", astCondition: ["console.log($A)"], description: "blocks console" });
+
+		const { rulebookRules, alwaysApplyRules } = bucketRules([ttsr], mgr);
+
+		expect(rulebookRules).toHaveLength(0);
+		expect(alwaysApplyRules).toHaveLength(0);
+		expect(mgr.hasRules()).toBe(true);
+		expect(mgr.hasAstRules()).toBe(true);
 	});
 
 	it("splits non-TTSR rules into always-apply and rulebook by metadata", () => {

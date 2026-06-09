@@ -1,4 +1,4 @@
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchResponse } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { ParallelApiError, type ParallelSearchResult, type ParallelSearchSource } from "../../parallel";
@@ -112,6 +112,7 @@ async function searchWithAuthStorage(
 	queries: string[],
 	params: {
 		signal?: AbortSignal;
+		fetch?: FetchImpl;
 	},
 	authStorage: AuthStorage,
 	sessionId?: string,
@@ -123,30 +124,41 @@ async function searchWithAuthStorage(
 		);
 	}
 
-	const response = await fetch(PARALLEL_SEARCH_URL, {
-		method: "POST",
-		headers: {
-			Accept: "application/json",
-			"Content-Type": "application/json",
-			"x-api-key": apiKey,
-			"parallel-beta": PARALLEL_BETA_HEADER,
-		},
-		body: JSON.stringify({
-			objective,
-			search_queries: queries,
-			mode: "fast",
-			excerpts: {
-				max_chars_per_result: 10_000,
-			},
-		}),
-		signal: withHardTimeout(params.signal),
-	});
-	if (!response.ok) {
-		throw parseParallelErrorResponse(response.status, await response.text());
-	}
+	// Drive the (already-present) credential through the central force-refresh /
+	// sibling-rotate retry policy. The `ParallelApiError` thrown below carries a
+	// `statusCode`, which `withAuth`'s default classifier reads to detect a
+	// retryable 401 / usage-limit.
+	const keyOrResolver: ApiKey = authStorage.resolver("parallel", { sessionId });
+	return withAuth(
+		keyOrResolver,
+		async key => {
+			const response = await (params.fetch ?? fetch)(PARALLEL_SEARCH_URL, {
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					"x-api-key": key,
+					"parallel-beta": PARALLEL_BETA_HEADER,
+				},
+				body: JSON.stringify({
+					objective,
+					search_queries: queries,
+					mode: "fast",
+					excerpts: {
+						max_chars_per_result: 10_000,
+					},
+				}),
+				signal: withHardTimeout(params.signal),
+			});
+			if (!response.ok) {
+				throw parseParallelErrorResponse(response.status, await response.text());
+			}
 
-	const payload: unknown = await response.json();
-	return parseSearchPayload(payload);
+			const payload: unknown = await response.json();
+			return parseSearchPayload(payload);
+		},
+		{ signal: params.signal },
+	);
 }
 
 export async function searchParallel(
@@ -154,6 +166,7 @@ export async function searchParallel(
 		query: string;
 		num_results?: number;
 		signal?: AbortSignal;
+		fetch?: FetchImpl;
 	},
 	authStorage: AuthStorage,
 	sessionId?: string,
@@ -166,6 +179,7 @@ export async function searchParallel(
 			[params.query],
 			{
 				signal: params.signal,
+				fetch: params.fetch,
 			},
 			authStorage,
 			sessionId,
@@ -202,6 +216,7 @@ export class ParallelProvider extends SearchProvider {
 				query: params.query,
 				num_results: params.numSearchResults ?? params.limit,
 				signal: params.signal,
+				fetch: params.fetch,
 			},
 			params.authStorage,
 			params.sessionId,

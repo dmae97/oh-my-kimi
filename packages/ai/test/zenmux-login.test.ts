@@ -1,12 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginZenMux } from "../src/utils/oauth/zenmux";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
+import { describe, expect, it, vi } from "bun:test";
+import { loginZenMux } from "@oh-my-pi/pi-ai/registry/zenmux";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 describe("zenmux login", () => {
 	it("opens ZenMux key settings and validates against models endpoint", async () => {
@@ -15,8 +9,8 @@ describe("zenmux login", () => {
 		let promptMessage: string | undefined;
 		let promptPlaceholder: string | undefined;
 
-		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
-			const url = typeof input === "string" ? input : input.toString();
+		const fetchMock: FetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			expect(url).toBe("https://zenmux.ai/api/v1/models");
 			expect(init?.method).toBe("GET");
 			expect(init?.headers).toEqual({ Authorization: "Bearer sk-zenmux-test" });
@@ -25,7 +19,6 @@ describe("zenmux login", () => {
 				headers: { "Content-Type": "application/json" },
 			});
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const apiKey = await loginZenMux({
 			onAuth: info => {
@@ -37,6 +30,7 @@ describe("zenmux login", () => {
 				promptPlaceholder = prompt.placeholder;
 				return "sk-zenmux-test";
 			},
+			fetch: fetchMock,
 		});
 
 		expect(authUrl).toBe("https://zenmux.ai/settings/keys");
@@ -60,13 +54,14 @@ describe("zenmux login", () => {
 	});
 
 	it("surfaces models endpoint validation errors", async () => {
-		global.fetch = vi.fn(
+		const fetchMock: FetchImpl = vi.fn(
 			async () => new Response('{"error":"invalid_api_key"}', { status: 401 }),
 		) as unknown as typeof fetch;
 
 		await expect(
 			loginZenMux({
 				onPrompt: async () => "sk-zenmux-test",
+				fetch: fetchMock,
 			}),
 		).rejects.toThrow("ZenMux API key validation failed (401)");
 	});

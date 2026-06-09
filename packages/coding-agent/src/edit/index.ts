@@ -14,7 +14,7 @@ import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import applyPatchDescription from "../prompts/tools/apply-patch.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
-import type { ToolSession } from "../tools";
+import type { DeferredDiagnosticsEntry, ToolSession } from "../tools";
 import { truncateForPrompt } from "../tools/approval";
 import { isInternalUrlPath } from "../tools/path-utils";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
@@ -297,7 +297,6 @@ export class EditTool implements AgentTool<TInput> {
 	readonly name = "edit";
 	readonly label = "Edit";
 	readonly loadMode = "essential";
-	readonly nonAbortable = true;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 
@@ -307,6 +306,10 @@ export class EditTool implements AgentTool<TInput> {
 	readonly #editMode?: EditMode;
 	readonly #dedupDiagnostics: boolean;
 	readonly #pendingDeferredFetches = new Map<string, AbortController>();
+	/** Fallback per-path mutation counter used only when the session does not expose
+	 *  a shared one. Prefer `session.bumpFileMutationVersion` so write (and any other
+	 *  tool) mutating the same file also invalidates pending late-diagnostics. */
+	readonly #editVersionByPath = new Map<string, number>();
 
 	constructor(private readonly session: ToolSession) {
 		const {
@@ -503,10 +506,11 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const deferredController = new AbortController();
+		const editVersion = this.#bumpFileVersion(path);
 		return {
 			onDeferredDiagnostics: (lateDiagnostics: FileDiagnosticsResult) => {
 				this.#pendingDeferredFetches.delete(path);
-				this.#injectLateDiagnostics(path, lateDiagnostics);
+				this.#injectLateDiagnostics(path, lateDiagnostics, editVersion);
 			},
 			signal: deferredController.signal,
 			finalize: (diagnostics: FileDiagnosticsResult | undefined) => {
@@ -519,24 +523,34 @@ export class EditTool implements AgentTool<TInput> {
 		};
 	}
 
-	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult): void {
+	#injectLateDiagnostics(path: string, diagnostics: FileDiagnosticsResult, editVersion: number): void {
 		const effective = this.#dedupDiagnostics
 			? getDiagnosticsLedger(this.session).reduce(path, diagnostics)
 			: diagnostics;
 		if (this.#dedupDiagnostics && effective.messages.length === 0) return;
 
-		const summary = effective.summary ?? "";
-		const lines = effective.messages ?? [];
-		const body = [`Late LSP diagnostics for ${path} (arrived after the edit tool returned):`, summary, ...lines]
-			.filter(Boolean)
-			.join("\n");
+		const entry: DeferredDiagnosticsEntry = {
+			path,
+			summary: effective.summary ?? "",
+			messages: effective.messages ?? [],
+			errored: effective.errored,
+			// Drop at flush time if a later edit to the same file superseded this fetch.
+			isStale: () => this.#fileVersion(path) !== editVersion,
+		};
+		this.session.queueDeferredDiagnostics?.(entry);
+	}
 
-		this.session.queueDeferredMessage?.({
-			role: "custom",
-			customType: "lsp-late-diagnostic",
-			content: body,
-			display: false,
-			timestamp: Date.now(),
-		});
+	/** Bump the file's mutation counter (session-global when available). */
+	#bumpFileVersion(path: string): number {
+		if (this.session.bumpFileMutationVersion) return this.session.bumpFileMutationVersion(path);
+		const next = (this.#editVersionByPath.get(path) ?? 0) + 1;
+		this.#editVersionByPath.set(path, next);
+		return next;
+	}
+
+	/** Read the file's current mutation counter (session-global when available). */
+	#fileVersion(path: string): number {
+		if (this.session.getFileMutationVersion) return this.session.getFileMutationVersion(path);
+		return this.#editVersionByPath.get(path) ?? 0;
 	}
 }

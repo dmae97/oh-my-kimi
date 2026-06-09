@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import type { AgentStorage } from "../../src/session/agent-storage";
-import { searchWithParallel } from "../../src/web/parallel";
-import { searchParallel } from "../../src/web/search/providers/parallel";
+import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
+import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { searchWithParallel } from "@oh-my-pi/pi-coding-agent/web/parallel";
+import { searchParallel } from "@oh-my-pi/pi-coding-agent/web/search/providers/parallel";
 
 describe("Parallel web search", () => {
 	const fakeStorage = {
@@ -30,6 +29,12 @@ describe("Parallel web search", () => {
 		hasAuth() {
 			return Boolean(process.env.PARALLEL_API_KEY);
 		},
+		resolver(_provider: string) {
+			return async () => process.env.PARALLEL_API_KEY ?? undefined;
+		},
+		async rotateSessionCredential() {
+			return false;
+		},
 	} as unknown as AuthStorage;
 
 	let capturedRequestBody: unknown;
@@ -44,20 +49,22 @@ describe("Parallel web search", () => {
 		delete process.env.PARALLEL_API_KEY;
 	});
 
-	function mockFetch(responseBody: unknown, status = 200): Disposable {
-		return hookFetch((_url, init) => {
+	function mockFetch(responseBody: unknown, status = 200): FetchImpl {
+		return (_url, init) => {
 			if (typeof init?.body === "string") {
 				capturedRequestBody = JSON.parse(init.body);
 			}
-			return new Response(JSON.stringify(responseBody), {
-				status,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify(responseBody), {
+					status,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 	}
 
 	it("sends the expected Parallel search request and parses results", async () => {
-		using _hook = mockFetch({
+		const fetchMock = mockFetch({
 			search_id: "search-parallel-1",
 			results: [
 				{
@@ -71,7 +78,7 @@ describe("Parallel web search", () => {
 			usage: [{ name: "sku_search", count: 1 }],
 		});
 
-		const result = await searchWithParallel("parallel query", ["parallel query"], {}, fakeStorage);
+		const result = await searchWithParallel("parallel query", ["parallel query"], { fetch: fetchMock }, fakeStorage);
 		expect(capturedRequestBody).toEqual({
 			objective: "parallel query",
 			search_queries: ["parallel query"],
@@ -95,7 +102,7 @@ describe("Parallel web search", () => {
 	});
 
 	it("maps Parallel search responses into SearchResponse", async () => {
-		using _hook = mockFetch({
+		const fetchMock = mockFetch({
 			search_id: "search-parallel-2",
 			results: [
 				{
@@ -110,7 +117,7 @@ describe("Parallel web search", () => {
 			usage: null,
 		});
 
-		const result = await searchParallel({ query: "alpha search" }, fakeAuthStorage);
+		const result = await searchParallel({ query: "alpha search", fetch: fetchMock }, fakeAuthStorage);
 		expect(result.provider).toBe("parallel");
 		expect(result.requestId).toBe("search-parallel-2");
 		expect(result.sources).toEqual([
@@ -125,8 +132,8 @@ describe("Parallel web search", () => {
 	});
 
 	it("surfaces plain-text Parallel API errors", async () => {
-		using _hook = hookFetch(() => new Response("upstream unavailable", { status: 503 }));
-		await expect(searchParallel({ query: "broken" }, fakeAuthStorage)).rejects.toMatchObject({
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response("upstream unavailable", { status: 503 }));
+		await expect(searchParallel({ query: "broken", fetch: fetchMock }, fakeAuthStorage)).rejects.toMatchObject({
 			provider: "parallel",
 			status: 503,
 			message: "Parallel API error (503): upstream unavailable",

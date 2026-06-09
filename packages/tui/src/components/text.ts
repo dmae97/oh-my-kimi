@@ -26,11 +26,15 @@ export class Text implements Component {
 		return this.#text;
 	}
 
-	setText(text: string): void {
+	setText(text: string): boolean {
+		if (text === this.#text) {
+			return false;
+		}
 		this.#text = text;
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
+		return true;
 	}
 
 	setCustomBgFn(customBgFn?: (text: string) => string): void {

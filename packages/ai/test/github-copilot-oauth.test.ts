@@ -3,7 +3,7 @@ import {
 	getGitHubCopilotBaseUrl,
 	normalizeGitHubCopilotEnterpriseDomain,
 	parseGitHubCopilotApiKey,
-} from "../src/utils/oauth/github-copilot";
+} from "@oh-my-pi/pi-ai/registry/oauth/github-copilot";
 
 describe("GitHub Copilot OAuth helpers", () => {
 	it("treats github.com as the public Copilot host", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getPriorityPremiumRequests, resolveServiceTier, shouldSendServiceTier } from "../src/types";
+import { getPriorityPremiumRequests, resolveServiceTier, shouldSendServiceTier } from "@oh-my-pi/pi-ai/types";
 
 describe("getPriorityPremiumRequests", () => {
 	it("counts priority tier as one premium request on OpenAI", () => {

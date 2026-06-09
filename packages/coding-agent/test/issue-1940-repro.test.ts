@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { TinyTitleClient } from "../src/tiny/title-client";
-import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "../src/tiny/title-protocol";
+import { TinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 
 class FakeTinyWorker {
 	terminated = false;

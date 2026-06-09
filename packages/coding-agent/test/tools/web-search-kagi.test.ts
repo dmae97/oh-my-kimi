@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import { type KagiSearchRequest, searchWithKagi } from "../../src/web/kagi";
-import { KagiProvider, searchKagi } from "../../src/web/search/providers/kagi";
-import { SearchProviderError } from "../../src/web/search/types";
+import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
+import { type KagiSearchRequest, searchWithKagi } from "@oh-my-pi/pi-coding-agent/web/kagi";
+import { KagiProvider, searchKagi } from "@oh-my-pi/pi-coding-agent/web/search/providers/kagi";
+import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 const fakeAuthStorage = {
 	async getApiKey() {
@@ -25,16 +24,14 @@ describe("Kagi web search error handling", () => {
 	});
 
 	it("maps auth failures to a compact provider-tagged error", async () => {
-		using _hook = hookFetch(
-			() =>
-				new Response(JSON.stringify({ error: [{ code: 401, message: "Invalid API key or access denied." }] }), {
-					status: 401,
-					headers: { "Content-Type": "application/json" },
-				}),
-		);
+		const fetchMock: FetchImpl = async () =>
+			new Response(JSON.stringify({ error: [{ code: 401, message: "Invalid API key or access denied." }] }), {
+				status: 401,
+				headers: { "Content-Type": "application/json" },
+			});
 
 		try {
-			await searchKagi({ query: "kagi test", authStorage: fakeAuthStorage });
+			await searchKagi({ query: "kagi test", authStorage: fakeAuthStorage, fetch: fetchMock });
 			expect.unreachable("expected searchKagi to throw");
 		} catch (error) {
 			expect(error).toBeInstanceOf(SearchProviderError);
@@ -44,17 +41,19 @@ describe("Kagi web search error handling", () => {
 	});
 
 	it("falls back to plain text for non-JSON error bodies", async () => {
-		using _hook = hookFetch(() => new Response("service unavailable", { status: 503 }));
+		const fetchMock: FetchImpl = async () => new Response("service unavailable", { status: 503 });
 
-		await expect(searchWithKagi("plain text error", {}, fakeAuthStorage)).rejects.toThrow(
+		await expect(searchWithKagi("plain text error", { fetch: fetchMock }, fakeAuthStorage)).rejects.toThrow(
 			"Kagi API error (503): service unavailable",
 		);
 	});
 
 	it("maps HTTP 5xx errors with empty body", async () => {
-		using _hook = hookFetch(() => new Response("", { status: 502 }));
+		const fetchMock: FetchImpl = async () => new Response("", { status: 502 });
 
-		await expect(searchWithKagi("empty error", {}, fakeAuthStorage)).rejects.toThrow("Kagi API error (502)");
+		await expect(searchWithKagi("empty error", { fetch: fetchMock }, fakeAuthStorage)).rejects.toThrow(
+			"Kagi API error (502)",
+		);
 	});
 });
 
@@ -71,55 +70,53 @@ describe("Kagi search result parsing", () => {
 	});
 
 	it("parses categorized response with search + video + news + related_search", async () => {
-		using _hook = hookFetch(
-			() =>
-				new Response(
-					JSON.stringify({
-						meta: { trace: "req-success" },
-						data: {
-							search: [
-								{
-									url: "https://example.com/article",
-									title: "Example Article",
-									snippet: "Example snippet text",
-									time: "2025-06-01T00:00:00Z",
-								},
-							],
-							video: [
-								{
-									url: "https://example.com/video",
-									title: "Example Video",
-									snippet: "Video description",
-									time: "2025-06-02T00:00:00Z",
-								},
-							],
-							news: [
-								{
-									url: "https://example.com/news",
-									title: "Breaking News",
-									snippet: "News snippet",
-									time: "2025-06-03T00:00:00Z",
-								},
-							],
-							related_search: [
-								{
-									title: "Related One",
-									url: "https://example.com/rs1",
-									props: { question: "related query one" },
-								},
-								{
-									title: "Related Two",
-									url: "https://example.com/rs2",
-									props: { question: "related query two" },
-								},
-							],
-						},
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				),
-		);
+		const fetchMock: FetchImpl = async () =>
+			new Response(
+				JSON.stringify({
+					meta: { trace: "req-success" },
+					data: {
+						search: [
+							{
+								url: "https://example.com/article",
+								title: "Example Article",
+								snippet: "Example snippet text",
+								time: "2025-06-01T00:00:00Z",
+							},
+						],
+						video: [
+							{
+								url: "https://example.com/video",
+								title: "Example Video",
+								snippet: "Video description",
+								time: "2025-06-02T00:00:00Z",
+							},
+						],
+						news: [
+							{
+								url: "https://example.com/news",
+								title: "Breaking News",
+								snippet: "News snippet",
+								time: "2025-06-03T00:00:00Z",
+							},
+						],
+						related_search: [
+							{
+								title: "Related One",
+								url: "https://example.com/rs1",
+								props: { question: "related query one" },
+							},
+							{
+								title: "Related Two",
+								url: "https://example.com/rs2",
+								props: { question: "related query two" },
+							},
+						],
+					},
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
 
-		const result = await searchWithKagi("success case", {}, fakeAuthStorage);
+		const result = await searchWithKagi("success case", { fetch: fetchMock }, fakeAuthStorage);
 
 		expect(result.requestId).toBe("req-success");
 		expect(result.sources).toHaveLength(3);
@@ -136,41 +133,37 @@ describe("Kagi search result parsing", () => {
 	});
 
 	it("parses direct_answer into the answer field", async () => {
-		using _hook = hookFetch(
-			() =>
-				new Response(
-					JSON.stringify({
-						meta: { trace: "req-answer" },
-						data: {
-							search: [{ url: "https://example.com", title: "Result", snippet: "Snippet" }],
-							direct_answer: [
-								{
-									url: "https://example.com/answer",
-									title: "Direct Answer",
-									snippet: "This is a direct answer.",
-								},
-							],
-						},
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				),
-		);
+		const fetchMock: FetchImpl = async () =>
+			new Response(
+				JSON.stringify({
+					meta: { trace: "req-answer" },
+					data: {
+						search: [{ url: "https://example.com", title: "Result", snippet: "Snippet" }],
+						direct_answer: [
+							{
+								url: "https://example.com/answer",
+								title: "Direct Answer",
+								snippet: "This is a direct answer.",
+							},
+						],
+					},
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
 
-		const result = await searchWithKagi("question", {}, fakeAuthStorage);
+		const result = await searchWithKagi("question", { fetch: fetchMock }, fakeAuthStorage);
 
 		expect(result.answer).toBe("This is a direct answer.");
 	});
 
 	it("returns empty results for an empty data object", async () => {
-		using _hook = hookFetch(
-			() =>
-				new Response(JSON.stringify({ meta: { trace: "req-empty" }, data: {} }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				}),
-		);
+		const fetchMock: FetchImpl = async () =>
+			new Response(JSON.stringify({ meta: { trace: "req-empty" }, data: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
 
-		const result = await searchWithKagi("no results", {}, fakeAuthStorage);
+		const result = await searchWithKagi("no results", { fetch: fetchMock }, fakeAuthStorage);
 
 		expect(result.sources).toHaveLength(0);
 		expect(result.relatedQuestions).toHaveLength(0);
@@ -185,7 +178,7 @@ describe("Kagi search result parsing", () => {
 	] as const)("maps recency %s to filters.after %s", async (recency, expected) => {
 		let requestBody: KagiSearchRequest | undefined;
 
-		using _hook = hookFetch((input: string | URL | Request, init) => {
+		const fetchMock: FetchImpl = async (input, init) => {
 			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			if (urlStr === "https://kagi.com/api/v1/search") {
 				requestBody = JSON.parse(init?.body as string) as KagiSearchRequest;
@@ -195,16 +188,16 @@ describe("Kagi search result parsing", () => {
 				});
 			}
 			return new Response("not mocked", { status: 500 });
-		});
+		};
 
-		await searchWithKagi("recency test", { recency }, fakeAuthStorage);
+		await searchWithKagi("recency test", { recency, fetch: fetchMock }, fakeAuthStorage);
 
 		expect(requestBody?.filters?.after).toBe(expected);
 	});
 
 	it("uses a Bearer authorization header", async () => {
 		let capturedAuth: string | null = null;
-		using _hook = hookFetch((input: string | URL | Request, init) => {
+		const fetchMock: FetchImpl = async (input, init) => {
 			const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			if (urlStr === "https://kagi.com/api/v1/search") {
 				capturedAuth =
@@ -219,9 +212,9 @@ describe("Kagi search result parsing", () => {
 				});
 			}
 			return new Response("not mocked", { status: 500 });
-		});
+		};
 
-		await searchWithKagi("auth test", {}, fakeAuthStorage);
+		await searchWithKagi("auth test", { fetch: fetchMock }, fakeAuthStorage);
 
 		expect(capturedAuth ?? "null").toBe("Bearer test-kagi-key");
 	});

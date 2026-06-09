@@ -437,10 +437,8 @@ impl ShellVariable {
 				}
 				Ok(())
 			},
-			_ => {
-				tracing::error!("assigning to index {array_index} of {:?}", self.value);
-				error::unimp("assigning to index of non-array variable")
-			},
+			ShellValue::Dynamic { .. } => Ok(()),
+			ShellValue::Unset(_) | ShellValue::String(_) => Err(error::ErrorKind::NotArray.into()),
 		}
 	}
 
@@ -800,23 +798,45 @@ impl ShellValue {
 		existing_values: &mut BTreeMap<String, String>,
 		literal_values: ArrayLiteral,
 	) -> Result<(), error::Error> {
-		let mut current_key = None;
-		for (key, value) in literal_values.0 {
-			if let Some(current_key) = current_key.take() {
-				if key.is_some() {
-					return error::unimp("misaligned keys/values in associative array literal");
-				} else {
-					existing_values.insert(current_key, value);
-				}
-			} else if let Some(key) = key {
-				existing_values.insert(key, value);
-			} else {
-				current_key = Some(value);
-			}
-		}
+		let mut literal_values = literal_values.0.into_iter();
+		let Some((first_key, first_value)) = literal_values.next() else {
+			return Ok(());
+		};
 
-		if let Some(current_key) = current_key {
-			existing_values.insert(current_key, String::new());
+		if let Some(first_key) = first_key {
+			existing_values.insert(first_key, first_value);
+
+			for (key, value) in literal_values {
+				let Some(key) = key else {
+					return Err(error::ErrorKind::AssociativeArrayMissingSubscript.into());
+				};
+
+				existing_values.insert(key, value);
+			}
+		} else {
+			let mut current_key = Some(first_value);
+			for (key, value) in literal_values {
+				let value = if let Some(key) = key {
+					let mut word = String::with_capacity(key.len() + value.len() + 3);
+					word.push('[');
+					word.push_str(key.as_str());
+					word.push_str("]=");
+					word.push_str(value.as_str());
+					word
+				} else {
+					value
+				};
+
+				if let Some(key) = current_key.take() {
+					existing_values.insert(key, value);
+				} else {
+					current_key = Some(value);
+				}
+			}
+
+			if let Some(current_key) = current_key {
+				existing_values.insert(current_key, String::new());
+			}
 		}
 
 		Ok(())

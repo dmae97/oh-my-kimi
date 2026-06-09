@@ -7,8 +7,8 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import { type AuthStorage, getBundledModels } from "@oh-my-pi/pi-ai";
-import { decodeJwt } from "@oh-my-pi/pi-ai/utils/oauth/openai-codex";
+import { type AuthStorage, type FetchImpl, getBundledModels } from "@oh-my-pi/pi-ai";
+import { decodeJwt } from "@oh-my-pi/pi-ai/oauth/openai-codex";
 import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
@@ -66,6 +66,7 @@ function shouldRetryWithNextDefaultModel(error: unknown): boolean {
 
 export interface CodexSearchParams {
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 	query: string;
 	system_prompt?: string;
 	num_results?: number;
@@ -114,8 +115,34 @@ interface CodexResponse {
 	usage?: CodexUsage;
 }
 
+/**
+ * Known Codex "image placeholder" answers — short prose the assistant emits in
+ * place of a real answer when it produced a screenshot instead of text. These
+ * carry no information, so callers treat them as non-answers and advance the
+ * chain to a provider that returns text. Extend by adding the normalized
+ * literal below; no regex tuning required.
+ */
+const IMAGE_PLACEHOLDER_ANSWERS: ReadonlySet<string> = new Set([
+	"see attached image",
+	"attached image",
+	"see the attached image",
+	"see image",
+	"see image above",
+	"image above",
+	"see image below",
+	"image below",
+]);
+
 function isImagePlaceholderAnswer(text: string): boolean {
-	return text.trim().toLowerCase() === "(see attached image)";
+	// Strip surrounding brackets/quotes and trailing punctuation, lowercase,
+	// then match against the known-placeholder set.
+	const normalized = text
+		.trim()
+		.replace(/^[[("'`*_]+/, "")
+		.replace(/[\])"'`*_.!?]+$/, "")
+		.trim()
+		.toLowerCase();
+	return IMAGE_PLACEHOLDER_ANSWERS.has(normalized);
 }
 
 function addSource(sources: SearchSource[], source: SearchSource): void {
@@ -296,6 +323,7 @@ async function callCodexSearch(
 		systemPrompt?: string;
 		searchContextSize?: "low" | "medium" | "high";
 		modelId: string;
+		fetch?: FetchImpl;
 	},
 ): Promise<{
 	answer: string;
@@ -330,7 +358,8 @@ async function callCodexSearch(
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
 
-	const response = await fetch(url, {
+	const fetchImpl = options.fetch ?? fetch;
+	const response = await fetchImpl(url, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
@@ -423,15 +452,18 @@ async function callCodexSearch(
 
 	const finalAnswer = answerParts.join("\n\n").trim();
 	const streamedAnswer = streamedAnswerParts.join("").trim();
-	if (isImagePlaceholderAnswer(finalAnswer) && streamedAnswer.length === 0) {
+	// Throw to advance the chain whenever Codex emitted nothing but image
+	// placeholder prose — including the case where the streamed delta itself
+	// is the placeholder (the model occasionally streams the same text it
+	// publishes as the final output_text).
+	const finalIsPlaceholder = finalAnswer.length > 0 && isImagePlaceholderAnswer(finalAnswer);
+	const streamedIsPlaceholder = streamedAnswer.length > 0 && isImagePlaceholderAnswer(streamedAnswer);
+	const hasFinalText = finalAnswer.length > 0 && !finalIsPlaceholder;
+	const hasStreamedText = streamedAnswer.length > 0 && !streamedIsPlaceholder;
+	if (!hasFinalText && !hasStreamedText && sources.length === 0) {
 		throw new SearchProviderError("codex", "Codex returned image-only response", 502);
 	}
-	const answer =
-		finalAnswer.length > 0 && !isImagePlaceholderAnswer(finalAnswer)
-			? finalAnswer
-			: streamedAnswer.length > 0
-				? streamedAnswer
-				: finalAnswer;
+	const answer = hasFinalText ? finalAnswer : hasStreamedText ? streamedAnswer : "";
 
 	// Fallback: when Codex omits url_citation annotations, scrape markdown links
 	// and bare URLs from the synthesized answer so callers still receive sources.
@@ -493,6 +525,7 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 				systemPrompt: params.systemPrompt,
 				searchContextSize: "high",
 				modelId,
+				fetch: params.fetch,
 			});
 			break;
 		} catch (error) {

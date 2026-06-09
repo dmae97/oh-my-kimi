@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { PlanModeState } from "../../src/plan-mode/state";
-import type { ToolSession } from "../../src/tools";
-import { enforcePlanModeWrite, resolvePlanPath } from "../../src/tools/plan-mode-guard";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { enforcePlanModeWrite, resolvePlanPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 
 interface SessionOverrides {
 	artifactsDir?: string | null;
@@ -43,72 +44,70 @@ describe("resolvePlanPath local:// support", () => {
 	});
 });
 
-describe("resolvePlanPath plan-mode redirect", () => {
-	const planMode: PlanModeState = { enabled: true, planFilePath: "local://PLAN.md" };
-	const approvedPlanMode: PlanModeState = { enabled: true, planFilePath: "local://APPROVED.md" };
+describe("resolvePlanPath resolves literally (no plan-mode redirect)", () => {
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
 
-	it("redirects bare PLAN.md to the session plan path when plan mode is active", () => {
-		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
-		expect(resolvePlanPath(session, "PLAN.md")).toBe(path.join("/tmp/agent-artifacts", "local", "PLAN.md"));
-	});
-
-	it("redirects ./PLAN.md and absolute cwd-PLAN.md alike", () => {
+	it("resolves a bare path against cwd regardless of plan mode", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
-		const expected = path.join("/tmp/agent-artifacts", "local", "PLAN.md");
-		expect(resolvePlanPath(session, "./PLAN.md")).toBe(expected);
-		expect(resolvePlanPath(session, "/repo/PLAN.md")).toBe(expected);
-	});
-
-	it("does not redirect when plan mode is disabled", () => {
-		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo" });
 		expect(resolvePlanPath(session, "PLAN.md")).toBe(path.join("/repo", "PLAN.md"));
-	});
-
-	it("does not redirect paths whose basename differs from the plan basename", () => {
-		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
 		expect(resolvePlanPath(session, "src/foo.ts")).toBe(path.join("/repo", "src/foo.ts"));
 	});
 
-	it("leaves an explicit local://PLAN.md unchanged", () => {
+	it("resolves a local:// plan file to the session local root", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
-		expect(resolvePlanPath(session, "local://PLAN.md")).toBe(path.join("/tmp/agent-artifacts", "local", "PLAN.md"));
-	});
-
-	it("redirects PLAN.md aliases to the active titled plan artifact", () => {
-		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode: approvedPlanMode });
-		const expected = path.join("/tmp/agent-artifacts", "local", "APPROVED.md");
-		expect(resolvePlanPath(session, "PLAN.md")).toBe(expected);
-		expect(resolvePlanPath(session, "./PLAN.md")).toBe(expected);
-		expect(resolvePlanPath(session, "/repo/PLAN.md")).toBe(expected);
-		expect(resolvePlanPath(session, "local://PLAN.md")).toBe(expected);
+		expect(resolvePlanPath(session, "local://some-plan.md")).toBe(
+			path.join("/tmp/agent-artifacts", "local", "some-plan.md"),
+		);
 	});
 });
 
-describe("enforcePlanModeWrite plan-mode redirect", () => {
-	const planMode: PlanModeState = { enabled: true, planFilePath: "local://PLAN.md" };
-	const approvedPlanMode: PlanModeState = { enabled: true, planFilePath: "local://APPROVED.md" };
+describe("enforcePlanModeWrite (working tree read-only, local:// sandbox writable)", () => {
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
 
-	it("accepts bare PLAN.md as a write to the plan file", () => {
+	it("accepts writes to any local:// file", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
-		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "update" })).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, "local://auth-refactor-plan.md", { op: "create" })).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, "local://scratch/notes.md", { op: "update" })).not.toThrow();
 	});
 
-	it("still rejects non-plan paths in plan mode", () => {
+	it("rejects writes to the working tree", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+		expect(() => enforcePlanModeWrite(session, "src/foo.ts", { op: "update" })).toThrow(/working tree is read-only/);
+		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "create" })).toThrow(/working tree is read-only/);
+	});
+
+	it("rejects deletes and renames outright", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
-		expect(() => enforcePlanModeWrite(session, "src/foo.ts", { op: "update" })).toThrow(
-			/only the plan file may be modified/,
+		expect(() => enforcePlanModeWrite(session, "local://some-plan.md", { op: "delete" })).toThrow(
+			/deleting files is not allowed/,
+		);
+		expect(() => enforcePlanModeWrite(session, "local://some-plan.md", { move: "local://renamed.md" })).toThrow(
+			/renaming files is not allowed/,
 		);
 	});
 
-	it("accepts bare PLAN.md as a write to a titled active plan file", () => {
-		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode: approvedPlanMode });
-		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "update" })).not.toThrow();
+	it("is a no-op when plan mode is disabled", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo" });
+		expect(() => enforcePlanModeWrite(session, "src/foo.ts", { op: "update" })).not.toThrow();
+	});
+});
+
+describe("enforcePlanModeWrite accepts absolute local-sandbox paths", () => {
+	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
+
+	it("allows the absolute path returned by `read local://...` (== sandbox-resolved path)", async () => {
+		// Use an existing tmp directory so the realpath check inside the guard
+		// sees a real filesystem (macOS collapses /tmp -> /private/tmp etc.).
+		const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-guard-test-"));
+		const session = makeSession({ artifactsDir, planMode });
+		const absolute = resolvePlanPath(session, "local://my-plan.md");
+		expect(() => enforcePlanModeWrite(session, absolute, { op: "update" })).not.toThrow();
 	});
 
-	it("rejects deletes of PLAN.md even when basename matches", () => {
-		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
-		expect(() => enforcePlanModeWrite(session, "PLAN.md", { op: "delete" })).toThrow(
-			/Plan mode: deleting files is not allowed/,
+	it("still rejects an absolute path outside the local sandbox", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+		expect(() => enforcePlanModeWrite(session, "/repo/src/foo.ts", { op: "update" })).toThrow(
+			/working tree is read-only/,
 		);
 	});
 });

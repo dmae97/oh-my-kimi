@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import { searchGemini } from "../../src/web/search/providers/gemini";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { searchGemini } from "@oh-my-pi/pi-coding-agent/web/search/providers/gemini";
 
 const SSE_RESPONSE =
 	'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini answer"}]}}],"modelVersion":"gemini-2.5-flash"}}\n\n';
@@ -25,21 +25,22 @@ describe("searchGemini tools serialization", () => {
 		},
 	} as unknown as AuthStorage;
 
-	function mockGeminiFetch() {
+	function mockGeminiFetch(): FetchImpl {
 		capturedRequest = null;
-		return hookFetch((_url, init) => {
+		return (_url, init) => {
 			capturedRequest = {
 				body: init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : null,
 			};
-			return new Response(SSE_RESPONSE, {
-				status: 200,
-				headers: { "Content-Type": "text/event-stream" },
-			});
-		});
+			return Promise.resolve(
+				new Response(SSE_RESPONSE, {
+					status: 200,
+					headers: { "Content-Type": "text/event-stream" },
+				}),
+			);
+		};
 	}
 
 	afterEach(() => {
-		vi.restoreAllMocks();
 		capturedRequest = null;
 	});
 
@@ -52,8 +53,8 @@ describe("searchGemini tools serialization", () => {
 	}
 
 	it("sends default googleSearch tool when no passthrough payloads are provided", async () => {
-		using _hook = mockGeminiFetch();
-		await searchGemini(makeParams("default tools"));
+		const fetchMock = mockGeminiFetch();
+		await searchGemini({ ...makeParams("default tools"), fetch: fetchMock });
 
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.body?.request).toMatchObject({
@@ -62,10 +63,11 @@ describe("searchGemini tools serialization", () => {
 	});
 
 	it("passes through googleSearch payload into googleSearch tool", async () => {
-		using _hook = mockGeminiFetch();
+		const fetchMock = mockGeminiFetch();
 		await searchGemini({
 			...makeParams("google payload"),
 			google_search: { dynamicRetrievalConfig: { mode: "MODE_DYNAMIC" } },
+			fetch: fetchMock,
 		});
 
 		expect(capturedRequest).not.toBeNull();
@@ -75,11 +77,12 @@ describe("searchGemini tools serialization", () => {
 	});
 
 	it("includes codeExecution and urlContext tools when provided", async () => {
-		using _hook = mockGeminiFetch();
+		const fetchMock = mockGeminiFetch();
 		await searchGemini({
 			...makeParams("extended tools"),
 			code_execution: {},
 			url_context: { allowedDomains: ["example.com"] },
+			fetch: fetchMock,
 		});
 
 		expect(capturedRequest).not.toBeNull();

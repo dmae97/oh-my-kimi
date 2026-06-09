@@ -1,4 +1,4 @@
-import { type KeyId, matchesKey, parseKey } from "./keys";
+import { type KeyId, parseKey } from "./keys";
 
 /**
  * Global keybinding registry.
@@ -100,11 +100,11 @@ export const TUI_KEYBINDINGS = {
 		description: "Delete character forward",
 	},
 	"tui.editor.deleteWordBackward": {
-		defaultKeys: ["ctrl+w", "alt+backspace", "ctrl+backspace"],
+		defaultKeys: ["ctrl+w", "alt+backspace", "ctrl+backspace", "super+alt+backspace"],
 		description: "Delete word backward",
 	},
 	"tui.editor.deleteWordForward": {
-		defaultKeys: ["alt+delete", "alt+d"],
+		defaultKeys: ["alt+delete", "alt+d", "super+alt+delete", "super+alt+d"],
 		description: "Delete word forward",
 	},
 	"tui.editor.deleteToLineStart": {
@@ -164,6 +164,64 @@ const SHIFTED_SYMBOL_KEYS = new Set<string>([
 	"~",
 ]);
 
+const MODIFIER_ORDER = ["ctrl", "shift", "alt", "super"] as const;
+
+function startsWithModifier(key: string, offset: number, modifier: string): boolean {
+	if (key.length <= offset + modifier.length || key.charCodeAt(offset + modifier.length) !== 43) return false;
+	for (let i = 0; i < modifier.length; i++) {
+		const actual = key.charCodeAt(offset + i);
+		const expected = modifier.charCodeAt(i);
+		if (actual !== expected && actual !== expected - 32) return false;
+	}
+	return true;
+}
+
+function isAsciiUppercaseLetter(key: string): boolean {
+	if (key.length !== 1) return false;
+	const code = key.charCodeAt(0);
+	return code >= 65 && code <= 90;
+}
+
+export function canonicalKeyId(key: string): string {
+	let offset = 0;
+	const modifiers: string[] = [];
+	let foundModifier = true;
+
+	while (foundModifier) {
+		foundModifier = false;
+		for (const modifier of MODIFIER_ORDER) {
+			if (startsWithModifier(key, offset, modifier)) {
+				modifiers.push(modifier);
+				offset += modifier.length + 1;
+				foundModifier = true;
+				break;
+			}
+		}
+	}
+	const rawBase = key.slice(offset);
+	const lowerBase = rawBase.toLowerCase();
+	const base = lowerBase === "esc" ? "escape" : lowerBase === "return" ? "enter" : lowerBase;
+	if (isAsciiUppercaseLetter(rawBase) && !modifiers.includes("shift")) {
+		modifiers.push("shift");
+	}
+
+	if (modifiers.length === 0) return base;
+	modifiers.sort(
+		(left, right) =>
+			MODIFIER_ORDER.indexOf(left as (typeof MODIFIER_ORDER)[number]) -
+			MODIFIER_ORDER.indexOf(right as (typeof MODIFIER_ORDER)[number]),
+	);
+	return `${modifiers.join("+")}+${base}`;
+}
+
+export function addKeyAliases(keys: Set<string>, key: KeyId): void {
+	const canonical = canonicalKeyId(key);
+	keys.add(canonical);
+	if (SHIFTED_SYMBOL_KEYS.has(canonical)) {
+		keys.add(`shift+${canonical}`);
+	}
+}
+
 const normalizeKeyId = (key: KeyId): KeyId => key.toLowerCase() as KeyId;
 
 function normalizeKeys(keys: KeyId | KeyId[] | undefined): KeyId[] {
@@ -185,6 +243,7 @@ export class KeybindingsManager {
 	#definitions: KeybindingDefinitions;
 	#userBindings: KeybindingsConfig;
 	#keysById = new Map<Keybinding, KeyId[]>();
+	#matchKeysById = new Map<Keybinding, Set<string>>();
 	#conflicts: KeybindingConflict[] = [];
 
 	constructor(definitions: KeybindingDefinitions, userBindings: KeybindingsConfig = {}) {
@@ -195,6 +254,7 @@ export class KeybindingsManager {
 
 	#rebuild(): void {
 		this.#keysById.clear();
+		this.#matchKeysById.clear();
 		this.#conflicts = [];
 
 		const userClaims = new Map<KeyId, Set<Keybinding>>();
@@ -217,21 +277,19 @@ export class KeybindingsManager {
 			const userKeys = this.#userBindings[id];
 			const keys = userKeys === undefined ? normalizeKeys(definition.defaultKeys) : normalizeKeys(userKeys);
 			this.#keysById.set(id as Keybinding, keys);
+			const matchKeys = new Set<string>();
+			for (const key of keys) {
+				addKeyAliases(matchKeys, key);
+			}
+			this.#matchKeysById.set(id as Keybinding, matchKeys);
 		}
 	}
 
 	matches(data: string, keybinding: Keybinding): boolean {
-		const keys = this.#keysById.get(keybinding) ?? [];
-		for (const key of keys) {
-			if (matchesKey(data, key)) return true;
-		}
-
-		// Handle shifted symbol keys (e.g., shift+- produces _ on US layout)
 		const parsed = parseKey(data);
-		if (!parsed?.startsWith("shift+")) return false;
-		const keyName = parsed.slice("shift+".length);
-		if (!SHIFTED_SYMBOL_KEYS.has(keyName)) return false;
-		return keys.includes(keyName as KeyId);
+		if (parsed === undefined) return false;
+		const matchKeys = this.#matchKeysById.get(keybinding);
+		return matchKeys?.has(canonicalKeyId(parsed)) ?? false;
 	}
 
 	getKeys(keybinding: Keybinding): KeyId[] {

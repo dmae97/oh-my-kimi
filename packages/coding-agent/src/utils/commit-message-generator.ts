@@ -6,8 +6,9 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveModelRoleValue } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
@@ -50,7 +51,7 @@ function getSmolModelCandidates(
 		candidates.push({ model, thinkingLevel });
 	};
 
-	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	const configuredSmol = resolveModelRoleValue(settings.getModelRole("smol"), availableModels, {
 		settings,
 		matchPreferences,
@@ -110,7 +111,14 @@ export async function generateCommitMessage(
 					systemPrompt: [COMMIT_SYSTEM_PROMPT],
 					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				},
-				{ apiKey, maxTokens, reasoning: toReasoningEffort(candidate.thinkingLevel) },
+				{
+					apiKey: registry.resolver(candidate.model.provider, {
+						sessionId,
+						baseUrl: candidate.model.baseUrl,
+					}),
+					maxTokens,
+					reasoning: toReasoningEffort(candidate.thinkingLevel),
+				},
 			);
 
 			if (response.stopReason === "error") {

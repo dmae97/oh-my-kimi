@@ -2,12 +2,18 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "../../src/config/settings";
-import { DapClient } from "../../src/dap/client";
-import { DapSessionManager } from "../../src/dap/session";
-import type { DapCapabilities, DapClientState, DapEventMessage, DapResolvedAdapter } from "../../src/dap/types";
-import type { ToolSession } from "../../src/tools";
-import { DebugTool } from "../../src/tools/debug";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as dapModule from "@oh-my-pi/pi-coding-agent/dap";
+import { DapClient } from "@oh-my-pi/pi-coding-agent/dap/client";
+import { DapSessionManager } from "@oh-my-pi/pi-coding-agent/dap/session";
+import type {
+	DapCapabilities,
+	DapClientState,
+	DapEventMessage,
+	DapResolvedAdapter,
+} from "@oh-my-pi/pi-coding-agent/dap/types";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { DebugTool } from "@oh-my-pi/pi-coding-agent/tools/debug";
 
 const TEST_ADAPTER: DapResolvedAdapter = {
 	name: "lldb-dap",
@@ -20,7 +26,34 @@ const TEST_ADAPTER: DapResolvedAdapter = {
 	launchDefaults: {},
 	attachDefaults: {},
 	connectMode: "stdio",
+	acceptsDirectoryProgram: false,
 };
+
+const DELAYED_UNIX_SOCKET_ADAPTER = `
+const listenPrefix = "--listen=unix:";
+const listenArg = process.argv.find(arg => arg.startsWith(listenPrefix));
+if (!listenArg) {
+	throw new Error("missing --listen=unix argument");
+}
+const socketPath = listenArg.slice(listenPrefix.length);
+let server;
+process.on("SIGTERM", () => {
+	server?.stop();
+	process.exit(0);
+});
+await Bun.sleep(100);
+server = Bun.listen({
+	unix: socketPath,
+	socket: {
+		open() {},
+		data() {},
+		close() {},
+		error() {},
+	},
+});
+await Bun.sleep(2_000);
+server.stop();
+`;
 
 type DapEventHandler = (body: unknown, event: DapEventMessage) => void | Promise<void>;
 
@@ -286,32 +319,179 @@ describe("DAP launch failure handling", () => {
 		expect(message).toContain("launch: 'C:\\repo\\program' is not a valid executable");
 		expect(message).toContain("configurationDone: Expected process to be stopped.");
 	});
+
+	it("waits for delayed Unix socket adapters before connecting on Linux", async () => {
+		if (process.platform !== "linux") return;
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-dlv-socket-"));
+		const adapterPath = path.join(cwd, "delayed-unix-socket-adapter.mjs");
+		await fs.writeFile(adapterPath, DELAYED_UNIX_SOCKET_ADAPTER);
+		const adapter: DapResolvedAdapter = {
+			...TEST_ADAPTER,
+			name: "dlv",
+			command: process.execPath,
+			args: [adapterPath],
+			resolvedCommand: process.execPath,
+			connectMode: "socket",
+		};
+		let client: DapClient | undefined;
+		try {
+			client = await DapClient.spawn({ adapter, cwd });
+			expect(client.isAlive()).toBe(true);
+		} finally {
+			await client?.dispose();
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("DebugTool launch validation", () => {
-	it("rejects directory-valued launch programs before adapter selection", async () => {
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-program-"));
+	it("rejects directory programs when the selected adapter cannot debug a directory", async () => {
+		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(TEST_ADAPTER);
 		try {
-			await fs.mkdir(path.join(cwd, "python"));
-			const session: ToolSession = {
-				cwd,
-				hasUI: false,
-				getSessionFile: () => null,
-				getSessionSpawns: () => "*",
-				settings: Settings.isolated({ "debug.enabled": true }),
-			};
-			const tool = new DebugTool(session);
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-program-"));
+			try {
+				await fs.mkdir(path.join(cwd, "python"));
+				const session: ToolSession = {
+					cwd,
+					hasUI: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					settings: Settings.isolated({ "debug.enabled": true }),
+				};
+				const tool = new DebugTool(session);
 
-			await expect(tool.execute("call", { action: "launch", program: "python" })).rejects.toThrow(
-				/launch program resolves to a directory.*python/,
-			);
+				await expect(tool.execute("call", { action: "launch", program: "python" })).rejects.toThrow(
+					/launch program resolves to a directory.*python/,
+				);
+			} finally {
+				await fs.rm(cwd, { recursive: true, force: true });
+			}
 		} finally {
-			await fs.rm(cwd, { recursive: true, force: true });
+			launchSpy.mockRestore();
+		}
+	});
+
+	it("allows directory programs when the selected adapter accepts them (dlv on a Go package)", async () => {
+		const dlvAdapter: DapResolvedAdapter = {
+			...TEST_ADAPTER,
+			name: "dlv",
+			command: "dlv",
+			resolvedCommand: "dlv",
+			launchDefaults: { request: "launch", mode: "debug", stopOnEntry: true },
+			acceptsDirectoryProgram: true,
+		};
+		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(dlvAdapter);
+		const sessionLaunchSpy = spyOn(dapModule.dapSessionManager, "launch").mockImplementation(async opts => {
+			throw Object.assign(new Error("captured launch"), { capturedOptions: opts });
+		});
+		try {
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-dlv-dir-"));
+			try {
+				await fs.mkdir(path.join(cwd, "cmd"));
+				const session: ToolSession = {
+					cwd,
+					hasUI: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					settings: Settings.isolated({ "debug.enabled": true }),
+				};
+				const tool = new DebugTool(session);
+
+				// Validation must pass and propagate to dapSessionManager.launch; we
+				// stop the actual spawn there and inspect the launch arguments.
+				await expect(tool.execute("call", { action: "launch", program: "cmd", adapter: "dlv" })).rejects.toThrow(
+					/captured launch/,
+				);
+				expect(sessionLaunchSpy).toHaveBeenCalledTimes(1);
+				const [opts] = sessionLaunchSpy.mock.calls[0]!;
+				expect(opts.extraLaunchArguments).toEqual({ mode: "debug" });
+				expect(opts.program).toBe(path.join(cwd, "cmd"));
+			} finally {
+				await fs.rm(cwd, { recursive: true, force: true });
+			}
+		} finally {
+			sessionLaunchSpy.mockRestore();
+			launchSpy.mockRestore();
+		}
+	});
+
+	it("prefers directory-capable dlv over native adapters for extensionless Go package directories", async () => {
+		const sessionLaunchSpy = spyOn(dapModule.dapSessionManager, "launch").mockImplementation(async opts => {
+			throw Object.assign(new Error("captured launch"), { capturedOptions: opts });
+		});
+		try {
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-dlv-mixed-roots-"));
+			try {
+				await fs.writeFile(path.join(cwd, "go.mod"), "module hello\n\ngo 1.22\n");
+				await fs.writeFile(path.join(cwd, "Makefile"), "all:\n\tgo build ./...\n");
+				await fs.mkdir(path.join(cwd, "bin"));
+				await fs.writeFile(path.join(cwd, "bin", "dlv"), "");
+				await fs.writeFile(path.join(cwd, "bin", "gdb"), "");
+				await fs.mkdir(path.join(cwd, "cmd", "hello"), { recursive: true });
+				const session: ToolSession = {
+					cwd,
+					hasUI: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					settings: Settings.isolated({ "debug.enabled": true }),
+				};
+				const tool = new DebugTool(session);
+
+				await expect(tool.execute("call", { action: "launch", program: "cmd/hello" })).rejects.toThrow(
+					/captured launch/,
+				);
+				const [opts] = sessionLaunchSpy.mock.calls[0]!;
+				expect(opts.adapter.name).toBe("dlv");
+				expect(opts.extraLaunchArguments).toEqual({ mode: "debug" });
+			} finally {
+				await fs.rm(cwd, { recursive: true, force: true });
+			}
+		} finally {
+			sessionLaunchSpy.mockRestore();
+		}
+	});
+
+	it("dlv launch with a compiled binary switches mode from debug to exec", async () => {
+		const dlvAdapter: DapResolvedAdapter = {
+			...TEST_ADAPTER,
+			name: "dlv",
+			command: "dlv",
+			resolvedCommand: "dlv",
+			launchDefaults: { request: "launch", mode: "debug", stopOnEntry: true },
+			acceptsDirectoryProgram: true,
+		};
+		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(dlvAdapter);
+		const sessionLaunchSpy = spyOn(dapModule.dapSessionManager, "launch").mockImplementation(async opts => {
+			throw Object.assign(new Error("captured launch"), { capturedOptions: opts });
+		});
+		try {
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-dlv-exec-"));
+			try {
+				await fs.writeFile(path.join(cwd, "hello"), "#!/usr/bin/env sh\necho hi\n");
+				const session: ToolSession = {
+					cwd,
+					hasUI: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					settings: Settings.isolated({ "debug.enabled": true }),
+				};
+				const tool = new DebugTool(session);
+
+				await expect(tool.execute("call", { action: "launch", program: "hello", adapter: "dlv" })).rejects.toThrow(
+					/captured launch/,
+				);
+				const [opts] = sessionLaunchSpy.mock.calls[0]!;
+				expect(opts.extraLaunchArguments).toEqual({ mode: "exec" });
+			} finally {
+				await fs.rm(cwd, { recursive: true, force: true });
+			}
+		} finally {
+			sessionLaunchSpy.mockRestore();
+			launchSpy.mockRestore();
 		}
 	});
 
 	it("throws targeted 'python not found in PATH' when adapter:'debugpy' is unresolvable for launch", async () => {
-		const dapModule = await import("../../src/dap");
 		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(null);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-debugpy-"));
@@ -338,7 +518,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("throws targeted 'python not found in PATH' when adapter:'debugpy' is unresolvable for attach", async () => {
-		const dapModule = await import("../../src/dap");
 		const attachSpy = spyOn(dapModule, "selectAttachAdapter").mockReturnValue(null);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-debugpy-attach-"));
@@ -364,7 +543,6 @@ describe("DebugTool launch validation", () => {
 	});
 
 	it("falls back to the generic 'No debugger adapter' error when adapter is unspecified", async () => {
-		const dapModule = await import("../../src/dap");
 		const launchSpy = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue(null);
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-noadapter-"));

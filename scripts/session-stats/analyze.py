@@ -17,6 +17,7 @@ import json
 import re
 import sqlite3
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -65,6 +66,14 @@ def parse_bucket(spec: str) -> int:
     raise ValueError(f"bad --by spec: {spec}")
 
 
+def since_cutoff_ms(args: argparse.Namespace) -> int | None:
+    """Resolve --since spec (h/d/w/m/<N>{h,d,w}) to an epoch-ms cutoff, or None."""
+    spec = getattr(args, "since", None)
+    if not spec:
+        return None
+    return int(time.time() * 1000) - parse_bucket(spec) * 1000
+
+
 def percentile(values: list[int], p: float) -> float:
     if not values:
         return 0.0
@@ -111,12 +120,19 @@ def cmd_tools(args: argparse.Namespace) -> int:
     conn = open_ro()
     where_session, where_args = _session_filter_clause(conn, args)
 
+    cutoff = since_cutoff_ms(args)
     def with_session(table_alias: str) -> tuple[str, tuple]:
-        """Returns ('AND <alias>.session_file IN (...)', params) or ('', ())."""
-        if not where_args:
-            return "", ()
-        ph = ",".join("?" * len(where_args))
-        return f"AND {table_alias}.session_file IN ({ph})", where_args
+        """Combined session-file + since-timestamp scope for an alias, or ('', ())."""
+        parts: list[str] = []
+        params: list = []
+        if where_args:
+            ph = ",".join("?" * len(where_args))
+            parts.append(f"AND {table_alias}.session_file IN ({ph})")
+            params.extend(where_args)
+        if cutoff is not None:
+            parts.append(f"AND {table_alias}.timestamp >= ?")
+            params.append(cutoff)
+        return " ".join(parts), tuple(params)
 
     sf_clause_c, sf_params_c = with_session("c")
     sf_clause_r, sf_params_r = with_session("r")
@@ -137,9 +153,15 @@ def cmd_tools(args: argparse.Namespace) -> int:
         """,
         sf_params_c + sf_params_r + sf_params_a + sf_params_a + sf_params_u + sf_params_c + sf_params_r,
     ).fetchone()
-    n_sessions = conn.execute(
-        f"SELECT COUNT(*) FROM ss_sessions {where_session}", where_args
-    ).fetchone()[0]
+    if cutoff is None:
+        n_sessions = conn.execute(
+            f"SELECT COUNT(*) FROM ss_sessions {where_session}", where_args
+        ).fetchone()[0]
+    else:
+        sc, sp = with_session("c")
+        n_sessions = conn.execute(
+            f"SELECT COUNT(DISTINCT c.session_file) FROM ss_tool_calls c WHERE 1=1 {sc}", sp
+        ).fetchone()[0]
     g = grand
 
     grand_total = g["tool_args"] + g["tool_res"] + g["thinking"] + g["asst_text"] + g["user_text"]
@@ -188,7 +210,7 @@ def cmd_tools(args: argparse.Namespace) -> int:
 
     if args.by:
         bucket = parse_bucket(args.by)
-        _print_buckets(conn, bucket, args.top, args.tool)
+        _print_buckets(conn, bucket, args.top, args.tool, cutoff)
 
     return 0
 
@@ -219,9 +241,17 @@ def _session_filter_clause(conn, args) -> tuple[str, tuple]:
     return ("", ())
 
 
-def _print_buckets(conn, bucket_secs: int, top: int, tool_filter: str | None) -> None:
-    where = "WHERE c.tool_name = ?" if tool_filter else ""
-    params = (tool_filter,) if tool_filter else ()
+def _print_buckets(conn, bucket_secs: int, top: int, tool_filter: str | None,
+                   cutoff: int | None = None) -> None:
+    conds: list[str] = []
+    params: list = []
+    if tool_filter:
+        conds.append("c.tool_name = ?")
+        params.append(tool_filter)
+    if cutoff is not None:
+        conds.append("c.timestamp >= ?")
+        params.append(cutoff)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
     rows = conn.execute(
         f"""
         SELECT
@@ -237,7 +267,7 @@ def _print_buckets(conn, bucket_secs: int, top: int, tool_filter: str | None) ->
         GROUP BY bucket, c.tool_name
         ORDER BY bucket DESC
         """,
-        (bucket_secs, bucket_secs) + params,
+        (bucket_secs, bucket_secs, *params),
     ).fetchall()
 
     by_bucket: dict[int, list[sqlite3.Row]] = defaultdict(list)
@@ -273,25 +303,34 @@ _RE_SUCCESS = re.compile(
 _RE_ANCHOR_STALE = re.compile(
     r"(Edit rejected:.*anchor[s]? do(es)? not match the current file|"
     r"Edit rejected:.*line[s]? .* changed since the last read|"
-    r"line[s]? ha(s|ve) changed since last read)",
+    r"line[s]? ha(s|ve) changed since last read|"
+    r"hash #[0-9a-fA-F]+ is not from this session|is not from this session|"
+    r"stale (hash|tag|snapshot))",
     re.I,
 )
 _RE_ANCHOR_MISSING = re.compile(
     r"anchor .* (not found|unknown|missing)|loc requires the full anchor", re.I
 )
-_RE_NO_ENCLOSING = re.compile(r"No enclosing .* block", re.I)
+_RE_NO_ENCLOSING = re.compile(
+    r"No enclosing .* block|could not resolve a syntactic block", re.I
+)
 _RE_PARSE_ERROR = re.compile(r"parse|syntax error|unbalanced|unexpected token", re.I)
 _RE_SSR_NO_MATCH = re.compile(
     r"0 matches|no replacements|no match found|No replacements made|Failed to find expected lines",
     re.I,
 )
 _RE_FILE_NOT_READ = re.compile(r"must be read first|has not been read|not yet read", re.I)
-_RE_FILE_CHANGED = re.compile(r"file has been (modified|changed) externally", re.I)
+_RE_FILE_CHANGED = re.compile(
+    r"file has been (modified|changed) externally|file changed between read and edit", re.I
+)
 _RE_PERM_DENIED = re.compile(r"permission denied|not allowed", re.I)
 _RE_GENERIC_REJECTED = re.compile(r"\b(rejected|failed|error|invalid)\b", re.I)
+_RE_TAG_MISSING = re.compile(
+    r"Missing hashline snapshot tag|from your latest read/search", re.I
+)
 
 
-def classify_edit_result(text: str) -> str:
+def classify_edit_result(text: str, is_error: int | None = None) -> str:
     t = (text or "").strip()
     if not t:
         return "empty"
@@ -300,14 +339,23 @@ def classify_edit_result(text: str) -> str:
         return "truncated"
     if _RE_ABORTED.search(t):
         return "aborted"
-    if _RE_SUCCESS.match(first):
+    # The harness `is_error` flag is authoritative. The current edit format emits
+    # a `¶PATH#TAG` / `[PATH#TAG]` diff header on success whose body can contain
+    # words like "parser"/"error" that the text heuristics would otherwise misread.
+    if is_error == 0:
         return "success"
+    if is_error is None and (t[0] in "¶[" or _RE_SUCCESS.match(first)):
+        return "success"
+    if is_error == 1 and t[0] in "¶[":
+        return "fail:other"
     if _RE_ANCHOR_STALE.search(t):
         return "fail:anchor-stale"
     if _RE_NO_ENCLOSING.search(t):
         return "fail:no-enclosing-block"
     if _RE_ANCHOR_MISSING.search(t):
         return "fail:anchor-missing"
+    if _RE_TAG_MISSING.search(t):
+        return "fail:missing-tag"
     if _RE_PARSE_ERROR.search(t):
         return "fail:parse"
     if _RE_SSR_NO_MATCH.search(t):
@@ -318,12 +366,31 @@ def classify_edit_result(text: str) -> str:
         return "fail:file-changed"
     if _RE_PERM_DENIED.search(t):
         return "fail:perm"
-    if _RE_GENERIC_REJECTED.search(first):
+    if is_error == 1 or _RE_GENERIC_REJECTED.search(first):
         return "fail:other"
     return "unknown"
 
 
 _ANCHOR_BARE = re.compile(r"^[a-zA-Z]?[0-9]+[a-z]{2}$")
+
+
+_HASHLINE_OP = re.compile(
+    r"^(replace block|replace|delete block|delete|"
+    r"insert before|insert after|insert head|insert tail)\b",
+    re.I,
+)
+
+
+def _hashline_ops(inp: str) -> list[str]:
+    """Op kinds in a hashline edit `input` payload (skips `+` body rows)."""
+    ops: list[str] = []
+    for line in inp.splitlines():
+        if not line or line[0] == "+":
+            continue
+        m = _HASHLINE_OP.match(line.lstrip())
+        if m:
+            ops.append(m.group(1).lower())
+    return ops
 
 
 def _detect_edit_format(tool_name: str, args_obj: dict | None) -> str:
@@ -402,25 +469,29 @@ def _classify_edit_args(tool_name: str, args_obj: dict | None) -> tuple[str, lis
     if tool_name == "write":
         verbs.append("write")
     elif tool_name == "edit" and isinstance(args_obj, dict):
-        edits = args_obj.get("edits")
-        if isinstance(edits, list):
-            for op in edits:
-                if not isinstance(op, dict):
-                    continue
-                loc_val = op.get("loc")
-                loc_shapes.append(_loc_shape(loc_val if isinstance(loc_val, str) else ""))
-                v: list[str] = []
-                if op.get("splice"):
-                    v.append("splice")
-                if op.get("pre"):
-                    v.append("pre")
-                if op.get("post"):
-                    v.append("post")
-                if op.get("sed"):
-                    v.append("sed")
-                if not v:
-                    v.append("none")
-                verbs.append("+".join(v))
+        inp = args_obj.get("input")
+        if isinstance(inp, str):
+            verbs.extend(_hashline_ops(inp))
+        else:
+            edits = args_obj.get("edits")
+            if isinstance(edits, list):
+                for op in edits:
+                    if not isinstance(op, dict):
+                        continue
+                    loc_val = op.get("loc")
+                    loc_shapes.append(_loc_shape(loc_val if isinstance(loc_val, str) else ""))
+                    v: list[str] = []
+                    if op.get("splice"):
+                        v.append("splice")
+                    if op.get("pre"):
+                        v.append("pre")
+                    if op.get("post"):
+                        v.append("post")
+                    if op.get("sed"):
+                        v.append("sed")
+                    if not v:
+                        v.append("none")
+                    verbs.append("+".join(v))
     return fmt, verbs, loc_shapes
 
 
@@ -428,6 +499,9 @@ def cmd_edits(args: argparse.Namespace) -> int:
     conn = open_ro()
     where_session, where_args = _session_filter_clause(conn, args)
     sf_clause = "AND c.session_file IN (" + ",".join("?" * len(where_args)) + ")" if where_args else ""
+    cutoff = since_cutoff_ms(args)
+    since_clause = "AND c.timestamp >= ?" if cutoff is not None else ""
+    since_params = (cutoff,) if cutoff is not None else ()
 
     rows = conn.execute(
         f"""
@@ -437,10 +511,10 @@ def cmd_edits(args: argparse.Namespace) -> int:
         FROM ss_tool_calls c
         LEFT JOIN ss_tool_results r
           ON r.session_file = c.session_file AND r.call_id = c.call_id
-        WHERE c.tool_name IN ('edit','ast_edit','write') {sf_clause}
+        WHERE c.tool_name IN ('edit','ast_edit','write') {sf_clause} {since_clause}
         ORDER BY c.timestamp
         """,
-        where_args,
+        where_args + since_params,
     ).fetchall()
 
     if not rows:
@@ -466,7 +540,7 @@ def cmd_edits(args: argparse.Namespace) -> int:
         except Exception:
             args_obj = None
         fmt, verbs, locs = _classify_edit_args(tool, args_obj)
-        status = classify_edit_result(r["result_text"] or "")
+        status = classify_edit_result(r["result_text"] or "", r["is_error"])
 
         by_tool[tool] += 1
         by_format[fmt] += 1
@@ -574,6 +648,9 @@ def cmd_followups(args: argparse.Namespace) -> int:
     conn = open_ro()
     where_session, where_args = _session_filter_clause(conn, args)
     sf_clause = "AND c.session_file IN (" + ",".join("?" * len(where_args)) + ")" if where_args else ""
+    cutoff = since_cutoff_ms(args)
+    since_clause = "AND c.timestamp >= ?" if cutoff is not None else ""
+    since_params = (cutoff,) if cutoff is not None else ()
 
     # All edit calls + their sections, ordered per session.
     call_rows = conn.execute(
@@ -581,10 +658,10 @@ def cmd_followups(args: argparse.Namespace) -> int:
         SELECT c.session_file, c.call_id, c.seq, c.timestamp, c.raw_input_len,
                c.success, c.warnings
         FROM ss_edit_calls c
-        WHERE 1=1 {sf_clause}
+        WHERE 1=1 {sf_clause} {since_clause}
         ORDER BY c.session_file, c.seq
         """,
-        where_args,
+        where_args + since_params,
     ).fetchall()
 
     section_rows = conn.execute(
@@ -596,10 +673,10 @@ def cmd_followups(args: argparse.Namespace) -> int:
                s.longest_repeat_sample, s.dup_anchors
         FROM ss_edit_sections s
         JOIN ss_edit_calls c USING (session_file, call_id)
-        WHERE 1=1 {sf_clause.replace('c.session_file', 's.session_file')}
+        WHERE 1=1 {sf_clause.replace('c.session_file', 's.session_file')} {since_clause}
         ORDER BY s.session_file, s.seq, s.section_idx
         """,
-        where_args,
+        where_args + since_params,
     ).fetchall()
 
     # Index sections by (session_file, call_id).
@@ -835,6 +912,8 @@ def main() -> int:
                         help="restrict to N most-recent sessions (0 = all)")
     common.add_argument("--folder", default=None,
                         help="filter sessions whose folder contains this substring")
+    common.add_argument("--since", default=None,
+                        help="only include calls newer than this window: h, d, w, m, or <N>{h,d,w}")
 
     ap_tools = sub.add_parser("tools", parents=[common], help="per-tool token totals")
     ap_tools.add_argument("--by", default=None,

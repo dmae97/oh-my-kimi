@@ -5,12 +5,14 @@
  * Endpoint: POST https://api.synthetic.new/v2/search
  */
 
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
+
+type SearchParamsWithFetch = SearchParams & { fetch?: FetchImpl };
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 
@@ -39,8 +41,9 @@ async function callSyntheticSearch(
 	apiKey: string,
 	query: string,
 	signal?: AbortSignal,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<SyntheticSearchResponse> {
-	const response = await fetch(SYNTHETIC_SEARCH_URL, {
+	const response = await fetchImpl(SYNTHETIC_SEARCH_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -65,13 +68,16 @@ async function callSyntheticSearch(
 }
 
 /** Execute Synthetic web search. */
-export async function searchSynthetic(params: SearchParams): Promise<SearchResponse> {
-	const apiKey = await findApiKey(params.authStorage, params.sessionId, params.signal);
-	if (!apiKey) {
-		throw new Error("Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.");
-	}
+export async function searchSynthetic(params: SearchParamsWithFetch): Promise<SearchResponse> {
+	const keyOrResolver: ApiKey = params.authStorage.resolver("synthetic", {
+		sessionId: params.sessionId,
+	});
 
-	const data = await callSyntheticSearch(apiKey, params.query, params.signal);
+	const fetchImpl = params.fetch;
+	const data = await withAuth(keyOrResolver, key => callSyntheticSearch(key, params.query, params.signal, fetchImpl), {
+		signal: params.signal,
+		missingKeyMessage: "Synthetic credentials not found. Set SYNTHETIC_API_KEY or login with 'omp /login synthetic'.",
+	});
 	const sources: SearchSource[] = [];
 
 	for (const result of data.results ?? []) {
@@ -102,7 +108,7 @@ export class SyntheticProvider extends SearchProvider {
 		return authStorage.hasAuth("synthetic") || !!getEnvApiKey("synthetic");
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
+	search(params: SearchParamsWithFetch): Promise<SearchResponse> {
 		return searchSynthetic(params);
 	}
 }

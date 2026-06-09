@@ -152,7 +152,7 @@ content: ""
   - Invalidates shared filesystem scan cache entries through `invalidateFsScanAfterWrite()`.
   - Enforces plan-mode write restrictions before mutating the target.
 - Background work / cancellation
-  - Marks the tool `nonAbortable = true` and `concurrency = "exclusive"` in `WriteTool`.
+  - Marks the tool `concurrency = "exclusive"` in `WriteTool`.
   - LSP writethrough can schedule deferred diagnostics fetches after a timeout, but plain `write.ts` only consumes the immediate return value.
 
 ## Limits & Caps

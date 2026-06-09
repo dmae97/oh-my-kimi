@@ -3,16 +3,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { createSessionRuntime } from "@oh-my-pi/pi-coding-agent/autoresearch/state";
+import { openAutoresearchStorage } from "@oh-my-pi/pi-coding-agent/autoresearch/storage";
+import { createInitExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/init-experiment";
+import { createLogExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/log-experiment";
+import { createRunExperimentTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/run-experiment";
+import { createUpdateNotesTool } from "@oh-my-pi/pi-coding-agent/autoresearch/tools/update-notes";
+import type { LogDetails, RunDetails } from "@oh-my-pi/pi-coding-agent/autoresearch/types";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { createSessionRuntime } from "../src/autoresearch/state";
-import { openAutoresearchStorage } from "../src/autoresearch/storage";
-import { createInitExperimentTool } from "../src/autoresearch/tools/init-experiment";
-import { createLogExperimentTool } from "../src/autoresearch/tools/log-experiment";
-import { createRunExperimentTool } from "../src/autoresearch/tools/run-experiment";
-import { createUpdateNotesTool } from "../src/autoresearch/tools/update-notes";
-import type { LogDetails, RunDetails } from "../src/autoresearch/types";
-import type { ExtensionAPI, ExtensionContext } from "../src/extensibility/extensions";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -68,16 +68,16 @@ function createPiHarness(initialTools: string[] = []): PiHarness {
 	return { api, activeTools, appendEntries, setActiveToolsCalls };
 }
 
-async function initGitRepo(dir: string): Promise<{ baselineCommit: string; mainBranch: string }> {
-	await $`git init --initial-branch=main`.cwd(dir).quiet();
-	await $`git config user.email tester@example.com`.cwd(dir).quiet();
-	await $`git config user.name Tester`.cwd(dir).quiet();
+async function initGitRepo(dir: string): Promise<{ baselineCommit: string }> {
 	await Bun.write(path.join(dir, "README.md"), "# baseline\n");
-	await $`git add -A`.cwd(dir).quiet();
-	await $`git commit -m baseline`.cwd(dir).quiet();
+	// One shell invocation instead of five: the git processes are unavoidable
+	// (config identity is read by the production tool's own commits), but
+	// chaining collapses the per-call Node↔shell spawn overhead.
+	await $`git init --initial-branch=main && git config user.email tester@example.com && git config user.name Tester && git add -A && git commit -m baseline`
+		.cwd(dir)
+		.quiet();
 	const sha = (await $`git rev-parse HEAD`.cwd(dir).text()).trim();
-	const branch = (await $`git rev-parse --abbrev-ref HEAD`.cwd(dir).text()).trim();
-	return { baselineCommit: sha, mainBranch: branch };
+	return { baselineCommit: sha };
 }
 
 async function checkoutBranch(dir: string, name: string): Promise<void> {
@@ -510,70 +510,86 @@ describe("log_experiment", () => {
 
 	it("flags previously logged runs via flag_runs", async () => {
 		const dir = makeTempDir();
-		const { log } = await setupRun(dir);
-		const first = await log.execute(
-			"l1",
-			{ metric: 10, status: "keep", description: "baseline" },
-			undefined,
-			undefined,
-			createCtx(dir),
-		);
-		const firstId = (first.details as LogDetails).experiment.runNumber;
-		expect(firstId).not.toBeNull();
-
-		// New run + log that flags the previous run.
-		const harness = createPiHarness();
+		const storage = await openAutoresearchStorage(dir);
+		const session = storage.openSession({
+			name: "speed",
+			goal: null,
+			primaryMetric: "runtime_ms",
+			metricUnit: "ms",
+			direction: "lower",
+			preferredCommand: "bash autoresearch.sh",
+			branch: null,
+			baselineCommit: null,
+			maxIterations: null,
+			scopePaths: ["src"],
+			offLimits: ["forbidden"],
+			constraints: [],
+			secondaryMetrics: [],
+		});
+		const now = Date.now();
+		const firstRun = storage.insertRun({
+			sessionId: session.id,
+			segment: session.currentSegment,
+			command: "bash autoresearch.sh",
+			startedAt: now,
+			logPath: "",
+			preRunDirtyPaths: [],
+		});
+		const firstLogged = storage.markRunLogged({
+			runId: firstRun.id,
+			status: "keep",
+			description: "baseline",
+			metric: 10,
+			metrics: {},
+			asi: null,
+			commitHash: null,
+			confidence: null,
+			modifiedPaths: [],
+			scopeDeviations: [],
+			justification: null,
+			loggedAt: now,
+		});
+		const secondRun = storage.insertRun({
+			sessionId: session.id,
+			segment: session.currentSegment,
+			command: "bash autoresearch.sh",
+			startedAt: now + 1,
+			logPath: "",
+			preRunDirtyPaths: [],
+		});
+		storage.markRunCompleted({
+			runId: secondRun.id,
+			completedAt: now + 2,
+			durationMs: 1,
+			exitCode: 0,
+			timedOut: false,
+			parsedPrimary: 8,
+			parsedMetrics: { runtime_ms: 8 },
+			parsedAsi: null,
+		});
 		const runtime = createSessionRuntime();
-		// Re-hydrate runtime by re-running the tools chain.
-		const init = createInitExperimentTool({
+		const log = createLogExperimentTool({
 			dashboard: dashboardStub(),
 			getRuntime: () => runtime,
-			pi: harness.api,
+			pi: createPiHarness().api,
 		});
-		await init.execute(
-			"i",
-			{
-				name: "speed",
-				primary_metric: "runtime_ms",
-				metric_unit: "ms",
-				scope_paths: ["src"],
-				off_limits: ["forbidden"],
-			},
-			undefined,
-			undefined,
-			createCtx(dir),
-		);
-		const run = createRunExperimentTool({
-			dashboard: dashboardStub(),
-			getRuntime: () => runtime,
-			pi: harness.api,
-		});
-		await run.execute("r2", {}, undefined, undefined, createCtx(dir));
-		const log2 = createLogExperimentTool({
-			dashboard: dashboardStub(),
-			getRuntime: () => runtime,
-			pi: harness.api,
-		});
-		const second = await log2.execute(
+		const second = await log.execute(
 			"l2",
 			{
 				metric: 8,
 				status: "keep",
 				description: "improved",
-				flag_runs: [{ run_id: firstId as number, reason: "reward-hacked" }],
+				flag_runs: [{ run_id: firstLogged.id, reason: "reward-hacked" }],
 			},
 			undefined,
 			undefined,
 			createCtx(dir),
 		);
 		const details = second.details as LogDetails;
-		expect(details.flaggedRuns).toEqual([{ runId: firstId as number, reason: "reward-hacked" }]);
+		expect(details.flaggedRuns).toEqual([{ runId: firstLogged.id, reason: "reward-hacked" }]);
 
-		// Refresh storage to confirm DB row updated
-		const storage = await openAutoresearchStorage(dir);
-		const session = storage.getActiveSession();
-		const runs = storage.listLoggedRuns(session!.id);
-		const flagged = runs.find(r => r.id === firstId);
+		const runs = storage.listLoggedRuns(session.id);
+		const flagged = runs.find(r => r.id === firstLogged.id);
 		expect(flagged?.flagged).toBe(true);
 		expect(flagged?.flaggedReason).toBe("reward-hacked");
 	});
@@ -585,8 +601,7 @@ describe("log_experiment", () => {
 		// Commit `src/edit-me.ts` to baseline so it is tracked, not in pre-run dirty paths.
 		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
 		await Bun.write(path.join(dir, "src", "edit-me.ts"), "export const v = 1;\n");
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m seed`.cwd(dir).quiet();
+		await $`git add -A && git commit -m seed`.cwd(dir).quiet();
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();
 		const init = createInitExperimentTool({
@@ -638,8 +653,7 @@ describe("log_experiment", () => {
 		await initGitRepo(dir);
 		// Commit the harness on main so it is part of the autoresearch branch's baseline.
 		await writeHarnessStub(dir);
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m harness`.cwd(dir).quiet();
+		await $`git add -A && git commit -m harness`.cwd(dir).quiet();
 		await checkoutBranch(dir, "autoresearch/test-20260501");
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();
@@ -651,8 +665,7 @@ describe("log_experiment", () => {
 		await init.execute("i", { name: "x", primary_metric: "m" }, undefined, undefined, createCtx(dir));
 		// Simulate a previously kept iteration by committing it directly on the branch.
 		await Bun.write(path.join(dir, "src", "kept.ts"), "export const v = 1;\n");
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m "kept iteration"`.cwd(dir).quiet();
+		await $`git add -A && git commit -m "kept iteration"`.cwd(dir).quiet();
 		const headBeforeDiscard = (await $`git rev-parse HEAD`.cwd(dir).text()).trim();
 
 		const run = createRunExperimentTool({
@@ -691,13 +704,11 @@ describe("log_experiment", () => {
 		const dir = makeTempDir();
 		await initGitRepo(dir);
 		await writeHarnessStub(dir);
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m harness`.cwd(dir).quiet();
+		await $`git add -A && git commit -m harness`.cwd(dir).quiet();
 		// Seed a tracked file that the agent will edit during the iteration.
 		fs.mkdirSync(path.join(dir, "src"), { recursive: true });
 		await Bun.write(path.join(dir, "src", "store.ts"), "export const v = 1;\n");
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m seed`.cwd(dir).quiet();
+		await $`git add -A && git commit -m seed`.cwd(dir).quiet();
 		await checkoutBranch(dir, "autoresearch/keep-test");
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();
@@ -747,8 +758,7 @@ describe("log_experiment", () => {
 		const dir = makeTempDir();
 		await initGitRepo(dir);
 		await writeHarnessStub(dir);
-		await $`git add -A`.cwd(dir).quiet();
-		await $`git commit -m harness`.cwd(dir).quiet();
+		await $`git add -A && git commit -m harness`.cwd(dir).quiet();
 		await checkoutBranch(dir, "autoresearch/scope-test");
 		const runtime = createSessionRuntime();
 		const harness = createPiHarness();

@@ -6,7 +6,7 @@
  * manager, and splits the rest into the always-apply and rulebook buckets.
  *
  * Bucket precedence (matches docs/rulebook-matching-pipeline.md §5):
- *   1. TTSR     — non-empty `condition` that `TtsrManager.addRule` accepts
+ *   1. TTSR     — non-empty `condition`/`astCondition` that `TtsrManager.addRule` accepts
  *   2. always   — `alwaysApply === true`
  *   3. rulebook — has a `description`
  */
@@ -49,7 +49,9 @@ export function bucketRules(
 		if (disabled.has(rule.name)) continue;
 		if (!includeBuiltin && rule._source?.provider === BUILTIN_DEFAULTS_PROVIDER_ID) continue;
 
-		const isTtsrRule = rule.condition && rule.condition.length > 0 ? ttsrManager.addRule(rule) : false;
+		const hasTtsrCondition =
+			(rule.condition && rule.condition.length > 0) || (rule.astCondition && rule.astCondition.length > 0);
+		const isTtsrRule = hasTtsrCondition ? ttsrManager.addRule(rule) : false;
 		if (isTtsrRule) continue;
 		if (rule.alwaysApply === true) {
 			alwaysApplyRules.push(rule);

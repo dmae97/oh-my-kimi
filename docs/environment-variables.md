@@ -43,6 +43,7 @@ These are consumed via `getEnvApiKey()` (`packages/ai/src/stream.ts`) unless not
 | `FIREWORKS_API_KEY`             | Fireworks auth                                   | Using Fireworks models                                         |                                                                                                     |
 | `FIREPASS_API_KEY`              | Fire Pass auth                                   | Using Fire Pass models                                         |                                                                                                     |
 | `TOGETHER_API_KEY`              | Together auth                                    | Using `together` provider                                      |                                                                                                     |
+| `AIMLAPI_API_KEY`               | AIML API auth                                   | Using `aimlapi` provider                                       | OpenAI-compatible AIML API endpoint at `https://api.aimlapi.com/v1`                                  |
 | `HUGGINGFACE_HUB_TOKEN`         | Hugging Face auth                                | Using `huggingface` provider                                   | Primary Hugging Face token env var                                                                  |
 | `HF_TOKEN`                      | Hugging Face auth                                | Using `huggingface` provider                                   | Fallback when `HUGGINGFACE_HUB_TOKEN` is unset                                                      |
 | `SYNTHETIC_API_KEY`             | Synthetic auth                                   | Using Synthetic models                                         |                                                                                                     |
@@ -81,13 +82,13 @@ These are consumed via `getEnvApiKey()` (`packages/ai/src/stream.ts`) unless not
 | `WAFER_SERVERLESS_API_KEY`      | Wafer Serverless auth                            | Using `wafer-serverless` provider                              | Pay-as-you-go Wafer SKU; validated against `https://pass.wafer.ai/v1/models`                        |
 | `GITLAB_TOKEN`                  | GitLab Duo auth                                  | Using `gitlab-duo` provider                                    |                                                                                                     |
 
-### GitHub/Copilot token chains
+### GitHub/Copilot tokens
 
-| Variable               | Used for                                         | Chain                                                |
-| ---------------------- | ------------------------------------------------ | ---------------------------------------------------- |
-| `COPILOT_GITHUB_TOKEN` | GitHub Copilot provider auth                     | `COPILOT_GITHUB_TOKEN` → `GH_TOKEN` → `GITHUB_TOKEN` |
-| `GH_TOKEN`             | Copilot fallback; GitHub API auth in web scraper | In web scraper: `GITHUB_TOKEN` → `GH_TOKEN`          |
-| `GITHUB_TOKEN`         | Copilot fallback; GitHub API auth in web scraper | In web scraper: checked before `GH_TOKEN`            |
+| Variable               | Used for                                         | Notes                                      |
+| ---------------------- | ------------------------------------------------ | ------------------------------------------ |
+| `COPILOT_GITHUB_TOKEN` | GitHub Copilot provider auth                     | Generic GitHub tokens are not used here    |
+| `GH_TOKEN`             | GitHub API auth in web scraper                   | Web scraper fallback after `GITHUB_TOKEN`  |
+| `GITHUB_TOKEN`         | GitHub API auth in web scraper                   | Web scraper checks this before `GH_TOKEN`  |
 
 ### Auth broker / auth gateway (remote credential vault)
 

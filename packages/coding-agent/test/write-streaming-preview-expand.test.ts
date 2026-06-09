@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
-import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
 
 const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, "");
 const hasLine = (lines: string[], n: number): boolean =>

@@ -1,9 +1,7 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
+import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
-import type { Effort } from "./model-thinking";
+import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
+import type { Effort } from "./effort";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
@@ -46,6 +44,7 @@ import {
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import { streamXAIResponses } from "./providers/xai-responses";
 import { isUsageLimitError } from "./rate-limit-utils";
+import { PROVIDER_REGISTRY } from "./registry";
 import type {
 	Api,
 	AssistantMessage,
@@ -60,24 +59,8 @@ import type {
 	ToolChoice,
 } from "./types";
 import { AssistantMessageEventStream } from "./utils/event-stream";
-import { isFoundryEnabled } from "./utils/foundry";
 import { withRequestDebugFetch } from "./utils/request-debug";
 
-let cachedVertexAdcCredentialsExists: boolean | null = null;
-
-function hasVertexAdcCredentials(): boolean {
-	if (cachedVertexAdcCredentialsExists === null) {
-		const gacPath = $env.GOOGLE_APPLICATION_CREDENTIALS;
-		if (gacPath) {
-			cachedVertexAdcCredentialsExists = fs.existsSync(gacPath);
-		} else {
-			cachedVertexAdcCredentialsExists = fs.existsSync(
-				path.join(os.homedir(), ".config", "gcloud", "application_default_credentials.json"),
-			);
-		}
-	}
-	return cachedVertexAdcCredentialsExists;
-}
 function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
@@ -174,101 +157,22 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 
 type KeyResolver = string | (() => string | undefined);
 
-const serviceProviderMap: Record<string, KeyResolver> = {
-	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
-	openai: "OPENAI_API_KEY",
-	google: "GEMINI_API_KEY",
-	groq: "GROQ_API_KEY",
-	cerebras: "CEREBRAS_API_KEY",
-	xai: "XAI_API_KEY",
-	"xai-oauth": () => $pickenv("XAI_OAUTH_TOKEN", "XAI_API_KEY"),
-	fireworks: "FIREWORKS_API_KEY",
-	firepass: "FIREPASS_API_KEY",
-	"wafer-pass": "WAFER_PASS_API_KEY",
-	"wafer-serverless": "WAFER_SERVERLESS_API_KEY",
-	openrouter: "OPENROUTER_API_KEY",
-	kilo: "KILO_API_KEY",
-	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-	zai: "ZAI_API_KEY",
-	"zhipu-coding-plan": "ZHIPU_API_KEY",
-	mistral: "MISTRAL_API_KEY",
-	minimax: "MINIMAX_API_KEY",
-	"minimax-code": "MINIMAX_CODE_API_KEY",
-	"minimax-code-cn": "MINIMAX_CODE_CN_API_KEY",
-	"opencode-go": "OPENCODE_API_KEY",
-	"opencode-zen": "OPENCODE_API_KEY",
-	cursor: "CURSOR_ACCESS_TOKEN",
-	deepseek: "DEEPSEEK_API_KEY",
-	"openai-codex": "OPENAI_CODEX_OAUTH_TOKEN",
+const LEGACY_ENV_KEYS: Record<string, KeyResolver> = {
+	// Non-provider / search-tool keys and API-name keys not modeled as registry provider defs.
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
+	"llama.cpp": "LLAMA_CPP_API_KEY",
 	exa: "EXA_API_KEY",
 	jina: "JINA_API_KEY",
 	brave: "BRAVE_API_KEY",
-	perplexity: "PERPLEXITY_API_KEY",
-	tavily: "TAVILY_API_KEY",
-	parallel: "PARALLEL_API_KEY",
-	kagi: "KAGI_API_KEY",
-	// GitHub Copilot uses GitHub personal access token
-	"github-copilot": () => $pickenv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
-	// Foundry mode optionally switches Anthropic auth to enterprise gateway credentials.
-	anthropic: () =>
-		isFoundryEnabled()
-			? $pickenv("ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
-			: $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
-	"gitlab-duo": "GITLAB_TOKEN",
-	// Vertex AI supports either GOOGLE_CLOUD_API_KEY or Application Default Credentials.
-	"google-vertex": () => {
-		if ($env.GOOGLE_CLOUD_API_KEY) {
-			return $env.GOOGLE_CLOUD_API_KEY;
-		}
-		const hasCredentials = hasVertexAdcCredentials();
-		const hasProject = !!($env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT);
-		const hasLocation = !!($env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION);
-		if (hasCredentials && hasProject && hasLocation) {
-			return "<authenticated>";
-		}
-	},
-	// Amazon Bedrock supports multiple credential sources:
-	// 1. AWS_BEARER_TOKEN_BEDROCK - Bedrock API keys (bearer token)
-	// 2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY - standard IAM keys
-	// 3. AWS_PROFILE - named profile from ~/.aws/credentials
-	// 4. AWS_CONTAINER_CREDENTIALS_* - ECS/Task IAM role credentials
-	// 5. AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN - IRSA (EKS) web identity
-	"amazon-bedrock": () => {
-		const hasEcsCredentials =
-			!!$env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || !!$env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
-		const hasWebIdentity = !!$env.AWS_WEB_IDENTITY_TOKEN_FILE && !!$env.AWS_ROLE_ARN;
-		if (
-			$env.AWS_PROFILE ||
-			($env.AWS_ACCESS_KEY_ID && $env.AWS_SECRET_ACCESS_KEY) ||
-			$env.AWS_BEARER_TOKEN_BEDROCK ||
-			hasEcsCredentials ||
-			hasWebIdentity
-		) {
-			return "<authenticated>";
-		}
-	},
-	synthetic: "SYNTHETIC_API_KEY",
-	"cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
-	huggingface: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),
-	litellm: "LITELLM_API_KEY",
-	moonshot: "MOONSHOT_API_KEY",
-	nvidia: "NVIDIA_API_KEY",
-	nanogpt: "NANO_GPT_API_KEY",
-	"lm-studio": "LM_STUDIO_API_KEY",
-	ollama: "OLLAMA_API_KEY",
-	"ollama-cloud": "OLLAMA_CLOUD_API_KEY",
-	"llama.cpp": "LLAMA_CPP_API_KEY",
-	qianfan: "QIANFAN_API_KEY",
-	"qwen-portal": () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
-	together: "TOGETHER_API_KEY",
-	zenmux: "ZENMUX_API_KEY",
-	venice: "VENICE_API_KEY",
-	vllm: "VLLM_API_KEY",
-	xiaomi: "XIAOMI_API_KEY",
-	"xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
-	"xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
-	"xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+};
+
+const serviceProviderMap: Record<string, KeyResolver> = {
+	...Object.fromEntries(
+		PROVIDER_REGISTRY.flatMap(provider =>
+			provider.envKeys != null ? [[provider.id, provider.envKeys] as [string, KeyResolver]] : [],
+		),
+	),
+	...LEGACY_ENV_KEYS,
 };
 
 /**
@@ -283,6 +187,18 @@ export function getEnvApiKey(provider: string): string | undefined {
 		return $env[resolver];
 	}
 	return resolver?.();
+}
+
+/**
+ * Name of the environment variable that backs `getEnvApiKey` for a provider,
+ * when that provider maps to a single named variable (e.g. `github-copilot` →
+ * `COPILOT_GITHUB_TOKEN`). Returns undefined for providers whose env fallback
+ * is computed (multi-var pickers, Vertex ADC / Bedrock probes, …) since no
+ * single variable name describes the source.
+ */
+export function getEnvApiKeyName(provider: string): string | undefined {
+	const resolver = serviceProviderMap[provider];
+	return typeof resolver === "string" ? resolver : undefined;
 }
 
 /**
@@ -443,12 +359,15 @@ export function streamSimple<TApi extends Api>(
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const requestOptions = withRequestDebugFetch(options);
-	const retryApiKey = requestOptions?.onAuthError
-		? (requestOptions.apiKey ?? getEnvApiKey(model.provider))
-		: undefined;
-	if (retryApiKey) {
+	const apiKeyResolver = isApiKeyResolver(requestOptions?.apiKey) ? requestOptions.apiKey : undefined;
+	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();
-		const onAuthError = requestOptions!.onAuthError!;
+		const signal = requestOptions?.signal;
+		// One inner attempt against a resolved string key. When
+		// `captureAuthFailure` is set, a retryable auth error that arrives before
+		// any replay-unsafe event is buffered and returned (so the caller can
+		// retry with a fresh key) instead of surfaced. The terminal attempt
+		// clears the flag and emits whatever it gets.
 		const runAttempt = async (apiKey: string, captureAuthFailure: boolean): Promise<AuthRetryFailure | undefined> => {
 			const bufferedEvents: AssistantMessageEvent[] = [];
 			let emittedReplayUnsafeEvent = false;
@@ -458,7 +377,7 @@ export function streamSimple<TApi extends Api>(
 			};
 
 			try {
-				const inner = streamSimple(model, context, { ...requestOptions, apiKey, onAuthError: undefined });
+				const inner = streamSimple(model, context, { ...requestOptions, apiKey });
 				for await (const event of inner) {
 					if (!emittedReplayUnsafeEvent && event.type === "start") {
 						bufferedEvents.push(event);
@@ -510,19 +429,32 @@ export function streamSimple<TApi extends Api>(
 		};
 
 		void (async () => {
-			const failure = await runAttempt(retryApiKey, true);
-			if (!failure) return;
-			let nextKey: string | undefined;
+			let lastKey: string | undefined;
 			try {
-				nextKey = await onAuthError(model.provider, retryApiKey, failure.error);
+				lastKey = (await apiKeyResolver({ lastChance: false, error: undefined, signal })) || undefined;
 			} catch {
-				nextKey = undefined;
+				lastKey = undefined;
 			}
-			if (!nextKey || nextKey === retryApiKey) {
-				emitFailure(failure);
+			if (lastKey === undefined) {
+				outer.fail(new Error(`No API key for provider: ${model.provider}`));
 				return;
 			}
-			await runAttempt(nextKey, false);
+			let failure = await runAttempt(lastKey, true);
+			if (!failure) return;
+			// a/b/c policy: refresh the same account (lastChance=false), then
+			// switch to a sibling (lastChance=true). A step is skipped when the
+			// resolver yields the same key it just tried or `undefined`; the
+			// final step's attempt clears the capture flag so it emits directly.
+			for (let step = 0; step < AUTH_RETRY_STEPS.length; step++) {
+				const nextKey = await resolveRetryKey(apiKeyResolver, AUTH_RETRY_STEPS[step]!, failure.error, signal);
+				if (nextKey === undefined || nextKey === lastKey) continue;
+				lastKey = nextKey;
+				const isLastStep = step === AUTH_RETRY_STEPS.length - 1;
+				const next = await runAttempt(nextKey, !isLastStep);
+				if (!next) return;
+				failure = next;
+			}
+			emitFailure(failure);
 		})();
 		return outer;
 	}
@@ -553,7 +485,10 @@ export function streamSimple<TApi extends Api>(
 		return stream(model, context, providerOptions);
 	}
 
-	const apiKey = requestOptions?.apiKey || getEnvApiKey(model.provider);
+	// The resolver form is handled by the wrapper above; only a static string
+	// key reaches this point.
+	const apiKey =
+		(typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) || getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
@@ -724,7 +659,7 @@ function mapOptionsForApi<TApi extends Api>(
 		repetitionPenalty: options?.repetitionPenalty,
 		maxTokens: options?.maxTokens ?? model.maxTokens,
 		signal: options?.signal,
-		apiKey: apiKey || options?.apiKey,
+		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),
 		cacheRetention: options?.cacheRetention,
 		headers: options?.headers,
 		initiatorOverride: options?.initiatorOverride,

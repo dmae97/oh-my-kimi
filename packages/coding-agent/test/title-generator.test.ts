@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { type Api, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { generateSessionTitle } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { logger } from "@oh-my-pi/pi-utils";
-import { generateSessionTitle } from "../src/utils/title-generator";
 
 function getModelOrThrow(id: string): Model<Api> {
 	const model = getBundledModel("anthropic", id);
@@ -29,6 +29,9 @@ function createRegistry(model: Model<Api>) {
 	return {
 		getAvailable: () => [model],
 		getApiKey: async () => "test-key",
+		getApiKeyForProvider: async () => "test-key",
+		authStorage: { rotateSessionCredential: async () => false },
+		resolver: () => async () => "test-key",
 	} as never;
 }
 

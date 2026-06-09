@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildBunInstallArgs, replaceBinaryForUpdate, resolveUpdateMethodForTest } from "../src/cli/update-cli";
+import {
+	buildBunInstallArgs,
+	buildHomebrewUpdateArgs,
+	buildMiseForceInstallArgs,
+	buildMiseUpgradeArgs,
+	replaceBinaryForUpdate,
+	resolveUpdateMethodForTest,
+} from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 
 const tempDirs: string[] = [];
 
@@ -32,6 +39,54 @@ describe("update-cli install target detection", () => {
 		const method = resolveUpdateMethodForTest("/Users/test/.local/bin/omp", undefined);
 
 		expect(method).toBe("binary");
+	});
+
+	it("uses Homebrew update when prioritized omp resolves into the Homebrew formula", async () => {
+		const dir = await makeTempDir();
+		const prefix = path.join(dir, "opt", "omp");
+		const linkedBin = path.join(dir, "bin");
+		await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
+		await fs.mkdir(linkedBin, { recursive: true });
+		await Bun.write(path.join(prefix, "bin", "omp"), "binary");
+		await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
+
+		const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
+			homebrewPrefix: prefix,
+		});
+
+		expect(method).toBe("brew");
+	});
+
+	it("uses mise update when prioritized omp is in an active mise bin path", () => {
+		const method = resolveUpdateMethodForTest(
+			"/Users/test/.local/share/mise/installs/github-can1357-oh-my-pi/latest/bin/omp",
+			undefined,
+			{
+				miseBinDirs: ["/Users/test/.local/share/mise/installs/github-can1357-oh-my-pi/latest/bin"],
+			},
+		);
+
+		expect(method).toBe("mise");
+	});
+
+	it("uses mise update when prioritized omp is a mise shim", () => {
+		const method = resolveUpdateMethodForTest("/Users/test/.local/share/mise/shims/omp", undefined, {
+			miseDataDir: "/Users/test/.local/share/mise",
+		});
+
+		expect(method).toBe("mise");
+	});
+});
+
+describe("update-cli package manager commands", () => {
+	it("targets the Homebrew tap formula and switches to reinstall for forced updates", () => {
+		expect(buildHomebrewUpdateArgs(false)).toEqual(["upgrade", "can1357/tap/omp"]);
+		expect(buildHomebrewUpdateArgs(true)).toEqual(["reinstall", "can1357/tap/omp"]);
+	});
+
+	it("targets the mise GitHub backend tool and force-reinstalls the checked version when requested", () => {
+		expect(buildMiseUpgradeArgs()).toEqual(["upgrade", "github:can1357/oh-my-pi", "--bump"]);
+		expect(buildMiseForceInstallArgs("15.10.5")).toEqual(["install", "--force", "github:can1357/oh-my-pi@15.10.5"]);
 	});
 });
 

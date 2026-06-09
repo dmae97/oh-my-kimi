@@ -43,6 +43,7 @@ export type SymbolKey =
 	| "status.running"
 	| "status.shadowed"
 	| "status.aborted"
+	| "status.done"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -95,6 +96,7 @@ export type SymbolKey =
 	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
+	| "icon.search"
 	| "icon.scratchFolder"
 	| "icon.file"
 	| "icon.git"
@@ -196,7 +198,29 @@ export type SymbolKey =
 	| "tab.tools"
 	| "tab.memory"
 	| "tab.tasks"
-	| "tab.providers";
+	| "tab.providers"
+	// Tool identity icons
+	| "tool.write"
+	| "tool.edit"
+	| "tool.bash"
+	| "tool.ssh"
+	| "tool.lsp"
+	| "tool.gh"
+	| "tool.webSearch"
+	| "tool.exa"
+	| "tool.browser"
+	| "tool.eval"
+	| "tool.debug"
+	| "tool.mcp"
+	| "tool.job"
+	| "tool.task"
+	| "tool.todo"
+	| "tool.memory"
+	| "tool.ask"
+	| "tool.resolve"
+	| "tool.review"
+	| "tool.inspectImage"
+	| "tool.goal";
 
 type SymbolMap = Record<SymbolKey, string>;
 
@@ -212,6 +236,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.running": "⟳",
 	"status.shadowed": "◌",
 	"status.aborted": "⏹",
+	"status.done": "•",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -264,6 +289,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
+	"icon.search": "🔍",
 	"icon.scratchFolder": "🗑",
 	"icon.file": "📄",
 	"icon.git": "⎇",
@@ -366,6 +392,28 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tab.memory": "🧠",
 	"tab.tasks": "📦",
 	"tab.providers": "🌐",
+	// Tool identity icons (per-tool signature glyph on the success header)
+	"tool.write": "✎",
+	"tool.edit": "✎",
+	"tool.bash": "❯",
+	"tool.ssh": "⇄",
+	"tool.lsp": "💡",
+	"tool.gh": "⎇",
+	"tool.webSearch": "⌕",
+	"tool.exa": "🔭",
+	"tool.browser": "🌐",
+	"tool.eval": "▶",
+	"tool.debug": "🐞",
+	"tool.mcp": "🔌",
+	"tool.job": "⚙",
+	"tool.task": "⇶",
+	"tool.todo": "☑",
+	"tool.memory": "🧠",
+	"tool.ask": "?",
+	"tool.resolve": "✓",
+	"tool.review": "◉",
+	"tool.inspectImage": "🖼",
+	"tool.goal": "◎",
 };
 
 const NERD_SYMBOLS: SymbolMap = {
@@ -390,6 +438,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.shadowed": "◐",
 	// pick:  | alt:  
 	"status.aborted": "\uf04d",
+	// pick: • | alt: ● ·
+	"status.done": "•",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -488,6 +538,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.loop": "\uf021",
 	// pick:  | alt:  
 	"icon.folder": "\uf115",
+	"icon.search": "\uf002",
 	// pick:  | alt:
 	"icon.scratchFolder": "\uf014",
 	// pick:  | alt:  
@@ -635,6 +686,28 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tab.memory": "󰧑",
 	"tab.tasks": "󰐱",
 	"tab.providers": "󰖟",
+	// Tool identity icons (per-tool signature glyph on the success header)
+	"tool.write": "\uEA7F",
+	"tool.edit": "\uEA73",
+	"tool.bash": "\uEBCA",
+	"tool.ssh": "\uEB3A",
+	"tool.lsp": "\uEA61",
+	"tool.gh": "\uEA84",
+	"tool.webSearch": "\uEB01",
+	"tool.exa": "\uEB68",
+	"tool.browser": "\uEAAE",
+	"tool.eval": "\uEBAF",
+	"tool.debug": "\uEAD8",
+	"tool.mcp": "\uEB2D",
+	"tool.job": "\uEBA2",
+	"tool.task": "\uEA7E",
+	"tool.todo": "\uEAB3",
+	"tool.memory": "\uEACE",
+	"tool.ask": "\uEAC7",
+	"tool.resolve": "\uEBB1",
+	"tool.review": "\uEA70",
+	"tool.inspectImage": "\uEAEA",
+	"tool.goal": "\uEBF8",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {
@@ -649,6 +722,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.running": "[~]",
 	"status.shadowed": "[/]",
 	"status.aborted": "[-]",
+	"status.done": "*",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",
@@ -701,6 +775,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
+	"icon.search": "[/]",
 	"icon.scratchFolder": "[T]",
 	"icon.file": "[F]",
 	"icon.git": "git:",
@@ -801,6 +876,28 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tab.memory": "[Y]",
 	"tab.tasks": "[K]",
 	"tab.providers": "[P]",
+	// Tool identity icons (per-tool signature glyph on the success header)
+	"tool.write": "+f",
+	"tool.edit": "~",
+	"tool.bash": "$",
+	"tool.ssh": "ssh",
+	"tool.lsp": "lsp",
+	"tool.gh": "gh",
+	"tool.webSearch": "web",
+	"tool.exa": "exa",
+	"tool.browser": "[w]",
+	"tool.eval": ">_",
+	"tool.debug": "dbg",
+	"tool.mcp": "<>",
+	"tool.job": "job",
+	"tool.task": ">>>",
+	"tool.todo": "[x]",
+	"tool.memory": "mem",
+	"tool.ask": "[?]",
+	"tool.resolve": "[v]",
+	"tool.review": "rev",
+	"tool.inspectImage": "[i]",
+	"tool.goal": "(o)",
 };
 
 const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
@@ -1481,6 +1578,7 @@ export class Theme {
 			running: this.#symbols["status.running"],
 			shadowed: this.#symbols["status.shadowed"],
 			aborted: this.#symbols["status.aborted"],
+			done: this.#symbols["status.done"],
 		};
 	}
 
@@ -2439,10 +2537,10 @@ function getHighlightColors(t: Theme): NativeHighlightColors {
  * switch (which always reassigns `theme`) must invalidate every entry.
  *
  * Why this exists: animated tool blocks (eval/bash) repaint their box on every
- * ~16ms border-shimmer frame, and markdown re-lexes on every streamed delta.
- * Without memoization each frame re-tokenizes an unchanged code body through the
- * Rust FFI — ~26ms for 100 lines, ~40ms for 150 — overrunning the 16ms frame
- * budget and starving the spinner/render timers (the "TUI freeze").
+ * ~33ms border-shimmer frame, and markdown re-lexes on every streamed delta.
+ * Without memoization each frame can re-tokenize an unchanged code body through
+ * the Rust FFI — ~26ms for 100 lines, ~40ms for 150 — consuming or overrunning
+ * the 33ms frame budget and starving the spinner/render timers (the "TUI freeze").
  */
 const HIGHLIGHT_CACHE_MAX = 256;
 const highlightCache = new LRUCache<string, string>({ max: HIGHLIGHT_CACHE_MAX });

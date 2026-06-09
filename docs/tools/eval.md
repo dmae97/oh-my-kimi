@@ -131,7 +131,7 @@ Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/cod
   - `display`, `print`
   - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
-  - `llm(prompt, opts?)` for oneshot, stateless LLM calls (see _Oneshot LLM helper_ below)
+  - `completion(prompt, opts?)` for oneshot, stateless model calls (see _Oneshot completion helper_ below)
   - `agent(prompt, opts?)` for a single subagent call, plus `parallel()` / `pipeline()` bounded-pool helpers (see _Subagent helper_ below)
 - JS helpers that touch the host/runtime boundary are async and `await`able; pure text helpers (`sort`, `uniq`, `counter`) return synchronously but may still be safely awaited.
 - JS helper signatures use a trailing options object rather than Python keyword arguments:
@@ -161,7 +161,7 @@ Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding
   - initialize cwd / env / `sys.path`
   - execute `PYTHON_PRELUDE`
 - Python cells run in the runner's persistent asyncio event loop, so top-level `await` works; the prompt warns not to use `asyncio.run(...)`
-- The Python prelude defines helpers with the same surface as JS where practical, including `tool.<name>(args)`, `llm(...)`, and `agent(...)` through a per-run loopback bridge
+- The Python prelude defines helpers with the same surface as JS where practical, including `tool.<name>(args)`, `completion(...)`, and `agent(...)` through a per-run loopback bridge
 - Synchronous statement blocks run in the default executor with ContextVar state copied in; the GIL still serializes bytecode execution, but awaited regions can interleave with sibling cells
 - Kernel `display_data` / `execute_result` messages map to:
   - `application/x-omp-status` → status event
@@ -172,13 +172,13 @@ Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding
   - `text/html` → HTML converted to markdown with `htmlToBasicMarkdown()`
 - Interactive stdin is rejected: `input_request` sends an empty reply, marks `stdinRequested`, and the executor returns exit code `1`
 
-### Oneshot LLM helper (`llm`)
+### Oneshot completion helper (`completion`)
 
-Both runtimes expose `llm()` — a single stateless completion against a model tier. It is intentionally minimal: no conversation history, no agent-visible tools, pure text in / text (or object) out. Implemented host-side in `packages/coding-agent/src/eval/llm-bridge.ts` and routed through the existing tool bridge under the reserved name `__llm__`.
+Both runtimes expose `completion()` — a single stateless completion against a model tier. It is intentionally minimal: no conversation history, no agent-visible tools, pure text in / text (or object) out. Implemented host-side in `packages/coding-agent/src/eval/completion-bridge.ts` and routed through the existing tool bridge under the reserved name `__completion__`.
 
 - Signatures:
-  - JS: `await llm(prompt, { model?, system?, schema? })`
-  - Python: `llm(prompt, *, model="default", system=None, schema=None)`
+  - JS: `await completion(prompt, { model?, system?, schema? })`
+  - Python: `completion(prompt, *, model="default", system=None, schema=None)`
 - `model` selects a tier (default `"default"`):
   - `"smol"` → `pi/smol` role (fast / cheap)
   - `"default"` → the session's active model, falling back to the `pi/default` role

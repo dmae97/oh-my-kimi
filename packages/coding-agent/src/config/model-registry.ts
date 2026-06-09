@@ -1,27 +1,19 @@
 import * as path from "node:path";
+import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { readModelCache } from "@oh-my-pi/pi-ai/model-cache";
+import { createModelManager, type ModelManagerOptions, type ModelRefreshStrategy } from "@oh-my-pi/pi-ai/model-manager";
+import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
+import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-ai/models";
 import {
-	type Api,
-	type AssistantMessageEventStream,
-	type Context,
-	createModelManager,
-	enrichModelThinking,
-	getBundledModels,
-	getBundledProviders,
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
-	type Model,
-	type ModelManagerOptions,
-	type ModelRefreshStrategy,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-	readModelCache,
-	registerCustomApi,
-	type SimpleStreamOptions,
-	type ThinkingConfig,
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
-	unregisterCustomApis,
-} from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-ai/provider-models";
+import type { Api, Context, Model, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
@@ -103,12 +95,14 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 	...SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
 ];
 
-import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import type { ApiKeyResolver, FetchImpl } from "@oh-my-pi/pi-ai";
+import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
+import { type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { type ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCanonicalModelIndex,
@@ -124,6 +118,7 @@ import {
 	getModelLikeIdSegments,
 	stripBracketedModelIdAffixes,
 } from "./model-id-affixes";
+import { buildModelProviderPriorityRank } from "./model-provider-priority";
 import {
 	type ModelOverride,
 	type ModelsConfig,
@@ -927,8 +922,12 @@ export class ModelRegistry {
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
+	// Runtime model managers registered by extensions via fetchDynamicModels.
+	// Keyed by provider name; use the same SQLite cache path as builtins.
+	#runtimeModelManagers: Map<string, { options: ModelManagerOptions<Api>; sourceId: string }> = new Map();
 	#rebuildPending: boolean = false;
 	#rebuildSuspended: number = 0;
+	#fetch: FetchImpl;
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
@@ -942,7 +941,9 @@ export class ModelRegistry {
 	constructor(
 		readonly authStorage: AuthStorage,
 		modelsPath?: string,
+		options?: { fetch?: FetchImpl },
 	) {
+		this.#fetch = options?.fetch ?? fetch;
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath);
 		this.#cacheDbPath = modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined;
 		// Set up fallback resolver for custom provider API keys
@@ -999,6 +1000,27 @@ export class ModelRegistry {
 				}
 			}
 			await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		} finally {
+			this.#resumeRebuild();
+		}
+	}
+
+	/**
+	 * Discover models for providers registered at runtime via `fetchDynamicModels`
+	 * (extension providers). Merges the discovered catalog into the existing model
+	 * set without reloading static models, so dynamically-discovered models from
+	 * other providers are preserved. No-op when no runtime providers are registered.
+	 *
+	 * Drives the same SQLite model cache as built-in providers, so the default
+	 * `online-if-uncached` strategy fetches at most once per cache TTL (24 h).
+	 */
+	async refreshRuntimeProviders(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
+		if (this.#runtimeModelManagers.size === 0) {
+			return;
+		}
+		this.#suspendRebuild();
+		try {
+			await this.#refreshRuntimeDiscoveries(strategy, new Set(this.#runtimeModelManagers.keys()));
 		} finally {
 			this.#resumeRebuild();
 		}
@@ -1610,6 +1632,7 @@ export class ModelRegistry {
 					googleAntigravityModelManagerOptions({
 						oauthToken,
 						endpoint: this.getProviderBaseUrl("google-antigravity"),
+						fetch: this.#fetch,
 					}),
 			},
 			{
@@ -1619,6 +1642,7 @@ export class ModelRegistry {
 					googleGeminiCliModelManagerOptions({
 						oauthToken,
 						endpoint: this.getProviderBaseUrl("google-gemini-cli"),
+						fetch: this.#fetch,
 					}),
 			},
 			{
@@ -1657,6 +1681,7 @@ export class ModelRegistry {
 					descriptor.createModelManagerOptions({
 						apiKey: isAuthenticated(apiKey) ? apiKey : undefined,
 						baseUrl: this.getProviderBaseUrl(descriptor.providerId),
+						fetch: this.#fetch,
 					}),
 				);
 			}
@@ -1669,6 +1694,10 @@ export class ModelRegistry {
 				continue;
 			}
 			options.push(descriptor.createOptions(key));
+		}
+		// Append runtime model managers registered by extensions via fetchDynamicModels.
+		for (const { options: managerOpts } of this.#runtimeModelManagers.values()) {
+			options.push(managerOpts);
 		}
 		return options;
 	}
@@ -1704,7 +1733,7 @@ export class ModelRegistry {
 	): Promise<OllamaDiscoveredModelMetadata | null> {
 		const showUrl = `${endpoint}/api/show`;
 		try {
-			const response = await fetch(showUrl, {
+			const response = await this.#fetch(showUrl, {
 				method: "POST",
 				headers: { ...(headers ?? {}), "Content-Type": "application/json" },
 				body: JSON.stringify({ model: modelId }),
@@ -1752,7 +1781,7 @@ export class ModelRegistry {
 		const endpoint = this.#normalizeOllamaBaseUrl(providerConfig.baseUrl);
 		const tagsUrl = `${endpoint}/api/tags`;
 		const headers = { ...(providerConfig.headers ?? {}) };
-		const response = await fetch(tagsUrl, {
+		const response = await this.#fetch(tagsUrl, {
 			headers,
 			signal: AbortSignal.timeout(250),
 		});
@@ -1796,7 +1825,7 @@ export class ModelRegistry {
 	): Promise<LlamaCppDiscoveredServerMetadata | null> {
 		const propsUrl = `${this.#toLlamaCppNativeBaseUrl(baseUrl)}/props`;
 		try {
-			const response = await fetch(propsUrl, {
+			const response = await this.#fetch(propsUrl, {
 				headers,
 				signal: AbortSignal.timeout(150),
 			});
@@ -1827,7 +1856,7 @@ export class ModelRegistry {
 		}
 
 		const [response, serverMetadata] = await Promise.all([
-			fetch(modelsUrl, {
+			this.#fetch(modelsUrl, {
 				headers,
 				signal: AbortSignal.timeout(250),
 			}),
@@ -1879,7 +1908,7 @@ export class ModelRegistry {
 			headers.Authorization = `Bearer ${apiKey}`;
 		}
 
-		const response = await fetch(modelsUrl, {
+		const response = await this.#fetch(modelsUrl, {
 			headers,
 			signal: AbortSignal.timeout(10_000),
 		});
@@ -1941,7 +1970,7 @@ export class ModelRegistry {
 			headers.Authorization = `Bearer ${apiKey}`;
 		}
 
-		const response = await fetch(modelsUrl, {
+		const response = await this.#fetch(modelsUrl, {
 			headers,
 			signal: AbortSignal.timeout(10_000),
 		});
@@ -2214,27 +2243,8 @@ export class ModelRegistry {
 		});
 	}
 
-	#providerRank(models: readonly Model<Api>[]): Map<string, number> {
-		const configuredProviders = getConfiguredProviderOrderFromSettings();
-		const result = new Map<string, number>();
-		let nextRank = 0;
-		for (const provider of configuredProviders) {
-			const normalized = provider.trim().toLowerCase();
-			if (!normalized || result.has(normalized)) {
-				continue;
-			}
-			result.set(normalized, nextRank);
-			nextRank += 1;
-		}
-		for (const model of models) {
-			const normalized = model.provider.toLowerCase();
-			if (result.has(normalized)) {
-				continue;
-			}
-			result.set(normalized, nextRank);
-			nextRank += 1;
-		}
-		return result;
+	#providerRank(): Map<string, number> {
+		return buildModelProviderPriorityRank(getConfiguredProviderOrderFromSettings());
 	}
 
 	#resolveCanonicalVariant(
@@ -2244,7 +2254,7 @@ export class ModelRegistry {
 		if (variants.length === 0) {
 			return undefined;
 		}
-		const providerRank = this.#providerRank(allCandidates);
+		const providerRank = this.#providerRank();
 		const modelOrder = new Map<string, number>();
 		for (let index = 0; index < allCandidates.length; index += 1) {
 			modelOrder.set(formatCanonicalVariantSelector(allCandidates[index]!), index);
@@ -2373,12 +2383,33 @@ export class ModelRegistry {
 
 	/**
 	 * Get API key for a provider (e.g., "openai").
+	 *
+	 * `options.forceRefresh` powers step (b) of the auth-retry policy — it
+	 * re-mints the session-sticky OAuth token even when the cached copy still
+	 * looks valid. `options.signal` is threaded into any broker-bound refresh.
 	 */
-	async getApiKeyForProvider(provider: string, sessionId?: string, baseUrl?: string): Promise<string | undefined> {
+	async getApiKeyForProvider(
+		provider: string,
+		sessionId?: string,
+		options?: { baseUrl?: string; forceRefresh?: boolean; signal?: AbortSignal },
+	): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
 			return kNoAuth;
 		}
-		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
+		return this.authStorage.getApiKey(provider, sessionId, {
+			baseUrl: options?.baseUrl,
+			forceRefresh: options?.forceRefresh,
+			signal: options?.signal,
+		});
+	}
+
+	/**
+	 * Build an {@link ApiKeyResolver} for this provider, implementing the
+	 * central a/b/c auth-retry policy. Callers that need the initial key for
+	 * a guard can call `resolveApiKeyOnce(resolver)`.
+	 */
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver {
+		return createApiKeyResolver(this, provider, options);
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
@@ -2399,6 +2430,7 @@ export class ModelRegistry {
 		this.#runtimeProviderApiKeys.delete(providerName);
 		this.#runtimeProviderOverrides.delete(providerName);
 		this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
+		this.#runtimeModelManagers.delete(providerName);
 		this.authStorage.removeConfigApiKey(providerName);
 	}
 
@@ -2562,6 +2594,47 @@ export class ModelRegistry {
 			return;
 		}
 
+		if (config.fetchDynamicModels) {
+			const fetcher = config.fetchDynamicModels;
+			const providerBaseUrl = config.baseUrl ?? "";
+			const providerApi = config.api;
+			const providerHeaders = config.headers;
+			const providerApiKey = config.apiKey;
+			const providerAuthHeader = config.authHeader;
+			const providerCompat = config.compat;
+			const managerOptions: ModelManagerOptions<Api> = {
+				providerId: providerName as Parameters<typeof createModelManager>[0]["providerId"],
+				staticModels: [],
+				cacheDbPath: this.#cacheDbPath,
+				cacheTtlMs: 24 * 60 * 60 * 1000,
+				dynamicModelsAuthoritative: true,
+				fetchDynamicModels: async () => {
+					const apiKey = await this.authStorage.peekApiKey(providerName);
+					const resolvedKey = isAuthenticated(apiKey) ? apiKey : undefined;
+					const modelDefs = await fetcher(resolvedKey);
+					const results: Model<Api>[] = [];
+					for (const modelDef of modelDefs) {
+						const overlay = buildCustomModelOverlay(
+							providerName,
+							modelDef.baseUrl ?? providerBaseUrl,
+							modelDef.api ?? providerApi,
+							providerHeaders,
+							providerApiKey,
+							providerAuthHeader,
+							providerCompat,
+							undefined,
+							modelDef as CustomModelDefinitionLike,
+						);
+						if (overlay) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
+					}
+					return results;
+				},
+			};
+			this.#runtimeModelManagers.set(providerName, { options: managerOptions, sourceId: sourceId ?? "" });
+			// Discovery is driven by refreshRuntimeProviders() after the drain — not
+			// here, so registration has no network side effect and callers can await.
+		}
+
 		if (
 			config.baseUrl ||
 			config.headers ||
@@ -2609,6 +2682,14 @@ export class ModelRegistry {
 		}
 		return true;
 	}
+
+	/**
+	 * Clear all cooldown suppressions recorded via {@link suppressSelector}.
+	 * Used to reset retry-fallback cooldown state without a full {@link refresh}.
+	 */
+	clearSuppressedSelectors(): void {
+		this.#suppressedSelectors.clear();
+	}
 }
 
 /**
@@ -2631,6 +2712,15 @@ export interface ProviderConfigInput {
 		getApiKey?(credentials: OAuthCredentials): string;
 		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 	};
+	/**
+	 * Async factory that fetches the live model list from the provider endpoint.
+	 * When present, the result is run through the same SQLite model-cache as
+	 * built-in providers (keyed by provider name, default 24 h TTL).
+	 * The factory receives the resolved API key (undefined when unauthenticated).
+	 */
+	fetchDynamicModels?: (
+		apiKey: string | undefined,
+	) => Promise<readonly NonNullable<ProviderConfigInput["models"]>[number][]>;
 	models?: Array<{
 		id: string;
 		name: string;

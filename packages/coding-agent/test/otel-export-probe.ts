@@ -9,8 +9,13 @@
  * core uses, flushes, and exits 0 only if the receiver got a non-empty
  * protobuf POST at /v1/traces.
  */
+
+import {
+	flushTelemetryExport,
+	initTelemetryExport,
+	isTelemetryExportEnabled,
+} from "@oh-my-pi/pi-coding-agent/telemetry-export";
 import { trace } from "@opentelemetry/api";
-import { flushTelemetryExport, initTelemetryExport, isTelemetryExportEnabled } from "../src/telemetry-export";
 
 let received = false;
 
@@ -35,7 +40,7 @@ const server = Bun.serve({
 process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://localhost:${server.port}/v1/traces`;
 process.env.OTEL_SERVICE_NAME = "oh-my-pi-export-probe";
 
-initTelemetryExport();
+await initTelemetryExport();
 if (!isTelemetryExportEnabled()) {
 	console.error("PROBE: provider did not register");
 	await server.stop(true);

@@ -13,7 +13,7 @@ import {
 	resetBankForTests,
 	setBank,
 	ValueError,
-} from "../src/core/banks";
+} from "@oh-my-pi/pi-mnemopi/core/banks";
 
 describe("BankManager", () => {
 	it("creates, lists, renames, stats, and deletes isolated bank directories", () => {

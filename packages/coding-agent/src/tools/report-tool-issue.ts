@@ -22,6 +22,7 @@
 import { Database } from "bun:sqlite";
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import { $env, $flag, getAgentDir, getInstallId, logger, VERSION } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { Settings } from "..";
@@ -261,6 +262,10 @@ export interface FlushOptions {
 	 */
 	bypassConsent?: boolean;
 	/**
+	 * Fetch implementation for the push POST. Defaults to global fetch.
+	 */
+	fetch?: FetchImpl;
+	/**
 	 * Fires once at the start of the loop with the snapshot count of
 	 * unpushed rows. Subsequent inserts won't be reflected (the count is
 	 * a planning hint for progress reporters, not a live total).
@@ -345,6 +350,7 @@ async function performFlush(db: Database, config: PushConfig, options: FlushOpti
 		const totalRow = db.prepare("SELECT COUNT(*) AS n FROM grievances WHERE pushed = 0").get() as { n: number };
 		options.onStart(totalRow.n);
 	}
+	const fetchImpl = options.fetch ?? fetch;
 	let totalPushed = 0;
 	for (;;) {
 		const rows = selectStmt.all(FLUSH_BATCH_SIZE) as GrievanceRow[];
@@ -366,7 +372,7 @@ async function performFlush(db: Database, config: PushConfig, options: FlushOpti
 
 		let response: Response;
 		try {
-			response = await fetch(config.endpoint, {
+			response = await fetchImpl(config.endpoint, {
 				method: "POST",
 				headers,
 				body,

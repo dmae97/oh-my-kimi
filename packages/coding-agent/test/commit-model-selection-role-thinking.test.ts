@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Effort, getBundledModel } from "@oh-my-pi/pi-ai";
-import { resolvePrimaryModel, resolveSmolModel } from "../src/commit/model-selection";
+import { resolvePrimaryModel, resolveSmolModel } from "@oh-my-pi/pi-coding-agent/commit/model-selection";
 
 function getModelOrThrow(id: string) {
 	const model = getBundledModel("anthropic", id);
@@ -38,6 +38,9 @@ describe("commit role thinking selection", () => {
 		const registry = {
 			getAvailable: () => [defaultModel, commitModel],
 			getApiKey: async () => "test-key",
+			getApiKeyForProvider: async () => "test-key",
+			authStorage: { rotateSessionCredential: async () => false as const },
+			resolver: () => async () => "test-key",
 		};
 
 		const primary = await resolvePrimaryModel(undefined, settings, registry);

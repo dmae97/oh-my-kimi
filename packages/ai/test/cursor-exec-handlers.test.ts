@@ -4,9 +4,9 @@ import {
 	buildCursorSystemPromptJsons,
 	resolveExecHandler,
 	streamCursor,
-} from "../src/providers/cursor";
-import type { AgentRunRequest } from "../src/providers/cursor/gen/agent_pb";
-import type { Context, Model } from "../src/types";
+} from "@oh-my-pi/pi-ai/providers/cursor";
+import type { AgentRunRequest } from "@oh-my-pi/pi-ai/providers/cursor/gen/agent_pb";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 
 const cursorModel: Model<"cursor-agent"> = {
 	id: "cursor-composer-2.5",

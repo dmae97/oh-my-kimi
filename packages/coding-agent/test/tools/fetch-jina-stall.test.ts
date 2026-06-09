@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { renderHtmlToText } from "@oh-my-pi/pi-coding-agent/tools/fetch";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { asGlobalFetch } from "../helpers/fetch-mock";
 
 /**
  * Regression test for #1449: a stalled Jina reader request must not prevent
@@ -9,12 +9,10 @@ import { hookFetch } from "@oh-my-pi/pi-utils";
  * overall reader-mode budget.
  */
 describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)", () => {
-	afterEach(() => {
-		// Nothing to restore — `using` handles fetch hook cleanup per-test.
-	});
-
 	it("falls back to native renderer when jina hangs until aborted", async () => {
-		const settings = Settings.isolated({ "providers.parallelFetch": false });
+		// Force jina first so the stall path is actually exercised before the
+		// native fallback runs.
+		const settings = Settings.isolated({ "providers.fetch": "jina" });
 		// Substantive HTML so the native converter produces >100 chars and
 		// `isLowQualityOutput` does not reject it.
 		const paragraphs = Array.from(
@@ -24,14 +22,12 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		).join("");
 		const html = `<!doctype html><html><head><title>Example</title></head><body><article><h1>Example article</h1>${paragraphs}</article></body></html>`;
 
-		using _hook = hookFetch((input, _init, _next) => {
+		const fetchMock = asGlobalFetch((input, init) => {
 			const url = String(input);
-			// Hang on the Jina reader endpoint until aborted, mirroring the
-			// real bug: r.jina.ai stalls indefinitely.
 			if (url.startsWith("https://r.jina.ai/")) {
 				return new Promise<Response>((_resolve, reject) => {
-					const signal = _init?.signal;
-					if (!signal) return; // never settles
+					const signal = init?.signal;
+					if (!signal) return;
 					if (signal.aborted) {
 						reject(new DOMException("aborted", "AbortError"));
 						return;
@@ -45,31 +41,30 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		});
 
 		const started = Date.now();
-		// `timeout: 2` keeps the overall budget tight — the test must complete
-		// within ~2s even though Jina would otherwise hang for the full budget.
-		const result = await renderHtmlToText("https://example.com/article", html, 2, settings, undefined, null);
+		const result = await renderHtmlToText(
+			"https://example.com/article",
+			html,
+			0.3,
+			settings,
+			undefined,
+			null,
+			fetchMock,
+		);
 		const elapsedMs = Date.now() - started;
 
 		expect(result.ok).toBe(true);
-		// Native converter is the only deterministic local fallback; trafilatura
-		// and lynx may or may not be installed in CI, but native always works.
-		// If trafilatura or lynx happened to succeed first, that's also a valid
-		// non-aborted outcome.
 		expect(["native", "trafilatura", "lynx"]).toContain(result.method);
-		// Must finish well before the overall budget elapses: the remote
-		// sub-budget caps Jina at min(timeout, REMOTE_READER_MAX_MS), so the
-		// remaining ~1s of the 2s budget is enough for the native renderer.
-		expect(elapsedMs).toBeLessThan(2_500);
+		expect(elapsedMs).toBeLessThan(1_500);
 	});
 
 	it("re-throws when the user signal is aborted, not when Jina sub-budget expires", async () => {
-		const settings = Settings.isolated({ "providers.parallelFetch": false });
+		const settings = Settings.isolated({ "providers.fetch": "jina" });
 		const html = "<html><body><p>short</p></body></html>";
 
-		using _hook = hookFetch((_input, init, _next) => {
+		const fetchMock2 = asGlobalFetch((_input, init) => {
 			return new Promise<Response>((_resolve, reject) => {
 				const signal = init?.signal;
-				if (!signal) return; // Defensive: never settles otherwise.
+				if (!signal) return;
 				if (signal.aborted) {
 					reject(new DOMException("aborted", "AbortError"));
 					return;
@@ -88,6 +83,7 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 			settings,
 			controller.signal,
 			null,
+			fetchMock2,
 		).catch(err => err);
 
 		controller.abort();

@@ -5,9 +5,10 @@
  * by providing authorization URL, token URL, and client credentials.
  */
 
-import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/utils/oauth/callback-server";
-import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/utils/oauth/callback-server";
-import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/oauth/callback-server";
+import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
+import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
@@ -114,6 +115,8 @@ export interface MCPOAuthConfig {
 	callbackPort?: number;
 	/** Custom callback path (default: /callback or redirectUri pathname) */
 	callbackPath?: string;
+	/** Fetch implementation for token exchange and discovery requests. */
+	fetch?: FetchImpl;
 }
 
 /**
@@ -124,6 +127,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	#resolvedClientId?: string;
 	#registeredClientSecret?: string;
 	#codeVerifier?: string;
+	#fetch: FetchImpl;
 
 	constructor(
 		private config: MCPOAuthConfig,
@@ -131,6 +135,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	) {
 		super(ctrl, resolveCallbackOptions(config));
 		this.#resolvedClientId = this.#resolveClientId(config);
+		this.#fetch = config.fetch ?? ctrl.fetch ?? fetch;
 	}
 
 	/**
@@ -212,7 +217,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			params.set("client_secret", clientSecret);
 		}
 
-		const response = await fetch(this.config.tokenUrl, {
+		const response = await this.#fetch(this.config.tokenUrl, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -289,7 +294,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (!registrationEndpoint) return;
 
 		try {
-			const response = await fetch(registrationEndpoint, {
+			const response = await this.#fetch(registrationEndpoint, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -357,7 +362,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	async #tryWellKnownForRegistration(wellKnownUrl: string): Promise<string | null> {
 		try {
-			const response = await fetch(wellKnownUrl, {
+			const response = await this.#fetch(wellKnownUrl, {
 				method: "GET",
 				headers: { Accept: "application/json" },
 			});
@@ -374,7 +379,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	async #assertClientIdNotRequired(authorizationUrl: string): Promise<void> {
 		try {
-			const response = await fetch(authorizationUrl, {
+			const response = await this.#fetch(authorizationUrl, {
 				method: "GET",
 				redirect: "manual",
 				headers: { Accept: "text/plain,text/html,application/json" },
@@ -402,7 +407,9 @@ export async function refreshMCPOAuthToken(
 	refreshToken: string,
 	clientId?: string,
 	clientSecret?: string,
+	opts?: { fetch?: FetchImpl },
 ): Promise<OAuthCredentials> {
+	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	const params = new URLSearchParams({
 		grant_type: "refresh_token",
 		refresh_token: refreshToken,
@@ -410,7 +417,7 @@ export async function refreshMCPOAuthToken(
 	if (clientId) params.set("client_id", clientId);
 	if (clientSecret) params.set("client_secret", clientSecret);
 
-	const response = await fetch(tokenUrl, {
+	const response = await fetchImpl(tokenUrl, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: params.toString(),

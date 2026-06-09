@@ -1,6 +1,13 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAntigravityUserAgent, getEnvApiKey, type Model } from "@oh-my-pi/pi-ai";
+import {
+	type ApiKey,
+	type FetchImpl,
+	getAntigravityUserAgent,
+	getEnvApiKey,
+	type Model,
+	withAuth,
+} from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -20,6 +27,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import packageJson from "../../package.json" with { type: "json" };
+
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
@@ -365,7 +373,11 @@ function toDataUrl(image: InlineImageData): string {
 	return `data:${image.mimeType};base64,${image.data}`;
 }
 
-async function loadImageFromUrl(imageUrl: string, signal?: AbortSignal): Promise<InlineImageData> {
+async function loadImageFromUrl(
+	imageUrl: string,
+	fetchImpl: FetchImpl,
+	signal?: AbortSignal,
+): Promise<InlineImageData> {
 	if (imageUrl.startsWith("data:")) {
 		const normalized = normalizeDataUrl(imageUrl.trim());
 		if (!normalized.mimeType) {
@@ -377,7 +389,7 @@ async function loadImageFromUrl(imageUrl: string, signal?: AbortSignal): Promise
 		return { data: normalized.data, mimeType: normalized.mimeType };
 	}
 
-	const response = await fetch(imageUrl, { signal });
+	const response = await fetchImpl(imageUrl, { signal });
 	if (!response.ok) {
 		const rawText = await response.text();
 		throw new Error(`Image download failed (${response.status}): ${rawText}`);
@@ -849,13 +861,14 @@ async function generateOpenAIHostedImage(
 	model: Model,
 	params: ImageGenParams,
 	inputImages: InlineImageData[],
+	fetchImpl: FetchImpl,
 	signal: AbortSignal | undefined,
 	sessionId: string | undefined,
 ): Promise<OpenAIHostedImageResult> {
 	const promptText = assemblePrompt(params);
 	const stream = model.api === "openai-codex-responses" || model.provider === "openai-codex";
 	const requestBody = buildOpenAIHostedImageRequest(model, promptText, params, inputImages, stream);
-	const response = await fetch(getOpenAIResponsesUrl(model), {
+	const response = await fetchImpl(getOpenAIResponsesUrl(model), {
 		method: "POST",
 		headers: buildOpenAIImageHeaders(model, apiKey, sessionId),
 		body: JSON.stringify(requestBody),
@@ -864,7 +877,10 @@ async function generateOpenAIHostedImage(
 
 	if (!response.ok) {
 		const errorText = await response.text();
-		throw new Error(`OpenAI image request failed (${response.status}): ${getOpenAIResponseErrorMessage(errorText)}`);
+		throw Object.assign(
+			new Error(`OpenAI image request failed (${response.status}): ${getOpenAIResponseErrorMessage(errorText)}`),
+			{ status: response.status },
+		);
 	}
 
 	const contentType = response.headers.get("content-type") ?? "";
@@ -1031,19 +1047,32 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			}
 
 			const requestSignal = ptree.combineSignals(signal, IMAGE_TIMEOUT);
+			const fetchImpl = ctx.fetch ?? fetch;
 
 			if (provider === "openai" || provider === "openai-codex") {
 				if (!apiKey.model) {
 					throw new Error("Missing active GPT model for OpenAI image generation");
 				}
 
-				const parsed = await generateOpenAIHostedImage(
-					apiKey.apiKey,
-					apiKey.model,
-					params,
-					resolvedImages,
-					requestSignal,
+				const hostedModel = apiKey.model;
+				const hostedKey: ApiKey = ctx.modelRegistry.resolver(hostedModel.provider, {
 					sessionId,
+					baseUrl: hostedModel.baseUrl,
+				});
+
+				const parsed = await withAuth(
+					hostedKey,
+					key =>
+						generateOpenAIHostedImage(
+							key,
+							hostedModel,
+							params,
+							resolvedImages,
+							fetchImpl,
+							requestSignal,
+							sessionId,
+						),
+					{ signal: requestSignal },
 				);
 
 				if (parsed.images.length === 0) {
@@ -1088,38 +1117,57 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				}
 
 				const prompt = assemblePrompt(params);
-				const requestBody = buildAntigravityRequest(
-					prompt,
-					model,
-					apiKey.projectId,
-					params.aspect_ratio,
-					params.image_size,
-					resolvedImages,
-				);
-
-				const response = await fetch(`${ANTIGRAVITY_ENDPOINT}/v1internal:streamGenerateContent?alt=sse`, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${apiKey.apiKey}`,
-						"Content-Type": "application/json",
-						Accept: "text/event-stream",
-						"User-Agent": getAntigravityUserAgent(),
-					},
-					body: JSON.stringify(requestBody),
-					signal: requestSignal,
+				const antigravityKey: ApiKey = ctx.modelRegistry.resolver("google-antigravity", {
+					sessionId,
 				});
 
-				if (!response.ok) {
-					const errorText = await response.text();
-					let message = errorText;
-					try {
-						const parsed = JSON.parse(errorText) as { error?: { message?: string } };
-						message = parsed.error?.message ?? message;
-					} catch {
-						// Keep raw text.
-					}
-					throw new Error(`Antigravity image request failed (${response.status}): ${message}`);
-				}
+				const response = await withAuth(
+					antigravityKey,
+					async key => {
+						// On a retry the resolver yields the raw stored credential JSON
+						// ({ token, projectId }); the initial seed is the already-parsed
+						// access token. Tolerate both, falling back to the seed projectId.
+						const rotated = parseAntigravityCredentials(key);
+						const bearer = rotated?.accessToken ?? key;
+						const projectId = rotated?.projectId ?? apiKey.projectId!;
+						const requestBody = buildAntigravityRequest(
+							prompt,
+							model,
+							projectId,
+							params.aspect_ratio,
+							params.image_size,
+							resolvedImages,
+						);
+
+						const resp = await fetchImpl(`${ANTIGRAVITY_ENDPOINT}/v1internal:streamGenerateContent?alt=sse`, {
+							method: "POST",
+							headers: {
+								Authorization: `Bearer ${bearer}`,
+								"Content-Type": "application/json",
+								Accept: "text/event-stream",
+								"User-Agent": getAntigravityUserAgent(),
+							},
+							body: JSON.stringify(requestBody),
+							signal: requestSignal,
+						});
+
+						if (!resp.ok) {
+							const errorText = await resp.text();
+							let message = errorText;
+							try {
+								const parsedErr = JSON.parse(errorText) as { error?: { message?: string } };
+								message = parsedErr.error?.message ?? message;
+							} catch {
+								// Keep raw text.
+							}
+							throw Object.assign(new Error(`Antigravity image request failed (${resp.status}): ${message}`), {
+								status: resp.status,
+							});
+						}
+						return resp;
+					},
+					{ signal: requestSignal },
+				);
 
 				const parsed = await parseAntigravitySseForImage(response, requestSignal);
 				const responseText = parsed.text.length > 0 ? parsed.text.join(" ") : undefined;
@@ -1191,28 +1239,41 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					: xaiBaseBody;
 				const xaiEndpoint = isEdit ? "/images/edits" : "/images/generations";
 
-				const xaiResponse = await fetch(`${xaiCreds.baseURL}${xaiEndpoint}`, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${xaiCreds.apiKey}`,
-						"Content-Type": "application/json",
-						"User-Agent": ohMyPiXAIUserAgent(),
-					},
-					body: JSON.stringify(xaiBody),
-					signal: requestSignal,
+				const xaiKey: ApiKey = ctx.modelRegistry.resolver(xaiCreds.provider, {
+					sessionId,
+					baseUrl: xaiCreds.baseURL,
 				});
 
-				const xaiRawText = await xaiResponse.text();
-				if (!xaiResponse.ok) {
-					let message = xaiRawText;
-					try {
-						const parsedErr = JSON.parse(xaiRawText) as { error?: { message?: string } };
-						message = parsedErr.error?.message ?? message;
-					} catch {
-						// Keep raw text.
-					}
-					throw new Error(`xAI image request failed (${xaiResponse.status}): ${message}`);
-				}
+				const xaiRawText = await withAuth(
+					xaiKey,
+					async key => {
+						const resp = await fetchImpl(`${xaiCreds.baseURL}${xaiEndpoint}`, {
+							method: "POST",
+							headers: {
+								Authorization: `Bearer ${key}`,
+								"Content-Type": "application/json",
+								"User-Agent": ohMyPiXAIUserAgent(),
+							},
+							body: JSON.stringify(xaiBody),
+							signal: requestSignal,
+						});
+						const rawText = await resp.text();
+						if (!resp.ok) {
+							let message = rawText;
+							try {
+								const parsedErr = JSON.parse(rawText) as { error?: { message?: string } };
+								message = parsedErr.error?.message ?? message;
+							} catch {
+								// Keep raw text.
+							}
+							throw Object.assign(new Error(`xAI image request failed (${resp.status}): ${message}`), {
+								status: resp.status,
+							});
+						}
+						return rawText;
+					},
+					{ signal: requestSignal },
+				);
 
 				const xaiData = JSON.parse(xaiRawText) as {
 					data?: Array<{ b64_json?: string; url?: string }>;
@@ -1224,7 +1285,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						const mimeType = parseImageMetadata(bytes)?.mimeType ?? "image/png";
 						xaiInlineImages.push({ data: entry.b64_json, mimeType });
 					} else if (entry.url) {
-						xaiInlineImages.push(await loadImageFromUrl(entry.url, requestSignal));
+						xaiInlineImages.push(await loadImageFromUrl(entry.url, fetchImpl, requestSignal));
 					}
 				}
 
@@ -1269,30 +1330,34 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					messages: [{ role: "user" as const, content: contentParts }],
 				};
 
-				const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${apiKey.apiKey}`,
-						"HTTP-Referer": "https://omp.sh/",
-						"X-OpenRouter-Title": "Oh-My-Pi",
-						"X-OpenRouter-Categories": "cli-agent",
-					},
-					body: JSON.stringify(requestBody),
-					signal: requestSignal,
-				});
-
-				const rawText = await response.text();
-				if (!response.ok) {
-					let message = rawText;
-					try {
-						const parsed = JSON.parse(rawText) as { error?: { message?: string } };
-						message = parsed.error?.message ?? message;
-					} catch {
-						// Keep raw text.
+				const rawText = await withAuth(apiKey.apiKey, async key => {
+					const resp = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${key}`,
+							"HTTP-Referer": "https://omp.sh/",
+							"X-OpenRouter-Title": "Oh-My-Pi",
+							"X-OpenRouter-Categories": "cli-agent",
+						},
+						body: JSON.stringify(requestBody),
+						signal: requestSignal,
+					});
+					const text = await resp.text();
+					if (!resp.ok) {
+						let message = text;
+						try {
+							const parsed = JSON.parse(text) as { error?: { message?: string } };
+							message = parsed.error?.message ?? message;
+						} catch {
+							// Keep raw text.
+						}
+						throw Object.assign(new Error(`OpenRouter image request failed (${resp.status}): ${message}`), {
+							status: resp.status,
+						});
 					}
-					throw new Error(`OpenRouter image request failed (${response.status}): ${message}`);
-				}
+					return text;
+				});
 
 				const data = JSON.parse(rawText) as OpenRouterResponse;
 				const message = data.choices?.[0]?.message;
@@ -1300,7 +1365,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				const imageUrls = extractOpenRouterImageUrls(message);
 				const inlineImages: InlineImageData[] = [];
 				for (const imageUrl of imageUrls) {
-					inlineImages.push(await loadImageFromUrl(imageUrl, requestSignal));
+					inlineImages.push(await loadImageFromUrl(imageUrl, fetchImpl, requestSignal));
 				}
 
 				if (inlineImages.length === 0) {
@@ -1360,30 +1425,34 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				generationConfig,
 			};
 
-			const response = await fetch(
-				`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"x-goog-api-key": apiKey.apiKey,
+			const rawText = await withAuth(apiKey.apiKey, async key => {
+				const resp = await fetchImpl(
+					`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"x-goog-api-key": key,
+						},
+						body: JSON.stringify(requestBody),
+						signal: requestSignal,
 					},
-					body: JSON.stringify(requestBody),
-					signal: requestSignal,
-				},
-			);
-
-			const rawText = await response.text();
-			if (!response.ok) {
-				let message = rawText;
-				try {
-					const parsed = JSON.parse(rawText) as { error?: { message?: string } };
-					message = parsed.error?.message ?? message;
-				} catch {
-					// Keep raw text.
+				);
+				const text = await resp.text();
+				if (!resp.ok) {
+					let message = text;
+					try {
+						const parsed = JSON.parse(text) as { error?: { message?: string } };
+						message = parsed.error?.message ?? message;
+					} catch {
+						// Keep raw text.
+					}
+					throw Object.assign(new Error(`Gemini image request failed (${resp.status}): ${message}`), {
+						status: resp.status,
+					});
 				}
-				throw new Error(`Gemini image request failed (${response.status}): ${message}`);
-			}
+				return text;
+			});
 
 			const data = JSON.parse(rawText) as GeminiGenerateContentResponse;
 			const responseParts = combineParts(data);

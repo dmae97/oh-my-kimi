@@ -4,7 +4,7 @@
 
 import { HL_FILE_PREFIX, HL_FILE_SUFFIX } from "@oh-my-pi/hashline";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { Text, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { FileDiagnosticsResult } from "../lsp";
@@ -13,10 +13,8 @@ import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import type { OutputMeta } from "../tools/output-meta";
 import {
 	formatDiagnostics,
-	formatDiffStats,
 	formatExpandHint,
 	formatStatusIcon,
-	formatTitle,
 	getDiffStats,
 	getLspBatchRequest,
 	type LspBatchRequest,
@@ -25,7 +23,7 @@ import {
 	shortenPath,
 	truncateDiffByHunk,
 } from "../tools/render-utils";
-import { fileHyperlink, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import { fileHyperlink, framedBlock, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import type { EditMode } from "../utils/edit-mode";
 import type { DiffError, DiffResult } from "./diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
@@ -179,46 +177,131 @@ function countEditFiles(edits: EditRenderEntry[]): number {
 	return new Set(edits.map(edit => filePathFromEditEntry(edit.path)).filter(Boolean)).size;
 }
 
-function countLines(text: string): number {
-	if (!text) return 0;
-	return text.split("\n").length;
-}
-
 function getOperationTitle(op: Operation | undefined): string {
 	return op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
+}
+
+interface EditPathDisplayOptions {
+	rename?: string;
+	firstChangedLine?: number;
+	linkPath?: string;
+	renameLinkPath?: string;
+	maxPathWidth?: number;
+}
+
+function truncateEditTitlePath(displayPath: string, maxWidth: number | undefined): string {
+	if (maxWidth === undefined) return displayPath;
+	const width = visibleWidth(displayPath);
+	const safeMaxWidth = Math.max(0, Math.floor(maxWidth));
+	if (width <= safeMaxWidth) return displayPath;
+
+	const contentWidth = safeMaxWidth - 1;
+	if (contentWidth <= 0) return "…";
+
+	const headWidth = Math.floor(contentWidth / 2);
+	const tailWidth = contentWidth - headWidth;
+	const head = sliceWithWidth(displayPath, 0, headWidth, true).text;
+	const tail = sliceWithWidth(displayPath, Math.max(0, width - tailWidth), tailWidth, true).text;
+	return `${head}…${tail}`;
+}
+
+function formatEditTitlePath(pathValue: string, maxWidth?: number): string {
+	return truncateEditTitlePath(replaceTabs(shortenPath(pathValue), pathValue), maxWidth);
 }
 
 function formatEditPathDisplay(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number },
-): string {
+	options?: EditPathDisplayOptions,
+): { text: string; pathWidth: number } {
+	// `rawPath`/`rename` are shown (cwd-relative) but the OSC 8 link targets the
+	// absolute path when known — a relative `rawPath` would otherwise yield a
+	// `file:///rel` URI that resolves against filesystem root instead of cwd.
+	const linkTarget = options?.linkPath || rawPath;
+	const lineLink = options?.firstChangedLine ? { line: options.firstChangedLine } : undefined;
+	const primaryDisplay = rawPath ? formatEditTitlePath(rawPath, options?.maxPathWidth) : "…";
 	let pathDisplay = rawPath
-		? fileHyperlink(rawPath, uiTheme.fg("accent", shortenPath(rawPath)))
-		: uiTheme.fg("toolOutput", "…");
-
-	if (options?.firstChangedLine) {
-		pathDisplay += uiTheme.fg("warning", `:${options.firstChangedLine}`);
-	}
+		? fileHyperlink(linkTarget, uiTheme.fg("accent", primaryDisplay), lineLink)
+		: uiTheme.fg("toolOutput", primaryDisplay);
+	let pathWidth = visibleWidth(primaryDisplay);
 
 	if (options?.rename) {
-		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(options.rename, uiTheme.fg("accent", shortenPath(options.rename)))}`;
+		const renameTarget = options.renameLinkPath || options.rename;
+		const renameDisplay = formatEditTitlePath(options.rename, options.maxPathWidth);
+		pathDisplay += ` ${uiTheme.fg("dim", "→")} ${fileHyperlink(renameTarget, uiTheme.fg("accent", renameDisplay))}`;
+		pathWidth += visibleWidth(renameDisplay);
 	}
 
-	return pathDisplay;
+	return { text: pathDisplay, pathWidth };
 }
 
 function formatEditDescription(
 	rawPath: string,
 	uiTheme: Theme,
-	options?: { rename?: string; firstChangedLine?: number },
-): { language: string; description: string } {
+	options?: EditPathDisplayOptions,
+): { language: string; description: string; pathWidth: number } {
 	const language = getLanguageFromPath(rawPath) ?? "text";
 	const icon = uiTheme.fg("muted", uiTheme.getLangIcon(language));
+	const pathDisplay = formatEditPathDisplay(rawPath, uiTheme, options);
 	return {
 		language,
-		description: `${icon} ${formatEditPathDisplay(rawPath, uiTheme, options)}`,
+		description: `${icon} ${pathDisplay.text}`,
+		pathWidth: pathDisplay.pathWidth,
 	};
+}
+
+function editHeaderLabelBudget(width: number, uiTheme: Theme): number {
+	const leftGlyphs = `${uiTheme.boxSharp.topLeft}${uiTheme.boxSharp.horizontal.repeat(3)}`;
+	return Math.max(0, width - visibleWidth(leftGlyphs) - visibleWidth(uiTheme.boxSharp.topRight) - 2);
+}
+
+function renderEditHeader(
+	width: number,
+	uiTheme: Theme,
+	options: {
+		icon: "pending" | "success" | "error";
+		iconOverride?: string;
+		spinnerFrame?: number;
+		op?: Operation;
+		rawPath: string;
+		rename?: string;
+		firstChangedLine?: number;
+		linkPath?: string;
+		statsSuffix?: string;
+		extraSuffix?: string;
+	},
+): string {
+	const title = getOperationTitle(options.op);
+	const descriptionOptions: EditPathDisplayOptions = {
+		rename: options.rename,
+		firstChangedLine: options.firstChangedLine,
+		linkPath: options.linkPath,
+	};
+	const formatted = formatEditDescription(options.rawPath, uiTheme, descriptionOptions);
+	const suffix = `${options.statsSuffix ?? ""}${options.extraSuffix ?? ""}`;
+	const buildHeader = (description: string): string =>
+		renderStatusLine(
+			{
+				icon: options.icon,
+				iconOverride: options.iconOverride,
+				spinnerFrame: options.spinnerFrame,
+				title,
+				description,
+			},
+			uiTheme,
+		) + suffix;
+
+	const header = buildHeader(formatted.description);
+	const overflow = visibleWidth(header) - editHeaderLabelBudget(width, uiTheme);
+	if (overflow <= 0 || formatted.pathWidth <= 1) return header;
+
+	const pathCount = Math.max(1, (options.rawPath ? 1 : 0) + (options.rename ? 1 : 0));
+	const fittedPathWidth = Math.max(1, Math.floor((formatted.pathWidth - overflow) / pathCount));
+	const fitted = formatEditDescription(options.rawPath, uiTheme, {
+		...descriptionOptions,
+		maxPathWidth: fittedPathWidth,
+	});
+	return buildHeader(fitted.description);
 }
 
 function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string): string {
@@ -261,14 +344,6 @@ function formatStreamingDiff(
 	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
 	if (!expanded || label !== "preview") text += uiTheme.fg("dim", `\n(${label})`);
 	return text;
-}
-
-function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
-	const icon = uiTheme.getLangIcon(language);
-	if (lineCount !== null) {
-		return uiTheme.fg("dim", `${icon} ${lineCount} lines`);
-	}
-	return uiTheme.fg("dim", `${icon}`);
 }
 
 function formatMultiFileStreamingDiff(previews: PerFileDiffPreview[], uiTheme: Theme, expanded: boolean): string {
@@ -387,6 +462,16 @@ function getApplyPatchRenderSummary(
 	}
 }
 
+function formatDiffStatsSuffix(diff: string, uiTheme: Theme): string {
+	const { added, removed } = getDiffStats(diff);
+	if (added === 0 && removed === 0) return "";
+	const stats = [
+		added > 0 ? uiTheme.fg("toolDiffAdded", `+${added}`) : undefined,
+		removed > 0 ? uiTheme.fg("toolDiffRemoved", `-${removed}`) : undefined,
+	].filter(value => value !== undefined);
+	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats.join(uiTheme.fg("dim", "/"))}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
+}
+
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -394,15 +479,6 @@ function renderDiffSection(
 	uiTheme: Theme,
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
 ): string {
-	let text = "";
-	const diffStats = getDiffStats(diff);
-	text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${formatDiffStats(
-		diffStats.added,
-		diffStats.removed,
-		diffStats.hunks,
-		uiTheme,
-	)}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
-
 	const {
 		text: truncatedDiff,
 		hiddenHunks,
@@ -411,7 +487,7 @@ function renderDiffSection(
 		? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
 		: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
 
-	text += `\n\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
+	let text = `\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
 	if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
 		const remainder: string[] = [];
 		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
@@ -473,24 +549,34 @@ export const editToolRenderer = {
 			"";
 		const rename = editArgs.rename || firstEdit?.rename || firstEdit?.move || firstApplyPatchEntry?.rename;
 		const op = editArgs.op || firstEdit?.op || firstApplyPatchEntry?.op;
-		const { description } = formatEditDescription(rawPath, uiTheme, { rename });
-		const spinner =
-			options?.spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, options.spinnerFrame) : "";
-		let text = `${formatTitle(getOperationTitle(op), uiTheme)} ${spinner ? `${spinner} ` : ""}${description}`;
-		// Show file count hint for multi-file edits
 		let fileCount = hashlineInputSummary?.entries.length ?? applyPatchSummary?.entries.length ?? 0;
 		if (Array.isArray(editArgs.edits)) {
 			fileCount = countEditFiles(editArgs.edits);
 		}
-		if (fileCount > 1) {
-			text += uiTheme.fg("dim", ` (+${fileCount - 1} more)`);
-		}
-		text += getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded);
-		if (applyPatchSummary?.error) {
-			text += `\n\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), CALL_TEXT_PREVIEW_WIDTH))}`;
-		}
-
-		return new Text(text, 0, 0);
+		return framedBlock(uiTheme, width => {
+			const header = renderEditHeader(width, uiTheme, {
+				icon: "pending",
+				spinnerFrame: options?.spinnerFrame,
+				op,
+				rawPath,
+				rename,
+				extraSuffix: fileCount > 1 ? uiTheme.fg("dim", ` (+${fileCount - 1} more)`) : undefined,
+			});
+			let body = getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded);
+			if (applyPatchSummary?.error) {
+				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 2)))}`;
+			}
+			const bodyLines = body ? body.split("\n") : [];
+			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+			return {
+				header,
+				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+				state: applyPatchSummary?.error ? "error" : "pending",
+				borderColor: applyPatchSummary?.error ? "error" : "borderMuted",
+				width,
+				contentPaddingLeft: 0,
+			};
+		});
 	},
 
 	renderResult(
@@ -532,11 +618,6 @@ function renderSingleFileResult(
 		"";
 	const op = args?.op || firstEdit?.op || details?.op;
 	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
-	const { language } = formatEditDescription(rawPath, uiTheme, { rename });
-
-	const editTextSource = args?.newText ?? args?.oldText ?? args?.diff ?? args?.patch;
-	const metadataLineCount = editTextSource ? countLines(editTextSource) : null;
-	const metadataLine = op !== "delete" ? `\n${formatMetadataLine(metadataLineCount, language, uiTheme)}` : "";
 
 	const displayErrorText = isError && details && "displayErrorText" in details ? details.displayErrorText : undefined;
 	const errorText = isError
@@ -545,61 +626,63 @@ function renderSingleFileResult(
 			(result.content?.find(c => c.type === "text")?.text ?? "")
 		: "";
 
-	let cached: RenderCache | undefined;
+	return framedBlock(uiTheme, width => {
+		const { expanded, renderContext } = options;
+		const editDiffPreview = renderContext?.editDiffPreview;
+		const renderDiffFn = renderContext?.renderDiff ?? ((t: string) => t);
 
-	return {
-		render(width) {
-			const { expanded, renderContext } = options;
-			const editDiffPreview = renderContext?.editDiffPreview;
-			const renderDiffFn = renderContext?.renderDiff ?? ((t: string) => t);
-			const key = new Hasher().bool(expanded).u32(width).digest();
-			if (cached?.key === key) return cached.lines;
+		const firstChangedLine =
+			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
+			(details && !isError ? details.firstChangedLine : undefined);
+		const linkPath = details && "path" in details ? details.path : undefined;
 
-			const firstChangedLine =
-				(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
-				(details && !isError ? details.firstChangedLine : undefined);
-			const { description } = formatEditDescription(rawPath, uiTheme, { rename, firstChangedLine });
+		// Change stats ride inline on the header bar next to the path.
+		const previewDiff = editDiffPreview && !("error" in editDiffPreview) ? editDiffPreview.diff : undefined;
+		const headerDiff = isError ? undefined : details?.diff || previewDiff;
+		const statsSuffix = headerDiff ? formatDiffStatsSuffix(headerDiff, uiTheme) : "";
+		const header = renderEditHeader(width, uiTheme, {
+			icon: isError ? "error" : "success",
+			iconOverride: !isError && !options.isPartial ? uiTheme.styledSymbol("tool.edit", "accent") : undefined,
+			op,
+			rawPath,
+			rename,
+			firstChangedLine,
+			linkPath,
+			statsSuffix,
+		});
 
-			const header = renderStatusLine(
-				{
-					icon: isError ? "error" : "success",
-					title: getOperationTitle(op),
-					description,
-				},
-				uiTheme,
+		let body = "";
+		if (isError) {
+			if (errorText) body = uiTheme.fg("error", replaceTabs(errorText, rawPath));
+		} else if (details?.diff) {
+			body = renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
+		} else if (editDiffPreview) {
+			if ("error" in editDiffPreview) body = uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath));
+			else if (editDiffPreview.diff)
+				body = renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
+		}
+		if (details?.diagnostics) {
+			body += formatDiagnostics(details.diagnostics, expanded, uiTheme, (fp: string) =>
+				uiTheme.getLangIcon(getLanguageFromPath(fp)),
 			);
-			let text = header;
-			text += metadataLine;
+		}
 
-			if (isError) {
-				if (errorText) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(errorText, rawPath))}`;
-				}
-			} else if (details?.diff) {
-				text += renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
-			} else if (editDiffPreview) {
-				if ("error" in editDiffPreview) {
-					text += `\n\n${uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath))}`;
-				} else if (editDiffPreview.diff) {
-					text += renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
-				}
-			}
+		// Diff lines self-wrap with a continuation gutter; pre-wrap to the frame's
+		// inner width so renderOutputBlock's generic wrap is a no-op. Edit frames
+		// use a flush left border because code-frame gutters already provide padding.
+		const innerWidth = Math.max(1, width - 2);
+		const bodyLines = body.length > 0 ? body.split("\n").flatMap(line => wrapEditRendererLine(line, innerWidth)) : [];
+		while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 
-			if (details?.diagnostics) {
-				text += formatDiagnostics(details.diagnostics, expanded, uiTheme, (fp: string) =>
-					uiTheme.getLangIcon(getLanguageFromPath(fp)),
-				);
-			}
-
-			const lines =
-				width > 0 ? text.split("\n").flatMap(line => wrapEditRendererLine(line, width)) : text.split("\n");
-			cached = { key, lines };
-			return lines;
-		},
-		invalidate() {
-			cached = undefined;
-		},
-	};
+		return {
+			header,
+			sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
+			state: isError ? "error" : options.isPartial ? "pending" : "success",
+			borderColor: isError ? "error" : "borderMuted",
+			width,
+			contentPaddingLeft: 0,
+		};
+	});
 }
 
 function renderMultiFileResult(
@@ -654,7 +737,7 @@ function renderMultiFileResult(
 		},
 		invalidate() {
 			cached = undefined;
-			for (const c of fileComponents) c.invalidate();
+			for (const c of fileComponents) c.invalidate?.();
 		},
 	};
 }

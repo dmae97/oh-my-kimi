@@ -1,17 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import { loginXiaomi } from "../src/utils/oauth/xiaomi";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
+import { describe, expect, it, vi } from "bun:test";
+import { loginXiaomi } from "@oh-my-pi/pi-ai/registry/oauth/xiaomi";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 describe("xiaomi oauth validation", () => {
 	it("uses a fresh AbortSignal per endpoint so SGP timeout doesn't abort AMS fallback", async () => {
 		const capturedSignals: (AbortSignal | undefined)[] = [];
-		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 			capturedSignals.push(init?.signal ?? undefined);
 			if (capturedSignals.length === 1) {
 				// Simulate SGP timing out: throw an AbortError as AbortSignal.timeout would.
@@ -19,11 +13,11 @@ describe("xiaomi oauth validation", () => {
 			}
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		await loginXiaomi({
 			onPrompt: async () => "tp-test-key",
 			onAuth: () => {},
+			fetch: fetchMock,
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -41,15 +35,15 @@ describe("xiaomi oauth validation", () => {
 		// OpenAI-compatible endpoint requires Bearer auth and rejects x-api-key as 401
 		// "Invalid API Key" — see issue #1580.
 		const capturedHeaders: Record<string, string>[] = [];
-		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 			capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		await loginXiaomi({
 			onPrompt: async () => "tp-test-key",
 			onAuth: () => {},
+			fetch: fetchMock,
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -61,16 +55,16 @@ describe("xiaomi oauth validation", () => {
 	it("sends Authorization: Bearer for standard sk- keys as well", async () => {
 		const capturedHeaders: Record<string, string>[] = [];
 		const capturedUrls: string[] = [];
-		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
 			capturedUrls.push(typeof input === "string" ? input : input.toString());
 			capturedHeaders.push((init?.headers ?? {}) as Record<string, string>);
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		await loginXiaomi({
 			onPrompt: async () => "sk-test-key",
 			onAuth: () => {},
+			fetch: fetchMock,
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);

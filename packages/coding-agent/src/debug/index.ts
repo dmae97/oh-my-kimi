@@ -19,6 +19,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getSessionsDir } from "@oh-my-pi/pi-utils";
 import { DynamicBorder } from "../modes/components/dynamic-border";
+import { TranscriptBlock } from "../modes/components/transcript-container";
 import { getSelectListTheme, getSymbolTheme, theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import { formatBytes } from "../tools/render-utils";
@@ -150,13 +151,13 @@ export class DebugSelectorComponent extends Container {
 		}
 
 		// Show message and wait for keypress
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new Text(theme.fg("accent", `${theme.status.info} CPU profiling started`), 1, 0));
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
+		const block = new TranscriptBlock();
+		block.addChild(new Text(theme.fg("accent", `${theme.status.info} CPU profiling started`), 1, 0));
+		block.addChild(new Spacer(1));
+		block.addChild(
 			new Text(theme.fg("muted", "Reproduce the performance issue, then press Enter to stop profiling."), 1, 0),
 		);
-		this.ctx.ui.requestRender();
+		this.ctx.present(block);
 
 		// Wait for Enter keypress
 		const { promise, resolve } = Promise.withResolvers<void>();
@@ -194,6 +195,7 @@ export class DebugSelectorComponent extends Container {
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
+				rawSseText: this.#getRawSseText(),
 				cpuProfile,
 				workProfile,
 			});
@@ -201,19 +203,16 @@ export class DebugSelectorComponent extends Container {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Performance report saved`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			const block = new TranscriptBlock();
+			block.addChild(new Text(theme.fg("success", `+ Performance report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			this.ctx.present(block);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 			this.ctx.showError(`Failed to create report: ${err instanceof Error ? err.message : String(err)}`);
 		}
-
-		this.ctx.ui.requestRender();
 	}
 
 	async #handleWorkReport(): Promise<void> {
@@ -231,15 +230,13 @@ export class DebugSelectorComponent extends Container {
 
 			openPath(tmpPath);
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
+			this.ctx.present([
+				new Spacer(1),
 				new Text(theme.fg("dim", `Opened flamegraph (${workProfile.sampleCount} samples)`), 1, 0),
-			);
+			]);
 		} catch (err) {
 			this.ctx.showError(`Failed to open profile: ${err instanceof Error ? err.message : String(err)}`);
 		}
-
-		this.ctx.ui.requestRender();
 	}
 
 	async #handleDumpReport(): Promise<void> {
@@ -257,24 +254,22 @@ export class DebugSelectorComponent extends Container {
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
+				rawSseText: this.#getRawSseText(),
 			});
 
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Report bundle saved`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			const block = new TranscriptBlock();
+			block.addChild(new Text(theme.fg("success", `+ Report bundle saved`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			this.ctx.present(block);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 			this.ctx.showError(`Failed to create report: ${err instanceof Error ? err.message : String(err)}`);
 		}
-
-		this.ctx.ui.requestRender();
 	}
 
 	async #handleMemoryReport(): Promise<void> {
@@ -295,25 +290,23 @@ export class DebugSelectorComponent extends Container {
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
+				rawSseText: this.#getRawSseText(),
 				heapSnapshot,
 			});
 
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Memory report saved`), 1, 0),
-			);
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			this.ctx.chatContainer.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			const block = new TranscriptBlock();
+			block.addChild(new Text(theme.fg("success", `+ Memory report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
+			this.ctx.present(block);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 			this.ctx.showError(`Failed to create report: ${err instanceof Error ? err.message : String(err)}`);
 		}
-
-		this.ctx.ui.requestRender();
 	}
 
 	async #handleViewLogs(): Promise<void> {
@@ -365,15 +358,14 @@ export class DebugSelectorComponent extends Container {
 			const info = await collectSystemInfo();
 			const formatted = formatSystemInfo(info);
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
-			this.ctx.chatContainer.addChild(new Text(formatted, 1, 0));
-			this.ctx.chatContainer.addChild(new DynamicBorder());
+			const block = new TranscriptBlock();
+			block.addChild(new DynamicBorder());
+			block.addChild(new Text(formatted, 1, 0));
+			block.addChild(new DynamicBorder());
+			this.ctx.present(block);
 		} catch (err) {
 			this.ctx.showError(`Failed to collect system info: ${err instanceof Error ? err.message : String(err)}`);
 		}
-
-		this.ctx.ui.requestRender();
 	}
 
 	async #handleViewTerminalState(): Promise<void> {
@@ -384,11 +376,11 @@ export class DebugSelectorComponent extends Container {
 		});
 		const formatted = formatTerminalState(info);
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.chatContainer.addChild(new Text(formatted, 1, 0));
-		this.ctx.chatContainer.addChild(new DynamicBorder());
-		this.ctx.ui.requestRender();
+		const block = new TranscriptBlock();
+		block.addChild(new DynamicBorder());
+		block.addChild(new Text(formatted, 1, 0));
+		block.addChild(new DynamicBorder());
+		this.ctx.present(block);
 	}
 
 	async #handleViewProtocols(): Promise<void> {
@@ -407,15 +399,14 @@ export class DebugSelectorComponent extends Container {
 			TERMINAL.sendNotification(notification);
 		}
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
-		this.ctx.chatContainer.addChild(
+		this.ctx.present([
+			new Spacer(1),
 			new ProtocolProbeComponent({
 				image: buildSampleImage(),
 				imageBudget: this.ctx.ui.imageBudget,
 				notificationSuppressed: suppressed,
 			}),
-		);
-		this.ctx.ui.requestRender();
+		]);
 	}
 
 	async #handleTranscriptExport(): Promise<void> {
@@ -487,21 +478,20 @@ export class DebugSelectorComponent extends Container {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
-			this.ctx.chatContainer.addChild(new Spacer(1));
-			this.ctx.chatContainer.addChild(
-				new Text(
-					theme.fg("success", `${theme.status.success} Cleared ${result.removed} artifact directories`),
-					1,
-					0,
-				),
-			);
+			this.ctx.present([
+				new Spacer(1),
+				new Text(theme.fg("success", `- Cleared ${result.removed} artifact directories`), 1, 0),
+			]);
 		} catch (err) {
 			loader.stop();
 			this.ctx.statusContainer.clear();
 			this.ctx.showError(`Failed to clear cache: ${err instanceof Error ? err.message : String(err)}`);
 		}
+	}
 
-		this.ctx.ui.requestRender();
+	#getRawSseText(): string | undefined {
+		const rawSseText = resolveRawSseDebugBuffer(this.ctx.session).toRawText();
+		return rawSseText.trim().length > 0 ? rawSseText : undefined;
 	}
 
 	#getResolvedSettings(): Record<string, unknown> {

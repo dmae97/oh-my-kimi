@@ -18,6 +18,8 @@ interface AntigravityQuotaInfo {
 	tier?: string;
 	windowId?: string;
 	windowLabel?: string;
+	apiProvider?: string;
+	modelProvider?: string;
 }
 
 interface AntigravityModelInfo {
@@ -25,6 +27,8 @@ interface AntigravityModelInfo {
 	quotaInfo?: AntigravityQuotaInfo | AntigravityQuotaInfo[];
 	quotaInfos?: AntigravityQuotaInfo[];
 	quotaInfoByTier?: Record<string, AntigravityQuotaInfo | AntigravityQuotaInfo[]>;
+	apiProvider?: string;
+	modelProvider?: string;
 }
 
 interface AntigravityUsageResponse {
@@ -60,22 +64,47 @@ function parseWindow(info: AntigravityQuotaInfo): UsageWindow | undefined {
 }
 
 function buildAmount(info: AntigravityQuotaInfo): UsageAmount {
-	const remainingFraction = clampFraction(info.remainingFraction);
+	const apiRemainingFraction = clampFraction(info.remainingFraction);
+	// Observed Antigravity responses omit remainingFraction for exhausted
+	// Google/Gemini counters and keep only resetTime. Treat that shape as
+	// "blocked until reset" rather than unknown so a healthy sibling backend
+	// counter cannot mask it during dedupe.
+	const remainingFraction = apiRemainingFraction ?? (info.resetTime ? 0 : undefined);
 	const amount: UsageAmount = { unit: "percent" };
 	if (remainingFraction === undefined) return amount;
-	const usedFraction = clampFraction(1 - remainingFraction);
+	const usedFraction = 1 - remainingFraction;
 	amount.remainingFraction = remainingFraction;
 	amount.usedFraction = usedFraction;
 	amount.remaining = remainingFraction * 100;
-	amount.used = usedFraction !== undefined ? usedFraction * 100 : undefined;
+	amount.used = usedFraction * 100;
 	amount.limit = 100;
 	return amount;
 }
 
+function formatCounterName(info: AntigravityQuotaInfo): string | undefined {
+	switch (info.modelProvider ?? info.apiProvider) {
+		case "MODEL_PROVIDER_ANTHROPIC":
+		case "API_PROVIDER_ANTHROPIC_VERTEX":
+			return "Anthropic";
+		case "MODEL_PROVIDER_GOOGLE":
+		case "API_PROVIDER_GOOGLE_GEMINI":
+			return "Google";
+		case "MODEL_PROVIDER_OPENAI":
+		case "API_PROVIDER_OPENAI_VERTEX":
+			return "OpenAI";
+		default:
+			return undefined;
+	}
+}
+
 function normalizeQuotaInfos(info: AntigravityModelInfo): AntigravityQuotaInfo[] {
 	const results: AntigravityQuotaInfo[] = [];
+	const source = {
+		...(info.apiProvider ? { apiProvider: info.apiProvider } : {}),
+		...(info.modelProvider ? { modelProvider: info.modelProvider } : {}),
+	};
 	const addInfo = (value: AntigravityQuotaInfo, tier?: string) => {
-		results.push({ ...value, ...(tier ? { tier } : {}) });
+		results.push({ ...source, ...value, ...(tier ? { tier } : {}) });
 	};
 	const addArray = (values?: AntigravityQuotaInfo[]) => {
 		if (!values) return;
@@ -148,10 +177,26 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	}
 
 	const data = (await response.json()) as AntigravityUsageResponse;
-	const limits: UsageLimit[] = [];
+
+	// The API returns per-model quota entries, but quota is shared across
+	// models within the same backend counter, tier, and reset window. Keep
+	// Google and Anthropic-backed Antigravity models separate so a healthy
+	// Claude counter cannot mask an exhausted Gemini counter.
+	const deduped = new Map<
+		string,
+		{
+			amount: UsageAmount;
+			window: UsageWindow | undefined;
+			tier: string | undefined;
+			tierKey: string;
+			windowId: string;
+			counterName: string | undefined;
+			counterKey: string;
+		}
+	>();
 	let earliestReset: number | undefined;
 
-	for (const [modelId, modelInfo] of Object.entries(data.models ?? {})) {
+	for (const [_modelId, modelInfo] of Object.entries(data.models ?? {})) {
 		const quotaInfos = normalizeQuotaInfos(modelInfo);
 		for (const quotaInfo of quotaInfos) {
 			const amount = buildAmount(quotaInfo);
@@ -159,35 +204,90 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 			if (window?.resetsAt) {
 				earliestReset = earliestReset ? Math.min(earliestReset, window.resetsAt) : window.resetsAt;
 			}
-			const labelBase = modelInfo.displayName || modelId;
-			const label = quotaInfo.tier ? `${labelBase} (${quotaInfo.tier})` : labelBase;
-			const windowId = window?.id ?? "default";
-			limits.push({
-				id: `${modelId}:${quotaInfo.tier ?? "default"}:${windowId}`,
-				label,
-				scope: {
-					provider: params.provider,
-					accountId: credential.accountId,
-					projectId: credential.projectId,
-					modelId,
-					tier: quotaInfo.tier,
-					windowId,
-				},
-				window,
-				amount,
-				status: getUsageStatus(amount.remainingFraction),
+			const tierKey = (quotaInfo.tier ?? "default").toLowerCase();
+			const counterName = formatCounterName(quotaInfo);
+			const counterKey = counterName?.toLowerCase() ?? "default";
+			// Use quotaInfo.windowId even when parseWindow returns undefined
+			// (no resetTime) — separate windows must not collapse to "default".
+			const windowId = quotaInfo.windowId ?? window?.id ?? "default";
+			const key = `${counterKey}|${tierKey}|${windowId}`;
+			const existing = deduped.get(key);
+			if (!existing) {
+				deduped.set(key, { amount, window, tier: quotaInfo.tier, tierKey, windowId, counterName, counterKey });
+				continue;
+			}
+			// Merge: keep the entry with fraction data for the bar, but
+			// also keep any window with a reset time so "resets in…" survives.
+			const eFrac = existing.amount.remainingFraction;
+			const cFrac = amount.remainingFraction;
+			const eHasFrac = eFrac !== undefined;
+			const cHasFrac = cFrac !== undefined;
+
+			let bestAmount = existing.amount;
+			let bestWindow = existing.window?.resetsAt ? existing.window : (window ?? existing.window);
+			let bestTier = existing.tier ?? quotaInfo.tier;
+
+			if (!eHasFrac && cHasFrac) {
+				bestAmount = amount;
+				bestTier = quotaInfo.tier ?? existing.tier;
+			} else if (eFrac !== undefined && cFrac !== undefined && cFrac < eFrac) {
+				bestAmount = amount;
+				bestTier = quotaInfo.tier ?? existing.tier;
+			}
+			// Always merge in window with reset time if the current
+			// best doesn't have one.
+			if (!bestWindow?.resetsAt && window?.resetsAt) {
+				bestWindow = window;
+			}
+			deduped.set(key, {
+				amount: bestAmount,
+				window: bestWindow,
+				tier: bestTier,
+				tierKey: existing.tierKey,
+				windowId: existing.windowId,
+				counterName: existing.counterName,
+				counterKey: existing.counterKey,
 			});
 		}
 	}
+
+	const limits: UsageLimit[] = [];
+	for (const entry of deduped.values()) {
+		const label = entry.counterName ? `Usage (${entry.counterName})` : "Usage";
+		limits.push({
+			id: `${params.provider}:${entry.counterKey}:${entry.tierKey}:${entry.windowId}`,
+			label,
+			scope: {
+				provider: params.provider,
+				accountId: credential.accountId,
+				projectId: credential.projectId,
+				tier: entry.tier,
+				windowId: entry.windowId,
+			},
+			window: entry.window,
+			amount: entry.amount,
+			status: getUsageStatus(entry.amount.remainingFraction),
+		});
+	}
+
+	limits.sort((a, b) => {
+		const aFraction = a.amount.remainingFraction ?? 1;
+		const bFraction = b.amount.remainingFraction ?? 1;
+		return aFraction - bFraction;
+	});
+
+	const metadata: UsageReport["metadata"] = {
+		endpoint: url,
+		projectId: credential.projectId,
+	};
+	if (credential.email) metadata.email = credential.email;
+	if (credential.accountId) metadata.accountId = credential.accountId;
 
 	const report: UsageReport = {
 		provider: params.provider,
 		fetchedAt: nowMs,
 		limits,
-		metadata: {
-			endpoint: url,
-			projectId: credential.projectId,
-		},
+		metadata,
 		raw: data,
 	};
 

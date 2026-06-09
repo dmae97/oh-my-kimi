@@ -18,13 +18,17 @@ import {
 	zSessionNotification,
 } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	ACP_BOOTSTRAP_RACE_GUARD_MS,
+	AcpAgent,
+	createAcpExtensionUiContext,
+} from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { ACP_BOOTSTRAP_RACE_GUARD_MS, AcpAgent, createAcpExtensionUiContext } from "../src/modes/acp/acp-agent";
-import type { PlanModeState } from "../src/plan-mode/state";
-import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
-import { SILENT_ABORT_MARKER } from "../src/session/messages";
-import { SessionManager } from "../src/session/session-manager";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
 const TEST_MODELS: Model[] = [
@@ -615,7 +619,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("plan-approval standing handler renames the plan and exits plan mode on apply", async () => {
+	it("plan-approval standing handler approves the agent-named plan and exits plan mode on apply", async () => {
 		const harness = await createHarness();
 		Settings.instance.set("plan.enabled", true);
 
@@ -625,7 +629,9 @@ describe("ACP agent", () => {
 
 		const artifactsDir = session.sessionManager.getArtifactsDir();
 		expect(artifactsDir).not.toBeNull();
-		const planPath = path.join(artifactsDir!, "local", "PLAN.md");
+		// The agent writes to its chosen `local://<slug>-plan.md` and resolves with
+		// the matching slug — the file is never renamed.
+		const planPath = path.join(artifactsDir!, "local", "words-counter-plan.md");
 		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
 
 		const updatesBefore = harness.updates.length;
@@ -636,21 +642,20 @@ describe("ACP agent", () => {
 			extra: { title: "words-counter" },
 		})) as {
 			content: Array<{ type: string; text: string }>;
-			details: { sourceToolName: string; sourceResultDetails: { finalPlanFilePath: string; title: string } };
+			details: { sourceToolName: string; sourceResultDetails: { planFilePath: string; title: string } };
 		};
 
 		// Plan-approval payload is shaped for `event-controller` / ACP renderers.
 		expect(result.details.sourceToolName).toBe("plan_approval");
 		expect(result.details.sourceResultDetails.title).toBe("words-counter");
-		expect(result.details.sourceResultDetails.finalPlanFilePath).toBe("local://words-counter.md");
+		expect(result.details.sourceResultDetails.planFilePath).toBe("local://words-counter-plan.md");
 		expect(result.content[0]?.text).toMatch(/Plan approved/);
-		// Plan file is renamed and the source path no longer exists.
-		expect(await Bun.file(path.join(artifactsDir!, "local", "words-counter.md")).exists()).toBe(true);
-		expect(await Bun.file(planPath).exists()).toBe(false);
+		// Plan file keeps its agent-chosen name — no rename.
+		expect(await Bun.file(planPath).exists()).toBe(true);
 		// Mode + handler are cleared; the agent regains write tools next turn.
 		expect(session.planModeState).toBeUndefined();
 		expect(session.standingResolveHandler).toBeUndefined();
-		expect(session.planReferencePath).toBe("local://words-counter.md");
+		expect(session.planReferencePath).toBe("local://words-counter-plan.md");
 		const approvalUpdates = harness.updates.slice(updatesBefore);
 		// Mode-change notifications reached the client so Zed's UI and config
 		// selector both reflect the approval-driven exit.

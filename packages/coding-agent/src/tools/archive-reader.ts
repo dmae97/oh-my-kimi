@@ -1,5 +1,9 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { inflateSync, strFromU8 } from "fflate";
 
+import { formatBytes } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
 export type ArchiveFormat = "zip" | "tar" | "tar.gz";
@@ -123,11 +127,21 @@ function getArchiveFormatFromPath(filePath: string): ArchiveFormat | undefined {
 	return undefined;
 }
 
+export function formatArchiveEntryLines(entries: readonly ArchiveDirectoryEntry[]): string[] {
+	return entries.map(entry => {
+		if (entry.isDirectory) return `${entry.name}/`;
+
+		const sizeSuffix = entry.size > 0 ? ` (${formatBytes(entry.size)})` : "";
+		return `${entry.name}${sizeSuffix}`;
+	});
+}
+
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
 const ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE = 0x02014b50;
 const ZIP64_EOCD_SIGNATURE = 0x06064b50;
 const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50;
 const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_DATA_DESCRIPTOR_SIGNATURE = 0x08074b50;
 const ZIP_EOCD_MIN_LENGTH = 22;
 const ZIP_EOCD_MAX_COMMENT_LENGTH = 0xffff;
 const ZIP64_EOCD_LOCATOR_LENGTH = 20;
@@ -165,6 +179,37 @@ function readUInt16LE(bytes: Uint8Array, offset: number): number {
 
 function readUInt32LE(bytes: Uint8Array, offset: number): number {
 	return (bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16) | (bytes[offset + 3]! << 24)) >>> 0;
+}
+
+function bytesMatchAscii(bytes: Uint8Array, offset: number, value: string): boolean {
+	if (bytes.byteLength < offset + value.length) return false;
+	for (let index = 0; index < value.length; index++) {
+		if (bytes[offset + index] !== value.charCodeAt(index)) return false;
+	}
+	return true;
+}
+
+export function sniffArchiveFormat(bytes: Uint8Array): ArchiveFormat | undefined {
+	if (bytes.byteLength >= 4) {
+		const signature = readUInt32LE(bytes, 0);
+		if (
+			signature === ZIP_LOCAL_FILE_HEADER_SIGNATURE ||
+			signature === ZIP_EOCD_SIGNATURE ||
+			signature === ZIP_DATA_DESCRIPTOR_SIGNATURE
+		) {
+			return "zip";
+		}
+	}
+
+	if (bytes.byteLength >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+		return "tar.gz";
+	}
+
+	if (bytesMatchAscii(bytes, 257, "ustar")) {
+		return "tar";
+	}
+
+	return undefined;
 }
 
 function readUInt64LEAsNumber(bytes: Uint8Array, offset: number): number {
@@ -626,4 +671,23 @@ export async function openArchive(filePath: string): Promise<ArchiveReader> {
 	const entries =
 		format === "zip" ? await readZipEntries(filePath) : await readTarEntries(await Bun.file(filePath).bytes());
 	return new ArchiveReader(format, entries);
+}
+
+export async function listArchiveRoot(
+	bytes: Uint8Array,
+	format: ArchiveFormat,
+	opts: { limit?: number } = {},
+): Promise<string> {
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-archive-"));
+	const tempPath = path.join(tempDir, `payload.${format}`);
+	try {
+		await Bun.write(tempPath, bytes);
+		const archive = await openArchive(tempPath);
+		const entries = archive.listDirectory("");
+		const limitedEntries = opts.limit !== undefined && opts.limit > 0 ? entries.slice(0, opts.limit) : entries;
+		const lines = formatArchiveEntryLines(limitedEntries);
+		return lines.length > 0 ? lines.join("\n") : "(empty archive directory)";
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
 }
