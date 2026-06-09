@@ -214,12 +214,7 @@ export class SelectList implements Component {
 		}
 	}
 
-	#renderItem(
-		item: SelectItem,
-		isSelected: boolean,
-		width: number,
-		primaryColumnWidth: number,
-	): string[] {
+	#renderItem(item: SelectItem, isSelected: boolean, width: number, primaryColumnWidth: number): string[] {
 		const layout = this.#computeItemLayout(item, isSelected, width, primaryColumnWidth);
 		const { prefix, truncatedValue, spacing } = layout;
 
