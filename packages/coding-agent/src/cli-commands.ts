@@ -38,6 +38,18 @@ export const commands: CommandEntry[] = [
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
+const RESERVED_TOP_LEVEL_WORDS = new Map<string, string>([
+	[
+		"extensions",
+		'`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
+	],
+]);
+
+export function reservedTopLevelWordMessage(first: string | undefined): string | undefined {
+	if (!first || first.startsWith("-") || first.startsWith("@")) return undefined;
+	return RESERVED_TOP_LEVEL_WORDS.get(first);
+}
+
 /**
  * Return true when `first` matches a registered subcommand name or alias.
  *

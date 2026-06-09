@@ -23,6 +23,13 @@ describe("install command is registered as a top-level subcommand", () => {
 		expect(cli.commands.some(c => c.name === "install")).toBe(true);
 		expect(cli.isSubcommand("install")).toBe(true);
 	});
+
+	test("CLI runner rejects reserved management words instead of launching a prompt", async () => {
+		const cli = await import("@oh-my-pi/pi-coding-agent/cli-commands");
+		expect(cli.isSubcommand("extensions")).toBe(false);
+		expect(cli.reservedTopLevelWordMessage("extensions")).toContain("omp plugin list");
+		expect(cli.reservedTopLevelWordMessage("hello")).toBeUndefined();
+	});
 });
 
 describe("looksLikeLocalPath", () => {
