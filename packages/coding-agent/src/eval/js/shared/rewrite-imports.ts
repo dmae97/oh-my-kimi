@@ -82,6 +82,14 @@ function parseProgram(code: string): { program: { body: ReadonlyArray<BabelProgr
 	}
 }
 
+// Callee substituted for dynamic `import(...)` calls. Functions handed to puppeteer
+// (`tab.evaluate`, `page.evaluate`, `waitForFunction`, `$$eval`, ...) are serialized with
+// `Function.prototype.toString()` and re-evaluated inside the browser page, where the
+// worker-injected `__omp_import__` global does not exist. The swap therefore guards on the
+// helper's presence and falls back to native dynamic import, so serialized code keeps
+// working in foreign realms while in-worker code still resolves against the session cwd.
+const DYNAMIC_IMPORT_CALLEE = '(typeof __omp_import__ === "function" ? __omp_import__ : (s, o) => import(s, o))';
+
 function buildOmpImportCall(sourceLiteral: string, optionsLiteral: string | undefined): string {
 	// Route every static import through the worker-injected `__omp_import__` helper so the
 	// specifier resolves against the session cwd (and `with`-attribute imports keep working).
@@ -180,7 +188,7 @@ export function rewriteImports(code: string): string {
 		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
 		const callee = call.callee;
 		if (callee?.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number") return;
-		edits.push({ start: callee.start, end: callee.end, text: "__omp_import__" });
+		edits.push({ start: callee.start, end: callee.end, text: DYNAMIC_IMPORT_CALLEE });
 	});
 
 	if (edits.length === 0) return code;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { rewriteImports, wrapCode } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
+import { indirectEval } from "@oh-my-pi/pi-coding-agent/eval/js/shared/indirect-eval";
 
 // Test fixtures embed user-supplied `import(...)` syntax that the rewriter must
 // transform. The strings are split so static-analysis heuristics don't read them
@@ -51,29 +52,62 @@ describe("rewriteImports", () => {
 		expect(out).toContain("const data =");
 	});
 
+	// Dynamic `import(...)` callees are swapped for a shim that prefers the worker-injected
+	// `__omp_import__` helper but falls back to native dynamic import. The fallback matters:
+	// puppeteer serializes functions with `Function.prototype.toString()` and re-evaluates
+	// them inside the browser page, where the helper global does not exist.
+	const SHIM = '(typeof __omp_import__ === "function" ? __omp_import__ : (s, o) => import(s, o))';
+
 	it("rewrites bare dynamic import() so its specifier resolves against the session cwd", () => {
 		const out = rewriteImports(`const m = await ${dyn('("./foo.ts")')};`);
-		expect(out).toContain('await __omp_import__("./foo.ts")');
+		expect(out).toContain(`await ${SHIM}("./foo.ts")`);
 		expect(out).not.toContain(dyn('("./foo.ts")'));
 	});
 
 	it("rewrites dynamic import() with an options bag (passes options through unchanged)", () => {
 		const out = rewriteImports(`const m = await ${dyn('("./d.json", { with: { type: "json" } })')};`);
-		expect(out).toContain('__omp_import__("./d.json", { with: { type: "json" } })');
+		expect(out).toContain(`${SHIM}("./d.json", { with: { type: "json" } })`);
 	});
 
 	it("rewrites nested and chained dynamic import() calls", () => {
 		const out = rewriteImports(
 			`Promise.all([${dyn('("./a.ts")')}, ${dyn('("./b.ts")')}]).then(([a, b]) => a.run(b));`,
 		);
-		expect(out).toContain('__omp_import__("./a.ts")');
-		expect(out).toContain('__omp_import__("./b.ts")');
+		expect(out).toContain(`${SHIM}("./a.ts")`);
+		expect(out).toContain(`${SHIM}("./b.ts")`);
 		expect(out).not.toContain(dyn('("./a.ts")'));
 	});
 
 	it("rewrites dynamic import() with a non-literal specifier", () => {
 		const out = rewriteImports(`const m = await ${dyn("(spec)")};`);
-		expect(out).toContain("__omp_import__(spec)");
+		expect(out).toContain(`${SHIM}(spec)`);
+	});
+
+	it("routes dynamic import through the helper when present and native import when serialized into a foreign realm", async () => {
+		const out = rewriteImports(`const load = async () => await ${dyn('("node:path")')}; load;`);
+		const globals = globalThis as Record<string, unknown>;
+		expect("__omp_import__" in globals).toBe(false);
+
+		// Worker realm: helper global exists, call must route through it.
+		const seen: string[] = [];
+		globals.__omp_import__ = async (source: string) => {
+			seen.push(source);
+			return { stubbed: true };
+		};
+		try {
+			const load = indirectEval(out) as () => Promise<{ stubbed?: boolean }>;
+			expect((await load()).stubbed).toBe(true);
+			expect(seen).toEqual(["node:path"]);
+
+			// Page realm: puppeteer ships `load.toString()` to a realm without the helper —
+			// the shim must fall back to native dynamic import instead of throwing.
+			const serialized = indirectEval(`(${load.toString()})`) as () => Promise<typeof import("node:path")>;
+			delete globals.__omp_import__;
+			const mod = await serialized();
+			expect(typeof mod.join).toBe("function");
+		} finally {
+			delete globals.__omp_import__;
+		}
 	});
 
 	it("does not rewrite import statements embedded in template literals (the bug)", () => {
