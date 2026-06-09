@@ -1204,6 +1204,7 @@ function buildParams(
 		compat.reasoningContentField = "reasoning_content";
 	}
 	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
+	const isOpenRouter = model.baseUrl.includes("openrouter.ai");
 	const messages = convertMessages(model, context, compat);
 	maybeAddAnthropicCacheControl(compat, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";
@@ -1217,8 +1218,15 @@ function buildParams(
 	// Kimi-family regex used by the compat detector.
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
 	const requestedMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
+	// OpenRouter fans out to upstreams whose output caps differ from the catalog
+	// value (which tracks the highest-cap provider). A max_tokens above the routed
+	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
+	// GLM-4.7, ~40k) for a higher-cap one, defeating `provider.order`/`only`. Omit
+	// it for OpenRouter so each upstream self-caps and routing is honored. Kimi is
+	// exempt — it derives TPM rate limits from max_tokens (see above).
+	const omitMaxTokensForRouting = isOpenRouter && !isKimiModelId;
 	const effectiveMaxTokens =
-		requestedMaxTokens === undefined
+		requestedMaxTokens === undefined || omitMaxTokensForRouting
 			? undefined
 			: Math.min(requestedMaxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
 
