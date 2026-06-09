@@ -1998,11 +1998,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.planModeEnabled) {
-			const confirmed = await this.showHookConfirm(
-				"Exit plan mode?",
-				"This exits plan mode without approving a plan.",
-			);
-			if (!confirmed) return;
+			const planFilePath = this.planModePlanFilePath ?? (await this.#getPlanFilePath());
+			const planContent = await this.#readPlanFile(planFilePath);
+			if (planContent !== null && planContent.trim().length > 0) {
+				const confirmed = await this.showHookConfirm(
+					"Exit plan mode?",
+					"This exits plan mode without approving a plan.",
+				);
+				if (!confirmed) return;
+			}
 			await this.#exitPlanMode({ paused: true });
 			return;
 		}
