@@ -301,6 +301,18 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.max_tokens).toBe(8_192);
 	});
 
+	it("keeps the full model output ceiling for API-key requests", async () => {
+		const payload = (await captureAnthropicPayload(
+			{ ...ANTHROPIC_MODEL, id: "claude-opus-4-8", name: "Claude Opus 4.8", maxTokens: 128_000 },
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{ isOAuth: false },
+		)) as { max_tokens?: number };
+		expect(payload.max_tokens).toBe(128_000);
+	});
+
 	it("billing-header fingerprint uses first user message, not leading developer message", async () => {
 		const userText = "Hello from user with enough chars padding here";
 
@@ -395,6 +407,45 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(embeddedClaudeCliHeaders["User-Agent"]).toBe(
 			`claude-cli/${claudeCodeVersion} (external, local-agent, agent-sdk/${claudeAgentSdkVersion})`,
 		);
+	});
+
+	it("forwards model-supplied User-Agent on API-key requests", () => {
+		// Direct Anthropic API (X-Api-Key branch).
+		const directHeaders = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			isOAuth: false,
+			stream: true,
+			modelHeaders: { "User-Agent": "corp-gateway-client/2.0" },
+		});
+		expect(directHeaders["User-Agent"]).toBe("corp-gateway-client/2.0");
+
+		// Non-Anthropic gateway (Bearer branch).
+		const gatewayHeaders = buildAnthropicHeaders({
+			apiKey: "gateway-token",
+			isOAuth: false,
+			stream: true,
+			baseUrl: "https://gateway.example.com/anthropic",
+			modelHeaders: { "User-Agent": "corp-gateway-client/2.0" },
+		});
+		expect(gatewayHeaders["User-Agent"]).toBe("corp-gateway-client/2.0");
+	});
+
+	it("omits Claude Code betas on API-key requests by default", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			isOAuth: false,
+			stream: true,
+			extraBetas: ["web-search-2025-03-05"],
+		});
+		expect(headers["anthropic-beta"]).toBe("web-search-2025-03-05");
+
+		// And no empty anthropic-beta header when there are no betas at all.
+		const bare = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			isOAuth: false,
+			stream: true,
+		});
+		expect(bare["anthropic-beta"]).toBeUndefined();
 	});
 
 	it("skips Claude Code instruction injection for claude-3-5-haiku models", async () => {
@@ -1126,10 +1177,9 @@ describe("Anthropic request fingerprint alignment", () => {
 			hasTools: true,
 		});
 
-		expect(withoutTools.defaultHeaders["anthropic-beta"]).not.toContain("fine-grained-tool-streaming-2025-05-14");
-		expect(withCompatibleTools.defaultHeaders["anthropic-beta"]).not.toContain(
-			"fine-grained-tool-streaming-2025-05-14",
-		);
+		// No betas at all → the header is omitted entirely on API-key requests.
+		expect(withoutTools.defaultHeaders["anthropic-beta"]).toBeUndefined();
+		expect(withCompatibleTools.defaultHeaders["anthropic-beta"]).toBeUndefined();
 		expect(withIncompatibleTools.defaultHeaders["anthropic-beta"]).toContain(
 			"fine-grained-tool-streaming-2025-05-14",
 		);

@@ -2,9 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- Exported `wrapFetchForCch` so non-streaming OAuth callers (e.g. the web-search provider) can patch the Claude Code billing-header `cch` attestation into their request bodies instead of shipping the `cch=00000` placeholder.
+
 ### Fixed
 
+- Fixed `processResponsesStream` (shared by `openai-responses` and `azure-openai-responses`) ignoring the terminal `response.incomplete` event: a max-output-tokens-truncated response ended with `stopReason: "stop"`, zero usage, and no cost instead of `"length"` with the reported token counts. `response.incomplete` is now handled alongside `response.completed` and counts as stream progress for the idle watchdogs.
+- Fixed custom tool-call content blocks keeping the transient `partialJson` accumulation buffer (and a potentially stale `arguments.input`) after `response.output_item.done` in the shared Responses stream processor — the function_call branch already cleaned these up.
+- Fixed two OpenAI Codex stream-retry paths (whitespace-loop recovery and retryable provider errors) leaking native output items from the abandoned attempt into the replayed turn's `providerPayload` — stale reasoning items completed before the failure were re-sent as history input on subsequent requests alongside the retry's own items.
+- Fixed the Codex WebSocket queue wiping already-received frames when a transport error arrived: a `response.completed` queued just before an eager server close was discarded, turning a finished response into a spurious `websocket closed` failure and a full request replay. Errors now append behind pending data frames.
+- Fixed concurrent `getOrCreateCodexWebSocketConnection` callers (prewarm racing the first request) tearing down each other's in-flight handshake — closing a CONNECTING socket rejected the other caller with a fatal `websocket closed before open`, disabling WebSockets for the entire session. Callers now join the pending handshake.
+- Stopped the Codex connection-limit recovery from replaying a turn over SSE after a `toolcall_end` had already been delivered to the consumer (`canSafelyReplayWebsocketOverSse` guard was bypassed, re-emitting the same tool calls); the error now surfaces instead.
+- Extended the Codex whitespace-only argument-delta circuit breaker to `custom_tool_call_input.delta` frames, which counted as stream progress and could keep a degenerate response alive forever with no cap on buffer growth.
+- Fixed Codex stream failures during transport open reporting a synthetic request dump (empty URL/body) instead of the real request, and a `response.created` event resetting the recorded time-to-first-token.
+- Fixed the Codex WebSocket connect watchdog timer leaking (pinning the event loop for up to 10s) when the request signal aborted before or during the handshake.
 - Fixed OpenRouter-hosted Anthropic adaptive reasoning models (Claude Fable/Mythos 5 and Opus 4.6+) so the catalog exposes `xhigh`; Fable/Mythos and Opus 4.7+ requests now map user `high`/`xhigh` onto OpenRouter's Anthropic `xhigh`/`max` effort scale.
+- Fixed an unknown Anthropic `stop_reason` failing the whole turn after the response had fully streamed. `mapStopReason` threw on unrecognized values, and since the reason arrives on the trailing `message_delta` the error was unretryable — the live `model_context_window_exceeded` stop reason (default on Sonnet 4.5+) hit this path. It now maps to `length`, and any future unknown reason degrades to a logged anomaly plus a normal `stop` instead of an error.
+- Stopped clamping API-key Anthropic requests to Claude Code's 64k output cap. The `CLAUDE_CODE_MAX_OUTPUT_TOKENS` clamp exists to match the OAuth wire fingerprint, but `buildParams` applied it unconditionally, silently halving the output budget of 128k-output models (e.g. Opus 4.8) for API-key callers. OAuth requests keep the clamp.
+- Stopped a successful strict-tools fallback from shipping `errorMessage` on a `stopReason: "stop"` assistant message. After a grammar-too-large 400 triggered the non-strict retry, the original 400 text was kept on the final message even when the retry succeeded — consumers that treat `errorMessage` presence as failure (e.g. balance probes) misclassified the turn, and the stale text suppressed later refusal explanations. The fallback is now logged instead.
+- Fixed model-supplied `User-Agent` headers being silently dropped on non-OAuth Anthropic requests. `enforcedHeaderKeys` filtered the header out of `modelHeaders` in every branch but only the OAuth branch set one back; the Cloudflare-gateway, bearer-gateway, and `X-Api-Key` branches now forward the caller's value verbatim.
+- Stopped sending the `fast-mode-2026-02-01` beta header once a session has learned the endpoint+model rejects fast mode (`fastModeDisabled` provider state), matching the already-dropped `speed` param.
+- Stopped `buildAnthropicHeaders` defaulting API-key requests onto the full Claude Code OAuth beta list (`oauth-2025-04-20`, `claude-code-20250219`, …). The `claudeCodeBetas` default is now OAuth-gated, matching the streaming path — the web-search header builder was the only caller hitting the default, so API-key search requests now carry just their own betas (e.g. `web-search-2025-03-05`). An empty `anthropic-beta` header is omitted entirely instead of being sent as an empty string.
+- Fixed image-bearing `developer` messages being upgraded to mid-conversation `system` turns on Opus 4.8+/Fable/Mythos 5. System content is text-only on the wire, so a developer turn carrying image blocks in an upgrade-eligible position produced a 400; it now stays a `user` message.
 
 ## [15.10.9] - 2026-06-09
 

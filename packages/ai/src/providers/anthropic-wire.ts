@@ -188,7 +188,8 @@ export type StopReason =
 	| "tool_use"
 	| "pause_turn"
 	| "refusal"
-	| "sensitive";
+	| "sensitive"
+	| "model_context_window_exceeded";
 
 export type CacheCreation = {
 	ephemeral_5m_input_tokens?: number | null;

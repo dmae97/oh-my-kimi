@@ -16,6 +16,7 @@ import {
 	type FetchImpl,
 	stripClaudeToolPrefix,
 	withAuth,
+	wrapFetchForCch,
 } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import type {
@@ -64,7 +65,9 @@ function buildSystemBlocks(
 	model: string,
 	systemPrompt?: string,
 ): AnthropicSystemBlock[] | undefined {
-	const includeClaudeCode = !model.startsWith("claude-3-5-haiku");
+	// Match the streaming path: the CC billing header + system instruction are
+	// an OAuth fingerprint and must not be claimed on API-key requests.
+	const includeClaudeCode = auth.isOAuth && !model.startsWith("claude-3-5-haiku");
 	const extraInstructions = auth.isOAuth ? ["You are a helpful AI assistant with web search capabilities."] : [];
 
 	return buildAnthropicSystemBlocks(systemPrompt ? [systemPrompt] : undefined, {
@@ -118,7 +121,10 @@ async function callSearch(
 		body.system = systemBlocks;
 	}
 
-	const response = await fetchImpl(url, {
+	// OAuth requests inject the CC billing header (buildSystemBlocks); patch its
+	// cch attestation like the streaming path instead of shipping `cch=00000`.
+	const doFetch = auth.isOAuth ? wrapFetchForCch(fetchImpl) : fetchImpl;
+	const response = await doFetch(url, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),

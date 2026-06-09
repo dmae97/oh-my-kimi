@@ -206,7 +206,17 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
 	const stream = options.stream ?? false;
-	const betaHeader = buildBetaHeader(options.claudeCodeBetas ?? buildClaudeCodeBetas(true, true, false), extraBetas);
+	// `enforcedHeaderKeys` strips User-Agent out of modelHeaders so a spread can't
+	// produce case-duplicate keys; re-add the caller's value explicitly per branch
+	// (OAuth replaces non-claude-cli values, the other branches forward verbatim).
+	const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
+	// Claude Code betas (oauth-2025-04-20, claude-code-20250219, …) are part of
+	// the OAuth fingerprint; API-key requests default to extras only, matching
+	// the streaming path (buildAnthropicClientOptions passes [] for non-OAuth).
+	const betaHeader = buildBetaHeader(
+		options.claudeCodeBetas ?? (oauthToken ? buildClaudeCodeBetas(true, true, false) : []),
+		extraBetas,
+	);
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
 	const modelHeaders = Object.fromEntries(
 		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
@@ -217,13 +227,13 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			...modelHeaders,
 			Accept: acceptHeader,
 			...sharedHeaders,
-			"anthropic-beta": betaHeader,
+			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
+			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
 			"cf-aig-authorization": `Bearer ${options.apiKey}`,
 		};
 	}
 
 	if (oauthToken) {
-		const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
 		const userAgent = isClaudeCodeClientUserAgent(incomingUserAgent)
 			? incomingUserAgent
 			: `claude-cli/${claudeCodeVersion} (external, local-agent, agent-sdk/${claudeAgentSdkVersion})`;
@@ -244,14 +254,16 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			Accept: acceptHeader,
 			Authorization: `Bearer ${options.apiKey}`,
 			...sharedHeaders,
-			"anthropic-beta": betaHeader,
+			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
+			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
 		};
 	} else {
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
 			...sharedHeaders,
-			"anthropic-beta": betaHeader,
+			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
+			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
 			"X-Api-Key": options.apiKey,
 		};
 	}
@@ -437,7 +449,8 @@ export const claudeClientVersion = "1.11187.4";
 export const claudeToolPrefix: string = "_";
 export const claudeCodeSystemInstruction = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 // Claude Code caps requested output at 64k tokens even when the model ceiling is
-// higher (e.g. Opus 4.8 supports 128k); clamp to match the wire fingerprint.
+// higher (e.g. Opus 4.8 supports 128k); OAuth requests clamp to match the wire
+// fingerprint. API-key requests keep the full model ceiling.
 export const CLAUDE_CODE_MAX_OUTPUT_TOKENS = 64000;
 
 export function mapStainlessOs(platform: string): "MacOS" | "Windows" | "Linux" | "FreeBSD" | `Other::${string}` {
@@ -562,9 +575,12 @@ function patchCch(body: Uint8Array): boolean {
 	return true;
 }
 
-type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-function wrapFetchForCch(base: FetchFn): FetchFn {
+/**
+ * Wraps a fetch implementation to patch the Claude Code billing-header `cch`
+ * attestation into outgoing request bodies. Bodies without the placeholder
+ * pass through untouched, so installing it on every OAuth flow is safe.
+ */
+export function wrapFetchForCch(base: FetchImpl): FetchImpl {
 	return (input, init) => {
 		if (init?.body && typeof init.body === "string" && init.body.includes(CCH_PLACEHOLDER_STR)) {
 			const encoded = cchEncoder.encode(init.body);
@@ -1336,7 +1352,7 @@ function isTransientStreamEnvelopeError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	return (
 		error.message.includes(ANTHROPIC_STREAM_ENVELOPE_ERROR_PREFIX) ||
-		/stream event order|before message_start|before terminal stop signal/i.test(error.message)
+		/stream event order|before message_start/i.test(error.message)
 	);
 }
 
@@ -1461,6 +1477,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
 
 		try {
+			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "https://api.anthropic.com";
+			const providerSessionState = getAnthropicProviderSessionState(
+				options?.providerSessionState,
+				baseUrl,
+				model.id,
+			);
+			let disableStrictTools =
+				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
+			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+
 			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
 
@@ -1468,11 +1495,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				client = options.client;
 				isOAuthToken = false;
 			} else {
-				const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
-
 				const extraBetas = normalizeExtraBetas(options?.betas);
 				const wantsAnthropicPriority = resolveServiceTier(options?.serviceTier, model.provider) === "priority";
-				if (wantsAnthropicPriority && !extraBetas.includes(fastModeBeta)) {
+				// Skip the fast-mode beta when this session already learned the
+				// endpoint+model rejects fast mode; `speed` is dropped from the params
+				// too (dropFastMode), so the request stays a faithful non-fast request.
+				if (wantsAnthropicPriority && !dropFastMode && !extraBetas.includes(fastModeBeta)) {
 					extraBetas.push(fastModeBeta);
 				}
 				if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
@@ -1500,18 +1528,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
 			}
-			const baseUrl =
-				resolveAnthropicBaseUrl(model, options?.apiKey ?? getEnvApiKey(model.provider) ?? "") ??
-				"https://api.anthropic.com";
-			const providerSessionState = getAnthropicProviderSessionState(
-				options?.providerSessionState,
-				baseUrl,
-				model.id,
-			);
-			let disableStrictTools =
-				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
-			let strictFallbackErrorMessage: string | undefined;
-			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
 				let nextParams = buildParams(model, baseUrl, preparedContext, isOAuthToken, options, disableStrictTools);
@@ -1644,6 +1660,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 						if (event.type === "message_start") {
 							if (sawMessageStart) {
+								// Transparent reconnects can splice a fresh envelope onto the same
+								// stream; keep the original message but surface the anomaly.
+								reportAnthropicEnvelopeAnomaly("duplicate message_start event");
 								continue;
 							}
 							sawMessageStart = true;
@@ -1913,8 +1932,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						hasStrictAnthropicTools(params) &&
 						isAnthropicStrictGrammarTooLargeError(streamFailure)
 					) {
-						strictFallbackErrorMessage = await finalizeErrorMessage(streamFailure, rawRequestDump);
-						output.errorMessage = strictFallbackErrorMessage;
+						// Log-only: the retried turn must not carry an errorMessage on
+						// success (consumers treat its presence as failure).
+						logger.warn("anthropic: strict tool grammar rejected, retrying without strict tools", {
+							model: model.id,
+							error: await finalizeErrorMessage(streamFailure, rawRequestDump),
+						});
 						if (providerSessionState) {
 							providerSessionState.strictToolsDisabled = true;
 						}
@@ -1980,7 +2003,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					output.content.length = 0;
 					output.responseId = undefined;
-					output.errorMessage = strictFallbackErrorMessage;
+					output.errorMessage = undefined;
 					output.providerPayload = undefined;
 					output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
 					output.stopReason = "stop";
@@ -2250,14 +2273,13 @@ function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming)
 	}
 }
 
-function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, model: Model<"anthropic-messages">): void {
+function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, maxAllowedTokens: number): void {
 	const thinking = params.thinking;
 	if (thinking?.type !== "enabled") return;
 
 	const budgetTokens = thinking.budget_tokens ?? 0;
 	if (budgetTokens <= 0) return;
 
-	const maxAllowedTokens = Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, model.maxTokens);
 	const currentMaxTokens = Math.min(params.max_tokens ?? maxAllowedTokens, maxAllowedTokens);
 	const raisedMaxTokens = Math.min(
 		Math.max(currentMaxTokens, budgetTokens + OUTPUT_FALLBACK_BUFFER),
@@ -2607,6 +2629,11 @@ function buildParams(
 	if (options?.taskBudget) outputConfigEntries.task_budget = options.taskBudget;
 	const outputConfig = Object.keys(outputConfigEntries).length ? outputConfigEntries : undefined;
 
+	// Claude Code requests at most 64k output tokens; clamp only OAuth requests,
+	// where the wire fingerprint must match. API-key callers keep the full model
+	// ceiling (e.g. 128k on Opus 4.8).
+	const maxOutputTokens = isOAuthToken ? Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, model.maxTokens) : model.maxTokens;
+
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
@@ -2615,7 +2642,7 @@ function buildParams(
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
 		...(metadata && { metadata }),
-		max_tokens: Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, model.maxTokens, options?.maxTokens || model.maxTokens),
+		max_tokens: Math.min(maxOutputTokens, options?.maxTokens || model.maxTokens),
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),
@@ -2671,7 +2698,7 @@ function buildParams(
 	}
 
 	disableThinkingIfToolChoiceForced(params);
-	ensureMaxTokensForThinking(params, model);
+	ensureMaxTokensForThinking(params, maxOutputTokens);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
 	normalizeCacheControlTtlOrdering(params);
@@ -2891,8 +2918,12 @@ export function convertAnthropicMessages(
 			const followsUser = idx > 0 && params[idx - 1]?.role === "user";
 			const next = params[idx + 1];
 			const lastOrBeforeAssistant = idx === params.length - 1 || next?.role === "assistant";
-			if (followsUser && lastOrBeforeAssistant) {
-				params[idx] = { role: "system", content: params[idx].content };
+			// System content is text-only on the wire; a developer turn carrying
+			// image blocks must stay a `user` message or the API rejects it.
+			const content = params[idx].content;
+			const textOnly = typeof content === "string" || content.every(block => block.type === "text");
+			if (followsUser && lastOrBeforeAssistant && textOnly) {
+				params[idx] = { role: "system", content };
 			}
 		}
 	}
@@ -3394,6 +3425,10 @@ function mapStopReason(reason: string): StopReason {
 			return "stop";
 		case "max_tokens":
 			return "length";
+		// Generation ran into the model's context window (default behavior on
+		// Sonnet 4.5+); the streamed content is valid, just truncated.
+		case "model_context_window_exceeded":
+			return "length";
 		case "tool_use":
 			return "toolUse";
 		case "refusal":
@@ -3401,11 +3436,15 @@ function mapStopReason(reason: string): StopReason {
 		case "pause_turn": // Stop is good enough -> resubmit
 			return "stop";
 		case "stop_sequence":
-			return "stop"; // We don't supply stop sequences, so this should never happen
+			return "stop"; // A caller-supplied stop_sequences entry matched; the turn completed normally.
 		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
 			return "error";
 		default:
-			// Handle unknown stop reasons gracefully (API may add new values)
-			throw new Error(`Unhandled stop reason: ${reason}`);
+			// New stop reasons ship server-side first ("sensitive",
+			// "model_context_window_exceeded") and arrive on the trailing
+			// message_delta after all content has streamed. Degrade to a normal
+			// stop instead of failing the fully streamed turn.
+			reportAnthropicEnvelopeAnomaly(`unhandled stop reason: ${reason}`);
+			return "stop";
 	}
 }

@@ -136,7 +136,7 @@ function getStrictFlags(params: unknown): boolean[] {
 
 function createTextSuccessEvents(
 	text: string,
-	options: { duplicateMessageStart?: boolean } = {},
+	options: { duplicateMessageStart?: boolean; stopReason?: string } = {},
 ): MockAnthropicEvent[] {
 	const events: MockAnthropicEvent[] = [
 		{
@@ -156,7 +156,7 @@ function createTextSuccessEvents(
 		{ type: "content_block_stop", index: 0 },
 		{
 			type: "message_delta",
-			delta: { stop_reason: "end_turn" },
+			delta: { stop_reason: options.stopReason ?? "end_turn" },
 			usage: {
 				input_tokens: 12,
 				output_tokens: 4,
@@ -303,6 +303,51 @@ describe("anthropic stream envelope handling", () => {
 		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
 	});
 
+	it("maps model_context_window_exceeded to a length stop", async () => {
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() =>
+				createMockRequest(
+					createTextSuccessEvents("hello", { stopReason: "model_context_window_exceeded" }),
+				) as never,
+		);
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(countEvents(events, "error")).toBe(0);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(result.stopReason).toBe("length");
+		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
+	});
+
+	it("completes the turn instead of failing when the API sends an unknown stop reason", async () => {
+		let attempt = 0;
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
+			attempt += 1;
+			return createMockRequest(createTextSuccessEvents("hello", { stopReason: "weird_new_reason" })) as never;
+		});
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		// The unknown reason arrives after all content streamed; it must not burn
+		// a retry or surface as an error.
+		expect(attempt).toBe(1);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(countEvents(events, "done")).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
+	});
+
 	it("ignores unknown preamble events before message_start and streams the response once", async () => {
 		let attempt = 0;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
@@ -444,7 +489,7 @@ describe("anthropic stream envelope handling", () => {
 		const result = await stream.result();
 
 		expect(result.stopReason).toBe("stop");
-		expect(result.errorMessage).toContain("compiled grammar is too large");
+		expect(result.errorMessage).toBeUndefined();
 		expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
 		expect(countEvents(events, "done")).toBe(1);
 		expect(countEvents(events, "error")).toBe(0);
