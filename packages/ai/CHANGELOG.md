@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `google-antigravity` not rotating to another stored OAuth account when Cloud Code Assist returns `429 You have exhausted your capacity on this model. Your quota will reset after …`. `parseRateLimitReason` matched the literal `capacity` before the `quota will reset` suffix and downgraded the failure to `MODEL_CAPACITY_EXHAUSTED` (45–75 s backoff), and `isUsageLimitError` returned false for the same message — so `markUsageLimitReached` was never invoked and the agent kept hammering the exhausted credential while the retry layer bailed on the multi-hour `retry-after`. Both paths now treat the Antigravity phrasing as `QUOTA_EXHAUSTED` / usage-limit, blocking the current credential until reset and letting the session pick an unblocked sibling ([#2187](https://github.com/can1357/oh-my-pi/issues/2187)).
+
+### Added
+
+- Added `antigravityRankingStrategy` and registered it as the default `CredentialRankingStrategy` for `google-antigravity`, so multi-account selection consumes the per-counter Antigravity usage reports (sorted ascending by `remainingFraction` in `fetchAntigravityUsage`) before falling back to round-robin — preventing the exhausted-counter credential from being chosen first when an unblocked sibling has headroom ([#2187](https://github.com/can1357/oh-my-pi/issues/2187)).
+
 ## [15.10.8] - 2026-06-09
 ### Added
 

@@ -21,13 +21,23 @@ const ACCOUNT_RATE_LIMIT_PATTERN =
 
 /**
  * Classify a rate-limit error message into a reason category.
- * Priority order: MODEL_CAPACITY > RATE_LIMIT > QUOTA > SERVER_ERROR > UNKNOWN.
+ * Priority order: QUOTA (Antigravity "quota will reset") > MODEL_CAPACITY > QUOTA (account) >
+ * RATE_LIMIT > QUOTA (generic) > SERVER_ERROR > UNKNOWN.
  *
  * "resource exhausted" maps to MODEL_CAPACITY (transient, short wait)
- * "quota exceeded" maps to QUOTA_EXHAUSTED (long wait, switch account)
+ * "quota exceeded" / "quota will reset" maps to QUOTA_EXHAUSTED (long wait, switch account)
  */
 export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 	const lower = errorMessage.toLowerCase();
+
+	// Antigravity / Cloud Code Assist surface multi-hour daily-quota exhaustion as
+	// "You have exhausted your capacity on this model. Your quota will reset after …".
+	// The literal "capacity" used to pre-empt the QUOTA branch even though "quota
+	// will reset" is the long-wait signal — short-circuit here before the
+	// MODEL_CAPACITY fallthrough so credential rotation (not 60s backoff) kicks in.
+	if (lower.includes("quota will reset") || lower.includes("exhausted your capacity")) {
+		return "QUOTA_EXHAUSTED";
+	}
 
 	if (
 		lower.includes("capacity") ||
@@ -84,7 +94,7 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 
 /** Detect usage/quota limit errors in error messages (persistent, requires credential switch). */
 const USAGE_LIMIT_PATTERN =
-	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|resource.?exhausted/i;
+	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|resource.?exhausted|exhausted your capacity|quota will reset/i;
 
 export function isUsageLimitError(errorMessage: string): boolean {
 	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
