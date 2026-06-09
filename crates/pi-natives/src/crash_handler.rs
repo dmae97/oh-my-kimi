@@ -30,7 +30,10 @@ use std::{
 	io::Write as _,
 	path::{Path, PathBuf},
 	process,
-	sync::Once,
+	sync::{
+		atomic::{AtomicBool, Ordering},
+		Once,
+	},
 	thread,
 	time::{SystemTime, UNIX_EPOCH},
 };
@@ -44,6 +47,7 @@ const DEFAULT_CONFIG_DIR: &str = ".omp";
 const APP_NAME: &str = "omp";
 
 static INSTALL: Once = Once::new();
+static ALLOC_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Install the panic and allocation-error hooks. Idempotent.
 pub fn install() {
@@ -56,12 +60,16 @@ pub fn install() {
 		}));
 
 		std::alloc::set_alloc_error_hook(|layout| {
+			// Print the canonical line before doing anything allocation-prone.
+			// If this is genuine process-wide OOM, report formatting/path work may
+			// recursively enter this hook; the secondary entry writes the same
+			// stack-only fallback and aborts immediately.
+			write_alloc_failure_line(std::io::stderr(), layout.size());
+			if ALLOC_HOOK_ACTIVE.swap(true, Ordering::AcqRel) {
+				process::abort();
+			}
 			let report = format_alloc_report(layout);
 			persist(&report, CrashKind::Alloc);
-			// Preserve the default handler's externally observable behavior:
-			// print the canonical OOM line and abort. The crash record is the
-			// only thing we add; we never silently swallow OOM.
-			let _ = writeln!(std::io::stderr(), "memory allocation of {} bytes failed", layout.size());
 			process::abort();
 		});
 	});
@@ -119,6 +127,24 @@ fn report_header(kind: CrashKind) -> String {
 		kind = kind.as_str(),
 		pid = process::id(),
 	)
+}
+fn write_alloc_failure_line(mut out: impl std::io::Write, size: usize) {
+	let _ = out.write_all(b"memory allocation of ");
+	let mut digits = [0u8; usize::MAX.ilog10() as usize + 1];
+	let mut pos = digits.len();
+	let mut value = size;
+	if value == 0 {
+		pos -= 1;
+		digits[pos] = b'0';
+	} else {
+		while value > 0 {
+			pos -= 1;
+			digits[pos] = b'0' + (value % 10) as u8;
+			value /= 10;
+		}
+	}
+	let _ = out.write_all(&digits[pos..]);
+	let _ = out.write_all(b" bytes failed\n");
 }
 
 fn panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
@@ -271,6 +297,16 @@ mod tests {
 		assert!(report.contains("backtrace:"), "report missing backtrace section: {report}");
 		assert!(report.contains(&format!("pid:       {}", process::id())), "report missing pid: {report}");
 		assert!(report.contains("thread:"), "report missing thread: {report}");
+	}
+
+	#[test]
+	fn alloc_failure_line_matches_rust_default_text_without_heap_formatting() {
+		let mut buf = Vec::new();
+		write_alloc_failure_line(&mut buf, 7714);
+		assert_eq!(buf, b"memory allocation of 7714 bytes failed\n");
+		buf.clear();
+		write_alloc_failure_line(&mut buf, usize::MAX);
+		assert_eq!(buf, format!("memory allocation of {} bytes failed\n", usize::MAX).as_bytes());
 	}
 
 	#[test]
