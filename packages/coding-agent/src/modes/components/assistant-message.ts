@@ -5,7 +5,16 @@ import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
-import { resolveImageOptions } from "../../tools/render-utils";
+import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../tools/render-utils";
+
+/**
+ * Max lines of a turn-ending provider error rendered inline in the transcript.
+ * Bounds pathological error bodies — e.g. a proxy 502 whose body is a full HTML
+ * page — so they can't flood the scrollback. Blank lines are dropped and each
+ * line is width-truncated by {@link getPreviewLines}. Full text is still kept in
+ * the persisted session.
+ */
+const MAX_TRANSCRIPT_ERROR_LINES = 8;
 
 /**
  * Component that renders a complete assistant message
@@ -76,6 +85,22 @@ export class AssistantMessageComponent extends Container {
 
 	markTranscriptBlockFinalized(): void {
 		this.#transcriptBlockFinalized = true;
+	}
+
+	/**
+	 * Render a turn-ending provider error inline. Drops blank lines, clamps the
+	 * line count to {@link MAX_TRANSCRIPT_ERROR_LINES}, and width-truncates each
+	 * line so a pathological body — e.g. the HTML page a proxy returns on a 502 —
+	 * can't flood the transcript. Mirrors {@link ErrorBannerComponent}.
+	 */
+	#appendErrorBlock(message: string): void {
+		const lines = getPreviewLines(message, MAX_TRANSCRIPT_ERROR_LINES, TRUNCATE_LENGTHS.LINE);
+		if (lines.length === 0) lines.push("Unknown error");
+		this.#contentContainer.addChild(new Spacer(1));
+		this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${lines[0]}`), 1, 0));
+		for (const line of lines.slice(1)) {
+			this.#contentContainer.addChild(new Text(theme.fg("error", `  ${line}`), 1, 0));
+		}
 	}
 
 	setToolResultImages(toolCallId: string, images: ImageContent[]): void {
@@ -249,9 +274,7 @@ export class AssistantMessageComponent extends Container {
 				}
 				this.#contentContainer.addChild(new Text(theme.fg("error", abortMessage), 1, 0));
 			} else if (message.stopReason === "error" && !this.#errorPinned) {
-				const errorMsg = message.errorMessage || "Unknown error";
-				this.#contentContainer.addChild(new Spacer(1));
-				this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), 1, 0));
+				this.#appendErrorBlock(message.errorMessage || "Unknown error");
 			}
 		}
 		if (
@@ -260,8 +283,7 @@ export class AssistantMessageComponent extends Container {
 			message.stopReason !== "aborted" &&
 			message.stopReason !== "error"
 		) {
-			this.#contentContainer.addChild(new Spacer(1));
-			this.#contentContainer.addChild(new Text(theme.fg("error", `Error: ${message.errorMessage}`), 1, 0));
+			this.#appendErrorBlock(message.errorMessage);
 		}
 
 		// Token usage metadata
