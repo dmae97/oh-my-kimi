@@ -664,32 +664,42 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.output_text.delta") {
 			const entry = lookupOpenItem(event);
 			if (entry?.item.type === "message" && entry.block.type === "text") {
-				const lastPart = entry.item.content?.[entry.item.content.length - 1];
-				if (lastPart?.type === "output_text") {
-					entry.block.text += event.delta;
-					lastPart.text += event.delta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: contentIndexOf(entry.block),
-						delta: event.delta,
-						partial: output,
-					});
+				entry.item.content = entry.item.content || [];
+				let lastPart = entry.item.content[entry.item.content.length - 1];
+				if (lastPart?.type !== "output_text") {
+					// `content_part.added` never arrived (lossy proxy) — synthesize the
+					// part so live text still streams instead of freezing until the
+					// item's output_item.done recovers the final text.
+					lastPart = { type: "output_text", text: "", annotations: [] };
+					entry.item.content.push(lastPart);
 				}
+				entry.block.text += event.delta;
+				lastPart.text += event.delta;
+				stream.push({
+					type: "text_delta",
+					contentIndex: contentIndexOf(entry.block),
+					delta: event.delta,
+					partial: output,
+				});
 			}
 		} else if (event.type === "response.refusal.delta") {
 			const entry = lookupOpenItem(event);
 			if (entry?.item.type === "message" && entry.block.type === "text") {
-				const lastPart = entry.item.content?.[entry.item.content.length - 1];
-				if (lastPart?.type === "refusal") {
-					entry.block.text += event.delta;
-					lastPart.refusal += event.delta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: contentIndexOf(entry.block),
-						delta: event.delta,
-						partial: output,
-					});
+				entry.item.content = entry.item.content || [];
+				let lastPart = entry.item.content[entry.item.content.length - 1];
+				if (lastPart?.type !== "refusal") {
+					// Same lossy-proxy hardening as the output_text branch above.
+					lastPart = { type: "refusal", refusal: "" };
+					entry.item.content.push(lastPart);
 				}
+				entry.block.text += event.delta;
+				lastPart.refusal += event.delta;
+				stream.push({
+					type: "text_delta",
+					contentIndex: contentIndexOf(entry.block),
+					delta: event.delta,
+					partial: output,
+				});
 			}
 		} else if (event.type === "response.function_call_arguments.delta") {
 			const entry = lookupOpenFunctionCallItem(event);

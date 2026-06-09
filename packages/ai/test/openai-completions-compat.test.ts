@@ -172,6 +172,84 @@ describe("openai-completions compatibility", () => {
 		expect(assistant.content).toBe("hello world");
 	});
 
+	it("prepends thinking text to string assistant content when requiresThinkingAsText is set", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "chain of thought" },
+				{ type: "text", text: "final answer" },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(
+			model,
+			{ messages: [assistantMessage] },
+			{
+				...detectCompat(model),
+				requiresThinkingAsText: true,
+			},
+		);
+		const assistant = messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.role !== "assistant") throw new Error("assistant message missing");
+		// Regression: thinking+text replay used to call `.unshift` on the string
+		// content set above (TypeError). Both blocks must survive as one string.
+		expect(typeof assistant.content).toBe("string");
+		expect(assistant.content).toBe("chain of thought\n\nfinal answer");
+	});
+
+	it("emits thinking-only assistant content as a plain string when requiresThinkingAsText is set", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "only thoughts" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(
+			model,
+			{ messages: [assistantMessage] },
+			{
+				...detectCompat(model),
+				requiresThinkingAsText: true,
+			},
+		);
+		const assistant = messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.role !== "assistant") throw new Error("assistant message missing");
+		expect(assistant.content).toBe("only thoughts");
+	});
+
 	it("preserves multiple system prompts as leading system messages for chat completions", () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),

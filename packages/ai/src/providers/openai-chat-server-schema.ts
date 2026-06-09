@@ -145,6 +145,11 @@ export const assistantMessageSchema = z.object({
 	role: z.literal("assistant"),
 	content: baseContent.optional(),
 	tool_calls: z.array(toolCallSchema).optional(),
+	// DeepSeek-style reasoning channel. The gateway emits it on the way out
+	// (encodeResponse/encodeStream); accept it back so thinking-mode
+	// continuations replay the model's actual reasoning instead of a
+	// synthesized placeholder.
+	reasoning_content: z.string().nullish(),
 });
 
 export const toolMessageSchema = z.object({

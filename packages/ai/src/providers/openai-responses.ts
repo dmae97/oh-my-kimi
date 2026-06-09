@@ -1,4 +1,4 @@
-import { $env, extractHttpStatusFromError, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
 	Tool as OpenAITool,
@@ -312,7 +312,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
 				onOutputItemDone: item => {
-					nativeOutputItems.push(structuredCloneJSON<unknown>(item) as unknown as Record<string, unknown>);
+					// `processResponsesStream` hands over a private clone already; no
+					// second deep copy needed (reasoning items carry multi-KB blobs).
+					nativeOutputItems.push(item as unknown as Record<string, unknown>);
 				},
 			});
 

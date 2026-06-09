@@ -1269,9 +1269,17 @@ function handleMessageTextDelta(
 	partType: "output_text" | "refusal",
 ): void {
 	if (currentItem?.type !== "message" || currentBlock?.type !== "text") return;
-	if (!currentItem.content || currentItem.content.length === 0) return;
-	const lastPart = currentItem.content[currentItem.content.length - 1];
-	if (!lastPart || lastPart.type !== partType) return;
+	currentItem.content = currentItem.content || [];
+	let lastPart = currentItem.content[currentItem.content.length - 1];
+	if (lastPart?.type !== partType) {
+		// `content_part.added` never arrived (lossy proxy) — synthesize the part
+		// so live text still streams instead of freezing until output_item.done.
+		lastPart =
+			partType === "output_text"
+				? { type: "output_text", text: "", annotations: [] }
+				: { type: "refusal", refusal: "" };
+		currentItem.content.push(lastPart);
+	}
 	const delta = (rawEvent as { delta?: string }).delta || "";
 	currentBlock.text += delta;
 	if (lastPart.type === "output_text") {
@@ -1491,6 +1499,24 @@ function handleResponseCompleted(
 			// Without a response id the append baseline cannot be trusted.
 			state.canAppend = false;
 		}
+	}
+
+	// Finalize any toolCall block whose output_item.done never arrived: the
+	// throttled delta parser may have left block.arguments stale, and the
+	// toolUse promotion below would hand the agent incomplete arguments.
+	// Mirrors the shared decoder's response.completed sweep; also strips the
+	// transient partialJson/lastParseLen fields so they never persist.
+	for (const block of output.content) {
+		if (block.type !== "toolCall") continue;
+		const pending = block as ToolCall & { partialJson?: string; lastParseLen?: number };
+		if (pending.partialJson) {
+			pending.arguments =
+				pending.customWireName !== undefined
+					? { input: pending.partialJson }
+					: parseStreamingJson(pending.partialJson);
+		}
+		delete pending.partialJson;
+		delete pending.lastParseLen;
 	}
 
 	calculateCost(model, output.usage);

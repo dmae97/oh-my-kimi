@@ -574,6 +574,17 @@ function reasoningItemId(part: ThinkingContent): string {
 }
 
 /**
+ * pi-ai responses providers mint composite `"{call_id}|{item_id}"` tool-call
+ * ids ({@link encodeResponsesToolCallId}). Only the call_id half belongs on
+ * the wire: third-party clients validate the `call_id` charset
+ * (`^[a-zA-Z0-9_-]+$`) or echo it to other backends, and `|` fails both.
+ */
+function wireCallId(id: string): string {
+	const sep = id.indexOf("|");
+	return sep >= 0 ? id.slice(0, sep) : id;
+}
+
+/**
  * Walk the assistant content array and group consecutive TextContent into a
  * single message item; each ThinkingContent / ToolCall is its own item.
  */
@@ -609,7 +620,7 @@ function buildOutputItems(message: AssistantMessage): OutputItem[] {
 				out.push({
 					type: "custom_tool_call",
 					id: part.thoughtSignature ?? makeCustomCallId(),
-					call_id: part.id,
+					call_id: wireCallId(part.id),
 					name: part.customWireName,
 					input: rawInput,
 					status: "completed",
@@ -618,7 +629,7 @@ function buildOutputItems(message: AssistantMessage): OutputItem[] {
 				out.push({
 					type: "function_call",
 					id: part.thoughtSignature ?? makeFuncCallId(),
-					call_id: part.id,
+					call_id: wireCallId(part.id),
 					name: part.name,
 					arguments: JSON.stringify(part.arguments ?? {}),
 					status: "completed",
@@ -801,7 +812,7 @@ export function encodeStream(
 						: undefined;
 				const isCustom = customWireName !== undefined;
 				const itemId = tc?.thoughtSignature ?? (isCustom ? makeCustomCallId() : makeFuncCallId());
-				const callId = tc?.id ?? "";
+				const callId = wireCallId(tc?.id ?? "");
 				const name = customWireName ?? tc?.name ?? "";
 				const item = isCustom
 					? {
