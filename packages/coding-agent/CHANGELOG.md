@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP OAuth fallback prompts so the "Click here to authorize" label emits an auth-safe terminal hyperlink even when hyperlink auto-detection is unavailable, keeping non-browser MCP setup usable ([#2196](https://github.com/can1357/oh-my-pi/issues/2196)).
+
 ## [15.10.8] - 2026-06-09
 
 ### Added

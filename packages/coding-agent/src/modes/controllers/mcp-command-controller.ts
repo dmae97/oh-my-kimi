@@ -36,7 +36,7 @@ import {
 import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../mcp/types";
 import type { OAuthCredential } from "../../session/auth-storage";
 import { shortenPath } from "../../tools/render-utils";
-import { urlHyperlink } from "../../tui";
+import { urlHyperlinkAlways } from "../../tui";
 import { openPath } from "../../utils/open";
 import { ChatBlock } from "../components/chat-block";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
@@ -63,7 +63,7 @@ export class MCPAuthorizationLinkPrompt implements Component {
 	invalidate(): void {}
 
 	render(_width: number): string[] {
-		const link = urlHyperlink(this.#url, "Click here to authorize");
+		const link = urlHyperlinkAlways(this.#url, "Click here to authorize");
 		return [
 			` ${theme.fg("success", "Open authorization URL:")}`,
 			` ${theme.fg("accent", link)}`,
