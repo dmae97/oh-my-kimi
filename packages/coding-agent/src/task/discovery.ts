@@ -1,13 +1,14 @@
 /**
  * Agent discovery from filesystem.
  *
- * Discovers agent definitions from:
- *   - ~/.omp/agent/agents/*.md (user-level, primary)
- *   - ~/.pi/agent/agents/*.md (user-level, legacy)
- *   - ~/.claude/agents/*.md (user-level, legacy)
- *   - .omp/agents/*.md (project-level, primary)
- *   - .pi/agents/*.md (project-level, legacy)
- *   - .claude/agents/*.md (project-level, legacy)
+ * Discovers agent definitions from OMP-native task-agent roots:
+ *   - ~/.omp/agent/agents/*.md (user-level)
+ *   - .omp/agents/*.md (project-level)
+ *
+ * Claude Code marketplace plugin agents are discovered separately via the
+ * claude-plugins provider. Direct cross-harness roots such as .claude/agents
+ * are intentionally skipped because their frontmatter schema is not the OMP
+ * task-agent contract.
  *
  * Agent files use markdown with YAML frontmatter.
  */
@@ -20,6 +21,8 @@ import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import { listClaudePluginRoots } from "../discovery/helpers";
 import { loadBundledAgents, parseAgent } from "./agents";
 import type { AgentDefinition, AgentSource } from "./types";
+
+const TASK_AGENT_CONFIG_SOURCE = ".omp";
 
 /** Result of agent discovery */
 export interface DiscoveryResult {
@@ -52,41 +55,31 @@ async function loadAgentsFromDir(dir: string, source: AgentSource): Promise<Agen
 /**
  * Discover agents from filesystem and merge with bundled agents.
  *
- * Precedence (highest wins): .omp > .pi > .claude (project before user), then bundled
- *
+ * Precedence (highest wins): project .omp, user .omp, Claude plugin agents, then bundled
  * @param cwd - Current working directory for project agent discovery
  */
 export async function discoverAgents(cwd: string, home: string = os.homedir()): Promise<DiscoveryResult> {
 	const resolvedCwd = path.resolve(cwd);
-	const agentSources = Array.from(new Set(getConfigDirs("", { project: false }).map(entry => entry.source)));
 
-	// Get user directories (priority order: .omp, .pi, .claude, ...)
 	const userDirs = getConfigDirs("agents", { project: false })
-		.filter(entry => agentSources.includes(entry.source))
+		.filter(entry => entry.source === TASK_AGENT_CONFIG_SOURCE)
 		.map(entry => ({
 			...entry,
 			path: path.resolve(entry.path),
 		}));
 
-	// Get project directories by walking up from cwd (priority order)
 	const projectDirs = findAllNearestProjectConfigDirs("agents", resolvedCwd)
-		.filter(entry => agentSources.includes(entry.source))
+		.filter(entry => entry.source === TASK_AGENT_CONFIG_SOURCE)
 		.map(entry => ({
 			...entry,
 			path: path.resolve(entry.path),
 		}));
-
-	const orderedSources = agentSources.filter(
-		source => userDirs.some(entry => entry.source === source) || projectDirs.some(entry => entry.source === source),
-	);
 
 	const orderedDirs: Array<{ dir: string; source: AgentSource }> = [];
-	for (const source of orderedSources) {
-		const project = projectDirs.find(entry => entry.source === source);
-		if (project) orderedDirs.push({ dir: project.path, source: "project" });
-		const user = userDirs.find(entry => entry.source === source);
-		if (user) orderedDirs.push({ dir: user.path, source: "user" });
-	}
+	const project = projectDirs[0];
+	if (project) orderedDirs.push({ dir: project.path, source: "project" });
+	const user = userDirs[0];
+	if (user) orderedDirs.push({ dir: user.path, source: "user" });
 
 	// Load agents from Claude Code marketplace plugins (respects disabledProviders)
 	const { roots: pluginRoots } = isProviderEnabled("claude-plugins")
