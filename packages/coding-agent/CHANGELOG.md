@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.9] - 2026-06-09
+
 ### Fixed
 
 - Fixed streaming thinking (and other styled assistant content) vanishing from native scrollback once it scrolled past the viewport top during a foreground turn. The transcript's append-only commit detector compared raw row bytes, so a styled paragraph wrapping onto a new row (the span-closing SGR and width padding move while the visible cells stay identical) or a streamed token pushing the last word down a line flagged the block as permanently volatile — the commit boundary froze and every later row that crossed the viewport top was committed nowhere. Rows are now compared by visible content, a wrap-shrink of the in-flight bottom line counts as append-only, and a genuine one-off interior rewrite only suspends commits until the block re-earns append-only (30 clean frames), after which the pinned emitter backfills the stalled gap contiguously. Periodically rewriting blocks (spinners, collapsing tool previews) never re-earn and stay deferred.
