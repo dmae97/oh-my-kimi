@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import type { AgentSessionEvent } from "../session/agent-session";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import type { NestedRepoPatch } from "./worktree";
 
@@ -41,9 +42,23 @@ export interface SubagentProgressPayload {
 	agent: string;
 	agentSource: AgentSource;
 	task: string;
+	parentToolCallId?: string;
 	assignment?: string;
 	progress: AgentProgress;
 	sessionFile?: string;
+}
+
+/** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
+export interface SubagentEventPayload {
+	id: string;
+	index: number;
+	agent: string;
+	agentSource: AgentSource;
+	task: string;
+	parentToolCallId?: string;
+	assignment?: string;
+	sessionFile?: string;
+	event: AgentSessionEvent;
 }
 
 /** Payload emitted on TASK_SUBAGENT_LIFECYCLE_CHANNEL */
@@ -54,6 +69,7 @@ export interface SubagentLifecyclePayload {
 	description?: string;
 	status: "started" | "completed" | "failed" | "aborted";
 	sessionFile?: string;
+	parentToolCallId?: string;
 	index: number;
 }
 

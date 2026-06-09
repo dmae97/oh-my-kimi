@@ -18,6 +18,10 @@ export {
 	type RpcClientToolContext,
 	type RpcClientToolResult,
 	type RpcEventListener,
+	type RpcSessionEventListener,
+	type RpcSubagentEventListener,
+	type RpcSubagentLifecycleListener,
+	type RpcSubagentProgressListener,
 } from "./rpc/rpc-client";
 export type {
 	RpcCommand,
@@ -27,7 +31,15 @@ export type {
 	RpcHostToolResult,
 	RpcHostToolUpdate,
 	RpcResponse,
+	RpcSessionEventFrame,
 	RpcSessionState,
+	RpcSubagentEventFrame,
+	RpcSubagentFrame,
+	RpcSubagentLifecycleFrame,
+	RpcSubagentMessagesResult,
+	RpcSubagentProgressFrame,
+	RpcSubagentSnapshot,
+	RpcSubagentSubscriptionLevel,
 } from "./rpc/rpc-types";
 
 postmortem.register("terminal-restore", () => {
