@@ -14,7 +14,8 @@ import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
-import type { CustomTool, LoadedCustomTool } from "../extensibility/custom-tools/types";
+import type { ToolPathWithSource } from "../extensibility/custom-tools";
+import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
 import type { LoadExtensionsResult } from "../extensibility/extensions/types";
@@ -196,8 +197,12 @@ export interface ExecutorOptions {
 	rules?: Rule[];
 	/** Parent-loaded extensions, forwarded via `preloadedExtensions` to skip discovery. */
 	preloadedExtensions?: LoadExtensionsResult;
-	/** Parent-discovered custom tools, forwarded to skip the `.omp/tools/` scan. */
-	preloadedCustomTools?: LoadedCustomTool[];
+	/**
+	 * Parent's discovered custom-tool source paths. Forwarded to skip the
+	 * `.omp/tools/` FS scan in the subagent; the subagent then re-binds each
+	 * tool against its own `CustomToolAPI` (cwd, exec, pushPendingAction, UI).
+	 */
+	preloadedCustomToolPaths?: ToolPathWithSource[];
 	mcpManager?: MCPManager;
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
@@ -1294,7 +1299,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					workspaceTree: options.workspaceTree,
 					rules: options.rules,
 					preloadedExtensions: options.preloadedExtensions,
-					preloadedCustomTools: options.preloadedCustomTools,
+					preloadedCustomToolPaths: options.preloadedCustomToolPaths,
 					systemPrompt: defaultPrompt => {
 						const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 							agent: agent.systemPrompt,

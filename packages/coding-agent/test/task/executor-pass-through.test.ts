@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { LoadedCustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import type { ToolPathWithSource } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
 import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
@@ -94,7 +94,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("forwards rules, preloadedExtensions, and preloadedCustomTools to createAgentSession", async () => {
+	it("forwards rules, preloadedExtensions, and preloadedCustomToolPaths to createAgentSession", async () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
@@ -104,15 +104,15 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			errors: [],
 			runtime: { sentinel: "runtime" } as unknown,
 		} as unknown as LoadExtensionsResult;
-		const preloadedCustomTools: LoadedCustomTool[] = [
-			{ path: "tools/x.ts", resolvedPath: "/abs/tools/x.ts", tool: { name: "x" } } as unknown as LoadedCustomTool,
+		const preloadedCustomToolPaths: ToolPathWithSource[] = [
+			{ path: "tools/x.ts", source: { provider: "config", providerName: "Config", level: "project" } },
 		];
 
 		const result = await runSubprocess({
 			...baseOptions,
 			rules,
 			preloadedExtensions,
-			preloadedCustomTools,
+			preloadedCustomToolPaths,
 		});
 
 		expect(result.exitCode).toBe(0);
@@ -121,7 +121,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		// Identity, not equality: passing a clone would defeat the perf fix.
 		expect(forwarded?.rules).toBe(rules);
 		expect(forwarded?.preloadedExtensions).toBe(preloadedExtensions);
-		expect(forwarded?.preloadedCustomTools).toBe(preloadedCustomTools);
+		expect(forwarded?.preloadedCustomToolPaths).toBe(preloadedCustomToolPaths);
 	});
 
 	it("forwards undefined when the parent has not pre-discovered state", async () => {
@@ -134,6 +134,6 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const forwarded = spy.mock.calls[0]?.[0];
 		expect(forwarded?.rules).toBeUndefined();
 		expect(forwarded?.preloadedExtensions).toBeUndefined();
-		expect(forwarded?.preloadedCustomTools).toBeUndefined();
+		expect(forwarded?.preloadedCustomToolPaths).toBeUndefined();
 	});
 });

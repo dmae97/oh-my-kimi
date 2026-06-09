@@ -8,7 +8,7 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
-import type { LoadedCustomTool } from "../extensibility/custom-tools/types";
+import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { LoadExtensionsResult } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
@@ -161,8 +161,12 @@ export interface ToolSession {
 	rules?: Rule[];
 	/** Pre-loaded extensions result (forwarded to subagents via `preloadedExtensions`). */
 	extensionsResult?: LoadExtensionsResult;
-	/** Pre-loaded custom tools discovered from `.omp/tools/`, `.claude/tools/`, etc. (forwarded to subagents). */
-	loadedCustomTools?: LoadedCustomTool[];
+	/**
+	 * Pre-discovered custom-tool source paths from `.omp/tools/`, `.claude/tools/`,
+	 * plugins, etc. Forwarded to subagents so they skip the FS scan but still
+	 * re-bind tools to their own session-scoped `CustomToolAPI`.
+	 */
+	customToolPaths?: ToolPathWithSource[];
 	/** Whether LSP integrations are enabled */
 	enableLsp?: boolean;
 	/** Whether an edit-capable tool is available in this session (controls hashline output) */

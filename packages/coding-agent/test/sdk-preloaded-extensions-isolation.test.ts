@@ -62,7 +62,7 @@ describe("createAgentSession preloadedExtensions isolation (issue #2190)", () =>
 			skipPythonPreflight: true,
 			skills: [],
 			rules: [],
-			preloadedCustomTools: [],
+			preloadedCustomToolPaths: [],
 			contextFiles: [],
 			promptTemplates: [],
 		});

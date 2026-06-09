@@ -62,13 +62,8 @@ import {
 	type LoadedCustomCommand,
 	loadCustomCommands as loadCustomCommandsInternal,
 } from "./extensibility/custom-commands";
-import { discoverAndLoadCustomTools } from "./extensibility/custom-tools";
-import type {
-	CustomTool,
-	CustomToolContext,
-	CustomToolSessionEvent,
-	LoadedCustomTool,
-} from "./extensibility/custom-tools/types";
+import { discoverCustomToolPaths, loadCustomTools, type ToolPathWithSource } from "./extensibility/custom-tools";
+import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "./extensibility/custom-tools/types";
 import {
 	discoverAndLoadExtensions,
 	type ExtensionContext,
@@ -347,13 +342,17 @@ export interface CreateAgentSessionOptions {
 	 */
 	preloadedExtensions?: LoadExtensionsResult;
 	/**
-	 * Pre-loaded custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
-	 * When provided, the filesystem-scan inside `discoverAndLoadCustomTools()` is
-	 * skipped — subagents inherit the parent's discovery result. MCP/image/tts/
-	 * web-search tools are still resolved per-session because they depend on the
-	 * session's own model and tool selection.
+	 * Pre-discovered custom-tool source paths from `.omp/tools/`, `.claude/tools/`,
+	 * plugins, etc. When provided, the filesystem-scan inside
+	 * `discoverCustomToolPaths()` is skipped — subagents inherit the parent's
+	 * scan result and call `loadCustomTools()` themselves so each session binds
+	 * tools to its OWN `CustomToolAPI` (cwd, exec, pushPendingAction, UI).
+	 *
+	 * Forwarding the loaded `LoadedCustomTool[]` instances directly would reuse
+	 * the parent's session-bound API and route tool execution back through the
+	 * parent — wrong for isolated tasks and for pending-action routing.
 	 */
-	preloadedCustomTools?: LoadedCustomTool[];
+	preloadedCustomToolPaths?: ToolPathWithSource[];
 
 	/** Shared event bus for tool/extension communication. Default: creates new bus. */
 	eventBus?: EventBus;
@@ -1532,27 +1531,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Discover custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
-		// Subagents reuse the parent's discovery via `preloadedCustomTools` so the
-		// filesystem scan only runs once per process tree. MCP/image/tts/web-search
-		// tools above are still resolved per-session because they depend on the
-		// session's own model and tool selection.
+		// Subagents reuse the parent's scan via `preloadedCustomToolPaths` to skip
+		// the FS walk, but ALWAYS re-call `loadCustomTools` here so factories bind
+		// to THIS session's `CustomToolAPI` (cwd, exec, pushPendingAction, UI).
+		// Forwarding the parent's `LoadedCustomTool[]` directly would route tool
+		// execution back through the parent — wrong for isolated tasks and for
+		// pending-action queueing.
 		const builtInToolNames = builtinTools.map(t => t.name);
-		const loadedCustomTools: LoadedCustomTool[] =
-			options.preloadedCustomTools ??
-			(await logger.time("discoverAndLoadCustomTools", async () => {
-				const result = await discoverAndLoadCustomTools([], cwd, builtInToolNames, action =>
-					queueResolveHandler(toolSession, action),
-				);
-				for (const { path, error } of result.errors) {
-					logger.error("Custom tool load failed", { path, error });
-				}
-				return result.tools;
-			}));
-		if (loadedCustomTools.length > 0) {
-			customTools.push(...loadedCustomTools.map(loaded => loaded.tool));
+		const customToolPaths: ToolPathWithSource[] =
+			options.preloadedCustomToolPaths ??
+			(await logger.time("discoverCustomToolPaths", () => discoverCustomToolPaths([], cwd)));
+		const customToolsLoadResult = await logger.time("loadCustomTools", () =>
+			loadCustomTools(customToolPaths, cwd, builtInToolNames, action => queueResolveHandler(toolSession, action)),
+		);
+		for (const { path, error } of customToolsLoadResult.errors) {
+			logger.error("Custom tool load failed", { path, error });
 		}
-		// Forward the discovered tools to subagents so they skip the FS scan.
-		toolSession.loadedCustomTools = loadedCustomTools;
+		if (customToolsLoadResult.tools.length > 0) {
+			customTools.push(...customToolsLoadResult.tools.map(loaded => loaded.tool));
+		}
+		// Forward the path list (NOT the loaded tools) to subagents so they
+		// re-bind under their own `CustomToolAPI` while skipping the FS scan.
+		toolSession.customToolPaths = customToolPaths;
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
 		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
