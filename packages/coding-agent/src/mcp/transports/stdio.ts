@@ -124,7 +124,7 @@ function quoteCmdArg(value: string): string {
 		}
 		result += "\\".repeat(backslashes);
 		backslashes = 0;
-		result += char;
+		result += char === "%" ? "^%" : char;
 	}
 	result += "\\".repeat(backslashes * 2);
 	return `${result}"`;

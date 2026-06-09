@@ -31,6 +31,37 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
+	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["serve", "--header", "Authorization=%TOKEN%"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`"${shim}" "serve" "--header" "Authorization=^%TOKEN^%"`,
+			]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("resolves extension-less absolute Windows paths to the sibling .cmd shim", async () => {
 		// Mirrors npm's Windows shim layout: bare `codegraph` (shebang script),
 		// `codegraph.cmd` (cmd.exe wrapper), and `codegraph.ps1` siblings under
