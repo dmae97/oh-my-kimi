@@ -144,12 +144,15 @@ function deriveLiveCommitState(
 			// which suspends commits until the block re-earns append-only.
 			const preservedEveryRow = prefixLength + suffixLength >= previous.lines.length;
 			let tailExtendedInPlace = false;
-			if (!preservedEveryRow && prefixLength + suffixLength === previous.lines.length - 1 && prefixLength < current.length) {
+			if (
+				!preservedEveryRow &&
+				prefixLength + suffixLength === previous.lines.length - 1 &&
+				prefixLength < current.length
+			) {
 				const prevTail = normalizeRow(previous.lines[prefixLength]!);
 				const curTail = normalizeRow(current[prefixLength]!);
 				tailExtendedInPlace =
-					curTail.startsWith(prevTail) ||
-					(current.length > previous.lines.length && prevTail.startsWith(curTail));
+					curTail.startsWith(prevTail) || (current.length > previous.lines.length && prevTail.startsWith(curTail));
 			}
 			if ((preservedEveryRow || tailExtendedInPlace) && current.length >= previous.lines.length) {
 				if (volatileCooldown === 0) appendOnly = true;
