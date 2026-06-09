@@ -1285,59 +1285,67 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const { normalized: normalizedOutputSchema } = normalizeSchema(outputSchema);
 
-			const { session } = await awaitAbortable(
-				createAgentSession({
-					cwd: worktree ?? cwd,
-					authStorage,
-					modelRegistry,
-					settings: subagentSettings,
-					model,
-					thinkingLevel: effectiveThinkingLevel,
-					toolNames,
-					outputSchema,
-					requireYieldTool: true,
-					contextFiles: options.contextFiles,
-					skills: options.skills,
-					promptTemplates: options.promptTemplates,
-					workspaceTree: options.workspaceTree,
-					rules: options.rules,
-					preloadedExtensionPaths: options.preloadedExtensionPaths,
-					preloadedCustomToolPaths: options.preloadedCustomToolPaths,
-					systemPrompt: defaultPrompt => {
-						const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
-							agent: agent.systemPrompt,
-							context: options.context?.trim() ?? "",
-							planReference: options.planReference?.content ?? "",
-							planReferencePath: options.planReference?.path ?? "",
-							worktree: worktree ?? "",
-							outputSchema: normalizedOutputSchema,
-							contextFile: contextFileForPrompt,
-							ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
-							ircSelfId: ircEnabled ? id : "",
-						});
-						return defaultPrompt.length === 0
-							? [subagentPrompt]
-							: [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
-					},
-					sessionManager,
-					hasUI: false,
-					spawns: spawnsEnv,
-					taskDepth: childDepth,
-					parentHindsightSessionState: options.parentHindsightSessionState,
-					parentMnemopiSessionState: options.parentMnemopiSessionState,
-					parentTaskPrefix: id,
-					agentId: id,
-					agentDisplayName: agent.name,
-					enableLsp: lspEnabled,
-					skipPythonPreflight,
-					enableMCP,
-					mcpManager: options.mcpManager,
-					customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
-					localProtocolOptions: options.localProtocolOptions,
-					telemetry: subagentTelemetry,
-					parentEvalSessionId: options.parentEvalSessionId,
-				}),
-			);
+			const sessionPromise = createAgentSession({
+				cwd: worktree ?? cwd,
+				authStorage,
+				modelRegistry,
+				settings: subagentSettings,
+				model,
+				thinkingLevel: effectiveThinkingLevel,
+				toolNames,
+				outputSchema,
+				requireYieldTool: true,
+				contextFiles: options.contextFiles,
+				skills: options.skills,
+				promptTemplates: options.promptTemplates,
+				workspaceTree: options.workspaceTree,
+				rules: options.rules,
+				preloadedExtensionPaths: options.preloadedExtensionPaths,
+				preloadedCustomToolPaths: options.preloadedCustomToolPaths,
+				systemPrompt: defaultPrompt => {
+					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
+						agent: agent.systemPrompt,
+						context: options.context?.trim() ?? "",
+						planReference: options.planReference?.content ?? "",
+						planReferencePath: options.planReference?.path ?? "",
+						worktree: worktree ?? "",
+						outputSchema: normalizedOutputSchema,
+						contextFile: contextFileForPrompt,
+						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
+						ircSelfId: ircEnabled ? id : "",
+					});
+					return defaultPrompt.length === 0
+						? [subagentPrompt]
+						: [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
+				},
+				sessionManager,
+				hasUI: false,
+				spawns: spawnsEnv,
+				taskDepth: childDepth,
+				parentHindsightSessionState: options.parentHindsightSessionState,
+				parentMnemopiSessionState: options.parentMnemopiSessionState,
+				parentTaskPrefix: id,
+				agentId: id,
+				agentDisplayName: agent.name,
+				enableLsp: lspEnabled,
+				skipPythonPreflight,
+				enableMCP,
+				mcpManager: options.mcpManager,
+				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				localProtocolOptions: options.localProtocolOptions,
+				telemetry: subagentTelemetry,
+				parentEvalSessionId: options.parentEvalSessionId,
+			});
+			let session: AgentSession;
+			try {
+				({ session } = await awaitAbortable(sessionPromise));
+			} catch (err) {
+				// Abort raced session startup. The session may still resolve later
+				// holding live LSP/MCP child processes — dispose it when it does so
+				// a cancelled subagent cannot leak them.
+				void sessionPromise.then(created => created.session.dispose()).catch(() => {});
+				throw err;
+			}
 
 			activeSession = session;
 

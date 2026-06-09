@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
 import { getWorktreeDir, hashPath, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as git from "../utils/git";
+import { mapWithConcurrencyLimit } from "./parallel";
 
 const { IsoBackendKind } = natives;
 type IsoBackendKind = natives.IsoBackendKind;
@@ -82,16 +83,16 @@ async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 async function captureUntrackedPatch(repoRoot: string, untracked: readonly string[]): Promise<string> {
 	if (untracked.length === 0) return "";
 	const nullPath = getGitNoIndexNullPath();
-	const untrackedDiffs = await Promise.all(
-		untracked.map(entry =>
-			git.diff(repoRoot, {
-				allowFailure: true,
-				binary: true,
-				noIndex: { left: nullPath, right: entry },
-			}),
-		),
+	// Bound concurrent git spawns; large untracked sets would otherwise fork one
+	// process per file at once.
+	const { results: untrackedDiffs } = await mapWithConcurrencyLimit([...untracked], 8, entry =>
+		git.diff(repoRoot, {
+			allowFailure: true,
+			binary: true,
+			noIndex: { left: nullPath, right: entry },
+		}),
 	);
-	return untrackedDiffs.filter(diff => diff.trim()).join("\n");
+	return untrackedDiffs.filter((diff): diff is string => !!diff?.trim()).join("\n");
 }
 
 async function captureRepoBaseline(repoRoot: string): Promise<RepoBaseline> {
@@ -427,6 +428,8 @@ export interface MergeBranchResult {
 	merged: string[];
 	failed: string[];
 	conflict?: string;
+	/** Set when cherry-picks landed on HEAD but restoring the stashed working tree failed. */
+	stashConflict?: string;
 }
 
 /**
@@ -438,64 +441,69 @@ export async function mergeTaskBranches(
 	repoRoot: string,
 	branches: Array<{ branchName: string; taskId: string; description?: string }>,
 ): Promise<MergeBranchResult> {
-	const merged: string[] = [];
-	const failed: string[] = [];
+	// Serialize against other in-process git mutations on this repo: concurrent
+	// background merges interleaving stash push/pop + cherry-pick would corrupt
+	// the working tree (lost uncommitted changes, mixed-up stash entries).
+	return git.withRepoLock(repoRoot, async () => {
+		const merged: string[] = [];
+		const failed: string[] = [];
 
-	// Stash dirty working tree so cherry-pick can operate on a clean HEAD.
-	// Without this, cherry-pick refuses to run when uncommitted changes exist.
-	const didStash = await git.stash.push(repoRoot, "omp-task-merge");
+		// Stash dirty working tree so cherry-pick can operate on a clean HEAD.
+		// Without this, cherry-pick refuses to run when uncommitted changes exist.
+		const didStash = await git.stash.push(repoRoot, "omp-task-merge");
 
-	let conflictResult: MergeBranchResult | undefined;
+		let conflictResult: MergeBranchResult | undefined;
 
-	try {
-		for (const { branchName } of branches) {
-			try {
-				await git.cherryPick(repoRoot, branchName);
-			} catch (err) {
+		try {
+			for (const { branchName } of branches) {
 				try {
-					await git.cherryPick.abort(repoRoot);
-				} catch {
-					/* no state to abort */
-				}
-				const stderr =
-					err instanceof git.GitCommandError
-						? err.result.stderr.trim()
-						: err instanceof Error
-							? err.message
-							: String(err);
-				failed.push(branchName);
-				conflictResult = {
-					merged,
-					failed: [...failed, ...branches.slice(merged.length + failed.length).map(b => b.branchName)],
-					conflict: `${branchName}: ${stderr}`,
-				};
-				break;
-			}
-
-			merged.push(branchName);
-		}
-	} finally {
-		if (didStash) {
-			try {
-				await git.stash.pop(repoRoot, { index: true });
-			} catch {
-				// Stash-pop conflicts mean the replayed changes clash with the user's
-				// uncommitted edits. Treat this as a merge failure so the caller preserves
-				// recovery branches instead of reporting success and deleting them.
-				logger.warn("Failed to restore stashed changes after task merge; stash entry preserved");
-				if (!conflictResult) {
+					await git.cherryPick(repoRoot, branchName);
+				} catch (err) {
+					try {
+						await git.cherryPick.abort(repoRoot);
+					} catch {
+						/* no state to abort */
+					}
+					const stderr =
+						err instanceof git.GitCommandError
+							? err.result.stderr.trim()
+							: err instanceof Error
+								? err.message
+								: String(err);
+					failed.push(branchName);
 					conflictResult = {
 						merged,
-						failed: merged,
-						conflict:
-							"stash pop: cherry-picked changes conflict with uncommitted edits. Run `git stash pop` and resolve manually.",
+						failed: [...failed, ...branches.slice(merged.length + failed.length).map(b => b.branchName)],
+						conflict: `${branchName}: ${stderr}`,
 					};
+					break;
+				}
+
+				merged.push(branchName);
+			}
+		} finally {
+			if (didStash) {
+				try {
+					await git.stash.pop(repoRoot, { index: true });
+				} catch {
+					// Stash-pop conflicts mean the replayed changes clash with the user's
+					// uncommitted edits. The cherry-picked commits are already on HEAD, so
+					// the merged branches DID land — report them as merged and surface the
+					// stash conflict separately instead of claiming they are unmerged.
+					logger.warn("Failed to restore stashed changes after task merge; stash entry preserved");
+					const stashConflict =
+						"stash pop: cherry-picked changes conflict with uncommitted edits. The merged commits are on HEAD; run `git stash pop` and resolve manually.";
+					if (conflictResult) {
+						conflictResult.stashConflict = stashConflict;
+					} else {
+						conflictResult = { merged, failed: [], stashConflict };
+					}
 				}
 			}
 		}
-	}
 
-	return conflictResult ?? { merged, failed };
+		return conflictResult ?? { merged, failed };
+	});
 }
 
 /** Clean up temporary task branches. */
