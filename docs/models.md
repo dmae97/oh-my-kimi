@@ -272,7 +272,7 @@ If `lm-studio` is not explicitly configured, registry adds an implicit discovera
 
 Runtime discovery fetches models (`GET /models`) and synthesizes model entries with local defaults.
 
-This path also works for local OpenAI-compatible servers that are not LM Studio. For example, set `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1` to discover oMLX through the existing `/v1/models` flow. Do not configure oMLX as `ollama`: Ollama discovery uses native `/api/tags` and `/api/show` endpoints, not OpenAI `/v1/models`.
+This path also works for local OpenAI-compatible servers that are not LM Studio. For example, if oMLX is bound to Ollama's usual port, set `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1` to discover it through the existing `/v1/models` flow. Running oMLX and Ollama side by side requires assigning a different port to one of them. Do not configure oMLX as `ollama`: Ollama discovery uses native `/api/tags` and `/api/show` endpoints, not OpenAI `/v1/models`.
 
 ### Explicit provider discovery
 
@@ -608,7 +608,7 @@ providers:
         name: Qwen 2.5 Coder 32B (local)
 ```
 
-For oMLX or another local OpenAI-compatible server with a discoverable `/v1/models` endpoint, prefer discovery instead of listing models by hand:
+For oMLX or another local OpenAI-compatible server with a discoverable `/v1/models` endpoint, prefer discovery instead of listing models by hand. Set `api` to the endpoint family your server actually exposes: `openai-completions` uses `/v1/chat/completions`; servers that expose `/v1/responses` need `openai-responses` instead.
 
 ```yaml
 providers:

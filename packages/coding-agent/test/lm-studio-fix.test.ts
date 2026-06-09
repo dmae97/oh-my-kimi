@@ -16,17 +16,13 @@ describe("ModelRegistry LM Studio Fixes", () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-lm-studio-fixes-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = path.join(tempDir, "models.json");
-		authStorage = await AuthStorage.create(":memory:");
+		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 	});
 
 	afterEach(() => {
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
-			try {
-				fs.rmSync(tempDir, { recursive: true, force: true });
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
-			}
+			fs.rmSync(tempDir, { recursive: true });
 		}
 	});
 
@@ -87,6 +83,7 @@ describe("ModelRegistry LM Studio Fixes", () => {
 			await registry.refresh();
 
 			expect(requestedUrl).toBe("http://127.0.0.1:11434/v1/models");
+			// Implicit discovery is still registered under the built-in lm-studio provider even when the base URL points to oMLX.
 			expect(registry.getAll().some(m => m.provider === "lm-studio" && m.id === "omlx-model")).toBe(true);
 		} finally {
 			if (originalBaseUrl === undefined) {
