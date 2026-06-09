@@ -1,6 +1,7 @@
 /**
  * Shared types and utilities for web-fetch handlers
  */
+import { scheduler } from "node:timers/promises";
 import { ptree } from "@oh-my-pi/pi-utils";
 import type TurndownService from "turndown";
 
@@ -70,6 +71,12 @@ export interface LoadPageOptions {
 	body?: string;
 	maxBytes?: number;
 	signal?: AbortSignal;
+	/**
+	 * Return true to skip reading the response body for this content type
+	 * (lowercased mime, no params). The caller is expected to re-fetch the
+	 * payload as binary; this avoids streaming + decoding huge binaries twice.
+	 */
+	skipBodyForContentType?: (contentType: string) => boolean;
 }
 
 export interface LoadPageResult {
@@ -78,6 +85,51 @@ export interface LoadPageResult {
 	finalUrl: string;
 	ok: boolean;
 	status?: number;
+	/** True when the body was cut mid-stream at maxBytes. */
+	truncated?: boolean;
+	/** Last transport-level error message when ok is false. */
+	error?: string;
+	/** True when the body read was skipped via skipBodyForContentType. */
+	bodySkipped?: boolean;
+}
+
+const RETRY_AFTER_MAX_MS = 10_000;
+
+/** Parse a Retry-After header (seconds or HTTP-date) into a bounded delay. */
+function parseRetryAfterMs(value: string | null): number {
+	if (!value) return 1_000;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds)) return Math.min(Math.max(seconds, 0) * 1000, RETRY_AFTER_MAX_MS);
+	const date = Date.parse(value);
+	if (!Number.isNaN(date)) return Math.min(Math.max(date - Date.now(), 0), RETRY_AFTER_MAX_MS);
+	return 1_000;
+}
+
+function charsetFromContentType(header: string): string | undefined {
+	return /charset\s*=\s*"?([\w-]+)"?/i.exec(header)?.[1];
+}
+
+/**
+ * Decode a response body honoring the declared charset (Content-Type header,
+ * then a cheap <meta charset> sniff), falling back to UTF-8.
+ */
+function decodeBody(bytes: Buffer, contentTypeHeader: string): string {
+	let label = charsetFromContentType(contentTypeHeader);
+	if (!label) {
+		// All charsets we can decode are ASCII-compatible in the prefix, so a
+		// latin1 view of the first 2KB is enough to find a <meta charset>.
+		label = /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(bytes.subarray(0, 2048).toString("latin1"))?.[1];
+	}
+	if (label && !/^utf-?8$/i.test(label)) {
+		try {
+			// Bun.Encoding's union is narrower than the runtime, which accepts
+			// WHATWG labels (shift_jis, euc-kr, gbk, big5, …); unknowns throw here.
+			return new TextDecoder(label as Bun.Encoding).decode(bytes);
+		} catch {
+			// Unknown/unsupported label — fall back to UTF-8.
+		}
+	}
+	return bytes.toString("utf-8");
 }
 
 /**
@@ -86,6 +138,8 @@ export interface LoadPageResult {
 export async function loadPage(url: string, options: LoadPageOptions = {}): Promise<LoadPageResult> {
 	const { timeout = 20, headers = {}, maxBytes = MAX_BYTES, signal, method = "GET", body } = options;
 
+	let lastError: string | undefined;
+	let retried429 = false;
 	for (let attempt = 0; attempt < USER_AGENTS.length; attempt++) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();
@@ -114,8 +168,30 @@ export async function loadPage(url: string, options: LoadPageOptions = {}): Prom
 
 			const response = await fetch(url, requestInit);
 
-			const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+			const rawContentType = response.headers.get("content-type") ?? "";
+			const contentType = rawContentType.split(";")[0]?.trim().toLowerCase() ?? "";
 			const finalUrl = response.url;
+
+			if (response.status === 429 && !retried429) {
+				// Rate limited: retry once, honoring a bounded Retry-After. The
+				// wait observes the caller's signal so an Esc during the backoff
+				// does not stall for up to the full delay.
+				retried429 = true;
+				const delayMs = parseRetryAfterMs(response.headers.get("retry-after"));
+				void response.body?.cancel().catch(() => {});
+				try {
+					await scheduler.wait(delayMs, { signal });
+				} catch {
+					throw new ToolAbortError();
+				}
+				attempt--; // Reuse the same user agent for the retry.
+				continue;
+			}
+
+			if (response.ok && options.skipBodyForContentType?.(contentType)) {
+				void response.body?.cancel().catch(() => {});
+				return { content: "", contentType, finalUrl, ok: true, status: response.status, bodySkipped: true };
+			}
 
 			const reader = response.body?.getReader();
 			if (!reader) {
@@ -124,6 +200,7 @@ export async function loadPage(url: string, options: LoadPageOptions = {}): Prom
 
 			const chunks: Uint8Array[] = [];
 			let totalSize = 0;
+			let truncated = false;
 
 			while (true) {
 				const { done, value } = await reader.read();
@@ -133,32 +210,34 @@ export async function loadPage(url: string, options: LoadPageOptions = {}): Prom
 				totalSize += value.length;
 
 				if (totalSize > maxBytes) {
-					reader.cancel();
+					truncated = true;
+					void reader.cancel().catch(() => {});
 					break;
 				}
 			}
 
-			const content = Buffer.concat(chunks).toString("utf-8");
+			const content = decodeBody(Buffer.concat(chunks), rawContentType);
 			if (isBotBlocked(response.status, content) && attempt < USER_AGENTS.length - 1) {
 				continue;
 			}
 
 			if (!response.ok) {
-				return { content, contentType, finalUrl, ok: false, status: response.status };
+				return { content, contentType, finalUrl, ok: false, status: response.status, truncated };
 			}
 
-			return { content, contentType, finalUrl, ok: true, status: response.status };
-		} catch {
+			return { content, contentType, finalUrl, ok: true, status: response.status, truncated };
+		} catch (error) {
 			if (signal?.aborted) {
 				throw new ToolAbortError();
 			}
+			lastError = error instanceof Error ? error.message : String(error);
 			if (attempt === USER_AGENTS.length - 1) {
-				return { content: "", contentType: "", finalUrl: url, ok: false };
+				return { content: "", contentType: "", finalUrl: url, ok: false, error: lastError };
 			}
 		}
 	}
 
-	return { content: "", contentType: "", finalUrl: url, ok: false };
+	return { content: "", contentType: "", finalUrl: url, ok: false, error: lastError };
 }
 
 /** Module-level Turndown instance — built lazily on first use. */
