@@ -13,7 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
-import { $flag, getDebugLogPath, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
@@ -1387,10 +1387,6 @@ export class TUI extends Container {
 
 	#maybeDeferGhosttyInitialImagePaint(): boolean {
 		if (this.#ghosttyInitialImageDelayDone) return false;
-		if (isBunTestRuntime()) {
-			this.#ghosttyInitialImageDelayDone = true;
-			return false;
-		}
 		if (TERMINAL.id !== "ghostty" || TERMINAL.imageProtocol !== ImageProtocol.Kitty) {
 			this.#ghosttyInitialImageDelayDone = true;
 			return false;

@@ -27,8 +27,9 @@ export interface ImageOptions {
 
 const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
+// Direct placements reserve height with leading zero-width rows. Keep them
+// non-plain so transcript blank-edge trimming does not collapse image-only blocks.
 const RESERVED_IMAGE_ROW = "\x1b[0m";
-
 
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
@@ -190,6 +191,7 @@ export class ImageBudget {
 		this.#pendingTransmits.push(sequence);
 	}
 
+	/** Whether a frame has image data queued but not yet written to the terminal. */
 	hasPendingTransmits(): boolean {
 		return this.#pendingTransmits.length > 0;
 	}
