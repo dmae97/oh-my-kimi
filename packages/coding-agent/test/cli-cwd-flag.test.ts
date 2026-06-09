@@ -26,6 +26,12 @@ describe("parseArgs — --cwd flag", () => {
 		expect(result.messages).toEqual(["hello"]);
 	});
 
+	it("parses repeated --config overlays", () => {
+		const result = parseArgs(["--config", "base.yml", "--config=team.yml", "hello"]);
+
+		expect(result.config).toEqual(["base.yml", "team.yml"]);
+		expect(result.messages).toEqual(["hello"]);
+	});
 	it("applies --cwd before session lookup callers read the project directory", async () => {
 		const launchDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-cwd-launch-"));
 		const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-cwd-target-"));

@@ -56,6 +56,10 @@ export default class Index extends Command {
 			description: "Output mode: text (default), json, rpc, or rpc-ui",
 			options: ["text", "json", "rpc", "acp", "rpc-ui"],
 		}),
+		config: Flags.string({
+			description: "Load an extra config.yml-style overlay for this run (repeatable)",
+			multiple: true,
+		}),
 		print: Flags.boolean({
 			char: "p",
 			description: "Non-interactive mode: process prompt and exit",

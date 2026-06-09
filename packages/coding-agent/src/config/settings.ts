@@ -64,6 +64,8 @@ export interface SettingsOptions {
 	inMemory?: boolean;
 	/** Initial overrides */
 	overrides?: Partial<Record<SettingPath, unknown>>;
+	/** Extra config.yml-style overlays loaded after global/project settings */
+	configFiles?: string[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -193,10 +195,13 @@ export class Settings {
 	#agentDir: string;
 	#storage: AgentStorage | null = null;
 
+	#configFiles: string[] = [];
 	/** Global settings from config.yml */
 	#global: RawSettings = {};
 	/** Project settings from .claude/settings.yml etc */
 	#project: RawSettings = {};
+	/** Extra config.yml-style overlays passed by CLI */
+	#configOverlay: RawSettings = {};
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
 	/** Merged view (global + project + overrides) */
@@ -221,6 +226,7 @@ export class Settings {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
 		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, "config.yml");
+		this.#configFiles = options.configFiles?.map(file => path.resolve(this.#cwd, file)) ?? [];
 		this.#persist = !options.inMemory;
 
 		if (options.overrides) {
@@ -386,6 +392,8 @@ export class Settings {
 		cloned.#storage = this.#storage;
 		cloned.#global = structuredClone(this.#global);
 		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
+		cloned.#configFiles = [...this.#configFiles];
+		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		cloned.#overrides = structuredClone(this.#overrides);
 		cloned.#rebuildMerged();
 		cloned.#fireAllHooks();
@@ -557,6 +565,7 @@ export class Settings {
 		}
 
 		this.#project = await projectPromise;
+		this.#configOverlay = await this.#loadConfigOverlays();
 
 		// Build merged view (global → project → overrides; project wins over global)
 		this.#rebuildMerged();
@@ -592,6 +601,14 @@ export class Settings {
 		} catch {
 			return {};
 		}
+	}
+
+	async #loadConfigOverlays(): Promise<RawSettings> {
+		let merged: RawSettings = {};
+		for (const filePath of this.#configFiles) {
+			merged = this.#deepMerge(merged, await this.#loadYaml(filePath));
+		}
+		return merged;
 	}
 
 	async #migrateFromLegacy(): Promise<void> {
@@ -898,6 +915,7 @@ export class Settings {
 
 	#rebuildMerged(): void {
 		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#project);
+		this.#merged = this.#deepMerge(this.#merged, this.#configOverlay);
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
 		this.#resolvedCache.clear();
 	}
