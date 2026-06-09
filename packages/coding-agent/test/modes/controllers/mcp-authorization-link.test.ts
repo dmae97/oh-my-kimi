@@ -5,10 +5,10 @@ import { MCPAuthorizationLinkPrompt } from "@oh-my-pi/pi-coding-agent/modes/cont
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 const OSC = "\x1b]";
-const ST = "\x1b\\";
+const BEL = "\x07";
 
 function extractLinkUri(text: string): string | undefined {
-	return text.match(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/)?.[1];
+	return text.match(/\x1b\]8;[^;]*;([^\x1b\x07]+)(?:\x1b\\|\x07)/)?.[1];
 }
 
 const LONG_AUTH_URL =
@@ -26,15 +26,13 @@ describe("MCPAuthorizationLinkPrompt", () => {
 		resetSettingsForTest();
 	});
 
-	it("renders a short clickable label and keeps the copy URL on one line", () => {
-		settings.override("tui.hyperlinks", "always");
-
+	it("renders a clickable label even when hyperlink auto-detection is false", () => {
 		const lines = new MCPAuthorizationLinkPrompt(LONG_AUTH_URL).render(80);
 		const plainLines = lines.map(line => stripVTControlCharacters(line));
 
 		expect(lines).toHaveLength(3);
 		expect(lines[1]).toContain(`${OSC}8;`);
-		expect(lines[1]).toContain(`${OSC}8;;${ST}`);
+		expect(lines[1]).toContain(`${OSC}8;;${BEL}`);
 		expect(extractLinkUri(lines[1])).toBe(LONG_AUTH_URL);
 		expect(plainLines[1]).toContain("Click here to authorize");
 		expect(plainLines[2]).toBe(` Copy URL: ${LONG_AUTH_URL}`);
