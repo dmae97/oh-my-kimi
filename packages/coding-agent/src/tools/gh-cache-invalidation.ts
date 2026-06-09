@@ -17,7 +17,7 @@
  * number, all auth_keys) because the upside of staleness elimination
  * dwarfs the cost of one cache miss.
  */
-import { invalidateAllForNumber } from "./github-cache";
+import { invalidateAllForNumber, invalidateAllForRepo } from "./github-cache";
 
 const PR_URL_PATTERN = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/i;
 const ISSUE_URL_PATTERN = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)(?:[/?#].*)?$/i;
@@ -48,13 +48,60 @@ const MUTATING_PR_SUBCMDS: Record<string, true> = {
 	lock: true,
 	unlock: true,
 };
+
+/**
+ * Flags whose value is the next argv token (`--milestone 3`). The detector
+ * must skip those values so `gh pr edit --milestone 3 14` invalidates #14,
+ * not #3. Curated for the mutating issue/PR subcommands above; a few short
+ * flags are booleans for *some* subcommands (e.g. `-c` is `--comment` text
+ * for `pr close` but a boolean for `pr review`) — we bias toward value-taking
+ * because over-skipping at worst falls back to repo-wide invalidation, while
+ * under-skipping invalidates the wrong number.
+ */
+const VALUE_TAKING_FLAGS: ReadonlySet<string> = new Set([
+	"-m",
+	"--milestone",
+	"-t",
+	"--title",
+	"-b",
+	"--body",
+	"-F",
+	"--body-file",
+	"-a",
+	"--assignee",
+	"--add-assignee",
+	"--remove-assignee",
+	"-l",
+	"--label",
+	"--add-label",
+	"--remove-label",
+	"-p",
+	"--project",
+	"--add-project",
+	"--remove-project",
+	"--add-reviewer",
+	"--remove-reviewer",
+	"-B",
+	"--base",
+	"-c",
+	"--comment",
+	"-r",
+	"--reason",
+	"--branch",
+	"--subject",
+	"--match-head-commit",
+	"--author-email",
+]);
 /**
  * Walk a single shell command's token stream looking for a top-level
- * `gh (issue|pr) <subcmd> <id-or-url>` invocation and return the
- * invalidation key when one is found. Returns `null` for non-matching
- * commands so the caller can iterate cheaply.
+ * `gh (issue|pr) <subcmd> [<id-or-url>]` invocation and return the
+ * invalidation key when one is found. `number === undefined` means the
+ * subcommand mutates state but names no identifier (gh defaults to the
+ * current branch's PR), so the caller must fall back to repo-wide
+ * invalidation. Returns `null` for non-matching commands so the caller can
+ * iterate cheaply.
  */
-function detectGhMutation(tokens: readonly string[]): { number: number; repo?: string } | null {
+function detectGhMutation(tokens: readonly string[]): { number?: number; repo?: string } | null {
 	const ghIdx = tokens.indexOf("gh");
 	if (ghIdx === -1) return null;
 	const subject = tokens[ghIdx + 1];
@@ -82,7 +129,9 @@ function detectGhMutation(tokens: readonly string[]): { number: number; repo?: s
 	}
 	for (let i = ghIdx + 3; i < tokens.length; i++) {
 		const token = tokens[i];
-		if (token === "-R" || token === "--repo") {
+		if (token === "-R" || token === "--repo" || VALUE_TAKING_FLAGS.has(token)) {
+			// Skip the flag's value so it is never mistaken for the positional
+			// identifier (`--milestone 3 14` must invalidate #14, not #3).
 			i++;
 			continue;
 		}
@@ -100,7 +149,9 @@ function detectGhMutation(tokens: readonly string[]): { number: number; repo?: s
 			}
 		}
 	}
-	return null;
+	// Mutating subcommand with no identifier: gh operates on the current
+	// branch's PR, which we cannot resolve synchronously here.
+	return repo !== undefined ? { repo } : {};
 }
 
 /**
@@ -195,6 +246,10 @@ export function invalidateGithubCacheForBashCommand(command: string): void {
 	for (const segment of segments) {
 		const hit = detectGhMutation(segment);
 		if (!hit) continue;
-		invalidateAllForNumber(hit.number, hit.repo);
+		if (hit.number !== undefined) {
+			invalidateAllForNumber(hit.number, hit.repo);
+		} else {
+			invalidateAllForRepo(hit.repo);
+		}
 	}
 }

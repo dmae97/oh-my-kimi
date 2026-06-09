@@ -459,7 +459,8 @@ describe("github tool", () => {
 
 	it("parseSearchDateBound: passes ISO dates through and normalizes ISO datetimes", () => {
 		expect(parseSearchDateBound("2026-05-01")).toBe("2026-05-01");
-		expect(parseSearchDateBound("2026-05-01T08:30:00Z")).toBe("2026-05-01T08:30:00.000Z");
+		expect(parseSearchDateBound("2026-05-01T08:30:00Z")).toBe("2026-05-01T08:30:00Z");
+		expect(parseSearchDateBound("2026-05-01T08:30:00.250Z")).toBe("2026-05-01T08:30:00Z");
 	});
 
 	it("parseSearchDateBound: rejects unparseable input", () => {
