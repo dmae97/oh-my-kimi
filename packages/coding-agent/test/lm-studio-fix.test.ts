@@ -16,13 +16,17 @@ describe("ModelRegistry LM Studio Fixes", () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-lm-studio-fixes-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = path.join(tempDir, "models.json");
-		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorage = await AuthStorage.create(":memory:");
 	});
 
 	afterEach(() => {
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true });
+			try {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
+			}
 		}
 	});
 
@@ -58,5 +62,38 @@ describe("ModelRegistry LM Studio Fixes", () => {
 		const available = registry.getAvailable();
 		expect(available.some(m => m.provider === "ollama")).toBe(true);
 		expect(available.some(m => m.provider === "lm-studio")).toBe(true);
+	});
+
+	test("LM_STUDIO_BASE_URL can target any local OpenAI-compatible /v1 server", async () => {
+		const originalBaseUrl = Bun.env.LM_STUDIO_BASE_URL;
+		Bun.env.LM_STUDIO_BASE_URL = "http://127.0.0.1:11434/v1";
+		let requestedUrl = "";
+		try {
+			const fetchMock: FetchImpl = input => {
+				const url = String(input);
+				if (url.includes(":11434/v1/models")) {
+					requestedUrl = url;
+					return Promise.resolve(
+						new Response(JSON.stringify({ data: [{ id: "omlx-model" }] }), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						}),
+					);
+				}
+				return Promise.resolve(new Response(null, { status: 404 }));
+			};
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			await registry.refresh();
+
+			expect(requestedUrl).toBe("http://127.0.0.1:11434/v1/models");
+			expect(registry.getAll().some(m => m.provider === "lm-studio" && m.id === "omlx-model")).toBe(true);
+		} finally {
+			if (originalBaseUrl === undefined) {
+				delete Bun.env.LM_STUDIO_BASE_URL;
+			} else {
+				Bun.env.LM_STUDIO_BASE_URL = originalBaseUrl;
+			}
+		}
 	});
 });
