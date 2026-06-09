@@ -666,6 +666,7 @@ export class MCPCommandController {
 						}
 						return pendingInput;
 					},
+					signal: oauthTimeout.signal,
 				},
 			);
 
