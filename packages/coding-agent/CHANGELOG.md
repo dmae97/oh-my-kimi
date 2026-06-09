@@ -5,6 +5,7 @@
 ### Added
 
 - Added a `bash.enabled` setting to disable the model-facing bash tool while leaving user-initiated bang/RPC bash commands available.
+- Added an `@<upstream>` model-selector suffix to pin an aggregator model to a single upstream provider per invocation, e.g. `--model openrouter/z-ai/glm-4.7@cerebras` (sets OpenRouter `provider.only`; Vercel AI Gateway models map to `vercelGatewayRouting.only`). Resolved through `parseModelPattern`, so it works for `--model`/`--smol`, model roles, and the SDK, and composes with a trailing thinking level (`...@cerebras:high`). The base must resolve to an aggregator (`openrouter.ai` / `ai-gateway.vercel.sh`); otherwise the `@` stays part of the id, so ids that legitimately contain `@` (`claude-opus-4-8@default`, `workers-ai/@cf/...`) are unaffected.
 
 ### Fixed
 
