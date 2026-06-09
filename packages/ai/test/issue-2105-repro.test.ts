@@ -15,53 +15,45 @@ describe("AIML API built-in provider (issue #2105)", () => {
 	});
 
 	test("uses the OpenAI-compatible completions transport and AIML API base URL", async () => {
-		const previousFetch = global.fetch;
 		const calls: Array<{ url: string; authorization: string | null }> = [];
-		global.fetch = Object.assign(
-			async (input: string | URL | Request, init?: RequestInit) => {
-				const headers = new Headers(init?.headers);
-				calls.push({ url: input.toString(), authorization: headers.get("authorization") });
-				return new Response(
-					JSON.stringify({
-						data: [
-							{ id: "alibaba/qwen-image", name: "Qwen Image" },
-							{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-							{ id: "google/veo-3.1-first-last-image-to-video", name: "Veo Video" },
-							{ id: "gpt-4o", name: "GPT-4o" },
-							{ id: "gpt-4o-mini-tts", name: "GPT-4o Mini TTS" },
-							{ id: "text-embedding-3-large", name: "Text Embedding 3 Large" },
-						],
-					}),
-					{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					},
-				);
-			},
-			{ preconnect: previousFetch.preconnect },
-		);
-		try {
-			const options = aimlApiModelManagerOptions({ apiKey: "aiml-test-key" });
-			const models = await options.fetchDynamicModels?.();
-
-			expect(options.providerId).toBe("aimlapi");
-			expect(calls).toEqual([
+		const fetchMock = (async (input: string | URL | Request, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			calls.push({ url: input.toString(), authorization: headers.get("authorization") });
+			return new Response(
+				JSON.stringify({
+					data: [
+						{ id: "alibaba/qwen-image", name: "Qwen Image" },
+						{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+						{ id: "google/veo-3.1-first-last-image-to-video", name: "Veo Video" },
+						{ id: "gpt-4o", name: "GPT-4o" },
+						{ id: "gpt-4o-mini-tts", name: "GPT-4o Mini TTS" },
+						{ id: "text-embedding-3-large", name: "Text Embedding 3 Large" },
+					],
+				}),
 				{
-					url: "https://api.aimlapi.com/v1/models",
-					authorization: "Bearer aiml-test-key",
+					status: 200,
+					headers: { "Content-Type": "application/json" },
 				},
-			]);
-			expect(models?.find(model => model.id === "gpt-4o")).toMatchObject({
-				id: "gpt-4o",
-				name: "GPT-4o",
-				api: "openai-completions",
-				provider: "aimlapi",
-				baseUrl: "https://api.aimlapi.com/v1",
-			});
-			expect(models?.map(model => model.id)).toEqual(["claude-sonnet-4-5", "gpt-4o"]);
-		} finally {
-			global.fetch = previousFetch;
-		}
+			);
+		}) as typeof fetch;
+		const options = aimlApiModelManagerOptions({ apiKey: "aiml-test-key", fetch: fetchMock });
+		const models = await options.fetchDynamicModels?.();
+
+		expect(options.providerId).toBe("aimlapi");
+		expect(calls).toEqual([
+			{
+				url: "https://api.aimlapi.com/v1/models",
+				authorization: "Bearer aiml-test-key",
+			},
+		]);
+		expect(models?.find(model => model.id === "gpt-4o")).toMatchObject({
+			id: "gpt-4o",
+			name: "GPT-4o",
+			api: "openai-completions",
+			provider: "aimlapi",
+			baseUrl: "https://api.aimlapi.com/v1",
+		});
+		expect(models?.map(model => model.id)).toEqual(["claude-sonnet-4-5", "gpt-4o"]);
 	});
 
 	test("filters AIML API discovery to chat-compatible model IDs", () => {

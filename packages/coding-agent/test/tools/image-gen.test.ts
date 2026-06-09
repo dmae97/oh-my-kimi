@@ -6,13 +6,11 @@ import type { CustomToolContext } from "@oh-my-pi/pi-coding-agent/extensibility/
 import type { ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { imageGenTool, setPreferredImageProvider } from "@oh-my-pi/pi-coding-agent/tools/image-gen";
 
-const originalFetch = global.fetch;
 const originalOpenRouterKey = Bun.env.OPENROUTER_API_KEY;
 const generatedImagePaths: string[] = [];
 
 afterEach(async () => {
 	await Promise.all(generatedImagePaths.splice(0).map(imagePath => fs.rm(imagePath, { force: true })));
-	global.fetch = originalFetch;
 	if (originalOpenRouterKey === undefined) {
 		delete Bun.env.OPENROUTER_API_KEY;
 	} else {
@@ -44,8 +42,6 @@ describe("imageGenTool", () => {
 				{ status: 200, headers: { "content-type": "application/json" } },
 			);
 		}) as unknown as typeof fetch;
-		fetchMock.preconnect = originalFetch.preconnect;
-		global.fetch = fetchMock;
 
 		const model = {
 			api: "openai-responses",
@@ -55,6 +51,7 @@ describe("imageGenTool", () => {
 			baseUrl: "https://api.openai.com/v1",
 		} as Model;
 		const ctx: CustomToolContext = {
+			fetch: fetchMock,
 			sessionManager: {
 				getCwd: () => "/tmp",
 				getSessionId: () => "test-session",
@@ -114,10 +111,9 @@ describe("imageGenTool", () => {
 				{ status: 200, headers: { "content-type": "application/json" } },
 			);
 		}) as unknown as typeof fetch;
-		fetchMock.preconnect = originalFetch.preconnect;
-		global.fetch = fetchMock;
 
 		const ctx: CustomToolContext = {
+			fetch: fetchMock,
 			sessionManager: {
 				getCwd: () => "/tmp",
 				getSessionId: () => "test-session",

@@ -13,22 +13,17 @@
  * dynamic-fetch path (which reads the bundled models.json reference) does
  * not regress after a /v1/models cache refresh.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	type ModelsDevModel,
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
 } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const OPENCODE_ZEN_BASE = "https://opencode.ai/zen/v1";
 const OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (issue #1617)", () => {
 	const zenDescriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(d => d.providerId === "opencode-zen");
@@ -64,24 +59,26 @@ describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (iss
 
 	test("opencode-zen /v1/models refresh routes a freshly-discovered M3 to openai-completions", async () => {
 		let requestedUrl = "";
-		const mockFetch = async (input: string | Request | URL): Promise<Response> => {
-			requestedUrl = input instanceof Request ? input.url : String(input);
-			return new Response(
-				JSON.stringify({
-					data: [
-						{
-							id: "minimax-m3-free",
-							name: "MiniMax M3 Free",
-							context_length: 200000,
-						},
-					],
-				}),
-				{ headers: { "content-type": "application/json" } },
-			);
-		};
-		global.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+		const mockFetch: FetchImpl = Object.assign(
+			async (input: string | Request | URL): Promise<Response> => {
+				requestedUrl = input instanceof Request ? input.url : String(input);
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "minimax-m3-free",
+								name: "MiniMax M3 Free",
+								context_length: 200000,
+							},
+						],
+					}),
+					{ headers: { "content-type": "application/json" } },
+				);
+			},
+			{ preconnect: fetch.preconnect },
+		);
 
-		const options = opencodeZenModelManagerOptions({ apiKey: "opencode-test-key" });
+		const options = opencodeZenModelManagerOptions({ apiKey: "opencode-test-key", fetch: mockFetch });
 		const models = await options.fetchDynamicModels?.();
 		const m3 = models?.find(model => model.id === "minimax-m3-free");
 
@@ -92,24 +89,26 @@ describe("opencode-zen/-go resolver routes MiniMax M3 to openai-completions (iss
 
 	test("opencode-go /v1/models refresh routes a freshly-discovered M3 to openai-completions", async () => {
 		let requestedUrl = "";
-		const mockFetch = async (input: string | Request | URL): Promise<Response> => {
-			requestedUrl = input instanceof Request ? input.url : String(input);
-			return new Response(
-				JSON.stringify({
-					data: [
-						{
-							id: "minimax-m3",
-							name: "MiniMax M3",
-							context_length: 200000,
-						},
-					],
-				}),
-				{ headers: { "content-type": "application/json" } },
-			);
-		};
-		global.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+		const mockFetch: FetchImpl = Object.assign(
+			async (input: string | Request | URL): Promise<Response> => {
+				requestedUrl = input instanceof Request ? input.url : String(input);
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "minimax-m3",
+								name: "MiniMax M3",
+								context_length: 200000,
+							},
+						],
+					}),
+					{ headers: { "content-type": "application/json" } },
+				);
+			},
+			{ preconnect: fetch.preconnect },
+		);
 
-		const options = opencodeGoModelManagerOptions({ apiKey: "opencode-test-key" });
+		const options = opencodeGoModelManagerOptions({ apiKey: "opencode-test-key", fetch: mockFetch });
 		const models = await options.fetchDynamicModels?.();
 		const m3 = models?.find(model => model.id === "minimax-m3");
 

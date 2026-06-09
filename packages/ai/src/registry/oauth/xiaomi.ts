@@ -8,6 +8,7 @@
  * login opens plan management so users copy the regional `tp-...` key.
  */
 
+import type { FetchImpl } from "../../types";
 import type { OAuthController } from "./types";
 
 const PROVIDER_ID = "xiaomi";
@@ -50,9 +51,11 @@ const VALIDATION_TIMEOUT_MS = 15_000;
 
 async function validateXiaomiApiKey(
 	apiKey: string,
+	tokenPlanRegion: XiaomiTokenPlanRegion | undefined,
 	signal?: AbortSignal,
-	tokenPlanRegion?: XiaomiTokenPlanRegion,
+	fetchOverride?: FetchImpl,
 ): Promise<void> {
+	const fetchImpl = fetchOverride ?? fetch;
 	// Region-specific Token Plan logins must validate against the selected
 	// cluster. Generic Xiaomi login keeps the historical SGP → AMS → CN fallback.
 	const endpoints = tokenPlanRegion
@@ -74,7 +77,7 @@ async function validateXiaomiApiKey(
 		const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
 		const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 		try {
-			const response = await fetch(`${ep.baseUrl}/chat/completions`, {
+			const response = await fetchImpl(`${ep.baseUrl}/chat/completions`, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -139,6 +142,7 @@ async function validateXiaomiApiKey(
  * Returns the API key directly (not OAuthCredentials - this isn't OAuth).
  */
 export async function loginXiaomi(options: OAuthController): Promise<string> {
+	const fetchImpl = options.fetch ?? fetch;
 	if (!options.onPrompt) {
 		throw new Error(`${PROVIDER_NAME} login requires onPrompt callback`);
 	}
@@ -159,7 +163,7 @@ export async function loginXiaomi(options: OAuthController): Promise<string> {
 	}
 
 	options.onProgress?.(`Validating ${PROVIDER_ID} API key...`);
-	await validateXiaomiApiKey(trimmed, options.signal);
+	await validateXiaomiApiKey(trimmed, undefined, options.signal, fetchImpl);
 	return trimmed;
 }
 
@@ -169,6 +173,7 @@ export async function loginXiaomi(options: OAuthController): Promise<string> {
  * Prompts for a token-plan API key and validates it against the selected region.
  */
 export async function loginXiaomiTokenPlan(options: OAuthController, region: XiaomiTokenPlanRegion): Promise<string> {
+	const fetchImpl = options.fetch ?? fetch;
 	if (!options.onPrompt) {
 		throw new Error(`Xiaomi Token Plan (${TOKEN_PLAN_REGION_NAMES[region]}) login requires onPrompt callback`);
 	}
@@ -189,6 +194,6 @@ export async function loginXiaomiTokenPlan(options: OAuthController, region: Xia
 	}
 
 	options.onProgress?.(`Validating Xiaomi Token Plan (${TOKEN_PLAN_REGION_NAMES[region]}) API key...`);
-	await validateXiaomiApiKey(trimmed, options.signal, region);
+	await validateXiaomiApiKey(trimmed, region, options.signal, fetchImpl);
 	return trimmed;
 }

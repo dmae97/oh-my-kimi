@@ -964,7 +964,8 @@ describe("provider routing selector (@upstream)", () => {
 		const result = parseModelPattern("vercel-ai-gateway/zai/glm-4.7@cerebras", [gatewayModel]);
 		expect(result.model?.id).toBe("zai/glm-4.7");
 		expect(
-			(result.model?.compat as { vercelGatewayRouting?: { only?: string[] } } | undefined)?.vercelGatewayRouting?.only,
+			(result.model?.compat as { vercelGatewayRouting?: { only?: string[] } } | undefined)?.vercelGatewayRouting
+				?.only,
 		).toEqual(["cerebras"]);
 		expect(openRouterOnly(result.model)).toBeUndefined();
 	});

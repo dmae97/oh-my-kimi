@@ -7,7 +7,6 @@ import { stream } from "@oh-my-pi/pi-ai/stream";
 import type { AssistantMessage, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { wrapFetchForRequestDebug } from "@oh-my-pi/pi-ai/utils/request-debug";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 
 const enc = new TextEncoder();
 
@@ -144,9 +143,9 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 		expect(log.body).toEqual(firstChunk);
 	});
 
-	it("injects the debug fetch into provider options when callers did not pass fetch", async () => {
+	it("wraps provider fetch options with request debug recording", async () => {
 		Bun.env.PI_REQ_DEBUG = "1";
-		using _hook = hookFetch(() => new Response("ok", { headers: { "x-debug": "yes" } }));
+		const fetchMock: FetchImpl = async () => new Response("ok", { headers: { "x-debug": "yes" } });
 		registerCustomApi("req-debug-test", (_model, _context, options) => {
 			const events = new AssistantMessageEventStream();
 			void (async () => {
@@ -195,7 +194,7 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 		const events = stream(
 			model,
 			{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
-			{ apiKey: "key" },
+			{ apiKey: "key", fetch: fetchMock },
 		);
 		await events.result();
 

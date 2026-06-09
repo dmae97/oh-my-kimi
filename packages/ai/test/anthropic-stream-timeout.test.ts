@@ -4,8 +4,6 @@ import type { AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anth
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { waitForDelayOrAbort } from "./helpers";
 
-const originalFetch = global.fetch;
-
 const model: Model<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
 	name: "Claude Sonnet 4.5",
@@ -167,7 +165,6 @@ async function resolveAfterMicrotasks<T>(promise: Promise<T>, errorMessage: stri
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.useRealTimers();
 	vi.restoreAllMocks();
 });

@@ -5,6 +5,7 @@ import { fetchGeminiModels } from "../utils/discovery/gemini";
 
 export interface GoogleModelManagerConfig {
 	apiKey?: string;
+	fetch?: FetchImpl;
 }
 
 export interface GoogleVertexModelManagerConfig {
@@ -18,14 +19,26 @@ export interface GoogleVertexModelManagerConfig {
 export interface GoogleAntigravityModelManagerConfig {
 	oauthToken?: string;
 	endpoint?: string;
+	fetch?: FetchImpl;
 }
 
 export interface GoogleGeminiCliModelManagerConfig {
 	oauthToken?: string;
 	endpoint?: string;
+	fetch?: FetchImpl;
 }
 
 const CLOUD_CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com";
+
+function toDiscoveryFetch(fetchImpl: FetchImpl | undefined): typeof fetch | undefined {
+	if (!fetchImpl) {
+		return undefined;
+	}
+	return Object.assign(
+		(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => fetchImpl(input, init),
+		{ preconnect: fetchImpl.preconnect ?? fetch.preconnect },
+	);
+}
 
 export function googleModelManagerOptions(
 	config?: GoogleModelManagerConfig,
@@ -33,7 +46,9 @@ export function googleModelManagerOptions(
 	const apiKey = config?.apiKey;
 	return {
 		providerId: "google",
-		...(apiKey ? { fetchDynamicModels: () => fetchGeminiModels({ apiKey }) } : undefined),
+		...(apiKey
+			? { fetchDynamicModels: () => fetchGeminiModels({ apiKey, fetch: toDiscoveryFetch(config?.fetch) }) }
+			: undefined),
 	};
 }
 
@@ -53,6 +68,7 @@ export function googleAntigravityModelManagerOptions(
 						fetchAntigravityDiscoveryModels({
 							token,
 							endpoint: config?.endpoint,
+							fetcher: toDiscoveryFetch(config?.fetch),
 						}),
 				}
 			: undefined),
@@ -72,6 +88,7 @@ export function googleGeminiCliModelManagerOptions(
 						const models = await fetchAntigravityDiscoveryModels({
 							token,
 							endpoint,
+							fetcher: toDiscoveryFetch(config?.fetch),
 						});
 						if (models === null) {
 							return null;

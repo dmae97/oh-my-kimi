@@ -3,9 +3,7 @@ import {
 	type AzureOpenAIResponsesOptions,
 	streamAzureOpenAIResponses,
 } from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
-import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
+import type { Context, FetchImpl, Model, Tool } from "@oh-my-pi/pi-ai/types";
 
 const azureModel: Model<"azure-openai-responses"> = {
 	id: "gpt-5-mini",
@@ -79,7 +77,6 @@ async function captureAzurePayload(
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -175,7 +172,7 @@ describe("azure openai responses streaming", () => {
 	});
 
 	it("surfaces nested response.failed provider errors", async () => {
-		global.fetch = vi.fn(async () =>
+		const fetchMock: FetchImpl = vi.fn(async () =>
 			createSseResponse([
 				{
 					type: "response.failed",
@@ -184,12 +181,12 @@ describe("azure openai responses streaming", () => {
 					},
 				},
 			]),
-		) as unknown as typeof fetch;
+		);
 
 		const result = await streamAzureOpenAIResponses(
 			azureModel,
 			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
-			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1" },
+			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1", fetch: fetchMock },
 		).result();
 
 		expect(result.stopReason).toBe("error");
@@ -197,7 +194,7 @@ describe("azure openai responses streaming", () => {
 	});
 
 	it("surfaces response.failed incomplete reasons", async () => {
-		global.fetch = vi.fn(async () =>
+		const fetchMock: FetchImpl = vi.fn(async () =>
 			createSseResponse([
 				{
 					type: "response.failed",
@@ -206,12 +203,12 @@ describe("azure openai responses streaming", () => {
 					},
 				},
 			]),
-		) as unknown as typeof fetch;
+		);
 
 		const result = await streamAzureOpenAIResponses(
 			azureModel,
 			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
-			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1" },
+			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1", fetch: fetchMock },
 		).result();
 
 		expect(result.stopReason).toBe("error");
@@ -219,7 +216,7 @@ describe("azure openai responses streaming", () => {
 	});
 
 	it("surfaces response.completed failed status_details errors", async () => {
-		global.fetch = vi.fn(async () =>
+		const fetchMock: FetchImpl = vi.fn(async () =>
 			createSseResponse([
 				{
 					type: "response.completed",
@@ -231,12 +228,12 @@ describe("azure openai responses streaming", () => {
 					},
 				},
 			]),
-		) as unknown as typeof fetch;
+		);
 
 		const result = await streamAzureOpenAIResponses(
 			azureModel,
 			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
-			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1" },
+			{ apiKey: "test-key", azureBaseUrl: azureModel.baseUrl, azureApiVersion: "v1", fetch: fetchMock },
 		).result();
 
 		expect(result.stopReason).toBe("error");

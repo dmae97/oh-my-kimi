@@ -7,7 +7,7 @@ import {
 	isAutoQaEnabled,
 } from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import * as piUtils from "@oh-my-pi/pi-utils";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { mockFetch } from "../helpers/fetch-mock";
 
 function openTempDb(): Database {
 	const db = new Database(":memory:");
@@ -103,11 +103,12 @@ describe("flushGrievances", () => {
 
 	it("skips network when consent is missing and leaves rows intact", async () => {
 		insertGrievance(db, "find", "weird ordering");
-		const fetchSpy = vi.fn(() => new Response("unexpected", { status: 200 }));
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = vi.fn(async () => new Response("unexpected", { status: 200 }));
 
 		// `denied` is the user-facing kill switch for push.
-		const result = await flushGrievances(db, pushSettings({ "dev.autoqa.consent": "denied" }));
+		const result = await flushGrievances(db, pushSettings({ "dev.autoqa.consent": "denied" }), {
+			fetch: mockFetch(fetchSpy),
+		});
 
 		expect(result).toEqual({ pushed: 0, ok: false, skipped: true });
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -116,10 +117,11 @@ describe("flushGrievances", () => {
 
 	it("skips network when endpoint is missing", async () => {
 		insertGrievance(db, "find", "weird ordering");
-		const fetchSpy = vi.fn(() => new Response("unexpected", { status: 200 }));
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = vi.fn(async () => new Response("unexpected", { status: 200 }));
 
-		const result = await flushGrievances(db, pushSettings({ "dev.autoqaPush.endpoint": "" }));
+		const result = await flushGrievances(db, pushSettings({ "dev.autoqaPush.endpoint": "" }), {
+			fetch: mockFetch(fetchSpy),
+		});
 
 		expect(result).toEqual({ pushed: 0, ok: false, skipped: true });
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -127,10 +129,9 @@ describe("flushGrievances", () => {
 	});
 
 	it("returns ok without fetching when there is nothing to push", async () => {
-		const fetchSpy = vi.fn(() => new Response("unexpected", { status: 200 }));
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = vi.fn(async () => new Response("unexpected", { status: 200 }));
 
-		const result = await flushGrievances(db, pushSettings());
+		const result = await flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
 
 		expect(result).toEqual({ pushed: 0, ok: true });
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -142,14 +143,15 @@ describe("flushGrievances", () => {
 
 		let capturedInput: string | URL | Request | undefined;
 		let capturedInit: RequestInit | undefined;
-		const fetchSpy = vi.fn((input: string | URL | Request, init: RequestInit | undefined) => {
+		const fetchSpy = vi.fn(async (input: string | URL | Request, init: RequestInit | undefined) => {
 			capturedInput = input;
 			capturedInit = init;
 			return new Response("", { status: 200 });
 		});
-		using _hook = hookFetch(fetchSpy);
 
-		const result = await flushGrievances(db, pushSettings({ "dev.autoqaPush.token": "secret-token" }));
+		const result = await flushGrievances(db, pushSettings({ "dev.autoqaPush.token": "secret-token" }), {
+			fetch: mockFetch(fetchSpy),
+		});
 
 		expect(result).toEqual({ pushed: 2, ok: true });
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -182,13 +184,12 @@ describe("flushGrievances", () => {
 	it("omits the Authorization header when no token is configured", async () => {
 		insertGrievance(db, "find", "no token here");
 		let capturedInit: RequestInit | undefined;
-		const fetchSpy = vi.fn((_input: string | URL | Request, init: RequestInit | undefined) => {
+		const fetchSpy = vi.fn(async (_input: string | URL | Request, init: RequestInit | undefined) => {
 			capturedInit = init;
 			return new Response("", { status: 204 });
 		});
-		using _hook = hookFetch(fetchSpy);
 
-		const result = await flushGrievances(db, pushSettings());
+		const result = await flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
 
 		expect(result).toEqual({ pushed: 1, ok: true });
 		const headers = capturedInit?.headers as Record<string, string> | undefined;
@@ -199,10 +200,9 @@ describe("flushGrievances", () => {
 
 	it("leaves rows unpushed on 5xx and reports failure", async () => {
 		insertGrievance(db, "find", "boom");
-		const fetchSpy = vi.fn(() => new Response("nope", { status: 500 }));
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = vi.fn(async () => new Response("nope", { status: 500 }));
 
-		const result = await flushGrievances(db, pushSettings());
+		const result = await flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
 
 		expect(result).toEqual({ pushed: 0, ok: false });
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -226,9 +226,8 @@ describe("flushGrievances", () => {
 			// finishes draining without manual coordination per batch.
 			return Promise.resolve(new Response("", { status: 200 }));
 		});
-		using _hook = hookFetch(fetchSpy);
 
-		const flushPromise = flushGrievances(db, pushSettings());
+		const flushPromise = flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
 		await fetchEntered.promise;
 
 		// New grievance written by a concurrent tool call while the push is in flight.
@@ -250,11 +249,10 @@ describe("flushGrievances", () => {
 
 		const releaseFetch = Promise.withResolvers<Response>();
 		const fetchSpy = vi.fn(() => releaseFetch.promise);
-		using _hook = hookFetch(fetchSpy);
 
 		const settings = pushSettings();
-		const first = flushGrievances(db, settings);
-		const second = flushGrievances(db, settings);
+		const first = flushGrievances(db, settings, { fetch: mockFetch(fetchSpy) });
+		const second = flushGrievances(db, settings, { fetch: mockFetch(fetchSpy) });
 
 		releaseFetch.resolve(new Response("", { status: 200 }));
 		const [a, b] = await Promise.all([first, second]);
@@ -268,12 +266,11 @@ describe("flushGrievances", () => {
 
 	it("skips the next push within the failure cooldown window", async () => {
 		insertGrievance(db, "find", "first");
-		const fetchSpy = vi.fn(() => new Response("nope", { status: 500 }));
-		using _hook = hookFetch(fetchSpy);
+		const fetchSpy = vi.fn(async () => new Response("nope", { status: 500 }));
 
 		const settings = pushSettings();
-		const firstResult = await flushGrievances(db, settings);
-		const secondResult = await flushGrievances(db, settings);
+		const firstResult = await flushGrievances(db, settings, { fetch: mockFetch(fetchSpy) });
+		const secondResult = await flushGrievances(db, settings, { fetch: mockFetch(fetchSpy) });
 
 		expect(firstResult).toEqual({ pushed: 0, ok: false });
 		expect(secondResult).toEqual({ pushed: 0, ok: false, skipped: true });
@@ -290,14 +287,13 @@ describe("flushGrievances", () => {
 		for (let i = 0; i < total; i++) insertGrievance(db, "find", `report-${i}`);
 
 		const seenBatchSizes: number[] = [];
-		const fetchSpy = vi.fn((_input: string | URL | Request, init: RequestInit | undefined) => {
+		const fetchSpy = vi.fn(async (_input: string | URL | Request, init: RequestInit | undefined) => {
 			const body = JSON.parse(String(init?.body)) as { entries: unknown[] };
 			seenBatchSizes.push(body.entries.length);
 			return new Response("", { status: 200 });
 		});
-		using _hook = hookFetch(fetchSpy);
 
-		const result = await flushGrievances(db, pushSettings());
+		const result = await flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
 
 		expect(result).toEqual({ pushed: total, ok: true });
 		// Three batches: 50 + 50 + 27.
@@ -320,9 +316,8 @@ describe("flushGrievances", () => {
 			call += 1;
 			return new Response("", { status: call === 1 ? 200 : 500 });
 		});
-		using _hook = hookFetch(fetchSpy);
 
-		const result = await flushGrievances(db, pushSettings());
+		const result = await flushGrievances(db, pushSettings(), { fetch: mockFetch(fetchSpy) });
 
 		expect(result).toEqual({ pushed: firstBatch, ok: false });
 		expect(fetchSpy).toHaveBeenCalledTimes(2);

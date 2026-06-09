@@ -38,6 +38,7 @@ async function loginMiniMaxCodeWithBaseUrl(
 	baseUrl: string,
 	providerName: string,
 ): Promise<string> {
+	const fetchImpl = options.fetch ?? fetch;
 	if (!options.onPrompt) {
 		throw new Error("MiniMax Coding Plan login requires onPrompt callback");
 	}
@@ -66,6 +67,7 @@ async function loginMiniMaxCodeWithBaseUrl(
 		baseUrl,
 		model: VALIDATION_MODEL,
 		signal: options.signal,
+		fetch: fetchImpl,
 	});
 	return trimmed;
 }

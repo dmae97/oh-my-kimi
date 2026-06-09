@@ -1,20 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { nanoGptModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
 
 async function discoverNanoGptModels(
 	payload: unknown,
 	apiKey = "nanogpt-test-key",
 	expectedBaseUrl = "https://nano-gpt.com/api/v1",
 ) {
-	const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input.toString();
 		expect(url).toBe(`${expectedBaseUrl}/models`);
 		expect(init?.method).toBe("GET");
@@ -27,9 +20,7 @@ async function discoverNanoGptModels(
 			headers: { "Content-Type": "application/json" },
 		});
 	});
-	global.fetch = fetchMock as unknown as typeof fetch;
-
-	const options = nanoGptModelManagerOptions({ apiKey, baseUrl: expectedBaseUrl });
+	const options = nanoGptModelManagerOptions({ apiKey, baseUrl: expectedBaseUrl, fetch: fetchMock });
 	expect(options.fetchDynamicModels).toBeDefined();
 	const models = await options.fetchDynamicModels?.();
 	expect(models).not.toBeNull();

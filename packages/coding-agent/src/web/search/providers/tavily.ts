@@ -4,7 +4,7 @@
  * Uses Tavily's agent-focused search API to return structured results with an
  * optional synthesized answer.
  */
-import { type ApiKey, type AuthStorage, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
@@ -21,6 +21,7 @@ export interface TavilySearchParams {
 	num_results?: number;
 	recency?: "day" | "week" | "month" | "year";
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 interface TavilySearchResult {
@@ -89,7 +90,7 @@ export function buildRequestBody(params: TavilySearchParams): Record<string, unk
 }
 
 async function callTavilySearch(apiKey: string, params: TavilySearchParams): Promise<TavilySearchResponse> {
-	const response = await fetch(TAVILY_SEARCH_URL, {
+	const response = await (params.fetch ?? fetch)(TAVILY_SEARCH_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -126,6 +127,7 @@ export async function searchTavily(params: SearchParams): Promise<SearchResponse
 		num_results: params.numSearchResults ?? params.limit,
 		recency: params.recency,
 		signal: params.signal,
+		fetch: params.fetch,
 	};
 	const keyOrResolver: ApiKey = params.authStorage.resolver("tavily", {
 		sessionId: params.sessionId,

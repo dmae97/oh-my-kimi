@@ -6,10 +6,9 @@ import {
 	prewarmOpenAICodexResponses,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import type { Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
-const originalFetch = global.fetch;
 const originalAgentDir = getAgentDir();
 const originalWebSocket = global.WebSocket;
 const originalCodexWebSocketRetryBudget = Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET;
@@ -31,7 +30,6 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	global.WebSocket = originalWebSocket;
 	setAgentDir(originalAgentDir);
 	restoreEnv("PI_CODEX_WEBSOCKET_RETRY_BUDGET", originalCodexWebSocketRetryBudget);
@@ -256,10 +254,10 @@ describe("openai-codex streaming", () => {
 		const context = createCodexTestContext();
 		const requestedUrls: string[] = [];
 		const sse = createCompletedCodexSse("Hello");
-		global.fetch = vi.fn(async (input: string | URL) => {
+		const fetchMock = vi.fn(async (input: string | URL) => {
 			requestedUrls.push(typeof input === "string" ? input : input.toString());
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
-		}) as unknown as typeof fetch;
+		});
 
 		for (const baseUrl of [
 			undefined,
@@ -268,7 +266,10 @@ describe("openai-codex streaming", () => {
 			"https://chatgpt.com/backend-api/codex/responses",
 		]) {
 			const model = { ...createCodexTestModel(baseUrl), preferWebsockets: false };
-			const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+			const result = await streamOpenAICodexResponses(model, context, {
+				apiKey: token,
+				fetch: fetchMock as FetchImpl,
+			}).result();
 			expect(result.stopReason).toBe("stop");
 		}
 
@@ -297,12 +298,15 @@ describe("openai-codex streaming", () => {
 			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: '{"path":"README.md"}' } })}`,
 			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
 		].join("\n\n")}\n\n`;
-		global.fetch = vi.fn(
+		const fetchMock = vi.fn(
 			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
-		) as unknown as typeof fetch;
+		);
 
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
-		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
 
 		const toolCall = result.content.find(c => c.type === "toolCall");
 		if (toolCall?.type !== "toolCall") throw new Error("expected a finalized toolCall block");
@@ -316,13 +320,14 @@ describe("openai-codex streaming", () => {
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
-		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
-			Promise.resolve(createNoProgressCodexSse(getRequestSignal(input, init)))) as typeof fetch;
+		const fetchMock: FetchImpl = (input: string | URL | Request, init?: RequestInit) =>
+			Promise.resolve(createNoProgressCodexSse(getRequestSignal(input, init)));
 		const controller = new AbortController();
 		setTimeout(() => controller.abort(), 30);
 
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			signal: controller.signal,
 		}).result();
@@ -511,7 +516,6 @@ describe("openai-codex streaming", () => {
 				headers: { "content-type": "text/event-stream" },
 			});
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class QueueOverflowWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -532,6 +536,7 @@ describe("openai-codex streaming", () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-queue-overflow-session",
 			providerSessionState,
@@ -674,8 +679,6 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		global.fetch = fetchMock as unknown as typeof fetch;
-
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
@@ -694,7 +697,7 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token });
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock as FetchImpl });
 		let sawTextDelta = false;
 		let sawDone = false;
 
@@ -737,7 +740,6 @@ describe("openai-codex streaming", () => {
 				headers: { "content-type": "text/event-stream" },
 			});
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
@@ -758,6 +760,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			serviceTier: "priority",
 		}).result();
@@ -807,7 +810,6 @@ describe("openai-codex streaming", () => {
 			}
 			return new Response("not found", { status: 404 });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
@@ -827,7 +829,10 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("terminal completion event");
 	});
@@ -850,9 +855,9 @@ describe("openai-codex streaming", () => {
 			`data: ${JSON.stringify({ type: "response.failed", code: "server_error", message: "late failure after terminal event" })}`,
 		].join("\n\n")}\n\n`;
 
-		global.fetch = vi.fn(
+		const fetchMock = vi.fn(
 			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
-		) as unknown as typeof fetch;
+		);
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
@@ -871,7 +876,10 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello");
 	});
@@ -907,7 +915,6 @@ describe("openai-codex streaming", () => {
 			}
 			return new Response("not found", { status: 404 });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
@@ -927,7 +934,10 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result.stopReason).toBe("error");
 		expect((result.errorMessage ?? "").toLowerCase()).toContain("rate limit");
@@ -971,7 +981,6 @@ describe("openai-codex streaming", () => {
 			}
 			return new Response("not found", { status: 404 });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
@@ -991,7 +1000,10 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const result = await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello after retry");
@@ -1074,8 +1086,6 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		global.fetch = fetchMock as unknown as typeof fetch;
-
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
@@ -1094,7 +1104,11 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, sessionId });
+		const streamResult = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			sessionId,
+			fetch: fetchMock as FetchImpl,
+		});
 		await streamResult.result();
 	});
 	it("keeps prompt_cache_key separate from Codex conversation headers", async () => {
@@ -1108,7 +1122,7 @@ describe("openai-codex streaming", () => {
 		let capturedHeaders: Headers | undefined;
 		let capturedBody: Record<string, unknown> | undefined;
 
-		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
 			const url = typeof input === "string" ? input : input.toString();
 			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
 				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
@@ -1126,9 +1140,10 @@ describe("openai-codex streaming", () => {
 				});
 			}
 			return new Response("not found", { status: 404 });
-		}) as unknown as typeof fetch;
+		});
 
 		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId,
 			promptCacheKey,
@@ -1209,8 +1224,6 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		global.fetch = fetchMock as unknown as typeof fetch;
-
 		const model = enrichModelThinking({
 			id: "gpt-5.3-codex",
 			name: "GPT-5.3 Codex",
@@ -1230,6 +1243,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const streamResult = streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			reasoning: "minimal",
 		});
@@ -1301,8 +1315,6 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		global.fetch = fetchMock as unknown as typeof fetch;
-
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
@@ -1322,7 +1334,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		// No sessionId provided
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token });
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock as FetchImpl });
 		await streamResult.result();
 	});
 
@@ -1353,7 +1365,6 @@ describe("openai-codex streaming", () => {
 			}
 			return new Response("not found", { status: 404 });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 		class FailingWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
 				super(url, options);
@@ -1388,6 +1399,7 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const streamResult = streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-session",
 			providerSessionState,
@@ -1421,7 +1433,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			return new Response(sse, { headers: { "content-type": "text/event-stream" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let constructorCount = 0;
 		class FailingConnectWebSocket extends MockWebSocket {
@@ -1457,6 +1468,7 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-fatal-fallback-session",
 			providerSessionState,
@@ -1496,7 +1508,6 @@ describe("openai-codex streaming", () => {
 			expect(headers.get("x-models-etag")).toBe("models-etag-1");
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class HandshakeWebSocket extends MockWebSocket {
 			handshakeHeaders = {
@@ -1540,11 +1551,13 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		await streamOpenAICodexResponses(websocketModel, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-handshake-session",
 			providerSessionState,
 		}).result();
 		await streamOpenAICodexResponses(sseModel, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-handshake-session",
 			providerSessionState,
@@ -1566,7 +1579,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class ServiceTierWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -1621,6 +1633,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			serviceTier: "priority",
 			sessionId: "ws-service-tier-session",
@@ -1645,7 +1658,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class DeltaWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -1686,6 +1698,7 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
 		};
 		const firstResponse = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-delta-session",
 			providerSessionState,
@@ -1699,6 +1712,7 @@ describe("openai-codex streaming", () => {
 			],
 		};
 		await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-delta-session",
 			providerSessionState,
@@ -1749,7 +1763,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class PreviousResponseMissingWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -1807,6 +1820,7 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
 		};
 		const firstResponse = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-expired-previous-response-session",
 			providerSessionState,
@@ -1821,6 +1835,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const secondResponse = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-expired-previous-response-session",
 			providerSessionState,
@@ -1869,7 +1884,6 @@ describe("openai-codex streaming", () => {
 			capturedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
@@ -1887,8 +1901,12 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		await streamOpenAICodexResponses(model, context, { apiKey: token }).result();
-		await streamOpenAICodexResponses(model, context, { apiKey: token, textVerbosity: "high" }).result();
+		await streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock as FetchImpl }).result();
+		await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			textVerbosity: "high",
+			fetch: fetchMock as FetchImpl,
+		}).result();
 
 		expect((capturedBodies[0]?.text as { verbosity?: string } | undefined)?.verbosity).toBe("low");
 		expect((capturedBodies[1]?.text as { verbosity?: string } | undefined)?.verbosity).toBe("high");
@@ -1908,7 +1926,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class WebSocketV2HeaderProbe extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -1945,6 +1962,7 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-v2-session",
 			providerSessionState,
@@ -1968,7 +1986,6 @@ describe("openai-codex streaming", () => {
 				headers: { "content-type": "text/event-stream" },
 			});
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let sendCount = 0;
 		class IdleWebSocket extends MockWebSocket {
@@ -2010,6 +2027,7 @@ describe("openai-codex streaming", () => {
 		const controller = new AbortController();
 		setTimeout(() => controller.abort(), 30);
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-idle-timeout-session",
 			providerSessionState,
@@ -2027,7 +2045,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not run once the websocket stream becomes replay-unsafe");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let sendCount = 0;
 		let interval: NodeJS.Timeout | undefined;
@@ -2077,6 +2094,7 @@ describe("openai-codex streaming", () => {
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-no-progress-session",
 			providerSessionState,
@@ -2104,7 +2122,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not run for degenerate tool-call arguments");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let sendCount = 0;
 		let closeCount = 0;
@@ -2147,6 +2164,7 @@ describe("openai-codex streaming", () => {
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-whitespace-arguments-session",
 			providerSessionState,
@@ -2168,7 +2186,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not run when the websocket recovers");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let connectionCount = 0;
 		let closeCount = 0;
@@ -2237,6 +2254,7 @@ describe("openai-codex streaming", () => {
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-whitespace-recovery-session",
 			providerSessionState,
@@ -2268,7 +2286,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called when websocket retry succeeds");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let constructorCount = 0;
 		const requestTypes: string[] = [];
@@ -2317,6 +2334,7 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-retry-close-session",
 			providerSessionState,
@@ -2356,7 +2374,6 @@ describe("openai-codex streaming", () => {
 			}
 			return new Response("not found", { status: 404 });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class UnavailableBeforeStreamWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -2391,6 +2408,7 @@ describe("openai-codex streaming", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const result = await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-unavailable-session",
 			providerSessionState,
@@ -2421,7 +2439,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const sentTypesByConnection: string[][] = [];
 		let constructorCount = 0;
@@ -2505,6 +2522,7 @@ describe("openai-codex streaming", () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 
 		const firstResult = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-abort-reset-session",
 			providerSessionState,
@@ -2516,6 +2534,7 @@ describe("openai-codex streaming", () => {
 			secondAbortController.abort();
 		};
 		const secondResult = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-abort-reset-session",
 			signal: secondAbortController.signal,
@@ -2524,6 +2543,7 @@ describe("openai-codex streaming", () => {
 		expect(secondResult.stopReason).toBe("aborted");
 
 		const thirdResult = await streamOpenAICodexResponses(model, thirdContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-abort-reset-session",
 			providerSessionState,
@@ -2547,7 +2567,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const sentTypes: string[] = [];
 		let constructorCount = 0;
@@ -2622,6 +2641,7 @@ describe("openai-codex streaming", () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 
 		const firstResult = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-error-reset-session",
 			providerSessionState,
@@ -2629,6 +2649,7 @@ describe("openai-codex streaming", () => {
 		expect(firstResult.role).toBe("assistant");
 
 		const secondResult = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-error-reset-session",
 			providerSessionState,
@@ -2637,6 +2658,7 @@ describe("openai-codex streaming", () => {
 		expect(secondResult.errorMessage).toContain("simulated request error");
 
 		const thirdResult = await streamOpenAICodexResponses(model, thirdContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-error-reset-session",
 			providerSessionState,
@@ -2669,7 +2691,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(
 			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
 		);
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class MalformedMessageWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -2703,6 +2724,7 @@ describe("openai-codex streaming", () => {
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 			},
 			{
+				fetch: fetchMock as FetchImpl,
 				apiKey: token,
 				sessionId: "ws-malformed-json-session",
 				providerSessionState: new Map<string, ProviderSessionState>(),
@@ -2736,7 +2758,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(
 			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
 		);
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		class BufferedCloseWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -2783,6 +2804,7 @@ describe("openai-codex streaming", () => {
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 			},
 			{
+				fetch: fetchMock as FetchImpl,
 				apiKey: token,
 				sessionId: "ws-buffered-close-session",
 				providerSessionState: new Map<string, ProviderSessionState>(),
@@ -2819,7 +2841,6 @@ describe("openai-codex streaming", () => {
 			sseModelsEtags.push(headers.get("x-models-etag"));
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const requestTypes: string[] = [];
 		class DivergedAppendWebSocket extends MockWebSocket {
@@ -2877,16 +2898,19 @@ describe("openai-codex streaming", () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 
 		await streamOpenAICodexResponses(websocketModel, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-diverged-session",
 			providerSessionState,
 		}).result();
 		await streamOpenAICodexResponses(websocketModel, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-diverged-session",
 			providerSessionState,
 		}).result();
 		await streamOpenAICodexResponses(sseModel, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-diverged-session",
 			providerSessionState,
@@ -2911,7 +2935,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let constructorCount = 0;
 		let sendCount = 0;
@@ -2951,7 +2974,11 @@ describe("openai-codex streaming", () => {
 		};
 
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		await prewarmOpenAICodexResponses(model, { apiKey: token, sessionId: "ws-reuse-session", providerSessionState });
+		await prewarmOpenAICodexResponses(model, {
+			apiKey: token,
+			sessionId: "ws-reuse-session",
+			providerSessionState,
+		});
 
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -2966,11 +2993,13 @@ describe("openai-codex streaming", () => {
 		};
 
 		await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-reuse-session",
 			providerSessionState,
 		}).result();
 		await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-reuse-session",
 			providerSessionState,
@@ -3018,7 +3047,6 @@ describe("openai-codex streaming", () => {
 			callCount += 1;
 			return new Response(sse, { status: 200, headers: responseHeaders });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		const model: Model<"openai-codex-responses"> = {
 			id: "gpt-5.1-codex",
@@ -3040,11 +3068,13 @@ describe("openai-codex streaming", () => {
 
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "turn-state-session",
 			providerSessionState,
 		}).result();
 		await streamOpenAICodexResponses(model, context, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "turn-state-session",
 			providerSessionState,
@@ -3074,7 +3104,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let constructorCount = 0;
 		let sendCount = 0;
@@ -3112,6 +3141,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-idle-reuse-session",
 			providerSessionState,
@@ -3123,6 +3153,7 @@ describe("openai-codex streaming", () => {
 		await new Promise(resolve => setTimeout(resolve, 30));
 
 		const second = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-idle-reuse-session",
 			providerSessionState,
@@ -3153,7 +3184,6 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
 		let constructorCount = 0;
 		let sendCount = 0;
@@ -3208,6 +3238,7 @@ describe("openai-codex streaming", () => {
 		};
 
 		const first = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-stale-frame-session",
 			providerSessionState,
@@ -3215,6 +3246,7 @@ describe("openai-codex streaming", () => {
 		expect(first.stopReason).toBe("stop");
 
 		const second = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-stale-frame-session",
 			providerSessionState,

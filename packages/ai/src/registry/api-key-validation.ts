@@ -1,9 +1,12 @@
+import type { FetchImpl } from "../types";
+
 type OpenAICompatibleValidationOptions = {
 	provider: string;
 	apiKey: string;
 	baseUrl: string;
 	model: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 };
 type AnthropicCompatibleValidationOptions = {
 	provider: string;
@@ -11,6 +14,7 @@ type AnthropicCompatibleValidationOptions = {
 	baseUrl: string;
 	model: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 };
 
 type ModelListValidationOptions = {
@@ -18,6 +22,7 @@ type ModelListValidationOptions = {
 	apiKey: string;
 	modelsUrl: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 };
 
 const VALIDATION_TIMEOUT_MS = 15_000;
@@ -35,8 +40,9 @@ function normalizeAnthropicCompatibleBaseUrl(baseUrl: string): string {
 export async function validateOpenAICompatibleApiKey(options: OpenAICompatibleValidationOptions): Promise<void> {
 	const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+	const fetchImpl = options.fetch ?? fetch;
 
-	const response = await fetch(`${options.baseUrl}/chat/completions`, {
+	const response = await fetchImpl(`${options.baseUrl}/chat/completions`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -75,8 +81,9 @@ export async function validateAnthropicCompatibleApiKey(options: AnthropicCompat
 	const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 	const baseUrl = normalizeAnthropicCompatibleBaseUrl(options.baseUrl);
+	const fetchImpl = options.fetch ?? fetch;
 
-	const response = await fetch(`${baseUrl}/v1/messages`, {
+	const response = await fetchImpl(`${baseUrl}/v1/messages`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -117,8 +124,9 @@ export async function validateAnthropicCompatibleApiKey(options: AnthropicCompat
 export async function validateApiKeyAgainstModelsEndpoint(options: ModelListValidationOptions): Promise<void> {
 	const timeoutSignal = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+	const fetchImpl = options.fetch ?? fetch;
 
-	const response = await fetch(options.modelsUrl, {
+	const response = await fetchImpl(options.modelsUrl, {
 		method: "GET",
 		headers: {
 			Authorization: `Bearer ${options.apiKey}`,

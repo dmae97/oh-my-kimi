@@ -3,6 +3,7 @@
  */
 import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "../../models";
+import type { FetchImpl } from "../../types";
 import type { OAuthCredentials } from "./types";
 
 const CLIENT_ID = "Ov23li8tweQw6odWQebz";
@@ -15,6 +16,16 @@ export const OPENCODE_HEADERS = {
 
 const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
+
+type GitHubCopilotLoginOptions = {
+	onAuth: (url: string, instructions?: string) => void;
+	onPrompt: (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => Promise<string>;
+	onProgress?: (message: string) => void;
+	signal?: AbortSignal;
+	pollIntervalFloorMs?: number;
+	pollIntervalScaleMs?: number;
+	fetch?: FetchImpl;
+};
 type DeviceCodeResponse = {
 	device_code: string;
 	user_code: string;
@@ -106,8 +117,8 @@ export function getGitHubCopilotBaseUrl(enterpriseDomain?: string): string {
 	return `https://${host}`;
 }
 
-async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
-	const response = await fetch(url, init);
+async function fetchJson(url: string, init: RequestInit, fetchImpl: FetchImpl): Promise<unknown> {
+	const response = await fetchImpl(url, init);
 	if (!response.ok) {
 		const text = await response.text();
 		throw new Error(`${response.status} ${response.statusText}: ${text}`);
@@ -115,20 +126,24 @@ async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
 	return response.json();
 }
 
-async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
+async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<DeviceCodeResponse> {
 	const urls = getUrls(domain);
-	const data = await fetchJson(urls.deviceCodeUrl, {
-		method: "POST",
-		headers: {
-			Accept: "application/json",
-			"Content-Type": "application/json",
-			...OPENCODE_HEADERS,
+	const data = await fetchJson(
+		urls.deviceCodeUrl,
+		{
+			method: "POST",
+			headers: {
+				Accept: "application/json",
+				"Content-Type": "application/json",
+				...OPENCODE_HEADERS,
+			},
+			body: JSON.stringify({
+				client_id: CLIENT_ID,
+				scope: "read:user",
+			}),
 		},
-		body: JSON.stringify({
-			client_id: CLIENT_ID,
-			scope: "read:user",
-		}),
-	});
+		fetchImpl,
+	);
 
 	if (!data || typeof data !== "object") {
 		throw new Error("Invalid device code response");
@@ -164,7 +179,8 @@ async function pollForGitHubAccessToken(
 	deviceCode: string,
 	intervalSeconds: number,
 	expiresIn: number,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
 	pollIntervalFloorMs = 1000,
 	pollIntervalScaleMs = 1000,
 ) {
@@ -187,19 +203,23 @@ async function pollForGitHubAccessToken(
 			throw new Error("Login cancelled");
 		}
 
-		const raw = await fetchJson(urls.accessTokenUrl, {
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				"Content-Type": "application/json",
-				...OPENCODE_HEADERS,
+		const raw = await fetchJson(
+			urls.accessTokenUrl,
+			{
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					...OPENCODE_HEADERS,
+				},
+				body: JSON.stringify({
+					client_id: CLIENT_ID,
+					device_code: deviceCode,
+					grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+				}),
 			},
-			body: JSON.stringify({
-				client_id: CLIENT_ID,
-				device_code: deviceCode,
-				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-			}),
-		});
+			fetchImpl,
+		);
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenSuccessResponse).access_token === "string") {
 			return (raw as DeviceTokenSuccessResponse).access_token;
@@ -255,12 +275,17 @@ export function refreshGitHubCopilotToken(refreshToken: string, enterpriseDomain
  * Enable a model for the user's GitHub Copilot account.
  * This is required for some models (like Claude, Grok) before they can be used.
  */
-async function enableGitHubCopilotModel(token: string, modelId: string, enterpriseDomain?: string): Promise<boolean> {
+async function enableGitHubCopilotModel(
+	token: string,
+	modelId: string,
+	fetchImpl: FetchImpl,
+	enterpriseDomain?: string,
+): Promise<boolean> {
 	const baseUrl = getGitHubCopilotBaseUrl(enterpriseDomain);
 	const url = `${baseUrl}/models/${modelId}/policy`;
 
 	try {
-		const response = await fetch(url, {
+		const response = await fetchImpl(url, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -283,7 +308,8 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
  */
 async function enableAllGitHubCopilotModels(
 	token: string,
-	enterpriseDomain?: string,
+	enterpriseDomain: string | undefined,
+	fetchImpl: FetchImpl,
 	onProgress?: (model: string, success: boolean) => void,
 ): Promise<void> {
 	const models = getBundledModels("github-copilot");
@@ -292,7 +318,7 @@ async function enableAllGitHubCopilotModels(
 		const batch = models.slice(i, i + BATCH_SIZE);
 		await Promise.all(
 			batch.map(async model => {
-				const success = await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
+				const success = await enableGitHubCopilotModel(token, model.id, fetchImpl, enterpriseDomain);
 				onProgress?.(model.id, success);
 			}),
 		);
@@ -307,14 +333,8 @@ async function enableAllGitHubCopilotModels(
  * @param options.onProgress - Optional progress callback
  * @param options.signal - Optional AbortSignal for cancellation
  */
-export async function loginGitHubCopilot(options: {
-	onAuth: (url: string, instructions?: string) => void;
-	onPrompt: (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => Promise<string>;
-	onProgress?: (message: string) => void;
-	signal?: AbortSignal;
-	pollIntervalFloorMs?: number;
-	pollIntervalScaleMs?: number;
-}): Promise<OAuthCredentials> {
+export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Promise<OAuthCredentials> {
+	const fetchImpl = options.fetch ?? fetch;
 	const input = await options.onPrompt({
 		message: "GitHub Enterprise URL/domain (blank for github.com)",
 		placeholder: "company.ghe.com",
@@ -334,7 +354,7 @@ export async function loginGitHubCopilot(options: {
 	const domain =
 		normalizedDomain && isPublicGitHubHost(normalizedDomain) ? "github.com" : (normalizedDomain ?? "github.com");
 
-	const device = await startDeviceFlow(domain);
+	const device = await startDeviceFlow(domain, fetchImpl);
 	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
 
 	const githubAccessToken = await pollForGitHubAccessToken(
@@ -343,6 +363,7 @@ export async function loginGitHubCopilot(options: {
 		device.interval,
 		device.expires_in,
 		options.signal,
+		fetchImpl,
 		options.pollIntervalFloorMs,
 		options.pollIntervalScaleMs,
 	);
@@ -357,6 +378,6 @@ export async function loginGitHubCopilot(options: {
 
 	// Enable all models after successful login
 	options.onProgress?.("Enabling models...");
-	await enableAllGitHubCopilotModels(githubAccessToken, enterpriseDomain ?? undefined);
+	await enableAllGitHubCopilotModels(githubAccessToken, enterpriseDomain ?? undefined, fetchImpl);
 	return credentials;
 }

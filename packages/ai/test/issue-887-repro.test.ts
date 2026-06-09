@@ -8,7 +8,7 @@
  * descriptor must override these specific ids to openai-completions so that
  * regenerated models.json keeps the correct routing.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	type ModelsDevModel,
@@ -16,12 +16,6 @@ import {
 } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 
 const OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 describe("opencode-go resolver routes 404-ing ids to openai-completions (issue #887)", () => {
 	const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(d => d.providerId === "opencode-go");
@@ -51,7 +45,7 @@ describe("opencode-go resolver routes 404-ing ids to openai-completions (issue #
 
 	test("runtime /v1/models refresh preserves qwen3.7-max Anthropic transport", async () => {
 		let requestedUrl = "";
-		const mockFetch = async (input: string | Request | URL): Promise<Response> => {
+		const fetchMock = (async (input: string | Request | URL): Promise<Response> => {
 			requestedUrl = input instanceof Request ? input.url : String(input);
 			return new Response(
 				JSON.stringify({
@@ -59,10 +53,9 @@ describe("opencode-go resolver routes 404-ing ids to openai-completions (issue #
 				}),
 				{ headers: { "content-type": "application/json" } },
 			);
-		};
-		global.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+		}) as typeof fetch;
 
-		const options = opencodeGoModelManagerOptions({ apiKey: "opencode-test-key" });
+		const options = opencodeGoModelManagerOptions({ apiKey: "opencode-test-key", fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 		const qwenMax = models?.find(model => model.id === "qwen3.7-max");
 

@@ -5,6 +5,7 @@
  * different model entries, and handles mixed-case tier names.
  */
 import { describe, expect, it } from "bun:test";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import type { UsageFetchContext, UsageFetchParams } from "@oh-my-pi/pi-ai/usage";
 import { antigravityUsageProvider } from "@oh-my-pi/pi-ai/usage/google-antigravity";
 
@@ -27,16 +28,16 @@ function makeCredential(overrides?: Partial<UsageFetchParams["credential"]>) {
 	} satisfies UsageFetchParams["credential"];
 }
 
-function fakeFetch(json: unknown): typeof fetch {
+function fakeFetch(json: unknown): FetchImpl {
 	const fn = async () =>
 		new Response(JSON.stringify(json), {
 			status: 200,
 			headers: { "content-type": "application/json" },
 		});
-	return fn as unknown as typeof fetch;
+	return fn;
 }
 
-function makeCtx(fetchImpl?: typeof fetch): UsageFetchContext {
+function makeCtx(fetchImpl?: FetchImpl): UsageFetchContext {
 	return { fetch: fetchImpl ?? fakeFetch({}) };
 }
 

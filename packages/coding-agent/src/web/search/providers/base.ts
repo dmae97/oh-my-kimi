@@ -1,4 +1,4 @@
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
 import type { SearchProviderId, SearchResponse } from "../types";
 
 /**
@@ -30,6 +30,7 @@ export interface SearchParams {
 	recency?: "day" | "week" | "month" | "year";
 	systemPrompt: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 	maxOutputTokens?: number;
 	numSearchResults?: number;
 	temperature?: number;

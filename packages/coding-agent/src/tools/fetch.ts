@@ -637,6 +637,7 @@ export async function renderHtmlToText(
 	settings: Settings,
 	userSignal: AbortSignal | undefined,
 	storage: AgentStorage | null,
+	fetchOverride?: typeof fetch,
 ): Promise<{ content: string; ok: boolean; method: string }> {
 	const overallSignal = ptree.combineSignals(userSignal, timeout * 1000);
 	const execOptions = {
@@ -650,6 +651,7 @@ export async function renderHtmlToText(
 	// Per-attempt budget for remote endpoints so one stall cannot consume the
 	// whole reader-mode budget and starve the local fallbacks.
 	const remoteSignal = () => ptree.combineSignals(userSignal, remoteBudgetMs);
+	const fetchImpl = fetchOverride ?? fetch;
 
 	const runners: Record<FetchProvider, () => Promise<string | null>> = {
 		// Purely local, no network/subprocess: still works on already-loaded HTML
@@ -670,14 +672,20 @@ export async function renderHtmlToText(
 			if (!findParallelApiKey(storage)) return null;
 			const parallelResult = await extractWithParallel(
 				[url],
-				{ objective: "Extract the main content", excerpts: true, fullContent: false, signal: remoteSignal() },
+				{
+					objective: "Extract the main content",
+					excerpts: true,
+					fullContent: false,
+					signal: remoteSignal(),
+					fetch: fetchImpl,
+				},
 				storage,
 			);
 			const firstDocument = parallelResult.results[0];
 			return firstDocument ? getParallelExtractContent(firstDocument) : null;
 		},
 		jina: async () => {
-			const response = await fetch(`https://r.jina.ai/${url}`, {
+			const response = await fetchImpl(`https://r.jina.ai/${url}`, {
 				headers: { Accept: "text/markdown" },
 				signal: remoteSignal(),
 			});

@@ -1,12 +1,13 @@
 import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
-import type { ThinkingConfig } from "../types";
+import type { FetchImpl, ThinkingConfig } from "../types";
 import { createBundledReferenceMap, createReferenceResolver } from "./bundled-references";
 
 export interface OllamaCloudModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 type OllamaTagEntry = {
@@ -65,13 +66,13 @@ function getThinkingConfig(capabilities: string[] | undefined): ThinkingConfig |
 		maxLevel: Effort.High,
 	};
 }
-
 async function fetchShowMetadata(
 	baseUrl: string,
 	apiKey: string,
 	model: string,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<OllamaShowResponse | undefined> {
-	const response = await fetch(`${baseUrl}/api/show`, {
+	const response = await fetchImpl(`${baseUrl}/api/show`, {
 		method: "POST",
 		headers: {
 			...createCloudHeaders(apiKey),
@@ -100,6 +101,7 @@ export function ollamaCloudModelManagerOptions(
 			const response = await fetchWithRetry(`${baseUrl}/api/tags`, {
 				method: "GET",
 				headers: createCloudHeaders(apiKey),
+				fetch: config?.fetch,
 				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 			});
 			if (!response.ok) {
@@ -116,7 +118,7 @@ export function ollamaCloudModelManagerOptions(
 					const reference = resolveReference(id);
 					let metadata: OllamaShowResponse | undefined;
 					try {
-						metadata = await fetchShowMetadata(baseUrl, apiKey, id);
+						metadata = await fetchShowMetadata(baseUrl, apiKey, id, config?.fetch);
 					} catch {
 						metadata = undefined;
 					}

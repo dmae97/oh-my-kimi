@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Removed
+
+- Removed the exported `hookFetch` API, which previously intercepted `globalThis.fetch` via middleware handlers
+- Removed `hookFetch` from the package entrypoint, so imports from `@.../utils` no longer provide this fetch interception helper
 
 ## [15.10.0] - 2026-06-06
 

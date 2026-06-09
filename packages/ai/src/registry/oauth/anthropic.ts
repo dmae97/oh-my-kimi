@@ -1,6 +1,8 @@
 /**
  * Anthropic OAuth flow (Claude Pro/Max)
  */
+
+import type { FetchImpl } from "../../types";
 import { OAuthCallbackFlow } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
@@ -40,9 +42,10 @@ function formatErrorDetails(error: unknown): string {
 async function postJson(
 	url: string,
 	body: Record<string, string | number>,
+	fetchImpl: FetchImpl,
 	extraHeaders?: Record<string, string>,
 ): Promise<string> {
-	const response = await fetch(url, {
+	const response = await fetchImpl(url, {
 		method: "POST",
 		headers: {
 			// No Accept header: CC omits it on OAuth token requests.
@@ -109,9 +112,12 @@ function extractAccountFromTokenResponse(data: AnthropicTokenResponse): {
 	};
 }
 
-async function fetchBootstrapIdentity(accessToken: string): Promise<{ accountId?: string; email?: string }> {
+async function fetchBootstrapIdentity(
+	accessToken: string,
+	fetchImpl: FetchImpl,
+): Promise<{ accountId?: string; email?: string }> {
 	const url = `${BOOTSTRAP_URL}?entrypoint=cli&model=${encodeURIComponent(CLAUDE_CODE_BOOTSTRAP_MODEL)}`;
-	const response = await fetch(url, {
+	const response = await fetchImpl(url, {
 		method: "GET",
 		headers: {
 			Accept: "application/json, text/plain, */*",
@@ -142,11 +148,14 @@ async function fetchBootstrapIdentity(accessToken: string): Promise<{ accountId?
 	};
 }
 
-async function resolveAccountIdentity(data: AnthropicTokenResponse): Promise<{ accountId?: string; email?: string }> {
+async function resolveAccountIdentity(
+	data: AnthropicTokenResponse,
+	fetchImpl: FetchImpl,
+): Promise<{ accountId?: string; email?: string }> {
 	const identity = extractAccountFromTokenResponse(data);
 	if (identity.accountId && identity.email) return identity;
 	try {
-		const bootstrap = await fetchBootstrapIdentity(data.access_token);
+		const bootstrap = await fetchBootstrapIdentity(data.access_token, fetchImpl);
 		return {
 			accountId: identity.accountId ?? bootstrap.accountId,
 			email: identity.email ?? bootstrap.email,
@@ -159,9 +168,11 @@ async function resolveAccountIdentity(data: AnthropicTokenResponse): Promise<{ a
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string = "";
 	#challenge: string = "";
+	#fetch: FetchImpl;
 
 	constructor(ctrl: OAuthController) {
 		super(ctrl, CALLBACK_PORT, CALLBACK_PATH);
+		this.#fetch = ctrl.fetch ?? fetch;
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
@@ -202,14 +213,18 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 
 		let responseBody: string;
 		try {
-			responseBody = await postJson(TOKEN_URL, {
-				grant_type: "authorization_code",
-				client_id: CLIENT_ID,
-				code: exchangeCode,
-				state: exchangeState,
-				redirect_uri: redirectUri,
-				code_verifier: this.#verifier,
-			});
+			responseBody = await postJson(
+				TOKEN_URL,
+				{
+					grant_type: "authorization_code",
+					client_id: CLIENT_ID,
+					code: exchangeCode,
+					state: exchangeState,
+					redirect_uri: redirectUri,
+					code_verifier: this.#verifier,
+				},
+				this.#fetch,
+			);
 		} catch (error) {
 			throw new Error(
 				`Token exchange request failed. url=${TOKEN_URL}; redirect_uri=${redirectUri}; response_type=authorization_code; details=${formatErrorDetails(error)}`,
@@ -217,7 +232,7 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 		}
 
 		const tokenData = parseOAuthTokenResponse(responseBody, "token exchange");
-		const { accountId, email } = await resolveAccountIdentity(tokenData);
+		const { accountId, email } = await resolveAccountIdentity(tokenData, this.#fetch);
 
 		return {
 			refresh: tokenData.refresh_token,
@@ -240,7 +255,11 @@ export async function loginAnthropic(ctrl: OAuthController): Promise<OAuthCreden
 /**
  * Refresh Anthropic OAuth token
  */
-export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+export async function refreshAnthropicToken(
+	refreshToken: string,
+	fetchOverride?: FetchImpl,
+): Promise<OAuthCredentials> {
+	const fetchImpl = fetchOverride ?? fetch;
 	let responseBody: string;
 	try {
 		responseBody = await postJson(
@@ -250,6 +269,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 				client_id: CLIENT_ID,
 				refresh_token: refreshToken,
 			},
+			fetchImpl,
 			{
 				// CC sends these on refresh but not on the initial code exchange
 				"anthropic-beta": "oauth-2025-04-20",
@@ -261,7 +281,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 	}
 
 	const data = parseOAuthTokenResponse(responseBody, "token refresh");
-	const { accountId, email } = await resolveAccountIdentity(data);
+	const { accountId, email } = await resolveAccountIdentity(data, fetchImpl);
 
 	return {
 		refresh: data.refresh_token || refreshToken,

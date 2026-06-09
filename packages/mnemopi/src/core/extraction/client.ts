@@ -1,3 +1,5 @@
+import type { FetchImpl } from "@oh-my-pi/pi-ai";
+
 import { getDiagnostics } from "./diagnostics";
 import { EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_TEMPLATE } from "./prompts";
 
@@ -26,6 +28,13 @@ export interface ExtractedFact {
 	[key: string]: unknown;
 }
 
+export interface ExtractionClientOptions {
+	model?: string | null;
+	apiKey?: string | null;
+	baseUrl?: string | null;
+	fetch?: FetchImpl;
+}
+
 function sleep(ms: number): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	setTimeout(resolve, ms);
@@ -45,11 +54,13 @@ export class ExtractionClient {
 	apiKey: string;
 	baseUrl: string;
 	callCount = 0;
+	private readonly fetchImpl: FetchImpl;
 
-	constructor(opts: { model?: string | null; apiKey?: string | null; baseUrl?: string | null } = {}) {
+	constructor(opts: ExtractionClientOptions = {}) {
 		this.model = opts.model || DEFAULT_EXTRACTION_MODEL;
 		this.apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
 		this.baseUrl = (opts.baseUrl || OPENROUTER_BASE_URL).replace(/\/+$/, "");
+		this.fetchImpl = opts.fetch ?? fetch;
 	}
 
 	async chat(messages: readonly ChatMessage[], temperature = 0, maxTokens = 4096): Promise<string> {
@@ -89,7 +100,7 @@ export class ExtractionClient {
 		temperature: number,
 		maxTokens: number,
 	): Promise<string> {
-		const response = await fetch(`${this.baseUrl}/chat/completions`, {
+		const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
 			method: "POST",
 			headers: authHeader(this.apiKey),
 			body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }),

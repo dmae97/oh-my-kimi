@@ -1,9 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 const model = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
@@ -26,16 +24,12 @@ function chunk(extra: Record<string, unknown>): Record<string, unknown> {
 	return { id: "gen-1", object: "chat.completion.chunk", created: 0, model: model.id, ...extra };
 }
 
-afterEach(() => {
-	global.fetch = originalFetch;
-});
-
 describe("openai-completions upstream provider capture", () => {
 	// Contract: aggregators (OpenRouter, …) report the upstream provider that served
 	// the request via a top-level `provider` field on every chunk. We surface it on
 	// the assistant message so telemetry/session logs can attribute routing.
 	it("records the aggregator-reported upstream provider from the stream", async () => {
-		global.fetch = ((_input: string | URL | Request, _init?: RequestInit) =>
+		const fetchMock: FetchImpl = () =>
 			Promise.resolve(
 				createSseResponse([
 					chunk({ provider: "Anthropic", choices: [{ index: 0, delta: { content: "Hi" } }] }),
@@ -45,9 +39,12 @@ describe("openai-completions upstream provider capture", () => {
 						usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 					}),
 				]),
-			)) as typeof fetch;
+			);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 
 		expect(result.upstreamProvider).toBe("Anthropic");
 		expect(result.stopReason).toBe("stop");
@@ -55,7 +52,7 @@ describe("openai-completions upstream provider capture", () => {
 	});
 
 	it("leaves upstreamProvider undefined when no provider field is present", async () => {
-		global.fetch = ((_input: string | URL | Request, _init?: RequestInit) =>
+		const fetchMock: FetchImpl = () =>
 			Promise.resolve(
 				createSseResponse([
 					chunk({ choices: [{ index: 0, delta: { content: "Hi" } }] }),
@@ -64,9 +61,12 @@ describe("openai-completions upstream provider capture", () => {
 						usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 					}),
 				]),
-			)) as typeof fetch;
+			);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 
 		expect(result.upstreamProvider).toBeUndefined();
 	});

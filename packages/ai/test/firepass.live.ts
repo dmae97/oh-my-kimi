@@ -10,7 +10,7 @@
  */
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 const apiKey = process.env.FIREPASS_API_KEY;
 if (!apiKey) {
@@ -29,14 +29,14 @@ interface CapturedRequest {
 	body: string | null;
 }
 
-const originalFetch = global.fetch;
+const originalFetch = fetch;
 const captured: { value: CapturedRequest | null } = { value: null };
-type FetchInput = Parameters<typeof fetch>[0];
-global.fetch = (async (input: FetchInput, init?: RequestInit) => {
+type FetchInput = string | URL | Request;
+const fetchImpl: FetchImpl = async (input: FetchInput, init?: RequestInit) => {
 	const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 	captured.value = { url, body: typeof init?.body === "string" ? init.body : null };
-	return originalFetch(input as Parameters<typeof fetch>[0], init);
-}) as typeof global.fetch;
+	return originalFetch(input, init);
+};
 
 const context: Context = {
 	systemPrompt: ["Reply with exactly two words."],
@@ -51,6 +51,7 @@ async function runEffort(label: string, reasoning: "xhigh" | undefined) {
 		// Intentionally omit maxTokens here so we can also assert that the Kimi-family
 		// safety net (openai-completions.ts isKimi) injects the catalog default.
 		...(reasoning ? { reasoning } : {}),
+		fetch: fetchImpl,
 	});
 	let text = "";
 	let stopReason: string | undefined;

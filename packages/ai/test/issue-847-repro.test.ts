@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { ollamaModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
-
-const originalFetch = global.fetch;
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
 describe("ollama provider context window discovery (issue #847)", () => {
 	test("uses /api/show context_length for unbundled cloud models like deepseek-v4-flash:cloud", async () => {
 		const showCalls: string[] = [];
-		global.fetch = vi.fn(async (input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:11434/v1/models") {
 				return new Response(
@@ -52,7 +50,7 @@ describe("ollama provider context window discovery (issue #847)", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		}) as unknown as typeof fetch;
 
-		const options = ollamaModelManagerOptions();
+		const options = ollamaModelManagerOptions({ fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 
 		const deepseek = models?.find(m => m.id === "deepseek-v4-flash:cloud");
@@ -64,7 +62,7 @@ describe("ollama provider context window discovery (issue #847)", () => {
 
 	test("caches /api/show results across repeated fetchDynamicModels calls", async () => {
 		const showCalls: string[] = [];
-		global.fetch = vi.fn(async (input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:11434/v1/models") {
 				return new Response(
@@ -86,14 +84,14 @@ describe("ollama provider context window discovery (issue #847)", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		}) as unknown as typeof fetch;
 
-		const options = ollamaModelManagerOptions();
+		const options = ollamaModelManagerOptions({ fetch: fetchMock });
 		await options.fetchDynamicModels?.();
 		await options.fetchDynamicModels?.();
 		expect(showCalls).toEqual(["deepseek-v4-flash:cloud"]);
 	});
 
 	test("falls back to 128k when /api/show is unavailable", async () => {
-		global.fetch = vi.fn(async input => {
+		const fetchMock: FetchImpl = vi.fn(async input => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:11434/v1/models") {
 				return new Response(JSON.stringify({ object: "list", data: [{ id: "mystery:1b", object: "model" }] }), {
@@ -107,7 +105,7 @@ describe("ollama provider context window discovery (issue #847)", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		}) as unknown as typeof fetch;
 
-		const options = ollamaModelManagerOptions();
+		const options = ollamaModelManagerOptions({ fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 		const mystery = models?.find(m => m.id === "mystery:1b");
 		expect(mystery?.contextWindow).toBe(128000);

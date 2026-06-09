@@ -1,16 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, OpenAICompat, ProviderSessionState, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, OpenAICompat, ProviderSessionState, Tool } from "@oh-my-pi/pi-ai/types";
 import * as z from "zod/v4";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
 
 const testTool: Tool = {
 	name: "echo",
@@ -213,7 +206,7 @@ describe("OpenAI tool strict mode", () => {
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 		};
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
 				new Response(
 					JSON.stringify({
@@ -227,10 +220,13 @@ describe("OpenAI tool strict mode", () => {
 						headers: { "content-type": "application/json" },
 					},
 				),
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAICompletions(model, testContext, { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("Tools with mixed values for 'strict' are not allowed.");
 		expect(result.errorMessage).toContain("param=tools");
@@ -244,7 +240,7 @@ describe("OpenAI tool strict mode", () => {
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
 		};
 		const strictFlags: boolean[][] = [];
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				const bodyText = typeof init?.body === "string" ? init.body : "";
 				const payload = JSON.parse(bodyText) as {
@@ -283,10 +279,13 @@ describe("OpenAI tool strict mode", () => {
 					"[DONE]",
 				]);
 			},
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAICompletions(model, testContext, { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toContainEqual({ type: "text", text: "Hello" });
 		expect(strictFlags).toEqual([[true], [false]]);
@@ -297,7 +296,7 @@ describe("OpenAI tool strict mode", () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const strictFlags: boolean[][] = [];
 		let attempt = 0;
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				attempt += 1;
 				const bodyText = typeof init?.body === "string" ? init.body : "";
@@ -340,12 +339,13 @@ describe("OpenAI tool strict mode", () => {
 					"[DONE]",
 				]);
 			},
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
 		const result = await streamOpenAICompletions(model, testContext, {
 			apiKey: "test-key",
 			providerSessionState,
+			fetch: fetchMock,
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
@@ -356,6 +356,7 @@ describe("OpenAI tool strict mode", () => {
 		const nextResult = await streamOpenAICompletions(model, testContext, {
 			apiKey: "test-key",
 			providerSessionState,
+			fetch: fetchMock,
 		}).result();
 
 		expect(nextResult.stopReason).toBe("stop");
@@ -367,7 +368,7 @@ describe("OpenAI tool strict mode", () => {
 		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const strictFlags: boolean[][] = [];
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				const bodyText = typeof init?.body === "string" ? init.body : "";
 				const payload = JSON.parse(bodyText) as {
@@ -386,12 +387,13 @@ describe("OpenAI tool strict mode", () => {
 					},
 				);
 			},
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
 		const result = await streamOpenAICompletions(model, testContext, {
 			apiKey: "test-key",
 			providerSessionState,
+			fetch: fetchMock,
 		}).result();
 
 		expect(result.stopReason).toBe("error");

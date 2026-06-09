@@ -4,6 +4,7 @@
  * Automatically detects OAuth requirements from MCP server responses
  * and extracts authentication endpoints.
  */
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 export interface OAuthEndpoints {
 	authorizationUrl: string;
@@ -249,7 +250,9 @@ export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
 	resourceMetadataUrl?: string,
+	opts?: { fetch?: FetchImpl },
 ): Promise<OAuthEndpoints | null> {
+	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	const wellKnownPaths = [
 		"/.well-known/oauth-authorization-server",
 		"/.well-known/openid-configuration",
@@ -266,7 +269,7 @@ export async function discoverOAuthEndpoints(
 	if (resourceMetadataUrl && !visitedAuthServers.has(resourceMetadataUrl)) {
 		visitedAuthServers.add(resourceMetadataUrl);
 		try {
-			const metaResp = await fetch(resourceMetadataUrl, {
+			const metaResp = await fetchImpl(resourceMetadataUrl, {
 				method: "GET",
 				headers: { Accept: "application/json" },
 				redirect: "follow",
@@ -359,7 +362,7 @@ export async function discoverOAuthEndpoints(
 			const urlsToTry = buildWellKnownUrls(path, baseUrl);
 			for (const url of urlsToTry) {
 				try {
-					const response = await fetch(url.toString(), {
+					const response = await fetchImpl(url.toString(), {
 						method: "GET",
 						headers: { Accept: "application/json" },
 						redirect: "follow",
@@ -379,7 +382,9 @@ export async function discoverOAuthEndpoints(
 								if (visitedAuthServers.has(discoveredAuthServer)) {
 									continue;
 								}
-								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer);
+								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer, undefined, {
+									fetch: fetchImpl,
+								});
 								if (discovered) return discovered;
 							}
 						}

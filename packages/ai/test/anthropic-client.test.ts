@@ -5,6 +5,7 @@ import {
 	AnthropicMessagesClient,
 } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { MessageCreateParamsStreaming } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const params: MessageCreateParamsStreaming = {
 	model: "claude-sonnet-4-5",
@@ -15,7 +16,7 @@ const params: MessageCreateParamsStreaming = {
 
 type FetchCall = { url: string; init: RequestInit };
 
-function createFetchMock(responses: Array<Response | Error>): { calls: FetchCall[]; fetch: typeof fetch } {
+function createFetchMock(responses: Array<Response | Error>): { calls: FetchCall[]; fetch: FetchImpl } {
 	const calls: FetchCall[] = [];
 	const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
 		calls.push({ url: String(input), init: init ?? {} });

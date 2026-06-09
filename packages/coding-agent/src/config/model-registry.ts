@@ -95,7 +95,7 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 	...SPECIAL_MODEL_MANAGER_PROVIDER_IDS,
 ];
 
-import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
+import type { ApiKeyResolver, FetchImpl } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
@@ -927,6 +927,7 @@ export class ModelRegistry {
 	#runtimeModelManagers: Map<string, { options: ModelManagerOptions<Api>; sourceId: string }> = new Map();
 	#rebuildPending: boolean = false;
 	#rebuildSuspended: number = 0;
+	#fetch: FetchImpl;
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
@@ -940,7 +941,9 @@ export class ModelRegistry {
 	constructor(
 		readonly authStorage: AuthStorage,
 		modelsPath?: string,
+		options?: { fetch?: FetchImpl },
 	) {
+		this.#fetch = options?.fetch ?? fetch;
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath);
 		this.#cacheDbPath = modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined;
 		// Set up fallback resolver for custom provider API keys
@@ -1629,6 +1632,7 @@ export class ModelRegistry {
 					googleAntigravityModelManagerOptions({
 						oauthToken,
 						endpoint: this.getProviderBaseUrl("google-antigravity"),
+						fetch: this.#fetch,
 					}),
 			},
 			{
@@ -1638,6 +1642,7 @@ export class ModelRegistry {
 					googleGeminiCliModelManagerOptions({
 						oauthToken,
 						endpoint: this.getProviderBaseUrl("google-gemini-cli"),
+						fetch: this.#fetch,
 					}),
 			},
 			{
@@ -1676,6 +1681,7 @@ export class ModelRegistry {
 					descriptor.createModelManagerOptions({
 						apiKey: isAuthenticated(apiKey) ? apiKey : undefined,
 						baseUrl: this.getProviderBaseUrl(descriptor.providerId),
+						fetch: this.#fetch,
 					}),
 				);
 			}
@@ -1727,7 +1733,7 @@ export class ModelRegistry {
 	): Promise<OllamaDiscoveredModelMetadata | null> {
 		const showUrl = `${endpoint}/api/show`;
 		try {
-			const response = await fetch(showUrl, {
+			const response = await this.#fetch(showUrl, {
 				method: "POST",
 				headers: { ...(headers ?? {}), "Content-Type": "application/json" },
 				body: JSON.stringify({ model: modelId }),
@@ -1775,7 +1781,7 @@ export class ModelRegistry {
 		const endpoint = this.#normalizeOllamaBaseUrl(providerConfig.baseUrl);
 		const tagsUrl = `${endpoint}/api/tags`;
 		const headers = { ...(providerConfig.headers ?? {}) };
-		const response = await fetch(tagsUrl, {
+		const response = await this.#fetch(tagsUrl, {
 			headers,
 			signal: AbortSignal.timeout(250),
 		});
@@ -1819,7 +1825,7 @@ export class ModelRegistry {
 	): Promise<LlamaCppDiscoveredServerMetadata | null> {
 		const propsUrl = `${this.#toLlamaCppNativeBaseUrl(baseUrl)}/props`;
 		try {
-			const response = await fetch(propsUrl, {
+			const response = await this.#fetch(propsUrl, {
 				headers,
 				signal: AbortSignal.timeout(150),
 			});
@@ -1850,7 +1856,7 @@ export class ModelRegistry {
 		}
 
 		const [response, serverMetadata] = await Promise.all([
-			fetch(modelsUrl, {
+			this.#fetch(modelsUrl, {
 				headers,
 				signal: AbortSignal.timeout(250),
 			}),
@@ -1902,7 +1908,7 @@ export class ModelRegistry {
 			headers.Authorization = `Bearer ${apiKey}`;
 		}
 
-		const response = await fetch(modelsUrl, {
+		const response = await this.#fetch(modelsUrl, {
 			headers,
 			signal: AbortSignal.timeout(10_000),
 		});
@@ -1964,7 +1970,7 @@ export class ModelRegistry {
 			headers.Authorization = `Bearer ${apiKey}`;
 		}
 
-		const response = await fetch(modelsUrl, {
+		const response = await this.#fetch(modelsUrl, {
 			headers,
 			signal: AbortSignal.timeout(10_000),
 		});

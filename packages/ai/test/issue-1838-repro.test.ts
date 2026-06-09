@@ -32,16 +32,10 @@
  * (OpenRouter, OpenCode, Kilo, Fireworks, …) translates thinking into its
  * own native format and would reject the extra key.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+import type { AssistantMessage, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 function abortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -56,9 +50,9 @@ function sseDoneResponse(): Response {
 	});
 }
 
-function mockFetch(): typeof fetch {
+function mockFetch(): FetchImpl {
 	const fn = async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => sseDoneResponse();
-	return Object.assign(fn, { preconnect: originalFetch.preconnect });
+	return Object.assign(fn, { preconnect: fetch.preconnect });
 }
 
 function moonshotKimiModel(id: string, reasoning = true): Model<"openai-completions"> {
@@ -95,12 +89,12 @@ async function capturePayload(
 	context: Context = basicContext(),
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
-	global.fetch = mockFetch();
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
 		signal: abortedSignal(),
 		onPayload: payload => resolve(payload),
 		...opts,
+		fetch: mockFetch(),
 	});
 	return promise;
 }

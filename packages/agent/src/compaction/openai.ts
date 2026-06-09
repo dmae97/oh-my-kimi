@@ -20,7 +20,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
 import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import type { AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
 import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
@@ -428,6 +428,7 @@ export async function requestOpenAiRemoteCompaction(
 	compactInput: Array<Record<string, unknown>>,
 	instructions: string,
 	signal?: AbortSignal,
+	opts?: { fetch?: FetchImpl },
 ): Promise<OpenAiRemoteCompactionResponse> {
 	const endpoint = resolveOpenAiCompactEndpoint(model);
 	const request: OpenAiRemoteCompactionRequest = {
@@ -451,7 +452,7 @@ export async function requestOpenAiRemoteCompaction(
 		headers[OPENAI_HEADERS.ORIGINATOR] = OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
 	}
 
-	const response = await fetch(endpoint, {
+	const response = await (opts?.fetch ?? fetch)(endpoint, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(request),
@@ -501,8 +502,9 @@ export async function requestRemoteCompaction(
 	endpoint: string,
 	request: RemoteCompactionRequest,
 	signal?: AbortSignal,
+	opts?: { fetch?: FetchImpl },
 ): Promise<RemoteCompactionResponse> {
-	const response = await fetch(endpoint, {
+	const response = await (opts?.fetch ?? fetch)(endpoint, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(request),

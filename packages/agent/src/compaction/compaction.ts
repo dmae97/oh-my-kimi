@@ -9,6 +9,7 @@ import {
 	type AssistantMessage,
 	clampThinkingLevelForModel,
 	Effort,
+	type FetchImpl,
 	type Message,
 	type MessageAttribution,
 	type Model,
@@ -595,6 +596,8 @@ export interface SummaryOptions {
 	 * `resolveCompactionEffort` for the conversion contract.
 	 */
 	thinkingLevel?: ThinkingLevel;
+	/** Optional fetch implementation threaded into remote compaction calls. */
+	fetch?: FetchImpl;
 }
 
 export async function generateSummary(
@@ -647,6 +650,7 @@ export async function generateSummary(
 				prompt: promptText,
 			},
 			signal,
+			{ fetch: options.fetch },
 		);
 		return remote.summary;
 	}
@@ -1015,6 +1019,7 @@ export async function compact(
 					remoteHistory,
 					summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
 					signal,
+					{ fetch: summaryOptions.fetch },
 				);
 				preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, remote);
 			} catch (err) {

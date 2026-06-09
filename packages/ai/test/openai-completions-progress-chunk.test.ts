@@ -1,13 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import {
 	getOpenAICompletionsStreamIdleTimeoutFallbackMs,
 	isOpenAICompletionsProgressChunk,
 	streamOpenAICompletions,
 } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
@@ -80,9 +78,6 @@ function createKeepaliveOnlyCompletionsResponse(modelId: string, signal: AbortSi
 	});
 }
 
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 	it("widens GLM 5.1 coding-plan stream watchdogs", () => {
 		const model = {
@@ -278,13 +273,14 @@ describe("isOpenAICompletionsProgressChunk", () => {
 });
 describe("provider integration", () => {
 	it("times out a completions stream whose keepalives never make progress", async () => {
-		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
+		const fetchMock: FetchImpl = (input: string | URL | Request, init?: RequestInit) =>
 			Promise.resolve(
 				createKeepaliveOnlyCompletionsResponse(openAICompletionsModel.id, getRequestSignal(input, init)),
-			)) as typeof fetch;
+			);
 
 		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			streamFirstEventTimeoutMs: 1_000,
 			streamIdleTimeoutMs: 20,
 		}).result();

@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { isXAIAccessTokenExpiring, refreshXAIOAuthToken, validateXAIEndpoint, XAIOAuthFlow } from "../xai-oauth";
 
-const originalFetch = global.fetch;
-
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -58,9 +55,10 @@ describe("refreshXAIOAuthToken", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("fetch should not be called when refresh_token is empty");
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		await expect(refreshXAIOAuthToken("")).rejects.toThrow(/missing refresh_token/);
+		await expect(refreshXAIOAuthToken("", fetchMock as unknown as typeof fetch)).rejects.toThrow(
+			/missing refresh_token/,
+		);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
@@ -95,9 +93,8 @@ describe("XAIOAuthFlow.exchangeToken", () => {
 				headers: { "Content-Type": "application/json" },
 			});
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const flow = new XAIOAuthFlow({});
+		const flow = new XAIOAuthFlow({ fetch: fetchMock as unknown as typeof fetch });
 		await flow.generateAuthUrl("state-abc", "http://127.0.0.1:56121/callback");
 
 		await expect(flow.exchangeToken("code-xyz", "state-abc", "http://127.0.0.1:56121/callback")).rejects.toThrow(

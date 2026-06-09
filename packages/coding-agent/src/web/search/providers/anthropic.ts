@@ -13,6 +13,7 @@ import {
 	buildAnthropicSearchHeaders,
 	buildAnthropicSystemBlocks,
 	buildAnthropicUrl,
+	type FetchImpl,
 	stripClaudeToolPrefix,
 	withAuth,
 } from "@oh-my-pi/pi-ai";
@@ -40,6 +41,7 @@ export interface AnthropicSearchParams {
 	max_tokens?: number;
 	temperature?: number;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 /**
@@ -89,6 +91,7 @@ async function callSearch(
 	maxTokens?: number,
 	temperature?: number,
 	signal?: AbortSignal,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<AnthropicApiResponse> {
 	const url = buildAnthropicUrl(auth);
 	const headers = buildAnthropicSearchHeaders(auth);
@@ -115,7 +118,7 @@ async function callSearch(
 		body.system = systemBlocks;
 	}
 
-	const response = await fetch(url, {
+	const response = await fetchImpl(url, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
@@ -275,6 +278,7 @@ export async function searchAnthropic(
 				maxTokens,
 				params.temperature,
 				params.signal,
+				params.fetch,
 			),
 		{
 			signal: params.signal,

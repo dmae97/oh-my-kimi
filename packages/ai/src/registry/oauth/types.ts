@@ -1,3 +1,4 @@
+import type { FetchImpl } from "../../types";
 import type { OAuthProviderUnion } from "../registry";
 
 export type OAuthCredentials = {
@@ -37,6 +38,7 @@ export interface OAuthController {
 	onManualCodeInput?(): Promise<string>;
 	onPrompt?(prompt: OAuthPrompt): Promise<string>;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 export interface OAuthLoginCallbacks extends OAuthController {

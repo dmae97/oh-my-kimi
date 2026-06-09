@@ -1,17 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
 };
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 function createSseResponse(events: unknown[]): Response {
 	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
@@ -53,7 +47,7 @@ function createFireworksReasoningEffortModel(): Model<"openai-completions"> {
 
 async function captureDisableReasoningPayload(model: Model<"openai-completions">): Promise<Record<string, unknown>> {
 	let payload: Record<string, unknown> | undefined;
-	global.fetch = Object.assign(
+	const fetchMock: FetchImpl = Object.assign(
 		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			payload = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
 			return createSseResponse([
@@ -74,11 +68,12 @@ async function captureDisableReasoningPayload(model: Model<"openai-completions">
 				"[DONE]",
 			]);
 		},
-		{ preconnect: originalFetch.preconnect },
+		{ preconnect: fetch.preconnect },
 	);
 
 	const result = await streamOpenAICompletions(model, testContext, {
 		apiKey: "test-key",
+		fetch: fetchMock,
 		disableReasoning: true,
 	}).result();
 

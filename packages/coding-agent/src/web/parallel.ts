@@ -1,4 +1,4 @@
-import { getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type FetchImpl, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { AgentStorage } from "../session/agent-storage";
 import { findCredential, withHardTimeout } from "./search/providers/utils";
 
@@ -62,6 +62,7 @@ export interface ParallelExtractOptions {
 	excerpts?: boolean;
 	fullContent?: boolean;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 export class ParallelApiError extends Error {
@@ -328,7 +329,8 @@ export async function extractWithParallel(
 		);
 	}
 
-	const response = await fetch(PARALLEL_EXTRACT_URL, {
+	const fetchImpl = options.fetch ?? fetch;
+	const response = await fetchImpl(PARALLEL_EXTRACT_URL, {
 		method: "POST",
 		headers: getAuthHeaders(apiKey),
 		body: JSON.stringify({

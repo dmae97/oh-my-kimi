@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@oh-my-pi/pi-agent-core/compaction/openai";
-import type { AssistantMessage, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { AssistantMessage, FetchImpl, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 
 function makeOpenAiModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"openai-responses"> {
 	return {
@@ -198,13 +197,13 @@ describe("buildOpenAiNativeHistory call-id tracking", () => {
 describe("remote compaction input trimming", () => {
 	test("trims custom tool outputs with their matching custom calls", async () => {
 		let requestInput: Array<Record<string, unknown>> | undefined;
-		using _hook = hookFetch(async (_input, init) => {
+		const fetchMock: FetchImpl = async (_input, init) => {
 			const body = JSON.parse(String(init?.body)) as { input: Array<Record<string, unknown>> };
 			requestInput = body.input;
 			return Response.json({
 				output: [{ type: "compaction_summary", summary: "compact" }],
 			});
-		});
+		};
 
 		await requestOpenAiRemoteCompaction(
 			makeOpenAiModel({ contextWindow: 1 }),
@@ -214,6 +213,8 @@ describe("remote compaction input trimming", () => {
 				{ type: "custom_tool_call_output", call_id: "call_apply_1", output: "patch applied".repeat(1_000) },
 			],
 			"compact",
+			undefined,
+			{ fetch: fetchMock },
 		);
 
 		expect(requestInput?.some(item => item.type === "custom_tool_call")).toBe(false);
@@ -224,7 +225,7 @@ describe("remote compaction input trimming", () => {
 describe("requestOpenAiRemoteCompaction abort", () => {
 	test("rejects when the abort signal is aborted mid-fetch", async () => {
 		const controller = new AbortController();
-		using _hook = hookFetch((_input, init) => {
+		const fetchMock: FetchImpl = (_input, init) => {
 			// Honor the provided abort signal: hang until aborted, then reject.
 			const signal = init?.signal as AbortSignal | undefined;
 			const { promise, reject } = Promise.withResolvers<Response>();
@@ -236,7 +237,7 @@ describe("requestOpenAiRemoteCompaction abort", () => {
 				reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
 			});
 			return promise;
-		});
+		};
 
 		const promise = requestOpenAiRemoteCompaction(
 			makeOpenAiModel(),
@@ -244,6 +245,7 @@ describe("requestOpenAiRemoteCompaction abort", () => {
 			[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
 			"compact",
 			controller.signal,
+			{ fetch: fetchMock },
 		);
 
 		queueMicrotask(() => controller.abort());
