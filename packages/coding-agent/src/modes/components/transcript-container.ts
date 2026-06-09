@@ -212,8 +212,11 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	#nativeScrollbackLiveRegionStart: number | undefined;
 	// Local line index up to which the leading run of live blocks is safe to
 	// commit. Finalized blocks contribute their full frozen body; still-live
-	// blocks contribute only after their stripped render has been observed
-	// growing without changing a previously rendered interior row.
+	// blocks contribute only while their render has been observed growing
+	// without visibly rewriting a previously rendered interior row (escape
+	// placement and pad drift are ignored). A rewrite suspends the block's
+	// contribution until it re-earns append-only via VOLATILE_REARM_FRAMES
+	// clean frames; the pinned emitter then backfills the stalled gap.
 	#nativeScrollbackCommitSafeEnd: number | undefined;
 
 	override invalidate(): void {
