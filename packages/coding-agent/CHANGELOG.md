@@ -6,6 +6,10 @@
 
 - Fixed MCP OAuth fallback prompts so the "Click here to authorize" label emits an auth-safe terminal hyperlink even when hyperlink auto-detection is unavailable, keeping non-browser MCP setup usable ([#2196](https://github.com/can1357/oh-my-pi/issues/2196)).
 
+### Fixed
+
+- Fixed `task`-spawned subagents repeating filesystem scans the parent had already completed. `ExecutorOptions` and the `createAgentSession()` call inside `runSubprocess()` did not forward `rules`, the discovered extension paths, or the discovered `.omp/tools/` paths, so each subagent re-ran `loadCapability<Rule>()`, `discoverAndLoadExtensions()`, and the full `.omp/tools/` walk. The toolsession now caches `session.rules`, `session.extensionPaths`, and `session.customToolPaths`; `runSubprocess()` threads them through; and `createAgentSession()` accepts new `preloadedExtensionPaths` and `preloadedCustomToolPaths` options backed by new exported `discoverExtensionPaths()` and `discoverCustomToolPaths()` helpers. Crucially, only path lists are forwarded — never loaded instances. Each session rebuilds its own `Extension` and `LoadedCustomTool` objects so the per-session `ExtensionAPI`/`CustomToolAPI` (cwd, eventBus, runtime, exec, pushPendingAction, UI) targets the right session; forwarding loaded instances would have routed extension handlers and custom-tool execution back through the parent. The CLI's `preloadedExtensions` short-circuit is preserved for same-process reuse and now shallow-clones the caller's `extensions` array so inline-extension augmentation (autoresearch + custom-tools wrapper) cannot bleed back into it ([#2190](https://github.com/can1357/oh-my-pi/issues/2190)).
+
 ## [15.10.8] - 2026-06-09
 
 ### Added
