@@ -280,6 +280,42 @@ describe("OutputSink", () => {
 		expect(dumped.output).toBe("bcdef");
 	});
 
+	test("artifact file includes head-retained bytes when head retention is enabled", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "output.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "artifact-2",
+			spillThreshold: 5,
+			headBytes: 4,
+		});
+
+		// First chunk lands fully in the head window; later chunks overflow the
+		// tail budget and trigger the artifact spill.
+		sink.push("head");
+		sink.push("abc");
+		sink.push("defgh");
+		const dumped = await sink.dump();
+		const artifactText = await Bun.file(artifactPath).text();
+
+		expect(dumped.truncated).toBe(true);
+		expect(artifactText).toBe("headabcdefgh");
+	});
+
+	test("throttled onChunk coalesces held-back chunks instead of dropping them", async () => {
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 60_000 });
+		sink.push("a");
+		// Inside the throttle window: buffered, not dropped.
+		sink.push("b");
+		sink.push("c");
+		const dumped = await sink.dump();
+
+		// First push fires immediately; dump flushes the coalesced remainder.
+		expect(chunks).toEqual(["a", "bc"]);
+		expect(dumped.output).toBe("abc");
+	});
+
 	test("createInput decodes streamed UTF-8 chunks correctly", async () => {
 		const sink = new OutputSink();
 		const writer = sink.createInput().getWriter();

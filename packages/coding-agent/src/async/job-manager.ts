@@ -23,6 +23,12 @@ export interface AsyncJob {
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
 	 */
 	ownerId?: string;
+	/**
+	 * Job is registered but parked behind a caller-managed gate (e.g. a task
+	 * batch semaphore). Queued jobs do not count toward the running-job limit
+	 * until the caller invokes `markRunning()` from the run context.
+	 */
+	queued?: boolean;
 }
 
 export interface AsyncJobManagerOptions {
@@ -53,6 +59,8 @@ export interface AsyncJobRegisterOptions {
 	/** Registry id of the agent that owns this job; used to scope cancelAll. */
 	ownerId?: string;
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
+	/** Register the job in queued state; see {@link AsyncJob.queued}. */
+	queued?: boolean;
 }
 
 /**
@@ -110,6 +118,17 @@ export class AsyncJobManager {
 		this.#retentionMs = Math.max(0, Math.floor(options.retentionMs ?? DEFAULT_RETENTION_MS));
 	}
 
+	/** True when the running-job count has reached the configured cap. */
+	get atCapacity(): boolean {
+		if (this.#disposed) return true;
+		// Mirror register(): queued jobs hold no execution slot.
+		let activeCount = 0;
+		for (const job of this.#jobs.values()) {
+			if (job.status === "running" && !job.queued) activeCount++;
+		}
+		return activeCount >= this.#maxRunningJobs;
+	}
+
 	register(
 		type: "bash" | "task",
 		label: string,
@@ -117,14 +136,21 @@ export class AsyncJobManager {
 			jobId: string;
 			signal: AbortSignal;
 			reportProgress: (text: string, details?: Record<string, unknown>) => Promise<void>;
+			/** Clear the queued flag once the job actually starts executing. */
+			markRunning: () => void;
 		}) => Promise<string>,
 		options?: AsyncJobRegisterOptions,
 	): string {
 		if (this.#disposed) {
 			throw new Error("Async job manager is disposed");
 		}
-		const runningCount = this.getRunningJobs().length;
-		if (runningCount >= this.#maxRunningJobs) {
+		// Queued jobs hold no execution slot yet — only count jobs that are
+		// actually running so a large parked batch cannot starve registration.
+		let activeCount = 0;
+		for (const existing of this.#jobs.values()) {
+			if (existing.status === "running" && !existing.queued) activeCount++;
+		}
+		if (activeCount >= this.#maxRunningJobs) {
 			throw new Error(
 				`Background job limit reached (${this.#maxRunningJobs}). Wait for running jobs to finish or cancel one.`,
 			);
@@ -144,6 +170,7 @@ export class AsyncJobManager {
 			abortController,
 			promise: Promise.resolve(),
 			ownerId: options?.ownerId,
+			queued: options?.queued === true,
 		};
 
 		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
@@ -159,7 +186,14 @@ export class AsyncJobManager {
 		};
 		job.promise = (async () => {
 			try {
-				const text = await run({ jobId: id, signal: abortController.signal, reportProgress });
+				const text = await run({
+					jobId: id,
+					signal: abortController.signal,
+					reportProgress,
+					markRunning: () => {
+						job.queued = false;
+					},
+				});
 				if (job.status === "cancelled") {
 					job.resultText = text;
 					this.#scheduleEviction(id);
@@ -276,6 +310,26 @@ export class AsyncJobManager {
 			...this.#deliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId)),
 		);
 		return before - this.#deliveries.length;
+	}
+
+	/**
+	 * Lift a foreground-wait suppression set via `acknowledgeDeliveries`. If the
+	 * job already finished while suppressed (its delivery enqueue was skipped),
+	 * re-enqueue the completion so the result is still delivered exactly once.
+	 */
+	resumeDeliveries(jobIds: string[]): void {
+		for (const rawId of jobIds) {
+			const jobId = rawId.trim();
+			if (!jobId) continue;
+			if (!this.#suppressedDeliveries.delete(jobId)) continue;
+			const job = this.#jobs.get(jobId);
+			if (!job || (job.status !== "completed" && job.status !== "failed")) continue;
+			const queued =
+				this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+				this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId);
+			if (queued) continue;
+			this.#enqueueDelivery(jobId, job.status === "completed" ? (job.resultText ?? "") : (job.errorText ?? ""));
+		}
 	}
 
 	/**
