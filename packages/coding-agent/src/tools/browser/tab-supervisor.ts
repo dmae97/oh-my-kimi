@@ -84,21 +84,51 @@ export interface ReleaseTabOptions {
 }
 
 const tabs = new Map<string, TabSession>();
+// Per-name acquisition chain: serializes concurrent `acquireTab` calls for the
+// same tab name so the existence check and `tabs.set` (separated by several
+// awaits) cannot interleave and leak a worker + browser refCount.
+const acquireChains = new Map<string, Promise<void>>();
 const GRACE_MS = 750;
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
 }
 
-export async function acquireTab(
+export function acquireTab(name: string, browser: BrowserHandle, opts: AcquireTabOptions): Promise<AcquireTabResult> {
+	const prior = acquireChains.get(name) ?? Promise.resolve();
+	const result = prior.then(() => acquireTabImpl(name, browser, opts));
+	const tail = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	acquireChains.set(name, tail);
+	void tail.then(() => {
+		if (acquireChains.get(name) === tail) acquireChains.delete(name);
+	});
+	return result;
+}
+
+async function acquireTabImpl(
 	name: string,
 	browser: BrowserHandle,
 	opts: AcquireTabOptions,
 ): Promise<AcquireTabResult> {
+	// Serialized opens can sit behind a slow predecessor in the per-name
+	// chain; honor an abort at dequeue instead of spawning a worker and
+	// browser hold nobody is waiting for.
+	if (opts.signal?.aborted) {
+		throw new ToolAbortError("Browser tab open aborted");
+	}
+	// Temporary refCount hold so releasing an existing tab on the SAME browser
+	// below cannot drop it to refCount 0 and dispose the instance we are about
+	// to reuse (e.g. reopening the sole tab with a different dialogs policy).
+	let tempHold = false;
 	const existing = tabs.get(name);
 	if (existing) {
 		if (existing.browser === browser && existing.state === "alive") {
 			if (opts.dialogs !== undefined && opts.dialogs !== existing.dialogPolicy) {
+				holdBrowser(browser);
+				tempHold = true;
 				await releaseTab(name, { kill: false });
 			} else {
 				const reuseSteps: string[] = [];
@@ -127,12 +157,25 @@ export async function acquireTab(
 				return { tab: tabs.get(name)!, created: false };
 			}
 		} else {
+			if (existing.browser === browser) {
+				holdBrowser(browser);
+				tempHold = true;
+			}
 			await releaseTab(name, { kill: false });
 		}
 	}
 
-	const initPayload = await buildInitPayload(browser, opts);
-	let worker = await spawnTabWorker();
+	let initPayload: WorkerInitPayload;
+	let worker: WorkerHandle;
+	try {
+		initPayload = await buildInitPayload(browser, opts);
+		worker = await spawnTabWorker();
+	} catch (error) {
+		// Failing before the worker took its own hold must release the
+		// temporary one, or the browser's refCount never reaches 0 again.
+		if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+		throw error;
+	}
 	let info: ReadyInfo;
 	try {
 		info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
@@ -142,7 +185,7 @@ export async function acquireTab(
 		// the inline worker here so module-resolution failures don't poison every tab open.
 		await worker.terminate().catch(() => undefined);
 		if (worker.mode === "inline") {
-			if (browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
 			throw error;
 		}
 		logger.warn("Tab worker init failed; retrying with inline tab worker (no sync-loop guard)", {
@@ -153,7 +196,7 @@ export async function acquireTab(
 			info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
 		} catch (inlineError) {
 			await worker.terminate().catch(() => undefined);
-			if (browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
 			const finalError = new ToolError(
 				`Failed to start browser tab worker (inline fallback also failed): ${inlineError instanceof Error ? inlineError.message : String(inlineError)}`,
 			);
@@ -163,6 +206,7 @@ export async function acquireTab(
 	}
 
 	holdBrowser(browser);
+	if (tempHold) await releaseBrowser(browser, { kill: false });
 	const tab: TabSession = {
 		name,
 		browser,

@@ -157,7 +157,10 @@ export function holdBrowser(handle: BrowserHandle): void {
 export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
 	handle.refCount = Math.max(0, handle.refCount - 1);
 	if (handle.refCount === 0) {
-		browsers.delete(handle.key);
+		// Only evict if the registry still points at THIS handle. After a disconnect,
+		// `acquireBrowser` may have already replaced the entry with a fresh live handle
+		// under the same key; deleting blindly would orphan that new browser.
+		if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
 		await disposeBrowserHandle(handle, opts);
 	}
 }
