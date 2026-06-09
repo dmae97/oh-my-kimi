@@ -52,7 +52,6 @@ export interface NormalizeSchemaOptions {
 
 interface NormalizeSchemaWalkOptions extends NormalizeSchemaOptions {
 	insideProperties: boolean;
-	epoch: number;
 }
 
 interface ResidualIncompatibilityChecks {
@@ -219,13 +218,27 @@ function applyDescriptionSpill(
 
 function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions): unknown {
 	if (Array.isArray(value)) {
-		if (!once(value, options.epoch)) return [];
-		return value.map(entry => normalizeSchemaNode(entry, options));
+		if (!enter(value)) return [];
+		try {
+			return value.map(entry => normalizeSchemaNode(entry, options));
+		} finally {
+			exit(value);
+		}
 	}
 	if (!isJsonObject(value)) {
 		return value;
 	}
-	if (!once(value, options.epoch)) return {};
+	// `enter`/`exit` path-tracking (not a visited-set): DAG-shared subtrees are
+	// normalized at every occurrence; only true cycles short-circuit to `{}`.
+	if (!enter(value)) return {};
+	try {
+		return normalizeSchemaObjectNode(value, options);
+	} finally {
+		exit(value);
+	}
+}
+
+function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWalkOptions): unknown {
 	let obj = options.normalizeFieldNames && !options.insideProperties ? applySnakeCaseRenames(value) : value;
 	if (options.collapseNullFields && !options.insideProperties) {
 		obj = preHandleNullFields(obj);
@@ -795,7 +808,6 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 	let normalized = normalizeSchemaNode(dereferenced, {
 		...options,
 		insideProperties: false,
-		epoch: epochNext(),
 	});
 	if (options.stripResidualCombinersFixpoint) {
 		normalized = stripResidualCombiners(normalized);

@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $envpos, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { FetchImpl } from "../types";
+import { raceWithSignal } from "../utils/abort";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
@@ -259,6 +260,13 @@ async function resolveAccessTokenUncached(
 }
 
 /**
+ * Bound for the detached (signal-free) shared token resolution: a hung OAuth
+ * exchange or metadata fetch must not pin the inflight slot forever — every
+ * later call would await the stuck promise until process restart.
+ */
+const SHARED_TOKEN_RESOLVE_TIMEOUT_MS = 30_000;
+
+/**
  * Returns a Bearer access token suitable for the `Authorization` header on Vertex AI calls.
  * The token is cached in module scope and refreshed `GOOGLE_VERTEX_REFRESH_SKEW_MS` ms before it expires.
  */
@@ -277,11 +285,17 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 
 	const cacheKey = "vertex-adc";
 	const existing = inflight.get(cacheKey);
-	if (existing) return existing;
+	if (existing) return raceWithSignal(existing, options?.signal);
 
+	// Deliberately resolve without any caller's signal: the in-flight promise is shared
+	// by every concurrent caller, so aborting one request must not fail the whole batch.
+	// Each caller races its own signal against the shared promise instead.
 	const promise = (async () => {
 		try {
-			const { source, token } = await resolveAccessTokenUncached(options?.signal, fetchImpl);
+			const { source, token } = await resolveAccessTokenUncached(
+				AbortSignal.timeout(SHARED_TOKEN_RESOLVE_TIMEOUT_MS),
+				fetchImpl,
+			);
 			const expiresAtMs = Date.now() + Math.max(0, token.expires_in * 1000);
 			tokenCache.set(source, { token: token.access_token, expiresAtMs });
 			logger.debug("vertex.adc acquired access token", { source, expiresInSec: token.expires_in });
@@ -291,7 +305,7 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 		}
 	})();
 	inflight.set(cacheKey, promise);
-	return promise;
+	return raceWithSignal(promise, options?.signal);
 }
 
 /** Test seam: clears every cached token. */
