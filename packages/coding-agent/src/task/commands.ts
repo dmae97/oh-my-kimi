@@ -120,7 +120,8 @@ export function getCommand(commands: WorkflowCommand[], name: string): WorkflowC
  * Replaces $@ with the provided input.
  */
 export function expandCommand(command: WorkflowCommand, input: string): string {
-	return command.instructions.replace(/\$@/g, input);
+	// Function replacement so `$`-patterns in user input ($$, $&, ...) stay literal.
+	return command.instructions.replace(/\$@/g, () => input);
 }
 
 /**
