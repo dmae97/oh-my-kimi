@@ -312,9 +312,14 @@ const ANTIGRAVITY_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
  * Anthropic / OpenAI) per tier per window, and {@link fetchAntigravityUsage}
  * sorts them ascending by `remainingFraction` — so `limits[0]` is always the
  * most-pressured counter for the credential, and `limits[1]` (when present)
- * is the next-most-pressured. Mapping those to {primary, secondary} lets the
- * ranker compare two credentials on both their bottleneck counter and their
- * runner-up before falling back to round-robin.
+ * is the next-most-pressured counter.
+ *
+ * `AuthStorage` compares the `secondary*` ranking metrics before `primary*`
+ * because other providers model a long-window budget as secondary. Antigravity
+ * does not expose a short/long split; every counter is a sibling bottleneck.
+ * Therefore the most-pressured counter goes in `secondary`, with the runner-up
+ * in `primary`, so proactive account selection always ranks the bottleneck
+ * before any healthier sibling counter.
  *
  * The Antigravity API exposes `resetTime` but not window duration, so the
  * drain-rate calculation depends on `windowDefaults`. Antigravity quotas are
@@ -324,7 +329,7 @@ const ANTIGRAVITY_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const antigravityRankingStrategy: CredentialRankingStrategy = {
 	findWindowLimits(report) {
-		return { primary: report.limits[0], secondary: report.limits[1] };
+		return { primary: report.limits[1], secondary: report.limits[0] };
 	},
 	windowDefaults: {
 		primaryMs: ANTIGRAVITY_DAILY_WINDOW_MS,

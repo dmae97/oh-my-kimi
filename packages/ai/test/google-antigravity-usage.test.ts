@@ -257,18 +257,20 @@ describe("antigravity ranking strategy", () => {
 		};
 	}
 
-	it("maps the most-pressured counter to primary and the runner-up to secondary", () => {
+	it("maps the most-pressured counter to secondary because AuthStorage compares secondary first", () => {
 		// fetchAntigravityUsage sorts ascending by remainingFraction, so a real
-		// report's limits[0] is always the bottleneck — the ranking strategy
-		// MUST surface that as the primary signal, not the first model alphabetically.
+		// report's limits[0] is always the bottleneck. AuthStorage compares the
+		// secondary ranking metrics before primary, so Antigravity must put the
+		// bottleneck there; otherwise [5%, 90%] remaining can beat [40%, 40%]
+		// because the runner-up counter looks healthier.
 		const report = {
 			provider: "google-antigravity" as const,
 			fetchedAt: Date.now(),
 			limits: [makeLimit(0.05, "Anthropic"), makeLimit(0.4, "Google"), makeLimit(0.9, "OpenAI")],
 		};
 		const { primary, secondary } = antigravityRankingStrategy.findWindowLimits(report);
-		expect(primary?.label).toBe("Anthropic");
-		expect(secondary?.label).toBe("Google");
+		expect(secondary?.label).toBe("Anthropic");
+		expect(primary?.label).toBe("Google");
 	});
 
 	it("returns undefined windows when the credential has no usage limits", () => {
