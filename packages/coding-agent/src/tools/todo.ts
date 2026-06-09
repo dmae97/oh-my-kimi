@@ -51,7 +51,7 @@ export interface TodoToolDetails {
 // =============================================================================
 
 const TodoOp = z
-	.enum(["init", "start", "done", "rm", "drop", "append", "note"] as const)
+	.enum(["init", "start", "done", "rm", "drop", "append", "note", "view"] as const)
 	.describe("operation to apply");
 
 const InitListEntry = z.object({
@@ -380,6 +380,8 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string
 		}
 		case "append":
 			return appendItems(phases, entry, errors);
+		case "view":
+			return phases;
 	}
 }
 
@@ -523,9 +525,12 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 	return { phases, errors };
 }
 
-function formatSummary(phases: TodoPhase[], errors: string[]): string {
+function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
-	if (tasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
+	if (tasks.length === 0) {
+		if (errors.length > 0) return `Errors: ${errors.join("; ")}`;
+		return readOnly ? "Todo list is empty." : "Todo list cleared.";
+	}
 
 	const remainingByPhase = phases
 		.map(phase => ({
@@ -608,15 +613,19 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoToolDetails>> {
 		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
-		const { phases: updated, errors } = applyParams(clonePhases(previousPhases), params);
-		const completedTasks = getCompletionTransitions(previousPhases, updated);
-		this.session.setTodoPhases?.(updated);
+		// Pure-view calls are reads: no normalization, no state write.
+		const readOnly = params.ops.every(entry => entry.op === "view");
+		const { phases: updated, errors } = readOnly
+			? { phases: previousPhases, errors: [] as string[] }
+			: applyParams(clonePhases(previousPhases), params);
+		const completedTasks = readOnly ? [] : getCompletionTransitions(previousPhases, updated);
+		if (!readOnly) this.session.setTodoPhases?.(updated);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
 		const details: TodoToolDetails = { phases: updated, storage };
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
 
 		return {
-			content: [{ type: "text", text: formatSummary(updated, errors) }],
+			content: [{ type: "text", text: formatSummary(updated, errors, readOnly) }],
 			details,
 			isError: errors.length > 0 ? true : undefined,
 		};

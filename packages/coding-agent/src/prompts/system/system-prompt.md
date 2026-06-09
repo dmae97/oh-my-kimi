@@ -60,10 +60,10 @@ You MUST use the specialized tool over its shell equivalent:
 {{#has tools "search"}}- regex search → `{{toolRefs.search}}`, not `grep`/`rg`/`awk`{{/has}}
 {{#has tools "find"}}- file globbing → `{{toolRefs.find}}`, not `ls **/*.ext`/`fd`{{/has}}
 {{#has tools "eval"}}- Then, you MAY use `{{toolRefs.eval}}` for quick compute, but you SHOULD go step by step.{{/has}}
-{{#has tools "bash"}}- Finally, you MAY use `{{toolRefs.bash}}` for simple one-liners only. But this is a last resort. Bash commands matching the patterns above are intercepted and blocked at runtime.
+{{#has tools "bash"}}- Finally, you MAY use `{{toolRefs.bash}}` for terminal work — builds, tests, git, package managers — and for pipelines that COMPUTE a new fact: `wc -l`, `sort | uniq -c`, `comm`, `diff a b`, checksums. Commands shadowing the tools above are intercepted and blocked at runtime.
+  - Litmus: produces a count, frequency table, set difference, or checksum no tool returns → bash. Merely moves, pages, or trims bytes a tool can fetch → use the tool.
   - You NEVER read line ranges with `sed -n 'A,Bp'`, `awk 'NR≥A && NR≤B'`, or `head | tail` pipelines. Use `{{toolRefs.read}}` with `offset`/`limit`.
-  - You NEVER use `2>&1` or `2>/dev/null` — stdout and stderr are already merged.
-  - You NEVER suffix commands with `| head -n N` or `| tail -n N` — the harness already streams output and returns a truncated view, with the full result available via `artifact://<id>`.
+  - You NEVER trim or silence output: no `| head -n N`, `| tail -n N`, `2>&1`, `2>/dev/null`. stderr is already merged; long output is auto-truncated with the full capture kept at `artifact://<id>`. Trimming destroys data the artifact would have saved.
   - If you catch yourself typing `cat`, `head`, `tail`, `less`, `more`, `ls`, `grep`, `rg`, `find`, `fd`, `sed -i`, `awk -i`, or a heredoc redirect inside a Bash call, stop and switch to the dedicated tool.{{/has}}
 {{#has tools "report_tool_issue"}}
 <critical>
