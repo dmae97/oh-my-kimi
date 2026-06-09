@@ -323,4 +323,50 @@ describe("SearchTool internal URL resolution", () => {
 			"Artifact 999 not found",
 		);
 	});
+
+	it("emits forward-only, deduplicated context lines for adjacent virtual matches", async () => {
+		registerVirtualDocs(new Map([["doc.md", "l1\nneedle a\nl3\nneedle b\nl5\nl6\nl7\nl8\n"]]));
+
+		const session = createSession({
+			settings: Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 3 }),
+		});
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["virtual://doc.md"],
+		});
+
+		const text = getResultText(result);
+		const lineNumbers = text
+			.split("\n")
+			.map(line => /^[* ](\d+)\|/.exec(line)?.[1])
+			.filter((n): n is string => n !== undefined)
+			.map(Number);
+		expect(lineNumbers.length).toBeGreaterThan(0);
+		for (let i = 1; i < lineNumbers.length; i++) {
+			expect(lineNumbers[i]).toBeGreaterThan(lineNumbers[i - 1]);
+		}
+		// Context between the two matches appears exactly once.
+		expect(lineNumbers.filter(n => n === 3)).toHaveLength(1);
+	});
+
+	it("reports 'No more results' instead of 'No matches found' when skip is past the end", async () => {
+		await Bun.write(path.join(tmpDir, "a.txt"), "needle in a\n");
+		await Bun.write(path.join(tmpDir, "b.txt"), "needle in b\n");
+
+		const session = createSession();
+		const tool = new SearchTool(session);
+
+		const result = await tool.execute("test-call", {
+			pattern: "needle",
+			paths: ["."],
+			skip: 5,
+		});
+
+		const text = getResultText(result);
+		expect(text).toContain("No more results");
+		expect(text).toContain("2 files total");
+		expect(text).not.toContain("No matches found");
+	});
 });
