@@ -360,6 +360,7 @@ async function resolveMnemopiProviderOptions(
 						apiKey: modelRegistry.resolver(model.provider, {
 							sessionId,
 							baseUrl: model.baseUrl,
+							modelId: model.id,
 						}),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,

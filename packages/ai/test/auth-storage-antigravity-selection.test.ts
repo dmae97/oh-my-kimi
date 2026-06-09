@@ -124,42 +124,55 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		}
 	});
 
-	test("skips antigravity account whose Gemini counter is exhausted", async () => {
+	test("blocks exhausted Antigravity Gemini counter without blocking healthy Claude counter", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
 		await authStorage.set("google-antigravity", [
-			{ type: "oauth", ...createCredential("acct-exhausted", "proj-exhausted", "exhausted@example.com") },
-			{ type: "oauth", ...createCredential("acct-healthy", "proj-healthy", "healthy@example.com") },
+			{
+				type: "oauth",
+				...createCredential("acct-gemini-exhausted", "proj-gemini-exhausted", "exhausted@example.com"),
+			},
+			{ type: "oauth", ...createCredential("acct-gemini-healthy", "proj-gemini-healthy", "healthy@example.com") },
 		]);
 
-		// Exhausted account: Gemini counter at 100%, Claude counter healthy.
-		// Pre-fix the credential was rotatable only on response-side errors,
-		// so a session could still be assigned to it on first use.
 		usageByAccount.set(
-			"acct-exhausted",
+			"acct-gemini-exhausted",
 			createAntigravityReport({
-				accountId: "acct-exhausted",
-				projectId: "proj-exhausted",
+				accountId: "acct-gemini-exhausted",
+				projectId: "proj-gemini-exhausted",
 				windows: [
 					{ counter: "google", usedFraction: 1, resetInMs: 12 * HOUR_MS },
-					{ counter: "anthropic", usedFraction: 0.2, resetInMs: 12 * HOUR_MS },
+					{ counter: "anthropic", usedFraction: 0.05, resetInMs: 12 * HOUR_MS },
 				],
 			}),
 		);
 		usageByAccount.set(
-			"acct-healthy",
+			"acct-gemini-healthy",
 			createAntigravityReport({
-				accountId: "acct-healthy",
-				projectId: "proj-healthy",
+				accountId: "acct-gemini-healthy",
+				projectId: "proj-gemini-healthy",
 				windows: [
 					{ counter: "google", usedFraction: 0.3, resetInMs: 20 * HOUR_MS },
-					{ counter: "anthropic", usedFraction: 0.1, resetInMs: 20 * HOUR_MS },
+					{ counter: "anthropic", usedFraction: 0.7, resetInMs: 20 * HOUR_MS },
 				],
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("google-antigravity", "session-antigravity-exhausted");
-		expect(apiKey).toBe("api-acct-healthy");
+		const geminiKey = await authStorage.getApiKey("google-antigravity", "session-antigravity-gemini", {
+			modelId: "gemini-3-flash",
+		});
+		expect(geminiKey).toBe("api-acct-gemini-healthy");
+
+		const counts = new Map<string, number>();
+		for (let i = 0; i < 80; i += 1) {
+			const apiKey = await authStorage.getApiKey("google-antigravity", `session-antigravity-claude-${i}`, {
+				modelId: "claude-sonnet-4-5",
+			});
+			if (!apiKey) continue;
+			counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
+		}
+
+		expect(counts.get("api-acct-gemini-exhausted") ?? 0).toBeGreaterThan(counts.get("api-acct-gemini-healthy") ?? 0);
 	});
 
 	test("ranks by bottleneck counter instead of healthier secondary counter", async () => {
@@ -195,7 +208,9 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 
 		const counts = new Map<string, number>();
 		for (let i = 0; i < 80; i += 1) {
-			const apiKey = await authStorage.getApiKey("google-antigravity", `session-antigravity-bottleneck-${i}`);
+			const apiKey = await authStorage.getApiKey("google-antigravity", `session-antigravity-bottleneck-${i}`, {
+				modelId: "gemini-3-flash",
+			});
 			if (!apiKey) continue;
 			counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
 		}
@@ -231,7 +246,9 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		// account by a clear margin even though both are unblocked.
 		const counts = new Map<string, number>();
 		for (let i = 0; i < 60; i += 1) {
-			const apiKey = await authStorage.getApiKey("google-antigravity", `session-antigravity-fresh-${i}`);
+			const apiKey = await authStorage.getApiKey("google-antigravity", `session-antigravity-fresh-${i}`, {
+				modelId: "gemini-3-flash",
+			});
 			if (!apiKey) continue;
 			counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
 		}

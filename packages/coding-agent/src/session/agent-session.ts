@@ -8337,6 +8337,7 @@ export class AgentSession {
 				{
 					retryAfterMs,
 					baseUrl: this.model.baseUrl,
+					modelId: this.model.id,
 				},
 			);
 			if (outcome.switched) {

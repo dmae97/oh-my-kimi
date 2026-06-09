@@ -163,6 +163,7 @@ export async function runEvalCompletion(
 				apiKey: registry.resolver(model.provider, {
 					sessionId: options.session.getSessionId?.() ?? undefined,
 					baseUrl: model.baseUrl,
+					modelId: model.id,
 				}),
 				signal: options.signal,
 				reasoning: reasoningForTier(tier, model),

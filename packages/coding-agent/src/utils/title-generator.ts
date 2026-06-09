@@ -239,7 +239,7 @@ export async function generateTitleOnline(
 				tools: [setTitleTool],
 			},
 			{
-				apiKey: registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl }),
+				apiKey: registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id }),
 				maxTokens,
 				disableReasoning: true,
 				toolChoice: { type: "tool", name: SET_TITLE_TOOL_NAME },

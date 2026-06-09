@@ -1,5 +1,6 @@
 import { getAntigravityUserAgent } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import type {
+	CredentialRankingContext,
 	CredentialRankingStrategy,
 	UsageAmount,
 	UsageFetchContext,
@@ -303,11 +304,34 @@ export const antigravityUsageProvider: UsageProvider = {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+function getAntigravityCounterKeyForModel(context: CredentialRankingContext | undefined): string | undefined {
+	const modelId = context?.modelId?.toLowerCase();
+	if (!modelId) return undefined;
+	if (modelId.startsWith("claude-")) return "anthropic";
+	if (modelId.startsWith("gemini-") || modelId.startsWith("gemma-")) return "google";
+	if (modelId.startsWith("gpt-") || modelId.startsWith("openai/")) return "openai";
+	return undefined;
+}
+
+function getAntigravityCounterLimits(report: UsageReport, counterKey: string): UsageLimit[] {
+	const prefix = `${report.provider}:${counterKey}:`;
+	return report.limits.filter(limit => limit.id.toLowerCase().startsWith(prefix));
+}
+
+function scopeAntigravityLimits(report: UsageReport, context: CredentialRankingContext | undefined): UsageLimit[] {
+	const counterKey = getAntigravityCounterKeyForModel(context);
+	if (!counterKey) return report.limits;
+	const backendLimits = getAntigravityCounterLimits(report, counterKey);
+	if (backendLimits.length > 0) return backendLimits;
+	return getAntigravityCounterLimits(report, "default");
+}
+
 /**
  * Antigravity quotas reset daily and are returned per backend counter
  * (Anthropic / Google / OpenAI) without a fixed "primary vs secondary"
  * split. `fetchAntigravityUsage` already sorts `limits` ascending by
- * `remainingFraction`, so the most-pressured counter is index 0.
+ * `remainingFraction`; after model-family scoping, the most-pressured
+ * relevant counter is index 0.
  *
  * Leave `secondary` unset: AuthStorage compares secondary metrics before
  * primary metrics, which is correct for providers with explicit long-window
@@ -316,8 +340,13 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
  * 80% Gemini / 70% Claude.
  */
 export const antigravityRankingStrategy: CredentialRankingStrategy = {
-	findWindowLimits(report) {
-		return { primary: report.limits[0] };
+	findWindowLimits(report, context) {
+		return { primary: scopeAntigravityLimits(report, context)[0] };
+	},
+	scopeLimits: scopeAntigravityLimits,
+	blockScope(context) {
+		const counterKey = getAntigravityCounterKeyForModel(context);
+		return counterKey ? `counter:${counterKey}` : undefined;
 	},
 	// Antigravity windows omit `durationMs`; the endpoint is
 	// `daily-cloudcode-pa.googleapis.com`, so fall back to 24h when computing
