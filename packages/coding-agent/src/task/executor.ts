@@ -18,7 +18,6 @@ import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
-import type { LoadExtensionsResult } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -195,8 +194,12 @@ export interface ExecutorOptions {
 	workspaceTree?: WorkspaceTree;
 	/** Parent-discovered rules, forwarded to skip rule discovery in the subagent. */
 	rules?: Rule[];
-	/** Parent-loaded extensions, forwarded via `preloadedExtensions` to skip discovery. */
-	preloadedExtensions?: LoadExtensionsResult;
+	/**
+	 * Parent's discovered extension source paths. Forwarded to skip the
+	 * extension FS scan in the subagent; the subagent then re-binds each
+	 * extension against its own `ExtensionAPI` (cwd, eventBus, runtime).
+	 */
+	preloadedExtensionPaths?: string[];
 	/**
 	 * Parent's discovered custom-tool source paths. Forwarded to skip the
 	 * `.omp/tools/` FS scan in the subagent; the subagent then re-binds each
@@ -1298,7 +1301,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					promptTemplates: options.promptTemplates,
 					workspaceTree: options.workspaceTree,
 					rules: options.rules,
-					preloadedExtensions: options.preloadedExtensions,
+					preloadedExtensionPaths: options.preloadedExtensionPaths,
 					preloadedCustomToolPaths: options.preloadedCustomToolPaths,
 					systemPrompt: defaultPrompt => {
 						const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {

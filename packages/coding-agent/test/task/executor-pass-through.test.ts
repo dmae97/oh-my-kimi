@@ -94,16 +94,12 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("forwards rules, preloadedExtensions, and preloadedCustomToolPaths to createAgentSession", async () => {
+	it("forwards rules, preloadedExtensionPaths, and preloadedCustomToolPaths to createAgentSession", async () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
 		const rules: Rule[] = [{ name: "rule-a" } as unknown as Rule];
-		const preloadedExtensions = {
-			extensions: [],
-			errors: [],
-			runtime: { sentinel: "runtime" } as unknown,
-		} as unknown as LoadExtensionsResult;
+		const preloadedExtensionPaths = ["/abs/parent/.omp/extensions/foo.ts"];
 		const preloadedCustomToolPaths: ToolPathWithSource[] = [
 			{ path: "tools/x.ts", source: { provider: "config", providerName: "Config", level: "project" } },
 		];
@@ -111,7 +107,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const result = await runSubprocess({
 			...baseOptions,
 			rules,
-			preloadedExtensions,
+			preloadedExtensionPaths,
 			preloadedCustomToolPaths,
 		});
 
@@ -120,7 +116,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const forwarded = spy.mock.calls[0]?.[0];
 		// Identity, not equality: passing a clone would defeat the perf fix.
 		expect(forwarded?.rules).toBe(rules);
-		expect(forwarded?.preloadedExtensions).toBe(preloadedExtensions);
+		expect(forwarded?.preloadedExtensionPaths).toBe(preloadedExtensionPaths);
 		expect(forwarded?.preloadedCustomToolPaths).toBe(preloadedCustomToolPaths);
 	});
 
@@ -133,7 +129,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(result.exitCode).toBe(0);
 		const forwarded = spy.mock.calls[0]?.[0];
 		expect(forwarded?.rules).toBeUndefined();
-		expect(forwarded?.preloadedExtensions).toBeUndefined();
+		expect(forwarded?.preloadedExtensionPaths).toBeUndefined();
 		expect(forwarded?.preloadedCustomToolPaths).toBeUndefined();
 	});
 });

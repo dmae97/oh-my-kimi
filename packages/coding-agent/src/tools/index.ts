@@ -9,7 +9,6 @@ import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
-import type { LoadExtensionsResult } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
@@ -159,8 +158,13 @@ export interface ToolSession {
 	promptTemplates?: PromptTemplate[];
 	/** Pre-loaded rules (forwarded to subagents to skip re-discovery). */
 	rules?: Rule[];
-	/** Pre-loaded extensions result (forwarded to subagents via `preloadedExtensions`). */
-	extensionsResult?: LoadExtensionsResult;
+	/**
+	 * Pre-discovered extension source paths. Forwarded to subagents so they
+	 * skip the FS scan but still re-bind extensions to their own session-scoped
+	 * `ExtensionAPI` (cwd, eventBus, runtime). Inline extension factories
+	 * (`<inline-N>`) are NOT included — those are session-local.
+	 */
+	extensionPaths?: string[];
 	/**
 	 * Pre-discovered custom-tool source paths from `.omp/tools/`, `.claude/tools/`,
 	 * plugins, etc. Forwarded to subagents so they skip the FS scan but still

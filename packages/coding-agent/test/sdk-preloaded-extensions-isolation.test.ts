@@ -1,12 +1,15 @@
 /**
- * Regression guard for issue #2190.
+ * Regression guard for issue #2190 / PR #2193 review.
  *
- * Subagents pass the parent session's `extensionsResult` as
- * `preloadedExtensions` so the extension-discovery work isn't repeated.
- * `createAgentSession()` augments the result with inline extensions
- * (autoresearch + custom-tools wrapper), so it MUST clone the caller's
- * `extensions` array before mutating it — otherwise the parent's runtime
- * accumulates every subagent's inline wrappers.
+ * The CLI loads extensions early to parse custom flags, then hands the result
+ * back through `preloadedExtensions` so its OWN session can reuse the loaded
+ * instances without redoing the FS scan. `createAgentSession()` augments the
+ * result with inline extensions (autoresearch + custom-tools wrapper), so it
+ * MUST clone the caller's `extensions` array before mutating it — otherwise
+ * the caller's array accumulates session-local wrappers it never authored.
+ *
+ * Subagent forwarding is a separate path (`preloadedExtensionPaths`) which
+ * reloads extensions per session so each session's `ExtensionAPI` is its own.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
