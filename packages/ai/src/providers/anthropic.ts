@@ -14,6 +14,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import {
 	hasOpus47ApiRestrictions,
+	isAnthropicFableOrMythosModel,
 	mapEffortToAnthropicAdaptiveEffort,
 	supportsMidConversationSystemMessages,
 } from "../model-thinking";
@@ -283,10 +284,12 @@ const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
 let warnedStopSequencesTrim = false;
 
 /**
- * Adaptive thinking `display` is supported starting with Claude Opus 4.7.
- * Older adaptive-thinking models (Opus 4.6, Sonnet 4.6+) reject the field.
+ * Adaptive thinking `display` is supported starting with Claude Opus 4.7 and
+ * Claude Fable/Mythos 5. Older adaptive-thinking models (Opus 4.6, Sonnet
+ * 4.6+) reject the field.
  */
 function supportsAdaptiveThinkingDisplay(modelId: string): boolean {
+	if (/claude-(?:fable|mythos)-5\b/.test(modelId)) return true;
 	const match = /claude-opus-(\d+)-(\d+)/.exec(modelId);
 	if (!match) return false;
 	const major = Number(match[1]);
@@ -896,17 +899,18 @@ export type AnthropicThinkingDisplay = "summarized" | "omitted";
 export interface AnthropicOptions extends StreamOptions {
 	/**
 	 * Enable extended thinking.
-	 * For Opus 4.6+: uses adaptive thinking (Claude decides when/how much to think).
-	 * For older models: uses budget-based thinking with thinkingBudgetTokens.
+	 * For adaptive-capable models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5):
+	 * uses adaptive thinking (Claude decides when/how much to think). For older
+	 * models: uses budget-based thinking with thinkingBudgetTokens.
 	 */
 	thinkingEnabled?: boolean;
 	/**
 	 * Token budget for extended thinking (older models only).
-	 * Ignored for Opus 4.6+ which uses adaptive thinking.
+	 * Ignored for adaptive-capable models.
 	 */
 	thinkingBudgetTokens?: number;
 	/**
-	 * Effort level for adaptive thinking (Opus 4.6+ only).
+	 * Effort level for adaptive thinking.
 	 * Controls how much thinking Claude allocates:
 	 * - "max": Always thinks with no constraints
 	 * - "high": Always thinks, deep reasoning (default)
@@ -1279,8 +1283,9 @@ function getAnthropicCompat(
 			model.compat?.supportsMidConversationSystem ??
 			// First-party Claude API only. Bedrock/Vertex/Foundry and other
 			// Anthropic-compatible proxies reject the role; gate auto-detection on
-			// the canonical api.anthropic.com host plus an Opus 4.8+ model id.
+			// the canonical api.anthropic.com host plus a supported model id.
 			(isAnthropicApiBaseUrl(model.baseUrl) && supportsMidConversationSystemMessages(model.id)),
+		supportsForcedToolChoice: model.compat?.supportsForcedToolChoice ?? !isAnthropicFableOrMythosModel(model.id),
 	};
 }
 
@@ -2556,12 +2561,12 @@ function buildParams(
 			const compat = getAnthropicCompat(model);
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
-				// Starting with Claude Opus 4.7, adaptive thinking content is omitted from the
-				// response by default. Opt into summarized reasoning so thinking deltas keep
-				// streaming with human-readable content for callers that rely on it. The
-				// `display` field is gated strictly on model support: Opus 4.6 / Sonnet 4.6+
-				// reject it with a 400, so an explicit `thinkingDisplay` MUST NOT force it onto
-				// a model that can't accept it (a hidden-thinking toggle must never break the request).
+				// Starting with Claude Opus 4.7 and Claude Fable/Mythos 5, adaptive thinking
+				// content is omitted from the response by default. Opt into summarized
+				// reasoning so thinking deltas keep streaming with human-readable content for
+				// callers that rely on it. The `display` field is gated strictly on model
+				// support: Opus 4.6 / Sonnet 4.6+ reject it with a 400, so an explicit
+				// `thinkingDisplay` MUST NOT force it onto a model that can't accept it.
 				if (supportsAdaptiveThinkingDisplay(model.id)) {
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
@@ -2576,7 +2581,17 @@ function buildParams(
 				if (mode === "anthropic-budget-effort" && effort) outputConfigEffort = effort;
 			}
 		} else if (options?.thinkingEnabled === false) {
-			thinking = { type: "disabled" };
+			const compat = getAnthropicCompat(model);
+			if (model.thinking?.mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
+				// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
+				// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
+				// Omit the thinking field (the API defaults to adaptive) and pin the
+				// lowest effort so "thinking off" calls stay cheap instead of failing
+				// the request with a 400 (a hidden-thinking toggle must never break it).
+				outputConfigEffort = "low";
+			} else {
+				thinking = { type: "disabled" };
+			}
 		}
 	}
 
@@ -2607,7 +2622,7 @@ function buildParams(
 		stream: true,
 	};
 
-	// Opus 4.7+ rejects non-default sampling parameters with 400 error.
+	// Opus 4.7+ and Fable/Mythos 5 reject non-default sampling parameters with 400 error.
 	const thinkingType = params.thinking?.type;
 	const allowSamplingParams =
 		!hasOpus47ApiRestrictions(model.id) && (thinkingType === undefined || thinkingType === "disabled");
@@ -2644,6 +2659,14 @@ function buildParams(
 			params.tool_choice = { ...options.toolChoice, name: applyClaudeToolPrefix(options.toolChoice.name) };
 		} else {
 			params.tool_choice = options.toolChoice;
+		}
+		// Claude Fable/Mythos 5 reject forced tool use outright ("tool_choice forces
+		// tool use is not compatible with this model"). Downgrade any/tool → auto so the
+		// request succeeds; the tool stays available and the caller's prompt steers
+		// the model toward it.
+		const choiceType = params.tool_choice?.type;
+		if ((choiceType === "any" || choiceType === "tool") && !getAnthropicCompat(model).supportsForcedToolChoice) {
+			params.tool_choice = { type: "auto" };
 		}
 	}
 
@@ -2718,7 +2741,7 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 
 /**
  * A single Anthropic conversation turn, including the mid-conversation
- * `system` role (Opus 4.8+).
+ * `system` role (Opus 4.8+ and Fable/Mythos 5).
  */
 export type AnthropicMessageParam = MessageParam;
 
@@ -2857,7 +2880,7 @@ export function convertAnthropicMessages(
 	}
 
 	// Upgrade developer-origin params to mid-conversation `system` messages where
-	// Anthropic's placement rules allow it (Opus 4.8+ on the first-party API).
+	// Anthropic's placement rules allow it (Opus 4.8+ / Fable/Mythos 5 on first-party API).
 	// Rules: a system message must immediately follow a `user` turn and must be
 	// the last entry or be followed by an `assistant` turn — never first, and
 	// never consecutive. Requiring the next param to be `assistant` (or absent)

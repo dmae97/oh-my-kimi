@@ -1,5 +1,140 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { resolveStdioSpawnCommand, StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
+
+describe("resolveStdioSpawnCommand", () => {
+	it("resolves bare Windows commands through PATHEXT and wraps .cmd shims with cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-stdio-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `"${shim}" "serve" "--mcp"`]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["serve", "--header", "Authorization=%TOKEN%"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`"${shim}" "serve" "--header" "Authorization=^%TOKEN^%"`,
+			]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes quoted JSON args before routing .cmd shims through cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-quotes-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["--config", '{"a":"b&c|d"}'] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`"${shim}" "--config" "{^"a^":^"b&c|d^"}"`,
+			]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves extension-less absolute Windows paths to the sibling .cmd shim", async () => {
+		// Mirrors npm's Windows shim layout: bare `codegraph` (shebang script),
+		// `codegraph.cmd` (cmd.exe wrapper), and `codegraph.ps1` siblings under
+		// %AppData%\Roaming\npm. uv_spawn rejects the extensionless script;
+		// the resolver must promote the bare absolute path to its `.cmd`
+		// sibling so the launch succeeds (see #2174). The test rig pins
+		// PATHEXT to a single lowercase extension so the candidate filename
+		// matches the file we create on the case-sensitive test host.
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-abs-"));
+		try {
+			const bare = path.join(tempDir, "codegraph");
+			const shim = `${bare}.cmd`;
+			await Bun.write(bare, "#!/bin/sh\n");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: bare, args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `"${shim}" "serve" "--mcp"`]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves non-Windows commands untouched", async () => {
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
+			{ cwd: "/", env: {}, platform: "linux" },
+		);
+
+		expect(result.cmd).toEqual(["codegraph", "serve", "--mcp"]);
+	});
+});
 
 // ---------------------------------------------------------------------------
 // writeFrame — the seam that catches synchronous FileSink throws AND neutralizes

@@ -27,6 +27,7 @@ import {
 	PROVIDER_DESCRIPTORS,
 } from "../src/provider-models/descriptors";
 import {
+	ANTHROPIC_CURATED_FALLBACK_MODELS,
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
 	isFireworksKimiK2ModelId,
@@ -382,6 +383,11 @@ async function generateModels() {
 	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
 	// async refresh fires (interactive boot does not await refresh).
 	allModels.push(...buildXaiOAuthStaticSeed());
+	// Seed Anthropic models that are live on the first-party API or in limited
+	// release but that models.dev has not catalogued yet (e.g. Claude Fable 5 /
+	// Mythos 5). Deduped behind upstream entries; metadata is pinned in
+	// applyAnthropicCatalogPolicy.
+	allModels.push(...ANTHROPIC_CURATED_FALLBACK_MODELS);
 
 	const specialDiscoverySources = [
 		{ label: "Antigravity", fetch: fetchAntigravityModels },

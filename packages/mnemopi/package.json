@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-mnemopi",
-	"version": "15.10.8",
+	"version": "15.10.9",
 	"description": "Local SQLite memory engine for Oh My Pi agents",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",

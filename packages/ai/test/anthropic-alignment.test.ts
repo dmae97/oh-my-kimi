@@ -1439,6 +1439,37 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.thinking).toBeUndefined();
 	});
 
+	it("drops sampling params for Claude Fable/Mythos 5 without enabled thinking", async () => {
+		for (const id of ["claude-fable-5", "claude-mythos-5"] as const) {
+			const payload = (await captureAnthropicPayload(
+				{
+					...ANTHROPIC_MODEL,
+					id,
+					name: id === "claude-fable-5" ? "Claude Fable 5" : "Claude Mythos 5",
+				},
+				{
+					systemPrompt: ["Stay concise."],
+					messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				},
+				{
+					temperature: 0.2,
+					topP: 0.3,
+					topK: 4,
+				},
+			)) as {
+				temperature?: number;
+				top_p?: number;
+				top_k?: number;
+				thinking?: { type?: string };
+			};
+
+			expect(payload.temperature).toBeUndefined();
+			expect(payload.top_p).toBeUndefined();
+			expect(payload.top_k).toBeUndefined();
+			expect(payload.thinking).toBeUndefined();
+		}
+	});
+
 	it("drops sampling params and keeps summarized adaptive thinking for OAuth Opus 4.7+", async () => {
 		const payload = (await captureAnthropicPayload(
 			{
@@ -1614,6 +1645,49 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.output_config).toEqual({
 			task_budget: { type: "tokens", total: 64_000 },
 		});
+	});
+
+	it("downgrades forced tool choice for Claude Fable/Mythos without deleting adaptive thinking", async () => {
+		for (const id of ["claude-fable-5", "claude-mythos-5"] as const) {
+			const payload = (await captureAnthropicPayload(
+				{
+					...ANTHROPIC_MODEL,
+					id,
+					name: id === "claude-fable-5" ? "Claude Fable 5" : "Claude Mythos 5",
+					contextWindow: 1_000_000,
+					maxTokens: 128_000,
+					thinking: {
+						mode: "anthropic-adaptive",
+						minLevel: Effort.Minimal,
+						maxLevel: Effort.XHigh,
+					},
+				},
+				{
+					systemPrompt: ["Stay concise."],
+					messages: [{ role: "user", content: "Use the tool", timestamp: Date.now() }],
+					tools: [
+						{
+							name: "lookup",
+							description: "Lookup a value",
+							parameters: { type: "object", properties: {}, additionalProperties: false },
+						},
+					],
+				},
+				{
+					thinkingEnabled: true,
+					reasoning: Effort.High,
+					toolChoice: "any",
+				},
+			)) as {
+				thinking?: { type?: string; display?: string };
+				tool_choice?: { type?: string };
+				output_config?: { effort?: string };
+			};
+
+			expect(payload.tool_choice).toEqual({ type: "auto" });
+			expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+			expect(payload.output_config).toEqual({ effort: "xhigh" });
+		}
 	});
 
 	it("treats tool prefix helpers as no-ops when prefix is empty string", () => {

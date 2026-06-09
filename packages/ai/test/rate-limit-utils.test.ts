@@ -53,6 +53,19 @@ describe("parseRateLimitReason", () => {
 			),
 		).toBe("QUOTA_EXHAUSTED");
 	});
+
+	it("classifies Antigravity capacity-exhausted as QUOTA_EXHAUSTED, not transient MODEL_CAPACITY", () => {
+		// Antigravity returns "You have exhausted your capacity on this model. Your
+		// quota will reset after 3h6m38s." The literal "capacity" used to win the
+		// classifier race and land in MODEL_CAPACITY_EXHAUSTED (45-75s backoff),
+		// blocking the agent from rotating to another OAuth account even though the
+		// "quota will reset" suffix is the long-wait, switch-account signal.
+		expect(
+			parseRateLimitReason(
+				"Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 3h6m38s.",
+			),
+		).toBe("QUOTA_EXHAUSTED");
+	});
 });
 
 describe("isUsageLimitError", () => {
@@ -60,6 +73,17 @@ describe("isUsageLimitError", () => {
 		expect(
 			isUsageLimitError(
 				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+			),
+		).toBe(true);
+	});
+
+	it("detects Antigravity capacity-exhausted message as a usage-limit error", () => {
+		// Without this branch `markUsageLimitReached` is never invoked, so the
+		// session sticks to the exhausted OAuth account instead of rotating —
+		// see `agent-session.ts` line 8314 and `auth-storage.ts` line 3457.
+		expect(
+			isUsageLimitError(
+				"Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 3h6m38s.",
 			),
 		).toBe(true);
 	});

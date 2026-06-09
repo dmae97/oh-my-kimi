@@ -18,6 +18,7 @@ import {
 
 const OSC = "\x1b]";
 const ST = "\x1b\\";
+const BEL = "\x07";
 
 /** Stable 8-char hex ID derived from a URI — hints terminals to coalesce identical adjacent links. */
 function buildLinkId(uri: string): string {
@@ -60,14 +61,18 @@ function safeHyperlinkUri(uri: string): string | undefined {
 	return uri;
 }
 
-function wrapHyperlink(uri: string, displayText: string): string {
-	if (!isHyperlinkEnabled()) return displayText;
+function wrapHyperlinkCore(uri: string, displayText: string, terminator: typeof ST | typeof BEL): string {
 	// Do not double-wrap if the text already embeds an OSC 8 sequence.
 	if (displayText.includes("\x1b]8;")) return displayText;
 	const safeUri = safeHyperlinkUri(uri);
 	if (!safeUri) return displayText;
 	const id = buildLinkId(safeUri);
-	return `${OSC}8;id=${id};${safeUri}${ST}${displayText}${OSC}8;;${ST}`;
+	return `${OSC}8;id=${id};${safeUri}${terminator}${displayText}${OSC}8;;${terminator}`;
+}
+
+function wrapHyperlink(uri: string, displayText: string): string {
+	if (!isHyperlinkEnabled()) return displayText;
+	return wrapHyperlinkCore(uri, displayText, ST);
 }
 
 /**
@@ -90,6 +95,25 @@ export function urlHyperlink(url: string, displayText: string): string {
 		const parsed = new URL(normalized);
 		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return displayText;
 		return wrapHyperlink(parsed.href, displayText);
+	} catch {
+		return displayText;
+	}
+}
+
+/**
+ * Wrap `displayText` in an OSC 8 hyperlink pointing at an HTTP(S) URL,
+ * bypassing terminal capability auto-detection. Used for auth prompts where
+ * an inert "click" label blocks login on terminals whose capabilities are
+ * not advertised. Still returns plain text when the user has explicitly
+ * opted out via `tui.hyperlinks=off`.
+ */
+export function urlHyperlinkAlways(url: string, displayText: string): string {
+	if (settings.get("tui.hyperlinks") === "off") return displayText;
+	const normalized = url.match(/^www\./i) ? `https://${url}` : url;
+	try {
+		const parsed = new URL(normalized);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return displayText;
+		return wrapHyperlinkCore(parsed.href, displayText, BEL);
 	} catch {
 		return displayText;
 	}

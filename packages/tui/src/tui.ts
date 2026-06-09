@@ -494,6 +494,10 @@ export class TUI extends Container {
 	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
 	// a single forced render lets the multiplexer settle first.
 	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
+	// Ghostty can drop Kitty graphics commands sent during its first post-startup
+	// settle window, leaving only Unicode placeholder cells. Hold the first image
+	// paint until that window has passed; later images render normally.
+	static readonly #GHOSTTY_INITIAL_IMAGE_DELAY_MS = 100;
 	// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
 	// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
 	// a transcript that overflows the viewport, scroll-pushing everything past
@@ -560,6 +564,9 @@ export class TUI extends Container {
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
 	#imageBudget = new ImageBudget(DEFAULT_MAX_INLINE_IMAGES, () => this.requestRender());
+	#ghosttyInitialImageDelayDone = false;
+	#ghosttyInitialImageDelayTimer: RenderTimer | undefined;
+	#ghosttyImageReadyAtMs = 0;
 	#clearScrollbackOnNextRender = false;
 	#forceViewportRepaintOnNextRender = false;
 	#allowUnknownViewportMutationOnNextRender = false;
@@ -889,6 +896,8 @@ export class TUI extends Container {
 
 	start(options?: TUIStartOptions): void {
 		this.#stopped = false;
+		this.#ghosttyInitialImageDelayDone = false;
+		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + TUI.#GHOSTTY_INITIAL_IMAGE_DELAY_MS;
 		// A DECRQM report for mode 2026 is authoritative: enable synchronized
 		// output when the terminal reports support (upgrading conservatively
 		// defaulted-off hosts like zellij/tmux-master/foot) and disable it when
@@ -1126,6 +1135,10 @@ export class TUI extends Container {
 		if (this.#renderTimer) {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
+		}
+		if (this.#ghosttyInitialImageDelayTimer) {
+			this.#ghosttyInitialImageDelayTimer.cancel();
+			this.#ghosttyInitialImageDelayTimer = undefined;
 		}
 		if (this.#multiplexerResizeTimer) {
 			this.#multiplexerResizeTimer.cancel();
@@ -1370,6 +1383,32 @@ export class TUI extends Container {
 			this.#postFullPaintSettleTimer = undefined;
 		}
 		this.#postFullPaintSettleUntilMs = 0;
+	}
+
+	#maybeDeferGhosttyInitialImagePaint(): boolean {
+		if (this.#ghosttyInitialImageDelayDone) return false;
+		if (TERMINAL.id !== "ghostty" || TERMINAL.imageProtocol !== ImageProtocol.Kitty) {
+			this.#ghosttyInitialImageDelayDone = true;
+			return false;
+		}
+		if (!this.#imageBudget.hasPendingTransmits()) return false;
+		if (this.#ghosttyInitialImageDelayTimer) return true;
+
+		const delayMs = Math.max(0, this.#ghosttyImageReadyAtMs - this.#renderScheduler.now());
+		if (delayMs === 0) {
+			this.#ghosttyInitialImageDelayDone = true;
+			return false;
+		}
+
+		this.#ghosttyInitialImageDelayTimer = this.#renderScheduler.scheduleRender(() => {
+			this.#ghosttyInitialImageDelayTimer = undefined;
+			this.#ghosttyInitialImageDelayDone = true;
+			if (this.#stopped) return;
+			this.#lastRenderAt = this.#renderScheduler.now();
+			this.#doRender();
+			if (this.#renderRequested) this.#scheduleRender();
+		}, delayMs);
+		return true;
 	}
 	#prepareForcedRender(clearScrollback: boolean): void {
 		const geometryChanged =
@@ -1984,6 +2023,7 @@ export class TUI extends Container {
 		// paints, so subsequent frames re-emit only the tiny placement sequence.
 		// `a=t` produces no display, so writing it ahead of the synchronized paint
 		// is artifact-free.
+		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
 		const imageTransmits = this.#imageBudget.takeTransmits();
 		if (imageTransmits.length > 0) {
 			let transmitBuffer = "";
