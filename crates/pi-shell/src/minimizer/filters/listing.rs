@@ -879,6 +879,7 @@ fn aggressive_strip_bodies(input: &str, path: &str) -> Option<String> {
 		.and_then(|e| e.to_str())
 		.unwrap_or("");
 	match ext {
+		"rs" if contains_rust_raw_string_literal(input) => None,
 		"rs" | "ts" | "tsx" | "js" | "jsx" | "go" => Some(strip_brace_bodies(input)),
 		"py" => Some(strip_python_bodies(input)),
 		_ => None,
@@ -924,6 +925,10 @@ fn strip_brace_bodies(input: &str) -> String {
 		out.push('\n');
 	}
 	out
+}
+
+fn contains_rust_raw_string_literal(input: &str) -> bool {
+	input.contains("r#") || input.contains("r\"") || input.contains("br#") || input.contains("br\"")
 }
 
 fn brace_delta(line: &str) -> i32 {
@@ -1508,6 +1513,17 @@ mod tests {
 		assert!(out.text.contains("use std::io;"));
 		assert!(out.text.contains("pub fn foo(x: i32) -> i32 { ... }"));
 		assert!(!out.text.contains("y * 2"));
+	}
+
+	#[test]
+	fn aggressive_rust_outline_bails_on_raw_strings() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.rs", &cfg);
+		let body =
+			"pub fn shader() -> &'static str {\n    r#\"fn main() { println!(\\\"hi\\\"); }\"#\n}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(!out.changed, "raw-string Rust source should fall back to default outline");
+		assert_eq!(out.text, body);
 	}
 
 	#[test]

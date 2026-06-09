@@ -70,7 +70,7 @@ fn condense_rustfmt(input: &str, exit_code: i32) -> String {
 		files.iter().filter(|f| seen.insert(**f)).collect()
 	};
 	let total = unique.len();
-	let _ = writeln!(out, "{total} files reformatted ({total} with diffs):");
+	let _ = writeln!(out, "{total} files reformatted:");
 	for file in unique.iter().take(3) {
 		out.push_str("  ");
 		out.push_str(file);
