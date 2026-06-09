@@ -1879,11 +1879,10 @@ export class TUI extends Container {
 			(this.#previousHeight > 0 && this.#previousHeight !== height) ||
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const eagerEraseScrollbackRisk = this.#hasEagerEraseScrollbackRisk();
-		const eagerRebuildAllowed = this.#eagerNativeScrollbackRebuild && !eagerEraseScrollbackRisk;
 		const focusChanged = this.#focusChangedSinceLastRender;
 		this.#focusChangedSinceLastRender = false;
 		const explicitViewportMutation = this.#allowUnknownViewportMutationOnNextRender || focusChanged;
-		const allowUnknownViewportMutation = explicitViewportMutation || eagerRebuildAllowed;
+		const allowUnknownViewportMutation = explicitViewportMutation;
 		this.#allowUnknownViewportMutationOnNextRender = false;
 
 		// 3. Classify intent.
