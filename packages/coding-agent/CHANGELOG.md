@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a read-only `view` op to the `todo` tool that echoes the current list without mutating state, so the agent can recover exact task text instead of guessing it from memory.
+
+### Changed
+
+- Rewrote the bash tool's coreutils guidance (tool prompt and system prompt) around an explicit litmus: pipelines that compute a new fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`) are legitimate bash, while commands that merely move, page, or trim bytes a dedicated tool can fetch remain banned — output trimming destroys data the `artifact://` capture would have saved.
+
+### Fixed
+
+- Fixed the model selector dropping an immediate Enter when cached models were available but the selector's offline refresh was still pending.
+- Fixed the edit tool's post-edit diff preview occasionally echoing a context line twice with out-of-order numbering. Block-boundary context injection classified space-prefixed diff rows as old-file-only, so an unchanged line sitting in a net-offset region (old N / new N+k) was missing from the new file's visibility window; `findBlockContextLines` then re-surfaced it under its post-edit number and the row was spliced in after the adjacent change run. New-file boundary lines are now translated back to pre-edit numbers (the compact-preview renumbering contract) and merged into a single old-numbered insertion pass — also fixing closers below a net-offset edit being dropped or renumbered incorrectly.
+
 ## [15.10.9] - 2026-06-09
 
 ### Fixed
