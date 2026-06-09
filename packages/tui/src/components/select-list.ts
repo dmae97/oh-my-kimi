@@ -139,9 +139,7 @@ export class SelectList implements Component {
 				rowCounts[i] = 0;
 				continue;
 			}
-			rowCounts[i] = wrapEnabled
-				? this.#computeItemRowCount(item, conservativeRowWidth, primaryColumnWidth)
-				: 1;
+			rowCounts[i] = wrapEnabled ? this.#computeItemRowCount(item, conservativeRowWidth, primaryColumnWidth) : 1;
 			visualTotal += rowCounts[i];
 		}
 
