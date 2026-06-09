@@ -2097,7 +2097,7 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("interrupts websocket streams that emit only whitespace tool-call argument deltas", async () => {
+	it("retries, then surfaces an error, when whitespace-only tool-call argument deltas never recover", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
@@ -2152,11 +2152,105 @@ describe("openai-codex streaming", () => {
 			providerSessionState,
 		}).result();
 
-		expect(sendCount).toBe(1);
+		// One initial attempt + CODEX_WHITESPACE_LOOP_RETRY_LIMIT (2) bounded retries.
+		expect(sendCount).toBe(3);
 		expect(closeCount).toBeGreaterThan(0);
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("whitespace-only tool-call argument delta");
 		expect(result.errorMessage).toContain("fc_ws_whitespace");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("drops the degenerate tool call and recovers when a retried websocket stream completes", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run when the websocket recovers");
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		let connectionCount = 0;
+		let closeCount = 0;
+		class RecoveringWhitespaceWebSocket extends MockWebSocket {
+			#index: number;
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.#index = connectionCount;
+				connectionCount += 1;
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				if (this.#index === 0) {
+					// First attempt: a function call whose arguments are only whitespace.
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "function_call", id: "fc_ws", call_id: "call_ws", name: "todo", arguments: "" },
+					});
+					for (let sequence = 1; sequence <= 300; sequence += 1) {
+						this.sendJson({
+							type: "response.function_call_arguments.delta",
+							delta: sequence % 2 === 0 ? " ".repeat(64) : "\t",
+							item_id: "fc_ws",
+							output_index: 0,
+							sequence_number: sequence,
+						});
+					}
+					return;
+				}
+				// Retried attempt: the model emits a well-formed tool call and completes.
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "function_call", id: "fc_ws", call_id: "call_ws", name: "todo", arguments: "" },
+				});
+				this.sendJson({
+					type: "response.function_call_arguments.delta",
+					delta: '{"ops":[{"op":"start","task":"x"}]}',
+					item_id: "fc_ws",
+					output_index: 0,
+					sequence_number: 1,
+				});
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "function_call",
+						id: "fc_ws",
+						call_id: "call_ws",
+						name: "todo",
+						arguments: '{"ops":[{"op":"start","task":"x"}]}',
+					},
+				});
+				this.sendJson({
+					type: "response.completed",
+					response: { id: "resp_ws", status: "completed", usage: DEFAULT_USAGE },
+				});
+			}
+
+			close(): void {
+				closeCount += 1;
+				super.close();
+			}
+		}
+		global.WebSocket = RecoveringWhitespaceWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			sessionId: "ws-whitespace-recovery-session",
+			providerSessionState,
+		}).result();
+
+		expect(connectionCount).toBe(2);
+		expect(closeCount).toBeGreaterThan(0);
+		expect(result.stopReason).not.toBe("error");
+		expect(result.errorMessage).toBeUndefined();
+		const toolCall = result.content.find(block => block.type === "toolCall");
+		if (toolCall?.type !== "toolCall") throw new Error("expected a recovered toolCall block");
+		expect(toolCall.name).toBe("todo");
+		expect(toolCall.id).toBe("call_ws|fc_ws");
+		expect(toolCall.arguments).toEqual({ ops: [{ op: "start", task: "x" }] });
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
