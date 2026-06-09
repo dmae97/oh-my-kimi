@@ -1,7 +1,7 @@
 Drives real Chromium tab; full puppeteer access via JS execution.
 
 <instruction>
-- For static web content (articles, docs, issues/PRs, JSON, PDFs, feeds), prefer `read` tool with URL — reader-mode text without spinning up browser. Use this tool when Need JS execution, authentication, or interactive actions.
+- For static web content (articles, docs, issues/PRs, JSON, PDFs, feeds), prefer `read` tool with URL — reader-mode text without spinning up browser. Use this tool when you need JS execution, authentication, or interactive actions.
 - Three actions only:
   - `open` — acquire or reuse named tab. `name` defaults `"main"`. Optional `url` navigates after tab ready. Optional `viewport` sets dimensions. Optional `dialogs: "accept" | "dismiss"` auto-handles `alert`/`confirm`/`beforeunload` so navigation/clicks don't hang (default: leave dialogs unhandled — page hangs until caller wires `page.on('dialog', …)`).
   - `close` — release tab by `name`, or every tab with `all: true`. For spawned-app browsers, set `kill: true` to terminate process tree (default leaves running).
@@ -12,7 +12,7 @@ Drives real Chromium tab; full puppeteer access via JS execution.
   - `app.path` → spawn absolute binary (Electron/CDP). If running instance already exposes CDP port, reused; otherwise stale instances killed, fresh one spawned. No stealth patches — NEVER tamper with real desktop app.
   - `app.cdp_url` → connect to existing CDP endpoint (e.g. `http://127.0.0.1:9222`).
   - `app.target` (with `path`/`cdp_url`) — substring matched against url+title to pick BrowserWindow when app exposes several.
-- Inside `run`, `tab` exposes high-level helpers; reach for `page` (raw puppeteer Page) when Need anything they don't cover.
+- Inside `run`, `tab` exposes high-level helpers; reach for `page` (raw puppeteer Page) when you need anything they don't cover.
   - `tab.goto(url, { waitUntil? })` — clears element cache and navigates.
   - `tab.observe({ includeAll?, viewportOnly? })` — accessibility snapshot. Returns `{ url, title, viewport, scroll, elements: [{ id, role, name, value, states, … }] }`. Element ids stable until next observe/goto.
   - `tab.id(n)` — resolves element id from most recent observe to real `ElementHandle` you can `.click()`, `.type()`, etc.

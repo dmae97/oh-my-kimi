@@ -81,5 +81,4 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 - You MUST prefer `read` over a browser/puppeteer tool for URL content; only reach for a browser when `read` cannot deliver reasonable content.
 - For line ranges, append the selector to `path` (`path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`). NEVER substitute `sed -n`, `awk NR`, or `head`/`tail` pipelines.
 - Summary footer says `read <path>:raw …`? Re-issue the exact selector it names. NEVER guess what's inside `..` / `…` markers — they carry no content.
-- You MAY combine selectors with URL reads and internal URIs; both paginate the cached resolved output.
 </critical>

@@ -7,6 +7,8 @@
 
 ### Changed
 
+- Tightened the system prompt and tool prompts: deduped restated warnings (bash "catch yourself" list, search/find shell-fallback recaps, read instruction/critical overlap, the AST metavariable primer duplicated across both ast tool descriptions), factored the repeated repo-default clause in the `gh` search ops, and dropped a dead `rsed` reference and an internal `tool-timeouts.ts` pointer
+- Replace tool prompt no longer recommends `sed -i`/`cat`-heredoc commands that the bash interceptor blocks; its bash-alternatives table now only lists non-intercepted commands
 - Capped concurrent IRC cards in the transcript's live region at 4: cards landing below a still-running tool cannot commit to native scrollback, so an unbounded burst pushed the live block's uncommitted rows above the window top (content read as cut off until the cards expired). The oldest live-region card now retires as soon as a new one would exceed the cap.
 - Interactive PTY mode (`pty: true`) no longer injects the non-interactive environment (`TERM=dumb`, `GIT_EDITOR=true`, `PAGER=cat`, `NO_COLOR=1`) that defeated its purpose — the PTY child now gets a real `TERM=xterm-256color`; and when a PTY is requested but unavailable (headless/RPC), the result now carries an explicit downgrade notice instead of silently running through a dumb pipe.
 - Raw sqlite `?q=` queries are now capped at 1000 rows with an "add a LIMIT clause" notice — `statement.all()` on a multi-million-row table previously materialized every row, blocking the process for minutes.

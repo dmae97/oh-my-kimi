@@ -163,7 +163,7 @@ function getJobStateVisual(
 ): { iconRaw: string; iconColor: ToolUIColor; textColor: ThemeColor } {
 	if (job.conclusion && SUCCESS_CONCLUSIONS.has(job.conclusion)) {
 		return {
-			iconRaw: theme.symbol("tool.gh"),
+			iconRaw: theme.status.success,
 			iconColor: "accent",
 			textColor: "success",
 		};
