@@ -145,7 +145,16 @@ from two independent signals:
   neither committed nor on screen) for the entire run. The ratchet tracks the
   window-minimum common prefix; a rewrite above the promoted run retreats it
   to the divergence, and rows that already committed are the engine audit's
-  problem (recommit → duplication, never loss).
+  problem (recommit → duplication, never loss). That retreat also arms a
+  permanent **rewrite floor** at the divergence: a row that mutates *after*
+  surviving a full promotion window is a slow ticker (an agent row's tool/cost
+  counter updating every few seconds), not settling content — without the
+  floor, every quiet stretch re-promoted it and every later tick forced an
+  audit recommit, spraying stale snapshots of the block into scrollback for
+  the whole run. Rows at/after the floor never re-promote while the block
+  lives (the floor index travels with append-shaped insertions above it);
+  one-off re-layouts before any promotion never arm it, and the append-only
+  path commits the full block regardless.
 
 Freezing is unconditional — it is the engine's required guarantee, not a
 per-terminal optimization.

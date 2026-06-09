@@ -192,12 +192,15 @@ describe("transcript reactive commit boundary", () => {
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
 	});
 
-	it("never re-promotes rows that have ever been rewritten in place (slow ticker)", () => {
+	it("stops re-promoting slow-ticking rows after the first promoted-row rewrite", () => {
 		const chat = new TranscriptContainer();
 		const head = markerLines("head-", 8);
 		// Task progress tree shape: per-agent rows whose tool/cost counters tick
 		// every few seconds — far slower than the promotion window, so each row
-		// looks "settled" between updates.
+		// looks "settled" between updates. Without the rewrite floor, every
+		// quiet stretch re-promotes the tree, every tick rewrites a
+		// committed row, and the engine audit recommits — spraying a stale
+		// snapshot of the block into scrollback for the whole run.
 		const tree = (a: number, b: number, c: number) => [
 			`agent-one · ${a} tools`,
 			`agent-two · ${b} tools`,
@@ -207,26 +210,26 @@ describe("transcript reactive commit boundary", () => {
 		chat.addChild(block);
 		chat.render(80);
 
-		// Stagger slow updates with long quiet stretches in between. Once any
-		// tree row has rewritten in place, no tree row may ever promote again:
-		// a promoted-then-rewritten row is a committed-then-rewritten row, and
-		// the engine audit can only repair that by recommitting — spraying a
-		// stale snapshot of the block into scrollback on every later tick.
-		let maxSafeEnd = 0;
+		// Stagger slow updates with quiet stretches longer than the promotion
+		// window. The floor arms the first time an already-promoted row ticks
+		// and descends to each promoted ticker as it re-ticks; after the
+		// topmost ticker has re-ticked once post-promotion, the boundary must
+		// converge to the static head and never reach into the tree again.
+		let maxSafeEndAfterConvergence = 0;
 		const counters: [number, number, number] = [0, 0, 0];
-		for (let tick = 0; tick < 6; tick++) {
+		for (let tick = 0; tick < 9; tick++) {
 			counters[tick % 3] += 1;
 			block.setLines([...head, ...tree(...counters)]);
 			for (let frame = 0; frame < 40; frame++) {
 				chat.render(80);
 				const safeEnd = chat.getNativeScrollbackCommitSafeEnd() ?? 0;
-				if (tick > 0) maxSafeEnd = Math.max(maxSafeEnd, safeEnd);
+				if (tick >= 4) maxSafeEndAfterConvergence = Math.max(maxSafeEndAfterConvergence, safeEnd);
 			}
 		}
 
-		// The static head still commits; the slow-ticking tree never does.
+		// The static head still commits; the slow-ticking tree stays deferred.
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
-		expect(maxSafeEnd).toBe(8);
+		expect(maxSafeEndAfterConvergence).toBe(8);
 	});
 
 	it("keeps the rewrite floor anchored across append growth below it", () => {
@@ -236,7 +239,10 @@ describe("transcript reactive commit boundary", () => {
 		chat.addChild(block);
 		chat.render(80);
 
-		// Tick once: the floor lands on the ticker row (index 4).
+		// Let the ratchet over-promote through the quiet ticker, then tick it:
+		// the floor lands on the ticker row (index 4).
+		for (let i = 0; i < 70; i++) chat.render(80);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(5);
 		block.setLines([...head, "ticker · 1"]);
 		chat.render(80);
 
@@ -247,7 +253,7 @@ describe("transcript reactive commit boundary", () => {
 		for (let i = 0; i < 70; i++) chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(6);
 
-		// And the shifted ticker itself still never promotes.
+		// And the shifted ticker itself never re-promotes.
 		block.setLines([...head, "settled-a", "settled-b", "ticker · 2"]);
 		for (let i = 0; i < 70; i++) chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(6);
@@ -526,6 +532,79 @@ describe("tool live-region scrollback", () => {
 			await term.flush();
 		}
 	}, 20000);
+
+	it("stops growing scrollback once slow-ticking rows are floored (no recommit storm)", async () => {
+		if (process.platform === "win32") return;
+
+		// The duplication-storm shape from the field: a live block whose head is
+		// static context, whose tail is a slowly-ticking agent tree plus a
+		// spinner, with finalized content (IRC cards) piled below it. The pile
+		// pushes the ticker rows above the window top, so any over-promotion
+		// commits them; every later tick would then make the engine audit
+		// recommit — native scrollback gains a stale snapshot of the tree per
+		// tick for the entire run. With the rewrite floor the ratchet converges
+		// after the first promoted-row re-tick and scrollback stops growing.
+		const term = new VirtualTerminal(80, 10);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const head = markerLines("CTX-", 20);
+		const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+		let frameSeq = 0;
+		const liveLines = (a: number, b: number) => [
+			...head,
+			`agent-one · ${a} tools`,
+			`agent-two · ${b} tools`,
+			`${spinner[frameSeq % spinner.length]} running`,
+		];
+		const block = new MutableLiveBlock(liveLines(0, 0));
+		chat.addChild(block);
+		chat.addChild(new MutableLiveBlock(markerLines("IRC-", 15), true));
+
+		const counters: [number, number] = [0, 0];
+		const renderFrames = async (frames: number) => {
+			for (let i = 0; i < frames; i++) {
+				frameSeq++;
+				block.setLines(liveLines(...counters));
+				tui.requestRender();
+				await term.waitForRender();
+			}
+		};
+		const tick = async (which: 0 | 1, frames: number) => {
+			counters[which] += 1;
+			await renderFrames(frames);
+		};
+
+		try {
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			// Overshoot: a quiet stretch longer than the promotion window lets
+			// the ratchet promote (and the engine commit) the ticker rows.
+			await renderFrames(35);
+			// First post-promotion tick of the topmost ticker arms the floor.
+			await tick(0, 35);
+			const settled = stripRows(term.getScrollBuffer());
+
+			// Further slow ticks must not grow native scrollback at all.
+			await tick(1, 12);
+			await tick(0, 12);
+			await tick(1, 12);
+			expect(stripRows(term.getScrollBuffer())).toBe(settled);
+
+			// The static head still reached scrollback. The ticker rows sit in
+			// the hidden gap between the commit boundary and the window top
+			// (the accepted cost while finalized content is piled below a live
+			// block) — but history holds exactly one stale snapshot of them
+			// instead of one per tick.
+			expect(settled).toContain("CTX-0");
+			const staleSnapshots = settled.split("\n").filter(row => row.startsWith("agent-one ·")).length;
+			expect(staleSnapshots).toBeLessThanOrEqual(2);
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	}, 30000);
 
 	it("commits the scrolled-off head of a tall finalized bottom tool result", async () => {
 		if (process.platform === "win32") return;
