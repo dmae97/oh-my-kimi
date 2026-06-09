@@ -6,6 +6,19 @@ import { inflateSync, strFromU8 } from "fflate";
 import { formatBytes } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
+/**
+ * Cap on the on-disk size of tar/tar.gz archives, which are loaded fully into
+ * memory (and decompressed by `Bun.Archive`) just to index entries. ZIP is
+ * exempt: it is read via ranged central-directory access.
+ */
+const MAX_TAR_ARCHIVE_BYTES = 256 * 1024 * 1024;
+/**
+ * Cap on a single archive member's declared (uncompressed) size. The declared
+ * size is attacker-controlled metadata — a crafted ZIP entry can claim
+ * multi-GB sizes that would be allocated up front before any data inflates.
+ */
+const MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024;
+
 export type ArchiveFormat = "zip" | "tar" | "tar.gz";
 
 export interface ArchivePathCandidate {
@@ -646,6 +659,11 @@ export class ArchiveReader {
 		if (!entry.storage) {
 			throw new ToolError(`Archive file '${normalizedPath}' has no readable storage`);
 		}
+		if (entry.size > MAX_ARCHIVE_MEMBER_BYTES) {
+			throw new ToolError(
+				`Archive member '${normalizedPath}' is too large to extract in memory (${formatBytes(entry.size)} > ${formatBytes(MAX_ARCHIVE_MEMBER_BYTES)} limit)`,
+			);
+		}
 
 		const bytes =
 			entry.storage.type === "tar"
@@ -668,8 +686,18 @@ export async function openArchive(filePath: string): Promise<ArchiveReader> {
 		throw new ToolError(`Unsupported archive format: ${filePath}`);
 	}
 
-	const entries =
-		format === "zip" ? await readZipEntries(filePath) : await readTarEntries(await Bun.file(filePath).bytes());
+	if (format === "zip") {
+		return new ArchiveReader(format, await readZipEntries(filePath));
+	}
+
+	const file = Bun.file(filePath);
+	const archiveSize = file.size;
+	if (archiveSize > MAX_TAR_ARCHIVE_BYTES) {
+		throw new ToolError(
+			`Archive is too large to read in memory (${formatBytes(archiveSize)} > ${formatBytes(MAX_TAR_ARCHIVE_BYTES)} limit)`,
+		);
+	}
+	const entries = await readTarEntries(await file.bytes());
 	return new ArchiveReader(format, entries);
 }
 
