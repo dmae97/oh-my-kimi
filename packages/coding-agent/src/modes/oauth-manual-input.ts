@@ -17,6 +17,11 @@ export class OAuthManualInputManager {
 		return promise;
 	}
 
+	tryWaitForInput(providerId: string): Promise<string> | undefined {
+		if (this.#pending) return undefined;
+		return this.waitForInput(providerId);
+	}
+
 	submit(input: string): boolean {
 		if (!this.#pending) return false;
 		const { resolve } = this.#pending;

@@ -597,6 +597,11 @@ export class MCPCommandController {
 		const resolvedClientSecret = clientSecret.trim() || undefined;
 
 		const manualInput = this.ctx.oauthManualInput;
+		if (manualInput.hasPending() && manualInput.pendingProviderId !== MCP_MANUAL_INPUT_PROVIDER_ID) {
+			throw new Error(
+				`OAuth login already in progress for ${manualInput.pendingProviderId}. Complete or cancel it before starting MCP OAuth.`,
+			);
+		}
 		const oauthTimeout = new AbortController();
 		try {
 			// Create OAuth flow
@@ -652,8 +657,15 @@ export class MCPCommandController {
 					onProgress: (message: string) => {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
-					onManualCodeInput: () => manualInput.waitForInput(MCP_MANUAL_INPUT_PROVIDER_ID),
-					signal: oauthTimeout.signal,
+					onManualCodeInput: () => {
+						const pendingInput = manualInput.tryWaitForInput(MCP_MANUAL_INPUT_PROVIDER_ID);
+						if (!pendingInput) {
+							throw new Error(
+								`OAuth login already in progress for ${manualInput.pendingProviderId}. Complete or cancel it before starting MCP OAuth.`,
+							);
+						}
+						return pendingInput;
+					},
 				},
 			);
 
