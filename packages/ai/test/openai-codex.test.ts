@@ -125,6 +125,24 @@ describe("openai-codex orphan tool-call repair", () => {
 		expect(output).toBeDefined();
 		expect(output?.output as string).toMatch(/interrupted/i);
 	});
+
+	it("folds an orphan custom_tool_call_output into an assistant message", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.1-codex",
+			input: [
+				{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+				{ type: "custom_tool_call_output", call_id: "call_custom_orphan", name: "apply_patch", output: "Done!" },
+			],
+		};
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		const input = transformed.input || [];
+
+		expect(input.some(item => item.type === "custom_tool_call_output")).toBe(false);
+		const note = input.find(item => item.type === "message" && item.role === "assistant");
+		expect(note?.content).toMatch(/call_custom_orphan/);
+		expect(note?.content).toMatch(/Done!/);
+	});
 });
 
 describe("openai-codex reasoning effort validation", () => {
