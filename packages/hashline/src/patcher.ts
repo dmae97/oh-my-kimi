@@ -199,7 +199,24 @@ export class Patcher {
 		}
 
 		const results: PatchSectionResult[] = [];
-		for (const entry of prepared) results.push(await this.commit(entry));
+		for (let index = 0; index < prepared.length; index++) {
+			try {
+				results.push(await this.commit(prepared[index]));
+			} catch (error) {
+				// A mid-batch write failure leaves earlier sections on disk with no
+				// rollback; report exactly which sections landed so the caller can
+				// re-issue only the missing ones instead of double-applying.
+				const written = prepared.slice(0, index).map(entry => entry.section.path);
+				const notWritten = prepared.slice(index + 1).map(entry => entry.section.path);
+				const message = error instanceof Error ? error.message : String(error);
+				throw new Error(
+					`Failed to write ${prepared[index].section.path}: ${message}` +
+						(written.length > 0 ? ` Sections already written: ${written.join(", ")}.` : "") +
+						(notWritten.length > 0 ? ` Sections not written: ${notWritten.join(", ")}.` : ""),
+					{ cause: error },
+				);
+			}
+		}
 		return { sections: results };
 	}
 

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed `BlockResolution.isDelete` to `BlockResolution.op` (`"replace" | "delete" | "insert_after"`) so resolutions can describe every block-anchored op
+
+### Added
+
+- Added `insert after block N:` patch syntax to insert body rows after the last line of the tree-sitter-resolved block beginning on line N, so a statement can be placed after a construct without counting to its closing line
+- Added depth-guided landing correction for `insert after N:` hunks: a body indented shallower than its anchor line slides past the structural closer lines below the anchor until depth returns to the body's level, with a warning naming the final landing line. The shift never crosses content lines, skips incomparable indentation styles and pure-closer bodies, and is abandoned when another hunk targets a crossed line
+- Added a global byte ceiling to `InMemorySnapshotStore` (`maxTotalBytes`, default 64 MiB): the cap was previously per-file only, so a session reading many large files retained up to 30 paths × 4 full-text versions indefinitely
+
+### Fixed
+
+- Fixed the boundary-echo repair stripping payload edges without the balance-neutrality guard its own documentation promised: in brace-heavy code where bare `}` lines repeat, a payload intentionally beginning/ending with lines identical to the range's neighbors had both edges silently dropped, writing content that differed from what was authored
+- Fixed lenient bare-body handling silently mutating payloads: interior blank rows in an un-prefixed body were dropped outright, and a body of numeric-keyed literals (`1: "one"` dict/YAML shapes) satisfied the uniform line-prefix check and had its keys stripped from every line — blank rows are now preserved when proven interior, and the uniform strip refuses lone-literal remainders
+- Fixed the multi-section "all-or-nothing" claim being false for write failures: commits run serially, so a mid-batch write error left earlier sections on disk while the thrown error said nothing — the error now lists exactly which sections were written and which were not
+- Fixed `delete`/`replace` ranges ending on the phantom trailing line of a newline-terminated file silently stripping the file's final newline; such anchors are now rejected with guidance toward `N-1` / `insert tail:` (inserts there remain valid, and genuine empty last lines of unterminated files stay deletable)
+
 ## [15.10.5] - 2026-06-08
 
 ### Added
