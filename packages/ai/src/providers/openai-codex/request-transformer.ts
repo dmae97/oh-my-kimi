@@ -105,8 +105,8 @@ function orphanFunctionOutputToMessage(item: InputItem, callId: string): InputIt
  * Repair both halves of unpaired tool exchanges so the Responses input grammar
  * stays valid — the API rejects either orphan with a 400:
  *
- * - `function_call_output` with no matching `function_call` → folded into an
- *   assistant message (`400 No tool call found for function call output …`).
+ * - `function_call_output` / `custom_tool_call_output` with no matching call →
+ *   folded into an assistant message (`400 No tool call found for … output`).
  *   Regression of #472 / #1351.
  * - `function_call` / `custom_tool_call` with no matching `*_output` → a
  *   placeholder output is synthesized immediately after the call
@@ -131,7 +131,11 @@ function repairToolCallPairs(input: InputItem[]): InputItem[] {
 	for (const item of input) {
 		const callId = typeof item.call_id === "string" ? item.call_id : undefined;
 
-		if (item.type === "function_call_output" && callId !== undefined && !callIds.has(callId)) {
+		if (
+			(item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+			callId !== undefined &&
+			!callIds.has(callId)
+		) {
 			repaired.push(orphanFunctionOutputToMessage(item, callId));
 			continue;
 		}

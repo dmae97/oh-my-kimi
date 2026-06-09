@@ -271,6 +271,12 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 						const { data, response, request_id } = await client.responses
 							.create(params, requestOptions)
 							.withResponse();
+						// Disarm the first-event watchdog as soon as headers arrive — a slow
+						// onResponse callback must not abort an already-connected stream.
+						if (requestTimeout !== undefined) {
+							clearTimeout(requestTimeout);
+							requestTimeout = undefined;
+						}
 						await notifyProviderResponse(options, response, model, request_id);
 						return data;
 					} catch (error) {
@@ -309,7 +315,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					nativeOutputItems.push(structuredCloneJSON<unknown>(item) as unknown as Record<string, unknown>);
 				},
 			});
-			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
@@ -464,7 +469,9 @@ function buildParams(
 		instructions: systemInstructions,
 		stream: true,
 		prompt_cache_key: promptCacheKey,
-		prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
+		prompt_cache_retention: promptCacheKey
+			? getPromptCacheRetention(resolvedBaseUrl ?? model.baseUrl, cacheRetention)
+			: undefined,
 		store: false,
 		stream_options: model.provider === "openai" ? { include_obfuscation: false } : undefined,
 	};
@@ -587,9 +594,13 @@ function convertConversationMessages(
 			messages.push({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const assistantMsg = msg as AssistantMessage;
-			const providerPayload = shouldReplayNativeHistory
-				? getOpenAIResponsesHistoryPayload(assistantMsg.providerPayload, model.provider, assistantMsg.provider)
-				: undefined;
+			// Native items are model-bound (reasoning carries encrypted content minted
+			// by the producing model); after a mid-session model switch fall back to
+			// block re-encode, which strips foreign signatures.
+			const providerPayload =
+				shouldReplayNativeHistory && assistantMsg.api === model.api && assistantMsg.model === model.id
+					? getOpenAIResponsesHistoryPayload(assistantMsg.providerPayload, model.provider, assistantMsg.provider)
+					: undefined;
 			const historyItems = providerPayload?.items;
 			if (historyItems) {
 				const sanitizedHistoryItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems));

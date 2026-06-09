@@ -1,4 +1,4 @@
-import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
 	ResponseCustomToolCall,
@@ -311,6 +311,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	customCallIds?: Set<string>,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
+	let unsignedTextBlocks = 0;
 	const isDifferentModel =
 		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 
@@ -320,7 +321,12 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 				continue;
 			}
 			if (block.thinkingSignature) {
-				outputItems.push(JSON.parse(block.thinkingSignature) as ResponseReasoningItem);
+				try {
+					outputItems.push(JSON.parse(block.thinkingSignature) as ResponseReasoningItem);
+				} catch {
+					// Legacy/corrupt persisted signature — skip the reasoning item
+					// rather than failing the whole request build.
+				}
 			}
 			continue;
 		}
@@ -329,7 +335,10 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			const parsedSignature = parseTextSignature(block.textSignature);
 			let msgId = parsedSignature?.id;
 			if (!msgId) {
-				msgId = `msg_${msgIndex}`;
+				// Distinct ids per unsigned block: several text blocks in one message
+				// (cross-provider replay downgrades thinking → text) must not share an id.
+				msgId = unsignedTextBlocks === 0 ? `msg_${msgIndex}` : `msg_${msgIndex}_${unsignedTextBlocks}`;
+				unsignedTextBlocks += 1;
 			} else if (msgId.length > 64) {
 				msgId = `msg_${Bun.hash(msgId).toString(36)}`;
 			}
@@ -394,10 +403,6 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	const hasImages = toolResult.content.some((block): block is ImageContent => block.type === "image");
 	const omittedImages = hasImages && !supportsImages;
 	const normalized = normalizeResponsesToolCallId(toolResult.toolCallId);
-	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
-		return;
-	}
-
 	const output = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
@@ -405,6 +410,19 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 				? textResult
 				: "(see attached image)"
 	).toWellFormed();
+	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
+		// Strict backends (Azure, Copilot) reject unpaired outputs outright, but
+		// silently dropping the result loses information the model needs. Fold it
+		// into an assistant note instead (same shape as repairOrphanResponsesToolOutputs).
+		const limit = 16_000;
+		const noteText = output.length > limit ? `${output.slice(0, limit)}\n...[truncated]` : output;
+		messages.push({
+			type: "message",
+			role: "assistant",
+			content: `[Orphan ${toolResult.toolName || "tool"} result; call_id=${normalized.callId}]: ${noteText}`,
+		} as ResponseInput[number]);
+		return;
+	}
 	if (customCallIds?.has(normalized.callId)) {
 		messages.push({
 			type: "custom_tool_call_output",
@@ -733,9 +751,15 @@ export async function processResponsesStream<TApi extends Api>(
 						: item.content?.[0]?.type === "reasoning_text"
 							? (item.content[0].text ?? "")
 							: "";
-				const reasoningBlock = output.content.find(
-					b => b.type === "thinking" && (b as ThinkingContent).itemId === item.id,
-				) as ThinkingContent | undefined;
+				// Prefer the routed entry; the bare itemId find misroutes when ids are
+				// absent (`undefined === undefined` matches the FIRST thinking block) and
+				// misses entirely when the done-event id drifts from the added-event id.
+				const reasoningBlock =
+					entry?.block.type === "thinking"
+						? entry.block
+						: (output.content.find(b => b.type === "thinking" && (b as ThinkingContent).itemId === item.id) as
+								| ThinkingContent
+								| undefined);
 				if (reasoningBlock) {
 					reasoningBlock.thinking = thinking;
 					reasoningBlock.thinkingSignature = JSON.stringify(item);
@@ -747,18 +771,25 @@ export async function processResponsesStream<TApi extends Api>(
 					});
 				}
 				closeOpenItem(event.output_index, item.id, entry);
-			} else if (item.type === "message" && entry?.block.type === "text") {
-				const block = entry.block;
-				block.text = item.content
+			} else if (item.type === "message") {
+				const block = entry?.block.type === "text" ? entry.block : undefined;
+				const text = item.content
 					.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? "")))
 					.join("");
-				block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-				stream.push({
-					type: "text_end",
-					contentIndex: contentIndexOf(block),
-					content: block.text,
-					partial: output,
-				});
+				const textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+				let contentIndex: number;
+				if (block) {
+					block.text = text;
+					block.textSignature = textSignature;
+					contentIndex = contentIndexOf(block);
+				} else {
+					// `output_item.added` never arrived (lossy proxy) — synthesize the
+					// block so the final message still carries the authoritative text.
+					const synthesized: TextContent = { type: "text", text, textSignature };
+					output.content.push(synthesized);
+					contentIndex = output.content.length - 1;
+				}
+				stream.push({ type: "text_end", contentIndex, content: text, partial: output });
 				closeOpenItem(event.output_index, item.id, entry);
 			} else if (item.type === "function_call") {
 				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
@@ -773,6 +804,7 @@ export async function processResponsesStream<TApi extends Api>(
 					name: item.name,
 					arguments: args,
 				};
+				let contentIndex: number;
 				if (block) {
 					// Persist the authoritative final args on the stored block. The
 					// throttled delta parser may have skipped the last partial parse,
@@ -782,8 +814,14 @@ export async function processResponsesStream<TApi extends Api>(
 					delete (block as { partialJson?: string }).partialJson;
 					delete (block as { lastParseLen?: number }).lastParseLen;
 					delete (block as { argumentsDone?: boolean }).argumentsDone;
+					contentIndex = contentIndexOf(block);
+				} else {
+					// `output_item.added` never arrived (lossy proxy) — synthesize the
+					// block so the final message carries the call the consumer was told
+					// completed (the agent loop executes tools from message.content).
+					output.content.push(toolCall);
+					contentIndex = output.content.length - 1;
 				}
-				const contentIndex = block ? contentIndexOf(block) : output.content.length - 1;
 				closeOpenItem(event.output_index, item.id, entry, item.call_id);
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			} else if (item.type === "custom_tool_call") {
@@ -796,19 +834,39 @@ export async function processResponsesStream<TApi extends Api>(
 					arguments: { input: rawInput },
 					customWireName: item.name,
 				};
+				let contentIndex: number;
 				if (block) {
 					// Persist the final input on the stored block and drop the transient
 					// accumulation buffer, mirroring the function_call branch above.
 					block.arguments = { input: rawInput };
 					delete (block as { partialJson?: string }).partialJson;
 					delete (block as { lastParseLen?: number }).lastParseLen;
+					contentIndex = contentIndexOf(block);
+				} else {
+					output.content.push(toolCall);
+					contentIndex = output.content.length - 1;
 				}
-				const contentIndex = block ? contentIndexOf(block) : output.content.length - 1;
 				closeOpenItem(event.output_index, item.id, entry, item.call_id);
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			}
 		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			const response = event.response;
+			// Finalize any toolCall block whose output_item.done never arrived: the
+			// throttled delta parser may have left block.arguments stale, and the
+			// toolUse override below would hand the agent incomplete arguments.
+			for (const open of openItemsInOrder) {
+				if (open.block.type !== "toolCall") continue;
+				const block = open.block;
+				if (block.partialJson && !block.argumentsDone) {
+					block.arguments =
+						open.item.type === "custom_tool_call"
+							? { input: block.partialJson }
+							: parseStreamingJson(block.partialJson);
+				}
+				delete (block as { partialJson?: string }).partialJson;
+				delete (block as { lastParseLen?: number }).lastParseLen;
+				delete (block as { argumentsDone?: boolean }).argumentsDone;
+			}
 			if (response?.id) {
 				output.responseId = response.id;
 			}
@@ -828,12 +886,19 @@ export async function processResponsesStream<TApi extends Api>(
 							: "Unknown error (no error details in response)";
 				throw new Error(message);
 			}
+			if (response?.status === "incomplete" && response.incomplete_details?.reason === "content_filter") {
+				// A content-filtered turn is a failure, not a token-cap truncation —
+				// mapping it to "length" would route the agent loop into "shorten your
+				// output" recovery against a filtered prompt.
+				throw new Error("incomplete: content_filter");
+			}
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}`);
 		} else if (event.type === "response.failed") {
+			populateResponsesUsageFromResponse(output, event.response?.usage);
 			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
 			const details = event.response?.incomplete_details;
 			const message = error
@@ -860,8 +925,12 @@ export function mapOpenAIResponsesStopReason(status: OpenAI.Responses.ResponseSt
 		case "queued":
 			return "stop";
 		default: {
+			// Compile-time exhaustiveness; at runtime a brand-new status from the
+			// server must degrade gracefully instead of failing a fully-streamed
+			// response.
 			const exhaustive: never = status;
-			throw new Error(`Unhandled stop reason: ${exhaustive}`);
+			logger.warn("Unhandled OpenAI Responses stop reason", { status: exhaustive });
+			return "stop";
 		}
 	}
 }
@@ -967,7 +1036,9 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 	// multi-turn conversations when store is false (items aren't persisted server-side, so
 	// we must include the full content). See: https://github.com/can1357/oh-my-pi/issues/41
 	if (includeEncryptedReasoning) {
-		params.include = ["reasoning.encrypted_content"];
+		const include = params.include ?? [];
+		if (!include.includes("reasoning.encrypted_content")) include.push("reasoning.encrypted_content");
+		params.include = include;
 	}
 
 	if (options?.reasoning || options?.reasoningSummary !== undefined) {
@@ -1022,6 +1093,10 @@ export function populateResponsesUsageFromResponse(
 	if (!usage) return;
 	const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
 	const reasoningTokens = usage.output_tokens_details?.reasoning_tokens || 0;
+	// Wholesale replacement must not drop provider-annotated extras (Copilot
+	// premium-request accounting): the failed/cancelled paths throw right after
+	// this call with no later chance to re-apply.
+	const premiumRequests = output.usage.premiumRequests;
 	output.usage = {
 		input: (usage.input_tokens || 0) - cachedTokens,
 		output: usage.output_tokens || 0,
@@ -1031,4 +1106,7 @@ export function populateResponsesUsageFromResponse(
 		...(reasoningTokens > 0 ? { reasoningTokens } : {}),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
+	if (premiumRequests !== undefined) {
+		output.usage.premiumRequests = premiumRequests;
+	}
 }
