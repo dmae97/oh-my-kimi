@@ -120,6 +120,10 @@
 - Fixed adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) returning HTTP 400 `"thinking.type.disabled" is not supported for this model` whenever thinking was turned off (utility calls and forced-tool turns route through the disable path). These models accept only `thinking.type: "adaptive"`; the request builder now omits the thinking field and pins the lowest adaptive effort instead of emitting `type: "disabled"`.
 - Widened the OpenAI-completions first-event watchdog floor from 120s to 300s for DeepSeek V4 reasoning models hosted on the official DeepSeek API. The reasoner emits no SSE bytes until its private chain-of-thought finishes, which routinely takes longer than the generic 100s first-event budget under load — every chat then aborted with `OpenAI completions stream timed out while waiting for the first event` and silently retried. Mirrors the existing GLM coding-plan widening ([#2177](https://github.com/can1357/oh-my-pi/issues/2177)).
 
+### Added
+
+- Added `grok-composer-2.5-fast` (Cursor "Composer 2.5 Fast") to the xAI Grok OAuth (SuperGrok) catalog: non-reasoning, text-only, 200K context.
+
 ## [15.10.8] - 2026-06-09
 
 ### Added
