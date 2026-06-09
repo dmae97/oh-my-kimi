@@ -149,6 +149,30 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(mode.planModeEnabled).toBe(true);
 	});
 
+	it("keeps confirmation when a slug plan file exists", async () => {
+		const defaultPlanFilePath = "local://PLAN.md";
+		const slugPlanFilePath = "local://auth-token-refresh-plan.md";
+		const defaultPlanPath = resolveLocalUrlToPath(defaultPlanFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		const slugPlanPath = resolveLocalUrlToPath(slugPlanFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(defaultPlanPath, "\n");
+		await Bun.write(slugPlanPath, "# Auth token refresh plan\n\nDo the thing.\n");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = defaultPlanFilePath;
+		const confirm = vi.spyOn(mode, "showHookConfirm").mockResolvedValue(false);
+
+		await mode.handlePlanModeCommand();
+
+		expect(confirm).toHaveBeenCalledWith("Exit plan mode?", "This exits plan mode without approving a plan.");
+		expect(mode.planModeEnabled).toBe(true);
+	});
+
 	it("forwards each submitted plan to the review overlay", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

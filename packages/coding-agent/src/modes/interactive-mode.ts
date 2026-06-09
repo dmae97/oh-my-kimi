@@ -1694,6 +1694,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	async #hasPlanModeDraftContent(planFilePath: string): Promise<boolean> {
+		const candidates = new Set<string>([planFilePath, ...(await this.#listLocalPlanFiles())]);
+		for (const candidate of candidates) {
+			const content = await this.#readPlanFile(candidate);
+			if (content !== null && content.trim().length > 0) return true;
+		}
+		return false;
+	}
+
 	/** `local://` URLs of plan files in the session-local root, newest first.
 	 *  A fallback for `resolveApprovedPlan` when the agent dropped `extra.title`,
 	 *  so the plan it wrote is still found by scanning recent `*-plan.md` files. */
@@ -1999,8 +2008,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.planModeEnabled) {
 			const planFilePath = this.planModePlanFilePath ?? (await this.#getPlanFilePath());
-			const planContent = await this.#readPlanFile(planFilePath);
-			if (planContent !== null && planContent.trim().length > 0) {
+			if (await this.#hasPlanModeDraftContent(planFilePath)) {
 				const confirmed = await this.showHookConfirm(
 					"Exit plan mode?",
 					"This exits plan mode without approving a plan.",
