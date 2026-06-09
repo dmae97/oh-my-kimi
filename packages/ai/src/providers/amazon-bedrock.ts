@@ -32,7 +32,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
-import { resolveAwsCredentials } from "./aws-credentials";
+import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream } from "./aws-eventstream";
 import { signRequest } from "./aws-sigv4";
 import { transformMessages } from "./transform-messages";
@@ -203,7 +203,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
-			const toolConfig = convertToolConfig(context.tools, options.toolChoice);
+			const historyHasToolBlocks = context.messages.some(
+				m => m.role === "toolResult" || (m.role === "assistant" && m.content.some(b => b.type === "toolCall")),
+			);
+			const toolConfig = convertToolConfig(context.tools, options.toolChoice, historyHasToolBlocks);
 			let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
 			// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
@@ -282,6 +285,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			});
 
 			if (!response.ok) {
+				if (!bearerToken && (response.status === 401 || response.status === 403)) {
+					// Stale cached credentials (e.g. rotated session keys in ~/.aws/credentials) —
+					// drop the cache entry so the next attempt re-resolves from scratch.
+					invalidateAwsCredentialCache({ profile: options.profile, region });
+				}
 				const errBody = await response.text().catch(() => "");
 				throw withHttpStatus(
 					new Error(`Bedrock HTTP ${response.status}: ${errBody.slice(0, 1000)}`),
@@ -340,6 +348,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					case "messageStop": {
 						const ev = payload as MessageStopEvent;
 						output.stopReason = mapStopReason(ev.stopReason);
+						if (output.stopReason === "error") {
+							output.errorMessage = `Generation failed with stop reason: ${ev.stopReason ?? "unknown"}`;
+						}
 						break;
 					}
 					case "metadata": {
@@ -740,8 +751,9 @@ function convertMessages(
 function convertToolConfig(
 	tools: Tool[] | undefined,
 	toolChoice: BedrockOptions["toolChoice"],
+	historyHasToolBlocks: boolean,
 ): WireToolConfig | undefined {
-	if (!tools?.length || toolChoice === "none") return undefined;
+	if (!tools?.length) return undefined;
 
 	const bedrockTools: WireToolSpec[] = tools.map(tool => ({
 		toolSpec: {
@@ -750,6 +762,13 @@ function convertToolConfig(
 			inputSchema: { json: toolWireSchema(tool) },
 		},
 	}));
+
+	// Bedrock rejects requests whose history contains toolUse/toolResult blocks without a
+	// toolConfig. With prior tool use we must keep the tool specs and merely omit the choice
+	// (there is no "none" choice on Converse); dropping toolConfig entirely would 400.
+	if (toolChoice === "none") {
+		return historyHasToolBlocks ? { tools: bedrockTools } : undefined;
+	}
 
 	let bedrockToolChoice: WireToolChoice | undefined;
 	switch (toolChoice) {
