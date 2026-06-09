@@ -123,7 +123,7 @@ function shouldRetryResponse(response: Response): boolean {
 }
 
 /** Server-suggested delay (`retry-after-ms`, then `retry-after` seconds or HTTP date). */
-function retryDelayFromHeaders(headers: Headers | undefined): number | undefined {
+export function retryDelayFromHeaders(headers: Headers | undefined): number | undefined {
 	if (!headers) return undefined;
 	const retryAfterMs = headers.get("retry-after-ms");
 	if (retryAfterMs) {

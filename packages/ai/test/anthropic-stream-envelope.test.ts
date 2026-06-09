@@ -278,6 +278,45 @@ describe("anthropic stream envelope handling", () => {
 		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
 	});
 
+	it("drops replayed closed blocks after a duplicate message_start instead of duplicating content", async () => {
+		const events: MockAnthropicEvent[] = [
+			{
+				type: "message_start",
+				message: { id: "msg_first", usage: { input_tokens: 12, output_tokens: 0 } },
+			},
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+			{ type: "content_block_stop", index: 0 },
+			// A replaying proxy splices the same envelope again before the
+			// terminal message_delta arrives.
+			{ type: "message_start", message: { id: "msg_replay", usage: { input_tokens: 12, output_tokens: 0 } } },
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+			{ type: "content_block_stop", index: 0 },
+			{
+				type: "message_delta",
+				delta: { stop_reason: "end_turn" },
+				usage: { input_tokens: 12, output_tokens: 4 },
+			},
+			{ type: "message_stop" },
+		];
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => createMockRequest(events) as never);
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		const collected: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			collected.push(event);
+		}
+		const result = await stream.result();
+
+		expect(countEvents(collected, "text_start")).toBe(1);
+		expect(countEvents(collected, "text_end")).toBe(1);
+		expect(countEvents(collected, "error")).toBe(0);
+		expect(result.stopReason).toBe("stop");
+		expect(result.responseId).toBe("msg_first");
+		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
+	});
+
 	it("ignores ping before message_start and streams the response once", async () => {
 		let attempt = 0;
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {

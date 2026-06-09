@@ -488,17 +488,37 @@ interface OpenBlock {
 	kind: BlockKind;
 }
 
+// Keepalive cadence for the SSE encoder. Anthropic's API pings periodically;
+// without frames between message_start and the first content block (slow first
+// token) SDK first-event/idle watchdogs classify the stream as stalled.
+const STREAM_PING_INTERVAL_MS = 15_000;
+
+const ZERO_WIRE_USAGE: Record<string, unknown> = {
+	input_tokens: 0,
+	output_tokens: 0,
+	cache_read_input_tokens: 0,
+	cache_creation_input_tokens: 0,
+};
+
 export function encodeStream(
 	events: AssistantMessageEventStream,
 	requestedModelId: string,
 ): ReadableStream<Uint8Array> {
+	let pingTimer: NodeJS.Timeout | undefined;
+	const stopPings = () => {
+		if (pingTimer !== undefined) {
+			clearInterval(pingTimer);
+			pingTimer = undefined;
+		}
+	};
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
 			const messageId = newMessageId();
 			let started = false;
+			let lastPartial: AssistantMessage | undefined;
 			const open = new Map<number, OpenBlock>();
 
-			const ensureStart = (partial: AssistantMessage) => {
+			const ensureStart = (partial: AssistantMessage | undefined) => {
 				if (started) return;
 				started = true;
 				controller.enqueue(
@@ -514,7 +534,7 @@ export function encodeStream(
 							// TODO: same as encodeResponse — surface matched stop sequence
 							// once pi-ai propagates it.
 							stop_sequence: null,
-							usage: encodeUsage(partial),
+							usage: partial ? encodeUsage(partial) : ZERO_WIRE_USAGE,
 						},
 					}),
 				);
@@ -526,8 +546,18 @@ export function encodeStream(
 				open.delete(index);
 			};
 
+			pingTimer = setInterval(() => {
+				try {
+					controller.enqueue(sseFrame("ping", { type: "ping" }));
+				} catch {
+					// Controller already closed/errored (client gone); stop the timer.
+					stopPings();
+				}
+			}, STREAM_PING_INTERVAL_MS);
+
 			try {
 				for await (const ev of events) {
+					if ("partial" in ev) lastPartial = ev.partial;
 					switch (ev.type) {
 						case "start":
 							ensureStart(ev.partial);
@@ -646,8 +676,18 @@ export function encodeStream(
 						}
 					}
 				}
-				// stream ended without explicit done; close gracefully
+				// Stream ended without an explicit done: emit a complete envelope
+				// (message_start + message_delta carrying a stop_reason) so strict
+				// clients don't reject the response as a protocol error.
+				ensureStart(lastPartial);
 				for (const idx of [...open.keys()]) closeBlock(idx);
+				controller.enqueue(
+					sseFrame("message_delta", {
+						type: "message_delta",
+						delta: { stop_reason: "end_turn", stop_sequence: null },
+						usage: lastPartial ? encodeUsage(lastPartial) : ZERO_WIRE_USAGE,
+					}),
+				);
 				controller.enqueue(sseFrame("message_stop", { type: "message_stop" }));
 				controller.close();
 			} catch (err) {
@@ -658,7 +698,12 @@ export function encodeStream(
 					}),
 				);
 				controller.close();
+			} finally {
+				stopPings();
 			}
+		},
+		cancel() {
+			stopPings();
 		},
 	});
 }
