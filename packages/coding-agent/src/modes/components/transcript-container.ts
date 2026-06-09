@@ -27,6 +27,12 @@ interface LiveDiffSnapshot {
 	stablePrefixLength: number;
 	candidatePrefixLength: number;
 	candidatePrefixAge: number;
+	/**
+	 * Topmost row index ever observed rewritten in place (see
+	 * {@link deriveLiveCommitState}): the stable-prefix ratchet never promotes
+	 * rows at/after it. `Infinity` until the first rewrite.
+	 */
+	rewriteFloor: number;
 }
 
 interface SnapshotCarrier {
@@ -74,6 +80,7 @@ interface LiveCommitState {
 	stablePrefixLength: number;
 	candidatePrefixLength: number;
 	candidatePrefixAge: number;
+	rewriteFloor: number;
 	safeLength: number;
 }
 
@@ -157,12 +164,14 @@ function deriveLiveCommitState(
 	let stablePrefixLength = 0;
 	let candidatePrefixLength = 0;
 	let candidatePrefixAge = 0;
+	let rewriteFloor = Number.POSITIVE_INFINITY;
 	if (hasValidSnapshot(previous, width, generation)) {
 		appendOnly = previous.appendOnly;
 		volatileCooldown = previous.volatileCooldown;
 		stablePrefixLength = previous.stablePrefixLength;
 		candidatePrefixLength = previous.candidatePrefixLength;
 		candidatePrefixAge = previous.candidatePrefixAge;
+		rewriteFloor = previous.rewriteFloor;
 
 		const prefixLength = commonPrefixLength(previous.lines, current);
 		const staticRender = prefixLength === previous.lines.length && prefixLength === current.length;
@@ -196,10 +205,31 @@ function deriveLiveCommitState(
 			}
 			if ((preservedEveryRow || tailExtendedInPlace) && current.length >= previous.lines.length) {
 				if (volatileCooldown === 0) appendOnly = true;
+				// Clean growth inserts rows at the divergence; rows the floor
+				// points at travel down with the preserved suffix. (On a tail
+				// extension the divergent row itself stays put — only rows
+				// strictly below it shift.)
+				const delta = current.length - previous.lines.length;
+				if (delta > 0 && Number.isFinite(rewriteFloor)) {
+					const floorShifts = preservedEveryRow ? rewriteFloor >= prefixLength : rewriteFloor > prefixLength;
+					if (floorShifts) rewriteFloor += delta;
+				}
 			} else {
 				cleanFrame = false;
 				appendOnly = false;
 				volatileCooldown = VOLATILE_REARM_FRAMES;
+				// A row rewritten in place once (an agent row's tool/cost
+				// counter, a periodically relocating footer) will be rewritten
+				// again: it is a ticker, not settling content. Floor the
+				// ratchet there permanently — only rows above the topmost
+				// ever-rewritten row may promote. Without this, a slow ticker
+				// (quiet for one promotion window between updates) gets
+				// promoted, committed, then rewritten — and the engine audit
+				// recommits on every tick, spraying stale snapshots of the
+				// block into native scrollback for the whole run. One-off
+				// re-layouts lose nothing: the append-only re-arm path commits
+				// the full block regardless of the floor.
+				rewriteFloor = Math.min(rewriteFloor, prefixLength);
 			}
 		}
 		if (cleanFrame && volatileCooldown > 0) volatileCooldown--;
@@ -222,7 +252,7 @@ function deriveLiveCommitState(
 				candidatePrefixAge === 0 ? prefixLength : Math.min(candidatePrefixLength, prefixLength);
 			candidatePrefixAge++;
 			if (candidatePrefixAge >= STABLE_PREFIX_COMMIT_FRAMES) {
-				stablePrefixLength = candidatePrefixLength;
+				stablePrefixLength = Math.min(candidatePrefixLength, rewriteFloor);
 				candidatePrefixLength = prefixLength;
 				candidatePrefixAge = 0;
 			}
@@ -235,6 +265,7 @@ function deriveLiveCommitState(
 		stablePrefixLength,
 		candidatePrefixLength,
 		candidatePrefixAge,
+		rewriteFloor,
 		// An append-only block's whole body is committable; otherwise the
 		// settled head still is — only the volatile tail stays deferred.
 		safeLength: appendOnly ? current.length : stablePrefixLength,
@@ -293,6 +324,24 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		return this.#nativeScrollbackCommitSafeEnd;
 	}
 
+	/**
+	 * Whether `component` sits below a still-mutating block — i.e. inside the
+	 * live region, where its rows cannot have been committed to native
+	 * scrollback yet (commits are prefix-only and stop at the first
+	 * still-live block). Callers that retract ephemeral blocks (IRC cards)
+	 * must check this: removing a block whose rows may already be in history
+	 * is an interior deletion of the committed prefix, which the engine can
+	 * only repair by recommitting everything below it — duplication.
+	 */
+	isWithinLiveRegion(component: Component): boolean {
+		const index = this.children.indexOf(component);
+		if (index < 0) return false;
+		for (let i = 0; i < index; i++) {
+			if (!isBlockFinalized(this.children[i]!)) return true;
+		}
+		return false;
+	}
+
 	override render(width: number): string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
@@ -347,6 +396,7 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 				stablePrefixLength: liveCommitState?.stablePrefixLength ?? 0,
 				candidatePrefixLength: liveCommitState?.candidatePrefixLength ?? 0,
 				candidatePrefixAge: liveCommitState?.candidatePrefixAge ?? 0,
+				rewriteFloor: liveCommitState?.rewriteFloor ?? Number.POSITIVE_INFINITY,
 			};
 
 			// Empty (or stripped-to-nothing) children contribute nothing and never
