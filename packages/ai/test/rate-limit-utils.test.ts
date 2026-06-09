@@ -87,6 +87,25 @@ describe("isUsageLimitError", () => {
 			),
 		).toBe(true);
 	});
+
+	// Antigravity / Cloud Code Assist returns this phrasing for an exhausted
+	// project quota; `parseRateLimitReason` already maps it to QUOTA_EXHAUSTED
+	// via the generic `quota` substring, but `isUsageLimitError` decides
+	// whether the auth layer rotates to a sibling OAuth credential, so it
+	// must match too — otherwise the session stays pinned to the exhausted
+	// account (see issue #2198).
+	it("detects Antigravity 'Individual quota reached' as a credential-rotatable usage limit", () => {
+		expect(
+			isUsageLimitError(
+				"Cloud Code Assist API error (429): Individual quota reached. Contact your administrator to enable overages.",
+			),
+		).toBe(true);
+	});
+
+	it("detects bare 'quota reached' phrasing", () => {
+		expect(isUsageLimitError("quota reached")).toBe(true);
+		expect(isUsageLimitError("quota_reached")).toBe(true);
+	});
 });
 
 describe("calculateRateLimitBackoffMs", () => {
