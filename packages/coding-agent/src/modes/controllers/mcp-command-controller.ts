@@ -591,6 +591,7 @@ export class MCPCommandController {
 		const resolvedClientId = clientId.trim() || parsedAuthUrl.searchParams.get("client_id") || undefined;
 		const resolvedClientSecret = clientSecret.trim() || undefined;
 
+		const manualInput = this.ctx.oauthManualInput;
 		try {
 			// Create OAuth flow
 			const flow = new MCPOAuthFlow(
@@ -620,6 +621,9 @@ export class MCPCommandController {
 								0,
 							),
 						);
+						block.addChild(
+							new Text(theme.fg("muted", "Headless? Paste the redirect URL or code with /login <value>."), 1, 0),
+						);
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0));
 						// Try to open browser automatically
@@ -644,6 +648,7 @@ export class MCPCommandController {
 					onProgress: (message: string) => {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
+					onManualCodeInput: () => manualInput.waitForInput("mcp"),
 				},
 			);
 
@@ -687,6 +692,8 @@ export class MCPCommandController {
 			} else {
 				throw new Error(`OAuth authentication failed: ${errorMsg}`);
 			}
+		} finally {
+			manualInput.clear("Manual MCP OAuth input cleared");
 		}
 	}
 
