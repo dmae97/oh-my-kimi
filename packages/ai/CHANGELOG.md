@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced idle-watchdog churn on the token hot path: the abort promise/listener is created once per stream instead of per yielded item, the deadline uses a persistent re-armed timer instead of a `setTimeout` create/destroy pair per delta, and the persistent race promises are re-minted every 1024 items so per-race reaction records cannot accumulate for the stream's whole life.
+- Memoized Anthropic many-image downscaling by content-block identity, so long sessions with stable message objects no longer re-decode and re-encode every oversized image on each request and retry.
+- Tool-argument validation errors now truncate embedded argument strings at 256 chars per field — a failed `write`-class call no longer echoes hundreds of KB of payload back to the model as the error message.
+
+### Fixed
+
+- Fixed Gemini streaming silently presenting truncated or blocked output as a successful `stop`: in-band `{"error":{...}}` events and `promptFeedback.blockReason` chunks were never inspected, and a stream ending without any `finishReason` kept the initialized `stop` — all three now surface as errors (both the API-key and gemini-cli/Antigravity consumers), and the `toolUse` stop-reason override no longer masks `SAFETY`/`MALFORMED_FUNCTION_CALL` finishes that arrive after a valid tool call.
+- Fixed Gemini/Bedrock error finishes reporting "An unknown error occurred": the raw finish/stop reason (`MALFORMED_FUNCTION_CALL`, `RECITATION`, `guardrail_intervened`, …) is now recorded into the surfaced error message.
+- Fixed the Anthropic provider retry loop ignoring server `retry-after` on 429/529 — it now waits `max(headerDelay, backoff)` instead of hammering a rate-limited endpoint three times within ~14s of guaranteed failures.
+- Fixed in-stream Anthropic SSE `error` events being thrown as raw JSON envelopes; the structured `error.type`/`message` is parsed out, keeping retry classification on the typed token instead of accidental regex hits.
+- Fixed transparent-reconnect tolerance duplicating content behind replaying proxies: after a duplicate `message_start`, replayed `content_block_start` events for already-closed indexes are now consumed silently instead of appending duplicate text/tool calls.
+- Fixed the Anthropic gateway accepting malformed known-type content blocks (e.g. `{type:"text", text:123}`) through the unknown-block catch-all, corrupting history and surfacing later as an opaque TypeError — they now fail validation with a clean 400. The gateway's encode stream also emits `ping` keepalives every 15s and a complete `message_start`/`message_delta`/`message_stop` envelope when the inner stream ends without a terminal event, so strict clients no longer classify slow or empty streams as protocol errors.
+- Fixed the Mistral `requiresThinkingAsText` replay path calling `.unshift()` on string assistant content — an unconditional TypeError that failed any same-model history turn carrying both thinking and text.
+- Fixed the Responses gateway stripping `encrypted_content` from inbound reasoning items (strip-mode schema), which broke codex-style stateless replay; the schema is now loose, restoring the symmetry the outbound encoder already preserved. Composite internal `callId|itemId` ids are also split before hitting the wire so third-party clients that validate `call_id` charsets no longer reject them.
+- Ported the shared unfinished-tool-call sweep to the codex `response.completed` handler, so a lost `output_item.done` can no longer persist a tool call with stale `{}` arguments and transient parser fields into session history.
+- Fixed live text freezing until item completion when a lossy proxy drops `content_part.added`: the missing part is now synthesized on the first `output_text`/`refusal` delta (shared and codex decoders).
+- Fixed interleaved `content`/`tool_calls` deltas fragmenting a tool call into a truncated call plus a nameless phantom: text/thinking transitions no longer finish open tool-call blocks, so index-only continuation deltas re-find them.
+- Fixed the Azure chat-completions path ignoring `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` (only the Responses provider honored it), producing opaque 404s when deployment names differ from catalog model ids.
+- Fixed the chat gateway discarding inbound assistant `reasoning_content`, which fed DeepSeek/Kimi exact-replay upstreams a placeholder instead of the model's actual reasoning; it now round-trips as a thinking block, and `toolcall_end` emits a corrective id/name chunk when the streamed start carried empty values.
+- Fixed the auth retry loop minting OAuth tokens and firing a doomed request after the caller aborted, and stopped masking resolver failures (broker/network/refresh errors) as "No API key" — the actual cause is preserved.
+- Fixed `EventStream.end()` without a terminal result leaving `.result()` pending forever (reachable via extension streams and the lazy wrapper); it now rejects with a synthesized error.
+- Fixed the Copilot retry wrapper blind-retrying every retryable error with fixed 400ms delays: 429/5xx now honor `Retry-After` (capped at 30s) and other statuses are not retried, while status-less transport blips keep the linear retry.
+- Fixed the OpenAI completions error path ending the stream without closing open text/thinking/tool-call blocks, leaving consumers with orphaned block lifecycles on every stream error or idle-timeout abort.
+- Fixed DSML hold-back freezing display on any bare `<` in model output for up to 256 chars: idle-state holding now only triggers on a strict DSML section-open prefix, and blowing the 1MB parameter cap no longer leaks the closing envelope tags as visible text; a capped parameter value also carries an explicit `…[parameter truncated]` marker instead of executing the tool with silently corrupted input.
+- Fixed schema normalization blanking DAG-shared subtrees to `{}`: the visited-set cycle guard treated a subschema object reused across two properties as a cycle; path-tracking `enter`/`exit` now allows sharing while still short-circuiting true cycles, frozen input schemas no longer throw, and the path counter no longer leaks depth on the cycle branch (which made every later normalization of the same object misreport a cycle).
+- Fixed shared in-flight Google token refreshes being bound to the first caller's `AbortSignal`, failing every concurrent waiter when one parallel Vertex call was cancelled; callers now race their own signal against a detached refresh, which is bounded by its own 30s timeout so a hung fetch cannot pin the in-flight slot until process restart.
+- Fixed Gemini <3 multimodal tool results breaking the single-function-response-turn invariant for parallel tool calls (image turns are buffered and flushed after the merged functionResponse turn), and the gemini-cli consumer now defaults missing `functionCall.args` to `{}` like the shared consumer.
+- Fixed Bedrock dropping `toolConfig` entirely when `toolChoice` is `"none"` while history still contains tool blocks — the Converse API rejects such requests, so tool specs are kept and only the choice is omitted.
+- Fixed AWS credential handling serving expired credentials until process restart: cache entries are invalidated on 401/403, file-sourced session-token credentials get a 5-minute TTL, and concurrent first requests single-flight instead of spawning duplicate `credential_process`/SSO fetches — the shared resolution is detached from the first caller's abort signal (one cancelled request no longer fails every waiter) and bounded by its own 30s timeout. The eventstream reader also cancels the response body on abnormal exit instead of leaving the HTTP connection draining.
+
+### Removed
+
+- Removed the dead `iterateUntilAbort` helper (superseded by `iterateWithIdleTimeout`); it leaked the upstream iterator when the consumer abandoned mid-yield and had no production call sites.
+
 ## [15.10.10] - 2026-06-09
 
 ### Added
