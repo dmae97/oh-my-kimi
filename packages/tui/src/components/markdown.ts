@@ -294,6 +294,10 @@ export class Markdown implements Component {
 	#cachedText?: string;
 	#cachedWidth?: number;
 	#cachedLines?: readonly string[];
+	/** When true, skip the module-level LRU (lookup and insert) for this instance's
+	 *  renders. Set for in-flight streaming partials whose text changes every frame —
+	 *  caching those churns the LRU with near-duplicate full-message snapshots. */
+	transientRenderCache = false;
 
 	constructor(
 		text: string,
@@ -355,16 +359,19 @@ export class Markdown implements Component {
 		// risk of clashing with a function that returns text verbatim.
 		// theme.heading is used as the representative theme probe — it's required
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
-		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
-		const headingProbe = this.#theme.heading("");
-		const cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
-		const cached = renderCache.get(cacheKey);
-		if (cached !== undefined) {
-			// Populate L1 so subsequent calls from this instance are O(1) map lookup.
-			this.#cachedText = this.#text;
-			this.#cachedWidth = width;
-			this.#cachedLines = cached;
-			return cached.slice();
+		let cacheKey: string | undefined;
+		if (!this.transientRenderCache) {
+			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
+			const headingProbe = this.#theme.heading("");
+			cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			const cached = renderCache.get(cacheKey);
+			if (cached !== undefined) {
+				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
+				this.#cachedText = this.#text;
+				this.#cachedWidth = width;
+				this.#cachedLines = cached;
+				return cached.slice();
+			}
 		}
 
 		// Parse markdown to HTML-like tokens
@@ -454,7 +461,9 @@ export class Markdown implements Component {
 
 		// Update L2 module-level LRU so future instances with the same key skip
 		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		renderCache.set(cacheKey, cachedLines);
+		if (cacheKey !== undefined) {
+			renderCache.set(cacheKey, cachedLines);
+		}
 
 		return result;
 	}
@@ -824,35 +833,33 @@ export class Markdown implements Component {
 		for (let i = 0; i < token.items.length; i++) {
 			const item = token.items[i];
 			const bullet = token.ordered ? `${startNumber + i}. ` : "- ";
+			// Continuation rows align under the item text, so the hang matches the
+			// actual bullet width (`10. ` is 4 cells, not 2).
+			const continuationIndent = indent + padding(bullet.length);
 
-			// Process item tokens to handle nested lists
+			// Process item tokens; nested-list lines arrive structurally tagged and
+			// already carry their own full indent.
 			const itemLines = this.#renderListItem(item.tokens || [], depth, styleContext);
 
 			if (itemLines.length > 0) {
-				// First line - check if it's a nested list
-				// A nested list will start with indent (spaces) followed by cyan bullet
-				const firstLine = itemLines[0];
-				const isNestedList = /^\s+\x1b\[36m[-\d]/.test(firstLine); // starts with spaces + cyan + bullet char
-
-				if (isNestedList) {
-					// This is a nested list, just add it as-is (already has full indent)
-					lines.push(firstLine);
+				const firstLine = itemLines[0]!;
+				if (firstLine.nested) {
+					// Nested list first - keep as-is (already has full indent)
+					lines.push(firstLine.text);
 				} else {
 					// Regular text content - add indent and bullet
-					lines.push(indent + this.#theme.listBullet(bullet) + firstLine);
+					lines.push(indent + this.#theme.listBullet(bullet) + firstLine.text);
 				}
 
 				// Rest of the lines
 				for (let j = 1; j < itemLines.length; j++) {
-					const line = itemLines[j];
-					const isNestedListLine = /^\s+\x1b\[36m[-\d]/.test(line); // starts with spaces + cyan + bullet char
-
-					if (isNestedListLine) {
+					const line = itemLines[j]!;
+					if (line.nested) {
 						// Nested list line - already has full indent
-						lines.push(line);
+						lines.push(line.text);
 					} else {
-						// Regular content - add parent indent + 2 spaces for continuation
-						lines.push(`${indent}  ${line}`);
+						// Regular content - hang under the item text
+						lines.push(continuationIndent + line.text);
 					}
 				}
 			} else {
@@ -864,50 +871,58 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Render list item tokens, handling nested lists
-	 * Returns lines WITHOUT the parent indent (renderList will add it)
+	 * Render list item tokens, handling nested lists.
+	 * Returns lines WITHOUT the parent indent (renderList adds it); lines that
+	 * belong to a nested list are tagged `nested` so the caller never has to
+	 * sniff theme-dependent ANSI bytes to recognize them.
 	 */
-	#renderListItem(tokens: Token[], parentDepth: number, styleContext?: InlineStyleContext): string[] {
-		const lines: string[] = [];
+	#renderListItem(
+		tokens: Token[],
+		parentDepth: number,
+		styleContext?: InlineStyleContext,
+	): Array<{ text: string; nested: boolean }> {
+		const lines: Array<{ text: string; nested: boolean }> = [];
 
 		for (const token of tokens) {
 			if (token.type === "list") {
 				// Nested list - render with one additional indent level
-				// These lines will have their own indent, so we just add them as-is
+				// These lines carry their own indent, so tag them for pass-through
 				const nestedLines = this.#renderList(token as ListToken, parentDepth + 1, styleContext);
-				lines.push(...nestedLines);
+				for (const nestedLine of nestedLines) {
+					lines.push({ text: nestedLine, nested: true });
+				}
 			} else if (token.type === "text") {
 				// Text content (may have inline tokens)
 				const text =
 					token.tokens && token.tokens.length > 0
 						? this.#renderInlineTokens(token.tokens, styleContext)
 						: token.text || "";
-				lines.push(text);
+				lines.push({ text, nested: false });
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
 				const text = this.#renderInlineTokens(token.tokens || [], styleContext);
-				lines.push(text);
+				lines.push({ text, nested: false });
 			} else if (token.type === "code") {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
-				lines.push(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
+				lines.push({ text: this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`), nested: false });
 				if (this.#theme.highlightCode) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
-						lines.push(`${codeIndent}${hlLine}`);
+						lines.push({ text: `${codeIndent}${hlLine}`, nested: false });
 					}
 				} else {
 					const codeLines = token.text.split("\n");
 					for (const codeLine of codeLines) {
-						lines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+						lines.push({ text: `${codeIndent}${this.#theme.codeBlock(codeLine)}`, nested: false });
 					}
 				}
-				lines.push(this.#theme.codeBlockBorder("```"));
+				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
 			} else {
 				// Other token types - try to render as inline
 				const text = this.#renderInlineTokens([token], styleContext);
 				if (text) {
-					lines.push(text);
+					lines.push({ text, nested: false });
 				}
 			}
 		}
