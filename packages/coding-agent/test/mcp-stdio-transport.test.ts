@@ -31,6 +31,39 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
+	it("resolves extension-less absolute Windows paths to the sibling .cmd shim", async () => {
+		// Mirrors npm's Windows shim layout: bare `codegraph` (shebang script),
+		// `codegraph.cmd` (cmd.exe wrapper), and `codegraph.ps1` siblings under
+		// %AppData%\Roaming\npm. uv_spawn rejects the extensionless script;
+		// the resolver must promote the bare absolute path to its `.cmd`
+		// sibling so the launch succeeds (see #2174). The test rig pins
+		// PATHEXT to a single lowercase extension so the candidate filename
+		// matches the file we create on the case-sensitive test host.
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-abs-"));
+		try {
+			const bare = path.join(tempDir, "codegraph");
+			const shim = `${bare}.cmd`;
+			await Bun.write(bare, "#!/bin/sh\n");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: bare, args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `"${shim}" "serve" "--mcp"`]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("leaves non-Windows commands untouched", async () => {
 		const result = await resolveStdioSpawnCommand(
 			{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
