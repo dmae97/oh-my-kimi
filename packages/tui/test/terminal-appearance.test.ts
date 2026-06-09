@@ -195,8 +195,8 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 
 		const afterInitial = queryCount();
 
-		// Advance 2s — poll should fire and send another query
-		vi.advanceTimersByTime(2000);
+		// Advance one poll interval — poll should fire and send another query
+		vi.advanceTimersByTime(30_000);
 		expect(queryCount()).toBe(afterInitial + 1);
 
 		// Complete poll's OSC 11 + DA1 (only one DA1 sentinel — keyboard probe is one-shot)
@@ -212,8 +212,8 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 
 		const afterMode2031 = queryCount();
 
-		// Advance 4s — no additional poll queries should fire
-		vi.advanceTimersByTime(4000);
+		// Advance two more poll intervals — no additional poll queries should fire
+		vi.advanceTimersByTime(60_000);
 		expect(queryCount()).toBe(afterMode2031);
 
 		terminal.stop();
@@ -228,21 +228,21 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 
-		// Poll fires at 2s while Mode 2031 support is still unknown.
+		// Poll fires at the first interval while Mode 2031 support is still unknown.
 		const afterInitial = queryCount();
-		vi.advanceTimersByTime(2000);
+		vi.advanceTimersByTime(30_000);
 		expect(queryCount()).toBe(afterInitial + 1);
 		// Drain the poll's OSC 11 reply so it is no longer pending.
 		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
 
 		// DECRQM confirms Mode 2031 support — push notifications supersede polling,
 		// so the poll must stop (its repeated OSC 11/DA1 writes otherwise clobber
-		// the user's active text selection every 2s).
+		// the user's active text selection on every poll).
 		process.stdin.emit("data", "\x1b[?2031;3$y");
 		const afterConfirm = queryCount();
 
 		// Advance well past several poll intervals — no further OSC 11 queries fire.
-		vi.advanceTimersByTime(6000);
+		vi.advanceTimersByTime(90_000);
 		expect(queryCount()).toBe(afterConfirm);
 
 		terminal.stop();
@@ -259,7 +259,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		process.stdin.emit("data", "\x1b[?1;2c");
 		const afterInitial = queryCount();
 
-		vi.advanceTimersByTime(4000);
+		vi.advanceTimersByTime(90_000);
 
 		expect(queryCount()).toBe(afterInitial);
 
@@ -335,7 +335,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		process.stdin.emit("data", "\x1b]11;rgb:1c1c/1c1c/1c1c\x07");
 
 		// DA1 reply arrives split: the prefix appears as one event and then the StdinBuffer
-		// flush timeout (10ms) elapses before the rest of the response is delivered.
+		// flush timeout (50ms) elapses before the rest of the response is delivered.
 		// xterm-style "VT420 with extensions" response: \x1b[?62;6;7;14;...;52c
 		process.stdin.emit("data", "\x1b[?62");
 		vi.advanceTimersByTime(50);
@@ -616,7 +616,7 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 
 	it("reassembles an in-band resize report split past the flush window without leaking the tail", () => {
 		// The reported bug: resizing rapidly keeps the event loop busy, so the
-		// StdinBuffer flush timeout (10ms) fires after the `\x1b[48;…` prefix but
+		// StdinBuffer flush timeout (50ms) fires after the `\x1b[48;…` prefix but
 		// before the terminator. The tail then arrives as bare characters that
 		// leaked into the editor as literal text (e.g. `8;125;1156;1125t`).
 		vi.useFakeTimers();

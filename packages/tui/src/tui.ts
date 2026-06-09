@@ -1725,6 +1725,12 @@ export class TUI extends Container {
 		this.#imageBudget.beginPass();
 		const rawFrame = this.render(width);
 		this.#imageBudget.endPass();
+		// Ghostty initial-image deferral must run before any render state is
+		// consumed (#resizeEventPending, hardware-cursor state, commit
+		// re-anchoring): the early return abandons this frame and the deferred
+		// render recomposes from scratch, so consuming state here would
+		// misclassify a pending resize as an ordinary diff and corrupt the paint.
+		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
 		// Strip cursor markers immediately (they are internal sentinels and
 		// must never reach the terminal, the committed prefix, or the audit);
 		// the visible marker is chosen after the window top is known.
@@ -1853,7 +1859,6 @@ export class TUI extends Container {
 		// Load newly-displayed image data once, before this frame's placements
 		// (and any emitter) reference it. `a=t` produces no display, so writing
 		// it ahead of the synchronized paint is artifact-free.
-		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
 		const imageTransmits = this.#imageBudget.takeTransmits();
 		if (imageTransmits.length > 0) {
 			let transmitBuffer = "";
@@ -2279,8 +2284,13 @@ export class TUI extends Container {
 	#emitAltFrame(lines: string[], width: number, height: number): void {
 		const fitted: string[] = new Array(height);
 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
-		// Skip an identical repaint (the modal is mostly static between keystrokes).
-		if (this.#altPreviousLines.length === height) {
+		// Skip an identical repaint (the modal is mostly static between
+		// keystrokes) — unless a forced repaint (resetDisplay,
+		// requestRender(true)) is pending: the redraw gesture must repair a
+		// corrupted modal even when our cached frame is byte-identical.
+		const force = this.#forceViewportRepaintOnNextRender;
+		this.#forceViewportRepaintOnNextRender = false;
+		if (!force && this.#altPreviousLines.length === height) {
 			let same = true;
 			for (let r = 0; r < height; r++) {
 				if (fitted[r] !== this.#altPreviousLines[r]) {
