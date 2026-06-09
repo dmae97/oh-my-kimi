@@ -242,7 +242,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
-			const { params } = buildParams(model, context, options, providerSessionState, baseUrl);
+			const params = buildParams(model, context, options, providerSessionState, baseUrl);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
@@ -432,18 +432,11 @@ function buildParams(
 	options: OpenAIResponsesOptions | undefined,
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
 	resolvedBaseUrl?: string,
-): { conversationMessages: ResponseInput; params: OpenAIResponsesSamplingParams } {
+): OpenAIResponsesSamplingParams {
 	const strictResponsesPairing =
 		options?.strictResponsesPairing ??
 		(isAzureOpenAIBaseUrl(model.baseUrl ?? "") || model.provider === "github-copilot");
-	const conversationMessages = convertConversationMessages(
-		model,
-		context,
-		strictResponsesPairing,
-		providerSessionState,
-		options,
-	);
-	const messages: ResponseInput = [...conversationMessages];
+	const messages = convertConversationMessages(model, context, strictResponsesPairing, providerSessionState, options);
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	let systemInstructions: string | undefined;
@@ -516,7 +509,7 @@ function buildParams(
 		Object.assign(params, options.extraBody);
 	}
 
-	return { conversationMessages, params };
+	return params;
 }
 
 function mapReasoningEffort(

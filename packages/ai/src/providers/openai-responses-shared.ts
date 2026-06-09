@@ -49,6 +49,7 @@ export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Se
 	"response.custom_tool_call_input.done",
 	"response.output_item.done",
 	"response.completed",
+	"response.incomplete",
 	"response.failed",
 	"error",
 ]);
@@ -795,11 +796,18 @@ export async function processResponsesStream<TApi extends Api>(
 					arguments: { input: rawInput },
 					customWireName: item.name,
 				};
+				if (block) {
+					// Persist the final input on the stored block and drop the transient
+					// accumulation buffer, mirroring the function_call branch above.
+					block.arguments = { input: rawInput };
+					delete (block as { partialJson?: string }).partialJson;
+					delete (block as { lastParseLen?: number }).lastParseLen;
+				}
 				const contentIndex = block ? contentIndexOf(block) : output.content.length - 1;
 				closeOpenItem(event.output_index, item.id, entry, item.call_id);
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			}
-		} else if (event.type === "response.completed") {
+		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			const response = event.response;
 			if (response?.id) {
 				output.responseId = response.id;
@@ -824,7 +832,7 @@ export async function processResponsesStream<TApi extends Api>(
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+			throw new Error(`Error Code ${event.code}: ${event.message}`);
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
 			const details = event.response?.incomplete_details;
