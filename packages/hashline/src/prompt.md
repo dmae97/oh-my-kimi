@@ -11,6 +11,7 @@ delete N..M        delete original lines N..M. No body.
 delete block N     delete the whole syntactic block that BEGINS on line N.
 insert before N:   insert the body rows immediately before line N.
 insert after N:    insert the body rows immediately after line N.
+insert after block N:  insert the body rows after the END of the syntactic block that BEGINS on line N (tree-sitter-resolved, like `replace block`). Point N at the construct's opening line; the body lands after its closing line. Reach for this to add a statement after a construct whose end you have not read or counted — the landing can't be mis-counted.
 insert head:       insert the body rows at the very start of the file.
 insert tail:       insert the body rows at the very end of the file.
 Single line: `replace N..N:` / `delete N`. The range is the ORIGINAL lines you touch; body length is irrelevant (replacing 1 line with 10 is still `replace N..N:`).
@@ -26,7 +27,8 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - Line numbers come from `read`/`search` (`LINE:TEXT`). Copy the `[PATH#TAG]` header; use the bare LINE numbers.
 - Numbers refer to the ORIGINAL file and stay valid for the whole patch — they do not shift as hunks apply.
 - Across calls they do NOT survive: each applied edit mints a fresh `#TAG` and renumbers the file, so the tag and line numbers you just used are dead. Anchor the next edit on the `[PATH#TAG]` and lines from the edit response (or re-`read`), never on pre-edit numbers.
-- A line number is an offset, not a structural boundary: never `insert after N` into a construct you have not read, and never start or end a `replace`/`delete` range mid-expression or mid-block. If unsure what is on those lines, `read` them first.
+- A line number is an offset, not a structural boundary: never `insert after N` into a construct you have not read, and never start or end a `replace`/`delete` range mid-expression or mid-block. If unsure what is on those lines, `read` them first. To land after a construct whose end you have not read, use `insert after block N` anchored on its OPENING line instead of counting to the close.
+- Body indentation is a depth claim. If an `insert after N` body is indented shallower than line N, the landing slides forward past the closing-delimiter lines below N until depth matches, and the result carries a warning naming the final line. Indent the body for the depth you want it to live at; if the shift was wrong, re-issue with the body indented to match line N.
 - A valid `#TAG` is NOT permission to patch the whole file — it certifies the snapshot, not your knowledge of it. Authority to touch a line comes from having literally seen that line as a `LINE:TEXT` row in a `read`/`search`, not from holding the tag. Every line in a hunk's range, and the lines bounding it, must be lines you actually saw.
 - An elided or partial read is NOT a read of the gap. A `…` (or any collapsed/truncated region) between two excerpts means those lines are UNSEEN — treat them exactly like lines you never opened. Never place a hunk on, or span a range across, an elided region; `read` that range explicitly first. Reconstructing it from memory of "what the code probably looks like" is how ranges drift off-by-N and shred neighboring blocks.
 - On a stale-tag rejection — or any result you cannot fully account for — STOP and re-`read`. Never stack more line-numbered edits onto output you have not re-grounded; that compounds corruption.

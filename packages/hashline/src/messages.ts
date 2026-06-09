@@ -47,27 +47,39 @@ export const EMPTY_BLOCK =
 	"`replace block N:` needs at least one `+TEXT` body row. To delete a block, use `delete N..M` with the block's line range.";
 
 /**
- * Error text emitted when a `replace block N:` anchor cannot be resolved to a
+ * Error text emitted when a block-anchored op cannot be resolved to a
  * syntactic block (unrecognized language, blank/out-of-range line, no node
  * begins on line N such as a lone closing delimiter, or the resolved block has
  * a syntax error). Names the offending line and steers back to an explicit
- * `replace N..M:` range.
+ * concrete-line form.
  */
-export function blockUnresolvedMessage(line: number): string {
+export function blockUnresolvedMessage(line: number, op: "replace" | "delete" | "insert_after" = "replace"): string {
+	const phrase =
+		op === "delete"
+			? `delete block ${line}`
+			: op === "insert_after"
+				? `insert after block ${line}:`
+				: `replace block ${line}:`;
+	const fallback =
+		op === "delete"
+			? `\`delete ${line}..M\``
+			: op === "insert_after"
+				? `\`insert after M:\` with the block's explicit last line`
+				: `\`replace ${line}..M:\` with the block's explicit end line`;
 	return (
-		`\`replace block ${line}:\` could not resolve a syntactic block beginning on line ${line}. ` +
+		`\`${phrase}\` could not resolve a syntactic block beginning on line ${line}. ` +
 		`The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. ` +
-		`Use \`replace ${line}..M:\` with the block's explicit end line instead.`
+		`Use ${fallback} instead.`
 	);
 }
 
 /**
- * Error text emitted when a `replace block N:` edit reaches a code path that
+ * Error text emitted when a block-anchored edit reaches a code path that
  * has no {@link BlockResolver} wired in. Indicates a host-configuration bug
  * rather than authored-input error.
  */
 export const BLOCK_RESOLVER_UNAVAILABLE =
-	"`replace block N:` is not available here (no tree-sitter block resolver is configured). Use `replace N..M:` with an explicit range.";
+	"Block-anchored ops (`replace block N:`, `delete block N`, `insert after block N:`) are not available here (no tree-sitter block resolver is configured). Use a concrete line range instead.";
 
 /**
  * Internal invariant error: `applyEdits` received an unresolved `replace block
@@ -86,6 +98,22 @@ export const DELETE_BLOCK_TAKES_NO_BODY =
 
 /** Error text emitted when an insert hunk has no body. */
 export const EMPTY_INSERT = "`insert` needs at least one `+TEXT` body row.";
+
+/**
+ * Warning emitted when an `insert after` edit's body rows are indented
+ * shallower than the anchor line and the landing point was slid forward past
+ * the structural closer lines that follow. The body's indentation names the
+ * depth the author wants the new lines to sit at; anchoring inside a deeper
+ * construct is the common "insert after the block, anchored on the last line
+ * I read" mistake.
+ */
+export function afterInsertLandingShiftWarning(anchorLine: number, landingLine: number, crossed: number): string {
+	return (
+		`insert after ${anchorLine}: the body is indented shallower than line ${anchorLine}, so the landing was moved past ` +
+		`${crossed} closing line${crossed === 1 ? "" : "s"} to after line ${landingLine}. ` +
+		`If you meant the deeper position inside the block, re-issue with the body indented to match.`
+	);
+}
 
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =

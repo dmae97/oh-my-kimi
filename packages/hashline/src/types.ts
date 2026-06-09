@@ -35,18 +35,21 @@ export type Edit =
 	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string }
 	| {
 			/**
-			 * Deferred block edit (`replace block N:` / `delete block N`). The exact
-			 * line span is unknown at parse time — it is computed by
-			 * {@link resolveBlockEdits} once file text + path (→ language) are
-			 * available, then expanded into concrete edits: a non-empty `payloads`
-			 * (from `replace block`) becomes the same `replacement` inserts + deletes
-			 * that `replace start..end:` produces; an empty `payloads` (from `delete
-			 * block`) becomes a pure range deletion. `applyEdits` never sees this
+			 * Deferred block edit (`replace block N:` / `delete block N` /
+			 * `insert after block N:`). The exact line span is unknown at parse
+			 * time — it is computed by {@link resolveBlockEdits} once file text +
+			 * path (→ language) are available, then expanded into concrete edits:
+			 * a non-empty `payloads` without `mode` (from `replace block`) becomes
+			 * the same `replacement` inserts + deletes that `replace start..end:`
+			 * produces; an empty `payloads` (from `delete block`) becomes a pure
+			 * range deletion; `mode: "insert_after"` becomes plain `after_anchor`
+			 * inserts at the block's last line. `applyEdits` never sees this
 			 * variant.
 			 */
 			kind: "block";
 			anchor: Anchor;
 			payloads: string[];
+			mode?: "insert_after";
 			lineNum: number;
 			index: number;
 	  };
@@ -122,11 +125,11 @@ export interface BlockSpan {
 }
 
 /**
- * One `replace block N:` / `delete block N` anchor resolved to its concrete
- * line span. Surfaced on {@link ApplyResult} so the host can echo
- * "block N → lines start..end" and let the model catch a wrong opener — e.g. a
- * decorator or doc-comment that sits in a separate node outside the resolved
- * block.
+ * One `replace block N:` / `delete block N` / `insert after block N:` anchor
+ * resolved to its concrete line span. Surfaced on {@link ApplyResult} so the
+ * host can echo "block N → lines start..end" and let the model catch a wrong
+ * opener — e.g. a decorator or doc-comment that sits in a separate node
+ * outside the resolved block.
  */
 export interface BlockResolution {
 	/** The 1-indexed line the block op was anchored on (the `N`). */
@@ -135,8 +138,8 @@ export interface BlockResolution {
 	start: number;
 	/** Last line of the resolved span (1-indexed, inclusive). */
 	end: number;
-	/** True for `delete block N`; false for `replace block N:`. */
-	isDelete: boolean;
+	/** Which block op produced this resolution. */
+	op: "replace" | "delete" | "insert_after";
 }
 
 /** Request handed to a {@link BlockResolver} to resolve one `replace block N:` anchor. */

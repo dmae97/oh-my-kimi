@@ -62,12 +62,20 @@ export abstract class SnapshotStore {
 
 const DEFAULT_MAX_PATHS = 30;
 const DEFAULT_MAX_VERSIONS_PER_PATH = 4;
+/** Global ceiling on retained snapshot text across all paths (UTF-16 code units). */
+const DEFAULT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 
 export interface InMemorySnapshotStoreOptions {
 	/** Maximum number of distinct paths tracked at once (default 30). LRU eviction. */
 	maxPaths?: number;
 	/** Maximum full-file versions retained per path (default 4). Oldest dropped first. */
 	maxVersionsPerPath?: number;
+	/**
+	 * Global ceiling on retained snapshot text summed across every path's
+	 * version history, measured in UTF-16 code units (default 64 MiB).
+	 * Least-recently-used path histories are evicted to stay under it.
+	 */
+	maxTotalBytes?: number;
 }
 
 /**
@@ -85,7 +93,15 @@ export class InMemorySnapshotStore extends SnapshotStore {
 
 	constructor(options: InMemorySnapshotStoreOptions = {}) {
 		super();
-		this.#versions = new LRUCache<string, Snapshot[]>({ max: options.maxPaths ?? DEFAULT_MAX_PATHS });
+		this.#versions = new LRUCache<string, Snapshot[]>({
+			max: options.maxPaths ?? DEFAULT_MAX_PATHS,
+			maxSize: options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES,
+			sizeCalculation: history => {
+				let total = 1;
+				for (const version of history) total += version.text.length;
+				return total;
+			},
+		});
 		this.#maxVersionsPerPath = options.maxVersionsPerPath ?? DEFAULT_MAX_VERSIONS_PER_PATH;
 	}
 

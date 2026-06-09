@@ -134,6 +134,26 @@ describe("hashline body contracts", () => {
 		expect(applyEdits(FILE, result.edits).text).toBe("a\n3:keep\nplain\nd\ne");
 	});
 
+	it("keeps interior blank rows in a bare replace body", () => {
+		const result = parsePatch("replace 2..3:\nfoo\n\nbar");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\nfoo\n\nbar\nd\ne");
+	});
+
+	it("drops trailing blank rows between a bare body and the next hunk", () => {
+		const result = parsePatch("replace 2..2:\nfoo\n\nreplace 4..4:\nbaz");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\nfoo\nc\nbaz\ne");
+	});
+
+	it("skips blank rows when checking N: prefix uniformity", () => {
+		const result = parsePatch("replace 2..3:\n2:foo\n\n3:bar");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\nfoo\n\nbar\nd\ne");
+	});
+
+	it("leaves numeric-keyed literal bodies untouched (dict/YAML shape)", () => {
+		const result = parsePatch('replace 2..3:\n1: "one",\n2: "two",');
+		expect(applyEdits(FILE, result.edits).text).toBe('a\n1: "one",\n2: "two",\nd\ne');
+	});
+
 	it("rejects `-` body rows with a teaching error", () => {
 		expect(() => parsePatch("replace 2..2:\n-old\n+new")).toThrow(/`-` rows are not valid/);
 	});
