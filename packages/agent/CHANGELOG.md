@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the upstream provider that served a request (`AssistantMessage.upstreamProvider`, e.g. OpenRouter's routed provider) as a `pi.gen_ai.response.upstream_provider` chat-span telemetry attribute, alongside the existing response id and time-to-first-chunk.
+
 ## [15.10.5] - 2026-06-08
 ### Removed
 

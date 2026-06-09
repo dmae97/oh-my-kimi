@@ -23,6 +23,7 @@ import {
 	type Message,
 	type MessageAttribution,
 	type Model,
+	OPENAI_MAX_OUTPUT_TOKENS,
 	type OpenAICompat,
 	type ProviderSessionState,
 	type RawSseEvent,
@@ -763,6 +764,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				// and each chunk in a streamed completion carries the same id.
 				output.responseId ||= chunk.id;
 
+				// Aggregators (OpenRouter, Vercel AI Gateway, …) report the upstream
+				// provider that actually served the request via a top-level `provider`
+				// field present on every chunk. Capture the first non-empty value so
+				// callers can attribute routing without re-parsing the raw stream.
+				output.upstreamProvider ||= getOptionalStringProperty(chunk, "provider");
+
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model, premiumRequestsTotal);
 				}
@@ -1209,7 +1216,11 @@ function buildParams(
 	// before the final answer. Always send max_tokens — match the same
 	// Kimi-family regex used by the compat detector.
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
-	const effectiveMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
+	const requestedMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
+	const effectiveMaxTokens =
+		requestedMaxTokens === undefined
+			? undefined
+			: Math.min(requestedMaxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
 
 	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
@@ -1404,6 +1415,11 @@ function buildParams(
 function getOptionalNumberProperty(value: object, key: string): number | undefined {
 	const property = Reflect.get(value, key);
 	return typeof property === "number" ? property : undefined;
+}
+
+function getOptionalStringProperty(value: object, key: string): string | undefined {
+	const property = Reflect.get(value, key);
+	return typeof property === "string" && property.length > 0 ? property : undefined;
 }
 
 function getOptionalObjectProperty(value: object, key: string): object | undefined {

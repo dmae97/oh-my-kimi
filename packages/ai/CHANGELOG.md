@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AssistantMessage.upstreamProvider`, capturing the upstream provider an aggregator routed the request to (OpenRouter reports it via a top-level `provider` field on every chunk, e.g. `"Anthropic"`). Surfaced from the OpenAI-completions stream alongside `responseId`.
+
 ### Fixed
 
 - Fixed a degenerate OpenAI Codex stream (the model emits whitespace-only `function_call_arguments.delta` frames forever — commonly seen right after a `todo` tool call) terminating the turn with an error instead of recovering. The whitespace-loop circuit-breaker now (a) stops aborting the shared per-request `AbortController` — `requestSignal` is an `AbortSignal.any` over it, so aborting latched it and made every reopen on the reused `requestSetup` impossible — and (b) drops the half-built junk tool call and replays the request from scratch, bounded by `CODEX_WHITESPACE_LOOP_RETRY_LIMIT` (2). Sampling nondeterminism usually clears the loop on a fresh attempt; once the budget is exhausted the error is surfaced as before, but without the junk tool call polluting the message.
+- Capped requested output tokens at 64k (`OPENAI_MAX_OUTPUT_TOKENS`, mirroring Anthropic's `CLAUDE_CODE_MAX_OUTPUT_TOKENS`) across every OpenAI-family wire — the `openai-completions` request builder and the shared responses sampling helper (`openai-responses`, `azure-openai-responses`). A model's catalog `maxTokens` often reflects its context window rather than a given upstream's real per-request output cap: OpenRouter advertises 131072 output tokens for `z-ai/glm-4.7`, but the Cerebras upstream only allows ~131072 tokens *total*, so requesting the full ceiling as output 400'd with "maximum context length is 131072 tokens". Output is now clamped to `min(requested, model.maxTokens, 64000)`.
 
 ## [15.10.7] - 2026-06-08
 
