@@ -218,18 +218,6 @@ function deriveLiveCommitState(
 				cleanFrame = false;
 				appendOnly = false;
 				volatileCooldown = VOLATILE_REARM_FRAMES;
-				// A row rewritten in place once (an agent row's tool/cost
-				// counter, a periodically relocating footer) will be rewritten
-				// again: it is a ticker, not settling content. Floor the
-				// ratchet there permanently — only rows above the topmost
-				// ever-rewritten row may promote. Without this, a slow ticker
-				// (quiet for one promotion window between updates) gets
-				// promoted, committed, then rewritten — and the engine audit
-				// recommits on every tick, spraying stale snapshots of the
-				// block into native scrollback for the whole run. One-off
-				// re-layouts lose nothing: the append-only re-arm path commits
-				// the full block regardless of the floor.
-				rewriteFloor = Math.min(rewriteFloor, prefixLength);
 			}
 		}
 		if (cleanFrame && volatileCooldown > 0) volatileCooldown--;
@@ -240,10 +228,23 @@ function deriveLiveCommitState(
 		// promotion means every promoted row stayed identical for the whole
 		// window (row r is inside frame i's common prefix iff r < p_i, so
 		// r < min(p) holds for every frame of the window). A row settling
-		// mid-window promotes at most two windows later. A change above the
-		// already-promoted run retreats it to the divergence — the engine
-		// audit owns any rows that already committed (recommit, never loss).
+		// mid-window promotes at most two windows later. The engine audit owns
+		// any promoted rows that already committed (recommit, never loss).
 		if (prefixLength < stablePrefixLength) {
+			// A divergence inside the promoted run is the ratchet's proof of
+			// over-promotion: this row was visibly stable for a full window,
+			// got promoted (and likely committed), and then mutated anyway — a
+			// slow ticker (an agent row's tool/cost counter, a growing progress
+			// tree), not settling content. It will mutate again, and every
+			// promote→mutate cycle makes the engine audit recommit, spraying a
+			// stale snapshot of the block into native scrollback. Floor the
+			// ratchet at the divergence permanently: rows above it may still
+			// promote, rows at/below it never re-promote while the block lives.
+			// One-off re-layouts before any promotion (a call→result frame
+			// transition, a codespan finalizing) never hit this branch, and the
+			// append-only re-arm path commits the full block regardless of the
+			// floor.
+			rewriteFloor = Math.min(rewriteFloor, prefixLength);
 			stablePrefixLength = prefixLength;
 			candidatePrefixLength = prefixLength;
 			candidatePrefixAge = 0;
