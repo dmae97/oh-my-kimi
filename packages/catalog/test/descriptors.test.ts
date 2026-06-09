@@ -13,6 +13,9 @@ describe("catalog provider descriptors", () => {
 		// but still a known model provider with a default.
 		expect(PROVIDER_DESCRIPTORS.some(descriptor => descriptor.providerId === "openai-codex")).toBe(false);
 		expect(DEFAULT_MODEL_PER_PROVIDER["openai-codex"]).toBe("gpt-5.4");
+		expect(DEFAULT_MODEL_PER_PROVIDER.minimax).toBe("MiniMax-M3");
+		expect(DEFAULT_MODEL_PER_PROVIDER["minimax-code"]).toBe("MiniMax-M3");
+		expect(DEFAULT_MODEL_PER_PROVIDER["minimax-code-cn"]).toBe("MiniMax-M3");
 		// Login-only tools have no default model.
 		expect(DEFAULT_MODEL_PER_PROVIDER).not.toHaveProperty("kagi");
 	});

@@ -191,17 +191,17 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "minimax",
-		defaultModel: "MiniMax-M2.5",
+		defaultModel: "MiniMax-M3",
 		envVars: ["MINIMAX_API_KEY"],
 	},
 	{
 		id: "minimax-code",
-		defaultModel: "MiniMax-M2.5",
+		defaultModel: "MiniMax-M3",
 		envVars: ["MINIMAX_CODE_API_KEY"],
 	},
 	{
 		id: "minimax-code-cn",
-		defaultModel: "MiniMax-M2.5",
+		defaultModel: "MiniMax-M3",
 		envVars: ["MINIMAX_CODE_CN_API_KEY"],
 	},
 	{

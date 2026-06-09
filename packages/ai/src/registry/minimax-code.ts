@@ -3,7 +3,7 @@ import type { ProviderDefinition } from "./types";
 
 export const minimaxCodeProvider = {
 	id: "minimax-code",
-	name: "MiniMax Coding Plan (International)",
+	name: "MiniMax Token Plan (International)",
 	login: async (cb: OAuthLoginCallbacks) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { loginMiniMaxCode } = await import("./oauth/minimax-code");
