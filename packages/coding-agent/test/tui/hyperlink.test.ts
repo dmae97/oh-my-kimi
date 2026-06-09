@@ -224,17 +224,24 @@ describe("urlHyperlink", () => {
 });
 
 describe("urlHyperlinkAlways", () => {
-	it("wraps HTTP URLs when hyperlink auto-detection is disabled", () => {
-		setHyperlinkMode("off");
+	it("wraps HTTP URLs in auto mode even when capability detection would suppress", () => {
+		setHyperlinkMode("auto");
+		Bun.env.NO_COLOR = "1"; // forces isHyperlinkEnabled() to false in auto mode
 		const result = urlHyperlinkAlways("www.example.com/path", "example");
 
+		expect(isHyperlinkEnabled()).toBe(false);
 		expect(result).toContain(`${OSC}8;`);
 		expect(result).toContain(`${OSC}8;;${BEL}`);
 		expect(extractAnyTerminatorLinkUri(result)).toBe("https://www.example.com/path");
 	});
 
-	it("does not wrap non-HTTP URL schemes", () => {
+	it("returns plain text when the user opts out with tui.hyperlinks=off", () => {
 		setHyperlinkMode("off");
+		expect(urlHyperlinkAlways("https://example.com/path", "example")).toBe("example");
+	});
+
+	it("does not wrap non-HTTP URL schemes", () => {
+		setHyperlinkMode("always");
 		expect(urlHyperlinkAlways("ftp://example.com/file", "file")).toBe("file");
 	});
 });

@@ -101,11 +101,14 @@ export function urlHyperlink(url: string, displayText: string): string {
 }
 
 /**
- * Wrap `displayText` in an OSC 8 hyperlink pointing at an HTTP(S) URL without
- * terminal capability gating. Used for auth prompts where an inert "click"
- * label blocks login on terminals with incomplete capability detection.
+ * Wrap `displayText` in an OSC 8 hyperlink pointing at an HTTP(S) URL,
+ * bypassing terminal capability auto-detection. Used for auth prompts where
+ * an inert "click" label blocks login on terminals whose capabilities are
+ * not advertised. Still returns plain text when the user has explicitly
+ * opted out via `tui.hyperlinks=off`.
  */
 export function urlHyperlinkAlways(url: string, displayText: string): string {
+	if (settings.get("tui.hyperlinks") === "off") return displayText;
 	const normalized = url.match(/^www\./i) ? `https://${url}` : url;
 	try {
 		const parsed = new URL(normalized);
