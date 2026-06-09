@@ -1,4 +1,17 @@
 //! Python test, type-check, and lint output filters.
+//!
+//! Ported from rtk-ai/rtk@878af7de99e0ba71da2e8fd996f6b52a1836e06c
+//! Path: `src/cmds/python/pytest_cmd.rs`
+//! License: MIT (compatible with workspace MIT). See `ATTRIBUTION-RTK.md` at
+//! the `pi-shell` crate root.
+//!
+//! The pytest state machine (`filter_pytest`, `pytest_success`,
+//! `is_pytest_*`, `looks_like_pytest_summary_part`) adapts the
+//! `build_pytest_summary` algorithm from RTK at the pinned SHA above:
+//! preserve failures, errors, and the final summary line; strip header
+//! framing, progress dots, and verbose PASSED rows. Unknown-state lines
+//! fall through unchanged (RTK's defensive default), so xdist `[gwN]`
+//! prefixes and custom reporters never cause data loss.
 
 use super::lint;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
@@ -12,6 +25,12 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 }
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	// Kill-switch parity (M2): when `legacy_filters_active`, fall back to
+	// the pre-PR passthrough so callers can rollback an RTK-port regression
+	// without recompile.
+	if ctx.config.legacy_filters_active() {
+		return MinimizerOutput::passthrough(input);
+	}
 	let tool = python_tool(ctx.program, ctx.subcommand);
 	let cleaned = primitives::strip_ansi(input);
 	let text = match tool {
@@ -50,9 +69,14 @@ fn filter_pytest(input: &str, exit_code: i32) -> String {
 
 	for line in input.lines() {
 		let trimmed = line.trim();
-		if is_pytest_summary_header(trimmed) || is_pytest_summary_line(trimmed) {
+		if is_pytest_summary_header(trimmed) {
 			in_failure = false;
 			push_line(&mut out, line);
+			continue;
+		}
+		if is_pytest_summary_line(trimmed) {
+			in_failure = false;
+			push_pytest_summary_line(&mut out, trimmed);
 			continue;
 		}
 
@@ -91,9 +115,14 @@ fn pytest_success(input: &str) -> String {
 
 	for line in input.lines() {
 		let trimmed = line.trim();
-		if is_pytest_summary_line(trimmed) || is_pytest_summary_header(trimmed) {
+		if is_pytest_summary_header(trimmed) {
 			push_line(&mut summary, line);
 			push_line(&mut out, line);
+			continue;
+		}
+		if is_pytest_summary_line(trimmed) {
+			push_pytest_summary_line(&mut summary, trimmed);
+			push_pytest_summary_line(&mut out, trimmed);
 			continue;
 		}
 		if is_pytest_pass_noise(trimmed) {
@@ -162,6 +191,14 @@ fn looks_like_pytest_summary_part(part: &str) -> bool {
 	false
 }
 
+fn compact_pytest_summary_line(trimmed: &str) -> &str {
+	if trimmed.starts_with('=') {
+		trimmed.trim_matches('=').trim()
+	} else {
+		trimmed
+	}
+}
+
 fn is_pytest_section_delimiter(trimmed: &str) -> bool {
 	trimmed.len() >= 6
 		&& trimmed
@@ -180,6 +217,7 @@ fn is_pytest_pass_noise(trimmed: &str) -> bool {
 		|| trimmed.starts_with("platform ")
 		|| trimmed.starts_with("cachedir:")
 		|| is_pytest_verbose_pass_line(trimmed)
+		|| is_pytest_progress_line(trimmed)
 		|| trimmed
 			.chars()
 			.all(|ch| matches!(ch, '.' | 's' | 'S' | 'x' | 'X' | 'f' | 'F' | 'E'))
@@ -191,6 +229,19 @@ fn is_pytest_verbose_pass_line(trimmed: &str) -> bool {
 	}
 	let mut parts = trimmed.split_whitespace();
 	parts.any(|part| matches!(part, "PASSED" | "SKIPPED" | "XPASS" | "XFAIL"))
+}
+
+fn is_pytest_progress_line(trimmed: &str) -> bool {
+	let Some((path, statuses)) = trimmed.split_once(char::is_whitespace) else {
+		return false;
+	};
+	std::path::Path::new(path)
+		.extension()
+		.is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
+		&& statuses
+			.trim()
+			.chars()
+			.all(|ch| matches!(ch, '.' | 's' | 'S' | 'x' | 'X' | 'f' | 'F' | 'E'))
 }
 
 fn is_ruff_format(ctx: &MinimizerCtx<'_>) -> bool {
@@ -236,6 +287,12 @@ fn push_line(out: &mut String, line: &str) {
 	out.push('\n');
 }
 
+fn push_pytest_summary_line(out: &mut String, trimmed: &str) {
+	out.push_str("pytest: ");
+	out.push_str(compact_pytest_summary_line(trimmed));
+	out.push('\n');
+}
+
 fn has_content(text: &str) -> bool {
 	text.lines().any(|line| !line.trim().is_empty())
 }
@@ -269,7 +326,7 @@ mod tests {
 		assert!(!out.contains("test session starts"));
 		assert!(out.contains("test_adds_badly"));
 		assert!(out.contains("AssertionError"));
-		assert!(out.contains("1 failed, 1 passed"));
+		assert!(out.contains("pytest: 1 failed, 1 passed"));
 	}
 
 	#[test]
@@ -298,7 +355,7 @@ mod tests {
 		let out = filter_pytest(input, 1);
 
 		assert!(!out.contains("................................................................"));
-		assert!(out.contains("5 failed, 1698 passed, 2 skipped in 108.89s"));
+		assert!(out.contains("pytest: 5 failed, 1698 passed, 2 skipped in 108.89s"));
 	}
 
 	#[test]
@@ -309,7 +366,26 @@ mod tests {
 		             PASSED    [  3%]\ntest_utils.py::TestListOps::test_flatten PASSED      \
 		             [100%]\n\n====== 33 passed in 0.05s ======\n";
 		let out = filter_pytest(input, 0);
-		assert_eq!(out, "====== 33 passed in 0.05s ======\n");
+		assert_eq!(out, "pytest: 33 passed in 0.05s\n");
+	}
+
+	#[test]
+	fn direct_pytest_success_routes_to_compact_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = MinimizerCtx {
+			program:    "pytest",
+			subcommand: None,
+			command:    "pytest",
+			config:     &cfg,
+		};
+		let out = filter(
+			&context,
+			"===== test session starts =====\ncollected 2 items\n\ntests/test_a.py ..\n===== 2 \
+			 passed in 0.01s =====\n",
+			0,
+		);
+
+		assert_eq!(out.text, "pytest: 2 passed in 0.01s\n");
 	}
 
 	#[test]

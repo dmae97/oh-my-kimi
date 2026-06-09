@@ -21,6 +21,8 @@ pub enum MinimizerMode {
 	None,
 	/// Capture the whole command and apply one filter to the whole buffer.
 	WholeCommand,
+	/// Execute a safe `&&` / `;` chain segment-by-segment.
+	SegmentedChain,
 }
 
 /// Return the minimization mode for a command.
@@ -32,6 +34,22 @@ pub fn mode_for(command: &str, config: &MinimizerConfig) -> MinimizerMode {
 			};
 			if identity_has_filter(&identity, config) {
 				MinimizerMode::WholeCommand
+			} else {
+				MinimizerMode::None
+			}
+		},
+		plan::CommandPlan::Chain { segments } => {
+			// Only route a chain through the segmented runner when the minimizer is
+			// enabled, the legacy kill-switch is off, at least one segment is
+			// eligible, and no segment can permanently rewire the shell's own file
+			// descriptors (`exec >out`). Any failed guard restores the pre-PR
+			// single-exec passthrough behaviour.
+			if config.enabled
+				&& !config.legacy_filters_active()
+				&& chain_has_eligible_segment(&segments, config)
+				&& !chain_mutates_shell_fds(&segments)
+			{
+				MinimizerMode::SegmentedChain
 			} else {
 				MinimizerMode::None
 			}
@@ -72,11 +90,15 @@ pub fn apply(
 	}
 
 	// Structural guard: this whole-buffer path only handles single simple
-	// commands. Compound commands and pipes can feed downstream parsers
-	// (awk, jq, rg, …), so rewriting their combined output is a correctness
-	// bug.
+	// commands. Safe chains are intentionally kept opaque here so the engine
+	// can only segment them when the shell executes each piece separately.
+	// Pipes can feed downstream parsers (awk, jq, rg, …), so rewriting their
+	// combined output is a correctness bug.
 	match plan::analyze(command) {
 		plan::CommandPlan::Single { .. } => {},
+		plan::CommandPlan::Chain { segments } => {
+			return apply_chain(command, &segments, captured, exit_code, config);
+		},
 		plan::CommandPlan::Piped => {
 			return MinimizerOutput::passthrough(captured).labeled("piped");
 		},
@@ -95,6 +117,41 @@ pub fn apply(
 	apply_identity(&identity, command, captured, exit_code, config)
 }
 
+/// Apply the whole-buffer dispatch path for a `Chain { segments }` plan.
+///
+/// The FFI whole-buffer entry point sees the entire chain's captured stdout
+/// (interleaved across segments) — it cannot split it back into per-segment
+/// slices. That makes the whole-buffer path fundamentally unable to minimize a
+/// chain safely: every git renderer that condenses output (`condense_status`,
+/// `compact_diff_output`, `condense_stash`, …) parses the buffer and rebuilds a
+/// single synthetic result, so feeding it two segments' interleaved captures
+/// produces output that never existed for any one command.
+///
+/// Concretely, `git -C a status && git -C b status` would let `condense_status`
+/// overwrite `summary.branch` with the *last* repo and sum both repos'
+/// clean/dirty counts into one fabricated status. The same multi-capture merge
+/// corrupts same-subcommand `diff`/`stash`/`log`/… chains: none of these
+/// renderers is associative over concatenated captures, and the whole-buffer
+/// path has no way to attribute lines back to their originating segment.
+///
+/// Per-segment minimization (where each segment is captured in isolation and is
+/// safe to route through its own filter) is handled separately by the segmented
+/// chain runner. The whole-buffer path therefore stays opaque for every chain:
+/// it preserves the captured bytes verbatim and labels the result `compound`.
+///
+/// Kill-switch parity (M2): `legacy_filters_active` also returns the opaque
+/// passthrough so callers can rollback without recompile.
+fn apply_chain(
+	command: &str,
+	segments: &[plan::ChainSegment],
+	captured: &str,
+	_exit_code: i32,
+	_config: &MinimizerConfig,
+) -> MinimizerOutput {
+	let _ = (command, segments);
+	MinimizerOutput::passthrough(captured).labeled("compound")
+}
+
 fn identity_has_filter(identity: &detect::CommandIdentity, config: &MinimizerConfig) -> bool {
 	if !config.is_program_enabled(&identity.program) {
 		return false;
@@ -103,6 +160,133 @@ fn identity_has_filter(identity: &detect::CommandIdentity, config: &MinimizerCon
 	let subcommand = identity.subcommand.as_deref();
 	filters::supports(&identity.program, subcommand)
 		|| resolve_pipeline(config, &identity.program, subcommand).is_some()
+}
+
+fn chain_has_eligible_segment(segments: &[plan::ChainSegment], config: &MinimizerConfig) -> bool {
+	segments.iter().any(|segment| {
+		detect::detect(&segment.command)
+			.is_some_and(|identity| identity_has_filter(&identity, config))
+			|| is_common_chain_utility(&segment.program)
+	})
+}
+
+/// True when any segment can permanently rewire the shell's own file
+/// descriptors. The segmented chain runner executes each segment in a fresh
+/// capture context with its own stdout/stderr pipe, so fd mutations made by one
+/// segment (e.g. `exec >out`, `exec 2>err`) are not honored by the segments
+/// that follow: output the user redirected to a file would instead be captured
+/// and returned to the caller. When such a segment is present we refuse to
+/// segment and leave the chain opaque (passthrough), preserving the original
+/// redirection semantics.
+fn chain_mutates_shell_fds(segments: &[plan::ChainSegment]) -> bool {
+	segments.iter().any(is_shell_fd_mutating_segment)
+}
+
+/// True when a segment's effective command can mutate the shell parse/runtime
+/// environment in a way that segmented execution cannot preserve.
+///
+/// `exec` rewires fds; `eval` / `source` / `.` can introduce that opaquely;
+/// `alias` / `unalias` change how later words in separate `run_string` calls
+/// are expanded. Resolves the simple direct case from the parsed program word
+/// first so quoted assignments such as `FOO="a b" exec >out` cannot fool the
+/// fallback whitespace scan.
+fn is_shell_fd_mutating_segment(segment: &plan::ChainSegment) -> bool {
+	if is_shell_state_mutating_program(&segment.program) {
+		return true;
+	}
+	if matches!(segment.program.as_str(), "command" | "builtin")
+		&& command_wrapper_invokes_mutator(segment)
+	{
+		return true;
+	}
+	false
+}
+
+fn is_shell_state_mutating_program(program: &str) -> bool {
+	matches!(program, "exec" | "eval" | "source" | "." | "alias" | "unalias")
+}
+
+fn command_wrapper_invokes_mutator(segment: &plan::ChainSegment) -> bool {
+	for word in segment.command.split_whitespace() {
+		if is_shell_state_mutating_program(word) {
+			return true;
+		}
+		// A split quoted assignment means we are no longer looking at real shell
+		// words. Stay opaque rather than proving safety from corrupted tokens.
+		if is_ambiguous_assignment_fragment(word) {
+			return true;
+		}
+		if word == "command" || word == "builtin" || word.starts_with('-') || is_env_assignment(word)
+		{
+			continue;
+		}
+		return false;
+	}
+	false
+}
+
+fn is_ambiguous_assignment_fragment(word: &str) -> bool {
+	is_env_assignment(word) && (word.contains('"') || word.contains('\''))
+}
+
+/// True for a leading `KEY=value` environment assignment (a prefix that does
+/// not change which command word ultimately runs).
+fn is_env_assignment(word: &str) -> bool {
+	word.split_once('=').is_some_and(|(key, _)| {
+		!key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+	})
+}
+
+/// Common shell utilities that on their own would not warrant whole-command
+/// minimization, but whose presence in a `&&` / `;` chain alongside other
+/// segments is enough to fire the segmented chain runner. Each such segment
+/// is captured and passes through `minimizer::apply` which will treat it as
+/// `Single` with no matching filter and stream the text unchanged.
+fn is_common_chain_utility(program: &str) -> bool {
+	matches!(
+		program,
+		"echo"
+			| "printf"
+			| "head"
+			| "tail"
+			| "file"
+			| "which"
+			| "type"
+			| "sed"
+			| "awk"
+			| "sleep"
+			| "seq"
+			| "cp" | "mv"
+			| "rm" | "mkdir"
+			| "rmdir"
+			| "touch"
+			| "basename"
+			| "dirname"
+			| "realpath"
+			| "readlink"
+			| "true"
+			| "false"
+			| "yes"
+			| "tr" | "tee"
+			| "sort"
+			| "uniq"
+			| "cut"
+			| "paste"
+			| "rev"
+			| "split"
+			| "comm"
+			| "patch"
+			| "xargs"
+			| "unzip"
+			| "zip"
+			| "tar"
+			| "gzip"
+			| "gunzip"
+			| "cd" | "pwd"
+			| "export"
+			| "env"
+			| "test"
+	)
 }
 
 fn apply_identity(
@@ -120,13 +304,22 @@ fn apply_identity(
 
 	if filters::supports(&identity.program, subcommand) {
 		let ctx = MinimizerCtx { program: &identity.program, subcommand, command, config };
-		let rust_output =
-			match catch_unwind(AssertUnwindSafe(|| filters::filter(&ctx, captured, exit_code))) {
-				Ok(out) => out,
-				Err(_) => MinimizerOutput::passthrough(captured),
-			};
+		let Ok(rust_output) =
+			catch_unwind(AssertUnwindSafe(|| filters::filter(&ctx, captured, exit_code)))
+		else {
+			return MinimizerOutput::passthrough(captured)
+				.labeled(program_label(&identity.program))
+				.with_original(captured);
+		};
 		let label = program_label(&identity.program);
-		let overlaid = apply_pipeline_overlay(config, &identity.program, rust_output, label);
+		let overlaid = apply_pipeline_overlay(
+			config,
+			&identity.program,
+			subcommand,
+			exit_code,
+			rust_output,
+			label,
+		);
 		return ensure_success_visible(overlaid, exit_code).with_original(captured);
 	}
 
@@ -190,6 +383,10 @@ fn program_label(program: &str) -> &'static str {
 		"rake" => "rake",
 		"rails" => "rails",
 		"rubocop" => "rubocop",
+		"rustfmt" => "rustfmt",
+		"xxd" => "xxd",
+		"strings" => "strings",
+		"od" => "od",
 		"tsc" => "tsc",
 		"eslint" => "eslint",
 		"biome" => "biome",
@@ -232,12 +429,17 @@ fn program_label(program: &str) -> &'static str {
 fn apply_pipeline_overlay(
 	config: &MinimizerConfig,
 	program: &str,
+	subcommand: Option<&str>,
+	exit_code: i32,
 	inner: MinimizerOutput,
 	primary_label: &'static str,
 ) -> MinimizerOutput {
-	let Some(pipeline) = resolve_pipeline(config, program, None) else {
+	let Some(pipeline) = resolve_pipeline(config, program, subcommand) else {
 		return inner.labeled(primary_label);
 	};
+	if pipeline.skipped_by_exit(exit_code) {
+		return inner.labeled(primary_label);
+	}
 	let text = catch_unwind(AssertUnwindSafe(|| pipeline.apply(&inner.text).into_owned()))
 		.unwrap_or_else(|_| inner.text.clone());
 	if text == inner.text {
@@ -312,8 +514,28 @@ pub fn verify_builtin_filters() -> Vec<pipeline::TestOutcome> {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use std::{
+		fs,
+		sync::atomic::{AtomicUsize, Ordering},
+	};
 
+	static CONFIG_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+	use super::*;
+	use crate::minimizer::MinimizerOptions;
+	fn config_from_settings(contents: &str) -> MinimizerConfig {
+		let nonce = CONFIG_COUNTER.fetch_add(1, Ordering::Relaxed);
+		let path = std::env::temp_dir()
+			.join(format!("pi-shell-minimizer-engine-{}-{nonce}.toml", std::process::id()));
+		fs::write(&path, contents).expect("write minimizer settings");
+		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
+			enabled: Some(true),
+			settings_path: Some(path.to_string_lossy().into_owned()),
+			..Default::default()
+		});
+		let _ = fs::remove_file(path);
+		cfg
+	}
 	#[test]
 	fn disabled_config_does_not_minimize() {
 		let cfg = MinimizerConfig::default();
@@ -322,6 +544,55 @@ mod tests {
 		assert!(!out.changed);
 	}
 
+	#[test]
+	fn disabled_minimizer_and_disabled_program_do_not_transform_supported_command() {
+		let input = "diff --git a/file.rs b/file.rs\n@@\n-old\n+new\n";
+
+		let disabled = MinimizerConfig::default();
+		assert!(!should_minimize("git diff", &disabled));
+		let out = apply("git diff", input, 0, &disabled);
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
+		assert_eq!(out.filter, "disabled");
+
+		let except_git = MinimizerConfig {
+			enabled: true,
+			except: std::iter::once("git".to_string()).collect(),
+			..Default::default()
+		};
+		assert!(!should_minimize("git diff", &except_git));
+		let out = apply("git diff", input, 0, &except_git);
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
+		assert_eq!(out.filter, "disabled");
+	}
+
+	#[test]
+	fn pipeline_overlay_honors_subcommand_and_exit_gates() {
+		let cfg = config_from_settings(
+			r#"
+schema_version = 1
+[filters.git_diff_overlay]
+match_command = "^git$"
+match_subcommand = "^diff$"
+strip_lines_matching = [".*"]
+on_empty = "OVERLAY"
+only_on_exit = [0]
+"#,
+		);
+		let diff_input = "diff --git a/file.rs b/file.rs\n@@\n-old\n+new\n";
+		let diff = apply("git diff", diff_input, 0, &cfg);
+		assert_eq!(diff.filter, "pipeline+builtin");
+		assert_eq!(diff.text, "OVERLAY");
+
+		let status = apply("git status", "## main\n M file.rs\n", 0, &cfg);
+		assert_ne!(status.filter, "pipeline+builtin");
+		assert!(status.text.contains("unstaged 1"));
+
+		let failed = apply("git diff", diff_input, 1, &cfg);
+		assert_ne!(failed.filter, "pipeline+builtin");
+		assert!(failed.text.contains("file changed"));
+	}
 	#[test]
 	fn enabled_known_filter_minimizes() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
@@ -332,13 +603,14 @@ mod tests {
 	}
 
 	#[test]
-	fn enabled_config_does_not_minimize_git_status() {
+	fn enabled_config_minimizes_git_status() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
-		assert!(!should_minimize("git status", &cfg));
+		assert!(should_minimize("git status", &cfg));
 		let input = "## main\n M file.rs\n";
 		let out = apply("git status", input, 0, &cfg);
-		assert!(!out.changed);
-		assert_eq!(out.text, input);
+		assert!(out.changed);
+		assert!(out.text.contains("unstaged 1"));
+		assert_eq!(out.filter, "git");
 	}
 
 	#[test]
@@ -356,6 +628,27 @@ mod tests {
 		assert_eq!(out.text, "OK\n");
 		assert_eq!(out.output_bytes, out.text.len());
 		assert!(out.original_text.is_some());
+	}
+
+	#[test]
+	fn successful_user_pipeline_empty_output_returns_visible_ok() {
+		let cfg = config_from_settings(
+			r#"
+schema_version = 1
+[filters.empty_ok]
+match_command = "^printf$"
+strip_lines_matching = [".*"]
+"#,
+		);
+
+		assert!(should_minimize("printf done", &cfg));
+		let out = apply("printf done", "drop me\n", 0, &cfg);
+
+		assert!(out.changed);
+		assert_eq!(out.text, "OK\n");
+		assert_eq!(out.filter, "pipeline");
+		assert_eq!(out.output_bytes, out.text.len());
+		assert_eq!(out.original_text.as_deref(), Some("drop me\n"));
 	}
 
 	#[test]
@@ -378,11 +671,44 @@ mod tests {
 	}
 
 	#[test]
-	fn compound_and_piped_commands_do_not_minimize() {
+	fn segmented_chain_mode_is_only_for_eligible_safe_chains() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
-		assert_eq!(mode_for("echo start ; git status", &cfg), MinimizerMode::None);
-		assert_eq!(mode_for("false && git status", &cfg), MinimizerMode::None);
+		assert_eq!(
+			mode_for("git diff --stat && git diff --name-only", &cfg),
+			MinimizerMode::SegmentedChain
+		);
+		assert_eq!(mode_for("git diff ; printf done", &cfg), MinimizerMode::SegmentedChain);
+		// Common shell utilities make a chain eligible for the segmented runner
+		// even when no segment has a dedicated filter — segments stream through
+		// per-segment passthrough so the chain itself is captured for telemetry.
+		assert_eq!(mode_for("false && echo no ; echo yes", &cfg), MinimizerMode::SegmentedChain);
+		assert_eq!(mode_for("foo || bar", &cfg), MinimizerMode::None);
 		assert_eq!(mode_for("git status | cat", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("sleep 1 &", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("(cd foo && make)", &cfg), MinimizerMode::None);
+	}
+
+	#[test]
+	fn segmented_chain_supported_command_does_not_record_unknown() {
+		// Phase 7 (Mode α resolution): supported chains route through
+		// filters::dispatch via the chain decomposer instead of falling
+		// back to passthrough. The unknown-command counter must remain
+		// stable — the chain entry point is structurally known.
+		reset_unknown_command_count();
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "diff --git a/file.rs b/file.rs\n@@\n-old\n+new\n";
+		let before = unknown_command_count();
+
+		assert_eq!(mode_for("git diff ; printf done", &cfg), MinimizerMode::SegmentedChain);
+		let out = apply("git diff ; printf done", input, 0, &cfg);
+
+		// Whole-buffer entry: a mixed chain (`git diff` + `printf`) stays opaque
+		// rather than running the git filter over the interleaved capture. The
+		// chain entry point is still structurally known, so no unknown-command is
+		// recorded (per-segment minimization is the segmented runner's job).
+		assert!(!out.changed, "mixed chain must stay passthrough in whole-buffer minimization");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(unknown_command_count(), before);
 	}
 
 	#[test]
@@ -414,6 +740,216 @@ mod tests {
 		assert_eq!(gtest.filter, "gtest");
 		assert!(!gtest.text.contains("Foo.Pass"));
 		assert!(gtest.text.contains("foo_test.cc:42: Failure"));
+	}
+
+	#[test]
+	fn git_status_chain_stays_opaque() {
+		// `condense_status` rebuilds a single synthetic status from the whole
+		// buffer: it keeps only the last `On branch …` it sees and sums every
+		// segment's clean/dirty counts. For `git -C a status && git -C b status`
+		// that fabricates one status that never existed for either repo, so the
+		// whole-buffer path must stay opaque and preserve the captured bytes.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "On branch feature-a\n M a.rs\nOn branch feature-b\n M b.rs\n";
+		let out = apply("git -C a status && git -C b status", input, 0, &cfg);
+		assert!(!out.changed, "same-subcommand status chain must stay passthrough");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input, "captured output must be preserved verbatim");
+		// Both repos' branch headers survive — no synthetic merged status.
+		assert!(out.text.contains("feature-a") && out.text.contains("feature-b"));
+	}
+
+	#[test]
+	fn git_commit_chain_differing_actions_stays_opaque() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "On branch main\nChanges to be committed:\n  modified: src/lib.rs\n[main \
+		             abc1234] init\n 1 file changed, 1 insertion(+)\n";
+		let out = apply("git commit --dry-run && git commit -m init", input, 0, &cfg);
+		assert!(!out.changed, "commit actions share a subcommand but not an output contract");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn git_only_chain_differing_subcommands_stays_opaque() {
+		// `git status && git log` must NOT route the whole buffer through one
+		// subcommand filter: `condense_status` rebuilds output from its own parse
+		// and would silently drop the `git log` segment's lines. Stay opaque and
+		// preserve the captured output verbatim.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "## main\n M file.rs\n";
+		let out = apply("git status && git log -1", input, 0, &cfg);
+		assert!(!out.changed, "differing-subcommand git chain must stay passthrough");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input, "captured output must be preserved verbatim");
+	}
+
+	#[test]
+	fn git_diff_chain_differing_formats_stays_opaque() {
+		// `git diff --name-only && git diff --stat` share the `diff` subcommand but
+		// select incompatible renderers. Routing the combined buffer through one
+		// (the whole-chain command carries BOTH `--name-only` and `--stat`, so the
+		// diff filter would treat it as a stat buffer) corrupts the listing
+		// segment's output. Diverging diff formats must stay opaque.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input =
+			"src/a.rs\nsrc/b.rs\n src/a.rs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n";
+		let out = apply("git diff --name-only && git diff --stat", input, 0, &cfg);
+		assert!(!out.changed, "differing diff formats must stay passthrough");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input, "captured output must be preserved verbatim");
+	}
+
+	#[test]
+	fn git_diff_chain_same_format_stays_opaque() {
+		// Even same-format diff chains stay opaque on the whole-buffer path: the
+		// renderer parses the combined buffer and rebuilds one summary, with no
+		// way to attribute files back to each segment's repo/ref. `git -C a diff
+		// && git -C b diff` would merge both repos into one fabricated stat, so
+		// the captured bytes must be preserved verbatim.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let mut listing = String::new();
+		for i in 0..30 {
+			use std::fmt::Write as _;
+			let _ = writeln!(listing, "src/file{i}.rs");
+		}
+		let out = apply("git diff --name-only && git diff --name-only HEAD~1", &listing, 0, &cfg);
+		assert!(!out.changed, "same-format diff chain must stay passthrough");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, listing, "captured output must be preserved verbatim");
+	}
+
+	#[test]
+	fn git_diff_raw_and_default_diff_stays_opaque() {
+		// `git diff --raw && git diff` share the `diff` subcommand but have
+		// incompatible output formats (raw vs unified). They MUST get distinct
+		// format keys so the chain stays opaque.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = ":100644 100644 12345... abcde... M\tsrc/a.rs\n diff --git a/src/a.rs \
+		             b/src/a.rs\nindex abc..def 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 \
+		             @@\n-old\n+new\n";
+		let out = apply("git diff --raw && git diff", input, 0, &cfg);
+		assert!(!out.changed, "raw+unified diff must stay opaque");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input, "captured output must be preserved verbatim");
+	}
+
+	#[test]
+	fn git_diff_summary_and_default_diff_stays_opaque() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = " create mode 100644 src/a.rs\n delete mode 100644 src/b.rs\n";
+		let out = apply("git diff --summary && git diff", input, 0, &cfg);
+		assert!(!out.changed, "summary+unified diff must stay opaque");
+		assert_eq!(out.filter, "compound");
+	}
+
+	#[test]
+	fn git_diff_check_and_default_diff_stays_opaque() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "src/a.rs:1: leftover conflict marker\n";
+		let out = apply("git diff --check && git diff", input, 0, &cfg);
+		assert!(!out.changed, "check+unified diff must stay opaque");
+		assert_eq!(out.filter, "compound");
+	}
+
+	#[test]
+	fn git_diff_same_raw_format_stays_opaque() {
+		// Same subcommand AND same raw format still stays opaque on the
+		// whole-buffer path: like every git chain here, the combined capture
+		// cannot be attributed back to each segment, so it is preserved verbatim.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = ":100644 100644 12345... abcde... M\tsrc/a.rs\n:100644 100644 67890... fghij... \
+		             M\tsrc/b.rs\n";
+		let out = apply("git diff --raw && git diff --raw HEAD~1", input, 0, &cfg);
+		assert!(!out.changed, "same-raw-format diff chain must stay passthrough");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input, "captured output must be preserved verbatim");
+	}
+	#[test]
+	fn mixed_chain_stays_opaque_in_whole_buffer_minimization() {
+		// A mixed chain (`git status` + unrelated `echo`) must NOT route the whole
+		// interleaved capture through the first segment's filter: `condense_status`
+		// rebuilds from its own parse and would drop the `echo` segment's output.
+		// Stay opaque and preserve the captured bytes verbatim.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "## main\n M file.rs\nIMPORTANT side-effect line\n";
+		let out = apply("git status && echo IMPORTANT side-effect line", input, 0, &cfg);
+		assert!(!out.changed, "mixed chain must stay passthrough");
+		assert_eq!(out.filter, "compound");
+		assert_eq!(out.text, input, "captured output must be preserved verbatim");
+		assert!(out.text.contains("IMPORTANT side-effect line"));
+	}
+
+	#[test]
+	fn unsupported_first_segment_chain_is_passthrough() {
+		// Phase 7: chains whose first segment has no filter fall back to
+		// passthrough labeled "compound" (preserves legacy behavior).
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let out = apply("zzzobscure && zzznever", "noise\n", 0, &cfg);
+		assert!(!out.changed);
+		assert_eq!(out.filter, "compound");
+	}
+
+	#[test]
+	fn chain_legacy_filters_active_passes_through() {
+		// Phase 7 kill-switch parity (M2): legacy_filters_active=true returns
+		// passthrough.labeled("compound") regardless of segment shape.
+		let cfg =
+			MinimizerConfig { enabled: true, legacy_filters_active: true, ..Default::default() };
+		let input = "## main\n M file.rs\n";
+		let out = apply("git status && git log -1", input, 0, &cfg);
+		assert!(!out.changed);
+		assert_eq!(out.filter, "compound");
+	}
+
+	#[test]
+	fn legacy_filters_active_disables_segmented_chain() {
+		// Kill-switch parity: with the legacy filters flag set, an otherwise
+		// eligible safe chain must NOT route through the segmented runner so
+		// pre-segmentation single-exec behavior is restored.
+		let mut cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		cfg.legacy_filters_active = true;
+		assert_eq!(mode_for("git diff --stat && git diff --name-only", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("git diff ; printf done", &cfg), MinimizerMode::None);
+	}
+
+	#[test]
+	fn disabled_config_does_not_segment_chain() {
+		// With the master switch off, no chain is segmented even when a segment
+		// would otherwise be eligible.
+		let cfg = MinimizerConfig::default();
+		assert!(!cfg.enabled);
+		assert_eq!(mode_for("git diff ; printf done", &cfg), MinimizerMode::None);
+	}
+
+	#[test]
+	fn chains_with_exec_fd_mutation_are_not_segmented() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// `exec >out` rewires the shell's stdout; segmenting would run the
+		// following segment with a fresh capture pipe and lose the redirection,
+		// returning output to the caller that should have gone to the file.
+		assert_eq!(mode_for("exec >out ; echo hi", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("exec 2>err ; git status", &cfg), MinimizerMode::None);
+		// The fd-mutating segment poisons the chain even when it is not first.
+		assert_eq!(mode_for("git status ; exec >out", &cfg), MinimizerMode::None);
+		// `exec` wrapped by `command`/`builtin` (with flags or env assignments)
+		// mutates the same fds and must also block segmentation.
+		assert_eq!(mode_for("command exec >out ; echo hi", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("builtin exec >out ; echo hi", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("git diff ; command -p exec 2>err", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("FOO=\"a b\" exec >out ; echo hi", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("FOO=\"a b\" command exec >out ; echo hi", &cfg), MinimizerMode::None);
+		// Alias mutations affect later words when segments are parsed in separate
+		// calls, so they must stay on the original single-parse path too.
+		assert_eq!(mode_for("alias cat='printf hacked' ; cat file", &cfg), MinimizerMode::None);
+		assert_eq!(mode_for("unalias cat ; cat file", &cfg), MinimizerMode::None);
+		// A real command merely named with `exec` as an argument is not the
+		// builtin and must NOT block segmentation.
+		assert_eq!(mode_for("echo exec ; printf done", &cfg), MinimizerMode::SegmentedChain);
+		// Such chains pass through untouched.
+		let out = apply("exec >out ; echo hi", "hi\n", 0, &cfg);
+		assert_eq!(out.text, "hi\n");
+		assert!(!out.changed);
 	}
 }
 

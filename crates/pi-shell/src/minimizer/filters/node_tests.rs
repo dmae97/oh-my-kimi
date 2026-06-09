@@ -65,7 +65,7 @@ fn failures_only(input: &str) -> String {
 		}
 
 		if keeping_block {
-			if is_pass_noise(trimmed) && !is_error_context_line(trimmed) {
+			if is_pass_noise(trimmed) {
 				keeping_block = false;
 				trailing_context = 0;
 				continue;
@@ -112,6 +112,7 @@ fn is_summary_line(trimmed: &str) -> bool {
 		|| trimmed.starts_with("% ")
 		|| trimmed.starts_with("Failed Tests")
 		|| trimmed.starts_with("Playwright Test Report")
+		|| (trimmed.starts_with("Ran ") && trimmed.contains("tests across"))
 		|| starts_count_summary(trimmed)
 }
 
@@ -123,7 +124,7 @@ fn starts_count_summary(trimmed: &str) -> bool {
 	if !count.chars().all(|ch| ch.is_ascii_digit()) {
 		return false;
 	}
-	matches!(parts.next(), Some("failed" | "passed" | "skipped" | "flaky"))
+	matches!(parts.next(), Some("failed" | "passed" | "skipped" | "flaky" | "pass" | "fail"))
 }
 
 fn is_pass_noise(trimmed: &str) -> bool {
@@ -134,6 +135,13 @@ fn is_pass_noise(trimmed: &str) -> bool {
 		|| trimmed.starts_with("○")
 		|| trimmed.starts_with(" RUN ")
 		|| trimmed.starts_with("DEV ")
+		|| trimmed.starts_with("bun test ")
+		|| trimmed.ends_with(".test.ts:")
+		|| trimmed.ends_with(".test.js:")
+		|| trimmed.ends_with(".test.tsx:")
+		|| trimmed.ends_with(".test.jsx:")
+		|| trimmed.ends_with(".spec.ts:")
+		|| trimmed.ends_with(".spec.js:")
 }
 
 fn starts_failure_block(trimmed: &str) -> bool {
@@ -160,6 +168,7 @@ fn is_error_context_line(trimmed: &str) -> bool {
 		|| trimmed.starts_with("Expected")
 		|| trimmed.starts_with("Received")
 		|| trimmed.starts_with("Error:")
+		|| trimmed.starts_with("error:")
 		|| trimmed.starts_with("AssertionError")
 		|| trimmed.starts_with("TimeoutError")
 		|| trimmed.contains(" › ")
@@ -234,5 +243,103 @@ mod tests {
 	fn success_keeps_summary_when_everything_else_is_pass_noise() {
 		let filtered = drop_passed_lines("✓ one passed\n✓ two passed\n3 passed (1.2s)\n");
 		assert_eq!(filtered, "3 passed (1.2s)\n");
+	}
+	#[test]
+	fn bun_pass_only_collapses_to_counts() {
+		let input = "\
+✓ a.test.ts > add works [0.50ms]
+✓ a.test.ts > subtract works [0.30ms]
+✓ b.test.ts > multiply works [0.40ms]
+✓ b.test.ts > divide works [0.60ms]
+✓ c.test.ts > negate works [0.20ms]
+
+ 5 pass
+ 0 fail
+ 7 expect() calls
+Ran 5 tests across 3 files. [102.00ms]
+";
+		let filtered = drop_passed_lines(input);
+
+		assert!(!filtered.contains("add works"));
+		assert!(!filtered.contains("subtract works"));
+		assert!(!filtered.contains("multiply works"));
+		assert!(filtered.contains("5 pass"));
+		assert!(filtered.contains("0 fail"));
+		assert!(filtered.contains("7 expect() calls"));
+		assert!(filtered.contains("Ran 5 tests across 3 files"));
+	}
+
+	#[test]
+	fn bun_failure_keeps_error_and_counts() {
+		let input = "\
+✗ a.test.ts > bad test [0.40ms]
+error: expect(received).toBe(expected)
+Expected: 2
+Received: 3
+      at a.test.ts:5:7
+
+✓ b.test.ts > another good [0.60ms]
+
+ 2 pass
+ 1 fail
+Ran 3 tests across 2 files. [150.00ms]
+";
+		let filtered = failures_only(input);
+
+		assert!(!filtered.contains("another good"));
+		assert!(filtered.contains("✗ a.test.ts > bad test"));
+		assert!(filtered.contains("error: expect(received).toBe(expected)"));
+		assert!(filtered.contains("Expected: 2"));
+		assert!(filtered.contains("Received: 3"));
+		assert!(filtered.contains("at a.test.ts:5:7"));
+		assert!(filtered.contains("2 pass"));
+		assert!(filtered.contains("1 fail"));
+	}
+
+	#[test]
+	fn vitest_many_passes_collapses_to_summary() {
+		let input = "\
+ ✓ src/a.test.ts > suite > test1 (2ms)
+ ✓ src/a.test.ts > suite > test2 (1ms)
+ ✓ src/a.test.ts > other > test3 (3ms)
+ ✓ src/b.test.ts > feature > test4 (1ms)
+ ✓ src/b.test.ts > feature > test5 (2ms)
+ ✓ src/b.test.ts > edge > test6 (5ms)
+
+ Test Files  2 passed (2)
+      Tests  6 passed (6)
+   Start at  12:00:00
+   Duration  1.23s
+";
+		let filtered = drop_passed_lines(input);
+
+		assert!(!filtered.contains("test1"));
+		assert!(!filtered.contains("test6"));
+		assert!(filtered.contains("Test Files  2 passed (2)"));
+		assert!(filtered.contains("Tests  6 passed (6)"));
+		assert!(filtered.contains("Duration  1.23s"));
+	}
+
+	#[test]
+	fn jest_many_passes_collapses_to_summary() {
+		let input = "\
+ PASS  src/a.test.ts
+ PASS  src/b.test.ts
+ PASS  src/c.test.ts
+ PASS  src/d.test.ts
+ PASS  src/e.test.ts
+
+Test Suites: 5 passed, 5 total
+Tests:       32 passed, 32 total
+Snapshots:   0 total
+Time:        2.345s
+";
+		let filtered = drop_passed_lines(input);
+
+		assert!(!filtered.contains("src/a.test.ts"));
+		assert!(!filtered.contains("src/e.test.ts"));
+		assert!(filtered.contains("Test Suites: 5 passed, 5 total"));
+		assert!(filtered.contains("Tests:       32 passed, 32 total"));
+		assert!(filtered.contains("Time:        2.345s"));
 	}
 }

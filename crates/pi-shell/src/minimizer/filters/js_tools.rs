@@ -40,7 +40,7 @@ pub fn effective_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Opti
 	{
 		return Some(tool);
 	}
-	if is_npx_like(program) {
+	if is_npx_like(program, subcommand) {
 		let tool = subcommand?;
 		if NPX_ROUTABLE_TOOLS.contains(&tool) {
 			return Some(tool);
@@ -62,8 +62,8 @@ fn effective_tool_from_command<'a>(
 		.find(|token| SUPPORTED_TOOLS.contains(token))
 }
 
-fn is_npx_like(program: &str) -> bool {
-	matches!(program, "npx" | "bunx" | "pnpm dlx")
+fn is_npx_like(program: &str, subcommand: Option<&str>) -> bool {
+	matches!(program, "npx" | "bunx") || matches!((program, subcommand), ("pnpm", Some("dlx")))
 }
 
 fn filter_next(input: &str, exit_code: i32) -> String {

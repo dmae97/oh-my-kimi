@@ -2067,6 +2067,24 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 4 * 1024 * 1024,
 	},
+	"shellMinimizer.sourceOutlineLevel": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "editing",
+			label: "Shell Minimizer Source Outline",
+			description: "Source outline mode for cat/read of source files: default or aggressive",
+		},
+	},
+	"shellMinimizer.legacyFilters": {
+		type: "boolean",
+		default: undefined,
+		ui: {
+			tab: "editing",
+			label: "Shell Minimizer Legacy Filters",
+			description: "Optional rollback switch for conservative legacy filter behavior",
+		},
+	},
 
 	// Eval (per-backend toggles; add more as new backends ship, e.g. eval.ts)
 	"eval.py": {
@@ -3461,6 +3479,8 @@ export interface ShellMinimizerSettings {
 	only: string[];
 	except: string[];
 	maxCaptureBytes: number;
+	sourceOutlineLevel: string | undefined;
+	legacyFilters: boolean | undefined;
 }
 
 /** Map group prefix -> typed settings interface */
