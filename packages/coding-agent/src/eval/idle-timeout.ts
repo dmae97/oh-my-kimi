@@ -6,8 +6,6 @@
  * `agent()`/`parallel()`/`completion()` work is ignored completely, then {@link resume}
  * starts a fresh timeout window once the runtime gets control back.
  *
- * The active timer self-reschedules instead of being torn down on every
- * activity event, so frequent activity costs one timestamp write per event.
  * Pause is reference-counted because `parallel()` can have multiple bridge calls
  * in flight at once.
  */
@@ -36,11 +34,6 @@ export class IdleTimeout {
 		return this.#idleMs;
 	}
 
-	/** Record runtime activity, pushing the active deadline forward by `idleMs`. */
-	bump(): void {
-		if (this.#settled || this.#pauseDepth > 0) return;
-		this.#deadlineMs = Date.now() + this.#idleMs;
-	}
 	/** Suspend timeout accounting while control is delegated to host-side work. */
 	pause(): void {
 		if (this.#settled) return;
@@ -86,8 +79,8 @@ export class IdleTimeout {
 		if (this.#settled || this.#pauseDepth > 0) return;
 		const remainingMs = this.#deadlineMs - Date.now();
 		if (remainingMs > 0) {
-			// A bump moved the deadline forward after this timer was armed; wait
-			// out the remaining window instead of firing early.
+			// The deadline moved forward (resume re-arming) after this timer was
+			// armed; wait out the remaining window instead of firing early.
 			this.#arm(remainingMs);
 			return;
 		}
