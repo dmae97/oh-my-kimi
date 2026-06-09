@@ -13,13 +13,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
-import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 export class ArtifactProtocolHandler implements ProtocolHandler {
 	readonly scheme = "artifact";
 	readonly immutable = true;
 
-	async resolve(url: InternalUrl): Promise<InternalResource> {
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const id = url.rawHost || url.hostname;
 		if (!id) {
 			throw new Error("artifact:// URL requires a numeric ID: artifact://0");
@@ -28,7 +28,16 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 			throw new Error(`artifact:// ID must be numeric, got: ${id}`);
 		}
 
+		// Artifact ids are per-session counters; in multi-session hosts the same
+		// id exists in several dirs. Pin resolution to the calling session's
+		// artifacts dir first so `artifact://3` means *this* session's #3.
 		const dirs = artifactsDirsFromRegistry();
+		const pinnedDir = context?.localProtocolOptions?.getArtifactsDir?.() ?? null;
+		if (pinnedDir) {
+			const pinnedIndex = dirs.indexOf(pinnedDir);
+			if (pinnedIndex >= 0) dirs.splice(pinnedIndex, 1);
+			dirs.unshift(pinnedDir);
+		}
 
 		if (dirs.length === 0) {
 			throw new Error("No session - artifacts unavailable");
