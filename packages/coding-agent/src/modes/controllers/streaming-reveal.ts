@@ -23,6 +23,45 @@ function countGraphemes(text: string): number {
 	return count;
 }
 
+/** Count graphemes of `text` from code-unit offset `start`, also reporting the
+ *  start offset of the final grapheme (where an append could extend a cluster). */
+function countGraphemesFrom(text: string, start: number): { count: number; tailStart: number } {
+	let count = 0;
+	let tailStart = start;
+	for (const seg of getSegmenter().segment(start === 0 ? text : text.slice(start))) {
+		count += 1;
+		tailStart = start + seg.index;
+	}
+	return { count, tailStart };
+}
+
+/** Memoizes per-block grapheme counts across reveal ticks. Streaming blocks only
+ *  grow by appending, and an append can only alter the final grapheme cluster of
+ *  the previous text, so only the suffix from that cluster needs re-segmenting. */
+class BlockUnitCounter {
+	#entries = new Map<number, { text: string; count: number; tailStart: number }>();
+
+	count(index: number, text: string): number {
+		const entry = this.#entries.get(index);
+		if (entry !== undefined) {
+			if (entry.text === text) return entry.count;
+			if (entry.count > 0 && text.length > entry.text.length && text.startsWith(entry.text)) {
+				const tail = countGraphemesFrom(text, entry.tailStart);
+				const next = { text, count: entry.count - 1 + tail.count, tailStart: tail.tailStart };
+				this.#entries.set(index, next);
+				return next.count;
+			}
+		}
+		const full = countGraphemesFrom(text, 0);
+		this.#entries.set(index, { text, count: full.count, tailStart: full.tailStart });
+		return full.count;
+	}
+
+	reset(): void {
+		this.#entries.clear();
+	}
+}
+
 function sliceGraphemes(text: string, units: number): string {
 	if (units <= 0 || text.length === 0) return "";
 	let count = 0;
@@ -51,9 +90,9 @@ export function visibleUnits(message: AssistantMessage, hideThinking: boolean): 
 function revealTextBlock(
 	block: Extract<AssistantContentBlock, { type: "text" }>,
 	remaining: number,
+	units: number,
 ): AssistantContentBlock {
 	if (remaining <= 0) return block.text.length === 0 ? block : { ...block, text: "" };
-	const units = countGraphemes(block.text);
 	if (remaining >= units) return block;
 	return { ...block, text: sliceGraphemes(block.text, remaining) };
 }
@@ -61,9 +100,9 @@ function revealTextBlock(
 function revealThinkingBlock(
 	block: Extract<AssistantContentBlock, { type: "thinking" }>,
 	remaining: number,
+	units: number,
 ): AssistantContentBlock {
 	if (remaining <= 0) return block.thinking.length === 0 ? block : { ...block, thinking: "" };
-	const units = countGraphemes(block.thinking);
 	if (remaining >= units) return block;
 	return { ...block, thinking: sliceGraphemes(block.thinking, remaining) };
 }
@@ -72,16 +111,20 @@ export function buildDisplayMessage(
 	target: AssistantMessage,
 	revealed: number,
 	hideThinking: boolean,
+	countOf: (index: number, text: string) => number = (_index, text) => countGraphemes(text),
 ): AssistantMessage {
 	let remaining = Math.max(0, Math.floor(revealed));
 	const content: AssistantContentBlock[] = [];
-	for (const block of target.content) {
+	for (let i = 0; i < target.content.length; i++) {
+		const block = target.content[i]!;
 		if (block.type === "text") {
-			content.push(revealTextBlock(block, remaining));
-			remaining = Math.max(0, remaining - countGraphemes(block.text));
+			const units = countOf(i, block.text);
+			content.push(revealTextBlock(block, remaining, units));
+			remaining = Math.max(0, remaining - units);
 		} else if (block.type === "thinking" && !hideThinking) {
-			content.push(revealThinkingBlock(block, remaining));
-			remaining = Math.max(0, remaining - countGraphemes(block.thinking));
+			const units = countOf(i, block.thinking);
+			content.push(revealThinkingBlock(block, remaining, units));
+			remaining = Math.max(0, remaining - units);
 		} else {
 			content.push(block);
 		}
@@ -103,6 +146,8 @@ export class StreamingRevealController {
 	#revealed = 0;
 	#hideThinkingBlock = false;
 	#smoothStreaming = true;
+	readonly #unitCounter = new BlockUnitCounter();
+	readonly #countOf = (index: number, text: string): number => this.#unitCounter.count(index, text);
 
 	constructor(options: StreamingRevealControllerOptions) {
 		this.#getSmoothStreaming = options.getSmoothStreaming;
@@ -121,15 +166,15 @@ export class StreamingRevealController {
 			component.updateContent(message);
 			return;
 		}
-		const total = visibleUnits(message, this.#hideThinkingBlock);
+		const total = this.#visibleUnits(message);
 		if (message.content.some(block => block.type === "toolCall")) {
 			// A tool call is a transcript-order boundary: finish any leading
 			// assistant text before EventController renders the separate tool card.
 			this.#revealed = total;
-			component.updateContent(buildDisplayMessage(message, this.#revealed, this.#hideThinkingBlock));
+			component.updateContent(buildDisplayMessage(message, this.#revealed, this.#hideThinkingBlock, this.#countOf));
 			return;
 		}
-		this.#renderCurrent();
+		this.#renderCurrent(total);
 		this.#syncTimer(total);
 	}
 
@@ -140,19 +185,21 @@ export class StreamingRevealController {
 			this.#component.updateContent(message);
 			return;
 		}
-		const total = visibleUnits(message, this.#hideThinkingBlock);
+		const total = this.#visibleUnits(message);
 		if (message.content.some(block => block.type === "toolCall")) {
 			// A tool call is a transcript-order boundary: finish any leading
 			// assistant text before EventController renders the separate tool card.
 			this.#revealed = total;
 			this.#stopTimer();
-			this.#component.updateContent(buildDisplayMessage(message, this.#revealed, this.#hideThinkingBlock));
+			this.#component.updateContent(
+				buildDisplayMessage(message, this.#revealed, this.#hideThinkingBlock, this.#countOf),
+			);
 			return;
 		}
 		if (this.#revealed > total) {
 			this.#revealed = total;
 		}
-		this.#renderCurrent();
+		this.#renderCurrent(total);
 		this.#syncTimer(total);
 	}
 
@@ -161,14 +208,32 @@ export class StreamingRevealController {
 		this.#target = undefined;
 		this.#component = undefined;
 		this.#revealed = 0;
+		this.#unitCounter.reset();
 	}
 
-	#renderCurrent(): void {
+	/** Total reveal units of `message`, memoized per block across ticks. */
+	#visibleUnits(message: AssistantMessage): number {
+		let total = 0;
+		for (let i = 0; i < message.content.length; i++) {
+			const block = message.content[i]!;
+			if (block.type === "text") {
+				total += this.#unitCounter.count(i, block.text);
+			} else if (block.type === "thinking" && !this.#hideThinkingBlock) {
+				total += this.#unitCounter.count(i, block.thinking);
+			}
+		}
+		return total;
+	}
+
+	#renderCurrent(total = this.#target ? this.#visibleUnits(this.#target) : 0): void {
 		if (!this.#target || !this.#component) return;
-		this.#component.updateContent(buildDisplayMessage(this.#target, this.#revealed, this.#hideThinkingBlock));
+		this.#component.updateContent(
+			buildDisplayMessage(this.#target, this.#revealed, this.#hideThinkingBlock, this.#countOf),
+			{ transient: this.#revealed < total },
+		);
 	}
 
-	#syncTimer(total = this.#target ? visibleUnits(this.#target, this.#hideThinkingBlock) : 0): void {
+	#syncTimer(total = this.#target ? this.#visibleUnits(this.#target) : 0): void {
 		if (!this.#target || !this.#component || this.#revealed >= total) {
 			this.#stopTimer();
 			return;
@@ -197,13 +262,15 @@ export class StreamingRevealController {
 			this.stop();
 			return;
 		}
-		const total = visibleUnits(target, this.#hideThinkingBlock);
+		const total = this.#visibleUnits(target);
 		if (this.#revealed >= total) {
 			this.#stopTimer();
 			return;
 		}
 		this.#revealed = Math.min(total, this.#revealed + nextStep(total - this.#revealed));
-		component.updateContent(buildDisplayMessage(target, this.#revealed, this.#hideThinkingBlock));
+		component.updateContent(buildDisplayMessage(target, this.#revealed, this.#hideThinkingBlock, this.#countOf), {
+			transient: this.#revealed < total,
+		});
 		this.#requestRender();
 		if (this.#revealed >= total) {
 			this.#stopTimer();
