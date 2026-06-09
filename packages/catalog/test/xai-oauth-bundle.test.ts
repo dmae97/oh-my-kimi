@@ -58,8 +58,21 @@ describe("xai-oauth bundled catalog (regression)", () => {
 		// exact bytes; only unrelated other-provider network churn was excluded
 		// to keep the diff scoped. Pin its zero-cost invariant (overlay-stable
 		// for the SuperGrok subscription), which the parity loop above never
-		// compares. maxTokens is deliberately not asserted: a future online
-		// /v1/models overlay may legitimately change it.
+		// compares. (maxTokens is pinned by the maxTokens-equals-contextWindow
+		// test below.)
 		expect(bundled["grok-composer-2.5-fast"]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+	});
+
+	// The OAuth surface's /v1/models reports no per-request output limit, so the
+	// curated catalog owns maxTokens — set to mirror each model's contextWindow
+	// (the openai-responses wire still clamps the actual request to
+	// OPENAI_MAX_OUTPUT_TOKENS). Pin maxTokens === contextWindow on both the
+	// static-seed and bundled paths so the 8888 UNK_MAX_TOKENS placeholder can
+	// never silently leak back into the bundle.
+	it("sets maxTokens equal to contextWindow for every xai-oauth model", () => {
+		for (const model of seed) {
+			expect(model.maxTokens, `seed ${model.id} maxTokens`).toBe(model.contextWindow);
+			expect(bundled[model.id]?.maxTokens, `bundled ${model.id} maxTokens`).toBe(model.contextWindow);
+		}
 	});
 });

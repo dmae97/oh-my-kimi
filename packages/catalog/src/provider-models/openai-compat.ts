@@ -759,6 +759,13 @@ const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as c
 // at request time, downstream of the omitReasoningEffort gate in xai-responses.ts.
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 
+// xai-oauth's /v1/models exposes no per-request output limit on the OAuth
+// (Grok Build / SuperGrok) surface, so the curated catalog owns `maxTokens`
+// like it owns `contextWindow`: each entry mirrors its context window. The
+// openai-responses wire clamps the actual request to
+// min(requested, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS=64000), so this is
+// just "no model-specific sub-cap below 64k", not an unbounded output budget.
+
 // Single source of truth for curated → Model fan-in. Used by the static-seed
 // and the dynamic overlay/inject paths (applyXAIOAuthCuration) so curated
 // reasoning/effort flags survive an online refresh (xAI's /v1/models lacks
@@ -781,6 +788,7 @@ function mergeCuratedIntoModel(
 	return {
 		...base,
 		contextWindow: curated.contextWindow,
+		maxTokens: curated.contextWindow,
 		name: curated.name ?? base.name,
 		reasoning: curated.reasoning ?? true,
 		input: curated.input ?? base.input,
@@ -855,8 +863,9 @@ function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]
  *
  * `reasoning` defaults to `true` for the Grok-4.x family; the explicit
  * `grok-4.20-0309-non-reasoning` entry opts out via `XAICuratedModel.reasoning`.
- * `maxTokens` uses `UNK_MAX_TOKENS` so id-keyed overlays from a successful
- * dynamic fetch merge cleanly. Mirrors
+ * `maxTokens` mirrors each model's `contextWindow` (the OAuth surface reports
+ * no per-request output limit); the openai-responses wire still clamps the
+ * actual request to OPENAI_MAX_OUTPUT_TOKENS. Mirrors
  * `hermes-agent/hermes_cli/models.py:_XAI_STATIC_FALLBACK`.
  */
 export function buildXaiOAuthStaticSeed(baseUrl?: string): ModelSpec<"openai-responses">[] {
@@ -876,7 +885,7 @@ export function buildXaiOAuthStaticSeed(baseUrl?: string): ModelSpec<"openai-res
 			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: curated.contextWindow,
-			maxTokens: UNK_MAX_TOKENS,
+			maxTokens: curated.contextWindow,
 			compat: { reasoningEffortMap: XAI_REASONING_EFFORT_MAP },
 		};
 		return mergeCuratedIntoModel(base, curated);
