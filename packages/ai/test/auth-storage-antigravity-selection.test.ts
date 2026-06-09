@@ -162,7 +162,6 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-healthy");
 	});
 
-
 	test("ranks by bottleneck counter instead of healthier secondary counter", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
