@@ -15,25 +15,23 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { commands, isSubcommand, resolveCliArgv } from "@oh-my-pi/pi-coding-agent/cli-commands";
 import { looksLikeLocalPath } from "@oh-my-pi/pi-coding-agent/commands/install";
 
 describe("install command is registered as a top-level subcommand", () => {
-	test("CLI runner sees `install` as a known command", async () => {
-		const cli = await import("@oh-my-pi/pi-coding-agent/cli-commands");
-		expect(cli.commands.some(c => c.name === "install")).toBe(true);
-		expect(cli.isSubcommand("install")).toBe(true);
+	test("CLI runner sees `install` as a known command", () => {
+		expect(commands.some(c => c.name === "install")).toBe(true);
+		expect(isSubcommand("install")).toBe(true);
 	});
 
-	test("CLI runner rejects only bare reserved management words", async () => {
-		const cli = await import("@oh-my-pi/pi-coding-agent/cli-commands");
-
-		expect(cli.resolveCliArgv(["extensions"])).toEqual({
+	test("CLI runner rejects only bare reserved management words", () => {
+		expect(resolveCliArgv(["extensions"])).toEqual({
 			error: '`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
 		});
-		expect(cli.resolveCliArgv(["extensions", "are", "not", "loading"])).toEqual({
+		expect(resolveCliArgv(["extensions", "are", "not", "loading"])).toEqual({
 			argv: ["launch", "extensions", "are", "not", "loading"],
 		});
-		expect(cli.resolveCliArgv(["launch", "extensions"])).toEqual({ argv: ["launch", "extensions"] });
+		expect(resolveCliArgv(["launch", "extensions"])).toEqual({ argv: ["launch", "extensions"] });
 	});
 });
 
