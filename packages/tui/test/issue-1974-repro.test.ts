@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, CURSOR_MARKER, type NativeScrollbackLiveRegion, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, type NativeScrollbackLiveRegion, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1974
@@ -125,19 +125,6 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 	}
 }
 
-type MutableTerminalInfo = { eagerEraseScrollbackRisk: boolean };
-
-async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Promise<T> {
-	const mutable = TERMINAL as unknown as MutableTerminalInfo;
-	const saved = mutable.eagerEraseScrollbackRisk;
-	mutable.eagerEraseScrollbackRisk = risk;
-	try {
-		return await run();
-	} finally {
-		mutable.eagerEraseScrollbackRisk = saved;
-	}
-}
-
 function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void {
 	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
 }
@@ -173,59 +160,56 @@ describe("issue #1974: tmux scrollback rendering", () => {
 		if (process.platform === "win32") return;
 
 		await withEnvPatch(TMUX_ENV, async () => {
-			await withTerminalRisk(true, async () => {
-				const term = new VirtualTerminal(80, 8, 10_000);
-				// Real tmux/ProcessTerminal does not implement
-				// `isNativeViewportAtBottom`, so the renderer sees `undefined`
-				// in production. Match that here.
-				overrideProbe(term, undefined);
+			const term = new VirtualTerminal(80, 8, 10_000);
+			// Real tmux/ProcessTerminal does not implement
+			// `isNativeViewportAtBottom`, so the renderer sees `undefined`
+			// in production. Match that here.
+			overrideProbe(term, undefined);
 
-				const tui = new TUI(term);
-				const stream = new StreamingLiveRegion([]);
-				tui.addChild(stream);
+			const tui = new TUI(term);
+			const stream = new StreamingLiveRegion([]);
+			tui.addChild(stream);
 
-				const markers = Array.from({ length: 40 }, (_unused, i) => `MARK-${String(i).padStart(3, "0")}`);
+			const markers = Array.from({ length: 40 }, (_unused, i) => `MARK-${String(i).padStart(3, "0")}`);
 
-				try {
-					tui.start();
-					tui.setEagerNativeScrollbackRebuild(true);
+			try {
+				tui.start();
+				await settle(term);
+
+				// Stream the reply in chunks. Each chunk grows the live block
+				// by 5 rows — small enough that no single frame double-
+				// overflows the 8-row viewport, large enough that the head
+				// must scroll into pane history between frames.
+				for (let chunk = 5; chunk <= markers.length; chunk += 5) {
+					stream.setLines(markers.slice(0, chunk));
+					tui.requestRender();
 					await settle(term);
-
-					// Stream the reply in chunks. Each chunk grows the live block
-					// by 5 rows — small enough that no single frame double-
-					// overflows the 8-row viewport, large enough that the head
-					// must scroll into pane history between frames.
-					for (let chunk = 5; chunk <= markers.length; chunk += 5) {
-						stream.setLines(markers.slice(0, chunk));
-						tui.requestRender();
-						await settle(term);
-					}
-
-					// `getScrollBuffer()` returns pane history + the active grid
-					// (i.e. what tmux would show when the user scrolled all the
-					// way up). Each MARK-NNN must appear in that combined buffer
-					// exactly once — no gaps ("missing sections") and no
-					// duplicates ("repeating chunks").
-					const scrollback = strip(term.getScrollBuffer());
-					const buffer = scrollback.join("\n");
-					const missing: string[] = [];
-					const duplicated: string[] = [];
-					for (const mark of markers) {
-						const occ = occurrencesOf(buffer, mark);
-						if (occ === 0) missing.push(mark);
-						if (occ > 1) duplicated.push(mark);
-					}
-					expect(missing).toEqual([]);
-					expect(duplicated).toEqual([]);
-
-					// The visible viewport still shows the live tail.
-					const viewport = strip(term.getViewport());
-					expect(viewport.some(row => row.includes("MARK-039"))).toBe(true);
-				} finally {
-					tui.stop();
-					await term.flush();
 				}
-			});
+
+				// `getScrollBuffer()` returns pane history + the active grid
+				// (i.e. what tmux would show when the user scrolled all the
+				// way up). Each MARK-NNN must appear in that combined buffer
+				// exactly once — no gaps ("missing sections") and no
+				// duplicates ("repeating chunks").
+				const scrollback = strip(term.getScrollBuffer());
+				const buffer = scrollback.join("\n");
+				const missing: string[] = [];
+				const duplicated: string[] = [];
+				for (const mark of markers) {
+					const occ = occurrencesOf(buffer, mark);
+					if (occ === 0) missing.push(mark);
+					if (occ > 1) duplicated.push(mark);
+				}
+				expect(missing).toEqual([]);
+				expect(duplicated).toEqual([]);
+
+				// The visible viewport still shows the live tail.
+				const viewport = strip(term.getViewport());
+				expect(viewport.some(row => row.includes("MARK-039"))).toBe(true);
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
 		});
 	});
 
@@ -233,33 +217,30 @@ describe("issue #1974: tmux scrollback rendering", () => {
 		if (process.platform === "win32") return;
 
 		await withEnvPatch(TMUX_ENV, async () => {
-			await withTerminalRisk(true, async () => {
-				const term = new VirtualTerminal(80, 8, 10_000);
-				overrideProbe(term, undefined);
-				const tui = new TUI(term);
-				const stream = new StreamingLiveRegion([]);
-				tui.addChild(stream);
+			const term = new VirtualTerminal(80, 8, 10_000);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const stream = new StreamingLiveRegion([]);
+			tui.addChild(stream);
 
-				try {
-					tui.start();
-					tui.setEagerNativeScrollbackRebuild(true);
+			try {
+				tui.start();
+				await settle(term);
+
+				const writes = capture(term);
+				for (let chunk = 5; chunk <= 40; chunk += 5) {
+					stream.setLines(Array.from({ length: chunk }, (_unused, i) => `row-${String(i).padStart(3, "0")}`));
+					tui.requestRender();
 					await settle(term);
-
-					const writes = capture(term);
-					for (let chunk = 5; chunk <= 40; chunk += 5) {
-						stream.setLines(Array.from({ length: chunk }, (_unused, i) => `row-${String(i).padStart(3, "0")}`));
-						tui.requestRender();
-						await settle(term);
-					}
-
-					// ED3 would either be a no-op or yank a scrolled tmux reader.
-					// The tmux path must commit incrementally via \r\n.
-					expect(writes.join("").match(ERASE_SCROLLBACK)?.length ?? 0).toBe(0);
-				} finally {
-					tui.stop();
-					await term.flush();
 				}
-			});
+
+				// ED3 would either be a no-op or yank a scrolled tmux reader.
+				// The tmux path must commit incrementally via \r\n.
+				expect(writes.join("").match(ERASE_SCROLLBACK)?.length ?? 0).toBe(0);
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
 		});
 	});
 
@@ -272,91 +253,85 @@ describe("issue #1974: tmux scrollback rendering", () => {
 		if (process.platform === "win32") return;
 
 		await withEnvPatch(TMUX_ENV, async () => {
-			await withTerminalRisk(true, async () => {
-				const term = new VirtualTerminal(80, 10, 10_000);
-				overrideProbe(term, undefined);
-				const tui = new TUI(term);
-				const stream = new StreamingLiveRegion([]);
-				const footer = new LineList(["── prompt ──", "> "]);
-				tui.addChild(stream);
-				tui.addChild(footer);
+			const term = new VirtualTerminal(80, 10, 10_000);
+			overrideProbe(term, undefined);
+			const tui = new TUI(term);
+			const stream = new StreamingLiveRegion([]);
+			const footer = new LineList(["── prompt ──", "> "]);
+			tui.addChild(stream);
+			tui.addChild(footer);
 
-				const markers = Array.from({ length: 30 }, (_unused, i) => `STREAM-${String(i).padStart(3, "0")}`);
+			const markers = Array.from({ length: 30 }, (_unused, i) => `STREAM-${String(i).padStart(3, "0")}`);
 
-				try {
-					tui.start();
-					tui.setEagerNativeScrollbackRebuild(true);
+			try {
+				tui.start();
+				await settle(term);
+
+				for (let chunk = 4; chunk <= markers.length; chunk += 4) {
+					stream.setLines(markers.slice(0, chunk));
+					tui.requestRender();
 					await settle(term);
-
-					for (let chunk = 4; chunk <= markers.length; chunk += 4) {
-						stream.setLines(markers.slice(0, chunk));
-						tui.requestRender();
-						await settle(term);
-					}
-
-					// `getScrollBuffer()` returns pane history followed by the
-					// active grid (the visible viewport). For "what is in pane
-					// history alone", chop off the last `rows` entries.
-					const fullBuffer = strip(term.getScrollBuffer());
-					const viewport = strip(term.getViewport());
-					const history = fullBuffer.slice(0, Math.max(0, fullBuffer.length - viewport.length));
-
-					// Chrome must NEVER enter pane history (it sits below the live
-					// region and never sealed).
-					expect(history.some(row => row.includes("── prompt ──"))).toBe(false);
-					expect(history.some(row => row.includes("> "))).toBe(false);
-					// Chrome stays in the visible viewport.
-					expect(viewport.some(row => row.includes("── prompt ──"))).toBe(true);
-
-					// No streamed row appears twice across pane history.
-					const historyText = history.join("\n");
-					const duplicated = markers.filter(m => occurrencesOf(historyText, m) > 1);
-					expect(duplicated).toEqual([]);
-
-					// The pane-history slice runs in original streaming order so
-					// a tmux scroll-back is monotonic.
-					const historyMarks = history
-						.map(row => row.match(/STREAM-\d{3}/)?.[0] ?? null)
-						.filter((m): m is string => m !== null);
-					expect(historyMarks).toEqual(markers.slice(0, historyMarks.length));
-				} finally {
-					tui.stop();
-					await term.flush();
 				}
-			});
+
+				// `getScrollBuffer()` returns pane history followed by the
+				// active grid (the visible viewport). For "what is in pane
+				// history alone", chop off the last `rows` entries.
+				const fullBuffer = strip(term.getScrollBuffer());
+				const viewport = strip(term.getViewport());
+				const history = fullBuffer.slice(0, Math.max(0, fullBuffer.length - viewport.length));
+
+				// Chrome must NEVER enter pane history (it sits below the live
+				// region and never sealed).
+				expect(history.some(row => row.includes("── prompt ──"))).toBe(false);
+				expect(history.some(row => row.includes("> "))).toBe(false);
+				// Chrome stays in the visible viewport.
+				expect(viewport.some(row => row.includes("── prompt ──"))).toBe(true);
+
+				// No streamed row appears twice across pane history.
+				const historyText = history.join("\n");
+				const duplicated = markers.filter(m => occurrencesOf(historyText, m) > 1);
+				expect(duplicated).toEqual([]);
+
+				// The pane-history slice runs in original streaming order so
+				// a tmux scroll-back is monotonic.
+				const historyMarks = history
+					.map(row => row.match(/STREAM-\d{3}/)?.[0] ?? null)
+					.filter((m): m is string => m !== null);
+				expect(historyMarks).toEqual(markers.slice(0, historyMarks.length));
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
 		});
 	});
 
 	it("keeps the cursor anchored when a no-append live repaint shifts the viewport", async () => {
 		if (process.platform === "win32") return;
 
-		await withTerminalRisk(true, async () => {
-			const term = new VirtualTerminal(20, 5, 1_000);
-			overrideProbe(term, undefined);
-			const tui = new TUI(term, true);
-			const stream = new VolatileLiveRegion([]);
-			tui.addChild(stream);
+		const term = new VirtualTerminal(20, 5, 1_000);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term, true);
+		const stream = new VolatileLiveRegion([]);
+		tui.addChild(stream);
 
-			try {
-				tui.start();
-				tui.setEagerNativeScrollbackRebuild(true);
-				await settle(term);
+		try {
+			tui.start();
+			await settle(term);
 
-				stream.setLines(["same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
-				tui.requestRender();
-				await settle(term);
-				expect(term.getCursor()).toEqual({ row: 3, col: 4 });
+			stream.setLines(["same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
+			tui.requestRender();
+			await settle(term);
+			expect(term.getCursor()).toEqual({ row: 3, col: 4 });
 
-				stream.setLines(["same", "same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
-				tui.requestRender();
-				await settle(term);
+			stream.setLines(["same", "same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
+			tui.requestRender();
+			await settle(term);
 
-				expect(strip(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
-				expect(term.getCursor()).toEqual({ row: 3, col: 4 });
-			} finally {
-				tui.stop();
-				await term.flush();
-			}
-		});
+			expect(strip(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
+			expect(term.getCursor()).toEqual({ row: 3, col: 4 });
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
 	});
 });

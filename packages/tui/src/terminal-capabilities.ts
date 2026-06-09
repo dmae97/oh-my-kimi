@@ -56,21 +56,11 @@ export class TerminalInfo {
 		public readonly trueColor: boolean,
 		public readonly hyperlinks: boolean,
 		public readonly notifyProtocol: NotifyProtocol = NotifyProtocol.Bell,
-		public readonly eagerEraseScrollbackRisk: boolean = false,
 		public readonly deccara: boolean = false,
 		readonly supportsScreenToScrollback: boolean = false,
 		/** Renders the Kitty OSC 66 text-sizing protocol (scaled spans). Kitty only. */
 		public readonly textSizing: boolean = false,
 	) {}
-
-	/**
-	 * Whether a prompt-submit keystroke scrolls this host to its tail, so the
-	 * native-scrollback reconciliation checkpoint may ED3-rebuild even when the
-	 * viewport position is unprobeable. Assigned by the TERMINAL builder from
-	 * {@link detectSubmitPinsViewportToTail}; readonly but tests opt in via the
-	 * {@link setTerminalSubmitPinsViewportToTail} mutable-cast setter.
-	 */
-	readonly submitPinsViewportToTail: boolean = false;
 
 	/**
 	 * Mutable clone for the {@link TERMINAL} singleton: copies every field and
@@ -155,128 +145,6 @@ export function isWindowsTerminalPreviewSixelSupported(
 	const version = parseMajorMinorVersion(env.TERM_PROGRAM_VERSION);
 	if (!version) return false;
 	return version.major > 1 || (version.major === 1 && version.minor >= 22);
-}
-
-/**
- * Whether live-frame native scrollback rebuilds are unsafe when the terminal
- * viewport position is unobservable.
- *
- * A TUI history rebuild emits xterm ED3 (`CSI 3 J`, erase saved lines). Many
- * terminals either clamp a scrolled reader back to the active tail or erase host
- * scrollback when ED3 lands. The important property is not the brand name — it
- * is that an unknown viewport position cannot be proven safe. Environment
- * markers are therefore only used to prove *risk* or a strongly-known profile;
- * unknown POSIX/remote/multiplexer shapes default to risky for passive renders.
- *
- * Native win32 is excluded here because the renderer has dedicated ConPTY
- * deferral paths; a `WT_SESSION` sighting on POSIX means Windows Terminal is the
- * outer host fronting WSL, where the same ED3 yank applies. See #1610/#1682/#1799.
- */
-export function detectTerminalEagerEraseScrollbackRisk(
-	env: NodeJS.ProcessEnv = Bun.env,
-	platform: NodeJS.Platform = process.platform,
-): boolean {
-	if (platform === "win32") return false;
-
-	const term = env.TERM?.toLowerCase() ?? "";
-	const termProgram = env.TERM_PROGRAM?.toLowerCase() ?? "";
-	const colorTerm = env.COLORTERM?.toLowerCase() ?? "";
-
-	if (env.PI_TUI_ED3_SAFE === "1") return false;
-	if (env.WT_SESSION) return true;
-	if (
-		env.SSH_CONNECTION ||
-		env.SSH_CLIENT ||
-		env.SSH_TTY ||
-		env.TMUX ||
-		env.STY ||
-		env.ZELLIJ ||
-		term.startsWith("tmux") ||
-		term.startsWith("screen")
-	) {
-		return true;
-	}
-	if (
-		env.WEZTERM_PANE ||
-		env.KITTY_WINDOW_ID ||
-		env.GHOSTTY_RESOURCES_DIR ||
-		env.ALACRITTY_WINDOW_ID ||
-		env.VTE_VERSION ||
-		env.ITERM_SESSION_ID
-	) {
-		return true;
-	}
-	switch (termProgram) {
-		case "alacritty":
-		case "apple_terminal":
-		case "ghostty":
-		case "gnome-terminal":
-		case "iterm.app":
-		case "kgx":
-		case "kitty":
-		case "ptyxis":
-		case "wezterm":
-		case "xfce4-terminal":
-			return true;
-		default:
-			break;
-	}
-	if (platform === "linux" && (colorTerm === "truecolor" || colorTerm === "24bit")) return true;
-	// Unknown POSIX terminals have no scroll-position oracle. Treat them as risky
-	// for passive ED3 until a positive terminal-specific integration proves safe.
-	return true;
-}
-
-/**
- * Whether a prompt-submit keystroke scrolls this terminal to its tail, making the
- * native-scrollback reconciliation checkpoint (`refreshNativeScrollbackIfDirty`)
- * safe to ED3-rebuild even when the viewport position cannot be probed.
- *
- * True only for recognized genuine *local* terminals where typing into the prompt
- * brings the host viewport to the bottom. False — the checkpoint keeps deferring
- * until a positive at-tail probe — for hosts whose scrollback a keystroke does not
- * move: Windows consoles/ConPTY, Windows Terminal (incl. WSL), SSH, multiplexers,
- * and unrecognized profiles. This is the per-terminal counterpart to the blanket
- * block from #1610/#1682/#1746: those hosts genuinely cannot treat a submit as
- * proof of at-tail, but genuine local terminals can.
- */
-export function detectSubmitPinsViewportToTail(
-	env: NodeJS.ProcessEnv = Bun.env,
-	platform: NodeJS.Platform = process.platform,
-): boolean {
-	if (env.PI_TUI_ED3_SAFE === "1") return true;
-	if (platform === "win32") return false;
-	if (env.WT_SESSION) return false;
-	if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return false;
-	const term = env.TERM?.toLowerCase() ?? "";
-	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
-		return false;
-	}
-	if (
-		env.WEZTERM_PANE ||
-		env.KITTY_WINDOW_ID ||
-		env.GHOSTTY_RESOURCES_DIR ||
-		env.ALACRITTY_WINDOW_ID ||
-		env.ITERM_SESSION_ID ||
-		env.VTE_VERSION
-	) {
-		return true;
-	}
-	switch (env.TERM_PROGRAM?.toLowerCase() ?? "") {
-		case "alacritty":
-		case "apple_terminal":
-		case "ghostty":
-		case "gnome-terminal":
-		case "iterm.app":
-		case "kgx":
-		case "kitty":
-		case "ptyxis":
-		case "wezterm":
-		case "xfce4-terminal":
-			return true;
-		default:
-			return false;
-	}
 }
 
 /**
@@ -395,12 +263,12 @@ const KNOWN_TERMINALS = Object.freeze({
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
 	// Recognized terminals
-	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true, true),
-	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
-	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9, true),
-	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9, true),
+	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true),
+	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9),
+	wezterm: new TerminalInfo("wezterm", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9),
+	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9),
 	vscode: new TerminalInfo("vscode", null, true, true, NotifyProtocol.Bell),
-	alacritty: new TerminalInfo("alacritty", null, true, true, NotifyProtocol.Bell, true),
+	alacritty: new TerminalInfo("alacritty", null, true, true, NotifyProtocol.Bell),
 });
 
 export const TERMINAL_ID: TerminalId = (() => {
@@ -453,16 +321,13 @@ export const TERMINAL_ID: TerminalId = (() => {
 export interface RuntimeTerminal extends TerminalInfo {
 	imageProtocol: ImageProtocol | null;
 	hyperlinks: boolean;
-	eagerEraseScrollbackRisk: boolean;
 	deccara: boolean;
 	supportsScreenToScrollback: boolean;
 	textSizing: boolean;
-	submitPinsViewportToTail: boolean;
 }
 
 export const TERMINAL: RuntimeTerminal = (() => {
 	const resolved = getTerminalInfo(TERMINAL_ID).clone();
-	resolved.eagerEraseScrollbackRisk = detectTerminalEagerEraseScrollbackRisk(Bun.env, process.platform);
 
 	const forcedImageProtocol = getForcedImageProtocol();
 	if (forcedImageProtocol !== undefined) {
@@ -484,11 +349,6 @@ export const TERMINAL: RuntimeTerminal = (() => {
 	// ignores DECCARA) exercises the padded-string fallback. Integration tests opt
 	// in explicitly through setTerminalDeccara.
 	resolved.deccara = detectRectangularSgrSupport(resolved.id, Bun.env) && !isBunTestRuntime();
-	// A genuine local terminal scrolls to its tail on the submit keystroke, so the
-	// reconciliation checkpoint may ED3-rebuild on an unprobeable viewport there.
-	// Forced off under the test runtime (like deccara) so checkpoint tests stay
-	// deterministic and opt in through setTerminalSubmitPinsViewportToTail.
-	resolved.submitPinsViewportToTail = detectSubmitPinsViewportToTail(Bun.env, process.platform) && !isBunTestRuntime();
 	return resolved;
 })();
 
@@ -517,11 +377,6 @@ export function setTerminalDeccara(enabled: boolean): void {
 /** Override screen-to-scrollback clear support for targeted renderer tests. */
 export function setTerminalScreenToScrollback(enabled: boolean): void {
 	TERMINAL.supportsScreenToScrollback = enabled;
-}
-
-/** Override submit-pins-viewport-to-tail for checkpoint reconciliation tests. */
-export function setTerminalSubmitPinsViewportToTail(enabled: boolean): void {
-	TERMINAL.submitPinsViewportToTail = enabled;
 }
 
 /**

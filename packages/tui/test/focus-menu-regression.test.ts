@@ -1,12 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, CURSOR_MARKER, type Focusable, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
-
-class UnknownViewportTerminal extends VirtualTerminal {
-	isNativeViewportAtBottom(): undefined {
-		return undefined;
-	}
-}
 
 class FocusToken implements Component, Focusable {
 	focused = false;
@@ -46,10 +40,7 @@ class MenuFrame implements Component {
 
 describe("focus-changing menu teardown", () => {
 	it("repaints stale menu and working rows on ED3-risk terminals without a viewport oracle", async () => {
-		const previousRisk = TERMINAL.eagerEraseScrollbackRisk;
-		TERMINAL.eagerEraseScrollbackRisk = true;
-
-		const term = new UnknownViewportTerminal(30, 6, 1000);
+		const term = new VirtualTerminal(30, 6, 1000);
 		const tui = new TUI(term, true);
 		const editor = new FocusToken();
 		const menu = new FocusToken();
@@ -62,18 +53,16 @@ describe("focus-changing menu teardown", () => {
 			await term.waitForRender();
 
 			frame.working = true;
-			tui.setEagerNativeScrollbackRebuild(true);
-			tui.requestRender(false, { allowUnknownViewportMutation: true });
+			tui.requestRender();
 			await term.waitForRender();
 
 			frame.menuOpen = true;
 			tui.setFocus(menu);
-			tui.requestRender(false, { allowUnknownViewportMutation: true });
+			tui.requestRender();
 			await term.waitForRender();
 
 			frame.working = false;
 			tui.requestRender();
-			tui.setEagerNativeScrollbackRebuild(false);
 			await term.waitForRender();
 
 			frame.menuOpen = false;
@@ -85,7 +74,6 @@ describe("focus-changing menu teardown", () => {
 			expect(term.getCursor()).toEqual({ row: 1, col: 6 });
 		} finally {
 			tui.stop();
-			TERMINAL.eagerEraseScrollbackRisk = previousRisk;
 		}
 	});
 });

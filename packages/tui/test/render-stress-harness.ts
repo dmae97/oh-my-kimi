@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
-import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	type Component,
 	CURSOR_MARKER,
@@ -262,15 +261,12 @@ export interface Scenario {
 	strictScrollback: boolean;
 	timeoutMs: number;
 	uniqueContent: boolean;
-	// Models a foreground tool actively streaming output: the agent sets
-	// `setEagerNativeScrollbackRebuild(true)` for the whole turn and re-renders
-	// content frames with a plain (non-forced) `requestRender()`. On an ED3-risk
-	// terminal (ghostty/kitty/…) the eager opt-in is gated off by
-	// `eagerEraseScrollbackRisk`, so `allowUnknownViewportMutation` stays false and
-	// offscreen-edit growth flows through `viewportRepaint` (which advances the
-	// rendered line count without committing the overflow to native history).
-	// The default content-frame path instead forces `allowUnknownViewportMutation`
-	// and never exercises that lagging-high-water state.
+	// Models a foreground tool actively streaming output: content frames are
+	// re-rendered with a plain (non-forced) `requestRender()`, so offscreen-edit
+	// growth flows through `viewportRepaint` (which advances the rendered line
+	// count without committing the overflow to native history). The default
+	// content-frame path instead forces a render and never exercises that
+	// lagging-high-water state.
 	foregroundStream: boolean;
 	// Renders each logical line wrapped to the viewport width, so a width resize
 	// changes the physical line COUNT (reflow), not just per-row truncation —
@@ -327,8 +323,8 @@ interface AppliedOperation {
 	// them. Defaults to the net frame growth when absent.
 	transientFrameGrowth?: number;
 	// The periodic prompt-submit checkpoint pins the viewport to the bottom and
-	// attempts the real reconciliation (`refreshNativeScrollbackIfDirty` outside
-	// `normal`, a `/clear`-style forced rebuild for `normal`). Native scrollback
+	// runs the prompt-submit reconciliation (a `/clear`-style forced rebuild for
+	// `normal`; other hosts get a plain forced render). Native scrollback
 	// must equal the transcript only when that reconciliation actually ran:
 	// ConPTY/Windows and other unobservable host-scrollback paths deliberately
 	// keep dirty history deferred until the renderer gets a positive at-tail probe.
@@ -1166,17 +1162,8 @@ class StressDriver {
 	}
 
 	async run(): Promise<void> {
-		// Foreground-tool streaming faithfully: pin the ED3-risk trait (independent
-		// of whatever real terminal hosts the worker) and keep the turn-long eager
-		// rebuild opt-in enabled. On an ED3-risk terminal that opt-in is gated off,
-		// so content frames flow through `viewportRepaint`/`diff` rather than a
-		// forced history rebuild — see `#renderContentFrame`.
-		const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
-		const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
-		if (this.#traits.foregroundStreaming) terminalInfo.eagerEraseScrollbackRisk = this.#traits.ed3ScrollbackEraseRisk;
 		try {
 			this.#tui.start();
-			if (this.#traits.foregroundStreaming) this.#tui.setEagerNativeScrollbackRebuild(true);
 			await this.#settle();
 			this.#assertOracles(
 				{
@@ -1209,7 +1196,6 @@ class StressDriver {
 		} finally {
 			this.#tui.stop();
 			await this.#term.flush();
-			terminalInfo.eagerEraseScrollbackRisk = savedRisk;
 		}
 	}
 
@@ -1475,43 +1461,30 @@ class StressDriver {
 	}
 
 	async #eagerStreamingMutation(): Promise<AppliedOperation> {
-		this.#tui.setEagerNativeScrollbackRebuild(true);
-		let detail: JsonObject = {};
-		try {
-			detail = this.#streams.content.chance(0.5)
-				? this.#model.streamOne()
-				: this.#model.editOffscreenLine(this.#term.rows);
-			this.#renderContentFrame();
-			await this.#settle();
-		} finally {
-			this.#tui.setEagerNativeScrollbackRebuild(false);
-		}
+		const detail: JsonObject = this.#streams.content.chance(0.5)
+			? this.#model.streamOne()
+			: this.#model.editOffscreenLine(this.#term.rows);
+		this.#renderContentFrame();
+		await this.#settle();
 		return contentOperation("eagerStreamingMutation", detail, false);
 	}
 
 	#renderContentFrame(): void {
 		if (this.#traits.foregroundStreaming) {
-			// A foreground tool's own re-render: a plain, non-forced request with the
-			// turn-long eager opt-in already enabled. We deliberately do NOT pass
-			// `allowUnknownViewportMutation` — on an ED3-risk terminal the eager
-			// opt-in is gated off, so the renderer keeps the live tail through
-			// `viewportRepaint`/`diff`. Offscreen-edit growth then flows through
-			// `viewportRepaint`, advancing the rendered line count without committing
-			// the overflow to native history, which is the lagging-high-water state a
-			// later shrink must still re-anchor from.
-			this.#tui.requestRender(false);
+			// A foreground tool's own re-render: a plain, non-forced request. The
+			// renderer keeps the live tail through `viewportRepaint`/`diff`;
+			// offscreen-edit growth advances the rendered line count without
+			// committing the overflow to native history, which is the lagging
+			// high-water state a later shrink must still re-anchor from.
+			this.#tui.requestRender();
 			return;
 		}
 		const position = this.#term.getBufferPosition();
 		const atBottom = position.viewportY >= position.baseY;
 		if (!this.#traits.strictNativeScrollback && atBottom) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		} else {
-			const allowUnknownViewportMutation = this.#traits.viewportProbe === "unknown" && atBottom;
-			this.#tui.requestRender(
-				false,
-				allowUnknownViewportMutation ? { allowUnknownViewportMutation: true } : undefined,
-			);
+			this.#tui.requestRender();
 		}
 	}
 
@@ -1617,8 +1590,8 @@ class StressDriver {
 				this.#term.scrollLines(LARGE_SCROLL);
 				return { amount: LARGE_SCROLL };
 			case "forceRender":
-				this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
-				return { allowUnknownViewportMutation: true };
+				this.#tui.requestRender(true);
+				return {};
 			default:
 				return assertNever(kind);
 		}
@@ -1632,7 +1605,7 @@ class StressDriver {
 			? this.#model.setCursorOffscreen(this.#term.rows, this.#term.columns)
 			: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
 		this.#tui.setFocus(this.#component);
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return this.#viewOperation(kind, { cursor });
 	}
@@ -1692,7 +1665,7 @@ class StressDriver {
 		const entry = this.#pickOverlay();
 		if (entry === undefined) return this.#viewOperation("editOverlay", { skipped: true });
 		const detail = entry.model.mutate(this.#term.columns);
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return this.#viewOperation("editOverlay", { id: entry.id, detail });
 	}
@@ -1702,7 +1675,7 @@ class StressDriver {
 		if (entry === undefined) return this.#viewOperation("moveOverlayCursor", { skipped: true });
 		const cursor = entry.model.setCursor(this.#term.columns);
 		this.#tui.setFocus(entry.component);
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return this.#viewOperation("moveOverlayCursor", { id: entry.id, cursor });
 	}
@@ -1780,9 +1753,9 @@ class StressDriver {
 		this.#term.resize(columns, rows);
 		// foregroundStream models a live tool turn: let the terminal's own resize
 		// callback drive the (non-forced, gated) repaint the real app relies on,
-		// rather than forcing an allowUnknown rebuild the streaming path never uses.
+		// rather than forcing a full rebuild the streaming path never uses.
 		if (!this.#traits.strictNativeScrollback && !this.#traits.foregroundStreaming) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		return viewOperation("resizeBoth", { columns, rows }, { geometryChanged: true, mutatesViewport: true });
@@ -1803,10 +1776,7 @@ class StressDriver {
 
 	async #scrollToBottom(): Promise<AppliedOperation> {
 		this.#term.scrollLines(LARGE_SCROLL);
-		this.#tui.requestRender(true, {
-			allowUnknownViewportMutation: true,
-			clearScrollback: this.#traits.strictNativeScrollback,
-		});
+		this.#tui.requestRender(true, { clearScrollback: this.#traits.strictNativeScrollback });
 		await this.#settle();
 		return forceRenderOperation(
 			"scrollToBottom",
@@ -1826,7 +1796,7 @@ class StressDriver {
 		const columns = this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns);
 		this.#term.resize(columns, this.#term.rows);
 		if (!this.#traits.strictNativeScrollback && !this.#traits.foregroundStreaming) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		return viewOperation("resizeWidth", { columns }, { geometryChanged: true, mutatesViewport: true });
@@ -1836,7 +1806,7 @@ class StressDriver {
 		const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
 		this.#term.resize(this.#term.columns, rows);
 		if (!this.#traits.strictNativeScrollback && !this.#traits.foregroundStreaming) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		return viewOperation("resizeHeight", { rows }, { geometryChanged: true, mutatesViewport: true });
@@ -1868,14 +1838,14 @@ class StressDriver {
 	}
 
 	async #forceRenderAllowUnknown(): Promise<AppliedOperation> {
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender(true);
 		await this.#settle();
-		return this.#forceOperation("forceRenderAllowUnknown", { allowUnknownViewportMutation: true });
+		return this.#forceOperation("forceRenderAllowUnknown", {});
 	}
 
 	async #forceRenderClearScrollback(): Promise<AppliedOperation> {
 		this.#term.scrollLines(LARGE_SCROLL);
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
+		this.#tui.requestRender(true, { clearScrollback: true });
 		await this.#settle();
 		return { ...this.#forceOperation("forceRenderClearScrollback", { clearScrollback: true }), checkpoint: true };
 	}
@@ -1889,7 +1859,7 @@ class StressDriver {
 			this.#tui.removeChild(child.component);
 		}
 		const empty = this.#model.clear();
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
+		this.#tui.requestRender(true, { clearScrollback: true });
 		await this.#settle();
 		// The clear's own replay frame can itself overflow the viewport (status
 		// header + residual rows), so the transient bound must cover everything
@@ -1897,7 +1867,7 @@ class StressDriver {
 		const clearedFrameLength = this.#expectedFrame().frame.length;
 		const overflowCount = this.#term.rows + this.#streams.geometry.int(1, 4);
 		const overflow = this.#model.appendCount(overflowCount, "overflow");
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender(true);
 		await this.#settle();
 		return {
 			...this.#forceOperation("forceRenderAfterEmptyOverflow", { detachedChildren, empty, overflow }),
@@ -1924,7 +1894,7 @@ class StressDriver {
 				: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
 			this.#tui.setFocus(this.#component);
 		}
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return viewOperation("toggleFocusInput", { focused: this.#component.focused, cursor });
 	}
@@ -2014,16 +1984,15 @@ class StressDriver {
 			// Normal POSIX uses a /clear-style forced rebuild; tmux keeps its forced
 			// repaint (its pane history cannot be destructively reconciled).
 			this.#tui.requestRender(true, {
-				allowUnknownViewportMutation: true,
 				clearScrollback: this.#traits.strictNativeScrollback,
 			});
 			reconcilesNativeScrollback = this.#traits.strictNativeScrollback;
 		} else {
-			// Unknown-viewport / ED3-risk / Windows hosts take the real prompt-submit
-			// path. `refreshNativeScrollbackIfDirty` returns false for permanently
-			// unobservable hosts such as ConPTY, where a submit key is not proof that
-			// hidden host scrollback is at the tail and ED3 would still yank readers.
-			reconcilesNativeScrollback = this.#tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+			// Unknown-viewport / ED3-risk / Windows hosts: the deferred
+			// native-scrollback reconciliation no longer exists, so a prompt submit
+			// is a plain forced render that never destructively rewrites native
+			// scrollback.
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		const after = this.#snapshot();
@@ -3593,18 +3562,15 @@ function coreTemplates(): ScenarioTemplate[] {
 		},
 		{
 			// Foreground tool actively streaming on an ED3-risk terminal whose
-			// viewport position is unobservable (ghostty/kitty/alacritty/VTE/iTerm2;
-			// see `detectTerminalEagerEraseScrollbackRisk`). The agent requests an
-			// eager native-scrollback rebuild for the streaming turn, but that opt-in
-			// is gated off on ED3-risk terminals, so `allowUnknownViewportMutation`
-			// stays false and content frames flow through `viewportRepaint`/`diff`
-			// instead of a forced history rebuild. An offscreen-edit growth then
-			// repaints in place — advancing the rendered line count without committing
-			// the overflow to native history — and the next shrink must still
+			// viewport position is unobservable (ghostty/kitty/alacritty/VTE/iTerm2).
+			// Content frames flow through `viewportRepaint`/`diff` instead of a
+			// forced history rebuild. An offscreen-edit growth then repaints in
+			// place — advancing the rendered line count without committing the
+			// overflow to native history — and the next shrink must still
 			// re-anchor the bottom of the viewport from that lagging high-water mark.
-			// The default content-frame path forces `allowUnknownViewportMutation` and
-			// never reaches this state (a notification chip rendering over the active
-			// tool render: the original report).
+			// The default content-frame path forces a render and never reaches this
+			// state (a notification chip rendering over the active tool render: the
+			// original report).
 			name: "darwin-unknown-ghostty-stream-small",
 			platform: "darwin",
 			terminalMode: "unknown",
@@ -3889,8 +3855,6 @@ function restoreOwnProperty(target: object, key: string, descriptor: PropertyDes
 export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 	await withPatchedEnv("ghostty", async () => {
 		await withPatchedPlatform("darwin", async () => {
-			const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
-			const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
 			const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 			const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 			const stdoutColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
@@ -3903,7 +3867,6 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 			const processKill = Object.getOwnPropertyDescriptor(process, "kill");
 			const writes: string[] = [];
 
-			terminalInfo.eagerEraseScrollbackRisk = true;
 			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 			Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
@@ -3931,7 +3894,6 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 
 			try {
 				tui.start();
-				tui.setEagerNativeScrollbackRebuild(true);
 				await scheduler.drain(drainTarget);
 
 				const reportOnlyWriteStart = writes.length;
@@ -3944,7 +3906,7 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 				const streamingWriteStart = writes.length;
 				component.setLines([...initialLines, "stream-row-35"]);
 				process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
-				tui.requestRender(false);
+				tui.requestRender();
 				await scheduler.drain(drainTarget);
 
 				const emitted = writes.slice(streamingWriteStart).join("");
@@ -3955,7 +3917,6 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 				}
 			} finally {
 				tui.stop();
-				terminalInfo.eagerEraseScrollbackRisk = savedRisk;
 				restoreOwnProperty(process.stdin, "isTTY", stdinIsTty);
 				restoreOwnProperty(process.stdout, "isTTY", stdoutIsTty);
 				restoreOwnProperty(process.stdout, "columns", stdoutColumns);

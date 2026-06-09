@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, type NativeScrollbackLiveRegion, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type NativeScrollbackLiveRegion, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2130
@@ -74,82 +74,68 @@ async function withTmuxEnv<T>(run: () => T | Promise<T>): Promise<T> {
 	}
 }
 
-async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Promise<T> {
-	const mutable = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
-	const saved = mutable.eagerEraseScrollbackRisk;
-	mutable.eagerEraseScrollbackRisk = risk;
-	try {
-		return await run();
-	} finally {
-		mutable.eagerEraseScrollbackRisk = saved;
-	}
-}
-
 describe("issue #2130: tmux rewind/branch leaves the viewport anchored to the pane top", () => {
 	it("recovers normal rendering after a clearScrollback render shrinks a tall transcript", async () => {
 		if (process.platform === "win32") return;
 
 		await withTmuxEnv(async () => {
-			await withTerminalRisk(true, async () => {
-				const term = new VirtualTerminal(40, 8, 10_000);
-				// Real tmux/ProcessTerminal does not implement the at-bottom
-				// probe; match production by returning undefined.
-				(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom =
-					() => undefined;
+			const term = new VirtualTerminal(40, 8, 10_000);
+			// Real tmux/ProcessTerminal does not implement the at-bottom
+			// probe; match production by returning undefined.
+			(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () =>
+				undefined;
 
-				const tui = new TUI(term);
-				const stream = new StreamingLiveRegion([]);
-				tui.addChild(stream);
+			const tui = new TUI(term);
+			const stream = new StreamingLiveRegion([]);
+			tui.addChild(stream);
 
-				try {
-					tui.start();
-					tui.setEagerNativeScrollbackRebuild(true);
-					await settle(term);
+			try {
+				tui.start();
+				await settle(term);
 
-					// Stream a tall reply so `#planLiveRegionPinnedRender` ramps
-					// `#scrollbackHighWater` past the viewport boundary.
-					const tall = Array.from({ length: 25 }, (_unused, i) => `TALL-${String(i).padStart(3, "0")}`);
-					for (let chunk = 5; chunk <= tall.length; chunk += 5) {
-						stream.setLines(tall.slice(0, chunk));
-						tui.requestRender();
-						await settle(term);
-					}
-
-					// Branch/rewind: the coding-agent replaces the transcript with
-					// the shorter pre-branch slice and forces a clearScrollback
-					// render (the same path `selector-controller.handleRewind`
-					// and friends take). The new content fits entirely inside
-					// the viewport (4 rows vs height = 8).
-					stream.setLines(["A", "B", "C", "D"]);
-					tui.requestRender(true, { clearScrollback: true });
-					await settle(term);
-
-					// Any subsequent frame after the rewind would re-route through
-					// `#planLiveRegionPinnedRender`. Before the fix the stale
-					// `#scrollbackHighWater` (~17, from streaming) made the
-					// planner pick `liveRegionPinned` with `renderViewportTop`
-					// at 5, so the emitter clamped `viewportTop` to
-					// `lines.length` and wrote eight blank rows.
-					stream.setLines(["A", "B", "C", "D", "E"]);
+				// Stream a tall reply so `#planLiveRegionPinnedRender` ramps
+				// `#scrollbackHighWater` past the viewport boundary.
+				const tall = Array.from({ length: 25 }, (_unused, i) => `TALL-${String(i).padStart(3, "0")}`);
+				for (let chunk = 5; chunk <= tall.length; chunk += 5) {
+					stream.setLines(tall.slice(0, chunk));
 					tui.requestRender();
 					await settle(term);
-
-					const viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-
-					// The visible viewport is bottom-anchored to the new content:
-					// five live rows followed by three blank rows below the live
-					// tail. Pre-fix: every row was blank.
-					expect(viewport.slice(0, 5)).toEqual(["A", "B", "C", "D", "E"]);
-
-					// The cursor lands on the last content row, not at the pane
-					// top. Pre-fix: `parkUp` from the pinned emitter dragged the
-					// cursor up to screen row 0.
-					expect(term.getCursor().row).toBe(4);
-				} finally {
-					tui.stop();
-					await term.flush();
 				}
-			});
+
+				// Branch/rewind: the coding-agent replaces the transcript with
+				// the shorter pre-branch slice and forces a clearScrollback
+				// render (the same path `selector-controller.handleRewind`
+				// and friends take). The new content fits entirely inside
+				// the viewport (4 rows vs height = 8).
+				stream.setLines(["A", "B", "C", "D"]);
+				tui.requestRender(true, { clearScrollback: true });
+				await settle(term);
+
+				// Any subsequent frame after the rewind would re-route through
+				// `#planLiveRegionPinnedRender`. Before the fix the stale
+				// `#scrollbackHighWater` (~17, from streaming) made the
+				// planner pick `liveRegionPinned` with `renderViewportTop`
+				// at 5, so the emitter clamped `viewportTop` to
+				// `lines.length` and wrote eight blank rows.
+				stream.setLines(["A", "B", "C", "D", "E"]);
+				tui.requestRender();
+				await settle(term);
+
+				const viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+
+				// The visible viewport is bottom-anchored to the new content:
+				// five live rows followed by three blank rows below the live
+				// tail. Pre-fix: every row was blank.
+				expect(viewport.slice(0, 5)).toEqual(["A", "B", "C", "D", "E"]);
+
+				// The cursor lands on the last content row, not at the pane
+				// top. Pre-fix: `parkUp` from the pinned emitter dragged the
+				// cursor up to screen row 0.
+				expect(term.getCursor().row).toBe(4);
+			} finally {
+				tui.stop();
+				await term.flush();
+			}
 		});
 	});
 });
