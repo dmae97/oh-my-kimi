@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed local tiny-title worker stdout/stderr leaking raw native model output such as `</title>` and cache/status lines into the interactive TUI scrollback ([#2206](https://github.com/can1357/oh-my-pi/issues/2206)).
+
 ## [15.10.9] - 2026-06-09
 
 ### Fixed
