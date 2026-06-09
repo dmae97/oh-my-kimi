@@ -145,6 +145,43 @@ function buildAnthropicReferenceMap(
 	return merged;
 }
 
+/**
+ * Curated Anthropic models that are live or limited-availability on the
+ * first-party `/v1/models` endpoint but that models.dev has not catalogued yet.
+ * Seeded into model generation so the bundled catalog is never gated on
+ * models.dev's update cadence; deduped behind upstream catalog / models.dev
+ * entries once those appear. Token limits and pricing are pinned
+ * authoritatively in
+ * `applyAnthropicCatalogPolicy`, and `thinking` is derived by
+ * `refreshModelThinking` during generation.
+ */
+export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly Model<"anthropic-messages">[] = [
+	{
+		id: "claude-fable-5",
+		name: "Claude Fable 5",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	},
+	{
+		id: "claude-mythos-5",
+		name: "Claude Mythos 5",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	},
+];
+
 function mapWithBundledReference<TApi extends Api>(
 	entry: OpenAICompatibleModelRecord,
 	defaults: Model<TApi>,
@@ -2615,6 +2652,8 @@ export function mapModelsDevToModels(
 
 // Bedrock cross-region prefix helpers
 const BEDROCK_GLOBAL_PREFIXES = [
+	"anthropic.claude-fable-5",
+	"anthropic.claude-mythos-5",
 	"anthropic.claude-haiku-4-5",
 	"anthropic.claude-sonnet-4",
 	"anthropic.claude-opus-4-5",

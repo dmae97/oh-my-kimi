@@ -5,6 +5,8 @@
 ### Fixed
 
 - Fixed `google-antigravity` not rotating to another stored OAuth account when Cloud Code Assist returns `429 You have exhausted your capacity on this model. Your quota will reset after …`. `parseRateLimitReason` matched the literal `capacity` before the `quota will reset` suffix and downgraded the failure to `MODEL_CAPACITY_EXHAUSTED` (45–75 s backoff), and `isUsageLimitError` returned false for the same message — so `markUsageLimitReached` was never invoked and the agent kept hammering the exhausted credential while the retry layer bailed on the multi-hour `retry-after`. Both paths now treat the Antigravity phrasing as `QUOTA_EXHAUSTED` / usage-limit, blocking the current credential until reset and letting the session pick an unblocked sibling ([#2187](https://github.com/can1357/oh-my-pi/issues/2187)).
+- Fixed OpenRouter Anthropic chat-completions requests placing `cache_control` on empty assistant tool-call content. The cache marker now skips empty text and attaches to the most recent non-empty text part, avoiding HTTP 400 payloads with `{type:"text", text:"", cache_control:...}`.
+- Fixed Fable-only Anthropic request shaping to cover Claude Mythos 5, and added Mythos 5 to the first-party Anthropic catalog seed. Adaptive display, sampling suppression, mid-conversation system messages, forced-tool-choice downgrade, and Bedrock adaptive metadata now handle both model families.
 
 ### Added
 
