@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { ollamaCloudModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/ollama";
 import { completeSimple, getEnvApiKey, stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, Tool } from "@oh-my-pi/pi-ai/types";
 
 const originalApiKey = Bun.env.OLLAMA_CLOUD_API_KEY;
-const originalFetch = global.fetch;
 
 const cloudModel: Model<"ollama-chat"> = {
 	id: "gpt-oss:120b",
@@ -52,7 +51,6 @@ afterEach(() => {
 	} else {
 		Bun.env.OLLAMA_CLOUD_API_KEY = originalApiKey;
 	}
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -63,7 +61,7 @@ describe("ollama-cloud provider support", () => {
 	});
 
 	test("discovers ollama-cloud models from native cloud endpoints", async () => {
-		global.fetch = vi.fn(async (input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
 			const url = String(input);
 			const headers = new Headers(init?.headers);
 			expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
@@ -92,9 +90,9 @@ describe("ollama-cloud provider support", () => {
 				});
 			}
 			throw new Error(`Unexpected URL: ${url}`);
-		}) as unknown as typeof fetch;
+		});
 
-		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key" });
+		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key", fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 		const gpt = models?.find(model => model.id === "gpt-oss:120b");
 		const qwen = models?.find(model => model.id === "qwen3:32b");
@@ -108,14 +106,11 @@ describe("ollama-cloud provider support", () => {
 		expect(gpt?.input).toEqual(["text", "image"]);
 		expect(qwen?.name).toBe("Qwen 3 32B");
 		expect(qwen?.input).toEqual(["text", "image"]);
-		expect(global.fetch).toHaveBeenCalledWith(
-			"https://ollama.com/api/tags",
-			expect.objectContaining({ method: "GET" }),
-		);
+		expect(fetchMock).toHaveBeenCalledWith("https://ollama.com/api/tags", expect.objectContaining({ method: "GET" }));
 	});
 
 	test("tolerates individual /api/show failures during model discovery", async () => {
-		global.fetch = vi.fn(async (input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
 			const url = String(input);
 			if (url === "https://ollama.com/api/tags") {
 				return new Response(
@@ -136,9 +131,9 @@ describe("ollama-cloud provider support", () => {
 				});
 			}
 			throw new Error(`Unexpected URL: ${url}`);
-		}) as unknown as typeof fetch;
+		});
 
-		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key" });
+		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key", fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 
 		const ids = models?.map(m => m.id).sort();
@@ -148,7 +143,7 @@ describe("ollama-cloud provider support", () => {
 	});
 
 	test("falls back to bundled metadata when /api/show metadata is unavailable", async () => {
-		global.fetch = vi.fn(async (input, _init) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, _init) => {
 			const url = String(input);
 			if (url === "https://ollama.com/api/tags") {
 				return new Response(
@@ -162,9 +157,9 @@ describe("ollama-cloud provider support", () => {
 				return new Response(null, { status: 500 });
 			}
 			throw new Error(`Unexpected URL: ${url}`);
-		}) as unknown as typeof fetch;
+		});
 
-		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key" });
+		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key", fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 		const model = models?.find(candidate => candidate.id === "gpt-oss:120b");
 
@@ -177,7 +172,7 @@ describe("ollama-cloud provider support", () => {
 	});
 
 	test("streams native chat responses with thinking, text, and usage mapping", async () => {
-		global.fetch = vi.fn(async (input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
 			expect(String(input)).toBe("https://ollama.com/api/chat");
 			const headers = new Headers(init?.headers);
 			expect(headers.get("Authorization")).toBe("Bearer cloud-test-key");
@@ -205,14 +200,14 @@ describe("ollama-cloud provider support", () => {
 					eval_count: 4,
 				},
 			]);
-		}) as unknown as typeof fetch;
+		});
 
 		const response = stream(
 			cloudModel,
 			{
 				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 			},
-			{ apiKey: "cloud-test-key" },
+			{ apiKey: "cloud-test-key", fetch: fetchMock },
 		);
 
 		const eventTypes: string[] = [];
@@ -235,7 +230,7 @@ describe("ollama-cloud provider support", () => {
 	});
 
 	test("supports ollama-cloud through streamSimple option mapping", async () => {
-		global.fetch = vi.fn(async () =>
+		const fetchMock: FetchImpl = vi.fn(async () =>
 			createNdjsonResponse([
 				{
 					model: "gpt-oss:120b",
@@ -244,12 +239,12 @@ describe("ollama-cloud provider support", () => {
 				},
 				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 2, eval_count: 4 },
 			]),
-		) as unknown as typeof fetch;
+		);
 
 		const response = await streamSimple(
 			cloudModel,
 			{ messages: [{ role: "user", content: "Say hi", timestamp: Date.now() }] },
-			{ apiKey: "cloud-test-key", toolChoice: "auto" },
+			{ apiKey: "cloud-test-key", toolChoice: "auto", fetch: fetchMock },
 		).result();
 
 		expect(response.stopReason).toBe("stop");
@@ -259,7 +254,7 @@ describe("ollama-cloud provider support", () => {
 	});
 
 	test("supports ollama-cloud through completeSimple top-level contract", async () => {
-		global.fetch = vi.fn(async () =>
+		const fetchMock: FetchImpl = vi.fn(async () =>
 			createNdjsonResponse([
 				{
 					model: "gpt-oss:120b",
@@ -268,12 +263,12 @@ describe("ollama-cloud provider support", () => {
 				},
 				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 5 },
 			]),
-		) as unknown as typeof fetch;
+		);
 
 		const response = await completeSimple(
 			cloudModel,
 			{ messages: [{ role: "user", content: "Finish this", timestamp: Date.now() }] },
-			{ apiKey: "cloud-test-key" },
+			{ apiKey: "cloud-test-key", fetch: fetchMock },
 		);
 
 		expect(response.stopReason).toBe("stop");
@@ -282,7 +277,7 @@ describe("ollama-cloud provider support", () => {
 		expect(response.usage.output).toBe(5);
 	});
 	test("streams tool calls and maps native tool stop reasons", async () => {
-		global.fetch = vi.fn(async () =>
+		const fetchMock: FetchImpl = vi.fn(async () =>
 			createNdjsonResponse([
 				{
 					model: "gpt-oss:120b",
@@ -309,7 +304,7 @@ describe("ollama-cloud provider support", () => {
 					eval_count: 2,
 				},
 			]),
-		) as unknown as typeof fetch;
+		);
 
 		const response = stream(
 			cloudModel,
@@ -317,7 +312,7 @@ describe("ollama-cloud provider support", () => {
 				messages: [{ role: "user", content: "Read README", timestamp: Date.now() }],
 				tools: [readFileTool],
 			},
-			{ apiKey: "cloud-test-key" },
+			{ apiKey: "cloud-test-key", fetch: fetchMock },
 		);
 		const eventTypes: string[] = [];
 		for await (const event of response) {
@@ -337,7 +332,7 @@ describe("ollama-cloud provider support", () => {
 
 	test("converts replay history, tools, and images into native ollama chat payloads", async () => {
 		let requestBody: Record<string, unknown> | undefined;
-		global.fetch = vi.fn(async (_input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 			return createNdjsonResponse([
 				{
@@ -347,7 +342,7 @@ describe("ollama-cloud provider support", () => {
 				},
 				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 1 },
 			]);
-		}) as unknown as typeof fetch;
+		});
 
 		const context: Context = {
 			messages: [
@@ -388,7 +383,7 @@ describe("ollama-cloud provider support", () => {
 			tools: [readFileTool],
 		};
 
-		await stream(cloudModel, context, { apiKey: "cloud-test-key" }).result();
+		await stream(cloudModel, context, { apiKey: "cloud-test-key", fetch: fetchMock }).result();
 
 		const messages = requestBody?.messages as Array<Record<string, unknown>> | undefined;
 		expect(requestBody?.model).toBe("gpt-oss:120b");
@@ -417,13 +412,13 @@ describe("ollama-cloud provider support", () => {
 
 	test("strips `thinking` from assistant history messages on ollama-cloud", async () => {
 		let requestBody: Record<string, unknown> | undefined;
-		global.fetch = vi.fn(async (_input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 			return createNdjsonResponse([
 				{ model: "gpt-oss:120b", message: { role: "assistant", content: "ok" }, done: false },
 				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 1, eval_count: 1 },
 			]);
-		}) as unknown as typeof fetch;
+		});
 
 		const context: Context = {
 			messages: [
@@ -460,7 +455,7 @@ describe("ollama-cloud provider support", () => {
 			tools: [readFileTool],
 		};
 
-		await stream(cloudModel, context, { apiKey: "cloud-test-key" }).result();
+		await stream(cloudModel, context, { apiKey: "cloud-test-key", fetch: fetchMock }).result();
 
 		const messages = requestBody?.messages as Array<Record<string, unknown>> | undefined;
 		const assistant = messages?.find(message => message.role === "assistant");
@@ -476,7 +471,7 @@ describe("ollama-cloud provider support", () => {
 
 	test("emits one Ollama system message per ordered system prompt entry", async () => {
 		let requestBody: Record<string, unknown> | undefined;
-		global.fetch = vi.fn(async (_input, init) => {
+		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 			return createNdjsonResponse([
 				{
@@ -486,7 +481,7 @@ describe("ollama-cloud provider support", () => {
 				},
 				{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 1 },
 			]);
-		}) as unknown as typeof fetch;
+		});
 
 		await stream(
 			cloudModel,
@@ -494,7 +489,7 @@ describe("ollama-cloud provider support", () => {
 				systemPrompt: ["Stable instruction.", "Extra policy."],
 				messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
 			},
-			{ apiKey: "cloud-test-key" },
+			{ apiKey: "cloud-test-key", fetch: fetchMock },
 		).result();
 
 		const messages = requestBody?.messages as Array<Record<string, unknown>> | undefined;
@@ -507,54 +502,54 @@ describe("ollama-cloud provider support", () => {
 	describe("mapToolChoice", () => {
 		test("omits tool_choice when undefined or auto", async () => {
 			let requestBody: Record<string, unknown> | undefined;
-			global.fetch = vi.fn(async (_input, init) => {
+			const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 				requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 				return createNdjsonResponse([
 					{ model: "gpt-oss:120b", message: { role: "assistant", content: "ok" }, done: false },
 					{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 1, eval_count: 1 },
 				]);
-			}) as unknown as typeof fetch;
+			});
 
 			await stream(
 				cloudModel,
 				{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [readFileTool] },
-				{ apiKey: "cloud-test-key", toolChoice: "auto" },
+				{ apiKey: "cloud-test-key", toolChoice: "auto", fetch: fetchMock },
 			).result();
 			expect(requestBody?.tool_choice).toBeUndefined();
 		});
 
 		test("passes tool_choice: none when ToolChoice is none", async () => {
 			let requestBody: Record<string, unknown> | undefined;
-			global.fetch = vi.fn(async (_input, init) => {
+			const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 				requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 				return createNdjsonResponse([
 					{ model: "gpt-oss:120b", message: { role: "assistant", content: "ok" }, done: false },
 					{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 1, eval_count: 1 },
 				]);
-			}) as unknown as typeof fetch;
+			});
 
 			await stream(
 				cloudModel,
 				{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [readFileTool] },
-				{ apiKey: "cloud-test-key", toolChoice: "none" },
+				{ apiKey: "cloud-test-key", toolChoice: "none", fetch: fetchMock },
 			).result();
 			expect(requestBody?.tool_choice).toBe("none");
 		});
 
 		test("passes tool_choice: required when ToolChoice is required or any", async () => {
 			let requestBody: Record<string, unknown> | undefined;
-			global.fetch = vi.fn(async (_input, init) => {
+			const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 				requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 				return createNdjsonResponse([
 					{ model: "gpt-oss:120b", message: { role: "assistant", content: "ok" }, done: false },
 					{ model: "gpt-oss:120b", done: true, done_reason: "stop", prompt_eval_count: 1, eval_count: 1 },
 				]);
-			}) as unknown as typeof fetch;
+			});
 
 			await stream(
 				cloudModel,
 				{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [readFileTool] },
-				{ apiKey: "cloud-test-key", toolChoice: "required" },
+				{ apiKey: "cloud-test-key", toolChoice: "required", fetch: fetchMock },
 			).result();
 			expect(requestBody?.tool_choice).toBe("required");
 		});

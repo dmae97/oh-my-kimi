@@ -9,8 +9,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ProxyAssistantMessageEvent } from "@oh-my-pi/pi-agent-core/proxy";
 import { type ProxyMessageEventStream, streamProxy } from "@oh-my-pi/pi-agent-core/proxy";
-import type { AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai";
 
 const mockModel: Model = {
 	id: "test-model",
@@ -76,12 +75,12 @@ describe("streamProxy — server disconnect without terminal event", () => {
 	it("emits an error event when server disconnects after start with no terminal event", async () => {
 		const events: ProxyAssistantMessageEvent[] = [{ type: "start" }];
 		const body = buildSseBody(events);
-
-		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
 
 		const stream = streamProxy(mockModel, mockContext, {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
+			fetch: fetchMock,
 		});
 		const collected = await collectEvents(stream);
 		const errorEvent = collected.find(e => e.type === "error");
@@ -98,12 +97,12 @@ describe("streamProxy — server disconnect without terminal event", () => {
 			{ type: "text_delta", contentIndex: 0, delta: "Hel" },
 		];
 		const body = buildSseBody(events);
-
-		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
 
 		const stream = streamProxy(mockModel, mockContext, {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
+			fetch: fetchMock,
 		});
 
 		// Consume iterator so the internal async function runs
@@ -123,13 +122,13 @@ describe("streamProxy — server disconnect without terminal event", () => {
 
 		const events: ProxyAssistantMessageEvent[] = [{ type: "start" }];
 		const body = buildSseBody(events);
-
-		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
 
 		const stream = streamProxy(mockModel, mockContext, {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
 			signal: abortController.signal,
+			fetch: fetchMock,
 		});
 
 		const collected = await collectEvents(stream);
@@ -150,13 +149,13 @@ describe("streamProxy — server disconnect without terminal event", () => {
 
 		const events: ProxyAssistantMessageEvent[] = [{ type: "start" }];
 		const body = buildSseBody(events);
-
-		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
 
 		const stream = streamProxy(mockModel, mockContext, {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
 			signal: abortController.signal,
+			fetch: fetchMock,
 		});
 
 		await collectEvents(stream);
@@ -180,12 +179,12 @@ describe("streamProxy — server disconnect without terminal event", () => {
 			},
 		];
 		const body = buildSseBody(events);
-
-		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
 
 		const stream = streamProxy(mockModel, mockContext, {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
+			fetch: fetchMock,
 		});
 
 		const collected = await collectEvents(stream);
@@ -209,12 +208,12 @@ describe("streamProxy — server disconnect without terminal event", () => {
 			},
 		];
 		const body = buildSseBody(events);
-
-		using _hook = hookFetch(() => new Response(body, { status: 200 }));
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
 
 		const stream = streamProxy(mockModel, mockContext, {
 			proxyUrl: "http://localhost:0",
 			authToken: "test",
+			fetch: fetchMock,
 		});
 
 		const collected = await collectEvents(stream);

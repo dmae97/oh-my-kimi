@@ -23,6 +23,7 @@ import {
 	type Message,
 	type MessageAttribution,
 	type Model,
+	OPENAI_MAX_OUTPUT_TOKENS,
 	type OpenAICompat,
 	type ProviderSessionState,
 	type RawSseEvent,
@@ -763,6 +764,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				// and each chunk in a streamed completion carries the same id.
 				output.responseId ||= chunk.id;
 
+				// Aggregators (OpenRouter, Vercel AI Gateway, …) report the upstream
+				// provider that actually served the request via a top-level `provider`
+				// field present on every chunk. Capture the first non-empty value so
+				// callers can attribute routing without re-parsing the raw stream.
+				output.upstreamProvider ||= getOptionalStringProperty(chunk, "provider");
+
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model, premiumRequestsTotal);
 				}
@@ -1197,6 +1204,7 @@ function buildParams(
 		compat.reasoningContentField = "reasoning_content";
 	}
 	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
+	const isOpenRouter = model.baseUrl.includes("openrouter.ai");
 	const messages = convertMessages(model, context, compat);
 	maybeAddAnthropicCacheControl(compat, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";
@@ -1209,7 +1217,18 @@ function buildParams(
 	// before the final answer. Always send max_tokens — match the same
 	// Kimi-family regex used by the compat detector.
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
-	const effectiveMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
+	const requestedMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
+	// OpenRouter fans out to upstreams whose output caps differ from the catalog
+	// value (which tracks the highest-cap provider). A max_tokens above the routed
+	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
+	// GLM-4.7, ~40k) for a higher-cap one, defeating `provider.order`/`only`. Omit
+	// it for OpenRouter so each upstream self-caps and routing is honored. Kimi is
+	// exempt — it derives TPM rate limits from max_tokens (see above).
+	const omitMaxTokensForRouting = isOpenRouter && !isKimiModelId;
+	const effectiveMaxTokens =
+		requestedMaxTokens === undefined || omitMaxTokensForRouting
+			? undefined
+			: Math.min(requestedMaxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
 
 	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
@@ -1404,6 +1423,11 @@ function buildParams(
 function getOptionalNumberProperty(value: object, key: string): number | undefined {
 	const property = Reflect.get(value, key);
 	return typeof property === "number" ? property : undefined;
+}
+
+function getOptionalStringProperty(value: object, key: string): string | undefined {
+	const property = Reflect.get(value, key);
+	return typeof property === "string" && property.length > 0 ? property : undefined;
 }
 
 function getOptionalObjectProperty(value: object, key: string): object | undefined {

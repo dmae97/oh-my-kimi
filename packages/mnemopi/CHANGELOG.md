@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [15.10.8] - 2026-06-09
+### Added
+
+- Added a `fetch` option to `ExtractionClient` to inject a custom fetch implementation for remote LLM requests
+- Added an optional `fetch` option to `extractFacts` to control the transport used for remote extraction calls
+- Added support for passing a custom `fetch` implementation through `complete` and `summarizeMemories` via remote LLM options
+
 ## [15.9.1] - 2026-06-04
 
 ### Breaking Changes

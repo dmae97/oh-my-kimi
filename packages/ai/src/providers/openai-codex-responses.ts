@@ -148,6 +148,8 @@ const CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES = new Set(["response.done", "respons
 // buffers and partial JSON grow without semantic progress.
 const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = 256;
 const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT = 16 * 1024;
+const CODEX_WHITESPACE_LOOP_RETRY_LIMIT = 2;
+const CODEX_WHITESPACE_LOOP_RETRY_DELAY_MS = 250;
 
 function isCodexStreamProgressEvent(event: unknown): boolean {
 	if (isOpenAIResponsesProgressEvent(event)) return true;
@@ -242,6 +244,7 @@ interface CodexStreamRuntime {
 	sawTerminalEvent: boolean;
 	canSafelyReplayWebsocketOverSse: boolean;
 	whitespaceToolCallArgumentsDelta?: CodexWhitespaceToolCallArgumentsDeltaState;
+	whitespaceLoopRetries: number;
 }
 
 interface CodexWhitespaceToolCallArgumentsDeltaState {
@@ -963,6 +966,7 @@ function createCodexStreamRuntime(initial: {
 		nativeOutputItems: [],
 		websocketStreamRetries: 0,
 		providerRetryAttempt: 0,
+		whitespaceLoopRetries: 0,
 		sawTerminalEvent: false,
 		canSafelyReplayWebsocketOverSse: true,
 		whitespaceToolCallArgumentsDelta: undefined,
@@ -1037,14 +1041,17 @@ function observeWhitespaceToolCallArgumentsDelta(
 }
 
 function interruptWhitespaceToolCallArgumentsDelta(
-	requestSetup: CodexRequestSetup,
 	runtime: CodexStreamRuntime,
 	interruption: CodexWhitespaceToolCallArgumentsDeltaInterruption,
 ): never {
-	const error = new Error(interruption.message);
-	requestSetup.requestAbortController.abort(error);
+	// Close the degenerate websocket so the server stops streaming whitespace
+	// frames. Do NOT abort requestSetup.requestAbortController: reopen*RuntimeStream
+	// reuses the same setup across retries, and requestSignal is an AbortSignal.any
+	// over that controller — aborting it stays latched and makes recovery
+	// impossible. Throwing unwinds the for-await, which returns the SSE generator
+	// and cancels its underlying body.
 	runtime.websocketState?.connection?.close("degenerate-tool-call");
-	throw error;
+	throw new CodexWhitespaceToolCallLoopError(interruption.message);
 }
 
 async function processCodexResponseStream(
@@ -1083,9 +1090,8 @@ function handleCodexStreamEvent(args: {
 	runtime: CodexStreamRuntime;
 	rawEvent: Record<string, unknown>;
 	firstTokenTime?: number;
-	requestSetup: CodexRequestSetup;
 }): number | undefined {
-	const { model, output, stream, runtime, rawEvent, requestSetup } = args;
+	const { model, output, stream, runtime, rawEvent } = args;
 	const eventType = typeof rawEvent.type === "string" ? rawEvent.type : "";
 	if (!eventType) return args.firstTokenTime;
 
@@ -1157,7 +1163,7 @@ function handleCodexStreamEvent(args: {
 
 	if (eventType === "response.function_call_arguments.delta") {
 		const interruption = handleToolCallArgumentsDelta(runtime, rawEvent, stream, output, blockIndex);
-		if (interruption) interruptWhitespaceToolCallArgumentsDelta(requestSetup, runtime, interruption);
+		if (interruption) interruptWhitespaceToolCallArgumentsDelta(runtime, interruption);
 		return firstTokenTime;
 	}
 
@@ -1515,6 +1521,9 @@ async function recoverCodexStreamError(
 	runtime: CodexStreamRuntime,
 	error: unknown,
 ): Promise<boolean> {
+	if (await tryRecoverCodexWhitespaceToolCallLoop(context, runtime, error)) {
+		return true;
+	}
 	if (await tryReconnectCodexWebSocketOnConnectionLimit(context, runtime, error)) {
 		return true;
 	}
@@ -1528,6 +1537,76 @@ async function recoverCodexStreamError(
 		return true;
 	}
 	return false;
+}
+
+/**
+ * Pop the half-built degenerate tool-call block (the one whose arguments were
+ * nothing but whitespace) off the output accumulator so it never surfaces in the
+ * caller's message. Any legitimate content produced before it is preserved.
+ */
+function dropTrailingDegenerateToolCall(output: AssistantMessage, runtime: CodexStreamRuntime): void {
+	const block = runtime.currentBlock;
+	if (block && block.type === "toolCall" && output.content[output.content.length - 1] === block) {
+		output.content.pop();
+	}
+	runtime.currentItem = null;
+	runtime.currentBlock = null;
+}
+
+/**
+ * Recover from the degenerate whitespace-only tool-call argument loop
+ * ({@link CodexWhitespaceToolCallLoopError}). The interrupted function call has
+ * no usable arguments, so drop the partial turn and replay the request from
+ * scratch — bounded by {@link CODEX_WHITESPACE_LOOP_RETRY_LIMIT}. Sampling
+ * nondeterminism usually breaks the loop on a fresh attempt; once the budget is
+ * exhausted the original error is surfaced (now without the junk tool call
+ * polluting the message).
+ */
+async function tryRecoverCodexWhitespaceToolCallLoop(
+	context: CodexStreamProcessingContext,
+	runtime: CodexStreamRuntime,
+	error: unknown,
+): Promise<boolean> {
+	if (!(error instanceof CodexWhitespaceToolCallLoopError)) {
+		return false;
+	}
+	// Drop the half-built degenerate tool call whether or not we retry, so it
+	// never reaches the caller's message.
+	dropTrailingDegenerateToolCall(context.output, runtime);
+	if (runtime.whitespaceLoopRetries >= CODEX_WHITESPACE_LOOP_RETRY_LIMIT || context.options?.signal?.aborted) {
+		return false;
+	}
+
+	runtime.whitespaceLoopRetries += 1;
+	const websocketState = context.requestContext.websocketState;
+	if (runtime.transport === "websocket" && websocketState) {
+		resetCodexWebSocketAppendState(websocketState);
+		resetCodexSessionMetadata(websocketState);
+	}
+
+	logCodexDebug("retrying codex turn after whitespace-only tool-call argument loop", {
+		retry: runtime.whitespaceLoopRetries,
+		retryBudget: CODEX_WHITESPACE_LOOP_RETRY_LIMIT,
+		transport: runtime.transport,
+	});
+
+	runtime.currentItem = null;
+	runtime.currentBlock = null;
+	runtime.sawTerminalEvent = false;
+	resetWhitespaceToolCallArgumentsDelta(runtime);
+	resetOutputState(context.output);
+	context.firstTokenTime = undefined;
+	await scheduler.wait(CODEX_WHITESPACE_LOOP_RETRY_DELAY_MS * runtime.whitespaceLoopRetries, {
+		signal: context.requestSetup.requestSignal,
+	});
+
+	if (runtime.transport === "websocket" && websocketState) {
+		await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
+		return true;
+	}
+
+	await reopenCodexSseRuntimeStream(context, runtime, websocketState);
+	return true;
 }
 
 /**
@@ -3038,6 +3117,13 @@ export function convertOpenAICodexResponsesTools(
 
 function getString(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
+}
+
+class CodexWhitespaceToolCallLoopError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "CodexWhitespaceToolCallLoopError";
+	}
 }
 
 class CodexProviderStreamError extends Error {

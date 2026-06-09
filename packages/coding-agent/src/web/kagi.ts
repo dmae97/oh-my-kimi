@@ -6,7 +6,7 @@
  * through the shared {@link AuthStorage} broker (Bearer token), and responses
  * are categorized result buckets rather than the legacy flat object array.
  */
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
 import { withHardTimeout } from "./search/providers/utils";
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
@@ -156,6 +156,7 @@ export interface KagiSearchOptions {
 	recency?: "day" | "week" | "month" | "year";
 	sessionId?: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 export interface KagiSearchSource {
@@ -251,7 +252,9 @@ export async function searchWithKagi(
 		throw new KagiApiError("Kagi credentials not found. Set KAGI_API_KEY or login with 'omp /login kagi'.");
 	}
 
-	const response = await fetch(KAGI_SEARCH_URL, {
+	const fetchImpl = options.fetch ?? fetch;
+
+	const response = await fetchImpl(KAGI_SEARCH_URL, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${apiKey}`,

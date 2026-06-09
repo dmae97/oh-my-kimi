@@ -211,12 +211,14 @@ describe("issue #1746: scrolled reader in a non-WT ConPTY host (Tabby)", () => {
 		});
 	});
 
-	it("keeps POSIX eager streaming rebuilds destructive (win32 guard must not leak)", async () => {
-		// Control case: on POSIX (non-ED3-risk terminal), the same eager
-		// streaming mutation IS allowed to rebuild history live — that is the
-		// documented purpose of setEagerNativeScrollbackRebuild. The win32
-		// deferral must stay scoped to Windows, or streaming tool output would
-		// stop reaching native scrollback on POSIX until the next checkpoint.
+	it("defers unknown-viewport streaming rebuilds on POSIX too (deferral is platform-independent)", async () => {
+		// Companion to the win32 case: an unknown viewport probe is not proof the
+		// reader is at the tail on ANY platform, so #2154 routes every eager
+		// streaming mutation over an unknown viewport through incremental
+		// append/repaint primitives instead of the destructive historyRebuild
+		// (ED3). The deferral is not a win32-only guard — POSIX with an unknown
+		// viewport defers identically, keeping offscreen growth in scrollback
+		// instead of clearing it once per streaming tick. See #2154.
 		await withEnvPatch(CONPTY_HOST_ENV, async () => {
 			await withPlatform("linux", async () => {
 				await withTerminalRisk(false, async () => {
@@ -240,7 +242,7 @@ describe("issue #1746: scrolled reader in a non-WT ConPTY host (Tabby)", () => {
 						tui.requestRender();
 						await settle(term);
 
-						expect(eraseScrollbackCount(writes)).toBe(1);
+						expect(eraseScrollbackCount(writes)).toBe(0);
 					} finally {
 						tui.stop();
 					}

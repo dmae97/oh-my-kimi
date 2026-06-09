@@ -5,7 +5,7 @@
  * and shared quotas across providers.
  */
 import * as z from "zod/v4";
-import type { Provider } from "./types";
+import type { FetchImpl, Provider } from "./types";
 export type UsageUnit = "percent" | "tokens" | "requests" | "usd" | "minutes" | "bytes" | "unknown";
 
 export type UsageStatus = "ok" | "warning" | "exhausted" | "unknown";
@@ -154,7 +154,7 @@ export interface UsageFetchParams {
 
 /** Shared runtime utilities for fetchers. */
 export interface UsageFetchContext {
-	fetch: typeof fetch;
+	fetch: FetchImpl;
 	logger?: UsageLogger;
 	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }

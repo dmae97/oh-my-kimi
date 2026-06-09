@@ -4,10 +4,7 @@ import { OPENCODE_HEADERS } from "@oh-my-pi/pi-ai/registry/oauth/github-copilot"
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { buildAnthropicUrl } from "@oh-my-pi/pi-ai/utils/anthropic-auth";
 
-const originalFetch = global.fetch;
-
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -94,17 +91,18 @@ describe("Anthropic Copilot auth config", () => {
 	it("sends OpenCode Go Anthropic requests with X-Api-Key", async () => {
 		const requestedApiKeys: Array<string | null> = [];
 		const requestedAuthorizations: Array<string | null> = [];
-		global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			requestedApiKeys.push(getRequestHeader(input, init, "X-Api-Key"));
 			requestedAuthorizations.push(getRequestHeader(input, init, "Authorization"));
 			return new Response(JSON.stringify({ error: { type: "authentication_error", message: "Unauthorized" } }), {
 				status: 401,
 				headers: { "Content-Type": "application/json" },
 			});
-		}) as unknown as typeof fetch;
+		});
 
 		const result = await streamAnthropic(makeOpenCodeGoQwen37Model(), testContext, {
 			apiKey: "opencode_test_key",
+			fetch: fetchMock as unknown as typeof fetch,
 		}).result();
 
 		expect(result.stopReason).toBe("error");
@@ -238,17 +236,18 @@ describe("Anthropic Copilot auth config", () => {
 
 	it("forwards initiatorOverride to Copilot message requests", async () => {
 		const requestedInitiators: Array<string | null> = [];
-		global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			requestedInitiators.push(getRequestHeader(input, init, "X-Initiator"));
 			return new Response(JSON.stringify({ error: { type: "authentication_error", message: "Unauthorized" } }), {
 				status: 401,
 				headers: { "Content-Type": "application/json" },
 			});
-		}) as unknown as typeof fetch;
+		});
 
 		const model = makeCopilotClaudeModel();
 		const result = await streamAnthropic(model, testContext, {
 			apiKey: "ghu_test_copilot_token",
+			fetch: fetchMock as unknown as typeof fetch,
 			initiatorOverride: "agent",
 		}).result();
 

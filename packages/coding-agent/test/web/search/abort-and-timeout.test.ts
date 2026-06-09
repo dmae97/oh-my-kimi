@@ -12,7 +12,7 @@
  * helper itself is exercised directly.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
 import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
@@ -23,7 +23,6 @@ import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/provider
 import { searchBrave } from "@oh-my-pi/pi-coding-agent/web/search/providers/brave";
 import { withHardTimeout } from "@oh-my-pi/pi-coding-agent/web/search/providers/utils";
 import type { SearchProviderId, SearchResponse } from "@oh-my-pi/pi-coding-agent/web/search/types";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 
 const FAKE_SESSION = {} as ToolSession;
 const fakeStorage = {
@@ -68,15 +67,15 @@ describe("Anthropic provider hard-timeout wiring", () => {
 		process.env.ANTHROPIC_SEARCH_API_KEY = "sk-test";
 
 		let capturedSignal: AbortSignal | null | undefined;
-		using _hook = hookFetch(async (_input, init) => {
+		const fetchMock: FetchImpl = async (_input, init) => {
 			capturedSignal = init?.signal;
 			return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: {} }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		await searchAnthropic({ query: "ping", system_prompt: "" }, fakeStorage);
+		await searchAnthropic({ query: "ping", system_prompt: "", fetch: fetchMock }, fakeStorage);
 
 		// Without the hard-timeout wrapper, init.signal would be undefined when
 		// the caller didn't supply one — leaving fetch with no cancellation at
@@ -90,15 +89,15 @@ describe("Anthropic provider hard-timeout wiring", () => {
 
 		const ac = new AbortController();
 		let capturedSignal: AbortSignal | null | undefined;
-		using _hook = hookFetch(async (_input, init) => {
+		const fetchMock: FetchImpl = async (_input, init) => {
 			capturedSignal = init?.signal;
 			return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: {} }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		await searchAnthropic({ query: "ping", system_prompt: "", signal: ac.signal }, fakeStorage);
+		await searchAnthropic({ query: "ping", system_prompt: "", signal: ac.signal, fetch: fetchMock }, fakeStorage);
 
 		// The signal handed to fetch must be a *composed* one, not the raw
 		// caller signal: that's what guarantees the hard timeout fires even
@@ -110,17 +109,18 @@ describe("Anthropic provider hard-timeout wiring", () => {
 		process.env.ANTHROPIC_SEARCH_BASE_URL = "https://search.example.test/";
 
 		let capturedUrl: string | undefined;
-		using _hook = hookFetch(async input => {
+		const fetchMock: FetchImpl = async input => {
 			capturedUrl = String(input);
 			return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: {} }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
 		await searchAnthropic({
 			query: "ping",
 			systemPrompt: "",
+			fetch: fetchMock,
 			authStorage: {
 				getApiKey: async () => "sk-fallback",
 				resolver: vi.fn(() => async () => "sk-fallback"),
@@ -141,15 +141,15 @@ describe("Brave provider hard-timeout wiring", () => {
 		process.env.BRAVE_API_KEY = "brave-test-key";
 
 		let capturedSignal: AbortSignal | null | undefined;
-		using _hook = hookFetch(async (_input, init) => {
+		const fetchMock: FetchImpl = async (_input, init) => {
 			capturedSignal = init?.signal;
 			return new Response(JSON.stringify({ web: { results: [] } }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		await searchBrave({ query: "ping" });
+		await searchBrave({ query: "ping", fetch: fetchMock });
 
 		expect(capturedSignal).toBeInstanceOf(AbortSignal);
 		expect(capturedSignal?.aborted).toBe(false);

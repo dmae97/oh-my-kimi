@@ -10,6 +10,7 @@
  * rejected on every call site, not just the first.
  */
 
+import type { FetchImpl } from "../../types";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
@@ -70,10 +71,14 @@ export function validateXAIEndpoint(url: string, field: string): string {
  *
  * Hermes `_xai_oauth_discovery` L3038-3084.
  */
-async function xaiOAuthDiscovery(timeoutMs: number = DISCOVERY_TIMEOUT_MS): Promise<XAIOAuthDiscovery> {
+async function xaiOAuthDiscovery(
+	timeoutMs: number = DISCOVERY_TIMEOUT_MS,
+	fetchOverride?: FetchImpl,
+): Promise<XAIOAuthDiscovery> {
+	const fetchImpl = fetchOverride ?? fetch;
 	let response: Response;
 	try {
-		response = await fetch(XAI_OAUTH_DISCOVERY_URL, {
+		response = await fetchImpl(XAI_OAUTH_DISCOVERY_URL, {
 			method: "GET",
 			headers: { Accept: "application/json" },
 			signal: AbortSignal.timeout(timeoutMs),
@@ -179,6 +184,7 @@ function buildXAIAuthorizeUrl(opts: BuildXAIAuthorizeUrlOptions): string {
  */
 export class XAIOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string = "";
+	#fetch: FetchImpl;
 
 	constructor(ctrl: OAuthController) {
 		super(ctrl, {
@@ -187,6 +193,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 			callbackHostname: XAI_OAUTH_REDIRECT_HOST,
 			redirectUri: `http://${XAI_OAUTH_REDIRECT_HOST}:${XAI_OAUTH_REDIRECT_PORT}${XAI_OAUTH_REDIRECT_PATH}`,
 		} satisfies OAuthCallbackFlowOptions);
+		this.#fetch = ctrl.fetch ?? fetch;
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
@@ -194,7 +201,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 		this.#verifier = pkce.verifier;
 		const nonce = crypto.randomUUID().replace(/-/g, "");
 
-		const discovery = await xaiOAuthDiscovery();
+		const discovery = await xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, this.#fetch);
 		const url = buildXAIAuthorizeUrl({
 			authorizationEndpoint: discovery.authorization_endpoint,
 			redirectUri,
@@ -210,7 +217,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
-		const discovery = await xaiOAuthDiscovery();
+		const discovery = await xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, this.#fetch);
 		const tokenEndpoint = validateXAIEndpoint(discovery.token_endpoint, "token_endpoint");
 
 		const body = new URLSearchParams({
@@ -221,7 +228,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 			code_verifier: this.#verifier,
 		});
 
-		const response = await fetch(tokenEndpoint, {
+		const response = await this.#fetch(tokenEndpoint, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -282,12 +289,13 @@ export async function loginXAIOAuth(ctrl: OAuthController): Promise<OAuthCredent
  * re-validates the cached `token_endpoint` on the refresh hot path so a
  * cached-but-poisoned endpoint cannot silently leak a refresh_token.
  */
-export async function refreshXAIOAuthToken(refreshToken: string): Promise<OAuthCredentials> {
+export async function refreshXAIOAuthToken(refreshToken: string, fetchOverride?: FetchImpl): Promise<OAuthCredentials> {
+	const fetchImpl = fetchOverride ?? fetch;
 	if (typeof refreshToken !== "string" || !refreshToken.trim()) {
 		throw new Error("missing refresh_token");
 	}
 
-	const discovery = await xaiOAuthDiscovery();
+	const discovery = await xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, fetchImpl);
 	const tokenEndpoint = validateXAIEndpoint(discovery.token_endpoint, "token_endpoint");
 
 	const body = new URLSearchParams({
@@ -296,7 +304,7 @@ export async function refreshXAIOAuthToken(refreshToken: string): Promise<OAuthC
 		refresh_token: refreshToken,
 	});
 
-	const response = await fetch(tokenEndpoint, {
+	const response = await fetchImpl(tokenEndpoint, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/x-www-form-urlencoded",

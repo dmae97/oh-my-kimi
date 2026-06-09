@@ -1,7 +1,7 @@
 import * as z from "zod/v4";
 import { getBundledModels } from "../../models";
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../../provider-models/discovery-constants";
-import type { Model } from "../../types";
+import type { FetchImpl, Model } from "../../types";
 
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_PAGE_SIZE = 100;
@@ -52,7 +52,7 @@ export interface GeminiDiscoveryOptions {
 	/** Optional abort signal for HTTP requests. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
-	fetch?: typeof fetch;
+	fetch?: FetchImpl;
 }
 
 /**

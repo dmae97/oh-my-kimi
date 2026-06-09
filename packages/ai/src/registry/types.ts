@@ -9,11 +9,11 @@
  * line in `./registry.ts`.
  */
 import type { ModelManagerOptions } from "../model-manager";
-import type { Api } from "../types";
+import type { Api, FetchImpl } from "../types";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth/types";
 
 /** Config passed to a provider's runtime model-manager factory. */
-export type ModelManagerConfig = { apiKey?: string; baseUrl?: string };
+export type ModelManagerConfig = { apiKey?: string; baseUrl?: string; fetch?: FetchImpl };
 
 /**
  * API-key environment fallback: either a single env var name (e.g.

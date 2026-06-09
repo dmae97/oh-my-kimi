@@ -7,6 +7,7 @@
  * widget lose per-model visibility.
  */
 import { describe, expect, it } from "bun:test";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { openaiCodexUsageProvider } from "@oh-my-pi/pi-ai/usage/openai-codex";
 
 const accessTokenFixture = (() => {
@@ -44,7 +45,7 @@ function makePayload() {
 	};
 }
 
-function fakeFetch(payload: unknown): typeof fetch {
+function fakeFetch(payload: unknown): FetchImpl {
 	const fn = async () =>
 		new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
 	return fn as unknown as typeof fetch;

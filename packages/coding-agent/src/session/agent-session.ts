@@ -229,6 +229,7 @@ import {
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
 	SILENT_ABORT_MARKER,
+	SKILL_PROMPT_MESSAGE_TYPE,
 	stripImagesFromMessage,
 } from "./messages";
 import { formatSessionDumpText } from "./session-dump-format";
@@ -4335,6 +4336,44 @@ export class AgentSession {
 		return { ...message, content: normalized } as T;
 	}
 
+	#createMagicKeywordNotices(text: string): CustomMessage[] {
+		const timestamp = Date.now();
+		const turnBudget = parseTurnBudget(text);
+		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
+		const keywordNotices: CustomMessage[] = [];
+		if (containsUltrathink(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "ultrathink-notice",
+				content: ULTRATHINK_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		}
+		if (containsOrchestrate(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "orchestrate-notice",
+				content: ORCHESTRATE_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		}
+		if (containsWorkflow(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "workflow-notice",
+				content: WORKFLOW_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		}
+		return keywordNotices;
+	}
+
 	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
@@ -4376,42 +4415,7 @@ export class AgentSession {
 		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
 		// agent-initiated turns never trigger them.
-		const keywordNotices: CustomMessage[] = [];
-		if (!options?.synthetic) {
-			const timestamp = Date.now();
-			const turnBudget = parseTurnBudget(expandedText);
-			this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
-			if (containsUltrathink(expandedText)) {
-				keywordNotices.push({
-					role: "custom",
-					customType: "ultrathink-notice",
-					content: ULTRATHINK_NOTICE,
-					display: false,
-					attribution: "user",
-					timestamp,
-				});
-			}
-			if (containsOrchestrate(expandedText)) {
-				keywordNotices.push({
-					role: "custom",
-					customType: "orchestrate-notice",
-					content: ORCHESTRATE_NOTICE,
-					display: false,
-					attribution: "user",
-					timestamp,
-				});
-			}
-			if (containsWorkflow(expandedText)) {
-				keywordNotices.push({
-					role: "custom",
-					customType: "workflow-notice",
-					content: WORKFLOW_NOTICE,
-					display: false,
-					attribution: "user",
-					timestamp,
-				});
-			}
-		}
+		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
 
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
@@ -4481,11 +4485,24 @@ export class AgentSession {
 						.map(content => content.text)
 						.join("");
 
+		let keywordNotices: CustomMessage[] = [];
+		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
+			const details = message.details;
+			let skillArgs = "";
+			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
+				skillArgs = details.args;
+			}
+			keywordNotices = this.#createMagicKeywordNotices(skillArgs);
+		}
+
 		if (this.isStreaming) {
 			if (!options?.streamingBehavior) {
 				throw new AgentBusyError();
 			}
 			await this.sendCustomMessage(message, { deliverAs: options.streamingBehavior });
+			for (const notice of keywordNotices) {
+				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
+			}
 			return;
 		}
 
@@ -4499,7 +4516,10 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 
-		await this.#promptWithMessage(customMessage, textContent, options);
+		await this.#promptWithMessage(customMessage, textContent, {
+			...options,
+			appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
+		});
 	}
 
 	async #promptWithMessage(
@@ -7837,16 +7857,32 @@ export class AgentSession {
 				return "handled";
 			}
 			const reclaimed = result.toolResultsDropped + result.blocksDropped > 0;
-			// Overflow needs the input to actually shrink before the retry; if shake
-			// reclaimed nothing, summarization is the only remaining recovery.
-			if (reason === "overflow" && !reclaimed) {
+			// Detect the dead-loop reported in issue #2119: the threshold check fires,
+			// shake runs, but the resulting context is still above the configured
+			// threshold. The next agent_end would re-trigger shake, which has nothing
+			// new to drop on the second pass, so the loop spins until the user kills it.
+			// Same hazard for "incomplete" (the retry would re-hit the length cap) and
+			// for the existing "overflow + nothing reclaimed" case. In every recovery
+			// reason we hand off to the summarization-driven context-full path so the
+			// situation actually resolves; "idle" is exempt because its 60s+ timer
+			// re-checks usage before re-firing and cannot dead-loop on its own.
+			const contextWindow = this.model?.contextWindow ?? 0;
+			const compactionSettings = this.settings.getGroup("compaction");
+			const postShakeTokens = contextWindow > 0 ? this.#estimatePendingPromptTokens([]) : 0;
+			const stillOverThreshold = shouldCompact(postShakeTokens, contextWindow, compactionSettings);
+			const shouldFallBack = reason !== "idle" && ((reason === "overflow" && !reclaimed) || stillOverThreshold);
+			if (shouldFallBack) {
+				const errorMessage = reclaimed
+					? `Auto-shake reclaimed ~${result.tokensFreed} tokens but context is still above the threshold; falling back to context-full compaction.`
+					: "Auto-shake found nothing eligible to drop; falling back to context-full compaction.";
 				await this.#emitSessionEvent({
 					type: "auto_compaction_end",
 					action,
 					result: undefined,
 					aborted: false,
 					willRetry: false,
-					skipped: true,
+					skipped: !reclaimed,
+					errorMessage,
 				});
 				return "fallback";
 			}

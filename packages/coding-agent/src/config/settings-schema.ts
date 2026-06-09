@@ -2187,6 +2187,12 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"bash.enabled": {
+		type: "boolean",
+		default: true,
+		ui: { tab: "tools", label: "Bash", description: "Enable the bash tool for shell command execution" },
+	},
+
 	// Search and AST tools
 	"find.enabled": {
 		type: "boolean",

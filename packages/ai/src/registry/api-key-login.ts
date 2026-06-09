@@ -82,6 +82,7 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 					baseUrl: config.validation.baseUrl,
 					model: config.validation.model,
 					signal: options.signal,
+					fetch: options.fetch,
 				});
 			} else if (config.validation.kind === "anthropic-messages") {
 				await validateAnthropicCompatibleApiKey({
@@ -90,6 +91,7 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 					baseUrl: config.validation.baseUrl,
 					model: config.validation.model,
 					signal: options.signal,
+					fetch: options.fetch,
 				});
 			} else {
 				await validateApiKeyAgainstModelsEndpoint({
@@ -97,6 +99,7 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 					apiKey: trimmed,
 					modelsUrl: config.validation.modelsUrl,
 					signal: options.signal,
+					fetch: options.fetch,
 				});
 			}
 		}

@@ -188,5 +188,62 @@ describe("AgentSession shake", () => {
 			expect(end).toHaveLength(1);
 			expect(end[0]).toMatchObject({ type: "auto_compaction_end", action: "shake" });
 		});
+
+		it("falls back to context-full when shake cannot drop context below the threshold (regression #2119)", async () => {
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("compaction.thresholdPercent", 1);
+			session.settings.set("contextPromotion.enabled", false);
+
+			// Seed agent state so the post-shake estimate is well above the 1% threshold
+			// (~2K tokens for a 200K window). The mocked shake returns reclaimed=true but
+			// does not modify state, mimicking the dead-loop scenario where shake removes
+			// nothing material yet the threshold check stays positive.
+			session.agent.replaceMessages([
+				{
+					role: "user",
+					content: [{ type: "text", text: "x".repeat(40000) }],
+					timestamp: Date.now(),
+				} as never,
+			]);
+
+			const shakeSpy = vi
+				.spyOn(session, "shake")
+				.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 10 });
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "trigger" }],
+				...apiInfo,
+				stopReason: "stop",
+				usage: {
+					input: 10_000,
+					output: 1_000,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 11_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+			await Bun.sleep(50);
+
+			// Shake fires once. The pre-fix bug auto-continued, which would re-trigger shake
+			// on the next agent_end. The fix replaces that loop with a one-shot fallback.
+			expect(shakeSpy).toHaveBeenCalledTimes(1);
+
+			const shakeEnd = events.find(
+				e => e.type === "auto_compaction_end" && (e as { action?: string }).action === "shake",
+			) as { errorMessage?: string; skipped?: boolean } | undefined;
+			expect(shakeEnd).toBeDefined();
+			expect(shakeEnd?.errorMessage).toMatch(/falling back to context-full/i);
+
+			// Fallback enters the context-full path so the situation actually resolves.
+			const fullStart = events.find(
+				e => e.type === "auto_compaction_start" && (e as { action?: string }).action === "context-full",
+			);
+			expect(fullStart).toBeDefined();
+		});
 	});
 });

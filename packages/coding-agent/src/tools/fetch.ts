@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import type { FetchImpl, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { htmlToMarkdown } from "@oh-my-pi/pi-natives";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { $which, ptree, truncate } from "@oh-my-pi/pi-utils";
@@ -637,6 +637,7 @@ export async function renderHtmlToText(
 	settings: Settings,
 	userSignal: AbortSignal | undefined,
 	storage: AgentStorage | null,
+	fetchOverride?: FetchImpl,
 ): Promise<{ content: string; ok: boolean; method: string }> {
 	const overallSignal = ptree.combineSignals(userSignal, timeout * 1000);
 	const execOptions = {
@@ -650,6 +651,7 @@ export async function renderHtmlToText(
 	// Per-attempt budget for remote endpoints so one stall cannot consume the
 	// whole reader-mode budget and starve the local fallbacks.
 	const remoteSignal = () => ptree.combineSignals(userSignal, remoteBudgetMs);
+	const fetchImpl = fetchOverride ?? fetch;
 
 	const runners: Record<FetchProvider, () => Promise<string | null>> = {
 		// Purely local, no network/subprocess: still works on already-loaded HTML
@@ -670,14 +672,20 @@ export async function renderHtmlToText(
 			if (!findParallelApiKey(storage)) return null;
 			const parallelResult = await extractWithParallel(
 				[url],
-				{ objective: "Extract the main content", excerpts: true, fullContent: false, signal: remoteSignal() },
+				{
+					objective: "Extract the main content",
+					excerpts: true,
+					fullContent: false,
+					signal: remoteSignal(),
+					fetch: fetchImpl,
+				},
 				storage,
 			);
 			const firstDocument = parallelResult.results[0];
 			return firstDocument ? getParallelExtractContent(firstDocument) : null;
 		},
 		jina: async () => {
-			const response = await fetch(`https://r.jina.ai/${url}`, {
+			const response = await fetchImpl(`https://r.jina.ai/${url}`, {
 				headers: { Accept: "text/markdown" },
 				signal: remoteSignal(),
 			});
@@ -1052,6 +1060,7 @@ async function renderUrl(
 	settings: Settings,
 	signal: AbortSignal | undefined,
 	storage: AgentStorage | null,
+	fetchOverride?: FetchImpl,
 ): Promise<FetchRenderResult> {
 	const notes: string[] = [];
 	const fetchedAt = new Date().toISOString();
@@ -1425,7 +1434,15 @@ async function renderUrl(
 		}
 
 		// 5E: Render HTML via the reader-backend chain (native/trafilatura/lynx/parallel/jina)
-		const htmlResult = await renderHtmlToText(finalUrl, rawContent, timeout, settings, signal, storage);
+		const htmlResult = await renderHtmlToText(
+			finalUrl,
+			rawContent,
+			timeout,
+			settings,
+			signal,
+			storage,
+			fetchOverride,
+		);
 		if (!htmlResult.ok) {
 			notes.push("html rendering failed (no reader backend produced usable output)");
 
@@ -1626,7 +1643,7 @@ async function buildReadUrlCacheEntry(
 	}
 
 	const storage = session.settings.getStorage();
-	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal, storage);
+	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal, storage, session.fetch);
 	const output = buildUrlReadOutput(result, result.content);
 	const artifactId = options?.ensureArtifact ? await persistReadUrlArtifact(session, output) : undefined;
 

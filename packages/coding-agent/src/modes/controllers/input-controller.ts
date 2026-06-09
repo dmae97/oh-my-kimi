@@ -32,6 +32,15 @@ function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
 }
 
+/** Minimal contract for any component that can receive a paste payload directly. */
+interface PasteTarget {
+	pasteText(text: string): void;
+}
+
+function hasPasteText(value: unknown): value is PasteTarget {
+	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
+}
+
 const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 // A cached model fires its file-load events in a short burst and then goes silent
 // while onnxruntime builds the session; a genuine download keeps streaming progress
@@ -250,10 +259,24 @@ export class InputController {
 		this.#enhancedPaste = new EnhancedPasteController({
 			write: data => this.ctx.ui.terminal.write(data),
 			pasteText: text => {
-				this.ctx.editor.pasteText(text);
+				// Route enhanced-paste text to the currently focused component when it
+				// exposes a `pasteText` hook (modal Input prompts: OAuth API-key entry,
+				// Perplexity OTP, GitHub Enterprise URL, manual redirect URL). Falling
+				// back to the main editor would have buried the text in the detached
+				// editor while the modal Input had focus (#2127).
+				const focused = this.ctx.ui.getFocused();
+				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+				target.pasteText(text);
 				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
 			},
 			pasteImage: async image => {
+				// Images can only land in the main editor — when a modal Input is
+				// focused, refuse rather than dump the binary blob in a hidden buffer.
+				const focused = this.ctx.ui.getFocused();
+				if (focused && focused !== this.ctx.editor && hasPasteText(focused)) {
+					this.ctx.showStatus("Image paste is not supported in this prompt");
+					return;
+				}
 				await this.#normalizeAndInsertPastedImage(image, `Unsupported pasted image format: ${image.mimeType}`);
 			},
 			showStatus: message => this.ctx.showStatus(message),

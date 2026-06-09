@@ -4,7 +4,7 @@ import {
 	discoverOAuthEndpoints,
 	extractMcpAuthServerUrl,
 } from "@oh-my-pi/pi-coding-agent/mcp/oauth-discovery";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { type FetchInput, mockFetch } from "./helpers/fetch-mock";
 
 describe("mcp oauth discovery", () => {
 	it("extracts Mcp-Auth-Server from transport error headers", () => {
@@ -20,7 +20,7 @@ describe("mcp oauth discovery", () => {
 
 	it("discovers oauth endpoints from auth server metadata", async () => {
 		const calls: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);
 			calls.push(url);
 
@@ -39,7 +39,9 @@ describe("mcp oauth discovery", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const oauth = await discoverOAuthEndpoints("https://mcp.figma.com/mcp", "https://www.figma.com");
+		const oauth = await discoverOAuthEndpoints("https://mcp.figma.com/mcp", "https://www.figma.com", undefined, {
+			fetch: fetchImpl,
+		});
 
 		expect(oauth).toEqual({
 			authorizationUrl: "https://www.figma.com/oauth",
@@ -54,7 +56,7 @@ describe("mcp oauth discovery", () => {
 describe("path-prefixed auth servers", () => {
 	it("discovers endpoints via relative well-known path when server URL has a sub-path", async () => {
 		const calls: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);
 			calls.push(url);
 
@@ -76,7 +78,9 @@ describe("path-prefixed auth servers", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service/mcp");
+		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service/mcp", undefined, undefined, {
+			fetch: fetchImpl,
+		});
 
 		expect(oauth).toEqual({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
@@ -90,7 +94,7 @@ describe("path-prefixed auth servers", () => {
 
 	it("discovers endpoints via single-segment path prefix (no trailing endpoint segment)", async () => {
 		const calls: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);
 			calls.push(url);
 
@@ -110,7 +114,9 @@ describe("path-prefixed auth servers", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service");
+		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service", undefined, undefined, {
+			fetch: fetchImpl,
+		});
 
 		expect(oauth).toEqual({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
@@ -122,7 +128,7 @@ describe("path-prefixed auth servers", () => {
 
 	it("falls back to RFC 8414 path-ful issuer form (/.well-known/oauth-authorization-server/<path>)", async () => {
 		const calls: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);
 			calls.push(url);
 
@@ -139,7 +145,9 @@ describe("path-prefixed auth servers", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service");
+		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service", undefined, undefined, {
+			fetch: fetchImpl,
+		});
 
 		expect(oauth).toEqual({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
@@ -150,7 +158,7 @@ describe("path-prefixed auth servers", () => {
 
 	it("prefers absolute well-known when it succeeds (origin-root servers still work)", async () => {
 		const calls: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);
 			calls.push(url);
 
@@ -167,7 +175,9 @@ describe("path-prefixed auth servers", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const oauth = await discoverOAuthEndpoints("https://mcp.example.com", "https://auth.example.com");
+		const oauth = await discoverOAuthEndpoints("https://mcp.example.com", "https://auth.example.com", undefined, {
+			fetch: fetchImpl,
+		});
 
 		expect(oauth).toEqual({
 			authorizationUrl: "https://auth.example.com/oauth",
@@ -194,7 +204,7 @@ describe("resource_metadata chain", () => {
 
 	it("follows resource_metadata URL to discover authorization servers", async () => {
 		const calls: string[] = [];
-		using _hook = hookFetch(input => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);
 			calls.push(url);
 
@@ -229,6 +239,7 @@ describe("resource_metadata chain", () => {
 			"https://gateway.example.com/my-service/mcp",
 			undefined,
 			"https://gateway.example.com/my-service/.well-known/oauth-protected-resource",
+			{ fetch: fetchImpl },
 		);
 
 		expect(oauth).toEqual({

@@ -101,6 +101,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "plan-review",
+		description: "Re-open the plan review for the latest plan (plan mode only)",
+		handleTui: async (_command, runtime) => {
+			await runtime.ctx.openPlanReview();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "goal",
 		description: "Toggle goal mode (persistent autonomous objective for this session)",
 		subcommands: [

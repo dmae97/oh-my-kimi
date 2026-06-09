@@ -133,6 +133,7 @@ export const enum PiGenAIAttr {
 	RequestMessages = "pi.gen_ai.request.messages",
 	ResponseText = "pi.gen_ai.response.text",
 	ResponseToolCalls = "pi.gen_ai.response.tool_calls",
+	ResponseUpstreamProvider = "pi.gen_ai.response.upstream_provider",
 	UsageTotalTokens = "pi.gen_ai.usage.total_tokens",
 	UsageServerSideTools = "pi.gen_ai.usage.server_tool_requests",
 	CostEstimatedUsd = "pi.gen_ai.cost.estimated_usd",
@@ -1189,6 +1190,9 @@ export function failChatSpan(
 function applyChatResponseAttributes(span: Span, message: AssistantMessage): void {
 	span.setAttribute(GenAIAttr.ResponseModel, message.model);
 	if (message.responseId) span.setAttribute(GenAIAttr.ResponseId, message.responseId);
+	if (message.upstreamProvider) {
+		span.setAttribute(PiGenAIAttr.ResponseUpstreamProvider, message.upstreamProvider);
+	}
 	if (message.ttft != null) span.setAttribute(GenAIAttr.ResponseTimeToFirstChunk, message.ttft / 1000);
 	const finishReason = mapStopReason(message.stopReason);
 	if (finishReason) span.setAttribute(GenAIAttr.ResponseFinishReasons, [finishReason]);

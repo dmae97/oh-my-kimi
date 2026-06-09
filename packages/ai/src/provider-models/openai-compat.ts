@@ -2,7 +2,7 @@ import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import { getGitHubCopilotBaseUrl, OPENCODE_HEADERS, parseGitHubCopilotApiKey } from "../registry/oauth/github-copilot";
-import type { Api, Model, Provider, ThinkingConfig } from "../types";
+import type { Api, FetchImpl, Model, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import {
 	fetchOpenAICompatibleModels,
@@ -56,7 +56,7 @@ function toInputCapabilities(value: unknown): ("text" | "image")[] {
 	return supportsImage ? ["text", "image"] : ["text"];
 }
 
-async function fetchModelsDevPayload(fetchImpl: typeof fetch = fetch): Promise<unknown> {
+async function fetchModelsDevPayload(fetchImpl: FetchImpl = fetch): Promise<unknown> {
 	const response = await fetchImpl(MODELS_DEV_URL, {
 		method: "GET",
 		headers: { Accept: "application/json" },
@@ -195,11 +195,12 @@ function toOllamaNativeBaseUrl(baseUrl: string): string {
 async function fetchOllamaNativeModels(
 	baseUrl: string,
 	resolveMetadata: (modelId: string) => Promise<OllamaResolvedMetadata>,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<Model<"openai-responses">[] | null> {
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	let response: Response;
 	try {
-		response = await fetch(`${nativeBaseUrl}/api/tags`, {
+		response = await fetchImpl(`${nativeBaseUrl}/api/tags`, {
 			method: "GET",
 			headers: { Accept: "application/json" },
 		});
@@ -318,9 +319,10 @@ function getOllamaThinkingConfig(capabilities: string[] | undefined): ThinkingCo
 async function fetchOllamaShowMetadata(
 	nativeBaseUrl: string,
 	modelId: string,
+	fetchImpl: FetchImpl = fetch,
 ): Promise<OllamaShowMetadata | undefined> {
 	try {
-		const response = await fetch(`${nativeBaseUrl}/api/show`, {
+		const response = await fetchImpl(`${nativeBaseUrl}/api/show`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json", Accept: "application/json" },
 			body: JSON.stringify({ model: modelId }),
@@ -355,13 +357,16 @@ async function fetchOllamaShowMetadata(
  * cached so repeated `fetchDynamicModels` calls do not refetch; failed
  * lookups stay uncached so a later refresh can recover.
  */
-function createOllamaMetadataResolver(nativeBaseUrl: string): (modelId: string) => Promise<OllamaResolvedMetadata> {
+function createOllamaMetadataResolver(
+	nativeBaseUrl: string,
+	fetchImpl?: FetchImpl,
+): (modelId: string) => Promise<OllamaResolvedMetadata> {
 	const cache = new Map<string, Promise<OllamaResolvedMetadata>>();
 	return modelId => {
 		const cached = cache.get(modelId);
 		if (cached) return cached;
 		const pending = (async () => {
-			const metadata = await fetchOllamaShowMetadata(nativeBaseUrl, modelId);
+			const metadata = await fetchOllamaShowMetadata(nativeBaseUrl, modelId, fetchImpl);
 			if (!metadata) {
 				cache.delete(modelId);
 				return { contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
@@ -440,7 +445,7 @@ function isLikelyNanoGptTextModelId(id: string): boolean {
 	return !NANO_GPT_NON_TEXT_MODEL_TOKENS.some(token => normalized.includes(token));
 }
 
-type SimpleProviderConfig = { apiKey?: string; baseUrl?: string };
+type SimpleProviderConfig = { apiKey?: string; baseUrl?: string; fetch?: FetchImpl };
 
 export function createSimpleOpenAICompletionsOptions(
 	providerId: Parameters<typeof getBundledModels>[0],
@@ -463,6 +468,7 @@ export function createSimpleOpenAICompletionsOptions(
 						const reference = references.get(defaults.id);
 						return mapWithBundledReference(entry, defaults, reference);
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -489,6 +495,7 @@ function createSimpleOpenAIResponsesOptions(
 						const reference = references.get(defaults.id);
 						return mapWithBundledReference(entry, defaults, reference);
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -521,6 +528,7 @@ function createSimpleAnthropicProviderOptions(
 							baseUrl,
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -533,6 +541,7 @@ function createSimpleAnthropicProviderOptions(
 export interface OpenAIModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): ModelManagerOptions<"openai-responses"> {
@@ -553,6 +562,7 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
 						const reference = references.get(defaults.id);
 						return mapWithBundledReference(entry, defaults, reference);
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -565,6 +575,7 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
 export interface GroqModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelManagerOptions<"openai-completions"> {
@@ -578,6 +589,7 @@ export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelM
 export interface CerebrasModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function cerebrasModelManagerOptions(
@@ -593,6 +605,7 @@ export function cerebrasModelManagerOptions(
 export interface HuggingfaceModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function huggingfaceModelManagerOptions(
@@ -608,6 +621,7 @@ export function huggingfaceModelManagerOptions(
 export interface NvidiaModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function nvidiaModelManagerOptions(
@@ -623,6 +637,7 @@ export function nvidiaModelManagerOptions(
 export interface XaiModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
@@ -632,6 +647,7 @@ export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelMan
 export interface XaiOAuthModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 interface XAICuratedModel {
@@ -861,12 +877,64 @@ export function xaiOAuthModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 6.4 AIML API
+// ---------------------------------------------------------------------------
+
+const AIML_API_NON_CHAT_MODEL_ID_PATTERN =
+	/(?:^|[/:._-])(?:audio|embed|embedding|embeddings|i2i|i2v|image|speech|t2i|t2v|tts|video)(?:$|[/:._-])/i;
+
+const AIML_API_NON_CHAT_MODEL_ID_SUBSTRINGS = ["dall-e", "dalle", "flux", "imagen", "sora", "veo", "whisper"] as const;
+
+export function isLikelyAimlApiChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) return false;
+	return (
+		!AIML_API_NON_CHAT_MODEL_ID_PATTERN.test(normalized) &&
+		!AIML_API_NON_CHAT_MODEL_ID_SUBSTRINGS.some(token => normalized.includes(token))
+	);
+}
+
+export interface AimlApiModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function aimlApiModelManagerOptions(
+	config?: AimlApiModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.aimlapi.com/v1";
+	const references = createBundledReferenceMap<"openai-completions">("aimlapi");
+	return {
+		providerId: "aimlapi",
+		dynamicModelsAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "aimlapi",
+					baseUrl,
+					apiKey,
+					filterModel: (_entry, model) => isLikelyAimlApiChatModelId(model.id),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 6.5 DeepSeek
 // ---------------------------------------------------------------------------
 
 export interface DeepSeekModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function deepseekModelManagerOptions(
@@ -881,6 +949,7 @@ export function deepseekModelManagerOptions(
 export interface ZhipuCodingPlanModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function zhipuCodingPlanModelManagerOptions(
@@ -914,6 +983,7 @@ export function zhipuCodingPlanModelManagerOptions(
 							},
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -998,6 +1068,7 @@ export function stripFireworksDeepSeekThinkingToggle(
 export interface FireworksModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 function toFireworksModelName(entry: OpenAICompatibleModelRecord, fallback: string): string {
@@ -1033,9 +1104,9 @@ function createModelsDevReferenceMap<TApi extends Api>(models: readonly Model<Ap
 	return references;
 }
 
-async function loadModelsDevReferences<TApi extends Api>(): Promise<Map<string, Model<TApi>>> {
+async function loadModelsDevReferences<TApi extends Api>(fetchImpl?: FetchImpl): Promise<Map<string, Model<TApi>>> {
 	try {
-		const payload = await fetchModelsDevPayload();
+		const payload = await fetchModelsDevPayload(fetchImpl);
 		return createModelsDevReferenceMap<TApi>(
 			mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
 		);
@@ -1053,7 +1124,7 @@ export function fireworksModelManagerOptions(
 		providerId: "fireworks",
 		...(apiKey && {
 			fetchDynamicModels: async () => {
-				const modelsDevReferences = await loadModelsDevReferences<"openai-completions">();
+				const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
 				return fetchOpenAICompatibleModels({
 					api: "openai-completions",
 					provider: "fireworks",
@@ -1083,6 +1154,7 @@ export function fireworksModelManagerOptions(
 							),
 						};
 					},
+					fetch: config?.fetch,
 				});
 			},
 		}),
@@ -1096,6 +1168,7 @@ export function fireworksModelManagerOptions(
 export interface FirepassModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 /**
@@ -1120,6 +1193,7 @@ export function firepassModelManagerOptions(
 export interface WaferModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 const WAFER_DEFAULT_BASE_URL = "https://pass.wafer.ai/v1";
@@ -1253,6 +1327,7 @@ function createWaferOptions(
 						return wafer?.tier === "pass_included";
 					},
 					mapModel: (entry, defaults) => mapWaferModel(providerId, baseUrl, entry, defaults),
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -1277,6 +1352,7 @@ export function waferServerlessModelManagerOptions(
 export interface MistralModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function mistralModelManagerOptions(
@@ -1292,6 +1368,7 @@ export function mistralModelManagerOptions(
 export interface OpenCodeModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 function normalizeOpenCodeBasePath(baseUrl: string | undefined, fallbackBasePath: string): string {
@@ -1339,6 +1416,7 @@ function openCodeModelManagerOptions(
 							maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -1359,6 +1437,7 @@ export function opencodeGoModelManagerOptions(config?: OpenCodeModelManagerConfi
 export interface OllamaModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
@@ -1366,7 +1445,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 	const baseUrl = normalizeOllamaBaseUrl(config?.baseUrl);
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	const references = createBundledReferenceMap<"openai-responses">("ollama" as Parameters<typeof getBundledModels>[0]);
-	const resolveMetadata = createOllamaMetadataResolver(nativeBaseUrl);
+	const resolveMetadata = createOllamaMetadataResolver(nativeBaseUrl, config?.fetch);
 	return {
 		providerId: "ollama",
 		fetchDynamicModels: async () => {
@@ -1387,6 +1466,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 					}
 					return mapWithBundledReference(entry, defaults, reference);
 				},
+				fetch: config?.fetch,
 			});
 			if (openAiCompatible && openAiCompatible.length > 0) {
 				await Promise.all(
@@ -1405,7 +1485,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 				);
 				return openAiCompatible;
 			}
-			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveMetadata);
+			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveMetadata, config?.fetch);
 			if (nativeFallback && nativeFallback.length > 0) {
 				for (const model of nativeFallback) applyOllamaReasoningCompat(model);
 				return nativeFallback;
@@ -1422,6 +1502,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 export interface OpenRouterModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function openrouterModelManagerOptions(
@@ -1474,6 +1555,7 @@ export function openrouterModelManagerOptions(
 						}),
 					};
 				},
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -1545,6 +1627,7 @@ function getZenMuxCacheWritePrice(pricings: Record<string, unknown> | undefined)
 export interface ZenMuxModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function zenmuxModelManagerOptions(config?: ZenMuxModelManagerConfig): ModelManagerOptions<Api> {
@@ -1581,6 +1664,7 @@ export function zenmuxModelManagerOptions(config?: ZenMuxModelManagerConfig): Mo
 							maxTokens: toPositiveNumber(entry.max_completion_tokens, defaults.maxTokens),
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -1593,6 +1677,7 @@ export function zenmuxModelManagerOptions(config?: ZenMuxModelManagerConfig): Mo
 export interface KiloModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function kiloModelManagerOptions(config?: KiloModelManagerConfig): ModelManagerOptions<"openai-completions"> {
@@ -1606,6 +1691,7 @@ export function kiloModelManagerOptions(config?: KiloModelManagerConfig): ModelM
 				provider: "kilo",
 				baseUrl,
 				apiKey,
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -1617,6 +1703,7 @@ export function kiloModelManagerOptions(config?: KiloModelManagerConfig): ModelM
 export interface AlibabaCodingPlanModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function alibabaCodingPlanModelManagerOptions(
@@ -1637,6 +1724,7 @@ export function alibabaCodingPlanModelManagerOptions(
 					const reference = references.get(defaults.id);
 					return mapWithBundledReference(entry, defaults, reference);
 				},
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -1648,6 +1736,7 @@ export function alibabaCodingPlanModelManagerOptions(
 export interface VercelAiGatewayModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { baseUrl: string; catalogBaseUrl: string } {
@@ -1701,6 +1790,7 @@ export function vercelAiGatewayModelManagerOptions(
 						maxTokens: typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens,
 					};
 				},
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -1712,6 +1802,7 @@ export function vercelAiGatewayModelManagerOptions(
 export interface KimiCodeModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function kimiCodeModelManagerOptions(
@@ -1752,6 +1843,7 @@ export function kimiCodeModelManagerOptions(
 							},
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -1764,6 +1856,7 @@ export function kimiCodeModelManagerOptions(
 export interface LmStudioModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function lmStudioModelManagerOptions(
@@ -1784,6 +1877,7 @@ export function lmStudioModelManagerOptions(
 					const reference = references.get(defaults.id);
 					return mapWithBundledReference(entry, defaults, reference);
 				},
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -1795,6 +1889,7 @@ export function lmStudioModelManagerOptions(
 export interface SyntheticModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function syntheticModelManagerOptions(
@@ -1834,6 +1929,7 @@ export function syntheticModelManagerOptions(
 							maxTokens: toPositiveNumber(entry.max_tokens, reference?.maxTokens ?? 8192),
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -1846,6 +1942,7 @@ export function syntheticModelManagerOptions(
 export interface VeniceModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function veniceModelManagerOptions(
@@ -1870,6 +1967,7 @@ export function veniceModelManagerOptions(
 						compat: { ...model.compat, supportsUsageInStreaming: false },
 					};
 				},
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -1881,6 +1979,7 @@ export function veniceModelManagerOptions(
 export interface TogetherModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function togetherModelManagerOptions(
@@ -1896,6 +1995,7 @@ export function togetherModelManagerOptions(
 export interface MoonshotModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function moonshotModelManagerOptions(
@@ -1936,6 +2036,7 @@ export function moonshotModelManagerOptions(
 									: undefined),
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -1948,6 +2049,7 @@ export function moonshotModelManagerOptions(
 export interface QwenPortalModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function qwenPortalModelManagerOptions(
@@ -1963,6 +2065,7 @@ export function qwenPortalModelManagerOptions(
 export interface QianfanModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function qianfanModelManagerOptions(
@@ -1978,6 +2081,7 @@ export function qianfanModelManagerOptions(
 export interface CloudflareAiGatewayModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function cloudflareAiGatewayModelManagerOptions(
@@ -2001,6 +2105,7 @@ export type XiaomiTokenPlanRegion = "sgp" | "ams" | "cn";
 export interface XiaomiModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 	providerId?: Provider;
 	tokenPlanRegion?: XiaomiTokenPlanRegion;
 }
@@ -2051,6 +2156,7 @@ export function xiaomiModelManagerOptions(
 					name: toModelName(entry.display_name, model.name),
 				};
 			},
+			fetch: config?.fetch,
 		});
 	return {
 		providerId,
@@ -2075,6 +2181,7 @@ export function xiaomiModelManagerOptions(
 export interface LiteLLMModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function litellmModelManagerOptions(
@@ -2090,7 +2197,7 @@ export function litellmModelManagerOptions(
 		// enrich discovered ids against models.dev — the same reference source the
 		// gateway providers (fireworks et al.) use — instead of a bundled map.
 		fetchDynamicModels: async () => {
-			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">();
+			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
 			return fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "litellm",
@@ -2098,6 +2205,7 @@ export function litellmModelManagerOptions(
 				apiKey,
 				mapModel: (entry, defaults) =>
 					mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id)),
+				fetch: config?.fetch,
 			});
 		},
 	};
@@ -2110,6 +2218,7 @@ export function litellmModelManagerOptions(
 export interface VllmModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelManagerOptions<"openai-completions"> {
@@ -2131,6 +2240,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
 					};
 				},
+				fetch: config?.fetch,
 			}),
 	};
 }
@@ -2142,6 +2252,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 export interface NanoGptModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function nanoGptModelManagerOptions(
@@ -2176,6 +2287,7 @@ export function nanoGptModelManagerOptions(
 						}
 						return isLikelyNanoGptTextModelId(model.id);
 					},
+					fetch: config?.fetch,
 				});
 				if (!models) return null;
 				// Mark base models as reasoning-capable when a :thinking variant existed.
@@ -2197,6 +2309,7 @@ export function nanoGptModelManagerOptions(
 export interface GithubCopilotModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 function inferCopilotApi(modelId: string): Api {
@@ -2327,6 +2440,7 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 								: {}),
 						};
 					},
+					fetch: config?.fetch,
 				}),
 		}),
 	};
@@ -2339,6 +2453,7 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 export interface AnthropicModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
+	fetch?: FetchImpl;
 }
 
 export function anthropicModelManagerOptions(
@@ -2349,12 +2464,12 @@ export function anthropicModelManagerOptions(
 	return {
 		providerId: "anthropic",
 		modelsDev: {
-			fetch: fetchModelsDevPayload,
+			fetch: () => fetchModelsDevPayload(config?.fetch),
 			map: payload => mapAnthropicModelsDev(payload, baseUrl),
 		},
 		...(apiKey && {
 			fetchDynamicModels: async () => {
-				const modelsDevModels = await fetchModelsDevPayload()
+				const modelsDevModels = await fetchModelsDevPayload(config?.fetch)
 					.then(payload => mapAnthropicModelsDev(payload, baseUrl))
 					.catch(() => []);
 				const references = buildAnthropicReferenceMap(modelsDevModels);
@@ -2386,6 +2501,7 @@ export function anthropicModelManagerOptions(
 								baseUrl,
 							};
 						},
+						fetch: config?.fetch,
 					}) ?? null
 				);
 			},

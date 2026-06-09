@@ -178,7 +178,13 @@ it("preserves latest Anthropic thinking blocks even when model id changes", () =
 	expect(transformedAssistant?.content[1]).toEqual(assistant.content[1]);
 });
 
-it("strips invalid thinking signatures from aborted Anthropic replay messages", () => {
+it("preserves a completed thinking signature on an aborted turn interrupted during later output", () => {
+	// When a turn is aborted, only the block that was streaming at the abort point can carry a
+	// partial (invalid) signature. A thinking block followed by another block already completed
+	// — Anthropic emits its signature at content_block_stop before the next block starts — so its
+	// signature is whole and must survive transform. Interrupting during the visible text output
+	// after thinking finished is the common case; dropping the valid signature and replaying it
+	// empty makes Anthropic reject the request with 400 "Invalid `signature` in `thinking` block".
 	const model: Model<"anthropic-messages"> = {
 		api: "anthropic-messages",
 		provider: "anthropic",
@@ -194,7 +200,7 @@ it("strips invalid thinking signatures from aborted Anthropic replay messages", 
 	const assistant: AssistantMessage = {
 		role: "assistant",
 		content: [
-			{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "sig_partial" },
+			{ type: "thinking", thinking: "completed reasoning", thinkingSignature: "sig_complete" },
 			{ type: "text", text: "partial answer" },
 		],
 		api: "anthropic-messages",
@@ -220,8 +226,8 @@ it("strips invalid thinking signatures from aborted Anthropic replay messages", 
 
 	expect(transformedAssistant).toBeDefined();
 	const thinkingBlock = transformedAssistant?.content[0];
-	expect(thinkingBlock).toMatchObject({ type: "thinking", thinking: "partial reasoning" });
-	expect(
-		thinkingBlock && "thinkingSignature" in thinkingBlock ? thinkingBlock.thinkingSignature : undefined,
-	).toBeUndefined();
+	expect(thinkingBlock).toMatchObject({ type: "thinking", thinking: "completed reasoning" });
+	expect(thinkingBlock && "thinkingSignature" in thinkingBlock ? thinkingBlock.thinkingSignature : undefined).toBe(
+		"sig_complete",
+	);
 });

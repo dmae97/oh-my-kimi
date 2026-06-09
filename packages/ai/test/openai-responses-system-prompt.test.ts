@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 // Non-reasoning model on api.openai.com (canonical path)
 const gpt4oMiniModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-responses">;
@@ -45,13 +43,12 @@ async function captureRequestBody(
 	context: Context,
 ): Promise<Record<string, unknown>> {
 	let captured: Record<string, unknown> = {};
-	const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		captured = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
 		return createSseResponse();
 	});
-	global.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect }) as typeof fetch;
 
-	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key" });
+	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key", fetch: fetchMock });
 	for await (const event of stream) {
 		if (event.type === "done" || event.type === "error") break;
 	}
@@ -59,7 +56,6 @@ async function captureRequestBody(
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 

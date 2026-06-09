@@ -4,7 +4,7 @@
  * Handles /mcp subcommands for managing MCP servers.
  */
 import * as path from "node:path";
-import { Spacer, Text } from "@oh-my-pi/pi-tui";
+import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../../capability/types";
 import { analyzeAuthError, discoverOAuthEndpoints, MCPManager } from "../../mcp";
@@ -36,6 +36,7 @@ import {
 import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../mcp/types";
 import type { OAuthCredential } from "../../session/auth-storage";
 import { shortenPath } from "../../tools/render-utils";
+import { urlHyperlink } from "../../tui";
 import { openPath } from "../../utils/open";
 import { ChatBlock } from "../components/chat-block";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
@@ -49,6 +50,26 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<T>();
 	const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
 	return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
+/** Renders the MCP OAuth fallback URL without hard-wrapping the copy target. */
+export class MCPAuthorizationLinkPrompt implements Component {
+	readonly #url: string;
+
+	constructor(url: string) {
+		this.#url = url;
+	}
+
+	invalidate(): void {}
+
+	render(_width: number): string[] {
+		const link = urlHyperlink(this.#url, "Click here to authorize");
+		return [
+			` ${theme.fg("success", "Open authorization URL:")}`,
+			` ${theme.fg("accent", link)}`,
+			` ${theme.fg("muted", `Copy URL: ${replaceTabs(this.#url)}`)}`,
+		];
+	}
 }
 
 /**
@@ -610,15 +631,13 @@ export class MCPCommandController {
 							block.addChild(new Text(theme.fg("success", "→ Opening browser automatically..."), 1, 0));
 							block.addChild(new Spacer(1));
 							block.addChild(new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0));
-							block.addChild(new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0));
-							block.addChild(new Text(theme.fg("accent", info.url), 1, 0));
+							block.addChild(new MCPAuthorizationLinkPrompt(info.url));
 							this.ctx.ui.requestRender();
 						} catch (_error) {
 							// Show error if browser doesn't open
 							block.addChild(new Spacer(1));
 							block.addChild(new Text(theme.fg("warning", "→ Could not open browser automatically"), 1, 0));
-							block.addChild(new Text(theme.fg("success", "Copy this exact URL in your browser:"), 1, 0));
-							block.addChild(new Text(theme.fg("accent", info.url), 1, 0));
+							block.addChild(new MCPAuthorizationLinkPrompt(info.url));
 							this.ctx.ui.requestRender();
 						}
 					},

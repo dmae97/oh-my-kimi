@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../../provider-models/discovery-constants";
-import type { Api, Model, Provider } from "../../types";
+import type { Api, FetchImpl, Model, Provider } from "../../types";
 
 const MODELS_PATH = "/models";
 
@@ -81,7 +81,7 @@ export interface FetchOpenAICompatibleModelsOptions<TApi extends Api> {
 	/** Optional AbortSignal for request cancellation. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for testing/custom runtimes. */
-	fetch?: typeof globalThis.fetch;
+	fetch?: FetchImpl;
 	/**
 	 * Optional post-normalization filter.
 	 * Return false to skip a model.

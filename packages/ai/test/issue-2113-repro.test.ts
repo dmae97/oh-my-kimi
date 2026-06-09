@@ -16,18 +16,12 @@
  * The fix marks every `kimi-k2.x` id as reasoning + vision in the
  * moonshot discovery mapper and stamps default thinking metadata.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { moonshotModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 function moonshotKimiModel(id: string, reasoning: boolean): Model<"openai-completions"> {
 	return {
@@ -84,16 +78,15 @@ async function runHiTurn(
 	model: Model<"openai-completions">,
 ): Promise<{ captured: CapturedRequest; assistant: AssistantMessage }> {
 	const captured: CapturedRequest = { url: "", body: {} };
-	const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+	const fetchMock = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		captured.url = url;
 		const raw = typeof init?.body === "string" ? init.body : "";
 		captured.body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 		return buildMockMoonshotResponse();
-	};
-	global.fetch = Object.assign(fetchImpl, { preconnect: originalFetch.preconnect });
+	}) as typeof fetch;
 
-	const stream = streamOpenAICompletions(model, basicContext(), { apiKey: "test-key" });
+	const stream = streamOpenAICompletions(model, basicContext(), { apiKey: "test-key", fetch: fetchMock });
 	for await (const _ of stream) {
 		// drain until terminal event
 	}
@@ -103,8 +96,7 @@ async function runHiTurn(
 
 describe("issue #2113 — moonshot kimi-k2.6 discovery and wire format", () => {
 	it("moonshot discovery mapper marks kimi-k2.6 as reasoning + vision with thinking metadata", async () => {
-		const opts = moonshotModelManagerOptions({ apiKey: "test-key" });
-		const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+		const fetchMock = (async (input: string | URL | Request): Promise<Response> => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			expect(url).toContain("api.moonshot.ai/v1/models");
 			const body = {
@@ -119,10 +111,9 @@ describe("issue #2113 — moonshot kimi-k2.6 discovery and wire format", () => {
 				status: 200,
 				headers: { "content-type": "application/json" },
 			});
-		};
-		global.fetch = Object.assign(fetchImpl, { preconnect: originalFetch.preconnect });
+		}) as typeof fetch;
 
-		const models = await opts.fetchDynamicModels?.();
+		const models = await moonshotModelManagerOptions({ apiKey: "test-key", fetch: fetchMock }).fetchDynamicModels?.();
 		expect(models).toBeDefined();
 		const byId = new Map(models?.map(m => [m.id, m]));
 
@@ -158,18 +149,18 @@ describe("issue #2113 — moonshot kimi-k2.6 discovery and wire format", () => {
 	it("wire body includes thinking.keep='all' when reasoning is explicitly requested", async () => {
 		const model = moonshotKimiModel("kimi-k2.6", true);
 		const captured: CapturedRequest = { url: "", body: {} };
-		const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const fetchMock = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			captured.url = url;
 			const raw = typeof init?.body === "string" ? init.body : "";
 			captured.body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 			return buildMockMoonshotResponse();
-		};
-		global.fetch = Object.assign(fetchImpl, { preconnect: originalFetch.preconnect });
+		}) as typeof fetch;
 
 		const stream = streamOpenAICompletions(model, basicContext(), {
 			apiKey: "test-key",
 			reasoning: "high",
+			fetch: fetchMock,
 		});
 		for await (const _ of stream) {
 			// drain

@@ -1,6 +1,6 @@
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ToolChoice } from "@oh-my-pi/pi-ai";
+import type { FetchImpl, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -60,11 +60,7 @@ import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { YieldTool } from "./yield";
 
-// Exa MCP tools (22 tools)
-
 export * from "../edit";
-export * from "../exa";
-export type * from "../exa/types";
 export * from "../goals";
 export * from "../lsp";
 export * from "../session/streaming-output";
@@ -147,6 +143,8 @@ export interface ToolSession {
 	cwd: string;
 	/** Whether UI is available */
 	hasUI: boolean;
+	/** Optional fetch implementation injected into the URL read pipeline (tests, proxies). Defaults to global fetch. */
+	fetch?: FetchImpl;
 	/** Skip Python kernel availability check and warmup */
 	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
@@ -497,7 +495,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const isToolAllowed = (name: string) => {
 		if (name === "goal") return goalEnabled && goalModeActive;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
-		if (name === "bash") return true;
+		if (name === "bash") return session.settings.get("bash.enabled");
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo") return !includeYield && session.settings.get("todo.enabled");

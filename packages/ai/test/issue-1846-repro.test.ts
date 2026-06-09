@@ -5,7 +5,7 @@ import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-sto
 import { xiaomiModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 import { convertMessages, detectCompat } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
-import type { AssistantMessage, Model, ThinkingContent, ToolCall } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, FetchImpl, Model, ThinkingContent, ToolCall } from "@oh-my-pi/pi-ai/types";
 
 const TP_KEY = "tp-ci1p8t1w4e1sbxgyc8v65tnrjbzro287igmvyf25van9mt76";
 const SGP_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";
@@ -61,14 +61,10 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 	it("logs into the selected Token Plan region and stores that provider key", async () => {
 		const seen: string[] = [];
 		let authUrl = "";
-		const fetchMock = Object.assign(
-			async (input: string | URL | Request) => {
-				seen.push(String(input));
-				return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-			},
-			{ preconnect() {} },
-		);
-		vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+		const fetchMock: FetchImpl = vi.fn(async (input: string | URL | Request) => {
+			seen.push(String(input));
+			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+		});
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
 		await storage.reload();
@@ -78,6 +74,7 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 				authUrl = info.url;
 			},
 			onPrompt: async () => TP_KEY,
+			fetch: fetchMock,
 		});
 
 		expect(seen).toEqual([`${SGP_BASE_URL}/chat/completions`]);
@@ -87,20 +84,17 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 	});
 
 	it("discovers Token Plan models under the regional provider id", async () => {
-		const fetchMock = Object.assign(
-			async (_input: string | URL | Request) => {
-				return new Response(JSON.stringify({ data: [{ id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro" }] }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			},
-			{ preconnect() {} },
-		);
-		vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+		const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request) => {
+			return new Response(JSON.stringify({ data: [{ id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro" }] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
 		const opts = xiaomiModelManagerOptions({
 			apiKey: TP_KEY,
 			providerId: "xiaomi-token-plan-sgp",
 			tokenPlanRegion: "sgp",
+			fetch: fetchMock,
 		});
 
 		const models = await opts.fetchDynamicModels?.();

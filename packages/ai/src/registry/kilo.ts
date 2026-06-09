@@ -18,7 +18,8 @@ interface KiloDeviceAuthPollResponse {
 }
 
 export async function loginKilo(callbacks: OAuthController): Promise<OAuthCredentials> {
-	const initiateResponse = await fetch(`${KILO_DEVICE_AUTH_BASE_URL}/codes`, {
+	const fetchImpl = callbacks.fetch ?? fetch;
+	const initiateResponse = await fetchImpl(`${KILO_DEVICE_AUTH_BASE_URL}/codes`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 	});
@@ -49,7 +50,7 @@ export async function loginKilo(callbacks: OAuthController): Promise<OAuthCreden
 			throw new Error("Login cancelled");
 		}
 
-		const pollResponse = await fetch(`${KILO_DEVICE_AUTH_BASE_URL}/codes/${encodeURIComponent(userCode)}`);
+		const pollResponse = await fetchImpl(`${KILO_DEVICE_AUTH_BASE_URL}/codes/${encodeURIComponent(userCode)}`);
 		if (pollResponse.status === 202) {
 			await Bun.sleep(POLL_INTERVAL_MS);
 			continue;

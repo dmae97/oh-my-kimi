@@ -16,6 +16,8 @@ There are two different bash execution surfaces in coding-agent:
 
 Both eventually use `executeBash()` in `src/exec/bash-executor.ts` for non-PTY execution, but only the tool-call path runs normalization/interception, optional managed background-job handling, and tool renderer logic.
 
+Set `bash.enabled: false` in settings to remove the model-facing `bash` tool from the active tool registry. This does not disable user-initiated bang commands or RPC `bash` requests.
+
 ## End-to-end tool-call pipeline
 
 ## 1) Input handling and parameter merge

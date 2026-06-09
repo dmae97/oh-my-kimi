@@ -10,7 +10,7 @@
  * the wire id (no rewrite). These tests defend the bundled catalog contract and
  * the case-sensitive id pass-through against the wire.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { createModelManager } from "@oh-my-pi/pi-ai/model-manager";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import {
@@ -18,13 +18,7 @@ import {
 	waferServerlessModelManagerOptions,
 } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 
 function sseResponse(events: unknown[]): Response {
 	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
@@ -61,11 +55,11 @@ describe("Wafer Pass provider", () => {
 	it("preserves the catalog id verbatim on the wire (no rewrite, case-sensitive)", async () => {
 		const model = getBundledModel<"openai-completions">("wafer-pass", "GLM-5.1");
 		const captured: { url: string | null; body: string | null } = { url: null, body: null };
-		global.fetch = (async (input: unknown, init?: RequestInit) => {
-			captured.url = typeof input === "string" ? input : input instanceof URL ? input.toString() : String(input);
+		const fetchMock: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			captured.url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			captured.body = typeof init?.body === "string" ? init.body : null;
 			return sseResponse(["[DONE]"]);
-		}) as typeof global.fetch;
+		};
 
 		const context: Context = {
 			systemPrompt: ["t"],
@@ -73,6 +67,7 @@ describe("Wafer Pass provider", () => {
 		};
 		const stream = streamOpenAICompletions(model as Model<"openai-completions">, context, {
 			apiKey: "wfr_test",
+			fetch: fetchMock,
 		});
 		for await (const _event of stream) {
 			/* drain */
@@ -165,12 +160,12 @@ describe("Wafer dynamic discovery mapper", () => {
 	//  - leave `thinkingFormat` unset for deepseek (uses `reasoning_effort`)
 	//    and unknown upstreams, so `detectOpenAICompat` picks the safe default
 	//    from the id pattern at request time.
-	function mockWaferModelsResponse(entries: Array<Record<string, unknown>>): void {
-		global.fetch = (async () =>
+	function mockWaferModelsResponse(entries: Array<Record<string, unknown>>): FetchImpl {
+		return async () =>
 			new Response(JSON.stringify({ object: "list", data: entries }), {
 				status: 200,
 				headers: { "content-type": "application/json" },
-			})) as unknown as typeof global.fetch;
+			});
 	}
 
 	function makeWaferEntry(id: string, upstream: string, opts: { reasoning?: boolean; vision?: boolean } = {}) {
@@ -199,7 +194,7 @@ describe("Wafer dynamic discovery mapper", () => {
 	}
 
 	it("picks thinkingFormat from the wafer.provider envelope per upstream", async () => {
-		mockWaferModelsResponse([
+		const fetchMock = mockWaferModelsResponse([
 			makeWaferEntry("GLM-fake", "zai", { reasoning: true }),
 			makeWaferEntry("Kimi-fake", "moonshotai", { reasoning: true }),
 			makeWaferEntry("qwen-fake", "qwen", { reasoning: true }),
@@ -208,7 +203,7 @@ describe("Wafer dynamic discovery mapper", () => {
 			makeWaferEntry("nothink-fake", "zai", { reasoning: false }),
 		]);
 
-		const manager = createModelManager(waferServerlessModelManagerOptions({ apiKey: "wfr_test" }));
+		const manager = createModelManager(waferServerlessModelManagerOptions({ apiKey: "wfr_test", fetch: fetchMock }));
 		const { models } = await manager.refresh("online");
 
 		const byId = new Map(models.map(m => [m.id, m as Model<"openai-completions">]));
@@ -253,15 +248,17 @@ describe("Wafer dynamic discovery mapper", () => {
 			},
 		};
 
-		mockWaferModelsResponse([sharedEntry]);
-		const passManager = createModelManager(waferPassModelManagerOptions({ apiKey: "wfr_test" }));
+		const fetchMock = mockWaferModelsResponse([sharedEntry]);
+		const passManager = createModelManager(waferPassModelManagerOptions({ apiKey: "wfr_test", fetch: fetchMock }));
 		const passResult = await passManager.refresh("online");
 		const passModel = passResult.models.find(m => m.id === "Shared-fake");
 		expect(passModel).toBeDefined();
 		expect(passModel?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
-		mockWaferModelsResponse([sharedEntry]);
-		const srvManager = createModelManager(waferServerlessModelManagerOptions({ apiKey: "wfr_test" }));
+		const srvFetchMock = mockWaferModelsResponse([sharedEntry]);
+		const srvManager = createModelManager(
+			waferServerlessModelManagerOptions({ apiKey: "wfr_test", fetch: srvFetchMock }),
+		);
 		const srvResult = await srvManager.refresh("online");
 		const srvModel = srvResult.models.find(m => m.id === "Shared-fake");
 		expect(srvModel).toBeDefined();

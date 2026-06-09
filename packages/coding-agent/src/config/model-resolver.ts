@@ -118,6 +118,43 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 	};
 }
 
+const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+
+/**
+ * Split a trailing `@<upstream>` provider-routing selector off a model pattern.
+ *
+ * `openrouter/z-ai/glm-4.7@cerebras` -> base `openrouter/z-ai/glm-4.7`, upstream
+ * `cerebras`. A `:thinking` suffix after the slug is kept on the base
+ * (`...@cerebras:high` -> base `...:high`). Returns undefined when there is no
+ * `@` or the suffix is not a bare provider slug, so model ids that legitimately
+ * contain `@` (`claude-opus-4-8@default`, `workers-ai/@cf/...`) are never split.
+ */
+function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
+	const at = pattern.lastIndexOf("@");
+	if (at <= 0) return undefined;
+	const rest = pattern.slice(at + 1);
+	const colon = rest.indexOf(":");
+	const upstream = colon === -1 ? rest : rest.slice(0, colon);
+	if (!UPSTREAM_ROUTING_SLUG.test(upstream)) return undefined;
+	const trailing = colon === -1 ? "" : rest.slice(colon);
+	return { base: pattern.slice(0, at) + trailing, upstream };
+}
+
+/** OpenRouter and Vercel AI Gateway are the aggregators that honor per-request upstream routing. */
+function supportsUpstreamRouting(model: Model<Api>): boolean {
+	return model.baseUrl.includes("openrouter.ai") || model.baseUrl.includes("ai-gateway.vercel.sh");
+}
+
+/** Pin a resolved aggregator model to a single upstream provider via its compat routing block. */
+function applyUpstreamRouting(model: Model<Api>, upstream: string): Model<Api> {
+	const aggregatorModel = model as Model<"openai-completions">;
+	const routing = { only: [upstream] };
+	const compat = model.baseUrl.includes("ai-gateway.vercel.sh")
+		? { ...aggregatorModel.compat, vercelGatewayRouting: routing }
+		: { ...aggregatorModel.compat, openRouterRouting: routing };
+	return { ...model, compat } as Model<Api>;
+}
+
 const kProviderModelIndex = Symbol("model-resolver.providerIndex");
 type ModelsWithProviderIndex = readonly Model<Api>[] & {
 	[kProviderModelIndex]?: Map<string, Model<Api> | null>;
@@ -442,6 +479,8 @@ export interface ParsedModelResult {
 	model: Model<Api> | undefined;
 	/** Thinking level if explicitly specified in pattern, undefined otherwise */
 	thinkingLevel?: ThinkingLevel;
+	/** Upstream provider slug from an `@upstream` routing selector, if present. */
+	upstream?: string;
 	warning: string | undefined;
 	explicitThinkingLevel: boolean;
 }
@@ -523,7 +562,20 @@ export function parseModelPattern(
 	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
 ): ParsedModelResult {
 	const context = buildPreferenceContext(availableModels, preferences);
-	return parseModelPatternWithContext(pattern, availableModels, context, options);
+	const direct = parseModelPatternWithContext(pattern, availableModels, context, options);
+	if (direct.model) return direct;
+
+	// No direct match: a trailing `@upstream` may be a provider-routing selector.
+	// Only honor it when the base resolves to an aggregator model (OpenRouter /
+	// Vercel Gateway); otherwise `@` stays part of the id and `direct` stands.
+	const routing = splitUpstreamRouting(pattern);
+	if (routing) {
+		const routed = parseModelPatternWithContext(routing.base, availableModels, context, options);
+		if (routed.model && supportsUpstreamRouting(routed.model)) {
+			return { ...routed, model: applyUpstreamRouting(routed.model, routing.upstream), upstream: routing.upstream };
+		}
+	}
+	return direct;
 }
 
 const PREFIX_MODEL_ROLE = "pi/";
@@ -1143,7 +1195,7 @@ export function resolveCliModel(options: {
 	}
 
 	const candidates = provider ? availableModels.filter(model => model.provider === provider) : availableModels;
-	const { model, thinkingLevel, warning } = parseModelPattern(pattern, candidates, preferences, {
+	const { model, thinkingLevel, warning, upstream } = parseModelPattern(pattern, candidates, preferences, {
 		allowInvalidThinkingSelectorFallback: false,
 		modelRegistry,
 	});
@@ -1172,6 +1224,9 @@ export function resolveCliModel(options: {
 				selector = modelRegistry.getCanonicalId?.(canonicalResolved) ?? canonicalCandidate;
 			}
 		}
+	}
+	if (selector !== undefined && upstream) {
+		selector = `${selector}@${upstream}`;
 	}
 
 	return {

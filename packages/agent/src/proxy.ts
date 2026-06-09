@@ -7,6 +7,7 @@ import {
 	type AssistantMessageEvent,
 	type Context,
 	EventStream,
+	type FetchImpl,
 	type Model,
 	type SimpleStreamOptions,
 	type StopReason,
@@ -61,6 +62,8 @@ export interface ProxyStreamOptions extends SimpleStreamOptions {
 	authToken: string;
 	/** Proxy server URL (e.g., "https://genai.example.com") */
 	proxyUrl: string;
+	/** Optional fetch implementation; defaults to global fetch. */
+	fetch?: FetchImpl;
 }
 
 /**
@@ -117,7 +120,7 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 		}
 
 		try {
-			response = await fetch(`${options.proxyUrl}/api/stream`, {
+			response = await (options.fetch ?? fetch)(`${options.proxyUrl}/api/stream`, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${options.authToken}`,

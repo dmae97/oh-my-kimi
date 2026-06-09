@@ -1,20 +1,21 @@
 import { describe, expect, it } from "bun:test";
 import { loginMiniMaxCode, loginMiniMaxCodeCn } from "@oh-my-pi/pi-ai/registry/oauth/minimax-code";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 describe("MiniMax Coding Plan login", () => {
 	it("opens the international platform and validates against the international API", async () => {
 		const authUrls: string[] = [];
 		const validationUrls: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			validationUrls.push(String(input));
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		const apiKey = await loginMiniMaxCode({
 			onAuth: info => authUrls.push(info.url),
 			onPrompt: async () => "  sk-intl  ",
+			fetch: fetchMock,
 		});
 
 		expect(apiKey).toBe("sk-intl");
@@ -26,14 +27,15 @@ describe("MiniMax Coding Plan login", () => {
 		const authUrls: string[] = [];
 		const validationUrls: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			validationUrls.push(String(input));
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		const apiKey = await loginMiniMaxCodeCn({
 			onAuth: info => authUrls.push(info.url),
 			onPrompt: async () => "  sk-cn  ",
+			fetch: fetchMock,
 		});
 
 		expect(apiKey).toBe("sk-cn");

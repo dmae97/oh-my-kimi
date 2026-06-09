@@ -11,6 +11,7 @@
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	type AuthStorage,
+	type FetchImpl,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-ai";
@@ -51,6 +52,7 @@ export interface GeminiSearchParams extends GeminiToolParams {
 	signal?: AbortSignal;
 	authStorage: AuthStorage;
 	sessionId?: string;
+	fetch?: FetchImpl;
 }
 
 export function buildGeminiRequestTools(params: GeminiToolParams): Array<Record<string, Record<string, unknown>>> {
@@ -156,6 +158,7 @@ async function callGeminiSearch(
 	maxOutputTokens: number | undefined,
 	temperature: number | undefined,
 	toolParams: GeminiToolParams,
+	fetchImpl: FetchImpl | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<{
 	answer: string;
@@ -237,6 +240,7 @@ async function callGeminiSearch(
 
 	const response = await fetchWithRetry(urlFor, {
 		...buildInit(),
+		fetch: fetchImpl,
 		maxAttempts: MAX_RETRIES + 1,
 		defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 		maxDelayMs: RATE_LIMIT_BUDGET_MS,
@@ -405,6 +409,7 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 			code_execution: params.code_execution,
 			url_context: params.url_context,
 		},
+		params.fetch,
 		params.signal,
 	);
 
@@ -450,6 +455,7 @@ export class GeminiProvider extends SearchProvider {
 			signal: params.signal,
 			authStorage: params.authStorage,
 			sessionId: params.sessionId,
+			fetch: params.fetch,
 		});
 	}
 }

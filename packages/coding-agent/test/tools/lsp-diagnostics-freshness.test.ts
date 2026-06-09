@@ -167,12 +167,13 @@ describe("LSP diagnostics freshness", () => {
 				mockClient.openFiles.set(syncedUri, { version: 1, languageId: "typescript" });
 			}
 		});
-		// Publish well after the inline window so the writethrough must defer.
+		// Publish far past the 500ms inline budget (INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS)
+		// so the writethrough deterministically defers even under heavy CI jitter.
 		vi.spyOn(lspClient, "notifySaved").mockImplementation(async (mockClient, savedFilePath) => {
 			const savedUri = fileToUri(savedFilePath);
 			setTimeout(() => {
 				publishDiagnostics(mockClient, savedUri, [createDiagnostic("deferred error")], null);
-			}, 900);
+			}, 2000);
 		});
 
 		const late = Promise.withResolvers<FileDiagnosticsResult>();
@@ -194,9 +195,10 @@ describe("LSP diagnostics freshness", () => {
 		);
 		const elapsed = Date.now() - t0;
 
-		// Inline returns promptly without blocking on the slow publish...
+		// Inline returns promptly (well under the 2000ms deferred publish) without
+		// blocking on the slow publish...
 		expect(inline).toBeUndefined();
-		expect(elapsed).toBeLessThan(800);
+		expect(elapsed).toBeLessThan(1500);
 
 		// ...and the diagnostics arrive afterwards via the deferred channel.
 		const lateResult = await late.promise;

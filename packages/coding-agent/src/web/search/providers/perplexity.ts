@@ -8,7 +8,7 @@
  * - Anonymous via `www.perplexity.ai/rest/sse/perplexity_ask`
  */
 
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import type {
 	PerplexityMessageOutput,
@@ -275,6 +275,7 @@ export interface PerplexitySearchParams {
 	num_search_results?: number;
 	authStorage: AuthStorage;
 	sessionId?: string;
+	fetch?: FetchImpl;
 }
 
 /** Find PERPLEXITY_API_KEY from environment or .env files (also checks PPLX_API_KEY) */
@@ -356,9 +357,10 @@ async function findPerplexityAuth(
 async function callPerplexityApi(
 	apiKey: string,
 	request: PerplexityRequest,
+	fetchImpl: FetchImpl | undefined,
 	signal?: AbortSignal,
 ): Promise<PerplexityResponse> {
-	const response = await fetch(PERPLEXITY_API_URL, {
+	const response = await (fetchImpl ?? fetch)(PERPLEXITY_API_URL, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -505,7 +507,7 @@ async function callPerplexityAsk(
 		requestParams.source = "default";
 	}
 
-	const response = await fetch(PERPLEXITY_OAUTH_ASK_URL, {
+	const response = await (params.fetch ?? fetch)(PERPLEXITY_OAUTH_ASK_URL, {
 		method: "POST",
 		headers,
 		body: JSON.stringify({
@@ -686,7 +688,7 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 		request.search_recency_filter = params.search_recency_filter;
 	}
 
-	const response = await callPerplexityApi(auth.token, request, params.signal);
+	const response = await callPerplexityApi(auth.token, request, params.fetch, params.signal);
 	const result = parseResponse(response);
 	result.authMode = "api_key";
 	return applySourceLimit(result, params.num_results);
@@ -722,6 +724,7 @@ export class PerplexityProvider extends SearchProvider {
 			num_results: params.limit,
 			authStorage: params.authStorage,
 			sessionId: params.sessionId,
+			fetch: params.fetch,
 		});
 	}
 }

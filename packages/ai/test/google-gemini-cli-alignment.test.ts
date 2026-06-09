@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as geminiCliProvider from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
@@ -8,8 +8,7 @@ import {
 	streamGoogleGeminiCli,
 } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { getOAuthApiKey } from "@oh-my-pi/pi-ai/registry/oauth";
-import type { Context, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import type { Context, FetchImpl, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
 
 function createModel(provider: "google-gemini-cli" | "google-antigravity"): Model<"google-gemini-cli"> {
 	return {
@@ -227,10 +226,10 @@ describe("Google Gemini CLI alignment", () => {
 	});
 	it("adds anthropic-beta for Antigravity Claude reasoning models without relying on id suffix", async () => {
 		let requestHeaders: Headers | undefined;
-		using _hook = hookFetch(async (_url, init) => {
+		const fetchMock: FetchImpl = async (_url, init) => {
 			requestHeaders = new Headers(init?.headers);
 			return new Response('{"error":{"message":"bad request"}}', { status: 400 });
-		});
+		};
 
 		const model: Model<"google-gemini-cli"> = {
 			...createModel("google-antigravity"),
@@ -241,6 +240,7 @@ describe("Google Gemini CLI alignment", () => {
 
 		const result = await streamGoogleGeminiCli(model, createContext(), {
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
 		}).result();
 
 		expect(result.stopReason).toBe("error");
@@ -251,24 +251,21 @@ describe("Google Gemini CLI alignment", () => {
 	});
 
 	describe("retry guardrails", () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
-
 		it("does not treat explicit HTTP failures as network retry errors", async () => {
 			let fetchCalls = 0;
-			using _hook = hookFetch(async () => {
+			const fetchMock: FetchImpl = async () => {
 				fetchCalls += 1;
 				return new Response('{"error":{"message":"busy"}}', {
 					status: 503,
 					headers: { "retry-after": "120" },
 				});
-			});
+			};
 
 			const model = createModel("google-gemini-cli");
 			const stream = streamGoogleGeminiCli(model, createContext(), {
 				apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
 				maxRetryDelayMs: 1000,
+				fetch: fetchMock,
 			});
 
 			const result = await stream.result();

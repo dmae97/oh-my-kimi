@@ -798,7 +798,15 @@ export class EventController {
 			);
 		} else if (isShakeAction) {
 			// Shake produces no CompactionResult; rebuild on success, suppress benign skips.
+			// The fallback path (`errorMessage` set, `skipped` false) means shake reclaimed
+			// some tokens before deciding the threshold still wasn't cleared — rebuild so
+			// the chat reflects the dropped regions even though a context-full pass follows.
 			if (event.errorMessage) {
+				if (!event.skipped) {
+					this.ctx.rebuildChatFromMessages();
+					this.ctx.statusLine.invalidate();
+					this.ctx.updateEditorTopBorder();
+				}
 				this.ctx.showWarning(event.errorMessage);
 			} else if (!event.skipped) {
 				this.ctx.rebuildChatFromMessages();

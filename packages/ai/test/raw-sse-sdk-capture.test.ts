@@ -6,9 +6,7 @@ import type { RawMessageStreamEvent } from "@oh-my-pi/pi-ai/providers/anthropic-
 import { streamAzureOpenAIResponses } from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, RawSseEvent } from "@oh-my-pi/pi-ai/types";
-
-const originalFetch = global.fetch;
+import type { Context, FetchImpl, Model, RawSseEvent } from "@oh-my-pi/pi-ai/types";
 
 const context: Context = {
 	messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -116,10 +114,11 @@ function createSseResponse(events: unknown[]): Response {
 	});
 }
 
-function installFetchResponse(events: unknown[]) {
-	const fetchMock = vi.fn(async () => createSseResponse(events));
-	global.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect }) as typeof fetch;
-	return fetchMock;
+function createFetchResponse(events: unknown[]): FetchImpl {
+	return Object.assign(
+		vi.fn(async () => createSseResponse(events)),
+		{ preconnect: fetch.preconnect },
+	) as typeof fetch;
 }
 
 function recordEvent(events: RawSseEvent[]): (event: RawSseEvent) => void {
@@ -168,17 +167,17 @@ function createAnthropicRawClient(events: RawMessageStreamEvent[]): AnthropicMes
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
 describe("SDK raw SSE capture", () => {
 	it("records OpenAI Responses SDK events from the decoded stream", async () => {
-		const fetchMock = installFetchResponse(openAIResponsesEvents);
+		const fetchMock = createFetchResponse(openAIResponsesEvents);
 		const observed: RawSseEvent[] = [];
 
 		const result = await streamOpenAIResponses(openAIResponsesModel, context, {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			onSseEvent: recordEvent(observed),
 		}).result();
 
@@ -216,11 +215,12 @@ describe("SDK raw SSE capture", () => {
 			},
 			"[DONE]",
 		];
-		installFetchResponse(chunks);
+		const fetchMock = createFetchResponse(chunks);
 		const observed: RawSseEvent[] = [];
 
 		const result = await streamOpenAICompletions(openAICompletionsModel, context, {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			onSseEvent: recordEvent(observed),
 		}).result();
 
@@ -231,11 +231,12 @@ describe("SDK raw SSE capture", () => {
 	});
 
 	it("records Azure OpenAI Responses SDK events from the decoded stream", async () => {
-		installFetchResponse(openAIResponsesEvents);
+		const fetchMock = createFetchResponse(openAIResponsesEvents);
 		const observed: RawSseEvent[] = [];
 
 		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, context, {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 			azureApiVersion: "v1",
 			onSseEvent: recordEvent(observed),
@@ -261,9 +262,12 @@ describe("SDK raw SSE capture", () => {
 	});
 
 	it("does not synthesize raw SSE records when no observer is installed", async () => {
-		installFetchResponse(openAIResponsesEvents);
+		const fetchMock = createFetchResponse(openAIResponsesEvents);
 
-		const result = await streamOpenAIResponses(openAIResponsesModel, context, { apiKey: "test-key" }).result();
+		const result = await streamOpenAIResponses(openAIResponsesModel, context, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 
 		expect(result.stopReason).toBe("stop");
 	});

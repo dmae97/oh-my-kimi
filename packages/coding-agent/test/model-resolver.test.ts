@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import {
 	expandRoleAlias,
 	parseModelPattern,
@@ -920,5 +920,85 @@ describe("expandRoleAlias", () => {
 		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
 
 		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
+	});
+});
+
+describe("provider routing selector (@upstream)", () => {
+	const openRouterOnly = (model: Model<Api> | undefined): string[] | undefined =>
+		(model?.compat as { openRouterRouting?: { only?: string[] } } | undefined)?.openRouterRouting?.only;
+
+	test("pins an OpenRouter model to one upstream via @slug", () => {
+		const result = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras", allModels);
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(result.model?.provider).toBe("openrouter");
+		expect(result.upstream).toBe("cerebras");
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("resolves @slug without an explicit provider prefix", () => {
+		const result = parseModelPattern("z-ai/glm-4.7@cerebras", allModels);
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("combines @slug with a trailing thinking level", () => {
+		const result = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras:high", allModels);
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("routes Vercel AI Gateway models via vercelGatewayRouting", () => {
+		const gatewayModel: Model<"anthropic-messages"> = {
+			id: "zai/glm-4.7",
+			name: "GLM 4.7 (Gateway)",
+			api: "anthropic-messages",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		const result = parseModelPattern("vercel-ai-gateway/zai/glm-4.7@cerebras", [gatewayModel]);
+		expect(result.model?.id).toBe("zai/glm-4.7");
+		expect(
+			(result.model?.compat as { vercelGatewayRouting?: { only?: string[] } } | undefined)?.vercelGatewayRouting
+				?.only,
+		).toEqual(["cerebras"]);
+		expect(openRouterOnly(result.model)).toBeUndefined();
+	});
+
+	test("does not split a model id that legitimately ends in @ (Vertex)", () => {
+		const vertexModel: Model<"anthropic-messages"> = {
+			id: "claude-opus-4-8@default",
+			name: "Claude Opus 4.8",
+			api: "anthropic-messages",
+			provider: "google-vertex",
+			baseUrl: "https://us-aiplatform.googleapis.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		};
+		const result = parseModelPattern("claude-opus-4-8@default", [vertexModel]);
+		expect(result.model?.id).toBe("claude-opus-4-8@default");
+		expect(result.upstream).toBeUndefined();
+		expect(openRouterOnly(result.model)).toBeUndefined();
+	});
+
+	test("ignores @slug on a non-aggregator model (no silent routing)", () => {
+		const result = parseModelPattern("gpt-4o@cerebras", allModels);
+		expect(result.model).toBeUndefined();
+	});
+
+	test("resolveCliModel round-trips @upstream in the selector and carries compat", () => {
+		const registry = { getAll: () => allModels } as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+		const result = resolveCliModel({ cliModel: "openrouter/z-ai/glm-4.7@cerebras", modelRegistry: registry });
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(result.selector).toBe("openrouter/z-ai/glm-4.7@cerebras");
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
 	});
 });

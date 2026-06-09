@@ -3,9 +3,9 @@ import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-a
 import { zenmuxModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const originalZenMuxApiKey = Bun.env.ZENMUX_API_KEY;
-const originalFetch = global.fetch;
 
 afterEach(() => {
 	if (originalZenMuxApiKey === undefined) {
@@ -13,7 +13,6 @@ afterEach(() => {
 	} else {
 		Bun.env.ZENMUX_API_KEY = originalZenMuxApiKey;
 	}
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -36,7 +35,7 @@ describe("zenmux provider support", () => {
 		expect(provider?.name).toBe("ZenMux");
 	});
 	test("routes Anthropic-owned models to anthropic-messages", async () => {
-		global.fetch = vi.fn(
+		const fetchMock: FetchImpl = vi.fn(
 			async () =>
 				new Response(
 					JSON.stringify({
@@ -73,13 +72,13 @@ describe("zenmux provider support", () => {
 				),
 		) as unknown as typeof fetch;
 
-		const options = zenmuxModelManagerOptions({ apiKey: "zenmux-test-key" });
+		const options = zenmuxModelManagerOptions({ apiKey: "zenmux-test-key", fetch: fetchMock });
 		expect(options.providerId).toBe("zenmux");
 		expect(options.fetchDynamicModels).toBeDefined();
 
 		const models = await options.fetchDynamicModels?.();
 		expect(models).not.toBeNull();
-		expect(global.fetch).toHaveBeenCalledWith(
+		expect(fetchMock).toHaveBeenCalledWith(
 			"https://zenmux.ai/api/v1/models",
 			expect.objectContaining({ method: "GET" }),
 		);

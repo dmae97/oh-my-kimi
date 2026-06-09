@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -6,13 +6,6 @@ import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { createModelManager } from "@oh-my-pi/pi-ai/model-manager";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { githubCopilotModelManagerOptions } from "@oh-my-pi/pi-ai/provider-models/openai-compat";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
 
 function getHeaderValue(headers: unknown, key: string): string | undefined {
 	if (!headers) return undefined;
@@ -45,7 +38,7 @@ async function discoverCopilotModels(
 	expectedBaseUrl = "https://api.githubcopilot.com",
 	expectedAuthorizationToken = apiKey,
 ) {
-	const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input.toString();
 		expect(url).toBe(`${expectedBaseUrl}/models`);
 		expect(init?.method).toBe("GET");
@@ -55,9 +48,7 @@ async function discoverCopilotModels(
 			headers: { "Content-Type": "application/json" },
 		});
 	});
-	global.fetch = fetchMock as unknown as typeof fetch;
-
-	const options = githubCopilotModelManagerOptions({ apiKey });
+	const options = githubCopilotModelManagerOptions({ apiKey, fetch: fetchMock });
 	expect(options.fetchDynamicModels).toBeDefined();
 	const models = await options.fetchDynamicModels?.();
 	expect(models).not.toBeNull();
@@ -237,7 +228,7 @@ describe("github copilot model limits mapping", () => {
 	it("keeps discovered context window through full model resolution for bundled models", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-copilot-models-"));
 		try {
-			global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 				const url = typeof input === "string" ? input : input.toString();
 				expect(url).toBe("https://api.githubcopilot.com/models");
 				expect(init?.method).toBe("GET");
@@ -260,9 +251,9 @@ describe("github copilot model limits mapping", () => {
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
-			}) as unknown as typeof fetch;
+			});
 
-			const options = githubCopilotModelManagerOptions({ apiKey: "copilot-test-key" });
+			const options = githubCopilotModelManagerOptions({ apiKey: "copilot-test-key", fetch: fetchMock });
 			const manager = createModelManager({
 				...options,
 				cacheDbPath: path.join(tempDir, "models.db"),

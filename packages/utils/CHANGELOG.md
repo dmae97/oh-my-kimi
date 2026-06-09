@@ -6,6 +6,12 @@
 
 - Added profile-aware directory helpers and isolated profile state roots, while keeping the install ID shared across profiles.
 
+## [15.10.8] - 2026-06-09
+### Removed
+
+- Removed the exported `hookFetch` API, which previously intercepted `globalThis.fetch` via middleware handlers
+- Removed `hookFetch` from the package entrypoint, so imports from `@.../utils` no longer provide this fetch interception helper
+
 ## [15.10.0] - 2026-06-06
 
 ### Changed
