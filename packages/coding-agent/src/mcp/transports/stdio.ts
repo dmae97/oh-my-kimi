@@ -110,23 +110,17 @@ async function resolveWindowsCommandPath(
 function quoteCmdArg(value: string): string {
 	if (value.length === 0) return '""';
 	let result = '"';
-	let backslashes = 0;
 	for (const char of value) {
-		if (char === "\\") {
-			backslashes++;
-			continue;
-		}
 		if (char === '"') {
-			result += "\\".repeat(backslashes * 2 + 1);
-			result += '"';
-			backslashes = 0;
-			continue;
+			result += '^"';
+		} else if (char === "^") {
+			result += "^^";
+		} else if (char === "%") {
+			result += "^%";
+		} else {
+			result += char;
 		}
-		result += "\\".repeat(backslashes);
-		backslashes = 0;
-		result += char === "%" ? "^%" : char;
 	}
-	result += "\\".repeat(backslashes * 2);
 	return `${result}"`;
 }
 
