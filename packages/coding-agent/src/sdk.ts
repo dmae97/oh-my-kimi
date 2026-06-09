@@ -1535,7 +1535,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolSession.mcpManager = mcpManager;
 		const enableMCP = options.enableMCP ?? true;
 		const deferMCPDiscoveryForUI = enableMCP && !mcpManager && options.hasUI === true;
-		const includeMCPServerInstructionsInPrompt = !deferMCPDiscoveryForUI;
 		const customTools: CustomTool[] = [];
 		let startDeferredMCPDiscovery:
 			| ((liveSession: AgentSession, activation: DeferredMCPActivation) => void)
@@ -1968,12 +1967,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
 			// Build combined append prompt: memory instructions + MCP server instructions.
-			// Interactive deferred MCP intentionally omits MCP instructions permanently;
-			// prompt rebuilds caused by later tool refreshes keep cache keys stable by
-			// updating tool metadata only, not server-provided prompt text.
-			const serverInstructions = includeMCPServerInstructionsInPrompt
-				? mcpManager?.getServerInstructions()
-				: undefined;
+			// For UI sessions MCP discovery is deferred, so `getServerInstructions()` is
+			// empty until the background connect completes; the rebuild that
+			// `refreshMCPTools` triggers post-discovery then picks up the now-connected
+			// servers' instructions, so they join the prompt for the rest of the session.
+			const serverInstructions = mcpManager?.getServerInstructions();
 			let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 			if (serverInstructions && serverInstructions.size > 0) {
 				const parts: string[] = [];
@@ -2336,23 +2334,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			rebuildSystemPrompt,
 			reloadSshTool,
 			requestedToolNames: requestedToolNameSet,
-			getMcpServerInstructions:
-				includeMCPServerInstructionsInPrompt && mcpManager
-					? () => {
-							const raw = mcpManager.getServerInstructions();
-							if (!raw || raw.size === 0) return raw;
-							const out = new Map<string, string>();
-							for (const [name, text] of raw) {
-								out.set(
-									name,
-									text.length > MAX_MCP_INSTRUCTIONS_LENGTH
-										? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)
-										: text,
-								);
-							}
-							return out;
+			getMcpServerInstructions: mcpManager
+				? () => {
+						const raw = mcpManager.getServerInstructions();
+						if (!raw || raw.size === 0) return raw;
+						const out = new Map<string, string>();
+						for (const [name, text] of raw) {
+							out.set(
+								name,
+								text.length > MAX_MCP_INSTRUCTIONS_LENGTH ? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH) : text,
+							);
 						}
-					: undefined,
+						return out;
+					}
+				: undefined,
 			mcpDiscoveryEnabled,
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
