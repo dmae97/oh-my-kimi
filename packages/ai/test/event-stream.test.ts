@@ -33,4 +33,18 @@ describe("AssistantMessageEventStream", () => {
 		expect(stream.queue[0]).toMatchObject({ type: "text_delta", delta: "a" });
 		expect(stream.queue[1]).toMatchObject({ type: "text_delta", delta: "b" });
 	});
+
+	it("rejects result() when ended without a terminal value", async () => {
+		const stream = new AssistantMessageEventStream();
+		stream.end();
+		await expect(stream.result()).rejects.toThrow(/ended without a final result/);
+	});
+
+	it("keeps the pushed terminal result when end() follows a done event", async () => {
+		const stream = new AssistantMessageEventStream();
+		const message = createPartial("final");
+		stream.push({ type: "done", reason: "stop", message });
+		stream.end();
+		await expect(stream.result()).resolves.toBe(message);
+	});
 });

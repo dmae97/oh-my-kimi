@@ -979,6 +979,23 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): ToolCall["a
 	return validateToolArguments(tool, toolCall);
 }
 
+/** Cap per-field string lengths when embedding received args in an error message. */
+const MAX_ERROR_ARG_STRING_LENGTH = 256;
+
+function truncateArgsForError(value: unknown): unknown {
+	if (typeof value === "string") {
+		if (value.length <= MAX_ERROR_ARG_STRING_LENGTH) return value;
+		return `${value.slice(0, MAX_ERROR_ARG_STRING_LENGTH)}… [truncated ${value.length - MAX_ERROR_ARG_STRING_LENGTH} chars]`;
+	}
+	if (Array.isArray(value)) return value.map(truncateArgsForError);
+	if (value !== null && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [key, entry] of Object.entries(value)) out[key] = truncateArgsForError(entry);
+		return out;
+	}
+	return value;
+}
+
 /**
  * Validates tool call arguments against the tool's schema (Zod or plain JSON
  * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
@@ -1025,12 +1042,15 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 	// existing tests; the detailed body is informational.
 	const errors = result.messages.join("\n") || "Unknown validation error";
 
+	// Truncate long per-field strings: the full payload (potentially hundreds
+	// of KB for write/edit-class calls) would otherwise round-trip back to the
+	// model inside the tool error.
 	const receivedArgs = changed
 		? {
-				original: originalArgs,
-				normalized: normalizedArgs,
+				original: truncateArgsForError(originalArgs),
+				normalized: truncateArgsForError(normalizedArgs),
 			}
-		: originalArgs;
+		: truncateArgsForError(originalArgs);
 
 	const errorMessage = `Validation failed for tool "${
 		toolCall.name

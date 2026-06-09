@@ -218,6 +218,25 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 		expect(calls[0].name).toBe("bash");
 		expect(JSON.parse(calls[0].arguments)).toEqual({ cmd: "ls -la" });
 	});
+
+	it("passes a bare '<' in idle prose through without holding it back", () => {
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		// No '>' anywhere in the tail — the old any-'<' hold-back froze display here.
+		expect(healing.feed("if a < b:\n    return a")).toBe("if a < b:\n    return a");
+	});
+
+	it("still holds back a tail that is a partial DSML section-open tag", () => {
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		expect(healing.feed("run ")).toBe("run ");
+		expect(healing.feed("<｜DSML｜tool")).toBe("");
+		expect(healing.feed("_calls>")).toBe("");
+		expect(
+			healing.feed(
+				'<｜DSML｜invoke name="bash"><｜DSML｜parameter name="cmd">ls</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>',
+			),
+		).toBe("");
+		expect(healing.drainCompleted()).toHaveLength(1);
+	});
 });
 
 describe("StreamMarkupHealing thinking pattern", () => {

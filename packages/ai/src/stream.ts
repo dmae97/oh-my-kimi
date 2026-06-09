@@ -432,8 +432,16 @@ export function streamSimple<TApi extends Api>(
 			let lastKey: string | undefined;
 			try {
 				lastKey = (await apiKeyResolver({ lastChance: false, error: undefined, signal })) || undefined;
-			} catch {
-				lastKey = undefined;
+			} catch (error) {
+				// A thrown resolver is a broker/OAuth/network failure, not a missing
+				// key — surface the cause instead of masking it as "No API key".
+				outer.fail(
+					new Error(
+						`Failed to resolve API key for provider ${model.provider}: ${error instanceof Error ? error.message : String(error)}`,
+						{ cause: error },
+					),
+				);
+				return;
 			}
 			if (lastKey === undefined) {
 				outer.fail(new Error(`No API key for provider: ${model.provider}`));
@@ -446,6 +454,9 @@ export function streamSimple<TApi extends Api>(
 			// resolver yields the same key it just tried or `undefined`; the
 			// final step's attempt clears the capture flag so it emits directly.
 			for (let step = 0; step < AUTH_RETRY_STEPS.length; step++) {
+				// Caller aborted between attempts: don't mint a fresh token or fire
+				// another doomed request — emit the captured failure instead.
+				if (signal?.aborted) break;
 				const nextKey = await resolveRetryKey(apiKeyResolver, AUTH_RETRY_STEPS[step]!, failure.error, signal);
 				if (nextKey === undefined || nextKey === lastKey) continue;
 				lastKey = nextKey;
