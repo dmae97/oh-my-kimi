@@ -1,4 +1,4 @@
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary } from "@oh-my-pi/pi-utils";
@@ -142,7 +142,31 @@ const LEGACY_PI_CODING_AGENT_SHIM_PATH = BUNFS_PACKAGE_ROOT
 // `Bun.resolveSync`, and hardcoding a relative source-tree path would break
 // installs where the bundled packages live at `node_modules/@oh-my-pi/pi-*`
 // rather than `packages/*`.
-const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
+//
+// Every override target is validated against the on-disk filesystem at module
+// init: any entry whose file is missing (e.g. a compiled binary where Bun's
+// `--compile` quietly dropped an additional entrypoint — issue #2168) is left
+// out so `resolveCanonicalPiSpecifier` falls through to `getResolvedSpecifier`,
+// which throws under bunfs and triggers the catch in `rewriteLegacyPiImports`.
+// That catch leaves the specifier untouched so Bun resolves the canonical
+// `@oh-my-pi/pi-*` import from the extension's own `node_modules` instead of
+// emitting a bunfs `file://` URL to a module that isn't actually present.
+
+/**
+ * Drop overrides whose targets are missing on disk so they can fall through to
+ * the canonical-resolution path. Exported for the test seam in #2168.
+ *
+ * `pathExistsSync` defaults to `fs.existsSync`; the tests inject a stub to
+ * simulate the missing-entrypoint failure mode without touching the real FS.
+ */
+export function __validateLegacyPiPackageRootOverrides(
+	candidates: Record<string, string>,
+	pathExistsSync: (p: string) => boolean = fs.existsSync,
+): Record<string, string> {
+	return Object.fromEntries(Object.entries(candidates).filter(([, candidate]) => pathExistsSync(candidate)));
+}
+
+const LEGACY_PI_PACKAGE_ROOT_OVERRIDES = __validateLegacyPiPackageRootOverrides({
 	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
 	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
 	...(BUNFS_PACKAGE_ROOT
@@ -153,7 +177,7 @@ const LEGACY_PI_PACKAGE_ROOT_OVERRIDES: Record<string, string> = {
 				[`${CANONICAL_PI_SCOPE}/pi-utils`]: bunfsPath("utils", "src", "index.js"),
 			}
 		: {}),
-};
+});
 
 let isLegacyPiSpecifierShimInstalled = false;
 
@@ -253,7 +277,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function pathExists(p: string): Promise<boolean> {
 	try {
-		await fs.stat(p);
+		await fs.promises.stat(p);
 		return true;
 	} catch {
 		return false;
@@ -267,7 +291,7 @@ function hasSourceModuleExtension(p: string): boolean {
 
 async function resolveSourceModuleFile(basePath: string): Promise<string | null> {
 	try {
-		const stats = await fs.stat(basePath);
+		const stats = await fs.promises.stat(basePath);
 		if (stats.isFile()) {
 			// Non-source files (JSON, WASM, text assets, etc.) bypass the on-load
 			// rewrite hook so Bun's native loaders handle them; our hook would
@@ -475,7 +499,7 @@ const hookedExtensionEntries = new Set<string>();
 /** Resolve symlinks in a path, falling back to the input if realpath fails. */
 async function realpathOrSelf(p: string): Promise<string> {
 	try {
-		return await fs.realpath(p);
+		return await fs.promises.realpath(p);
 	} catch {
 		return p;
 	}
