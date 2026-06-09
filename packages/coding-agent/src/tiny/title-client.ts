@@ -39,6 +39,12 @@ export interface TinyTitleDownloadOptions {
 	onProgress?: (event: TinyTitleProgressEvent) => void;
 }
 
+/**
+ * Per-request controls for {@link TinyTitleClient.generate}.
+ *
+ * Carries the optional abort signal and title-system-prompt override used by
+ * callers that customize automatic session-title generation.
+ */
 export interface TinyTitleGenerateOptions {
 	signal?: AbortSignal;
 	systemPrompt?: string;
