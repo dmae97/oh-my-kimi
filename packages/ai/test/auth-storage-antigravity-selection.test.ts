@@ -200,5 +200,4 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		const loaded = counts.get("api-acct-loaded") ?? 0;
 		expect(fresh).toBeGreaterThan(loaded);
 	});
-
 });
