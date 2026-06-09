@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed bracketed pastes containing multiple image file paths so each image is attached in order instead of treating the whole paste as one unreadable path.
+
 - Fixed MCP OAuth fallback prompts so the "Click here to authorize" label emits an auth-safe terminal hyperlink even when hyperlink auto-detection is unavailable, keeping non-browser MCP setup usable ([#2196](https://github.com/can1357/oh-my-pi/issues/2196)).
 
 ### Fixed

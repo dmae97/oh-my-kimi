@@ -27,6 +27,8 @@ export interface ImageOptions {
 
 const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
+const RESERVED_IMAGE_ROW = "\x1b[0m";
+
 
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
@@ -188,6 +190,10 @@ export class ImageBudget {
 		this.#pendingTransmits.push(sequence);
 	}
 
+	hasPendingTransmits(): boolean {
+		return this.#pendingTransmits.length > 0;
+	}
+
 	/** Transmit sequences to write before this frame's placements; clears the queue. */
 	takeTransmits(): readonly string[] {
 		if (this.#pendingTransmits.length === 0) return EMPTY_TRANSMITS;
@@ -296,7 +302,7 @@ export class Image implements Component {
 				// moves the cursor back up, then emits the image sequence.
 				lines = [];
 				for (let i = 0; i < result.rows - 1; i++) {
-					lines.push("");
+					lines.push(RESERVED_IMAGE_ROW);
 				}
 				const moveUp = result.rows > 1 ? `\x1b[${result.rows - 1}A` : "";
 				lines.push(moveUp + (result.sequence ?? ""));

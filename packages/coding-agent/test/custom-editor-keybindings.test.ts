@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "bun:test";
-import { CustomEditor, extractBracketedImagePastePath } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
+import {
+	CustomEditor,
+	extractBracketedImagePastePath,
+	extractBracketedImagePastePaths,
+} from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
 import { defaultEditorTheme } from "../../tui/test/test-themes";
 
 function ctrl(key: string): string {
@@ -24,12 +28,41 @@ describe("CustomEditor bracketed image path paste", () => {
 	it("routes a single pasted image path to the image-path handler", () => {
 		const editor = createEditor();
 		const paths: string[] = [];
-		editor.onPasteImagePath = path => paths.push(path);
+		editor.onPasteImagePath = path => {
+			paths.push(path);
+		};
 
 		editor.handleInput("\x1b[200~/tmp/screenshot.png\x1b[201~");
 
 		expect(paths).toEqual(["/tmp/screenshot.png"]);
 		expect(editor.getText()).toBe("");
+	});
+
+	it("routes multiple pasted image paths to the image-path handler in order", async () => {
+		const editor = createEditor();
+		const paths: string[] = [];
+		editor.onPasteImagePath = path => {
+			paths.push(path);
+		};
+
+		editor.handleInput("\x1b[200~/tmp/first.png /tmp/second.webp\x1b[201~");
+		await Promise.resolve();
+
+		expect(paths).toEqual(["/tmp/first.png", "/tmp/second.webp"]);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("keeps spaces inside pasted image paths when splitting a multi-image paste", () => {
+		expect(
+			extractBracketedImagePastePaths("\x1b[200~/tmp/My First Screenshot.png /tmp/second image.jpg\x1b[201~"),
+		).toEqual(["/tmp/My First Screenshot.png", "/tmp/second image.jpg"]);
+	});
+
+	it("unescapes shell-escaped spaces in pasted image paths", () => {
+		expect(extractBracketedImagePastePaths("\x1b[200~/tmp/My\\ First.png /tmp/second.gif\x1b[201~")).toEqual([
+			"/tmp/My First.png",
+			"/tmp/second.gif",
+		]);
 	});
 
 	it("leaves ordinary bracketed paste text on the editor path", () => {
