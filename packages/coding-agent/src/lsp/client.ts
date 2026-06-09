@@ -22,6 +22,10 @@ const clients = new Map<string, LspClient>();
 const clientLocks = new Map<string, Promise<LspClient>>();
 const fileOperationLocks = new Map<string, Promise<void>>();
 
+/** Negative cache of recent init failures so a broken server fails fast instead of re-spawning per call. */
+const INIT_FAILURE_BACKOFF_MS = 3 * 60 * 1000;
+const initFailures = new Map<string, { at: number; message: string }>();
+
 // Idle timeout configuration (disabled by default)
 let idleTimeoutMs: number | null = null;
 let idleCheckInterval: NodeJS.Timeout | null = null;
@@ -295,7 +299,18 @@ async function startMessageReader(client: LspClient): Promise<void> {
 
 				const headerText = MESSAGE_DECODER.decode(copyChunkRange(pendingChunks, 0, headerEnd));
 				const contentLengthMatch = headerText.match(/Content-Length: (\d+)/i);
-				if (!contentLengthMatch) break;
+				if (!contentLengthMatch) {
+					// Non-protocol bytes on stdout (e.g. a wrapper script printing).
+					// Drop past the bogus terminator and resync instead of stalling
+					// on the same junk header forever.
+					logger.warn("LSP framing resync: header block without Content-Length", {
+						server: client.name,
+						header: headerText.slice(0, 200),
+					});
+					dropChunkFront(pendingChunks, headerEnd + 4);
+					pendingLen -= headerEnd + 4;
+					continue;
+				}
 
 				const contentLength = Number.parseInt(contentLengthMatch[1], 10);
 				const messageStart = headerEnd + 4; // Skip \r\n\r\n
@@ -303,44 +318,54 @@ async function startMessageReader(client: LspClient): Promise<void> {
 				if (pendingLen < messageEnd) break;
 
 				const messageText = MESSAGE_DECODER.decode(copyChunkRange(pendingChunks, messageStart, messageEnd));
-				const message: LspJsonRpcResponse | LspJsonRpcNotification = JSON.parse(messageText);
 				dropChunkFront(pendingChunks, messageEnd);
 				pendingLen -= messageEnd;
 
-				// Route message
-				if ("id" in message && message.id !== undefined) {
-					// Response to a request
-					const pending = client.pendingRequests.get(message.id);
-					if (pending) {
-						client.pendingRequests.delete(message.id);
-						if ("error" in message && message.error) {
-							pending.reject(new Error(`LSP error: ${message.error.message}`));
-						} else {
-							pending.resolve(message.result);
+				// A malformed message or a throwing server-request handler must not
+				// kill the reader — later messages are still well-framed.
+				try {
+					const message: LspJsonRpcResponse | LspJsonRpcNotification = JSON.parse(messageText);
+
+					// Route message
+					if ("id" in message && message.id !== undefined) {
+						// Response to a request
+						const pending = client.pendingRequests.get(message.id);
+						if (pending) {
+							client.pendingRequests.delete(message.id);
+							if ("error" in message && message.error) {
+								pending.reject(new Error(`LSP error: ${message.error.message}`));
+							} else {
+								pending.resolve(message.result);
+							}
+						} else if ("method" in message) {
+							await handleServerRequest(client, message as LspJsonRpcRequest);
 						}
 					} else if ("method" in message) {
-						await handleServerRequest(client, message as LspJsonRpcRequest);
-					}
-				} else if ("method" in message) {
-					// Server notification
-					if (message.method === "textDocument/publishDiagnostics" && message.params) {
-						const params = message.params as PublishDiagnosticsParams;
-						client.diagnostics.set(params.uri, {
-							diagnostics: params.diagnostics,
-							version: params.version ?? null,
-						});
-						client.diagnosticsVersion += 1;
-					} else if (message.method === "$/progress" && message.params) {
-						const params = message.params as { token: string | number; value?: { kind?: string } };
-						if (params.value?.kind === "begin") {
-							client.activeProgressTokens.add(params.token);
-						} else if (params.value?.kind === "end") {
-							client.activeProgressTokens.delete(params.token);
-							if (client.activeProgressTokens.size === 0) {
-								client.resolveProjectLoaded();
+						// Server notification
+						if (message.method === "textDocument/publishDiagnostics" && message.params) {
+							const params = message.params as PublishDiagnosticsParams;
+							client.diagnostics.set(params.uri, {
+								diagnostics: params.diagnostics,
+								version: params.version ?? null,
+							});
+							client.diagnosticsVersion += 1;
+						} else if (message.method === "$/progress" && message.params) {
+							const params = message.params as { token: string | number; value?: { kind?: string } };
+							if (params.value?.kind === "begin") {
+								client.activeProgressTokens.add(params.token);
+							} else if (params.value?.kind === "end") {
+								client.activeProgressTokens.delete(params.token);
+								if (client.activeProgressTokens.size === 0) {
+									client.resolveProjectLoaded();
+								}
 							}
 						}
 					}
+				} catch (err) {
+					logger.warn("LSP message handling failed", {
+						server: client.name,
+						error: err instanceof Error ? err.message : String(err),
+					});
 				}
 			}
 		}
@@ -360,6 +385,22 @@ async function startMessageReader(client: LspClient): Promise<void> {
 					: Buffer.concat(pendingChunks, pendingLen);
 		reader.releaseLock();
 		client.isReading = false;
+		// Reader exited while the server process is still alive (unrecoverable
+		// read error or bad stream state): nothing will route responses anymore,
+		// so tear the client down — the next call respawns instead of timing out.
+		if (client.proc.exitCode === null) {
+			client.status = "error";
+			if (clients.get(client.name) === client) {
+				clients.delete(client.name);
+			}
+			const teardownErr = new Error("LSP reader stopped; client torn down");
+			for (const pending of client.pendingRequests.values()) {
+				pending.reject(teardownErr);
+			}
+			client.pendingRequests.clear();
+			client.resolveProjectLoaded();
+			client.proc.kill();
+		}
 	}
 }
 
@@ -565,6 +606,16 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 		return existingLock;
 	}
 
+	// Fail fast on a recent deterministic init failure instead of re-spawning
+	// a broken server (and paying its full init wait) on every call.
+	const recentFailure = initFailures.get(key);
+	if (recentFailure) {
+		if (Date.now() - recentFailure.at < INIT_FAILURE_BACKOFF_MS) {
+			throw new Error(`LSP server ${config.command} failed to initialize recently: ${recentFailure.message}`);
+		}
+		initFailures.delete(key);
+	}
+
 	// Create new client with lock
 	const clientPromise = (async () => {
 		const baseCommand = config.resolvedCommand ?? config.command;
@@ -605,18 +656,18 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			pendingRequests: new Map(),
 			messageBuffer: new Uint8Array(0),
 			isReading: false,
+			status: "connecting",
 			lastActivity: Date.now(),
 			writeQueue: Promise.resolve(),
 			activeProgressTokens: new Set(),
 			projectLoaded,
 			resolveProjectLoaded,
 		};
-		clients.set(key, client);
 
 		// Register crash recovery - remove client on process exit
 		proc.exited.then(() => {
-			clients.delete(key);
-			clientLocks.delete(key);
+			if (clients.get(key) === client) clients.delete(key);
+			if (clientLocks.get(key) === clientPromise) clientLocks.delete(key);
 			client.resolveProjectLoaded();
 
 			// Reject any pending requests — the server is gone, they will never complete.
@@ -669,12 +720,26 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			// Send initialized notification
 			await sendNotification(client, "initialized", {});
 
+			client.status = "ready";
+			// Publish only after init succeeds: pre-init clients are reachable
+			// solely through clientLocks, so concurrent callers (warmup vs first
+			// tool call) wait for init instead of using an unacknowledged client.
+			clients.set(key, client);
+			initFailures.delete(key);
 			return client;
 		} catch (err) {
 			// Clean up on initialization failure
-			clients.delete(key);
-			clientLocks.delete(key);
+			client.status = "error";
+			if (clients.get(key) === client) clients.delete(key);
 			proc.kill();
+			const message = err instanceof Error ? err.message : String(err);
+			// Negative-cache deterministic failures. Timeouts under a
+			// caller-shortened deadline (warmup/writethrough) are not cached —
+			// the server may simply be slow and a later call with the full
+			// deadline can still succeed.
+			if (!(initTimeoutMs !== undefined && message.includes("timed out"))) {
+				initFailures.set(key, { at: Date.now(), message });
+			}
 			throw err;
 		} finally {
 			clientLocks.delete(key);
@@ -1067,7 +1132,22 @@ export async function sendNotification(client: LspClient, method: string, params
 export async function shutdownAll(): Promise<void> {
 	const clientsToShutdown = Array.from(clients.values());
 	clients.clear();
-	await Promise.allSettled(clientsToShutdown.map(client => shutdownClientInstance(client)));
+	// Mid-initialize clients live only in clientLocks (publication is deferred
+	// until init succeeds) — without this, their server processes outlive
+	// shutdown. Failed init promises already cleaned up after themselves.
+	const pendingClients = Array.from(clientLocks.values());
+	clientLocks.clear();
+	const seen = new Set<LspClient>(clientsToShutdown);
+	await Promise.allSettled([
+		...clientsToShutdown.map(client => shutdownClientInstance(client)),
+		...pendingClients.map(pending =>
+			pending.then(client => {
+				if (seen.has(client)) return;
+				seen.add(client);
+				return shutdownClientInstance(client);
+			}),
+		),
+	]);
 }
 
 /** Status of an LSP server */
@@ -1084,7 +1164,7 @@ export interface LspServerStatus {
 export function getActiveClients(): LspServerStatus[] {
 	return Array.from(clients.values()).map(client => ({
 		name: client.config.command,
-		status: "ready" as const,
+		status: client.status,
 		fileTypes: client.config.fileTypes,
 	}));
 }
