@@ -121,36 +121,51 @@ export class SelectList implements Component {
 		}
 
 		const primaryColumnWidth = this.#getPrimaryColumnWidth();
-
-		// Calculate visible range with scrolling
-		const startIndex = Math.max(
-			0,
-			Math.min(this.#selectedIndex - Math.floor(this.maxVisible / 2), this.#filteredItems.length - this.maxVisible),
-		);
-		const endIndex = Math.min(startIndex + this.maxVisible, this.#filteredItems.length);
-
-		// Render visible items
-		const overflow = this.#filteredItems.length > this.maxVisible;
-		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
 		const wrapEnabled = this.layout.wrapDescription === true;
-		const rows: string[] = [];
-		let visualOffset = 0;
+		// `maxVisible` is the picker's visual row budget. For non-wrap layouts
+		// every item is one row, so the budget matches the original item count.
+		const visualBudget = this.maxVisible;
+
+		// Compute per-item visual row counts at the conservative width (i.e.
+		// assume the scrollbar column might be reserved). For non-wrap layouts
+		// every count is 1, so visualTotal == #filteredItems and overflow falls
+		// back to the original `N > maxVisible` predicate exactly.
+		const conservativeRowWidth = Math.max(0, width - 1);
+		const rowCounts = new Array<number>(this.#filteredItems.length);
 		let visualTotal = 0;
 		for (let i = 0; i < this.#filteredItems.length; i++) {
 			const item = this.#filteredItems[i];
-			if (!item) continue;
-			let rowCount = 1;
-			if (i >= startIndex && i < endIndex) {
-				const itemRows = this.#renderItem(item, i === this.#selectedIndex, rowWidth, primaryColumnWidth);
-				rowCount = itemRows.length;
-				rows.push(...itemRows);
-			} else if (wrapEnabled) {
-				// Wrap is opt-in, so non-wrap layouts keep the original
-				// constant-time path for items outside the visible window.
-				rowCount = this.#computeItemRowCount(item, rowWidth, primaryColumnWidth);
+			if (!item) {
+				rowCounts[i] = 0;
+				continue;
 			}
-			if (i < startIndex) visualOffset += rowCount;
-			visualTotal += rowCount;
+			rowCounts[i] = wrapEnabled
+				? this.#computeItemRowCount(item, conservativeRowWidth, primaryColumnWidth)
+				: 1;
+			visualTotal += rowCounts[i];
+		}
+
+		const overflow = visualTotal > visualBudget;
+		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+
+		// Pick a window centered on the selected item that fits in visualBudget
+		// rows. Falls through to the original item-count window when every row
+		// count is 1.
+		const { startIndex, endIndex, visualOffset } = this.#pickWindow(rowCounts, visualBudget);
+
+		// Render visible items. Cap rows at the budget so a single item that
+		// wraps to more than `visualBudget` rows (pathological — e.g. a 5-row
+		// description with maxVisible=3) still keeps the popup bounded; the
+		// scrollbar carries the offscreen rows.
+		const rows: string[] = [];
+		for (let i = startIndex; i < endIndex && rows.length < visualBudget; i++) {
+			const item = this.#filteredItems[i];
+			if (!item) continue;
+			const itemRows = this.#renderItem(item, i === this.#selectedIndex, rowWidth, primaryColumnWidth);
+			for (const row of itemRows) {
+				if (rows.length >= visualBudget) break;
+				rows.push(row);
+			}
 		}
 
 		const sv = new ScrollView(rows, {
@@ -259,6 +274,54 @@ export class SelectList implements Component {
 		if (layout.kind !== "description") return 1;
 		const wrapped = wrapTextWithAnsi(layout.descriptionSingleLine, layout.remainingWidth);
 		return Math.max(1, wrapped.length);
+	}
+
+	/**
+	 * Pick a contiguous window of items containing `selectedIndex` such that
+	 * their visual rows fit within `budget`. Centers the selection roughly
+	 * mid-window: first expands up by ⌊budget/2⌋ rows, then fills downward,
+	 * then back upward with any remaining budget. For non-wrap layouts (every
+	 * `rowCounts[i] === 1`) this resolves to the same `[start, start+maxVisible)`
+	 * window the prior arithmetic produced.
+	 */
+	#pickWindow(
+		rowCounts: ReadonlyArray<number>,
+		budget: number,
+	): { startIndex: number; endIndex: number; visualOffset: number } {
+		const n = rowCounts.length;
+		const selected = Math.max(0, Math.min(this.#selectedIndex, n - 1));
+		if (n === 0) return { startIndex: 0, endIndex: 0, visualOffset: 0 };
+
+		const half = Math.floor(budget / 2);
+		let lo = selected;
+		let rowsAboveSelected = 0;
+		// Step 1: expand upward up to `half` rows above the selection so it
+		// lands near the visual middle, matching the prior centering.
+		while (lo > 0 && rowsAboveSelected + (rowCounts[lo - 1] ?? 0) <= half) {
+			lo--;
+			rowsAboveSelected += rowCounts[lo] ?? 0;
+		}
+
+		// Step 2: expand downward until the budget is filled. The selected
+		// item's own rows are always counted; if it alone exceeds `budget`
+		// the surplus is clipped at render time and the scrollbar carries it.
+		let hi = selected + 1;
+		let used = rowsAboveSelected + (rowCounts[selected] ?? 0);
+		while (hi < n && used + (rowCounts[hi] ?? 0) <= budget) {
+			used += rowCounts[hi] ?? 0;
+			hi++;
+		}
+
+		// Step 3: if room remains (selection sat near the bottom), keep
+		// expanding upward.
+		while (lo > 0 && used + (rowCounts[lo - 1] ?? 0) <= budget) {
+			lo--;
+			used += rowCounts[lo] ?? 0;
+		}
+
+		let visualOffset = 0;
+		for (let i = 0; i < lo; i++) visualOffset += rowCounts[i] ?? 0;
+		return { startIndex: lo, endIndex: hi, visualOffset };
 	}
 
 	#computeItemLayout(

@@ -306,5 +306,70 @@ describe("SelectList", () => {
 			const rendered = list.render(80).join("\n");
 			expect(rendered).toContain("█");
 		});
+
+		it("caps the popup height at maxVisible rows even when items wrap", () => {
+			// Three matching items, each wraps to ~5 rows, fits within maxVisible=5
+			// budget but the popup must NOT grow to 15 rows.
+			const items = Array.from({ length: 3 }, (_, i) => ({
+				value: `v${i}`,
+				label: `Item ${i}`,
+				description: longDescription,
+			}));
+			const maxVisible = 5;
+			const list = new SelectList(items, maxVisible, testTheme, {
+				minPrimaryColumnWidth: 12,
+				maxPrimaryColumnWidth: 32,
+				wrapDescription: true,
+			});
+
+			const rendered = list.render(80);
+			// Status status line is gated on overflow (#shouldRenderSearchStatus),
+			// so the picker proper occupies up to `maxVisible` rows.
+			expect(rendered.length).toBeLessThanOrEqual(maxVisible);
+			// Scrollbar must appear since visual rows exceed the budget.
+			expect(rendered.join("\n")).toContain("█");
+		});
+
+		it("keeps the selected item visible when navigation shifts the window past the budget", () => {
+			const items = Array.from({ length: 4 }, (_, i) => ({
+				value: `v${i}`,
+				label: `Item ${i}`,
+				description: longDescription,
+			}));
+			const maxVisible = 5;
+			const list = new SelectList(items, maxVisible, testTheme, {
+				minPrimaryColumnWidth: 12,
+				maxPrimaryColumnWidth: 32,
+				wrapDescription: true,
+			});
+
+			// Down to the last item.
+			list.handleInput("\x1b[B");
+			list.handleInput("\x1b[B");
+			list.handleInput("\x1b[B");
+			expect(list.getSelectedItem()?.value).toBe("v3");
+
+			const rendered = list.render(80);
+			expect(rendered.length).toBeLessThanOrEqual(maxVisible);
+			// The selected item's label must appear on screen.
+			expect(rendered.some(row => row.includes("Item 3"))).toBe(true);
+		});
+
+		it("clips a single oversize wrapped item so the popup never exceeds maxVisible rows", () => {
+			const items = [{ value: "huge", label: "huge", description: longDescription }];
+			const maxVisible = 3;
+			const list = new SelectList(items, maxVisible, testTheme, {
+				minPrimaryColumnWidth: 12,
+				maxPrimaryColumnWidth: 32,
+				wrapDescription: true,
+			});
+
+			const rendered = list.render(80);
+			expect(rendered.length).toBeLessThanOrEqual(maxVisible);
+			// Scrollbar reflects the offscreen tail.
+			expect(rendered.join("\n")).toContain("█");
+			// The first wrapped line (with the primary label) is still visible.
+			expect(rendered.some(row => row.includes("huge"))).toBe(true);
+		});
 	});
 });
