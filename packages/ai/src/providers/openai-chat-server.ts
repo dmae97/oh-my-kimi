@@ -91,6 +91,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					buildAssistantMessage(
 						(m.content ?? undefined) as string | OpenAIChatContentPart[] | undefined,
 						m.tool_calls,
+						(m as { reasoning_content?: string | null }).reasoning_content ?? undefined,
 						data.model,
 						now,
 					),
@@ -227,10 +228,17 @@ function decodeDataUri(url: string): { data: string; mimeType: string } | undefi
 function buildAssistantMessage(
 	content: string | OpenAIChatContentPart[] | undefined,
 	toolCalls: OpenAIChatToolCall[] | undefined,
+	reasoningContent: string | undefined,
 	modelId: string,
 	now: number,
 ): AssistantMessage {
 	const parts: AssistantMessage["content"] = [];
+	if (reasoningContent !== undefined && reasoningContent.length > 0) {
+		// Replayed reasoning channel. The signature names the wire field so
+		// completions providers that demand exact `reasoning_content` replay
+		// (DeepSeek/Kimi) echo the model's actual reasoning back verbatim.
+		parts.push({ type: "thinking", thinking: reasoningContent, thinkingSignature: "reasoning_content" });
+	}
 	const text = stringifyContent(content);
 	if (text.length > 0) parts.push({ type: "text", text });
 	if (toolCalls) {
@@ -529,6 +537,9 @@ export function encodeStream(
 		async start(controller) {
 			// contentIndex (from pi-ai events) -> tool_calls index on the wire.
 			const toolIndexByContentIndex = new Map<number, number>();
+			// wire index -> id/name emitted on the start chunk, to detect late-arriving
+			// upstream id/name that needs a corrective chunk before the finish.
+			const sentToolMeta = new Map<number, { id: string; name: string }>();
 			let nextToolIndex = 0;
 			let hasToolCalls = false;
 			let finishReason: string = "stop";
@@ -559,6 +570,7 @@ export function encodeStream(
 							toolIndexByContentIndex.set(event.contentIndex, idx);
 							const partial = event.partial.content[event.contentIndex];
 							const call = partial && partial.type === "toolCall" ? partial : undefined;
+							sentToolMeta.set(idx, { id: call?.id ?? "", name: call?.name ?? "" });
 							writeSse(
 								controller,
 								baseChunk(
@@ -588,6 +600,38 @@ export function encodeStream(
 							break;
 						}
 
+						case "toolcall_end": {
+							const idx = toolIndexByContentIndex.get(event.contentIndex);
+							if (idx === undefined) break;
+							const sent = sentToolMeta.get(idx);
+							if (sent === undefined) break;
+							// Upstream completions providers can receive the real id/name in a
+							// later chunk than toolcall_start. Emit a corrective chunk only when
+							// the streamed value was empty: accumulating clients concatenate
+							// string fields, so "" + value is the only safe correction.
+							const correctId = sent.id === "" && event.toolCall.id !== "" ? event.toolCall.id : undefined;
+							const correctName =
+								sent.name === "" && event.toolCall.name !== "" ? event.toolCall.name : undefined;
+							if (correctId !== undefined || correctName !== undefined) {
+								writeSse(
+									controller,
+									baseChunk(
+										{
+											tool_calls: [
+												{
+													index: idx,
+													...(correctId !== undefined ? { id: correctId } : {}),
+													...(correctName !== undefined ? { function: { name: correctName } } : {}),
+												},
+											],
+										},
+										null,
+									),
+								);
+							}
+							break;
+						}
+
 						case "done":
 							finishReason =
 								event.reason === "toolUse"
@@ -610,8 +654,8 @@ export function encodeStream(
 							return;
 						}
 
-						// Drop start / *_start / *_end — chat-completions wire only
-						// surfaces deltas and the terminal finish_reason.
+						// Drop start / *_start and text/thinking *_end — chat-completions
+						// wire only surfaces deltas and the terminal finish_reason.
 						default:
 							break;
 					}
