@@ -22,7 +22,7 @@ import {
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
-import type { Context, Model, TJsonSchema, TokenTaskBudget, Tool } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Context, Model, TJsonSchema, TokenTaskBudget, Tool } from "@oh-my-pi/pi-ai/types";
 import * as z from "zod/v4";
 import { withEnv } from "./helpers";
 
@@ -311,6 +311,74 @@ describe("Anthropic request fingerprint alignment", () => {
 			{ isOAuth: false },
 		)) as { max_tokens?: number };
 		expect(payload.max_tokens).toBe(128_000);
+	});
+
+	it("does not place cache_control on thinking blocks in the trailing cache window", async () => {
+		const thinkingOnlyAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "long deliberation", thinkingSignature: "sig-1" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: ANTHROPIC_MODEL.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Think about it", timestamp: Date.now() }, thinkingOnlyAssistant],
+			},
+			{ isOAuth: false },
+		)) as { messages?: Array<{ role: string; content: string | Array<{ type: string; cache_control?: unknown }> }> };
+
+		// The thinking-only assistant turn sits inside the trailing two-message
+		// cache window (the Continue. pad is appended after it) but must not get
+		// a breakpoint — Anthropic rejects cache_control on thinking blocks.
+		const assistant = payload.messages?.find(message => message.role === "assistant");
+		expect(Array.isArray(assistant?.content)).toBe(true);
+		for (const block of assistant?.content as Array<{ type: string; cache_control?: unknown }>) {
+			expect(block.cache_control).toBeUndefined();
+		}
+		const last = payload.messages?.at(-1);
+		expect((last?.content as Array<{ cache_control?: unknown }>)[0]?.cache_control).toBeDefined();
+	});
+
+	it("adds effort and mid-conversation betas to API-key requests that use those features", async () => {
+		let capturedBeta: string | undefined;
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedBeta = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
+			return new Response(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+				{ status: 400, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+		const adaptiveModel: Model<"anthropic-messages"> = {
+			...ANTHROPIC_MODEL,
+			id: "claude-opus-4-8-20260528",
+			name: "Claude Opus 4.8",
+			thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
+		};
+
+		await streamAnthropic(
+			adaptiveModel,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "sk-ant-api-test", thinkingEnabled: false, fetch: fetchMock },
+		).result();
+
+		// thinking-off on an adaptive-only model still pins output_config.effort,
+		// and the converter may emit mid-conversation system turns on Opus 4.8 —
+		// both fields need their betas on API-key requests too.
+		expect(capturedBeta).toContain("effort-2025-11-24");
+		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
 	});
 
 	it("billing-header fingerprint uses first user message, not leading developer message", async () => {
@@ -1144,6 +1212,76 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
 		expect(strictNames).toEqual(["python"]);
+	});
+
+	it("demotes allowlisted tools with strict-incompatible schema keywords to non-strict", async () => {
+		const tools: Tool[] = [
+			{
+				name: "edit",
+				description: "Edit a value",
+				parameters: {
+					type: "object",
+					properties: { q: { oneOf: [{ type: "string" }, { type: "integer" }] } },
+					required: ["q"],
+				} as TJsonSchema,
+			},
+			{
+				name: "python",
+				description: "python tool",
+				parameters: {
+					type: "object",
+					properties: { tagged: { type: "object", patternProperties: { "^x-": { type: "string" } } } },
+					required: ["tagged"],
+				} as TJsonSchema,
+			},
+			{
+				name: "find",
+				description: "find tool",
+				parameters: {
+					type: "object",
+					properties: { pattern: { type: "string" } },
+					required: ["pattern"],
+				} as TJsonSchema,
+			},
+		];
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false },
+		)) as { tools?: Array<{ name?: string; strict?: boolean }> };
+
+		// oneOf/allOf/$ref compile unpredictably under the strict grammar and
+		// patternProperties contradicts the injected additionalProperties:false;
+		// such tools must stay non-strict while clean allowlisted tools keep it.
+		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
+		expect(strictNames).toEqual(["find"]);
+	});
+
+	it("keeps the interleaved-thinking beta for dated Opus 4.0 ids", () => {
+		const legacy = buildAnthropicClientOptions({
+			model: { ...ANTHROPIC_MODEL, id: "claude-opus-4-20250514", name: "Claude Opus 4" },
+			apiKey: "sk-ant-api-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: true,
+			hasTools: false,
+		});
+		// The date suffix must not parse as minor=20250514 (>= 4.7 display support).
+		expect(legacy.defaultHeaders["anthropic-beta"]).toContain("interleaved-thinking-2025-05-14");
+
+		const modern = buildAnthropicClientOptions({
+			model: { ...ANTHROPIC_MODEL, id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+			apiKey: "sk-ant-api-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: true,
+			hasTools: false,
+		});
+		expect(modern.defaultHeaders["anthropic-beta"] ?? "").not.toContain("interleaved-thinking-2025-05-14");
 	});
 
 	it("adds legacy fine-grained tool-streaming beta only for tool requests on incompatible models", () => {

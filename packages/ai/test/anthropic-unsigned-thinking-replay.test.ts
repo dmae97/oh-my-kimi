@@ -93,6 +93,47 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		expect(blocks[1]).toEqual({ type: "text", text: "Sure." });
 	});
 
+	it("sanitizes lone surrogates in cross-API tool arguments only", () => {
+		const loneSurrogate = "broken \ud83d end";
+		const makeToolCallAssistant = (api: AssistantMessage["api"]): AssistantMessage => ({
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_1",
+					name: "write",
+					arguments: { text: loneSurrogate, nested: { parts: [loneSurrogate] } },
+				},
+			],
+			api,
+			provider: api === "anthropic-messages" ? "custom-anthropic" : "openai",
+			model: "reasoning-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 0,
+		});
+
+		// Cross-API replay: Anthropic's strict UTF-8 validation rejects lone
+		// surrogates, so string leaves are deep-sanitized.
+		const crossBlocks = assistantWireBlocks([makeUser(), makeToolCallAssistant("openai-responses")], makeModel());
+		const crossToolUse = crossBlocks.find(block => block.type === "tool_use") as WireToolUseBlock;
+		expect(crossToolUse.input.text).toBe("broken \ufffd end");
+		expect((crossToolUse.input.nested as { parts: string[] }).parts[0]).toBe("broken \ufffd end");
+
+		// Same-API replay stays byte-identical (the args came from Anthropic's own
+		// JSON; rewriting them would destabilize prompt-cache prefixes).
+		const sameBlocks = assistantWireBlocks([makeUser(), makeToolCallAssistant("anthropic-messages")], makeModel());
+		const sameToolUse = sameBlocks.find(block => block.type === "tool_use") as WireToolUseBlock;
+		expect(sameToolUse.input.text).toBe(loneSurrogate);
+	});
+
 	it("covers the Xiaomi MiMo Anthropic-compatible reporter configuration without provider allowlists", () => {
 		const model = makeModel({
 			provider: "user-custom",

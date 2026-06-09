@@ -45,6 +45,10 @@ export async function callWithCopilotModelRetry<T>(
 			return await fn();
 		} catch (error) {
 			lastError = error;
+			// A latched abort (caller cancel or local watchdog) makes any retry a
+			// guaranteed-dead attempt — surface the original error, not the
+			// scheduler's AbortError.
+			if (options.signal?.aborted) throw error;
 			if (!isCopilotTransientModelError(error) && !isRetryableError(error)) throw error;
 			if (attempt === COPILOT_MODEL_RETRY_MAX_ATTEMPTS - 1) break;
 			await scheduler.wait(retryBaseDelayMs * (attempt + 1), { signal: options.signal });

@@ -225,6 +225,54 @@ describe("anthropic first-event timeout retries", () => {
 		expect(result.responseId).toBe("msg_retry_success");
 	});
 
+	it("keeps the first-event watchdog armed when only pings arrive before message_start", async () => {
+		vi.useFakeTimers();
+		let attempt = 0;
+		let firstAttemptIteratorStarted = false;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: attempt === 1 ? [{ type: "ping" }] : createSuccessfulAnthropicEvents("retry recovered"),
+				hangAfterEvents: attempt === 1,
+				onIteratorStart:
+					attempt === 1
+						? () => {
+								firstAttemptIteratorStarted = true;
+							}
+						: undefined,
+			}) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async () => {});
+
+		const resultPromise = streamAnthropic(model, context, {
+			client,
+			streamFirstEventTimeoutMs: 1,
+			streamIdleTimeoutMs: 60_000,
+			providerRetryWait,
+		}).result();
+
+		await drainMicrotasksUntil(
+			() => firstAttemptIteratorStarted,
+			"Anthropic mock stream did not enter the ping-then-hang first attempt",
+		);
+		await drainMicrotasksUntil(() => vi.getTimerCount() > 0, "Anthropic watchdog timer was not armed");
+
+		// A keepalive must not consume the first-event watchdog: if it did, the
+		// stall would be classified as a (non-retryable) 60s idle timeout and
+		// advancing 1ms would never settle the stream.
+		vi.advanceTimersByTime(1);
+		const result = await resolveAfterMicrotasks(
+			resultPromise,
+			"Anthropic ping-then-stall did not retry via the first-event watchdog",
+		);
+
+		expect(attempt).toBe(2);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
+	});
+
 	it("does not arm the Anthropic first-event watchdog before the stream connects", async () => {
 		let seenRequestTimeout: number | undefined;
 		let seenRequestMaxRetries: number | undefined;

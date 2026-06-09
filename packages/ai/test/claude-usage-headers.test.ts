@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { claudeCodeVersion } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { UsageFetchContext } from "@oh-my-pi/pi-ai/usage";
 import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
 
@@ -75,7 +76,7 @@ describe("claude usage request headers", () => {
 
 		const headers = calls[0]?.init?.headers;
 		expect(getHeaderCaseInsensitive(headers, "authorization")).toBe(`Bearer ${token}`);
-		expect(getHeaderCaseInsensitive(headers, "user-agent")).toBe("claude-cli/2.1.160 (external, cli)");
+		expect(getHeaderCaseInsensitive(headers, "user-agent")).toBe(`claude-cli/${claudeCodeVersion} (external, cli)`);
 
 		const beta = getHeaderCaseInsensitive(headers, "anthropic-beta");
 		expect(beta).toBeDefined();

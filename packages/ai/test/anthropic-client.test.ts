@@ -72,6 +72,25 @@ describe("AnthropicMessagesClient error mapping", () => {
 		expect(error).toBeInstanceOf(AnthropicApiError);
 		expect((error as AnthropicApiError).message).toBe("500 status code (no body)");
 	});
+
+	it("does not let fetchOptions override core request fields", async () => {
+		const { calls, fetch } = createFetchMock([new Response(null, { status: 200 })]);
+		const preAborted = AbortSignal.abort();
+		const client = new AnthropicMessagesClient({
+			apiKey: "sk-test",
+			maxRetries: 0,
+			fetch,
+			fetchOptions: { method: "GET", signal: preAborted },
+		});
+
+		const response = await client.messages.create(params).asResponse();
+
+		// fetchOptions exists for transport extras (tls); a caller-supplied signal
+		// or method must not disconnect the timeout controller or break the POST.
+		expect(response.status).toBe(200);
+		expect(calls[0]?.init.method).toBe("POST");
+		expect(calls[0]?.init.signal?.aborted).toBe(false);
+	});
 });
 
 describe("AnthropicMessagesClient retries", () => {
