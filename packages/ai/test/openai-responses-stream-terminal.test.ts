@@ -168,3 +168,154 @@ describe("processResponsesStream: terminal events", () => {
 		expect(end?.toolCall.arguments).toEqual({ input: patch });
 	});
 });
+
+describe("processResponsesStream: lost output_item.added recovery", () => {
+	test("synthesizes the tool-call block when output_item.added was lost", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: {
+						type: "function_call",
+						id: "fc_lost",
+						call_id: "call_lost",
+						name: "read",
+						arguments: '{"path":"a.txt"}',
+					},
+				},
+				{ type: "response.completed", response: { id: "resp_lost", status: "completed" } },
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.content).toHaveLength(1);
+		const block = output.content[0];
+		if (block?.type !== "toolCall") throw new Error("expected a toolCall block");
+		expect(block.arguments).toEqual({ path: "a.txt" });
+		// The toolUse override fires because the call now exists in content; the
+		// agent loop executes tools from message.content.
+		expect(output.stopReason).toBe("toolUse");
+		const end = emitted.find(e => e.type === "toolcall_end") as { contentIndex: number } | undefined;
+		expect(end?.contentIndex).toBe(0);
+	});
+
+	test("synthesizes the text block when message output_item.added was lost", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: {
+						type: "message",
+						id: "msg_lost",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Recovered text", annotations: [] }],
+					},
+				},
+				{ type: "response.completed", response: { id: "resp_lost_msg", status: "completed" } },
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.content).toEqual([expect.objectContaining({ type: "text", text: "Recovered text" })]);
+		const end = emitted.find(e => e.type === "text_end") as { content: string } | undefined;
+		expect(end?.content).toBe("Recovered text");
+	});
+
+	test("routes reasoning finalization by output_index when item ids are absent", async () => {
+		const output = makeOutput();
+		const stream = { push: () => {}, end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{ type: "response.output_item.added", output_index: 0, item: { type: "reasoning", summary: [] } },
+				{ type: "response.output_item.added", output_index: 1, item: { type: "reasoning", summary: [] } },
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "reasoning", summary: [{ type: "summary_text", text: "first" }] },
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 1,
+					item: { type: "reasoning", summary: [{ type: "summary_text", text: "second" }] },
+				},
+				{ type: "response.completed", response: { id: "resp_reasoning", status: "completed" } },
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.content).toHaveLength(2);
+		const [first, second] = output.content;
+		if (first?.type !== "thinking" || second?.type !== "thinking") throw new Error("expected thinking blocks");
+		expect(first.thinking).toBe("first");
+		expect(second.thinking).toBe("second");
+		expect(first.thinkingSignature).toBeDefined();
+		expect(second.thinkingSignature).toBeDefined();
+	});
+
+	test("treats content_filter incomplete responses as errors, not length", async () => {
+		const output = makeOutput();
+		const stream = { push: () => {}, end: () => {} } as never;
+
+		await expect(
+			processResponsesStream(
+				makeStream([
+					{
+						type: "response.incomplete",
+						response: {
+							id: "resp_cf",
+							status: "incomplete",
+							incomplete_details: { reason: "content_filter" },
+						},
+					},
+				]),
+				output,
+				stream,
+				makeModel(),
+			),
+		).rejects.toThrow("incomplete: content_filter");
+	});
+
+	test("preserves premiumRequests across usage population", async () => {
+		const output = makeOutput();
+		output.usage.premiumRequests = 3;
+		const stream = { push: () => {}, end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.completed",
+					response: {
+						id: "resp_premium",
+						status: "completed",
+						usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
+					},
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.usage.premiumRequests).toBe(3);
+		expect(output.usage.input).toBe(4);
+		expect(output.usage.output).toBe(2);
+	});
+});
