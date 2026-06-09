@@ -17,7 +17,7 @@ import githubDescription from "../prompts/tools/github.md" with { type: "text" }
 import * as git from "../utils/git";
 import type { ToolSession } from ".";
 import { formatShortSha } from "./gh-format";
-import { type CacheStatus, getOrFetchView, resolveGithubCacheAuthKey } from "./github-cache";
+import { type CacheStatus, getOrFetchView, invalidateAllForNumber, resolveGithubCacheAuthKey } from "./github-cache";
 import type { OutputMeta } from "./output-meta";
 import { ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -192,6 +192,10 @@ const SEARCH_LIMIT_DEFAULT = 10;
 const SEARCH_LIMIT_MAX = 50;
 const FILE_PREVIEW_LIMIT = 50;
 const RUN_WATCH_INTERVAL_DEFAULT = 3;
+const RUN_WATCH_INTERVAL_SLOW = 15;
+const RUN_WATCH_FAST_WINDOW_MS = 60_000;
+const RUN_WATCH_NO_RUNS_GIVE_UP_MS = 90_000;
+const RUN_WATCH_MAX_POLL_FAILURES = 5;
 const RUN_WATCH_GRACE_DEFAULT = 5;
 const RUN_WATCH_TAIL_DEFAULT = 15;
 const RUN_WATCH_TAIL_MAX = 200;
@@ -716,7 +720,9 @@ export function parseSearchDateBound(raw: string, now: Date = new Date()): strin
 
 	const parsedMs = Date.parse(trimmed);
 	if (!Number.isNaN(parsedMs)) {
-		return new Date(parsedMs).toISOString();
+		// GitHub search qualifiers accept seconds precision only
+		// (`YYYY-MM-DDTHH:MM:SSZ`); strip the milliseconds toISOString emits.
+		return new Date(parsedMs).toISOString().replace(/\.\d{3}Z$/, "Z");
 	}
 
 	throw new ToolError(
@@ -1277,6 +1283,16 @@ function isFailedJob(job: GhRunJobSnapshot): boolean {
 	return job.conclusion !== undefined && JOB_FAILURE_CONCLUSIONS.has(job.conclusion);
 }
 
+const GH_RATE_LIMIT_ERROR_PATTERN = /rate limit|HTTP 429|abuse detection/i;
+
+/**
+ * Rate-limit / secondary-limit gh failures are transient; the run_watch poll
+ * loops back off and retry them instead of discarding the whole watch.
+ */
+function isRateLimitedGhError(err: unknown): boolean {
+	return err instanceof ToolError && GH_RATE_LIMIT_ERROR_PATTERN.test(err.message);
+}
+
 function formatJobState(job: GhRunJobSnapshot): string {
 	return job.conclusion ?? job.status ?? "unknown";
 }
@@ -1800,6 +1816,7 @@ async function fetchRunsForCommit(
 	repo: string,
 	headSha: string,
 	signal?: AbortSignal,
+	completedRunJobsCache?: Map<number, GhRunJobSnapshot[]>,
 ): Promise<GhRunSnapshot[]> {
 	// Filter only by `head_sha`. The SHA uniquely identifies the commit, so
 	// adding the GitHub `branch=` filter would wrongly exclude workflow runs
@@ -1826,7 +1843,19 @@ async function fetchRunsForCommit(
 		(response.workflow_runs ?? [])
 			.filter((run): run is GhActionsRunApi & { id: number } => typeof run.id === "number")
 			.map(async run => {
-				const jobs = await fetchRunJobs(cwd, repo, run.id, signal);
+				// Completed runs' job lists are stable until a re-run flips
+				// `status` off "completed"; reuse them across watch polls so a
+				// long watch does not refetch every finished run's jobs. A run
+				// observed non-completed evicts its entry — when the re-run
+				// completes, `status` flips back to "completed" and a stale
+				// entry would serve the FIRST attempt's jobs and logs forever.
+				const completed = run.status === "completed";
+				if (!completed) completedRunJobsCache?.delete(run.id);
+				let jobs = completed ? completedRunJobsCache?.get(run.id) : undefined;
+				if (!jobs) {
+					jobs = await fetchRunJobs(cwd, repo, run.id, signal);
+					if (completed) completedRunJobsCache?.set(run.id, jobs);
+				}
 				return normalizeRunSnapshot(run, jobs);
 			}),
 	);
@@ -1857,12 +1886,13 @@ async function fetchRunJobs(
 			signal,
 			{ repoProvided: true },
 		);
-		const pageJobs = (response.jobs ?? [])
-			.map(job => normalizeRunJob(job))
-			.filter((job): job is GhRunJobSnapshot => job !== null);
+		const rawPage = response.jobs ?? [];
+		const pageJobs = rawPage.map(job => normalizeRunJob(job)).filter((job): job is GhRunJobSnapshot => job !== null);
 		jobs.push(...pageJobs);
 
-		if (pageJobs.length < RUN_JOBS_PAGE_SIZE) {
+		// Compare the raw page length: normalizeRunJob drops malformed items,
+		// and a post-filter short page must not end pagination early.
+		if (rawPage.length < RUN_JOBS_PAGE_SIZE) {
 			break;
 		}
 
@@ -1907,7 +1937,9 @@ async function fetchPrReviewComments(
 			.filter((comment): comment is GhPrReviewComment => comment !== null);
 		reviewComments.push(...pageComments);
 
-		if (pageComments.length < REVIEW_COMMENTS_PAGE_SIZE) {
+		// Compare the raw page length: a dropped malformed item must not end
+		// pagination early and silently lose the remaining pages.
+		if (response.length < REVIEW_COMMENTS_PAGE_SIZE) {
 			break;
 		}
 
@@ -2548,6 +2580,9 @@ async function fetchPrViewFresh(
  */
 export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<ViewLookupResult<GhIssueViewData>> {
 	const identifier = requireNonEmpty(options.issue, "issue");
+	if (identifier.startsWith("-")) {
+		throw new ToolError(`invalid issue identifier: ${identifier}. Pass an issue number or URL.`);
+	}
 	const includeComments = options.includeComments ?? true;
 	const authKey = options.cacheAuthKey === undefined ? (resolveGithubCacheAuthKey() ?? null) : options.cacheAuthKey;
 	const urlParse = parseIssueUrl(identifier);
@@ -2885,7 +2920,10 @@ async function fetchPrDiffFresh(
 	appendRepoFlag(args, repo, String(number));
 	const text = await git.github.text(cwd, args, signal, { repoProvided: true, trimOutput: false });
 	const payload = parsePrUnifiedDiff(text);
-	return { rendered: text, sourceUrl: undefined, payload };
+	// `rendered` already carries the verbatim diff; blank the payload copy so
+	// the cache row stores a potentially huge diff once instead of twice.
+	// `getOrFetchPrDiff` rehydrates `unified` from `rendered`.
+	return { rendered: text, sourceUrl: undefined, payload: { unified: "", files: payload.files } };
 }
 
 /**
@@ -2909,7 +2947,8 @@ export async function getOrFetchPrDiff(options: PrDiffLookupOptions): Promise<Vi
 	return {
 		rendered: lookup.rendered,
 		sourceUrl: lookup.sourceUrl,
-		payload: lookup.payload,
+		// Rehydrate the unified text from `rendered` (stored once per row).
+		payload: { unified: lookup.rendered, files: lookup.payload.files },
 		status: lookup.status,
 		fetchedAt: lookup.fetchedAt,
 	};
@@ -2930,9 +2969,35 @@ async function executePrCheckout(
 	const prRefs = prList.length > 0 ? prList : [undefined];
 	const isMulti = prRefs.length > 1;
 
-	const outcomes = await Promise.all(
+	const settled = await Promise.allSettled(
 		prRefs.map(prRef => checkoutPullRequest(session, signal, { prRef, repo, force })),
 	);
+	const outcomes: PrCheckoutOutcome[] = [];
+	const failures: Array<{ prRef: string | undefined; reason: unknown }> = [];
+	for (let i = 0; i < settled.length; i++) {
+		const entry = settled[i];
+		if (entry.status === "fulfilled") outcomes.push(entry.value);
+		else failures.push({ prRef: prRefs[i], reason: entry.reason });
+	}
+	if (failures.length > 0) {
+		throwIfAborted(signal);
+		const failureLines = failures.map(
+			f => `- ${f.prRef ?? "(current branch)"}: ${f.reason instanceof Error ? f.reason.message : String(f.reason)}`,
+		);
+		if (outcomes.length === 0) {
+			if (failures.length === 1) throw failures[0].reason;
+			throw new ToolError(`all ${failures.length} PR checkouts failed:\n${failureLines.join("\n")}`);
+		}
+		// Partial success: report the worktrees that did get created alongside
+		// the failures so the agent does not lose track of them.
+		const sections = outcomes.map(formatPrCheckoutResult);
+		const header = `# ${outcomes.length}/${settled.length} Pull Request Worktrees checked out (${failures.length} failed)`;
+		const text = [header, "", ...joinSections(sections), "", "## Failed", ...failureLines].join("\n").trim();
+		return buildTextResult(text, undefined, {
+			repo,
+			checkouts: outcomes.map(outcomeToSummary),
+		});
+	}
 
 	if (!isMulti) {
 		const [outcome] = outcomes;
@@ -2983,6 +3048,9 @@ async function checkoutPullRequest(
 	options: PrCheckoutOptions,
 ): Promise<PrCheckoutOutcome> {
 	const { prRef, repo, force } = options;
+	if (prRef?.startsWith("-")) {
+		throw new ToolError(`invalid PR identifier: ${prRef}. Pass a PR number, URL, or branch name.`);
+	}
 	const args = ["pr", "view"];
 	if (prRef) args.push(prRef);
 	appendRepoFlag(args, repo, prRef);
@@ -3121,6 +3189,14 @@ async function executePrPush(
 		remote: target.remoteName,
 		signal,
 	});
+
+	// A successful push changes what `pr://N` and `pr://N/diff` should show;
+	// drop the cached rows so the canonical "push → re-read diff" flow sees
+	// fresh data instead of a soft-TTL stale snapshot.
+	const pushedPr = parsePullRequestUrl(target.prUrl);
+	if (pushedPr.prNumber !== undefined) {
+		invalidateAllForNumber(pushedPr.prNumber, pushedPr.repo);
+	}
 
 	return buildTextResult(
 		formatPrPushResult({
@@ -3376,9 +3452,24 @@ async function executeRunWatch(
 	const explicitRepo = normalizeOptionalString(params.repo);
 	const runReference = parseRunReference(params.run);
 	const repo = await resolveGitHubRepo(session.cwd, explicitRepo, runReference.repo, signal);
-	const intervalSeconds = RUN_WATCH_INTERVAL_DEFAULT;
 	const graceSeconds = RUN_WATCH_GRACE_DEFAULT;
 	const tail = resolveTailLimit(params.tail);
+	const watchStartMs = Date.now();
+	// Fast polls for the first minute for snappy feedback, then back off:
+	// every commit-watch poll is one runs-list call plus one jobs call per
+	// non-completed run, and long builds must not burn the shared
+	// authenticated REST quota.
+	const currentIntervalSeconds = () =>
+		Date.now() - watchStartMs < RUN_WATCH_FAST_WINDOW_MS ? RUN_WATCH_INTERVAL_DEFAULT : RUN_WATCH_INTERVAL_SLOW;
+	let consecutivePollFailures = 0;
+	const handlePollError = async (err: unknown): Promise<void> => {
+		if (signal?.aborted) throw err;
+		consecutivePollFailures += 1;
+		if (!isRateLimitedGhError(err) || consecutivePollFailures > RUN_WATCH_MAX_POLL_FAILURES) throw err;
+		// Rate-limited: back off with the slow interval and retry instead of
+		// discarding the whole watch (and its accumulated context).
+		await scheduler.wait(RUN_WATCH_INTERVAL_SLOW * 1000, { signal });
+	};
 	if (runReference.runId !== undefined) {
 		const runId = runReference.runId;
 		let pollCount = 0;
@@ -3387,7 +3478,14 @@ async function executeRunWatch(
 			throwIfAborted(signal);
 			pollCount += 1;
 
-			let run = await fetchRunSnapshot(session.cwd, repo, runId, signal);
+			let run: GhRunSnapshot;
+			try {
+				run = await fetchRunSnapshot(session.cwd, repo, runId, signal);
+			} catch (err) {
+				await handlePollError(err);
+				continue;
+			}
+			consecutivePollFailures = 0;
 			const details = buildRunWatchDetails(repo, run, {
 				state: "watching",
 				pollCount,
@@ -3397,7 +3495,7 @@ async function executeRunWatch(
 				details,
 			});
 
-			const failedJobs = run.jobs.filter(isFailedJob);
+			let failedJobs = run.jobs.filter(isFailedJob);
 			const runCompleted = run.status === "completed";
 
 			if (failedJobs.length > 0) {
@@ -3417,13 +3515,28 @@ async function executeRunWatch(
 						}),
 					});
 					await scheduler.wait(graceSeconds * 1000, { signal });
-					run = await fetchRunSnapshot(session.cwd, repo, runId, signal);
+					try {
+						const refetched = await fetchRunSnapshot(session.cwd, repo, runId, signal);
+						const refetchedFailed = refetched.jobs.filter(isFailedJob);
+						// An auto-retry can reset job conclusions between
+						// detection and refetch; keep the originally-detected
+						// failure list (and its snapshot) when the refetch no
+						// longer shows any failures so the watch never ends
+						// with a failure result and zero logs.
+						if (refetchedFailed.length > 0) {
+							run = refetched;
+							failedJobs = refetchedFailed;
+						}
+					} catch (err) {
+						if (signal?.aborted) throw err;
+						// Refetch failure: report from the original snapshot.
+					}
 				}
 
 				const failedJobLogs = await fetchFailedJobLogs(
 					session.cwd,
 					repo,
-					run.jobs.filter(isFailedJob).map(job => ({ run, job })),
+					failedJobs.map(job => ({ run, job })),
 					tail,
 					signal,
 				);
@@ -3451,7 +3564,7 @@ async function executeRunWatch(
 				return buildTextResult(formatRunWatchResult(repo, run, [], tail), run.url, finalDetails);
 			}
 
-			await scheduler.wait(intervalSeconds * 1000, { signal });
+			await scheduler.wait(currentIntervalSeconds() * 1000, { signal });
 		}
 	}
 
@@ -3479,12 +3592,22 @@ async function executeRunWatch(
 	}
 	let pollCount = 0;
 	let settledSuccessSignature: string | undefined;
+	let everSawRuns = false;
+	const completedRunJobsCache = new Map<number, GhRunJobSnapshot[]>();
 
 	while (true) {
 		throwIfAborted(signal);
 		pollCount += 1;
 
-		let runs = await fetchRunsForCommit(session.cwd, repo, headSha, signal);
+		let runs: GhRunSnapshot[];
+		try {
+			runs = await fetchRunsForCommit(session.cwd, repo, headSha, signal, completedRunJobsCache);
+		} catch (err) {
+			await handlePollError(err);
+			continue;
+		}
+		consecutivePollFailures = 0;
+		if (runs.length > 0) everSawRuns = true;
 		const details = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
 			state: "watching",
 			pollCount,
@@ -3496,6 +3619,7 @@ async function executeRunWatch(
 
 		const outcome = getRunCollectionOutcome(runs);
 		if (outcome === "failure") {
+			let failedPairs = runs.flatMap(run => run.jobs.filter(isFailedJob).map(job => ({ run, job })));
 			if (graceSeconds > 0) {
 				const note = `Failure detected. Waiting ${graceSeconds}s to capture concurrent failures before fetching logs.`;
 				onUpdate?.({
@@ -3512,16 +3636,23 @@ async function executeRunWatch(
 					}),
 				});
 				await scheduler.wait(graceSeconds * 1000, { signal });
-				runs = await fetchRunsForCommit(session.cwd, repo, headSha, signal);
+				try {
+					const refetched = await fetchRunsForCommit(session.cwd, repo, headSha, signal, completedRunJobsCache);
+					const refetchedPairs = refetched.flatMap(run => run.jobs.filter(isFailedJob).map(job => ({ run, job })));
+					// Keep the originally-detected failure list when an
+					// auto-retry reset the conclusions during the grace window
+					// (see the run-id branch above).
+					if (refetchedPairs.length > 0) {
+						runs = refetched;
+						failedPairs = refetchedPairs;
+					}
+				} catch (err) {
+					if (signal?.aborted) throw err;
+					// Refetch failure: report from the original snapshots.
+				}
 			}
 
-			const failedJobLogs = await fetchFailedJobLogs(
-				session.cwd,
-				repo,
-				runs.flatMap(run => run.jobs.filter(isFailedJob).map(job => ({ run, job }))),
-				tail,
-				signal,
-			);
+			const failedJobLogs = await fetchFailedJobLogs(session.cwd, repo, failedPairs, tail, signal);
 			const finalDetails = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
 				state: "completed",
 				failedJobLogs,
@@ -3553,7 +3684,8 @@ async function executeRunWatch(
 			}
 
 			settledSuccessSignature = signature;
-			const note = `All known workflow runs completed successfully. Waiting ${intervalSeconds}s to ensure no additional runs appear for this commit.`;
+			const confirmWaitSeconds = currentIntervalSeconds();
+			const note = `All known workflow runs completed successfully. Waiting ${confirmWaitSeconds}s to ensure no additional runs appear for this commit.`;
 			onUpdate?.({
 				content: [
 					{
@@ -3567,11 +3699,22 @@ async function executeRunWatch(
 					note,
 				}),
 			});
-			await scheduler.wait(intervalSeconds * 1000, { signal });
+			await scheduler.wait(confirmWaitSeconds * 1000, { signal });
 			continue;
 		}
 
 		settledSuccessSignature = undefined;
-		await scheduler.wait(intervalSeconds * 1000, { signal });
+		if (!everSawRuns && Date.now() - watchStartMs >= RUN_WATCH_NO_RUNS_GIVE_UP_MS) {
+			// A repo with no Actions configured (or Actions disabled) never
+			// produces a run for this commit; give up with a clear message
+			// instead of polling forever.
+			const elapsedSec = Math.round((Date.now() - watchStartMs) / 1000);
+			return buildTextResult(
+				`No workflow runs found for ${repo}@${formatShortSha(headSha) ?? headSha} after ${elapsedSec}s (${pollCount} polls). The commit may not trigger any GitHub Actions workflows, or Actions may be disabled for this repository. Pass \`run\` to watch a specific run.`,
+				undefined,
+				buildCommitRunWatchDetails(repo, headSha, branch, runs, { state: "completed", pollCount }),
+			);
+		}
+		await scheduler.wait(currentIntervalSeconds() * 1000, { signal });
 	}
 }
