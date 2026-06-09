@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.10] - 2026-06-09
+
 ### Added
 
 - Exported `wrapFetchForCch` so non-streaming OAuth callers (e.g. the web-search provider) can patch the Claude Code billing-header `cch` attestation into their request bodies instead of shipping the `cch=00000` placeholder.
