@@ -25,6 +25,16 @@ import { StreamingRevealController } from "./streaming-reveal";
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
 const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
+/**
+ * Concurrent IRC cards allowed in the transcript's live region. Cards land
+ * below a still-live block (a running task), where they cannot commit to
+ * native scrollback (commits are prefix-only) — every visible card inflates
+ * the live region and pushes the live block's uncommitted rows above the
+ * window top, where they are neither on screen nor in history. A swarm burst
+ * (several agents coordinating at once) must therefore stay bounded: the
+ * oldest live-region card retires as soon as a new one would exceed the cap.
+ */
+const MAX_LIVE_IRC_CARDS = 4;
 
 /**
  * Loader label shown the instant a user interrupt (Esc) is requested, kept until
@@ -64,6 +74,9 @@ export class EventController {
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
+	// Insertion-ordered IRC cards not yet retired; values are the transcript
+	// components each card contributed (see #retireIrcCard for the guard).
+	#liveIrcCards = new Map<string, Component[]>();
 	#streamingReveal: StreamingRevealController;
 	#handlers: AgentSessionEventHandlers;
 
@@ -111,6 +124,7 @@ export class EventController {
 			clearTimeout(timer);
 		}
 		this.#ircExpiryTimers.clear();
+		this.#liveIrcCards.clear();
 	}
 
 	#resetReadGroup(): void {
@@ -324,6 +338,7 @@ export class EventController {
 		this.#resetReadGroup();
 		const components = this.ctx.addMessageToChat(event.message);
 		this.#scheduleIrcExpiry(signature, components);
+		this.#enforceIrcCardCap(signature);
 		this.ctx.ui.requestRender();
 	}
 
@@ -331,13 +346,47 @@ export class EventController {
 		if (components.length === 0 || this.#ircExpiryTimers.has(signature)) return;
 		const timer = setTimeout(() => {
 			this.#ircExpiryTimers.delete(signature);
-			for (const component of components) {
-				this.ctx.chatContainer.removeChild(component);
-			}
-			this.ctx.ui.requestRender();
+			this.#retireIrcCard(signature);
 		}, IRC_MESSAGE_VISIBLE_TTL_MS);
 		timer.unref?.();
 		this.#ircExpiryTimers.set(signature, timer);
+		this.#liveIrcCards.set(signature, components);
+	}
+
+	/**
+	 * Remove an expired/evicted IRC card — but only while it still sits below a
+	 * live block, where its rows cannot have entered native scrollback. Once
+	 * everything above it has finalized, its rows may already be committed;
+	 * removing them then is an interior deletion of the committed prefix, which
+	 * the engine can only repair by recommitting every row below the gap —
+	 * exactly the duplicated-block artifact this guard exists to prevent. Such
+	 * a card simply stays: it is final history, and the window scrolls past it.
+	 */
+	#retireIrcCard(signature: string): void {
+		const components = this.#liveIrcCards.get(signature);
+		this.#liveIrcCards.delete(signature);
+		if (!components) return;
+		let removed = false;
+		for (const component of components) {
+			if (!this.ctx.chatContainer.isWithinLiveRegion(component)) continue;
+			this.ctx.chatContainer.removeChild(component);
+			removed = true;
+		}
+		if (removed) this.ctx.ui.requestRender();
+	}
+
+	/** Evict oldest live-region cards beyond {@link MAX_LIVE_IRC_CARDS}. */
+	#enforceIrcCardCap(latestSignature: string): void {
+		while (this.#liveIrcCards.size > MAX_LIVE_IRC_CARDS) {
+			const oldest = this.#liveIrcCards.keys().next().value;
+			if (oldest === undefined || oldest === latestSignature) return;
+			const timer = this.#ircExpiryTimers.get(oldest);
+			if (timer) {
+				clearTimeout(timer);
+				this.#ircExpiryTimers.delete(oldest);
+			}
+			this.#retireIrcCard(oldest);
+		}
 	}
 
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {

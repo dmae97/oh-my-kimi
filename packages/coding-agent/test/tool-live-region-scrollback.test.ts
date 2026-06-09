@@ -191,6 +191,67 @@ describe("transcript reactive commit boundary", () => {
 		chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
 	});
+
+	it("never re-promotes rows that have ever been rewritten in place (slow ticker)", () => {
+		const chat = new TranscriptContainer();
+		const head = markerLines("head-", 8);
+		// Task progress tree shape: per-agent rows whose tool/cost counters tick
+		// every few seconds — far slower than the promotion window, so each row
+		// looks "settled" between updates.
+		const tree = (a: number, b: number, c: number) => [
+			`agent-one · ${a} tools`,
+			`agent-two · ${b} tools`,
+			`agent-three · ${c} tools`,
+		];
+		const block = new MutableLiveBlock([...head, ...tree(0, 0, 0)]);
+		chat.addChild(block);
+		chat.render(80);
+
+		// Stagger slow updates with long quiet stretches in between. Once any
+		// tree row has rewritten in place, no tree row may ever promote again:
+		// a promoted-then-rewritten row is a committed-then-rewritten row, and
+		// the engine audit can only repair that by recommitting — spraying a
+		// stale snapshot of the block into scrollback on every later tick.
+		let maxSafeEnd = 0;
+		const counters: [number, number, number] = [0, 0, 0];
+		for (let tick = 0; tick < 6; tick++) {
+			counters[tick % 3] += 1;
+			block.setLines([...head, ...tree(...counters)]);
+			for (let frame = 0; frame < 40; frame++) {
+				chat.render(80);
+				const safeEnd = chat.getNativeScrollbackCommitSafeEnd() ?? 0;
+				if (tick > 0) maxSafeEnd = Math.max(maxSafeEnd, safeEnd);
+			}
+		}
+
+		// The static head still commits; the slow-ticking tree never does.
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
+		expect(maxSafeEnd).toBe(8);
+	});
+
+	it("keeps the rewrite floor anchored across append growth below it", () => {
+		const chat = new TranscriptContainer();
+		const head = markerLines("head-", 4);
+		const block = new MutableLiveBlock([...head, "ticker · 0"]);
+		chat.addChild(block);
+		chat.render(80);
+
+		// Tick once: the floor lands on the ticker row (index 4).
+		block.setLines([...head, "ticker · 1"]);
+		chat.render(80);
+
+		// Settled rows are inserted above the ticker (append above stable
+		// trailing chrome): the ticker shifts down and the floor must travel
+		// with it, or the new settled rows would be barred from promoting.
+		block.setLines([...head, "settled-a", "settled-b", "ticker · 1"]);
+		for (let i = 0; i < 70; i++) chat.render(80);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(6);
+
+		// And the shifted ticker itself still never promotes.
+		block.setLines([...head, "settled-a", "settled-b", "ticker · 2"]);
+		for (let i = 0; i < 70; i++) chat.render(80);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(6);
+	});
 });
 
 describe("tool live-region scrollback", () => {

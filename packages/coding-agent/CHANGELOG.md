@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Added a limit of 4 concurrent IRC cards in the transcript live region and evicted the oldest live-region card when new IRC cards would exceed the cap
+
+### Fixed
+
+- Kept IRC cards from being removed after their TTL once they had entered committed history above the live region
+- Prevented slowly changing live-region rows from being repeatedly promoted to native scrollback, eliminating duplicate blocks from periodic in-place rewrites
 
 ## [15.10.10] - 2026-06-09
 
