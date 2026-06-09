@@ -358,8 +358,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							session,
 							idleTimeoutMs,
 							reset: cell.reset,
-							artifactPath,
-							artifactId,
 							onChunk: chunk => {
 								outputSink!.push(chunk);
 							},

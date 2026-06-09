@@ -20,8 +20,6 @@ export interface ExecutorBackendExecOptions {
 	 */
 	idleTimeoutMs: number;
 	reset: boolean;
-	artifactPath: string | undefined;
-	artifactId: string | undefined;
 	onChunk: (chunk: string) => void;
 	/**
 	 * Live status events (read/write/agent/…) delivered as they are emitted,

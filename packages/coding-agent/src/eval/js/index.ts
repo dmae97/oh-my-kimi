@@ -30,8 +30,6 @@ export default {
 			sessionId: namespaceSessionId(opts.sessionId),
 			sessionFile: opts.sessionFile,
 			reset: opts.reset,
-			artifactPath: opts.artifactPath,
-			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
 			onStatus: opts.onStatus,
 			session: opts.session,
