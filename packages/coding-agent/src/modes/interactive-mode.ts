@@ -409,7 +409,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
-		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
 		this.ui.setMaxInlineImages(settings.get("tui.maxInlineImages"));
 		// OSC 66 text-sizing is Kitty-only; resolve the setting against the terminal's
 		// capability (`TERMINAL.textSizing` defaults on for Kitty) so it stays off
@@ -429,7 +428,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		this.editor.onAutocompleteUpdate = () => {
-			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			this.ui.requestRender();
 		};
 		this.#syncEditorMaxHeight();
 		this.#resizeHandler = () => {
@@ -959,13 +958,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.editor.setText("");
 		this.editor.imageLinks = undefined;
-		// Reconciliation checkpoint: only retire frozen block snapshots after TUI
-		// proves the native viewport is at the tail and replays scrollback safely.
-		// Unknown host viewports stay frozen; thawing them would expose live rows
-		// over stale native history and can yank or duplicate when ED3 is unsafe.
-		if (this.ui.refreshNativeScrollbackIfDirty()) {
-			this.chatContainer.thaw();
-		}
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 		return submission;
@@ -2587,7 +2579,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		};
 		nextEditor.onAutocompleteUpdate = () => {
-			this.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			this.ui.requestRender();
 		};
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {

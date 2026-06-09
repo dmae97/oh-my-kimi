@@ -36,19 +36,6 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
  */
 export const INTERRUPTING_WORKING_MESSAGE = "Interrupting…";
 
-// Events that change foreground streaming state, or that reset a turn. The TUI
-// eager native-scrollback rebuild mode is recomputed only on these so unrelated
-// IRC/notices/status refreshes do not toggle scrollback replay policy.
-const STREAM_RENDER_MODE_EVENTS: Record<string, true> = {
-	agent_start: true,
-	agent_end: true,
-	message_start: true,
-	message_end: true,
-	tool_execution_start: true,
-	tool_execution_update: true,
-	tool_execution_end: true,
-};
-
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
@@ -65,7 +52,6 @@ export class EventController {
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
-	#assistantMessageStreaming = false;
 	#agentTurnActive = false;
 	#interrupting = false;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
@@ -217,30 +203,6 @@ export class EventController {
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
-		// While an assistant turn is active, visible status chrome and foreground
-		// transcript blocks can re-render after rows have entered native scrollback
-		// (idle Working loader, Markdown fences, wrapping, tool previews). Let the
-		// TUI use its foreground live-region path instead of idle deferral, which
-		// can otherwise leave the loader/status frame frozen until the next input.
-		// Background-running tools after the turn ends are excluded so late async
-		// updates keep the no-yank deferral; agent_start/agent_end bracket the
-		// foreground turn.
-		if (STREAM_RENDER_MODE_EVENTS[event.type]) {
-			this.#refreshToolRenderMode();
-		}
-	}
-
-	#refreshToolRenderMode(): void {
-		let foregroundToolActive = this.#agentTurnActive || this.#assistantMessageStreaming;
-		if (!foregroundToolActive) {
-			for (const toolCallId of this.ctx.pendingTools.keys()) {
-				if (!this.#backgroundToolCallIds.has(toolCallId)) {
-					foregroundToolActive = true;
-					break;
-				}
-			}
-		}
-		this.ctx.ui.setEagerNativeScrollbackRebuild(foregroundToolActive);
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
@@ -250,7 +212,6 @@ export class EventController {
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#resetReadGroup();
-		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
 		// Restore the previous turn's inline error in the transcript before dropping
 		// the banner, so the error stays in history once the banner is gone.
@@ -267,7 +228,6 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		this.#cancelIdleCompaction();
-		this.#refreshToolRenderMode();
 		this.ctx.ensureLoadingAnimation();
 		this.ctx.ui.requestRender();
 	}
@@ -340,7 +300,6 @@ export class EventController {
 			this.ctx.addMessageToChat(event.message);
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
-			this.#assistantMessageStreaming = true;
 			this.#lastVisibleBlockCount = 0;
 			this.ctx.streamingComponent = new AssistantMessageComponent(
 				undefined,
@@ -491,9 +450,6 @@ export class EventController {
 
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		if (event.message.role === "user") return;
-		if (event.message.role === "assistant") {
-			this.#assistantMessageStreaming = false;
-		}
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.stop();
@@ -701,7 +657,6 @@ export class EventController {
 	}
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		this.#agentTurnActive = false;
-		this.#assistantMessageStreaming = false;
 		this.#streamingReveal.stop();
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();

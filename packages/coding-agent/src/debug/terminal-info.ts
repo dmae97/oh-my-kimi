@@ -36,7 +36,6 @@ export interface TerminalStateInfo {
 	hyperlinks: boolean;
 	deccara: boolean;
 	screenToScrollback: boolean;
-	eagerEraseScrollbackRisk: boolean;
 	synchronizedOutput: boolean;
 	multiplexer: string | null;
 	env: { TERM?: string; TERM_PROGRAM?: string; TERM_PROGRAM_VERSION?: string; COLORTERM?: string };
@@ -82,7 +81,6 @@ export function collectTerminalState(runtime: TerminalRuntimeState): TerminalSta
 		hyperlinks: TERMINAL.hyperlinks,
 		deccara: TERMINAL.deccara,
 		screenToScrollback: TERMINAL.supportsScreenToScrollback,
-		eagerEraseScrollbackRisk: TERMINAL.eagerEraseScrollbackRisk,
 		synchronizedOutput: runtime.synchronizedOutput,
 		multiplexer: detectMultiplexer(env),
 		env: {
@@ -115,7 +113,6 @@ export function formatTerminalState(info: TerminalStateInfo): string {
 		"",
 		"Scrollback",
 		`  Screen->history clear: ${info.screenToScrollback ? "CSI 22 J" : "CSI 2 J (redraw)"}`,
-		`  Eager-erase risk:      ${yesNo(info.eagerEraseScrollbackRisk)} (ED3 may yank scrolled readers)`,
 		"",
 		"Detection signals",
 		`  TERM:                 ${info.env.TERM ?? "(unset)"}`,

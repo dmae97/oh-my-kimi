@@ -267,7 +267,7 @@ export class InputController {
 				const focused = this.ctx.ui.getFocused();
 				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
 				target.pasteText(text);
-				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+				this.ctx.ui.requestRender();
 			},
 			pasteImage: async image => {
 				// Images can only land in the main editor — when a modal Input is
@@ -755,7 +755,7 @@ export class InputController {
 		const dims = await this.#imageDimensions(imageData);
 		const label = dims ? `[Image #${imageNum}, ${dims.width}x${dims.height}]` : `[Image #${imageNum}]`;
 		this.ctx.editor.insertText(`${label} `);
-		this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.ctx.ui.requestRender();
 	}
 
 	/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
@@ -801,7 +801,7 @@ export class InputController {
 			});
 			if (!image) {
 				this.ctx.editor.pasteText(path);
-				this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+				this.ctx.ui.requestRender();
 				this.ctx.showStatus("Pasted path is not a supported image");
 				return;
 			}
@@ -811,7 +811,7 @@ export class InputController {
 			);
 		} catch (error) {
 			this.ctx.editor.pasteText(path);
-			this.ctx.ui.requestRender(false, { allowUnknownViewportMutation: true });
+			this.ctx.ui.requestRender();
 			this.ctx.showStatus(
 				error instanceof ImageInputTooLargeError ? error.message : "Failed to read pasted image path",
 			);

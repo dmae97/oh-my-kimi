@@ -242,18 +242,12 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 			expect(sawPreviewSentinel).toBe(true);
 			expect(maxStreamingHeight).toBeGreaterThan(term.rows);
 
-			const preCheckpointBufferText = normalizedBufferRows(term).join("\n");
-			const stalePreviewRowsExistedBeforeCheckpoint = preCheckpointBufferText.includes(previewPrefix);
 			term.scrollLines(1_000);
-			const checkpointRefreshed = tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
 			await settleTerminal(term);
 
 			const finalBufferText = normalizedBufferRows(term).join("\n");
 			expect(finalBufferText).toContain(finalSentinel);
 			expect(finalBufferText).not.toContain(previewPrefix);
-			if (stalePreviewRowsExistedBeforeCheckpoint) {
-				expect(checkpointRefreshed).toBe(true);
-			}
 
 			term.scrollLines(-1_000);
 			await term.flush();
