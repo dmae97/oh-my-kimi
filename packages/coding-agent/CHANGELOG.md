@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.10] - 2026-06-09
+
 ### Added
 
 - Added a read-only `view` op to the `todo` tool that echoes the current list without mutating state, so the agent can recover exact task text instead of guessing it from memory.
@@ -19,15 +21,12 @@
 - Fixed the Anthropic web-search provider claiming the Claude Code identity on API-key requests: the CC billing header + system instruction were injected whenever the model wasn't Haiku 3.5, regardless of auth mode. Injection is now OAuth-gated like the streaming path, and OAuth search requests patch the billing header's `cch` attestation (via `wrapFetchForCch`) instead of shipping the `cch=00000` placeholder.
 - Fixed long streamed content appearing cut off mid-run: scrolled-off rows were erased from the viewport without ever being appended to terminal history. The transcript's commit boundary (`deriveLiveCommitState`) was all-or-nothing per block — one perpetually rewriting row (a task tool's ticking progress tree, per-agent cost/tool counters, spinner stats) suspended scrollback commits for the entire block, so once the block outgrew the viewport its static head (e.g. a task's prompt/context markdown) was neither committed nor on screen until the tool sealed, and was lost outright if the session ended mid-run. A stable-prefix ratchet now promotes leading rows that stayed visibly identical for a full 30-frame window as commit-safe, so the settled head reaches native scrollback while only the genuinely volatile tail stays deferred; a rewrite above the promoted run retreats the boundary and the engine audit recommits (duplication, never loss).
 - Fixed local tiny-title worker stdout/stderr leaking raw native model output such as `</title>` and cache/status lines into the interactive TUI scrollback ([#2206](https://github.com/can1357/oh-my-pi/issues/2206)).
+- Fixed task-agent discovery advertising Claude Code custom agents from `.claude/agents/*.md` as OMP subagents; direct task-agent discovery now only loads OMP-native `.omp` agent roots, while Claude marketplace plugin agents keep their existing provider path ([#2209](https://github.com/can1357/oh-my-pi/issues/2209)).
 
 ### Removed
 
 - Removed the `clearOnShrink` setting and its `PI_CLEAR_ON_SHRINK` environment variable: the rewritten renderer always clears shrunken rows exactly, so the flicker/perf tradeoff the setting controlled no longer exists. Existing config entries are ignored.
 - Removed the prompt-submit native-scrollback reconciliation checkpoint and the eager streaming render mode from the interactive controllers — the renderer's append-only contract made both obsolete.
-
-### Fixed
-
-- Fixed task-agent discovery advertising Claude Code custom agents from `.claude/agents/*.md` as OMP subagents; direct task-agent discovery now only loads OMP-native `.omp` agent roots, while Claude marketplace plugin agents keep their existing provider path ([#2209](https://github.com/can1357/oh-my-pi/issues/2209)).
 
 ## [15.10.9] - 2026-06-09
 
