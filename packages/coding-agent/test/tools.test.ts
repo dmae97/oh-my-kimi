@@ -567,6 +567,23 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Use :1 to read from the start, or :3 to read the last line.");
 		});
 
+		it("should emit a binary notice instead of mojibake for files with NUL bytes", async () => {
+			const testFile = path.join(testDir, "blob.bin");
+			fs.writeFileSync(testFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0xff, 0xfe, 0x64, 0x65]));
+
+			const result = await readTool.execute("test-call-binary-nul", { path: testFile });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("Cannot read binary file");
+			expect(output).toContain("NUL bytes");
+		});
+
+		it("should reject malformed internal-URL selectors instead of dumping the whole resource", async () => {
+			await expect(readTool.execute("test-call-bad-internal-sel", { path: "artifact://3:-100" })).rejects.toThrow(
+				/Invalid selector ':-100'/,
+			);
+		});
+
 		it("should include truncation details when truncated", async () => {
 			const testFile = path.join(testDir, "large-file.txt");
 			const lines = Array.from({ length: 3500 }, (_, i) => `Line ${i + 1}`);
@@ -719,6 +736,53 @@ describe("Coding Agent Tools", () => {
 			});
 		}
 
+		it("should treat a selector-shaped archive subpath as a root listing selector", async () => {
+			const archivePath = path.join(testDir, "root-selector.tar");
+			fs.writeFileSync(
+				archivePath,
+				createTarArchive([
+					{ path: "alpha.txt", content: "alpha\n" },
+					{ path: "beta.txt", content: "beta\n" },
+				]),
+			);
+
+			// Previously misparsed as a member named "2" and failed with a
+			// misleading "not found inside archive" error. The selector is honored
+			// as a 1-indexed listing offset, so `:2` starts at the second entry.
+			const result = await readTool.execute("test-call-archive-root-selector", { path: `${archivePath}:2` });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("beta.txt");
+			expect(output).not.toContain("alpha.txt");
+			expect(result.details?.isDirectory).toBe(true);
+		});
+
+		it("should prefer an archive member over a selector-shaped name", async () => {
+			const archivePath = path.join(testDir, "member-precedence.tar");
+			fs.writeFileSync(archivePath, createTarArchive([{ path: "raw", content: "member named raw\n" }]));
+
+			const result = await readTool.execute("test-call-archive-member-raw", { path: `${archivePath}:raw` });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("member named raw");
+		});
+
+		it("should reject archive members larger than the in-memory extraction cap", async () => {
+			const archivePath = path.join(testDir, "bomb.zip");
+			fs.writeFileSync(
+				archivePath,
+				createZipArchiveWithRawDeflateEntry({
+					path: "bomb.bin",
+					compressed: Buffer.from([0xff, 0xff, 0xff, 0xff]),
+					originalSize: 3 * 1024 * 1024 * 1024, // 3GB declared, never allocated
+				}),
+			);
+
+			await expect(readTool.execute("test-call-archive-bomb", { path: `${archivePath}:bomb.bin` })).rejects.toThrow(
+				/too large to extract/i,
+			);
+		});
+
 		it("should detect image MIME type from file magic (not extension)", async () => {
 			const png1x1Base64 =
 				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2Z0AAAAASUVORK5CYII=";
@@ -868,6 +932,36 @@ describe("Coding Agent Tools", () => {
 			const archive = new Bun.Archive(await Bun.file(archivePath).bytes());
 			const files = await archive.files();
 			expect(await files.get("pkg/new.txt")?.text()).toBe(content);
+		});
+
+		it("should preserve gzip compression when writing into an existing .tar.gz", async () => {
+			const archivePath = path.join(testDir, "write-existing.tar.gz");
+			fs.writeFileSync(
+				archivePath,
+				zlib.gzipSync(
+					createTarArchive([
+						{ path: "pkg/README.md", content: "# Original\n" },
+						{ path: "pkg/src/index.ts", content: "export const archiveValue = 1;\n" },
+					]),
+				),
+			);
+
+			const content = "# Updated\nLine 2\n";
+			await writeTool.execute("test-call-archive-write-targz", {
+				path: `${archivePath}:pkg/README.md`,
+				content,
+			});
+
+			const bytes = fs.readFileSync(archivePath);
+			// gzip magic must survive the rewrite (regression: archive was
+			// silently rewritten as a bare tar under the .gz name).
+			expect(bytes[0]).toBe(0x1f);
+			expect(bytes[1]).toBe(0x8b);
+
+			const archive = new Bun.Archive(await Bun.file(archivePath).bytes());
+			const files = await archive.files();
+			expect(await files.get("pkg/README.md")?.text()).toBe(content);
+			expect(await files.get("pkg/src/index.ts")?.text()).toBe("export const archiveValue = 1;\n");
 		});
 
 		it("should treat a plain archive filename as a regular file write", async () => {
