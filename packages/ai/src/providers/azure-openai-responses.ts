@@ -179,12 +179,16 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				abortSignal: options?.signal,
 				isProgressItem: isOpenAIResponsesProgressEvent,
 			});
+			let sawCompleted = false;
 			const observedOpenaiStream = rawSseObserver
 				? observeDecodedAzureResponsesEvents(timedOpenaiStream, rawSseObserver)
 				: timedOpenaiStream;
 			await processResponsesStream(observedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
 					if (!firstTokenTime) firstTokenTime = Date.now();
+				},
+				onCompleted: () => {
+					sawCompleted = true;
 				},
 			});
 
@@ -195,6 +199,10 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 
 			if (abortTracker.wasCallerAbort()) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!sawCompleted) {
+				throw new Error("Azure OpenAI responses stream closed before response.completed was received");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
