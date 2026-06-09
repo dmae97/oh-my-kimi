@@ -63,7 +63,12 @@ import {
 	loadCustomCommands as loadCustomCommandsInternal,
 } from "./extensibility/custom-commands";
 import { discoverAndLoadCustomTools } from "./extensibility/custom-tools";
-import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "./extensibility/custom-tools/types";
+import type {
+	CustomTool,
+	CustomToolContext,
+	CustomToolSessionEvent,
+	LoadedCustomTool,
+} from "./extensibility/custom-tools/types";
 import {
 	discoverAndLoadExtensions,
 	type ExtensionContext,
@@ -341,6 +346,14 @@ export interface CreateAgentSessionOptions {
 	 * @internal Used by CLI when extensions are loaded early to parse custom flags.
 	 */
 	preloadedExtensions?: LoadExtensionsResult;
+	/**
+	 * Pre-loaded custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
+	 * When provided, the filesystem-scan inside `discoverAndLoadCustomTools()` is
+	 * skipped — subagents inherit the parent's discovery result. MCP/image/tts/
+	 * web-search tools are still resolved per-session because they depend on the
+	 * session's own model and tool selection.
+	 */
+	preloadedCustomTools?: LoadedCustomTool[];
 
 	/** Shared event bus for tool/extension communication. Default: creates new bus. */
 	eventBus?: EventBus;
@@ -1193,23 +1206,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Discover rules and bucket them in one pass to avoid repeated scans over large rule sets.
-	const { ttsrManager, rulebookRules, alwaysApplyRules } = await logger.time("discoverTtsrRules", async () => {
-		const { TtsrManager } = await import("./export/ttsr");
-		const ttsrSettings = settings.getGroup("ttsr");
-		const ttsrManager = new TtsrManager(ttsrSettings);
-		const rulesResult =
-			options.rules !== undefined
-				? { items: options.rules, warnings: undefined }
-				: await loadCapability<Rule>(ruleCapability.id, { cwd });
-		const { rulebookRules, alwaysApplyRules } = bucketRules(rulesResult.items, ttsrManager, {
-			builtinRules: ttsrSettings.builtinRules,
-			disabledRules: ttsrSettings.disabledRules,
-		});
-		if (existingSession.injectedTtsrRules.length > 0) {
-			ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
-		}
-		return { ttsrManager, rulebookRules, alwaysApplyRules };
-	});
+	const { ttsrManager, rulebookRules, alwaysApplyRules, allRules } = await logger.time(
+		"discoverTtsrRules",
+		async () => {
+			const { TtsrManager } = await import("./export/ttsr");
+			const ttsrSettings = settings.getGroup("ttsr");
+			const ttsrManager = new TtsrManager(ttsrSettings);
+			const rulesResult =
+				options.rules !== undefined
+					? { items: options.rules, warnings: undefined }
+					: await loadCapability<Rule>(ruleCapability.id, { cwd });
+			const { rulebookRules, alwaysApplyRules } = bucketRules(rulesResult.items, ttsrManager, {
+				builtinRules: ttsrSettings.builtinRules,
+				disabledRules: ttsrSettings.disabledRules,
+			});
+			if (existingSession.injectedTtsrRules.length > 0) {
+				ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
+			}
+			return { ttsrManager, rulebookRules, alwaysApplyRules, allRules: rulesResult.items };
+		},
+	);
 
 	// Resolve contextFiles up-front (it's needed before tool creation). The
 	// workspace tree scan is slow on large repos and we MUST NOT block startup on
@@ -1331,6 +1347,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			contextFiles,
 			workspaceTree: resolvedWorkspaceTree,
 			skills,
+			rules: allRules,
 			eventBus,
 			outputSchema: options.outputSchema,
 			requireYieldTool: options.requireYieldTool,
@@ -1514,22 +1531,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...getSearchTools());
 		}
 
-		// Discover and load custom tools from .omp/tools/, .claude/tools/, etc.
+		// Discover custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
+		// Subagents reuse the parent's discovery via `preloadedCustomTools` so the
+		// filesystem scan only runs once per process tree. MCP/image/tts/web-search
+		// tools above are still resolved per-session because they depend on the
+		// session's own model and tool selection.
 		const builtInToolNames = builtinTools.map(t => t.name);
-		const discoveredCustomTools = await logger.time(
-			"discoverAndLoadCustomTools",
-			discoverAndLoadCustomTools,
-			[],
-			cwd,
-			builtInToolNames,
-			action => queueResolveHandler(toolSession, action),
-		);
-		for (const { path, error } of discoveredCustomTools.errors) {
-			logger.error("Custom tool load failed", { path, error });
+		const loadedCustomTools: LoadedCustomTool[] =
+			options.preloadedCustomTools ??
+			(await logger.time("discoverAndLoadCustomTools", async () => {
+				const result = await discoverAndLoadCustomTools([], cwd, builtInToolNames, action =>
+					queueResolveHandler(toolSession, action),
+				);
+				for (const { path, error } of result.errors) {
+					logger.error("Custom tool load failed", { path, error });
+				}
+				return result.tools;
+			}));
+		if (loadedCustomTools.length > 0) {
+			customTools.push(...loadedCustomTools.map(loaded => loaded.tool));
 		}
-		if (discoveredCustomTools.tools.length > 0) {
-			customTools.push(...discoveredCustomTools.tools.map(loaded => loaded.tool));
-		}
+		// Forward the discovered tools to subagents so they skip the FS scan.
+		toolSession.loadedCustomTools = loadedCustomTools;
 
 		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
 		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
@@ -1539,12 +1562,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Load extensions. A preloaded result (e.g. resolved by the CLI before
 		// session creation so it can classify `@file` args extension-aware without
-		// a session/breadcrumb existing yet) is reused as-is; otherwise discover now
+		// a session/breadcrumb existing yet, or threaded from a parent session into
+		// a subagent) is reused without redoing discovery; otherwise discover now
 		// through the shared helper. Preloaded wins over `disableExtensionDiscovery`
-		// because the preloaded result already reflects that choice — re-running the
-		// loader here would double-load.
-		const extensionsResult: LoadExtensionsResult =
-			options.preloadedExtensions ?? (await loadSessionExtensions(options, cwd, settings, eventBus));
+		// because the preloaded result already reflects that choice — re-running
+		// the loader here would double-load.
+		//
+		// Shallow-clone `extensions` so the inline-extensions push below (and any
+		// other per-session augmentation) never mutates the caller's array; the
+		// `runtime` is intentionally shared so flag values set pre-creation flow
+		// into the live session.
+		const extensionsResult: LoadExtensionsResult = options.preloadedExtensions
+			? { ...options.preloadedExtensions, extensions: [...options.preloadedExtensions.extensions] }
+			: await loadSessionExtensions(options, cwd, settings, eventBus);
+		// Forward the resolved extensions result to subagents so they reuse it
+		// instead of repeating `loadSessionExtensions` discovery.
+		toolSession.extensionsResult = extensionsResult;
 
 		// Load inline extensions from factories
 		if (inlineExtensions.length > 0) {

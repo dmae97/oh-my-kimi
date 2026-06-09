@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `task`-spawned subagents repeating filesystem scans the parent had already completed. `ExecutorOptions` and the `createAgentSession()` call inside `runSubprocess()` did not forward `rules`, `preloadedExtensions`, or the discovered `.omp/tools/` (a.k.a. `LoadedCustomTool[]`) results, so each subagent re-ran `loadCapability<Rule>()`, `loadSessionExtensions()`, and `discoverAndLoadCustomTools()`. The toolsession now caches each (`session.rules`, `session.extensionsResult`, `session.loadedCustomTools`), `runSubprocess()` threads them through, and `createAgentSession()` accepts a new `preloadedCustomTools` option. `preloadedExtensions` is now shallow-cloned inside the SDK so inline-extension augmentation (autoresearch + custom-tools wrapper) can never bleed back into the caller's array ([#2190](https://github.com/can1357/oh-my-pi/issues/2190)).
+
 ## [15.10.8] - 2026-06-09
 
 ### Added

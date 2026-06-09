@@ -3,10 +3,13 @@ import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { FetchImpl, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
+import type { Rule } from "../capability/rule";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
+import type { LoadedCustomTool } from "../extensibility/custom-tools/types";
+import type { LoadExtensionsResult } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
@@ -154,6 +157,12 @@ export interface ToolSession {
 	skills?: Skill[];
 	/** Pre-loaded prompt templates */
 	promptTemplates?: PromptTemplate[];
+	/** Pre-loaded rules (forwarded to subagents to skip re-discovery). */
+	rules?: Rule[];
+	/** Pre-loaded extensions result (forwarded to subagents via `preloadedExtensions`). */
+	extensionsResult?: LoadExtensionsResult;
+	/** Pre-loaded custom tools discovered from `.omp/tools/`, `.claude/tools/`, etc. (forwarded to subagents). */
+	loadedCustomTools?: LoadedCustomTool[];
 	/** Whether LSP integrations are enabled */
 	enableLsp?: boolean;
 	/** Whether an edit-capable tool is available in this session (controls hashline output) */

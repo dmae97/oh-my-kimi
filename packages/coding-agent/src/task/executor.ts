@@ -8,14 +8,16 @@ import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
-import type { CustomTool } from "../extensibility/custom-tools/types";
+import type { CustomTool, LoadedCustomTool } from "../extensibility/custom-tools/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
+import type { LoadExtensionsResult } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -190,6 +192,12 @@ export interface ExecutorOptions {
 	skills?: Skill[];
 	promptTemplates?: PromptTemplate[];
 	workspaceTree?: WorkspaceTree;
+	/** Parent-discovered rules, forwarded to skip rule discovery in the subagent. */
+	rules?: Rule[];
+	/** Parent-loaded extensions, forwarded via `preloadedExtensions` to skip discovery. */
+	preloadedExtensions?: LoadExtensionsResult;
+	/** Parent-discovered custom tools, forwarded to skip the `.omp/tools/` scan. */
+	preloadedCustomTools?: LoadedCustomTool[];
 	mcpManager?: MCPManager;
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
@@ -1284,6 +1292,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					skills: options.skills,
 					promptTemplates: options.promptTemplates,
 					workspaceTree: options.workspaceTree,
+					rules: options.rules,
+					preloadedExtensions: options.preloadedExtensions,
+					preloadedCustomTools: options.preloadedCustomTools,
 					systemPrompt: defaultPrompt => {
 						const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 							agent: agent.systemPrompt,
