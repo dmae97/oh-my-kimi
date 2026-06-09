@@ -122,7 +122,7 @@ function tinyWorkerSpawnCmd(): string[] {
 }
 
 interface SpawnedSubprocess {
-	proc: Subprocess<"ignore", "inherit", "inherit">;
+	proc: Subprocess<"ignore", "ignore", "ignore">;
 	inbound: Set<(message: TinyTitleWorkerOutbound) => void>;
 	errors: Set<(error: Error) => void>;
 	/**
@@ -147,10 +147,13 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 		cmd: tinyWorkerSpawnCmd(),
 		env: tinyWorkerEnv(),
 		stdin: "ignore",
-		stdout: "inherit",
-		stderr: "inherit",
+		stdout: "ignore",
+		stderr: "ignore",
 		serialization: "advanced",
 		windowsHide: true,
+		// The worker is an implementation detail of the interactive TUI. Native
+		// model runtimes may print progress or decoded text directly; never let
+		// those bytes inherit the terminal and corrupt the chat scrollback.
 		ipc(message) {
 			for (const handler of inbound) handler(message as TinyTitleWorkerOutbound);
 		},
