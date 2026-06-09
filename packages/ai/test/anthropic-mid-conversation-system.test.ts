@@ -3,11 +3,11 @@ import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { AssistantMessage, DeveloperMessage, Message, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
 
 /**
- * Claude Opus 4.8 introduced mid-conversation `role: "system"` messages. Our
- * `developer` messages (the system-priority instructions we already emit as
- * `developer`/`system` to OpenAI providers) should map to that role on models
- * that support it, while respecting Anthropic's placement rules and falling
- * back to `user` everywhere else.
+ * Claude Opus 4.8 and the Fable/Mythos 5 generation support mid-conversation
+ * `role: "system"` messages. Our `developer` messages (the system-priority
+ * instructions we already emit as `developer`/`system` to OpenAI providers)
+ * should map to that role on models that support it, while respecting
+ * Anthropic's placement rules and falling back to `user` everywhere else.
  * @see https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
  */
 
@@ -71,6 +71,12 @@ describe("Anthropic mid-conversation system messages", () => {
 		expect(sys.content).toBe("Use parameterized SQL.");
 		// A trailing system message is a valid final entry; no synthetic Continue.
 		expect(params.at(-1)?.role).toBe("system");
+	});
+
+	it("maps developer messages to system on Claude Mythos 5", () => {
+		const model = makeModel({ id: "claude-mythos-5", name: "Claude Mythos 5" });
+		const params = convertAnthropicMessages([user("hi"), developer("Use project rules.")], model, false);
+		expect(params.map(p => p.role)).toEqual(["user", "system"]);
 	});
 
 	it("maps a developer message that precedes an assistant turn to role: system", () => {

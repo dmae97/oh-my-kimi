@@ -7,7 +7,14 @@ import {
 	streamOpenAICompletions,
 } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { type ResolvedOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
-import type { AssistantMessage, Context, FetchImpl, Model, OpenAICompat } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Context,
+	FetchImpl,
+	Model,
+	OpenAICompat,
+	ToolResultMessage,
+} from "@oh-my-pi/pi-ai/types";
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -1466,6 +1473,57 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 		const content = getLastPayloadContent(payload);
 		const textPart = getLastTextPart(content);
 
+		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+	});
+
+	it("does not attach Anthropic cache_control to empty assistant tool-call content", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_read",
+					name: "read",
+					arguments: { path: "screenshot.png" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 1,
+		};
+		const toolResultMessage: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "call_read",
+			toolName: "read",
+			content: [{ type: "text", text: "Read image file [image/webp]" }],
+			isError: false,
+			timestamp: 2,
+		};
+		const payload = await captureOpenAICompletionsPayload(model, {
+			messages: [{ role: "user", content: "cache me", timestamp: 0 }, assistantMessage, toolResultMessage],
+		});
+		const messages = getPayloadMessages(payload);
+		const assistant = messages.find(message => {
+			const toolCalls = Reflect.get(message, "tool_calls");
+			return Reflect.get(message, "role") === "assistant" && Array.isArray(toolCalls);
+		});
+		const firstUser = messages.find(message => Reflect.get(message, "role") === "user");
+		const userContent = firstUser ? Reflect.get(firstUser, "content") : undefined;
+		const textPart = getLastTextPart(userContent);
+
+		expect(assistant ? Reflect.get(assistant, "content") : undefined).toBe("");
+		expect(Reflect.get(textPart ?? {}, "text")).toBe("cache me");
 		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
 	});
 
