@@ -243,6 +243,27 @@ describe("tiny title generator routing", () => {
 		expect(online).not.toHaveBeenCalled();
 	});
 
+	it("passes the resolved TITLE_SYSTEM.md prompt to the local client", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const customPrompt = "Generate lowercase colon-delimited session names.";
+		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local Title");
+		const online = mockOnlineTitle("Online Title");
+
+		const title = await generateSessionTitle(
+			"Investigate routing",
+			createRegistry(model),
+			createSettings(model, "lfm2-350m"),
+			undefined,
+			undefined,
+			undefined,
+			customPrompt,
+		);
+
+		expect(title).toBe("Local Title");
+		expect(local).toHaveBeenCalledWith("lfm2-350m", "Investigate routing", { systemPrompt: customPrompt });
+		expect(online).not.toHaveBeenCalled();
+	});
+
 	it("starts online fallback immediately when local returns null", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		vi.spyOn(tinyTitleClient, "generate").mockResolvedValue(null);

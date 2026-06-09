@@ -260,6 +260,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	keybindings: KeybindingsManager;
 	agent: Agent;
 	historyStorage?: HistoryStorage;
+	titleSystemPrompt?: string;
 
 	ui: TUI;
 	chatContainer: TranscriptContainer;
@@ -382,6 +383,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		lspServers: LspStartupServerInfo[] | undefined = undefined,
 		mcpManager?: import("../mcp").MCPManager,
 		eventBus?: EventBus,
+		titleSystemPrompt?: string,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -394,6 +396,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
 		this.#eventBus = eventBus;
+		this.titleSystemPrompt = titleSystemPrompt;
 		if (eventBus) {
 			this.#eventBusUnsubscribers.push(
 				eventBus.on(LSP_STARTUP_EVENT_CHANNEL, data => {

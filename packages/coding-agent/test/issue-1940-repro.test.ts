@@ -33,6 +33,35 @@ class FakeTinyWorker {
 	}
 }
 
+describe("tiny title client prompt options", () => {
+	it("forwards a custom system prompt on local title requests", async () => {
+		let sent: TinyTitleWorkerInbound | undefined;
+		const worker = new FakeTinyWorker((message, worker) => {
+			sent = message;
+			if (message.type === "generate") {
+				worker.emit({ type: "title", id: message.id, title: "custom title" });
+			}
+		});
+		const client = new TinyTitleClient(() => worker);
+
+		try {
+			const title = await client.generate("lfm2-350m", "Investigate routing", {
+				systemPrompt: "Custom title prompt",
+			});
+
+			expect(title).toBe("custom title");
+			expect(sent).toMatchObject({
+				type: "generate",
+				modelKey: "lfm2-350m",
+				message: "Investigate routing",
+				systemPrompt: "Custom title prompt",
+			});
+		} finally {
+			await client.terminate();
+		}
+	});
+});
+
 describe("issue #1940 — local model failures release the worker process", () => {
 	it("recycles the tiny-model worker after model execution returns an error", async () => {
 		const first = new FakeTinyWorker((message, worker) => {
