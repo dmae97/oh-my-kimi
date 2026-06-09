@@ -12,6 +12,10 @@
 - Added depth-guided landing correction for `insert after N:` hunks: a body indented shallower than its anchor line slides past the structural closer lines below the anchor until depth returns to the body's level, with a warning naming the final landing line. The shift never crosses content lines, skips incomparable indentation styles and pure-closer bodies, and is abandoned when another hunk targets a crossed line
 - Added a global byte ceiling to `InMemorySnapshotStore` (`maxTotalBytes`, default 64 MiB): the cap was previously per-file only, so a session reading many large files retained up to 30 paths × 4 full-text versions indefinitely
 
+### Changed
+
+- Trimmed the `replace block N:` ops entry in the patch prompt to grammar and pointing rules; the usage doctrine it duplicated stays in the rules section
+
 ### Fixed
 
 - Fixed the boundary-echo repair stripping payload edges without the balance-neutrality guard its own documentation promised: in brace-heavy code where bare `}` lines repeat, a payload intentionally beginning/ending with lines identical to the range's neighbors had both edges silently dropped, writing content that differed from what was authored

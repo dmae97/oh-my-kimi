@@ -6,7 +6,7 @@ Every file section starts with `[PATH#TAG]`. `TAG` is the 4-hex snapshot tag fro
 
 <ops>
 `replace N..M:` — replace original lines N..M with the body rows below. CAUTION, IT IS INCLUSIVE! MAKE SURE YOU INTEND TO DELETE BOTH ENDS!
-`replace block N:` — replace the whole syntactic block that BEGINS on line N — header line through closing line — resolved with tree-sitter, so you never count the end. Body rows below. Reach for this to rewrite a whole construct (function/`if`/loop/class body): the end can't be mis-counted or clipped mid-block. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line. The span is EXACTLY that node — a leading decorator/attribute/doc-comment is a separate node and is NOT swept in (see rules).
+`replace block N:` — replace the whole syntactic block that BEGINS on line N — header line through closing line — resolved with tree-sitter, so you never count the end. Body rows below. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not a closing `}` or a blank line; a leading decorator/attribute/doc-comment is a separate node and is NOT swept in (see rules).
 `delete N..M` — delete original lines N..M. No body.
 `delete block N` — delete the whole syntactic block that BEGINS on line N.
 `insert before N:` — insert the body rows immediately before line N.

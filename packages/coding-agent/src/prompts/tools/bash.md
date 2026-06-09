@@ -27,7 +27,7 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 {{#if asyncEnabled}}
 # Timeout and async
 
-- `timeout` (seconds) caps the **wall-clock duration** of the command. When it elapses the process is killed and the call returns with a timeout annotation. Range: `1`–`3600`s; default `300`s (see `clampTimeout("bash", …)` in `tool-timeouts.ts`).
+- `timeout` (seconds) caps the **wall-clock duration** of the command. When it elapses the process is killed and the call returns with a timeout annotation. Range: `1`–`3600`s; default `300`s.
 - `async: true` only defers **reporting** of the result — it does NOT disable, extend, or detach the timeout. A daemon started with `async: true` is still killed when `timeout` elapses, regardless of how long the agent waits before reading the result.
 - For long-running daemons (dev servers, watchers): pass an explicit large `timeout` (up to `3600`). The shell session persists across calls, so a backgrounded job (`cmd &`) keeps running between bash calls on its own.
 {{/if}}

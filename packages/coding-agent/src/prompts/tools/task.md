@@ -31,8 +31,7 @@ Subagents have no conversation history. Every fact, file path, and direction the
 
 <rules>
 - **Maximize batch width.** Spawn the widest parallel set the work decomposes into. NEVER spawn a single-task batch for divisible work, or defer work that could have been concurrent.
-- NEVER assign tasks to run project-wide build/test/lint. Caller verifies after the batch.
-- **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates and formatters. You run them once at the end across the union of changed files — avoids redundant runs and racing formatter passes.
+- **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates, formatters, and project-wide build/test/lint. You run them once at the end across the union of changed files — avoids redundant runs and racing formatter passes.
 - No globs, no "update all", no package-wide scope. Fan out.
 - Do not concern yourself with how agents might overlap on certain actions. Never use it as an excuse to go slower: they can resolve collisions in real-time with the harness facilities.
 - Pass large payloads via `local://<path>` URIs, not inline. {{#if contextEnabled}} (other than the context){{/if}}

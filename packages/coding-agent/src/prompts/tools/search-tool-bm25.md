@@ -22,14 +22,7 @@ Behavior:
 - Newly activated tools become available before the next model call in the same overall turn
 
 Notes:
-Start with `limit` 5–10 if unsure.
-- `query` is matched against tool metadata fields:
-  - `name`
-  - `label`
-  - `server_name` (MCP tools)
-  - `mcp_tool_name` (MCP tools)
-  - `description` / `summary`
-  - input schema property keys (`schema_keys`)
+- Start with `limit` 5–10 if unsure.
 
 Not for repository/file/code search. Tool discovery only.
 
