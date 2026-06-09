@@ -2711,12 +2711,11 @@ describe("TUI terminal-state regressions", () => {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
 		});
-		it("rebuilds offscreen edits into clean scrollback while eager rebuild is enabled (active tool)", async () => {
-			// The streaming-text default defers offscreen edits on POSIX (no yank, but a
-			// growing/re-laying-out tool result leaves stale duplicated rows above the
-			// fold). While a foreground tool is active the agent opts into eager rebuild:
-			// offscreen edits rebuild native scrollback cleanly even though the viewport
-			// position is unknown (a snap to the tail is acceptable mid-tool).
+		it("keeps offscreen streaming growth incremental when the viewport is unknown", async () => {
+			// Unknown viewport probes are not proof that the user is at the tail. While
+			// a foreground tool is active, same-size/growing offscreen edits must keep
+			// using append/repaint primitives instead of clearing scrollback once per
+			// streaming tick after the transcript fills the viewport.
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
@@ -2742,7 +2741,7 @@ describe("TUI terminal-state regressions", () => {
 						try {
 							tui.start();
 							await settle(term);
-							// Default (no active tool) would defer the offscreen edit; confirm the flag flips behavior.
+							const writes = captureWrites(term);
 							tui.setEagerNativeScrollbackRebuild(true);
 
 							// A streaming tool result re-laying out: an offscreen header changes and the
@@ -2751,12 +2750,13 @@ describe("TUI terminal-state regressions", () => {
 							tui.requestRender();
 							await settle(term);
 
+							const output = writes.join("");
+							expect(output).not.toContain("\x1b[2J");
+							expect(output).not.toContain("\x1b[3J");
 							const buffer = term.getScrollBuffer().map(line => line.trimEnd());
-							// History was rebuilt at the new content: offscreen edit reflected, no stale copy.
-							expect(buffer).toContain("HEADER-EDITED");
-							expect(buffer).not.toContain("row-0");
-							// The grown tail is reachable exactly once — no duplicated rows above the viewport.
-							expect(buffer.filter(line => line === "tail-3")).toHaveLength(1);
+							expect(buffer).toContain("row-0");
+							expect(buffer).toContain("tail-3");
+							expect(buffer).not.toContain("HEADER-EDITED");
 							expect(tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true })).toBe(false);
 						} finally {
 							mutableTerminalInfo.eagerEraseScrollbackRisk = savedTerminalRisk;
