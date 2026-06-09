@@ -263,21 +263,26 @@ export class ModelSelectorComponent extends Container {
 		// Add bottom border
 		this.addChild(new DynamicBorder());
 
-		// Load models and do initial render
-		this.#loadModels().then(() => {
-			this.#buildProviderTabs();
-			this.#updateTabBar();
-			// Always apply the current search query — the user may have typed
-			// while models were loading asynchronously.
-			const currentQuery = this.#searchInput.getValue();
-			if (currentQuery) {
-				this.#filterModels(currentQuery);
-			} else {
-				this.#updateList();
-			}
-			// Request re-render after models are loaded
-			this.#tui.requestRender();
-		});
+		// Hydrate synchronously from the current registry snapshot so the first
+		// Enter after opening the selector acts on cached models instead of being
+		// dropped while the offline refresh promise is still pending. This stays
+		// on the open path, so it must remain cheap — heavy lifting lives in the
+		// registry's one-pass getCanonicalModelSelections.
+		this.#syncFromRegistryState();
+
+		// Reconcile with cached discovery state in the background. A --models
+		// scope is registry-independent, so the offline reload would only repeat
+		// the synchronous hydration above.
+		if (this.#scopedModels.length === 0) {
+			this.#modelRegistry
+				.refresh("offline")
+				.then(() => this.#syncFromRegistryState())
+				.catch(error => {
+					this.#errorMessage = error instanceof Error ? error.message : String(error);
+					this.#updateList();
+				})
+				.finally(() => this.#tui.requestRender());
+		}
 	}
 
 	#buildMenuRoleActions(): void {
@@ -477,37 +482,30 @@ export class ModelSelectorComponent extends Container {
 
 		const candidates = models.map(item => item.model);
 		this.#loadRoleModels(candidates);
-		const canonicalRecords = this.#modelRegistry.getCanonicalModels({
+		const canonicalSelections = this.#modelRegistry.getCanonicalModelSelections({
 			availableOnly: this.#scopedModels.length === 0,
 			candidates,
 		});
-		const canonicalModels = canonicalRecords
-			.map(record => {
-				const selectedModel = this.#modelRegistry.resolveCanonicalModel(record.id, {
-					availableOnly: this.#scopedModels.length === 0,
-					candidates,
-				});
-				if (!selectedModel) return undefined;
-				const searchText = [
-					record.id,
-					record.name,
-					selectedModel.provider,
-					selectedModel.id,
-					selectedModel.name,
-					...record.variants.flatMap(variant => [variant.selector, variant.model.name]),
-				].join(" ");
-				return {
-					kind: "canonical" as const,
-					id: record.id,
-					model: selectedModel,
-					selector: record.id,
-					variantCount: record.variants.length,
-					searchText,
-					normalizedSearchText: normalizeSearchText(searchText),
-					compactSearchText: compactSearchText(searchText),
-				};
-			})
-			.filter((item): item is CanonicalModelItem => item !== undefined);
+		const canonicalModels = canonicalSelections.map(({ record, model: selectedModel }): CanonicalModelItem => {
+			const searchText = [
+				record.id,
+				record.name,
+				selectedModel.provider,
+				selectedModel.id,
+				selectedModel.name,
+				...record.variants.flatMap(variant => [variant.selector, variant.model.name]),
+			].join(" ");
+			return {
+				kind: "canonical",
+				id: record.id,
+				model: selectedModel,
+				selector: record.id,
+				variantCount: record.variants.length,
+				searchText,
+				normalizedSearchText: normalizeSearchText(searchText),
+				compactSearchText: compactSearchText(searchText),
+			};
+		});
 
 		this.#sortModels(models);
 		this.#sortCanonicalModels(canonicalModels);
@@ -523,12 +521,27 @@ export class ModelSelectorComponent extends Container {
 		);
 	}
 
-	async #loadModels(): Promise<void> {
-		if (this.#scopedModels.length === 0) {
-			// Reload config and cached discovery state without blocking on live provider refresh
-			await this.#modelRegistry.refresh("offline");
-		}
+	/**
+	 * Rebuild the visible model lists from the registry's in-memory state.
+	 * Re-entrant: runs once synchronously at construction and again whenever a
+	 * background refresh lands, so it re-applies the live search query and pins
+	 * the highlighted item by selector — a refresh that reorders or inserts
+	 * models must not yank the user's selection out from under a pending Enter.
+	 */
+	#syncFromRegistryState(): void {
+		const selectedKey = this.#getSelectedItem()?.selector;
 		this.#loadModelsFromCurrentRegistryState();
+		this.#buildProviderTabs();
+		this.#updateTabBar();
+		this.#applyTabFilter();
+		if (selectedKey) {
+			const visibleItems = this.#getVisibleItems();
+			const restoredIndex = visibleItems.findIndex(item => item.selector === selectedKey);
+			if (restoredIndex >= 0 && restoredIndex !== this.#selectedIndex) {
+				this.#selectedIndex = this.#coerceSelectedIndex(restoredIndex, visibleItems);
+				this.#updateList();
+			}
+		}
 	}
 
 	#buildProviderTabs(): void {
@@ -631,10 +644,7 @@ export class ModelSelectorComponent extends Container {
 			// here must stay purely in-memory — do not call modelRegistry.refresh()
 			// again or tab switches will pay an extra whole-registry reload after the
 			// network round-trip completes.
-			this.#loadModelsFromCurrentRegistryState();
-			this.#buildProviderTabs();
-			this.#updateTabBar();
-			this.#applyTabFilter();
+			this.#syncFromRegistryState();
 		} catch (error) {
 			this.#errorMessage = error instanceof Error ? error.message : String(error);
 			this.#updateList();

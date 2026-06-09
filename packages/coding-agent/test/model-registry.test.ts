@@ -483,6 +483,33 @@ describe("ModelRegistry", () => {
 			expect(resolved?.provider).toBe("demo");
 			expect(resolved?.id).toBe("anthropic/claude-sonnet-4.5");
 		});
+
+		test("getCanonicalModelSelections matches per-record resolveCanonicalModel over the bundled catalog", () => {
+			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.setRuntimeApiKey("openrouter", "test-key");
+			authStorage.setRuntimeApiKey("groq", "test-key");
+			writeModelsJson({});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const candidates = registry.getAvailable();
+			expect(candidates.length).toBeGreaterThan(0);
+
+			const options = { availableOnly: true, candidates } as const;
+			const selections = registry.getCanonicalModelSelections(options);
+			const records = registry.getCanonicalModels(options);
+			expect(selections.length).toBe(records.length);
+			expect(selections.length).toBeGreaterThan(0);
+
+			const mismatches = selections
+				.map(({ record, model }) => {
+					const resolved = registry.resolveCanonicalModel(record.id, options);
+					return resolved && resolved.provider === model.provider && resolved.id === model.id
+						? undefined
+						: `${record.id}: batch=${model.provider}/${model.id} loop=${resolved?.provider}/${resolved?.id}`;
+				})
+				.filter((entry): entry is string => entry !== undefined);
+			expect(mismatches).toEqual([]);
+		});
 	});
 
 	describe("OpenRouter routed suffix fallback", () => {

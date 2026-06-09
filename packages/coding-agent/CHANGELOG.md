@@ -13,6 +13,7 @@
 ### Fixed
 
 - Fixed the model selector dropping an immediate Enter when cached models were available but the selector's offline refresh was still pending.
+- Removed transcript block freezing: blocks no longer replay a frozen render snapshot after crossing out of the live region, which could pin the visible window on stale or partial content (a tool stuck on its pending preview after a late result, an assistant message missing post-finalize updates like error pinning, collapsed/expanded toggles not reflected). Every block now renders its current content on every frame; the live-region seam still keeps still-mutating rows out of native scrollback, and history already committed to the terminal is never rewritten — the window simply always reflects the present state.
 - Fixed the edit tool's post-edit diff preview occasionally echoing a context line twice with out-of-order numbering. Block-boundary context injection classified space-prefixed diff rows as old-file-only, so an unchanged line sitting in a net-offset region (old N / new N+k) was missing from the new file's visibility window; `findBlockContextLines` then re-surfaced it under its post-edit number and the row was spliced in after the adjacent change run. New-file boundary lines are now translated back to pre-edit numbers (the compact-preview renumbering contract) and merged into a single old-numbered insertion pass — also fixing closers below a net-offset edit being dropped or renumbered incorrectly.
 
 ## [15.10.9] - 2026-06-09

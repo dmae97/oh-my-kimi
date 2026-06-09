@@ -428,6 +428,12 @@ export interface CanonicalModelQueryOptions {
 	candidates?: readonly Model<Api>[];
 }
 
+/** A canonical record (with query-filtered variants) plus the variant model selected for it. */
+export interface CanonicalModelSelection {
+	record: CanonicalModelRecord;
+	model: Model<Api>;
+}
+
 /** Result of loading custom models from models.json */
 interface CustomModelsResult {
 	models?: CustomModelOverlay[];
@@ -2217,30 +2223,67 @@ export class ModelRegistry {
 		return this.#models;
 	}
 
-	#isModelAvailable(model: Model<Api>): boolean {
+	/**
+	 * Availability predicate with per-provider memoization. Auth lookups
+	 * (`authStorage.hasAuth`) and the disabled-provider set are resolved once
+	 * per provider instead of once per model, which matters when filtering the
+	 * full bundled catalog (thousands of models, ~50 providers).
+	 */
+	#createAvailabilityCheck(): (model: Model<Api>) => boolean {
 		const disabledProviders = getDisabledProviderIdsFromSettings();
-		return (
-			!disabledProviders.has(model.provider) &&
-			(this.#keylessProviders.has(model.provider) || this.authStorage.hasAuth(model.provider))
-		);
+		const byProvider = new Map<string, boolean>();
+		return model => {
+			let available = byProvider.get(model.provider);
+			if (available === undefined) {
+				available =
+					!disabledProviders.has(model.provider) &&
+					(this.#keylessProviders.has(model.provider) || this.authStorage.hasAuth(model.provider));
+				byProvider.set(model.provider, available);
+			}
+			return available;
+		};
+	}
+
+	/**
+	 * Build the shared per-query filter state for canonical model queries.
+	 * Hoisted out of the per-record loop: building the candidate-selector set
+	 * and availability memo once per query instead of once per record is what
+	 * keeps `getCanonicalModelSelections` linear instead of O(records × candidates).
+	 */
+	#canonicalQueryFilters(options: CanonicalModelQueryOptions | undefined): {
+		candidateKeys: Set<string> | undefined;
+		isAvailable: ((model: Model<Api>) => boolean) | undefined;
+	} {
+		return {
+			candidateKeys: options?.candidates
+				? new Set(options.candidates.map(candidate => formatCanonicalVariantSelector(candidate)))
+				: undefined,
+			isAvailable: options?.availableOnly ? this.#createAvailabilityCheck() : undefined,
+		};
 	}
 
 	#filterCanonicalVariants(
 		record: CanonicalModelRecord,
-		options: CanonicalModelQueryOptions | undefined,
+		candidateKeys: ReadonlySet<string> | undefined,
+		isAvailable: ((model: Model<Api>) => boolean) | undefined,
 	): CanonicalModelVariant[] {
-		const candidateKeys = options?.candidates
-			? new Set(options.candidates.map(candidate => formatCanonicalVariantSelector(candidate)))
-			: undefined;
 		return record.variants.filter(variant => {
 			if (candidateKeys && !candidateKeys.has(variant.selector)) {
 				return false;
 			}
-			if (options?.availableOnly && !this.#isModelAvailable(variant.model)) {
+			if (isAvailable && !isAvailable(variant.model)) {
 				return false;
 			}
 			return true;
 		});
+	}
+
+	#buildModelOrder(candidates: readonly Model<Api>[]): Map<string, number> {
+		const modelOrder = new Map<string, number>();
+		for (let index = 0; index < candidates.length; index += 1) {
+			modelOrder.set(formatCanonicalVariantSelector(candidates[index]!), index);
+		}
+		return modelOrder;
 	}
 
 	#providerRank(): Map<string, number> {
@@ -2249,15 +2292,11 @@ export class ModelRegistry {
 
 	#resolveCanonicalVariant(
 		variants: readonly CanonicalModelVariant[],
-		allCandidates: readonly Model<Api>[],
+		modelOrder: ReadonlyMap<string, number>,
+		providerRank: ReadonlyMap<string, number>,
 	): CanonicalModelVariant | undefined {
 		if (variants.length === 0) {
 			return undefined;
-		}
-		const providerRank = this.#providerRank();
-		const modelOrder = new Map<string, number>();
-		for (let index = 0; index < allCandidates.length; index += 1) {
-			modelOrder.set(formatCanonicalVariantSelector(allCandidates[index]!), index);
 		}
 		const sourceRank: Record<CanonicalModelVariant["source"], number> = {
 			override: 1,
@@ -2289,9 +2328,10 @@ export class ModelRegistry {
 	}
 
 	getCanonicalModels(options?: CanonicalModelQueryOptions): CanonicalModelRecord[] {
+		const { candidateKeys, isAvailable } = this.#canonicalQueryFilters(options);
 		const records: CanonicalModelRecord[] = [];
 		for (const record of this.#canonicalIndex.records) {
-			const variants = this.#filterCanonicalVariants(record, options);
+			const variants = this.#filterCanonicalVariants(record, candidateKeys, isAvailable);
 			if (variants.length === 0) {
 				continue;
 			}
@@ -2304,12 +2344,43 @@ export class ModelRegistry {
 		return records;
 	}
 
+	/**
+	 * One-pass equivalent of `getCanonicalModels` + `resolveCanonicalModel` per
+	 * record. The per-query state (candidate-selector set, availability memo,
+	 * provider rank, candidate order) is built once, so the whole catalog
+	 * resolves in O(records + candidates) instead of O(records × candidates).
+	 * This is the path the model selector hydrates from synchronously on open.
+	 */
+	getCanonicalModelSelections(options?: CanonicalModelQueryOptions): CanonicalModelSelection[] {
+		const { candidateKeys, isAvailable } = this.#canonicalQueryFilters(options);
+		const candidates = options?.candidates ?? (options?.availableOnly ? this.getAvailable() : this.getAll());
+		const modelOrder = this.#buildModelOrder(candidates);
+		const providerRank = this.#providerRank();
+		const selections: CanonicalModelSelection[] = [];
+		for (const record of this.#canonicalIndex.records) {
+			const variants = this.#filterCanonicalVariants(record, candidateKeys, isAvailable);
+			if (variants.length === 0) {
+				continue;
+			}
+			const resolved = this.#resolveCanonicalVariant(variants, modelOrder, providerRank);
+			if (!resolved) {
+				continue;
+			}
+			selections.push({
+				record: { id: record.id, name: record.name, variants },
+				model: resolved.model,
+			});
+		}
+		return selections;
+	}
+
 	getCanonicalVariants(canonicalId: string, options?: CanonicalModelQueryOptions): CanonicalModelVariant[] {
 		const record = this.#canonicalIndex.byId.get(canonicalId.trim().toLowerCase());
 		if (!record) {
 			return [];
 		}
-		return this.#filterCanonicalVariants(record, options);
+		const { candidateKeys, isAvailable } = this.#canonicalQueryFilters(options);
+		return this.#filterCanonicalVariants(record, candidateKeys, isAvailable);
 	}
 
 	resolveCanonicalModel(canonicalId: string, options?: CanonicalModelQueryOptions): Model<Api> | undefined {
@@ -2318,7 +2389,7 @@ export class ModelRegistry {
 			return undefined;
 		}
 		const candidates = options?.candidates ?? (options?.availableOnly ? this.getAvailable() : this.getAll());
-		return this.#resolveCanonicalVariant(variants, candidates)?.model;
+		return this.#resolveCanonicalVariant(variants, this.#buildModelOrder(candidates), this.#providerRank())?.model;
 	}
 
 	getCanonicalId(model: Model<Api>): string | undefined {
@@ -2330,7 +2401,7 @@ export class ModelRegistry {
 	 * This is a fast check that doesn't refresh OAuth tokens.
 	 */
 	getAvailable(): Model<Api>[] {
-		return this.#models.filter(model => this.#isModelAvailable(model));
+		return this.#models.filter(this.#createAvailabilityCheck());
 	}
 
 	/**
