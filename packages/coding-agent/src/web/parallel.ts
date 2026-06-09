@@ -54,6 +54,7 @@ export interface ParallelSearchOptions {
 	mode?: "fast" | "research";
 	maxCharsPerResult?: number;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 export interface ParallelExtractOptions {
@@ -296,7 +297,8 @@ export async function searchWithParallel(
 		);
 	}
 
-	const response = await fetch(PARALLEL_SEARCH_URL, {
+	const fetchImpl = options.fetch ?? fetch;
+	const response = await fetchImpl(PARALLEL_SEARCH_URL, {
 		method: "POST",
 		headers: getAuthHeaders(apiKey),
 		body: JSON.stringify({

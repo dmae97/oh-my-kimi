@@ -78,10 +78,7 @@ describe("Parallel web search", () => {
 			usage: [{ name: "sku_search", count: 1 }],
 		});
 
-		// NOTE: searchWithParallel (web/parallel.ts) has no fetch seam; global fetch still used here.
-		void fetchMock;
-
-		const result = await searchWithParallel("parallel query", ["parallel query"], {}, fakeStorage);
+		const result = await searchWithParallel("parallel query", ["parallel query"], { fetch: fetchMock }, fakeStorage);
 		expect(capturedRequestBody).toEqual({
 			objective: "parallel query",
 			search_queries: ["parallel query"],

@@ -11,6 +11,7 @@ import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
 import * as scraperUtils from "@oh-my-pi/pi-coding-agent/web/scrapers/utils";
 import * as natives from "@oh-my-pi/pi-natives";
 import { ptree, Snowflake } from "@oh-my-pi/pi-utils";
+import { asGlobalFetch } from "../helpers/fetch-mock";
 
 const withMissingSystemPython = () => {
 	const whichSpy = vi.spyOn(Bun, "which").mockImplementation(() => null);
@@ -494,6 +495,7 @@ describe("read tool URL handling", () => {
 
 	it("uses section-scoped llms.txt fallback without requesting the site-wide file", async () => {
 		const session = createSession();
+		session.fetch = asGlobalFetch(() => new Response("blocked", { status: 500, statusText: "Blocked" }));
 		const tool = new ReadTool(session);
 		const pageUrl = "https://example.com/docs/reference/widget";
 		const pageHtml = "<html><body><nav>Docs</nav><main><h1>Widget</h1></main></body></html>";
@@ -577,6 +579,32 @@ describe("read tool URL handling", () => {
 		const session = createSession({ "providers.fetch": "parallel" });
 		const tool = new ReadTool(session);
 		const pageUrl = "https://example.com/parallel-page";
+		session.fetch = asGlobalFetch(input => {
+			if (String(input) === "https://api.parallel.ai/v1beta/extract") {
+				return new Response(
+					JSON.stringify({
+						extract_id: "extract-fetch-1",
+						results: [
+							{
+								url: pageUrl,
+								title: "Parallel Page",
+								excerpts: [
+									"Parallel-rendered content that is comfortably longer than one hundred characters. ".repeat(
+										2,
+									),
+								],
+								full_content: null,
+							},
+						],
+						errors: [],
+						warnings: null,
+						usage: null,
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("blocked", { status: 500, statusText: "Blocked" });
+		});
 		const pageHtml = "<html><body><main><h1>Parallel Page</h1></main></body></html>";
 		const ensureToolSpy = vi.spyOn(toolsManager, "ensureTool");
 		const htmlToMarkdownSpy = vi.spyOn(natives, "htmlToMarkdown");
