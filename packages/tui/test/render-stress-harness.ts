@@ -7,6 +7,7 @@ import {
 	type Component,
 	CURSOR_MARKER,
 	type Focusable,
+	findCommittedPrefixResync,
 	type OverlayAnchor,
 	type OverlayHandle,
 	type OverlayOptions,
@@ -1128,12 +1129,19 @@ class StressDriver {
 	// independently arrive at the same terminal state.
 	#shadowTape: string[] = [];
 	#shadowCommitted = 0;
+	// Raw-row mirror of the engine's committed prefix. The resync audit must
+	// run on the same inputs as the engine (raw rows, not normalized ones), or
+	// width-truncation collisions would let the two ledgers disagree about
+	// whether a divergence happened.
+	#shadowRawFrame: string[] = [];
+	#shadowRawPrefix: string[] = [];
 	#shadowWindowTop = 0;
 	#shadowFrame: string[] = [];
 	#shadowFrameHeight = 0;
 	#shadowFrameWidth = 0;
 	#shadowFrameOverlay = false;
 	#shadowFrameGeometryChanged = false;
+	#shadowResizePending = false;
 	#shadowAltActive = false;
 	// Every byte the renderer wrote to the terminal, in order. The sync-output
 	// discipline oracle audits bracket balance incrementally from #writeLogScanned
@@ -1173,23 +1181,51 @@ class StressDriver {
 			realWrite(data);
 			this.#applyShadowWrite(data);
 		};
+		// Mirror the engine's resize-event signal: a net-unchanged resize still
+		// reflows the terminal, and the engine classifies it as a geometry frame
+		// (audit skipped, commits frozen in multiplexers) — a dimension compare
+		// alone cannot see it.
+		const realResize = this.#term.resize.bind(this.#term);
+		(this.#term as { resize: (columns: number, rows: number) => void }).resize = (columns: number, rows: number) => {
+			this.#shadowResizePending = true;
+			realResize(columns, rows);
+		};
 		this.#tui = new TUI(this.#term, true, { renderScheduler: this.#scheduler });
 		this.#tui.addChild(this.#component);
 		const realRender = this.#tui.render.bind(this.#tui);
 		(this.#tui as { render: (width: number) => string[] }).render = (width: number) => {
 			const lines = realRender(width);
 			this.#shadowFrameGeometryChanged =
-				this.#shadowFrameWidth > 0 &&
-				(width !== this.#shadowFrameWidth || this.#term.rows !== this.#shadowFrameHeight);
-			// Markers are engine-internal sentinels and never reach the terminal;
-			// strip them before normalization (stripVTControlCharacters otherwise
-			// swallows everything after an APC introducer).
-			this.#shadowFrame = lines.map(line =>
-				expectedTerminalLine(line.includes(CURSOR_MARKER) ? line.replaceAll(CURSOR_MARKER, "") : line, width),
-			);
+				this.#shadowResizePending ||
+				(this.#shadowFrameWidth > 0 &&
+					(width !== this.#shadowFrameWidth || this.#term.rows !== this.#shadowFrameHeight));
+			this.#shadowResizePending = false;
+			// Markers are engine-internal sentinels; the engine strips them from
+			// this same array immediately after render returns, and its commit
+			// ledger (prefix + audit) only ever sees stripped rows — mirror that
+			// exactly. (Also: stripVTControlCharacters would otherwise swallow
+			// everything after an APC introducer during normalization.)
+			const stripped = lines.map(line => (line.includes(CURSOR_MARKER) ? line.replaceAll(CURSOR_MARKER, "") : line));
+			this.#shadowRawFrame = stripped;
+			this.#shadowFrame = stripped.map(line => expectedTerminalLine(line, width));
 			this.#shadowFrameWidth = width;
 			this.#shadowFrameHeight = this.#term.rows;
 			this.#shadowFrameOverlay = this.#tui.hasOverlay();
+			// Mirror the engine's render-time ledger transitions here: the audit
+			// resync and the shrink-into-prefix re-anchor can both fire on frames
+			// that emit zero bytes, which the write hook would never observe.
+			if (!this.#shadowFrameGeometryChanged && this.#shadowRawPrefix.length > 0) {
+				const resyncTo = findCommittedPrefixResync(stripped, this.#shadowRawPrefix);
+				if (resyncTo >= 0) {
+					this.#shadowCommitted = resyncTo;
+					this.#shadowRawPrefix.length = resyncTo;
+				}
+			}
+			if (stripped.length <= this.#shadowCommitted) {
+				this.#shadowCommitted = Math.max(0, stripped.length - Math.max(1, this.#term.rows));
+				this.#shadowWindowTop = this.#shadowCommitted;
+				this.#shadowRawPrefix = stripped.slice(0, this.#shadowCommitted);
+			}
 			return lines;
 		};
 	}
@@ -2075,6 +2111,7 @@ class StressDriver {
 	}
 	#assertOracles(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		this.#assertSyncOutputDiscipline(op, before, after, index);
+		this.#assertTapeScrollParity(op, before, after, index);
 		this.#assertViewportFidelity(op, before, after, index);
 		this.#assertCleanBufferWhenAligned(op, before, after, index);
 		this.#assertNoFrameNeutralScrollbackGrowth(op, before, after, index);
@@ -2099,6 +2136,26 @@ class StressDriver {
 			(this.#traits.strictNativeScrollback || op.reconcilesNativeScrollback === true)
 		) {
 			this.#assertCleanBuffer(op, before, after, index);
+		}
+	}
+
+	// The shadow tape and the physical buffer must scroll in lockstep: outside
+	// gesture replays (checkpoints, geometry) the only thing that ever pushes
+	// rows into native scrollback is a commit, and every commit appends to the
+	// tape in the same write. Any disagreement means the ledgers diverged —
+	// catch it at the op where it happens instead of N ops later when the
+	// content mismatch surfaces.
+	#assertTapeScrollParity(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (!this.#traits.strictNativeScrollback) return;
+		if (op.checkpoint || op.geometryChanged) return;
+		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
+		const physicalDelta = after.position.baseY - before.position.baseY;
+		const tapeDelta = after.shadowTapeLength - before.shadowTapeLength;
+		if (physicalDelta !== tapeDelta) {
+			this.#fail("tape/physical scroll parity", op, before, after, index, {
+				physicalDelta,
+				tapeDelta,
+			});
 		}
 	}
 
@@ -2490,12 +2547,14 @@ class StressDriver {
 		}
 		if (this.#shadowAltActive) return;
 		const frame = this.#shadowFrame;
+		const raw = this.#shadowRawFrame;
 		const height = Math.max(1, this.#shadowFrameHeight);
 		const length = frame.length;
 		if (data.includes("\x1b[3J")) {
 			this.#shadowCommitted = Math.max(0, length - height);
 			this.#shadowWindowTop = this.#shadowCommitted;
 			this.#shadowTape = frame.slice(0, this.#shadowCommitted);
+			this.#shadowRawPrefix = raw.slice(0, this.#shadowCommitted);
 			return;
 		}
 		if (data.includes("\x1b[2J")) {
@@ -2505,21 +2564,26 @@ class StressDriver {
 			for (let i = 0; i < chunkTo; i++) this.#shadowTape.push(frame[i] ?? "");
 			this.#shadowCommitted = chunkTo;
 			this.#shadowWindowTop = chunkTo;
+			this.#shadowRawPrefix = raw.slice(0, chunkTo);
 			return;
 		}
-		if (length <= this.#shadowCommitted) {
-			// Shrink into the committed prefix: the engine re-anchors and
-			// restarts commit bookkeeping; stale history stays on the tape.
-			this.#shadowCommitted = Math.max(0, length - height);
-			this.#shadowWindowTop = this.#shadowCommitted;
-			return;
-		}
+		// Audit and shrink re-anchoring are mirrored at render time (they can
+		// fire on zero-byte frames); the write hook only applies commits.
 		const windowTop = Math.max(this.#shadowCommitted, length - height, 0);
 		this.#shadowWindowTop = windowTop;
-		// Overlays and multiplexer geometry frames freeze commits.
-		if (this.#shadowFrameOverlay || this.#shadowFrameGeometryChanged) return;
+		// Overlays and multiplexer geometry frames freeze commits; a geometry
+		// frame also re-bases the raw prefix at the new width (accepted wrap
+		// drift, mirrored from the engine).
+		if (this.#shadowFrameGeometryChanged) {
+			this.#shadowRawPrefix = raw.slice(0, this.#shadowCommitted);
+			return;
+		}
+		if (this.#shadowFrameOverlay) return;
 		const chunkTo = Math.max(this.#shadowCommitted, Math.min(length, windowTop));
-		for (let i = this.#shadowCommitted; i < chunkTo; i++) this.#shadowTape.push(frame[i] ?? "");
+		for (let i = this.#shadowCommitted; i < chunkTo; i++) {
+			this.#shadowTape.push(frame[i] ?? "");
+			this.#shadowRawPrefix.push(raw[i] ?? "");
+		}
 		this.#shadowCommitted = chunkTo;
 	}
 	#scrollbackCapReached(snapshot: Snapshot): boolean {
@@ -2563,6 +2627,11 @@ class StressDriver {
 		index: number,
 	): void {
 		if (!this.#scenario.uniqueContent) return;
+		// All comparisons run with non-spacing marks stripped: the virtual
+		// terminal drops them on input (ghostty-web 0.4 margin-cluster crash
+		// workaround), so buffer readback and frame/tape rows would otherwise
+		// never collide on marked rows.
+		const strip = (line: string): string => line.replace(NONSPACING_MARKS, "");
 		// Accumulate even when the check below is skipped (scrolled/overlay): the
 		// frame's legitimate duplicates commit to scrollback regardless of where
 		// the viewport is parked. The shadow tape contributes too: a no-seam
@@ -2570,11 +2639,12 @@ class StressDriver {
 		// legitimately commit a second time (the exact tape-equality oracle has
 		// already proven the buffer matches the ledger row for row).
 		for (const line of duplicateNonblankLines(after.frame)) {
-			this.#everDuplicatedFrameLines.add(line);
+			this.#everDuplicatedFrameLines.add(strip(line));
 		}
 		const tapeSeen = new Set<string>();
-		for (const line of this.#shadowTape) {
-			if (line.length === 0) continue;
+		for (const raw of this.#shadowTape) {
+			if (raw.length === 0) continue;
+			const line = strip(raw);
 			if (tapeSeen.has(line)) this.#everDuplicatedFrameLines.add(line);
 			tapeSeen.add(line);
 		}
@@ -2582,15 +2652,17 @@ class StressDriver {
 		// at the commit boundary) legitimately appears in both regions of the
 		// whole-tape buffer snapshot.
 		for (let r = 0; r < after.height; r++) {
-			const line = this.#shadowFrame[this.#shadowWindowTop + r] ?? "";
-			if (line.length === 0) continue;
+			const raw = this.#shadowFrame[this.#shadowWindowTop + r] ?? "";
+			if (raw.length === 0) continue;
+			const line = strip(raw);
 			if (tapeSeen.has(line)) this.#everDuplicatedFrameLines.add(line);
 		}
 		if (this.#hasVisibleOverlay() || !after.atBottom) return;
 		const allowed = this.#everDuplicatedFrameLines;
 		const seen = new Set<string>();
-		for (const line of after.buffer) {
-			if (line.length === 0) continue;
+		for (const raw of after.buffer) {
+			if (raw.length === 0) continue;
+			const line = strip(raw);
 			if (seen.has(line) && !allowed.has(line)) {
 				this.#fail("unexpected duplicate native scrollback line", op, before, after, index, { line });
 			}
@@ -2628,6 +2700,15 @@ class StressDriver {
 			tags: this.#scenario.tags,
 			operationCoverage: Object.fromEntries(this.#operationCoverage.entries()),
 			lastOperations: this.#opLog.slice(-50),
+			shadow: {
+				committed: this.#shadowCommitted,
+				windowTop: this.#shadowWindowTop,
+				tapeLength: this.#shadowTape.length,
+				frameLength: this.#shadowFrame.length,
+				geometryChanged: this.#shadowFrameGeometryChanged,
+				overlayVisible: this.#shadowFrameOverlay,
+			},
+			lastWrites: this.#writeLog.slice(-4).map(write => JSON.stringify(write.slice(-400))),
 			children: this.#children.map(child => ({
 				id: child.id,
 				active: child.active,

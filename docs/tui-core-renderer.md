@@ -72,18 +72,30 @@ could be looking at.
 
 1. Compose the frame (`render(width)`), collecting `liveRegionStart` /
    `commitSafeEnd` from the root children (absolute row indices).
-2. Classify: **fullPaint** (first paint, `clearScrollback` session replace, or
+2. **Audit the committed prefix** (`findCommittedPrefixResync`, skipped on
+   geometry frames). Components must never re-layout rows below C, but real
+   flows violate it (a TTSR rewind truncating a streamed block, an image-cap
+   demotion shrinking a committed image) and the violation must not become
+   content loss. The detector samples the prefix *tail* (up to 8 non-blank
+   rows in the last 24, SGR-stripped): an in-place edit or restyle disturbs
+   only the touched rows (≤1 mismatch ⇒ aligned ⇒ ignored — stale styling in
+   history is the accepted artifact), while any insertion/deletion shifts
+   every row below it including the tail (⇒ re-anchor C at the first changed
+   row and recommit from there: history keeps the stale copy and gains a
+   fresh one — **duplication, never loss**).
+3. Classify: **fullPaint** (first paint, `clearScrollback` session replace, or
    geometry change outside a multiplexer — all user gestures) or **update**.
-3. Window math as in §1. Two special rules:
+4. Window math as in §1. Two special rules:
    - **Overlays freeze commits** (`C' = C`): composited rows must never enter
      history; the hidden gap backfills via the chunk after the overlay closes.
-   - **Shrink into the committed prefix** (`L ≤ C`, only possible without a
-     seam): re-anchor `W = max(0, L − height)`, reset `C = min(B, W)`, keep the
-     stale history above (no gesture, no erase).
-4. Extract the cursor marker, prepare lines (width fitting), slice the window,
-   composite overlays **into the window slice only** (screen coordinates — an
-   overlay never touches the frame or the ledger).
-5. Emit:
+   - **Shrink into the committed prefix** (`L ≤ C`): re-anchor
+     `W = max(0, L − height)`, reset `C = min(B, W)`, keep the stale history
+     above (no gesture, no erase).
+5. Extract the cursor marker (strip-first: markers never reach the terminal,
+   the prefix ledger, or the audit), prepare lines (width fitting), slice the
+   window, composite overlays **into the window slice only** (screen
+   coordinates — an overlay never touches the frame or the ledger).
+6. Emit:
 
 | Emitter | Bytes | When |
 |---|---|---|
@@ -133,7 +145,9 @@ engine's required guarantee, not a per-terminal optimization.
    multiplexers.
 2. **NEVER rewrite a committed row.** No emitter may touch frame rows `< C`,
    and `W ≥ C` always (re-showing a committed row on the grid duplicates it
-   for a scrolling reader — the historical corruption family).
+   for a scrolling reader — the historical corruption family). When a
+   *component* violates immutability, the audit (§2) degrades to duplication —
+   never silently skip rows, never erase history.
 3. **Commits are exactly the chunk.** Any byte shape that scrolls the screen
    must scroll *only* rows accounted for by `C' − C` — that is what makes
    scrollback provably `frame[0..C)`.
@@ -252,7 +266,10 @@ Kitty images are **transmit-once, place-many** (`kitty-graphics.ts`).
 exceeded the demoted image's pixels are deleted by id (`a=d,d=I`) and its
 visible rows re-render as the text fallback through the ordinary window diff —
 **no destructive replay**. A demoted placement already committed to history
-simply loses its pixels (committed rows are immutable).
+simply loses its pixels (committed rows are immutable), and the text fallback
+is **height-preserving** once a graphic has rendered (reserved rows + fallback
+line), so demotion never shrinks the block and never shifts committed content
+below it.
 
 **Rule:** never re-emit full base64 per frame. Kitty Unicode placeholders are
 default-on only for kitty/ghostty (`PI_NO_KITTY_PLACEHOLDERS` /

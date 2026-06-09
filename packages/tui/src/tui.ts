@@ -421,6 +421,73 @@ interface PreparedLine {
 	line: string;
 }
 
+const SGR_SEQUENCE = /\x1b\[[0-9;:]*m/g;
+
+/** Compare two rows ignoring SGR styling (theme restyles keep alignment). */
+function rowsEquivalent(a: string, b: string): boolean {
+	if (a === b) return true;
+	return a.replace(SGR_SEQUENCE, "") === b.replace(SGR_SEQUENCE, "");
+}
+
+function isBlankRow(row: string): boolean {
+	if (row.length === 0) return true;
+	return row.replace(SGR_SEQUENCE, "").trim().length === 0;
+}
+
+// Tail-alignment sampling bounds: look back through up to LOOKBACK rows of
+// the committed prefix to collect SAMPLES non-blank comparisons.
+const RESYNC_TAIL_LOOKBACK = 24;
+const RESYNC_TAIL_SAMPLES = 8;
+
+/**
+ * Decide whether `frame` still aligns with the committed prefix, and where to
+ * re-anchor the commit index when it does not. Returns the resync row index,
+ * or -1 when no resync is needed.
+ *
+ * The detector exploits the asymmetry between the two mutation classes: an
+ * in-place edit or restyle of committed rows disturbs only the touched rows
+ * (alignment below them is intact — the stale copy in history is the
+ * long-accepted artifact), while any insertion or deletion shifts EVERY row
+ * below it, including the rows just above the commit boundary. So the prefix
+ * *tail* is sampled (up to 8 non-blank rows within the last 24, compared
+ * SGR-stripped so theme changes stay quiet, tolerating one mismatch for a
+ * legitimate single-row edit): aligned ⇒ no resync; misaligned ⇒ resync at
+ * the first non-equivalent row, recommitting from there — duplication, never
+ * loss. Highly repetitive tails (identical filler rows) can mask a shift, in
+ * which case the skipped rows are content-identical to the committed ones —
+ * observationally harmless. Exported for the render-stress harness, whose
+ * shadow commit ledger must mirror the engine's law exactly.
+ */
+export function findCommittedPrefixResync(frame: readonly string[], prefix: readonly string[]): number {
+	const committed = prefix.length;
+	if (committed === 0) return -1;
+	if (frame.length >= committed) {
+		let samples = 0;
+		let mismatches = 0;
+		const lookback = Math.min(RESYNC_TAIL_LOOKBACK, committed);
+		for (let j = 1; j <= lookback && samples < RESYNC_TAIL_SAMPLES; j++) {
+			const row = frame[committed - j]!;
+			const old = prefix[committed - j]!;
+			if (row === old) {
+				if (!isBlankRow(row)) samples++;
+				continue;
+			}
+			if (isBlankRow(row) && isBlankRow(old)) continue;
+			samples++;
+			if (!rowsEquivalent(row, old)) mismatches++;
+		}
+		// No signal (all-blank tail) or at most one edited row: aligned.
+		if (samples === 0 || mismatches <= 1) return -1;
+	}
+	// Misaligned (or the frame no longer covers the prefix): re-anchor at the
+	// first row whose content actually changed.
+	const limit = Math.min(committed, frame.length);
+	for (let i = 0; i < limit; i++) {
+		if (!rowsEquivalent(frame[i]!, prefix[i]!)) return i;
+	}
+	return limit < committed ? limit : -1;
+}
+
 /**
  * TUI - Main class for managing terminal UI with differential rendering
  */
@@ -495,6 +562,12 @@ export class TUI extends Container {
 	// rows below the `NativeScrollbackLiveRegion` boundary so they never get
 	// here while they can still change.
 	#committedRows = 0;
+	// Raw rows mirroring [0, #committedRows) — the engine's claim of what it
+	// committed, audited each ordinary frame against the current render to
+	// detect components re-laying-out committed content (see
+	// #auditCommittedPrefix). Holds references to component-cached strings, so
+	// the audit is a pointer walk in the common case.
+	#committedPrefix: string[] = [];
 	// Frame row currently mapped to screen row 0. Monotonic between full
 	// paints: a shrink never re-exposes scrolled-off rows (they cannot be
 	// un-scrolled without rewriting history); live rows repaint at fixed
@@ -1574,22 +1647,20 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Find and extract cursor position from rendered lines.
-	 * Searches for CURSOR_MARKER, calculates its position, and strips it from
-	 * the output. Markers are internal sentinels and must never reach the
-	 * terminal, so every occurrence is stripped; only a marker at or below
-	 * `viewportTop` becomes a hardware cursor target.
+	 * Strip every CURSOR_MARKER from the rendered lines (markers are internal
+	 * sentinels and must never reach the terminal, the committed prefix, or
+	 * the resync audit) and return the positions of the stripped markers,
+	 * bottom-most first. Callers pick the visible one once the window top is
+	 * known.
 	 */
-	#extractCursorPosition(lines: string[], viewportTop: number): { row: number; col: number } | null {
-		let cursor: { row: number; col: number } | null = null;
+	#extractCursorMarkers(lines: string[]): { row: number; col: number }[] {
+		const markers: { row: number; col: number }[] = [];
 		for (let row = lines.length - 1; row >= 0; row--) {
 			const line = lines[row];
 			let markerIndex = line.indexOf(CURSOR_MARKER);
 			if (markerIndex === -1) continue;
-			if (cursor === null && row >= viewportTop) {
-				const beforeMarker = line.slice(0, markerIndex);
-				cursor = { row, col: visibleWidth(beforeMarker) };
-			}
+			const beforeMarker = line.slice(0, markerIndex);
+			markers.push({ row, col: visibleWidth(beforeMarker) });
 			let stripped = line;
 			while (markerIndex !== -1) {
 				stripped = stripped.slice(0, markerIndex) + stripped.slice(markerIndex + CURSOR_MARKER.length);
@@ -1597,7 +1668,7 @@ export class TUI extends Container {
 			}
 			lines[row] = stripped;
 		}
-		return cursor;
+		return markers;
 	}
 
 	#terminalLine(line: string): string {
@@ -1654,6 +1725,10 @@ export class TUI extends Container {
 		this.#imageBudget.beginPass();
 		const rawFrame = this.render(width);
 		this.#imageBudget.endPass();
+		// Strip cursor markers immediately (they are internal sentinels and
+		// must never reach the terminal, the committed prefix, or the audit);
+		// the visible marker is chosen after the window top is known.
+		const cursorMarkers = this.#extractCursorMarkers(rawFrame);
 		const liveRegionStart = this.#nativeScrollbackLiveRegionStart;
 		const commitSafeEnd = this.#nativeScrollbackCommitSafeEnd;
 
@@ -1671,6 +1746,20 @@ export class TUI extends Container {
 			(this.#previousHeight > 0 && this.#previousHeight !== height) ||
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const geometryChanged = widthChanged || heightChanged;
+
+		// Committed-prefix audit: rows below the commit index are physically in
+		// terminal history and must never re-layout. When a component violates
+		// that — a budget-demoted image collapsing to its one-line fallback, a
+		// TTSR rewind truncating a block whose sealed prefix already committed —
+		// keeping the old index would silently skip that many rows of
+		// everything below (content loss). Re-anchor at the divergence instead:
+		// the stale copy stays in history and rows recommit from there —
+		// duplication, never loss. Skipped on geometry frames (a rewrap
+		// legitimately reflows every row; the mux branch re-bases the prefix
+		// and non-mux geometry replays from scratch).
+		if (this.#hasEverRendered && !geometryChanged && !this.#clearScrollbackOnNextRender) {
+			this.#auditCommittedPrefix(rawFrame);
+		}
 
 		// 3. Window and commit math (lengths only; content prepared below).
 		const frameLength = rawFrame.length;
@@ -1703,14 +1792,15 @@ export class TUI extends Container {
 		} else if (frameLength <= this.#committedRows) {
 			// The frame shrank into (or below) the committed prefix: the app
 			// replaced content it had already let scroll into history without
-			// requesting a session replace (only possible without a live-region
-			// seam). History is immutable without a gesture, so the stale
-			// committed copy stays in scrollback; re-anchor the window at the
-			// tail and restart commit bookkeeping there so the live grid shows
-			// the real content instead of a blank pinned window.
+			// requesting a session replace. History is immutable without a
+			// gesture, so the stale committed copy stays in scrollback;
+			// re-anchor the window at the tail and restart commit bookkeeping
+			// there so the live grid shows the real content instead of a blank
+			// pinned window.
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(commitBoundary, windowTop);
 			this.#committedRows = chunkTo;
+			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 		} else {
 			// Re-anchor to the frame tail, floored at the committed boundary: a
 			// shrink (or overlay close) pulls the window back down, but never
@@ -1722,23 +1812,36 @@ export class TUI extends Container {
 			// Overlays freeze commits: composited rows must never enter
 			// history, and the hidden gap backfills via the chunk once the
 			// overlay closes. A multiplexer resize also commits nothing — the
-			// pane keeps its own (old-wrap) history.
+			// pane keeps its own (old-wrap) history — and re-bases the audit
+			// prefix at the new width so the accepted wrap drift does not read
+			// as a violation on the next ordinary frame.
 			chunkTo =
 				hasVisibleOverlay || geometryChanged
 					? this.#committedRows
 					: Math.max(this.#committedRows, Math.min(commitBoundary, windowTop));
+			if (geometryChanged) {
+				this.#committedPrefix = rawFrame.slice(0, this.#committedRows);
+			}
 		}
 
-		// 5. Extract the hardware-cursor marker (frame coordinates) before
-		// width fitting, then prepare lines and build the visible window slice.
-		let cursorPos = this.#extractCursorPosition(rawFrame, windowTop);
+		// 5. Pick the visible cursor marker (bottom-most at or below the window
+		// top), prepare lines, and build the visible window slice.
+		let cursorPos: { row: number; col: number } | null = null;
+		for (const marker of cursorMarkers) {
+			if (marker.row >= windowTop) {
+				cursorPos = marker;
+				break;
+			}
+		}
 		const frame = this.#prepareLines(rawFrame, width, true);
 		let window: string[] = new Array(height);
 		for (let r = 0; r < height; r++) window[r] = frame[windowTop + r] ?? "";
 		if (hasVisibleOverlay) {
 			window = this.#compositeOverlaysIntoWindow(window, width, height);
-			const overlayCursor = this.#extractCursorPosition(window, 0);
-			if (overlayCursor) cursorPos = { row: windowTop + overlayCursor.row, col: overlayCursor.col };
+			const overlayMarkers = this.#extractCursorMarkers(window);
+			if (overlayMarkers.length > 0) {
+				cursorPos = { row: windowTop + overlayMarkers[0]!.row, col: overlayMarkers[0]!.col };
+			}
 			window = this.#prepareLines(window, width, false);
 		}
 
@@ -1776,6 +1879,7 @@ export class TUI extends Container {
 				chunkTo,
 				windowTop,
 			});
+			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 			this.#clearScrollbackOnNextRender = false;
 			this.#hasEverRendered = true;
 			if (!firstPaint && frameLength > height) this.#armPostFullPaintSettle();
@@ -1788,6 +1892,29 @@ export class TUI extends Container {
 			prevHardwareCursorRow,
 			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && isMultiplexerSession()),
 		});
+		for (let i = this.#committedPrefix.length; i < chunkTo; i++) {
+			this.#committedPrefix.push(rawFrame[i] ?? "");
+		}
+	}
+
+	/**
+	 * Detect committed-prefix violations and re-anchor the commit index at the
+	 * first moved row, so subsequent rows recommit instead of being skipped:
+	 * the stale copy stays in history — duplication, never loss. Pure in-place
+	 * restyles keep their alignment and are left alone (stale styling in
+	 * history was always the accepted artifact).
+	 */
+	#auditCommittedPrefix(rawFrame: string[]): void {
+		const prefix = this.#committedPrefix;
+		if (prefix.length === 0) return;
+		const resyncTo = findCommittedPrefixResync(rawFrame, prefix);
+		if (resyncTo < 0) return;
+		this.#committedRows = resyncTo;
+		prefix.length = resyncTo;
+		if ($flag("PI_DEBUG_REDRAW")) {
+			const msg = `[${new Date().toISOString()}] commit resync: committed prefix diverged at row ${resyncTo}; recommitting\n`;
+			fs.appendFileSync(getDebugLogPath(), msg);
+		}
 	}
 
 	#prepareLines(lines: string[], width: number, useCache: boolean): string[] {
@@ -1966,8 +2093,18 @@ export class TUI extends Container {
 		if (TERMINAL.isImageLine(line)) return ERASE_LINE + line;
 		const terminalLine = this.#terminalLine(line);
 		const asciiWidth = this.#ansiAsciiLineWidth(line, width);
-		const lineWidth = asciiWidth ?? visibleWidth(line);
-		return lineWidth >= width ? terminalLine : terminalLine + ERASE_TO_END_OF_LINE;
+		if (asciiWidth !== undefined) {
+			// Exact width model: skip the erase only when the row truly fills
+			// the line (an EL there would eat the last cell via pending-wrap).
+			return asciiWidth >= width ? terminalLine : terminalLine + ERASE_TO_END_OF_LINE;
+		}
+		// Non-ASCII rows: the native measure can over-count combining-heavy
+		// scripts, so a row it calls "full" may render short and leave stale
+		// cells from the previous occupant — which would then scroll into
+		// history baked into the committed row. Erase the line first instead
+		// (rewrites always start at column 1, so EL-to-end clears the whole
+		// row); the leading reset keeps BCE on the default background.
+		return SEGMENT_RESET + ERASE_TO_END_OF_LINE + terminalLine;
 	}
 
 	/**
@@ -2128,7 +2265,7 @@ export class TUI extends Container {
 	#renderAltFrame(width: number, height: number): void {
 		const base: string[] = new Array(Math.max(0, height)).fill("");
 		let lines = this.#compositeOverlaysIntoWindow(base, width, height);
-		this.#extractCursorPosition(lines, 0);
+		this.#extractCursorMarkers(lines);
 		lines = this.#prepareLines(lines, width, false);
 		this.#emitAltFrame(lines, width, height);
 	}

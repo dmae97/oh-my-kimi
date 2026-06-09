@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import type { Terminal, TerminalAppearance } from "@oh-my-pi/pi-tui/terminal";
 import { CellFlags, Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghostty-web";
 
@@ -28,7 +29,32 @@ function loadGhosttyModule(): WebAssembly.Module {
 	return new WebAssembly.Module(fs.readFileSync(wasmPath));
 }
 
-const ghosttyModule = loadGhosttyModule();
+let ghosttyModule = loadGhosttyModule();
+
+/**
+ * Recompile the shared WASM module. ghostty-web 0.4 instances created from a
+ * module that already produced a trapped instance have been observed to trap
+ * again on byte streams that a freshly compiled module replays cleanly; the
+ * recovery path swaps the module before rebuilding.
+ */
+function reloadGhosttyModule(): void {
+	ghosttyModule = loadGhosttyModule();
+}
+
+// Non-spacing combining marks (Arabic harakat, Thai/Lao vowels) written so a
+// cluster lands on the right margin deterministically corrupt ghostty-web
+// 0.4's WASM memory (trap surfaces a few bytes later, with autowrap on or
+// off). Mark placement through this engine is already unverifiable — readback
+// migrates marks across cells, and the harness compares marked rows with
+// non-spacing marks stripped (`sameLinesAllowingMarkDrift`) — so dropping the
+// marks before the engine sees them removes the crash class without weakening
+// any oracle. Variation selectors are kept: they are width-bearing (VS16
+// promotes emoji to 2 cells) and never combine at the margin.
+const UNSAFE_COMBINING_MARKS = /(?![\uFE00-\uFE0F])\p{Mn}/gu;
+function stripCombiningMarksForGhostty(data: string): string {
+	if (!/\p{Mn}/u.test(data)) return data;
+	return data.replace(UNSAFE_COMBINING_MARKS, "");
+}
 
 function createGhosttyEngine(): Ghostty {
 	// libghostty-vt reports unimplemented control sequences (e.g. DECCARA `$r`,
@@ -45,11 +71,14 @@ function createGhosttyTerminal(
 	scrollbackCap: number,
 ): GhosttyTerminal {
 	return ghostty.createTerminal(columns, rows, {
-		// Byte budget (not a line count), grown lazily to this ceiling. Sized far
-		// above the requested line cap so the engine never evicts before the
-		// wrapper's line-cap clamp does — the clamp is the only eviction the
-		// harness sees, reproducing xterm's line-count scrollback.
-		scrollbackLimit: Math.min(0xffff_ffff, Math.max((scrollbackCap + rows + 64) * 4096, 4 * 1024 * 1024)),
+		// Byte budget (not a line count). Sized to hold the wrapper's line cap
+		// comfortably while staying small enough that ghostty's own page
+		// eviction kicks in under heavy write volume: ghostty-web 0.4's
+		// allocator traps once an instance accumulates enough un-evicted
+		// history (recommit-heavy stress runs hit it). The wrapper still clamps
+		// the EXPOSED scrollback to the line cap, so eviction beyond the budget
+		// is invisible to the oracles.
+		scrollbackLimit: Math.max((scrollbackCap + rows + 64) * 1024, 1024 * 1024),
 		fgColor: DEFAULT_FG_RGB,
 		bgColor: DEFAULT_BG_RGB,
 	});
@@ -59,17 +88,22 @@ function createGhosttyTerminal(
 // an explicit one. The exposed scrollback is clamped to this many lines (below).
 const DEFAULT_SCROLLBACK_LINES = 1000;
 // Packed default colors (0xRRGGBB). Light-grey fg on black bg so a styled SGR
-// color is always distinguishable from "default" when reading back cells.
+// row differs from a default row in cell readback.
 const DEFAULT_FG_RGB = 0xcccccc;
 const DEFAULT_BG_RGB = 0x000000;
-// Compare readback against the configured defaults directly; Ghostty's
-// getColors() currently reports render-state metadata, not these cell colors.
-const DEFAULT_FG_R = (DEFAULT_FG_RGB >> 16) & 0xff;
 const MAX_GHOSTTY_WRITE_CHUNK = 4096;
+// Compact the OOM-recovery event log once it exceeds this many logged chars.
+// Kept aggressively small: ghostty-web 0.4 instances can trap on long byte
+// histories (interactions that a synthesized text+grid state does not
+// reproduce), so recovery must always replay a compact synthetic snapshot
+// plus a short tail rather than the raw session history.
+const EVENT_LOG_COMPACT_BUDGET = 256_000;
 const SYNC_OUTPUT_BEGIN = "\x1b[?2026h";
 const SYNC_OUTPUT_END = "\x1b[?2026l";
 const OSC_SEQUENCE = /\x1b\][\s\S]*?(?:\x07|\x1b\\)/g;
-
+// Compare readback against the configured defaults directly; Ghostty's
+// getColors() currently reports render-state metadata, not these cell colors.
+const DEFAULT_FG_R = (DEFAULT_FG_RGB >> 16) & 0xff;
 const DEFAULT_FG_G = (DEFAULT_FG_RGB >> 8) & 0xff;
 const DEFAULT_FG_B = DEFAULT_FG_RGB & 0xff;
 const DEFAULT_BG_R = (DEFAULT_BG_RGB >> 16) & 0xff;
@@ -105,6 +139,17 @@ export class VirtualTerminal implements Terminal {
 	#inputHandler?: (data: string) => void;
 	#resizeHandler?: () => void;
 	#pendingEngineResize = false;
+	// Byte/resize event log since the last engine recreate. ghostty-web 0.4's
+	// allocator exhausts after enough cumulative write volume in one instance
+	// (recommit-heavy stress runs hit it); on an OOM trap the wrapper rebuilds
+	// a fresh engine and replays this log, which reproduces the exact terminal
+	// state. Full-clear recreates reset the log (prior history is erased), so
+	// it stays bounded by the bytes since the last destructive replay.
+	#eventLog: (string | { columns: number; rows: number })[] = [];
+	#eventLogBytes = 0;
+	#logBaseColumns: number;
+	#logBaseRows: number;
+	#replayingLog = false;
 	// Memoized text of committed scrollback rows, keyed by absolute offset. Safe
 	// because the engine never evicts (its byte budget sits far above the line
 	// cap), so an offset's content is stable until a resize (rewrap) or recreate
@@ -115,6 +160,8 @@ export class VirtualTerminal implements Terminal {
 	constructor(columns = 80, rows = 24, scrollback?: number) {
 		this.#columns = columns;
 		this.#rows = rows;
+		this.#logBaseColumns = columns;
+		this.#logBaseRows = rows;
 		this.#scrollbackCap = scrollback ?? DEFAULT_SCROLLBACK_LINES;
 		this.#ghostty = createGhosttyEngine();
 		this.#term = createGhosttyTerminal(this.#ghostty, columns, rows, this.#scrollbackCap);
@@ -382,10 +429,12 @@ export class VirtualTerminal implements Terminal {
 			data = data.slice(0, clearIndex) + data.slice(clearIndex + clearScrollbackAfterFullClear.length);
 		} else if (this.#pendingEngineResize) {
 			this.#term.resize(this.#columns, this.#rows);
+			this.#eventLog.push({ columns: this.#columns, rows: this.#rows });
 			this.#historyTextCache.length = 0; // engine rewraps scrollback on resize
 			this.#pendingEngineResize = false;
 		}
 		data = this.#stripSynchronizedOutput(data);
+		data = stripCombiningMarksForGhostty(data);
 		this.#writeToGhostty(data);
 		this.#refollowBottom(wasBottom);
 	}
@@ -396,9 +445,9 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	#writeToGhostty(data: string): void {
-		if (data.length <= MAX_GHOSTTY_WRITE_CHUNK) {
-			this.#term.write(data);
-			return;
+		if (!this.#replayingLog) {
+			this.#eventLog.push(data);
+			this.#eventLogBytes += data.length;
 		}
 		let offset = 0;
 		while (offset < data.length) {
@@ -406,8 +455,125 @@ export class VirtualTerminal implements Terminal {
 			const last = data.charCodeAt(end - 1);
 			if (end < data.length && last >= 0xd800 && last <= 0xdbff) end--;
 			if (end <= offset) end = Math.min(offset + 1, data.length);
-			this.#term.write(data.slice(offset, end));
+			const chunk = data.slice(offset, end);
+			try {
+				this.#term.write(chunk);
+			} catch (error) {
+				if (this.#replayingLog) {
+					const dumpPath = `${os.tmpdir()}/ghostty-trap-log-${Date.now()}.json`;
+					try {
+						fs.writeFileSync(dumpPath, JSON.stringify(this.#eventLog));
+					} catch {}
+					throw new Error(
+						`ghostty write failed during OOM-recovery replay (chunk ${chunk.length} chars at offset ${offset} of ${data.length}): ${String(error)}\n` +
+							`event log dumped to ${dumpPath}\n` +
+							`chunk head: ${JSON.stringify(chunk.slice(0, 200))}`,
+						{ cause: error },
+					);
+				}
+				this.#recoverFromEngineOom();
+				return;
+			}
 			offset = end;
+		}
+		// Healthy write completed: once the log grows past the budget, compact
+		// it to a bounded synthetic state and rotate onto a fresh engine.
+		// ghostty-web 0.4 instances cannot be freed safely and grow their WASM
+		// memory monotonically with write volume; abandoned giants eventually
+		// starve the process so badly that a fresh instance cannot even grow.
+		// Rotating early keeps every instance small.
+		if (!this.#replayingLog && this.#eventLogBytes > EVENT_LOG_COMPACT_BUDGET) {
+			this.#compactEventLog();
+			this.#rebuildEngineFromLog();
+		}
+	}
+
+	/**
+	 * Replace the event log with a synthetic stream rebuilt from the healthy
+	 * engine's readable state: the wrapper-visible history window as plain
+	 * text, the grid repainted with background runs (the only style any oracle
+	 * reads), and the cursor restored. Replaying it reproduces every
+	 * observable the oracles consume.
+	 */
+	#compactEventLog(): void {
+		const historyLen = this.#term.getScrollbackLength();
+		const capped = this.#cappedBaseY();
+		let synthetic = "";
+		for (let i = 0; i < capped; i++) {
+			synthetic += `${this.#historyRowText(historyLen - capped + i)}\r\n`;
+		}
+		// Push exactly `capped` rows into scrollback, leaving a blank grid.
+		synthetic += "\r\n".repeat(Math.max(0, this.#rows - 1));
+		for (let row = 0; row < this.#rows; row++) {
+			synthetic += `\x1b[${row + 1};1H\x1b[K${this.#syntheticGridRow(row)}`;
+		}
+		const cursor = this.getCursor();
+		synthetic += `\x1b[${cursor.row + 1};${cursor.col + 1}H`;
+		this.#eventLog = [synthetic];
+		this.#eventLogBytes = synthetic.length;
+		this.#logBaseColumns = this.#columns;
+		this.#logBaseRows = this.#rows;
+	}
+
+	/** Grid row text with minimal background-run SGR, for log compaction. */
+	#syntheticGridRow(row: number): string {
+		const cells = this.#term.getLine(row);
+		if (!cells) return "";
+		let out = "";
+		let currentBg = -1; // -1 = default
+		for (let col = 0; col < cells.length; col++) {
+			const cell = cells[col];
+			if (!cell || cell.width === 0) continue;
+			const bg = this.#isDefaultBg(cell) ? -1 : (cell.bg_r << 16) | (cell.bg_g << 8) | cell.bg_b;
+			if (bg !== currentBg) {
+				out += bg === -1 ? "\x1b[49m" : `\x1b[48;2;${cell.bg_r};${cell.bg_g};${cell.bg_b}m`;
+				currentBg = bg;
+			}
+			if (cell.codepoint === 0) {
+				out += " ";
+			} else {
+				out +=
+					cell.grapheme_len > 0 ? this.#term.getGraphemeString(row, col) : this.#safeCodepointText(cell.codepoint);
+			}
+		}
+		return `${out}\x1b[0m`;
+	}
+
+	/**
+	 * Rebuild a fresh engine and replay the event log to reproduce the exact
+	 * terminal state. The failed write is already in the log, so the replay
+	 * completes it against a fresh allocator.
+	 */
+	#recoverFromEngineOom(): void {
+		this.#rebuildEngineFromLog();
+	}
+
+	/**
+	 * Rebuild a fresh engine and replay the event log to reproduce the exact
+	 * terminal state. Used for proactive rotation (with a compacted log) and
+	 * for OOM recovery, where the failed write is already in the log so the
+	 * replay completes it against a fresh allocator.
+	 */
+	#rebuildEngineFromLog(): void {
+		const log = this.#eventLog;
+		// Give JSC a chance to collect previously abandoned instances before
+		// allocating another one.
+		Bun.gc(true);
+		reloadGhosttyModule();
+		this.#ghostty = createGhosttyEngine();
+		this.#term = createGhosttyTerminal(this.#ghostty, this.#logBaseColumns, this.#logBaseRows, this.#scrollbackCap);
+		this.#historyTextCache.length = 0;
+		this.#replayingLog = true;
+		try {
+			for (const event of log) {
+				if (typeof event === "string") {
+					this.#writeToGhostty(event);
+				} else {
+					this.#term.resize(event.columns, event.rows);
+				}
+			}
+		} finally {
+			this.#replayingLog = false;
 		}
 	}
 
@@ -443,6 +609,10 @@ export class VirtualTerminal implements Terminal {
 		this.#pendingEngineResize = false;
 		this.#viewportY = 0;
 		this.#historyTextCache.length = 0; // fresh engine: prior scrollback is gone
+		this.#eventLog.length = 0;
+		this.#eventLogBytes = 0;
+		this.#logBaseColumns = this.#columns;
+		this.#logBaseRows = this.#rows;
 	}
 
 	/** Cells of the presented viewport row (history when scrolled up, else active grid). */
