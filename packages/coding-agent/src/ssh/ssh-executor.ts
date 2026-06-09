@@ -147,7 +147,10 @@ export async function executeSSH(
 			throw event.error;
 		}
 
-		await streamsSettled;
+		const streamEvent = await (abortEvent ? Promise.race([streamsSettled, abortEvent]) : streamsSettled);
+		if (streamEvent?.kind === "error") {
+			throw streamEvent.error;
+		}
 		return {
 			exitCode: event.exitCode,
 			cancelled: false,
