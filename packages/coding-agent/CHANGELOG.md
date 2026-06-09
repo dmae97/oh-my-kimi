@@ -97,6 +97,10 @@
 
 - Removed the special Anthropic `claude-opus-4-8` tool-call batch cap; sessions no longer abort an in-flight provider stream after a fixed number of completed tool calls.
 
+### Added
+
+- Added `/review` support for explicit GitHub pull request URLs and detected PR URLs from recent conversation context ([#1743](https://github.com/can1357/oh-my-pi/issues/1743)).
+
 ## [15.10.4] - 2026-06-08
 
 ### Added
