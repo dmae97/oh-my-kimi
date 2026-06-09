@@ -14,7 +14,6 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
 import { Settings } from "../config/settings";
-import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 import type { Theme } from "../modes/theme/theme";
 import { OutputSink, type OutputSummary } from "../session/streaming-output";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
@@ -358,8 +357,11 @@ export async function runInteractiveBashPty(
 						command: options.command,
 						cwd: options.cwd,
 						timeoutMs: options.timeoutMs,
+						// Interactive PTY: inherit the user's environment (the Rust side
+						// applies these as overrides), with a real TERM so editors,
+						// pagers, and TUIs behave like a normal terminal.
 						env: {
-							...NON_INTERACTIVE_ENV,
+							TERM: "xterm-256color",
 							...options.env,
 						},
 						signal: options.signal,

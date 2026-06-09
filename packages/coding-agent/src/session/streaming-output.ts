@@ -650,6 +650,7 @@ export class OutputSink {
 	#sawData = false;
 	#truncated = false;
 	#lastChunkTime = 0;
+	#pendingChunk = "";
 
 	// Per-line column cap streaming state (persists across `push` calls so a
 	// long line split across chunks still trips the same trigger).
@@ -701,14 +702,20 @@ export class OutputSink {
 	push(chunk: string): void {
 		chunk = sanitizeWithOptionalSixelPassthrough(chunk, sanitizeText);
 
-		// Throttled onChunk: only call the callback when enough time has passed.
+		// Throttled onChunk: coalesce chunks arriving inside the throttle window
+		// and flush the buffered concatenation on the next eligible tick (plus a
+		// final flush in dump()) so the preview never has silent gaps.
 		// Live preview gets the raw (pre-cap) chunk so the TUI never lags behind
 		// what reached the sink — the column cap is for the persisted LLM view.
 		if (this.#onChunk) {
 			const now = Date.now();
 			if (now - this.#lastChunkTime >= this.#chunkThrottleMs) {
 				this.#lastChunkTime = now;
-				this.#onChunk(chunk);
+				const merged = this.#pendingChunk + chunk;
+				this.#pendingChunk = "";
+				this.#onChunk(merged);
+			} else {
+				this.#pendingChunk += chunk;
 			}
 		}
 
@@ -880,6 +887,11 @@ export class OutputSink {
 			const sink = Bun.file(this.#artifactPath).writer();
 			this.#file = { path: this.#artifactPath, artifactId: this.#artifactId, sink };
 
+			// Head-retained bytes precede the rolling tail buffer in the capture.
+			if (this.#head.length > 0) {
+				sink.write(this.#head);
+			}
+
 			// Flush existing buffer to file BEFORE it gets trimmed further.
 			if (this.#buffer.length > 0) {
 				sink.write(this.#buffer);
@@ -946,10 +958,19 @@ export class OutputSink {
 		this.#columnEllipsisAdded = false;
 		this.#columnDroppedBytes = 0;
 		this.#columnTruncatedLines = 0;
+		this.#pendingChunk = "";
 	}
 
 	async dump(notice?: string): Promise<OutputSummary> {
 		const noticeLine = notice ? `[${notice}]\n` : "";
+
+		// Flush any chunk still held back by the throttle so the live preview
+		// ends with the complete stream.
+		if (this.#onChunk && this.#pendingChunk.length > 0) {
+			const pending = this.#pendingChunk;
+			this.#pendingChunk = "";
+			this.#onChunk(pending);
+		}
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
 		if (this.#file) await this.#file.sink.end();

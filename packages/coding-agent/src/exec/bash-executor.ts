@@ -314,7 +314,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		if (userSignal) {
 			userSignal.removeEventListener("abort", abortHandler);
 		}
-		if (resetSession) {
+		if (resetSession || options?.sessionKey?.includes(":async:")) {
+			// `:async:` keys are per-job (jobId is unique), so the Shell would
+			// otherwise stay in the process-global map forever after completion.
 			shellSessions.delete(sessionKey);
 		}
 	}

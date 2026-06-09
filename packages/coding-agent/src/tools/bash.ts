@@ -410,10 +410,19 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	 */
 	#throwIfUnfinished(result: BashResult | BashInteractiveResult, timeoutSec: number, outputText: string): void {
 		if (result.cancelled) {
-			throw new ToolError(normalizeResultOutput(result) || "Command aborted");
+			// executeBash output already carries a `[Command cancelled]` notice from
+			// the sink; PTY/bridge interactive output does not, so annotate it here.
+			const out = normalizeResultOutput(result);
+			const annotated = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out;
+			throw new ToolError(annotated || "Command aborted");
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`);
+			const out = normalizeResultOutput(result);
+			throw new ToolError(
+				out
+					? `${out}\n\n[Command timed out after ${timeoutSec} seconds]`
+					: `Command timed out after ${timeoutSec} seconds`,
+			);
 		}
 		if (result.exitCode === undefined) {
 			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`);
@@ -669,7 +678,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// script can't pull the entire script into the "cwd" capture.
 		if (!cwd) {
 			const cdMatch = command.match(/^cd[ \t]+((?:[^&\\\n\r]|\\.)+?)[ \t]*&&[ \t]*/);
-			if (cdMatch) {
+			// Skip extraction when the path needs shell expansion ($VAR, $(...),
+			// backticks) — resolveToCwd only expands `~`, so routing those through
+			// cwd would reject commands the shell itself handles fine.
+			if (cdMatch && !/[$`(]/.test(cdMatch[1])) {
 				cwd = cdMatch[1].trim().replace(/^["']|["']$/g, "");
 				command = command.slice(cdMatch[0].length);
 			}
@@ -771,8 +783,24 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 		}
 
+		// The client-bridge terminal provides a live terminal card in the editor;
+		// when available it wins over auto-backgrounding (both are opt-in, and
+		// auto-background would otherwise silently disable the terminal route).
+		const clientBridge = this.session.getClientBridge?.();
+		const bridgeTerminalAvailable = Boolean(
+			clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty,
+		);
+
 		const autoBgManager = this.session.asyncJobManager;
-		if (this.#autoBackgroundEnabled && !pty && autoBgManager) {
+		// At the running-job cap, fall through to direct foreground execution
+		// instead of failing every bash call until a slot frees up.
+		if (
+			this.#autoBackgroundEnabled &&
+			!pty &&
+			!bridgeTerminalAvailable &&
+			autoBgManager &&
+			!autoBgManager.atCapacity
+		) {
 			const autoBackgroundWaitMs = this.#resolveAutoBackgroundWaitMs(timeoutMs);
 			const startBackgrounded = autoBackgroundWaitMs === 0;
 			const job = this.#startManagedBashJob({
@@ -793,21 +821,23 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					notices: pendingNotices,
 				});
 			}
+			// Suppress the completion delivery up front so a job finishing while we
+			// foreground-wait cannot also be injected by the delivery loop. Lifted
+			// via resumeDeliveries() if we end up backgrounding after all.
+			autoBgManager.acknowledgeDeliveries([job.jobId]);
 			const waitResult = await this.#waitForManagedBashJob(job, autoBackgroundWaitMs, signal);
 			if (waitResult.kind === "completed") {
-				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				return waitResult.result;
 			}
 			if (waitResult.kind === "failed") {
-				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				throw waitResult.error;
 			}
 			if (waitResult.kind === "aborted") {
 				autoBgManager.cancel(job.jobId);
-				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				throw new ToolAbortError(job.getLatestText() || "Command aborted");
 			}
 			job.setBackgrounded(true);
+			autoBgManager.resumeDeliveries([job.jobId]);
 			return this.#buildBackgroundStartResult(job.jobId, job.label, job.getLatestText(), timeoutSec, {
 				requestedTimeoutSec,
 				notices: pendingNotices,
@@ -816,7 +846,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 		// Route through the client terminal when the client advertises the terminal capability.
 		// Skip when pty=true (PTY needs the local terminal UI).
-		const clientBridge = this.session.getClientBridge?.();
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
 			const bridgeWallTimeStart = performance.now();
 			const handle = await clientBridge.createTerminal({
@@ -993,6 +1022,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 
 		const interactiveUi = canUseInteractiveBashPty(pty, ctx) ? ctx?.ui : undefined;
+		if (pty && !interactiveUi) {
+			pendingNotices.push("pty requested but unavailable in this environment; ran without a terminal");
+		}
 		const wallTimeStart = performance.now();
 		const result: BashResult | BashInteractiveResult = interactiveUi
 			? await runInteractiveBashPty(interactiveUi, {
@@ -1017,13 +1049,22 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				});
 		const wallTimeMs = performance.now() - wallTimeStart;
 		if (result.cancelled) {
+			const out = normalizeResultOutput(result);
+			// PTY output carries no cancel/timeout notice of its own; annotate so
+			// the model can tell an abort from a plain failure.
+			const message = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out || "Command aborted";
 			if (signal?.aborted) {
-				throw new ToolAbortError(normalizeResultOutput(result) || "Command aborted");
+				throw new ToolAbortError(message);
 			}
-			throw new ToolError(normalizeResultOutput(result) || "Command aborted");
+			throw new ToolError(message);
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`);
+			const out = normalizeResultOutput(result);
+			throw new ToolError(
+				out
+					? `${out}\n\n[Command timed out after ${timeoutSec} seconds]`
+					: `Command timed out after ${timeoutSec} seconds`,
+			);
 		}
 		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec,
