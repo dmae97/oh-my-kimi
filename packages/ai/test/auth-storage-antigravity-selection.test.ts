@@ -162,6 +162,47 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-healthy");
 	});
 
+
+	test("ranks by bottleneck counter instead of healthier secondary counter", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("google-antigravity", [
+			{ type: "oauth", ...createCredential("acct-gemini-hot", "proj-gemini-hot", "hot@example.com") },
+			{ type: "oauth", ...createCredential("acct-balanced", "proj-balanced", "balanced@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-gemini-hot",
+			createAntigravityReport({
+				accountId: "acct-gemini-hot",
+				projectId: "proj-gemini-hot",
+				windows: [
+					{ counter: "google", usedFraction: 0.95, resetInMs: 8 * HOUR_MS },
+					{ counter: "anthropic", usedFraction: 0, resetInMs: 8 * HOUR_MS },
+				],
+			}),
+		);
+		usageByAccount.set(
+			"acct-balanced",
+			createAntigravityReport({
+				accountId: "acct-balanced",
+				projectId: "proj-balanced",
+				windows: [
+					{ counter: "google", usedFraction: 0.8, resetInMs: 8 * HOUR_MS },
+					{ counter: "anthropic", usedFraction: 0.7, resetInMs: 8 * HOUR_MS },
+				],
+			}),
+		);
+
+		const counts = new Map<string, number>();
+		for (let i = 0; i < 80; i += 1) {
+			const apiKey = await authStorage.getApiKey("google-antigravity", `session-antigravity-bottleneck-${i}`);
+			if (!apiKey) continue;
+			counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
+		}
+
+		expect(counts.get("api-acct-balanced") ?? 0).toBeGreaterThan(counts.get("api-acct-gemini-hot") ?? 0);
+	});
 	test("prefers less-pressured antigravity account when neither is exhausted", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 

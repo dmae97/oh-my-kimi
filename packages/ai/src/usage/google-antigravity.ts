@@ -307,17 +307,17 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
  * Antigravity quotas reset daily and are returned per backend counter
  * (Anthropic / Google / OpenAI) without a fixed "primary vs secondary"
  * split. `fetchAntigravityUsage` already sorts `limits` ascending by
- * `remainingFraction`, so the most-pressured counter is index 0 and the
- * next-most-pressured (if any) is index 1. Treat those as the windows
- * AuthStorage compares across credentials — that surfaces an exhausted
- * Gemini counter on one credential even when a sibling Claude counter is
- * healthy, which is what was masking quota-exhausted accounts before.
+ * `remainingFraction`, so the most-pressured counter is index 0.
+ *
+ * Leave `secondary` unset: AuthStorage compares secondary metrics before
+ * primary metrics, which is correct for providers with explicit long-window
+ * limits but wrong here. Ranking Antigravity by the bottleneck counter first
+ * avoids preferring an account at 95% Gemini / 0% Claude over one at
+ * 80% Gemini / 70% Claude.
  */
 export const antigravityRankingStrategy: CredentialRankingStrategy = {
 	findWindowLimits(report) {
-		const primary = report.limits[0];
-		const secondary = report.limits.find((limit, index) => index > 0 && limit !== primary);
-		return { primary, secondary };
+		return { primary: report.limits[0] };
 	},
 	// Antigravity windows omit `durationMs`; the endpoint is
 	// `daily-cloudcode-pa.googleapis.com`, so fall back to 24h when computing
