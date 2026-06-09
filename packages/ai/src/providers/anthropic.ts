@@ -67,10 +67,12 @@ import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import {
+	AnthropicApiError,
 	AnthropicConnectionTimeoutError,
 	type AnthropicFetchOptions,
 	AnthropicMessagesClient,
 	type AnthropicMessagesClientLike,
+	retryDelayFromHeaders,
 } from "./anthropic-client";
 import type {
 	ToolInputSchema as AnthropicToolInputSchema,
@@ -219,9 +221,26 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		extraBetas,
 	);
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
-	const modelHeaders = Object.fromEntries(
-		Object.entries(options.modelHeaders ?? {}).filter(([key]) => !enforcedHeaderKeys.has(key.toLowerCase())),
-	);
+	const modelHeaders: Record<string, string> = {};
+	const filteredEnforcedKeys: string[] = [];
+	for (const [key, value] of Object.entries(options.modelHeaders ?? {})) {
+		const lowerKey = key.toLowerCase();
+		if (enforcedHeaderKeys.has(lowerKey)) {
+			// User-Agent is filtered only to dedup the spread; every branch re-adds
+			// the caller's value explicitly, so it is not "ignored".
+			if (lowerKey !== "user-agent") filteredEnforcedKeys.push(key);
+			continue;
+		}
+		modelHeaders[key] = value;
+	}
+	if (filteredEnforcedKeys.length > 0) {
+		// Caller/env-supplied values (options.headers, ANTHROPIC_CUSTOM_HEADERS)
+		// for enforced headers are replaced by our own values; say so instead of
+		// dropping them silently. Keys only — values may carry credentials.
+		logger.debug("anthropic: ignoring caller-supplied enforced headers", {
+			headers: filteredEnforcedKeys,
+		});
+	}
 
 	if (options.isCloudflareAiGateway) {
 		return {
@@ -746,6 +765,15 @@ function countAnthropicImageBlocks(messages: Message[]): number {
 
 const ANTHROPIC_IMAGE_RESIZE_CONCURRENCY = 4;
 
+/**
+ * Memoized resize results keyed on ImageContent identity. Callers keep message
+ * objects stable across turns, so without this every request (and every
+ * in-provider retry of a fresh turn) re-decodes and re-encodes the same
+ * oversized screenshots. A cached value identical to the key means "already
+ * within bounds / unresizable — skip the decode".
+ */
+const anthropicManyImageResizeCache = new WeakMap<ImageContent, ImageContent>();
+
 type ResizeLimiter = <R>(fn: () => Promise<R>) => Promise<R>;
 
 /**
@@ -816,7 +844,11 @@ async function resizeAnthropicManyImageContent(
 	const next = await Promise.all(
 		content.map(async block => {
 			if (block.type !== "image") return block;
-			const resized = await limit(() => resizeAnthropicManyImageBlock(block));
+			let resized = anthropicManyImageResizeCache.get(block);
+			if (resized === undefined) {
+				resized = await limit(() => resizeAnthropicManyImageBlock(block));
+				anthropicManyImageResizeCache.set(block, resized);
+			}
 			if (resized !== block) {
 				changed = true;
 				state.resized++;
@@ -1243,6 +1275,30 @@ type RawMessagePingEvent = { type: "ping" };
 type AnthropicStreamEvent = RawMessageStreamEvent | RawMessagePingEvent;
 const ANTHROPIC_PING_EVENT: RawMessagePingEvent = { type: "ping" };
 
+/**
+ * In-stream `error` SSE frames carry an Anthropic error envelope:
+ * `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`.
+ * Surface the structured type + message instead of the raw JSON blob; the
+ * error type token (e.g. `overloaded_error`, `rate_limit_error`) is kept in
+ * the message so `isProviderRetryableError`'s classification keys off the
+ * structured type rather than incidental JSON substrings.
+ */
+function createAnthropicSseStreamError(data: string): Error {
+	try {
+		const parsed = JSON.parse(data) as { error?: { type?: unknown; message?: unknown } };
+		const errorType = typeof parsed?.error?.type === "string" ? parsed.error.type : undefined;
+		const message = typeof parsed?.error?.message === "string" ? parsed.error.message : undefined;
+		if (message) {
+			return new Error(
+				errorType ? `Anthropic stream error (${errorType}): ${message}` : `Anthropic stream error: ${message}`,
+			);
+		}
+	} catch {
+		// Not a JSON envelope; fall through to the raw payload.
+	}
+	return new Error(data);
+}
+
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
@@ -1258,7 +1314,7 @@ async function* iterateAnthropicEvents(
 	for await (const sse of readSseEvents(response.body, signal)) {
 		notifyRawSseEvent(onSseEvent, sse);
 		if (sse.event === "error") {
-			throw new Error(sse.data);
+			throw createAnthropicSseStreamError(sse.data);
 		}
 
 		if (sse.event === "ping") {
@@ -1725,6 +1781,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 					let sawMessageStop = false;
+					// Set when a duplicate message_start splices a second envelope onto
+					// the stream; closed indexes then refuse to reopen so replayed
+					// content cannot duplicate (see content_block_start guard).
+					let sawSplicedEnvelope = false;
+					const closedBlockIndexes = new Set<number>();
 					const openBlocks = new Map<
 						number,
 						{ contentIndex: number; kind: "text" | "thinking" | "redactedThinking" | "toolCall" | "ignored" }
@@ -1759,8 +1820,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						if (event.type === "message_start") {
 							if (sawMessageStart) {
 								// Transparent reconnects can splice a fresh envelope onto the same
-								// stream; keep the original message but surface the anomaly.
+								// stream; keep the original message but surface the anomaly. Events
+								// for blocks still open from the first envelope continue to apply,
+								// but replayed blocks are dropped below (see closedBlockIndexes).
 								reportAnthropicEnvelopeAnomaly("duplicate message_start event");
+								sawSplicedEnvelope = true;
 								continue;
 							}
 							sawMessageStart = true;
@@ -1796,6 +1860,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 							if (openBlocks.has(event.index)) {
 								reportAnthropicEnvelopeAnomaly(`duplicate content_block_start index ${event.index}`);
+								continue;
+							}
+							if (sawSplicedEnvelope && closedBlockIndexes.has(event.index)) {
+								// A spliced envelope replaying an index this stream already
+								// completed would append duplicate text/tool calls; consume its
+								// events silently instead.
+								reportAnthropicEnvelopeAnomaly(
+									`replayed content_block_start index ${event.index} after duplicate message_start`,
+								);
+								openBlocks.set(event.index, { contentIndex: -1, kind: "ignored" });
 								continue;
 							}
 							if (!event.content_block?.type) {
@@ -1961,6 +2035,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								continue;
 							}
 							openBlocks.delete(event.index);
+							closedBlockIndexes.add(event.index);
 							finalizeStreamBlock(block, openBlock.contentIndex);
 						} else if (event.type === "message_delta") {
 							if (sawTerminalEnvelope) {
@@ -2121,7 +2196,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						throw streamFailure;
 					}
 					providerRetryAttempt++;
-					const delayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
+					const backoffDelayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
+					// Honor the server's retry hint (`retry-after-ms`/`retry-after`) on
+					// 429/529-style failures: retrying sooner than the server asked is a
+					// guaranteed failure that just burns the retry budget.
+					const headerDelayMs =
+						streamFailure instanceof AnthropicApiError ? retryDelayFromHeaders(streamFailure.headers) : undefined;
+					const delayMs = headerDelayMs !== undefined ? Math.max(headerDelayMs, backoffDelayMs) : backoffDelayMs;
 					if (options?.providerRetryWait) {
 						await options.providerRetryWait(delayMs, options.signal);
 					} else {

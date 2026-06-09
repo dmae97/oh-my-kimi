@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import { AnthropicApiError, type AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { waitForDelayOrAbort } from "./helpers";
 
@@ -132,6 +132,14 @@ function createAnthropicMockStream({
 				response,
 				request_id: response.headers.get("request-id"),
 			};
+		},
+	};
+}
+
+function createRejectedAnthropicRequest(error: Error): MockAnthropicRequest {
+	return {
+		async withResponse() {
+			throw error;
 		},
 	};
 }
@@ -411,5 +419,37 @@ describe("anthropic first-event timeout retries", () => {
 				arguments: {},
 			},
 		]);
+	});
+});
+
+describe("anthropic provider retry delays", () => {
+	it("waits at least the server-suggested retry-after before retrying a retryable API error", async () => {
+		let attempt = 0;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			if (attempt === 1) {
+				return createRejectedAnthropicRequest(
+					new AnthropicApiError(
+						529,
+						'529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+						new Headers({ "retry-after": "30" }),
+					),
+				) as never;
+			}
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: createSuccessfulAnthropicEvents("after backoff"),
+			}) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async () => {});
+
+		const result = await streamAnthropic(model, context, { client, providerRetryWait }).result();
+
+		// Header says 30s; the 2s exponential backoff must not undercut it.
+		expect(attempt).toBe(2);
+		expect(providerRetryWait).toHaveBeenCalledWith(30_000, undefined);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "after backoff" }]);
 	});
 });
