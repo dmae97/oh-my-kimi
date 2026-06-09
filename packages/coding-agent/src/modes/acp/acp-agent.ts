@@ -594,7 +594,13 @@ export class AcpAgent implements Agent {
 		const record = this.#getSessionRecord(params.sessionId);
 		const activeTurn = record.promptTurn;
 		if (activeTurn && !activeTurn.settled && record.session.isStreaming) {
-			throw new Error("ACP prompt already in progress for this session");
+			// New prompt arrived while the previous turn is still in-flight (e.g. the
+			// client sent a message immediately after pressing stop, before or without
+			// a preceding session/cancel notification). Implicitly cancel the running
+			// turn so the new prompt can queue behind the abort cleanup — identical to
+			// what cancel() does when called explicitly. #beginCancelCleanup is
+			// idempotent, so a concurrent session/cancel notification is harmless.
+			this.#beginCancelCleanup(record, activeTurn);
 		}
 		return await this.#queuePrompt(record, async () => {
 			const previousTurn = record.promptTurn;

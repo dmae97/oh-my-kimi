@@ -1309,11 +1309,25 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("rejects overlapping prompts while AgentSession is still streaming", async () => {
+	it("auto-cancels an in-progress turn and queues a new prompt when called mid-flight", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
-		const finishPrompt = holdPromptStreaming(session);
+		// Use custom prompt mock that lets us unblock both calls cleanly
+		const blockers: Array<() => void> = [];
+		session.prompt = async (text: string): Promise<void> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			const { promise, resolve } = Promise.withResolvers<void>();
+			blockers.push(resolve);
+			await promise;
+			const assistantMessage = makeAssistantMessage("pong");
+			session.sessionManager.appendMessage(assistantMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [assistantMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+		};
 
 		const firstPrompt = harness.agent.prompt({
 			sessionId: created.sessionId,
@@ -1321,22 +1335,30 @@ describe("ACP agent", () => {
 			prompt: [{ type: "text", text: "long running" }],
 		} as PromptRequest);
 		await Bun.sleep(0);
+		// First session.prompt is blocking; only "long running" has been seen so far
+		expect(session.promptCalls).toEqual(["long running"]);
 
-		try {
-			await expect(
-				harness.agent.prompt({
-					sessionId: created.sessionId,
-					messageId: "00000000-0000-4000-8000-000000000036",
-					prompt: [{ type: "text", text: "overlap" }],
-				} as PromptRequest),
-			).rejects.toThrow("ACP prompt already in progress for this session");
-			expect(session.promptCalls).toEqual(["long running"]);
-		} finally {
-			finishPrompt();
-			await firstPrompt;
-			harness.abortController.abort();
-			await Bun.sleep(0);
-		}
+		// Second prompt arrives mid-flight — must auto-cancel first, then queue
+		const secondPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000036",
+			prompt: [{ type: "text", text: "overlap" }],
+		} as PromptRequest);
+
+		// First resolves immediately as cancelled; second is still queued
+		const firstResponse = await firstPrompt;
+		expect(firstResponse.stopReason).toBe("cancelled");
+
+		// Let microtasks settle: abort completes, second session.prompt starts
+		await Bun.sleep(0);
+		// Unblock both session.prompt calls: first (background, fire-and-forget) + second
+		for (const resolve of blockers) resolve();
+		const secondResponse = await secondPrompt;
+		expect(secondResponse.stopReason).toBe("end_turn");
+		expect(session.promptCalls).toEqual(["long running", "overlap"]);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
 	});
 
 	it("waits for AgentSession idle cleanup after agent_end before returning", async () => {

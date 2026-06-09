@@ -359,6 +359,11 @@
 - Fixed `lsp request` error path swallowing the params that were sent, making shape/coercion bugs on raw LSP calls impossible to diagnose in one round-trip; the error now echoes a truncated copy of the request params.
 - Fixed `find` with a single-star segment like `dir/*` recursing into subdirectories and returning nested matches. `parseFindPattern` already prepends `**/` for top-level globs (`*.ts` → `**/*.ts`), so anything reaching native without `**/` was deliberately scoped by the user; `recursive: false` is now passed to `natives.glob` to honor that scope.
 
+### Fixed
+
+- Fixed ACP cancel button leaving the session in a stuck state — a new prompt sent while a turn is still in-flight (e.g. immediately after pressing Stop in Zed before `session/cancel` is processed) now implicitly cancels the running turn and queues the new message, instead of throwing an error that blocks further interaction.
+- Fixed `enabledModels` being ignored by the ACP model picker (Zed and other ACP clients) — `AgentSession.getAvailableModels()` now applies the configured allow-list, so only the models listed in `enabledModels` appear in the UI. Also applies consistently to the RPC `get_available_models` endpoint and the `/model` slash command.
+- Fixed ACP `available_commands_update` to include extension-registered slash commands so clients like Zed surface them in the slash-command palette.
 ## [15.10.1] - 2026-06-07
 
 ### Added
