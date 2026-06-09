@@ -152,11 +152,52 @@ describe("transcript reactive commit boundary", () => {
 		chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 	});
+
+	it("commits the settled head of a block whose tail keeps rewriting (task progress shape)", () => {
+		const chat = new TranscriptContainer();
+		const head = markerLines("head-", 8);
+		const block = new MutableLiveBlock([...head, "⠋ agents running · 0 tools"]);
+		chat.addChild(block);
+		chat.render(80);
+
+		// The progress tail rewrites every frame, so append-only is never
+		// earned — but the head rows stay visibly identical the whole time.
+		for (let i = 1; i <= 62; i++) {
+			block.setLines([...head, `⠋ agents running · ${i} tools`]);
+			chat.render(80);
+		}
+
+		// The settled head must become commit-safe; otherwise a tall block's
+		// scrolled-off head is neither committed nor on screen for the whole
+		// run — the transcript reads as cut off until the tool seals.
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
+	});
+
+	it("retreats the settled-head boundary when a promoted row is rewritten", () => {
+		const chat = new TranscriptContainer();
+		const head = markerLines("head-", 8);
+		const block = new MutableLiveBlock([...head, "tail-0"]);
+		chat.addChild(block);
+		chat.render(80);
+		for (let i = 1; i <= 62; i++) {
+			block.setLines([...head, `tail-${i}`]);
+			chat.render(80);
+		}
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
+
+		// A collapse/re-layout rewrites a promoted row: the boundary retreats
+		// to the divergence (the engine audit owns rows already committed).
+		block.setLines([...head.slice(0, 3), "rewritten", ...head.slice(4), "tail-x"]);
+		chat.render(80);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
+	});
 });
 
 describe("tool live-region scrollback", () => {
 	beforeAll(async () => {
 		await initTheme();
+		// The task progress renderer reads settings (resolved-model badge).
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
 	});
 
 	it("does not splice stale pending eval preview above the running eval viewport", async () => {
@@ -350,6 +391,80 @@ describe("tool live-region scrollback", () => {
 			await term.flush();
 		}
 	});
+
+	it("keeps the static task context reachable in scrollback while progress ticks below it", async () => {
+		if (process.platform === "win32") return;
+
+		const term = new VirtualTerminal(120, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const context = Array.from({ length: 40 }, (_unused, i) => `- CTX-${i}`).join("\n");
+		const args = {
+			agent: "explore",
+			context,
+			tasks: [{ id: "alpha", description: "probe", assignment: "Inspect the repo." }],
+		};
+		const component = new ToolExecutionComponent("task", args, {}, undefined, tui, process.cwd());
+		const progressAt = (toolCount: number) => ({
+			index: 0,
+			id: "alpha",
+			agent: "explore",
+			agentSource: "bundled" as const,
+			status: "running" as const,
+			task: "probe",
+			description: "probe",
+			recentTools: [],
+			recentOutput: [],
+			toolCount,
+			tokens: 0,
+			cost: 0,
+			durationMs: toolCount * 250,
+		});
+		const partial = (toolCount: number) =>
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "" }],
+					details: {
+						projectAgentsDir: null,
+						results: [],
+						totalDurationMs: 0,
+						progress: [progressAt(toolCount)],
+					},
+				},
+				true,
+			);
+
+		try {
+			chat.addChild(component);
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			// A running task rewrites its progress line (tool counts, spinner)
+			// below the static context for the whole run. The context head that
+			// scrolled above the viewport must still reach native scrollback —
+			// previously the ticking tail suspended commits for the entire
+			// block, leaving the context neither in history nor on screen.
+			// Two full promotion windows: the call→result transition frame
+			// poisons the first window's minimum, the second promotes the head.
+			for (let i = 1; i <= 70; i++) {
+				partial(i);
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			const scrollText = stripRows(term.getScrollBuffer());
+			const viewportText = stripRows(term.getViewport());
+
+			expect(viewportText).not.toContain("CTX-0");
+			expect(scrollText).toContain("CTX-0");
+			expect(scrollText).toContain("CTX-20");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	}, 20000);
 
 	it("commits the scrolled-off head of a tall finalized bottom tool result", async () => {
 		if (process.platform === "win32") return;

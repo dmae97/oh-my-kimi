@@ -18,6 +18,15 @@ interface LiveDiffSnapshot {
 	 * append-only status. `0` means the block is not under rewrite suspicion.
 	 */
 	volatileCooldown: number;
+	/**
+	 * Stable-prefix ratchet (see {@link deriveLiveCommitState}): leading rows
+	 * promoted as commit-safe because they stayed visibly identical for
+	 * {@link STABLE_PREFIX_COMMIT_FRAMES} consecutive frames, plus the in-flight
+	 * candidate run and its age.
+	 */
+	stablePrefixLength: number;
+	candidatePrefixLength: number;
+	candidatePrefixAge: number;
 }
 
 interface SnapshotCarrier {
@@ -62,6 +71,9 @@ function stripPlainBlankEdges(lines: string[]): string[] {
 interface LiveCommitState {
 	appendOnly: boolean;
 	volatileCooldown: number;
+	stablePrefixLength: number;
+	candidatePrefixLength: number;
+	candidatePrefixAge: number;
 	safeLength: number;
 }
 
@@ -77,6 +89,22 @@ interface LiveCommitState {
  * TUI's 30 Hz render cadence, so 30 frames ≈ 1s of clean streaming.
  */
 const VOLATILE_REARM_FRAMES = 30;
+
+/**
+ * Consecutive frames a leading row run must stay visibly identical before it
+ * is promoted as commit-safe even though the block's tail keeps rewriting.
+ * Append-only detection alone is all-or-nothing per block: one perpetually
+ * ticking row (a task tool's progress tree, per-agent cost/tool counters, a
+ * log line spinner) suspends commits for the WHOLE block forever, so once the
+ * block outgrows the viewport its static head — e.g. a task's prompt/context
+ * markdown — is neither committed to native scrollback nor on screen: the
+ * transcript reads as cut off for the entire (possibly minutes-long) run.
+ * The ratchet commits the settled head while only the genuinely volatile tail
+ * stays deferred. If a promoted row is later rewritten (a collapsing
+ * preview), the engine's committed-prefix audit re-anchors and recommits —
+ * duplication, never loss — and the ratchet retreats to the divergence.
+ */
+const STABLE_PREFIX_COMMIT_FRAMES = 30;
 
 /**
  * Visible-content form of a row: SGR/OSC bytes and trailing pad spaces are
@@ -126,9 +154,15 @@ function deriveLiveCommitState(
 ): LiveCommitState {
 	let appendOnly = false;
 	let volatileCooldown = 0;
+	let stablePrefixLength = 0;
+	let candidatePrefixLength = 0;
+	let candidatePrefixAge = 0;
 	if (hasValidSnapshot(previous, width, generation)) {
 		appendOnly = previous.appendOnly;
 		volatileCooldown = previous.volatileCooldown;
+		stablePrefixLength = previous.stablePrefixLength;
+		candidatePrefixLength = previous.candidatePrefixLength;
+		candidatePrefixAge = previous.candidatePrefixAge;
 
 		const prefixLength = commonPrefixLength(previous.lines, current);
 		const staticRender = prefixLength === previous.lines.length && prefixLength === current.length;
@@ -169,12 +203,41 @@ function deriveLiveCommitState(
 			}
 		}
 		if (cleanFrame && volatileCooldown > 0) volatileCooldown--;
+
+		// Stable-prefix ratchet, independent of append-only. `prefixLength` is
+		// this frame's visibly-unchanged leading run; the candidate accumulates
+		// the MINIMUM prefix across a STABLE_PREFIX_COMMIT_FRAMES window, so
+		// promotion means every promoted row stayed identical for the whole
+		// window (row r is inside frame i's common prefix iff r < p_i, so
+		// r < min(p) holds for every frame of the window). A row settling
+		// mid-window promotes at most two windows later. A change above the
+		// already-promoted run retreats it to the divergence — the engine
+		// audit owns any rows that already committed (recommit, never loss).
+		if (prefixLength < stablePrefixLength) {
+			stablePrefixLength = prefixLength;
+			candidatePrefixLength = prefixLength;
+			candidatePrefixAge = 0;
+		} else {
+			candidatePrefixLength =
+				candidatePrefixAge === 0 ? prefixLength : Math.min(candidatePrefixLength, prefixLength);
+			candidatePrefixAge++;
+			if (candidatePrefixAge >= STABLE_PREFIX_COMMIT_FRAMES) {
+				stablePrefixLength = candidatePrefixLength;
+				candidatePrefixLength = prefixLength;
+				candidatePrefixAge = 0;
+			}
+		}
 	}
 
 	return {
 		appendOnly,
 		volatileCooldown,
-		safeLength: appendOnly ? current.length : 0,
+		stablePrefixLength,
+		candidatePrefixLength,
+		candidatePrefixAge,
+		// An append-only block's whole body is committable; otherwise the
+		// settled head still is — only the volatile tail stays deferred.
+		safeLength: appendOnly ? current.length : stablePrefixLength,
 	};
 }
 
@@ -281,6 +344,9 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 				generation: this.#generation,
 				appendOnly: liveCommitState?.appendOnly ?? false,
 				volatileCooldown: liveCommitState?.volatileCooldown ?? 0,
+				stablePrefixLength: liveCommitState?.stablePrefixLength ?? 0,
+				candidatePrefixLength: liveCommitState?.candidatePrefixLength ?? 0,
+				candidatePrefixAge: liveCommitState?.candidatePrefixAge ?? 0,
 			};
 
 			// Empty (or stripped-to-nothing) children contribute nothing and never

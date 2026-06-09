@@ -131,10 +131,24 @@ of history:
 freeze (their render is snapshotted, so their content can never drift after
 the engine may have committed it), still-mutating blocks
 (`isTranscriptBlockFinalized?.() === false`) anchor the live region, and
-`deriveLiveCommitState` detects the append-only stable prefix of a streaming
-block (a rewrite of an interior row suspends commits for
-`VOLATILE_REARM_FRAMES` clean frames). Freezing is unconditional — it is the
-engine's required guarantee, not a per-terminal optimization.
+`deriveLiveCommitState` derives the commit-safe end of the first live block
+from two independent signals:
+
+- **append-only detection** — a block observed growing without visibly
+  rewriting an interior row commits its full body; a rewrite suspends this
+  for `VOLATILE_REARM_FRAMES` clean frames.
+- **stable-prefix ratchet** — rows that stayed visibly identical for a full
+  `STABLE_PREFIX_COMMIT_FRAMES` window commit even while the block's tail
+  keeps rewriting (a task tool's static prompt above a ticking progress
+  tree). Without it, one perpetually animating row holds the whole block out
+  of history, so a block taller than the window reads as cut off (head
+  neither committed nor on screen) for the entire run. The ratchet tracks the
+  window-minimum common prefix; a rewrite above the promoted run retreats it
+  to the divergence, and rows that already committed are the engine audit's
+  problem (recommit → duplication, never loss).
+
+Freezing is unconditional — it is the engine's required guarantee, not a
+per-terminal optimization.
 
 ---
 
