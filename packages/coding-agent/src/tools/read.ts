@@ -8,6 +8,7 @@ import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
+import { LRUCache } from "lru-cache/raw";
 import * as z from "zod/v4";
 import {
 	canonicalSnapshotKey,
@@ -98,6 +99,24 @@ import {
 } from "./sqlite-reader";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
+
+// Per-session memo for tree-sitter summaries. `summarizeCode` is a pure function
+// of (code, path, fold settings) but costs ~12-18ms for a ~1500-line file, and a
+// repeat summary read of the same unchanged file re-parses from scratch. Key on
+// the content hash of the freshly-read bytes (+ path + fold settings): the file
+// is still read fresh on every call, so a hit only reuses the deterministic
+// parse — there is no staleness window and no stat guard is needed. Bounded LRU,
+// aged out with the session via WeakMap.
+const SUMMARY_CACHE_MAX = 48;
+const summaryParseCaches = new WeakMap<object, LRUCache<string, SummaryResult>>();
+function getSummaryParseCache(session: object): LRUCache<string, SummaryResult> {
+	let cache = summaryParseCaches.get(session);
+	if (!cache) {
+		cache = new LRUCache<string, SummaryResult>({ max: SUMMARY_CACHE_MAX });
+		summaryParseCaches.set(session, cache);
+	}
+	return cache;
+}
 
 // Document types converted to markdown via markit.
 const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
@@ -1512,14 +1531,23 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (lineCount > MAX_SUMMARY_LINES) return null;
 			if (lineCount < this.session.settings.get("read.summarize.minTotalLines")) return null;
 
+			const minBodyLines = this.session.settings.get("read.summarize.minBodyLines");
+			const minCommentLines = this.session.settings.get("read.summarize.minCommentLines");
+			const unfoldUntilLines = this.session.settings.get("read.summarize.unfoldUntil");
+			const unfoldLimitLines = this.session.settings.get("read.summarize.unfoldLimit");
+			const cache = getSummaryParseCache(this.session);
+			const cacheKey = `${absolutePath}\0${Bun.hash(code)}\0${minBodyLines},${minCommentLines},${unfoldUntilLines},${unfoldLimitLines}`;
+			const memoized = cache.get(cacheKey);
+			if (memoized) return memoized;
 			const result = summarizeCode({
 				code,
 				path: absolutePath,
-				minBodyLines: this.session.settings.get("read.summarize.minBodyLines"),
-				minCommentLines: this.session.settings.get("read.summarize.minCommentLines"),
-				unfoldUntilLines: this.session.settings.get("read.summarize.unfoldUntil"),
-				unfoldLimitLines: this.session.settings.get("read.summarize.unfoldLimit"),
+				minBodyLines,
+				minCommentLines,
+				unfoldUntilLines,
+				unfoldLimitLines,
 			});
+			cache.set(cacheKey, result);
 			return result;
 		} catch {
 			return null;

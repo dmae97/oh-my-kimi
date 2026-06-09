@@ -804,7 +804,7 @@ export async function runRootCommand(
 
 	// Create AuthStorage and ModelRegistry upfront
 	const authStorage = await logger.time("discoverModels", deps.discoverAuthStorage ?? discoverAuthStorage);
-	const modelRegistry = new ModelRegistry(authStorage);
+	const modelRegistry = logger.time("modelRegistry:init", () => new ModelRegistry(authStorage));
 
 	if (parsedArgs.version) {
 		process.stdout.write(`${VERSION}\n`);
@@ -1045,7 +1045,7 @@ export async function runRootCommand(
 	// Both are no-ops when OTEL_EXPORTER_OTLP_ENDPOINT is unset. An empty config
 	// is enough to enable telemetry — content capture is governed by the
 	// standard OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT env var.
-	await initTelemetryExport();
+	await logger.time("initTelemetryExport", initTelemetryExport);
 	if (isTelemetryExportEnabled()) {
 		sessionOptions.telemetry = {};
 	}

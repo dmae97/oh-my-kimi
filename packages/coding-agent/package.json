@@ -41,7 +41,8 @@
 		"format-prompts": "bun scripts/format-prompts.ts",
 		"generate-docs-index": "bun scripts/generate-docs-index.ts",
 		"prepack": "bun scripts/generate-docs-index.ts",
-		"generate-template": "bun scripts/generate-template.ts"
+		"generate-template": "bun scripts/generate-template.ts",
+		"bench:guard": "bun scripts/bench-guard.ts"
 	},
 	"dependencies": {
 		"@agentclientprotocol/sdk": "catalog:",

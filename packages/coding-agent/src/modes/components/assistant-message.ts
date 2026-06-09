@@ -36,6 +36,11 @@ export class AssistantMessageComponent extends Container {
 	 * transcript keeps the error in history.
 	 */
 	#errorPinned = false;
+	// Fast-path state: reuse Markdown children when message shape is stable during streaming.
+	#fastPathKey: string | undefined;
+	#fastPathItems:
+		| Array<{ md: Markdown; contentIndex: number; blockType: "text" | "thinking"; lastText: string }>
+		| undefined;
 
 	constructor(
 		message?: AssistantMessage,
@@ -211,11 +216,106 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	#computeShapeKey(message: AssistantMessage): string {
+		const parts: string[] = [`htb:${this.hideThinkingBlock ? 1 : 0}`];
+		for (const content of message.content) {
+			if (content.type === "text") {
+				parts.push(content.text.trim() ? "T1" : "T0");
+			} else if (content.type === "thinking") {
+				if (!content.thinking.trim()) parts.push("K0");
+				else if (this.hideThinkingBlock) parts.push("KH");
+				else parts.push("KV");
+			} else {
+				// Non-rendered blocks (toolCall, redactedThinking, …) still occupy a
+				// content index. Encode their position so an inserted/removed one shifts
+				// the key and forces the teardown path instead of mis-indexing children.
+				parts.push(`O:${content.type}`);
+			}
+		}
+		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
+			const u = this.#usageInfo;
+			parts.push(`u:${u.input + u.cacheWrite}:${u.output}:${u.cacheRead}`);
+		} else {
+			parts.push("u:");
+		}
+		return parts.join("|");
+	}
+
+	#canFastPath(message: AssistantMessage): boolean {
+		for (const content of message.content) {
+			if (content.type === "toolCall") return false;
+		}
+		if (this.#toolImagesByCallId.size > 0) return false;
+		if (message.stopReason === "aborted" && shouldRenderAbortReason(message.errorMessage)) return false;
+		if (message.stopReason === "error" && !this.#errorPinned) return false;
+		if (
+			message.errorMessage &&
+			shouldRenderAbortReason(message.errorMessage) &&
+			message.stopReason !== "aborted" &&
+			message.stopReason !== "error"
+		)
+			return false;
+		// Extension stability: if thinking renderers exist and any tracked thinking
+		// block's text changed, extensions may produce a different child count.
+		if (this.thinkingRenderers.length > 0 && this.#fastPathItems) {
+			for (const item of this.#fastPathItems) {
+				if (item.blockType === "thinking") {
+					const content = message.content[item.contentIndex];
+					if (content?.type === "thinking" && content.thinking.trim() !== item.lastText) return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	#tryFastPathUpdate(message: AssistantMessage): boolean {
+		if (!this.#fastPathKey || !this.#fastPathItems) return false;
+		if (!this.#canFastPath(message)) {
+			this.#fastPathKey = undefined;
+			this.#fastPathItems = undefined;
+			return false;
+		}
+		if (this.#computeShapeKey(message) !== this.#fastPathKey) {
+			this.#fastPathKey = undefined;
+			this.#fastPathItems = undefined;
+			return false;
+		}
+		// Shape is identical — setText only on Markdown children whose source changed.
+		for (const item of this.#fastPathItems) {
+			const content = message.content[item.contentIndex];
+			let newText: string;
+			if (item.blockType === "text" && content?.type === "text") {
+				newText = content.text.trim();
+			} else if (item.blockType === "thinking" && content?.type === "thinking") {
+				newText = content.thinking.trim();
+			} else {
+				// Block at this index is gone or changed type (index shift) — fail closed.
+				this.#fastPathKey = undefined;
+				this.#fastPathItems = undefined;
+				return false;
+			}
+			if (newText !== item.lastText) {
+				item.md.setText(newText);
+				item.lastText = newText;
+			}
+		}
+		return true;
+	}
+
 	updateContent(message: AssistantMessage): void {
 		this.#lastMessage = message;
 
+		// Fast path: reuse Markdown children when shape is stable during streaming
+		if (this.#tryFastPathUpdate(message)) return;
+
 		// Clear content container
 		this.#contentContainer.clear();
+
+		// Determine if we should capture Markdown instances for next fast path
+		const shouldCapture = this.#canFastPath(message);
+		const captureItems:
+			| Array<{ md: Markdown; contentIndex: number; blockType: "text" | "thinking"; lastText: string }>
+			| undefined = shouldCapture ? [] : undefined;
 
 		const hasVisibleContent = message.content.some(
 			c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
@@ -228,7 +328,10 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.#contentContainer.addChild(new Markdown(content.text.trim(), 1, 0, getMarkdownTheme()));
+				const trimmed = content.text.trim();
+				const md = new Markdown(trimmed, 1, 0, getMarkdownTheme());
+				this.#contentContainer.addChild(md);
+				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
 			} else if (content.type === "thinking" && content.thinking.trim()) {
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
@@ -245,12 +348,12 @@ export class AssistantMessageComponent extends Container {
 				} else {
 					const thinkingText = content.thinking.trim();
 					// Thinking traces in thinkingText color, italic
-					this.#contentContainer.addChild(
-						new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						}),
-					);
+					const md = new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
+						color: (text: string) => theme.fg("thinkingText", text),
+						italic: true,
+					});
+					this.#contentContainer.addChild(md);
+					captureItems?.push({ md, contentIndex: i, blockType: "thinking", lastText: thinkingText });
 					this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
 					thinkingIndex += 1;
 					if (hasVisibleContentAfter) {
@@ -298,6 +401,15 @@ export class AssistantMessageComponent extends Container {
 			}
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("dim", parts.join("  ")), 1, 0));
+		}
+
+		// Store fast-path state for next call
+		if (shouldCapture) {
+			this.#fastPathItems = captureItems;
+			this.#fastPathKey = this.#computeShapeKey(message);
+		} else {
+			this.#fastPathKey = undefined;
+			this.#fastPathItems = undefined;
 		}
 	}
 }
