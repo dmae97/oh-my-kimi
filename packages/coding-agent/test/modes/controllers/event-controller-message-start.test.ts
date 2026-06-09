@@ -39,7 +39,7 @@ function createContext(options: {
 		isInitialized: true,
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
-		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn() },
+		ui: { requestRender: vi.fn() },
 		editor,
 		addMessageToChat,
 		updatePendingMessagesDisplay,

@@ -364,7 +364,7 @@ describe("TUI inline-image budget", () => {
 		);
 	}
 
-	it("hides the oldest image via a full redraw + graphics purge once a new image exceeds the cap", async () => {
+	it("purges demoted image graphics and repaints the fallback without a destructive replay", async () => {
 		const term = new VirtualTerminal(40, 12);
 		const writes: string[] = [];
 		const realWrite = term.write.bind(term);
@@ -381,7 +381,6 @@ describe("TUI inline-image budget", () => {
 		try {
 			tui.start();
 			await settle(term);
-			const redrawsBefore = tui.fullRedraws;
 			writes.length = 0;
 
 			// A second image arrives, exceeding the cap of 1.
@@ -389,8 +388,10 @@ describe("TUI inline-image budget", () => {
 			tui.requestRender();
 			await settle(term);
 
-			// The demotion forces at least one extra full redraw...
-			expect(tui.fullRedraws).toBeGreaterThan(redrawsBefore);
+			// The demotion never forces a destructive replay: committed
+			// placements are immutable, so no ED2/ED3 is emitted...
+			expect(writes.join("")).not.toContain("\x1b[2J");
+			expect(writes.join("")).not.toContain("\x1b[3J");
 			// ...purges the now-hidden image's graphics by id...
 			expect(writes.join("")).toContain(encodeKittyDeleteImage(oldId));
 			// ...and the oldest image is now shown as text, with one image still live.

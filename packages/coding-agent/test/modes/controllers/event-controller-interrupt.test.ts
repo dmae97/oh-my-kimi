@@ -21,7 +21,7 @@ function createContext() {
 		setWorkingMessage,
 		clearPinnedError: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),
-		ui: { setEagerNativeScrollbackRebuild: vi.fn(), requestRender: vi.fn() },
+		ui: { requestRender: vi.fn() },
 		session: { getToolByName: () => undefined },
 	} as unknown as InteractiveModeContext;
 	return { ctx, pendingTools, setWorkingMessage };

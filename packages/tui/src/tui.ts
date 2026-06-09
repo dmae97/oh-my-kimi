@@ -1700,20 +1700,33 @@ export class TUI extends Container {
 		if (fullPaint) {
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(commitBoundary, windowTop);
-		} else if (geometryChanged) {
-			// Multiplexer resize: keep committed rows as-is (their old wrap
-			// stays in pane history, same as any shell output) and re-anchor
-			// the window at the new geometry.
-			windowTop = Math.max(this.#committedRows, frameLength - height, 0);
-			chunkTo = this.#committedRows;
+		} else if (frameLength <= this.#committedRows) {
+			// The frame shrank into (or below) the committed prefix: the app
+			// replaced content it had already let scroll into history without
+			// requesting a session replace (only possible without a live-region
+			// seam). History is immutable without a gesture, so the stale
+			// committed copy stays in scrollback; re-anchor the window at the
+			// tail and restart commit bookkeeping there so the live grid shows
+			// the real content instead of a blank pinned window.
+			windowTop = Math.max(0, frameLength - height);
+			chunkTo = Math.min(commitBoundary, windowTop);
+			this.#committedRows = chunkTo;
 		} else {
-			windowTop = Math.max(prevWindowTop, frameLength - height);
+			// Re-anchor to the frame tail, floored at the committed boundary: a
+			// shrink (or overlay close) pulls the window back down, but never
+			// onto rows already in native history — re-showing those on the
+			// grid would duplicate them for a scrolling reader. On a
+			// multiplexer resize the pane reflowed its own history; committed
+			// rows keep their old wrap there, same as any shell output.
+			windowTop = Math.max(this.#committedRows, frameLength - height, 0);
 			// Overlays freeze commits: composited rows must never enter
 			// history, and the hidden gap backfills via the chunk once the
-			// overlay closes.
-			chunkTo = hasVisibleOverlay
-				? this.#committedRows
-				: Math.max(this.#committedRows, Math.min(commitBoundary, windowTop));
+			// overlay closes. A multiplexer resize also commits nothing — the
+			// pane keeps its own (old-wrap) history.
+			chunkTo =
+				hasVisibleOverlay || geometryChanged
+					? this.#committedRows
+					: Math.max(this.#committedRows, Math.min(commitBoundary, windowTop));
 		}
 
 		// 5. Extract the hardware-cursor marker (frame coordinates) before
@@ -2246,6 +2259,7 @@ export class TUI extends Container {
 
 		// In-window diff: nothing scrolls, nothing commits.
 		if (chunkLength === 0 && scroll === 0) {
+			if (forceWindowRewrite) this.#fullRedrawCount += 1;
 			let firstChanged = forceWindowRewrite ? 0 : -1;
 			let lastChanged = forceWindowRewrite ? height - 1 : -1;
 			if (!forceWindowRewrite) {
@@ -2304,6 +2318,7 @@ export class TUI extends Container {
 		// Cursor moves to the window top with a relative move; the chunk rows
 		// pass through the screen and scroll off as the window rows are written
 		// below them, so the rows entering scrollback are exactly the chunk.
+		this.#fullRedrawCount += 1;
 		let buffer = this.#paintBeginSequence + purgeSequence;
 		if (currentScreenRow > 0) buffer += `\x1b[${currentScreenRow}A`;
 		buffer += "\r";

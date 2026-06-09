@@ -209,7 +209,7 @@ describe("streaming scrollback defer", () => {
 		}
 	});
 
-	it("defers scrollback growth during streaming", async () => {
+	it("commits scrolled streaming rows to history exactly once without ED3", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(40, 10);
 		overrideProbe(term, undefined);
@@ -222,16 +222,18 @@ describe("streaming scrollback defer", () => {
 			await settle(term);
 
 			const writes = capture(term);
-			const scrollbackBefore = term.getScrollBuffer().length;
 
-			// Grow content past the viewport — capped, no rows enter native
-			// scrollback during streaming, and no ED3 erase fires.
-			component.setLines([...rows("stream-", 10), ...rows("more-", 30), "prompt"]);
+			// Grow content past the viewport — without a live-region seam the
+			// scrolled-off rows commit to native history as they pass the seam
+			// (shell semantics): exactly once, in frame order, with no ED3.
+			const frame1 = [...rows("init-", 10), ...rows("stream-", 30), "prompt"];
+			component.setLines(frame1);
 			tui.requestRender();
 			await settle(term);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
+			let buffer = term.getScrollBuffer().map(line => line.trimEnd());
+			expect(buffer).toEqual(frame1.slice(0, buffer.length));
 			expect(
 				term
 					.getViewport()
@@ -239,13 +241,17 @@ describe("streaming scrollback defer", () => {
 					.at(-1),
 			).toBe("prompt");
 
-			// Grow even more — still capped, still no ED3.
-			component.setLines([...rows("stream-", 10), ...rows("more-", 50), "prompt"]);
+			// Grow further — history extends append-only: still no ED3, no
+			// duplicates, and previously committed rows are untouched.
+			const frame2 = [...rows("init-", 10), ...rows("stream-", 50), "prompt"];
+			component.setLines(frame2);
 			tui.requestRender();
 			await settle(term);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
+			buffer = term.getScrollBuffer().map(line => line.trimEnd());
+			expect(buffer).toEqual(frame2.slice(0, buffer.length));
+			expect(buffer.length).toBeGreaterThan(frame1.length - 10);
 		} finally {
 			tui.stop();
 		}
@@ -377,15 +383,15 @@ describe("streaming scrollback defer", () => {
 			await settle(term);
 
 			const writes = capture(term);
-			const scrollbackBefore = term.getScrollBuffer().length;
 
-			// Stream past the viewport: the cap keeps transient rows out of native
-			// history and no ED3 fires.
+			// Stream past the viewport: scrolled rows commit to history in
+			// order (shell semantics) and no ED3 fires.
 			component.setLines([...rows("stream-", 30), "prompt"]);
 			tui.requestRender();
 			await settle(term);
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(term.getScrollBuffer().length).toBe(scrollbackBefore);
+			const streamed = term.getScrollBuffer().map(line => line.trimEnd());
+			expect(streamed).toEqual([...rows("stream-", 30), "prompt"].slice(0, streamed.length));
 
 			// Resize mid-stream. The terminal re-wrapped its saved lines at the old
 			// width, so the rebuild must erase them (ED 3) rather than capping to a
