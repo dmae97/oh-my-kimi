@@ -123,6 +123,7 @@
 ### Fixed
 
 - Fixed OpenAI Responses and Azure OpenAI Responses streams silently surfacing incomplete output as successful when a custom/proxy provider drops the connection without sending `response.completed`. Both providers now detect premature stream closure and throw with `stopReason: "error"` ([#2184](https://github.com/can1357/oh-my-pi/pull/2184))
+- Added `response.incomplete` as a recognized terminal event in `processResponsesStream` so that length-limited turns from the Responses gateway (which emits `response.incomplete` instead of `response.completed`) are handled correctly with `stopReason: "length"` instead of triggering the premature-closure guard ([#2184](https://github.com/can1357/oh-my-pi/pull/2184))
 
 ## [15.10.8] - 2026-06-09
 
