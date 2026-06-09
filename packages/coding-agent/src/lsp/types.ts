@@ -416,6 +416,8 @@ export interface LspClient {
 	pendingRequests: Map<number, PendingRequest>;
 	messageBuffer: Uint8Array;
 	isReading: boolean;
+	/** Lifecycle state: "connecting" until initialize completes, then "ready"; "error" on init failure or reader death. */
+	status: "connecting" | "ready" | "error";
 	serverCapabilities?: LspServerCapabilities;
 	lastActivity: number;
 	/** Serializes outbound JSON-RPC writes to the server process. */
