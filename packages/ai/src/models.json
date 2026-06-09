@@ -48898,7 +48898,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-haiku-4.5": {
@@ -49018,7 +49018,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-opus-4.6-fast": {
@@ -49043,7 +49043,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-opus-4.7": {
@@ -49068,7 +49068,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-opus-4.7-fast": {
@@ -49093,7 +49093,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-opus-4.8": {
@@ -49118,7 +49118,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-opus-4.8-fast": {
@@ -49143,7 +49143,7 @@
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
-				"maxLevel": "high"
+				"maxLevel": "xhigh"
 			}
 		},
 		"anthropic/claude-sonnet-4": {

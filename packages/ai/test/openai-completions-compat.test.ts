@@ -70,6 +70,7 @@ function baseContext(): Context {
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
+	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	const fetchMock = createMockFetch(["[DONE]"]);
@@ -78,6 +79,7 @@ async function captureOpenAICompletionsPayload(
 		fetch: fetchMock,
 		signal: createAbortedSignal(),
 		onPayload: payload => resolve(payload),
+		...options,
 	});
 	return promise;
 }
@@ -645,6 +647,23 @@ describe("kimi model detection via detectCompat", () => {
 			reasoning: true,
 		};
 		expect(detectCompat(openRouterKimi).thinkingFormat).toBe("openrouter");
+	});
+
+	it("maps OpenRouter Anthropic adaptive reasoning efforts to the Anthropic scale", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			id: "anthropic/claude-fable-5",
+			reasoning: true,
+		};
+
+		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
+		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
+
+		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "xhigh" });
+		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "max" });
 	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side

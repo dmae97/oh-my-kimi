@@ -374,6 +374,15 @@ function isFableOrMythos(kind: AnthropicKind): boolean {
 	return kind === "fable" || kind === "mythos";
 }
 
+function isOpenRouterAnthropicAdaptiveReasoningModel<TApi extends Api>(
+	parsedModel: AnthropicModel,
+	model: ApiModel<TApi>,
+): boolean {
+	if (model.api !== "openai-completions") return false;
+	if (model.provider !== "openrouter" && !model.baseUrl.includes("openrouter.ai")) return false;
+	return isFableOrMythos(parsedModel.kind) || (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.6"));
+}
+
 function anthropicModelHasRealXHighEffort<TApi extends Api>(model: ApiModel<TApi>): boolean {
 	if (model.api !== "anthropic-messages") return false;
 	const parsedModel = parseKnownModel(model.id);
@@ -590,6 +599,9 @@ function inferAnthropicSupportedEfforts<TApi extends Api>(
 		return parsedModel.kind === "opus" || isFableOrMythos(parsedModel.kind)
 			? DEFAULT_REASONING_EFFORTS_WITH_XHIGH
 			: DEFAULT_REASONING_EFFORTS;
+	}
+	if (isOpenRouterAnthropicAdaptiveReasoningModel(parsedModel, model)) {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
 	return inferFallbackEfforts(model);
 }

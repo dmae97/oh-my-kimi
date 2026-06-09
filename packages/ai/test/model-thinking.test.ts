@@ -474,6 +474,29 @@ describe("model thinking runtime helpers", () => {
 		);
 	});
 
+	it("exposes xhigh for OpenRouter-hosted Anthropic adaptive models", () => {
+		const fable = createModel({
+			id: "anthropic/claude-fable-5",
+			api: "openai-completions",
+			provider: "openrouter",
+		});
+		const opus46 = createModel({
+			id: "anthropic/claude-opus-4.6",
+			api: "openai-completions",
+			provider: "openrouter",
+		});
+		const sonnet46 = createModel({
+			id: "anthropic/claude-sonnet-4.6",
+			api: "openai-completions",
+			provider: "openrouter",
+		});
+
+		expect(fable.thinking?.maxLevel).toBe(Effort.XHigh);
+		expect(opus46.thinking?.maxLevel).toBe(Effort.XHigh);
+		expect(sonnet46.thinking?.maxLevel).toBe(Effort.High);
+		expect(requireSupportedEffort(fable, Effort.XHigh)).toBe(Effort.XHigh);
+	});
+
 	it("enables xhigh for openai-responses and openai-codex-responses APIs", () => {
 		const responsesModel = createModel({
 			id: "custom-responses",
