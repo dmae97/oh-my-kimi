@@ -10,6 +10,10 @@
 
 - Added `antigravityRankingStrategy` and registered it as the default `CredentialRankingStrategy` for `google-antigravity`, so multi-account selection consumes the per-counter Antigravity usage reports (sorted ascending by `remainingFraction` in `fetchAntigravityUsage`) before falling back to round-robin — preventing the exhausted-counter credential from being chosen first when an unblocked sibling has headroom ([#2187](https://github.com/can1357/oh-my-pi/issues/2187)).
 
+### Fixed
+
+- Widened the OpenAI-completions first-event watchdog floor from 120s to 300s for DeepSeek V4 reasoning models hosted on the official DeepSeek API. The reasoner emits no SSE bytes until its private chain-of-thought finishes, which routinely takes longer than the generic 100s first-event budget under load — every chat then aborted with `OpenAI completions stream timed out while waiting for the first event` and silently retried. Mirrors the existing GLM coding-plan widening ([#2177](https://github.com/can1357/oh-my-pi/issues/2177)).
+
 ## [15.10.8] - 2026-06-09
 ### Added
 
