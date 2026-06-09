@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Fixed Windows stdio MCP servers launched through PATH shims such as `codegraph.cmd` so bare commands like `codegraph` resolve via `PATHEXT` before spawn ([#2174](https://github.com/can1357/oh-my-pi/issues/2174)).
 - Fixed a turn-ending provider error (e.g. a 502 whose body is the proxy's full HTML page) flooding the transcript: `AnthropicApiError` folds the entire response body into `errorMessage`, and the inline transcript render reprinted it verbatim — every embedded blank line included — leaving a tall mostly-empty block ending in `</html>`. The inline error now drops blank lines, clamps to 8 lines, and width-truncates each line via `getPreviewLines`, matching the pinned error banner.
 
 ## [15.10.7] - 2026-06-08

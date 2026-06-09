@@ -5,6 +5,9 @@
  * Messages are newline-delimited JSON.
  */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+
 import { getProjectDir, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
 import { type Subprocess, spawn } from "bun";
 import type {
@@ -18,6 +21,140 @@ import type {
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
+
+/** Subprocess argv for launching an MCP stdio server. */
+export interface StdioSpawnCommand {
+	cmd: string[];
+}
+
+/** Inputs used to resolve platform-specific stdio spawn behavior. */
+export interface ResolveStdioSpawnOptions {
+	cwd: string;
+	env: Record<string, string | undefined>;
+	platform?: NodeJS.Platform;
+}
+
+const DEFAULT_WINDOWS_PATHEXT = [".COM", ".EXE", ".BAT", ".CMD"];
+const WINDOWS_BATCH_EXTENSIONS = new Set([".bat", ".cmd"]);
+
+function getCaseInsensitiveEnv(env: Record<string, string | undefined>, name: string): string | undefined {
+	const direct = env[name];
+	if (direct !== undefined) return direct;
+	const normalized = name.toLowerCase();
+	for (const [key, value] of Object.entries(env)) {
+		if (key.toLowerCase() === normalized) return value;
+	}
+	return undefined;
+}
+
+function getWindowsPathExt(env: Record<string, string | undefined>): string[] {
+	const raw = getCaseInsensitiveEnv(env, "PATHEXT");
+	if (!raw) return DEFAULT_WINDOWS_PATHEXT;
+	const extensions: string[] = [];
+	for (const part of raw.split(";")) {
+		const trimmed = part.trim();
+		if (!trimmed) continue;
+		extensions.push(trimmed.startsWith(".") ? trimmed : `.${trimmed}`);
+	}
+	return extensions.length > 0 ? extensions : DEFAULT_WINDOWS_PATHEXT;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+	try {
+		await fs.access(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function hasPathSegment(command: string): boolean {
+	return command.includes("/") || command.includes("\\") || path.isAbsolute(command);
+}
+
+function hasExecutableExtension(command: string, extensions: string[]): boolean {
+	const ext = path.extname(command).toLowerCase();
+	if (!ext) return false;
+	return extensions.some(candidate => candidate.toLowerCase() === ext);
+}
+
+async function resolveWindowsCommandPath(
+	command: string,
+	cwd: string,
+	env: Record<string, string | undefined>,
+): Promise<string | null> {
+	const extensions = getWindowsPathExt(env);
+	if (hasExecutableExtension(command, extensions)) return command;
+
+	const candidates = extensions.map(ext => `${command}${ext}`);
+	if (hasPathSegment(command)) {
+		for (const candidate of candidates) {
+			const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
+			if (await fileExists(resolved)) return resolved;
+		}
+		return null;
+	}
+
+	const pathValue = getCaseInsensitiveEnv(env, "PATH");
+	if (!pathValue) return null;
+	for (const dir of pathValue.split(";")) {
+		if (!dir) continue;
+		for (const candidate of candidates) {
+			const resolved = path.join(dir, candidate);
+			if (await fileExists(resolved)) return resolved;
+		}
+	}
+	return null;
+}
+
+function quoteCmdArg(value: string): string {
+	if (value.length === 0) return '""';
+	let result = '"';
+	let backslashes = 0;
+	for (const char of value) {
+		if (char === "\\") {
+			backslashes++;
+			continue;
+		}
+		if (char === '"') {
+			result += "\\".repeat(backslashes * 2 + 1);
+			result += '"';
+			backslashes = 0;
+			continue;
+		}
+		result += "\\".repeat(backslashes);
+		backslashes = 0;
+		result += char;
+	}
+	result += "\\".repeat(backslashes * 2);
+	return `${result}"`;
+}
+
+function isWindowsBatchCommand(command: string): boolean {
+	return WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
+}
+
+function resolveComSpec(env: Record<string, string | undefined>): string {
+	const comspec = getCaseInsensitiveEnv(env, "COMSPEC");
+	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
+}
+
+/** Resolve the subprocess argv used to launch an MCP stdio server. */
+export async function resolveStdioSpawnCommand(
+	config: MCPStdioServerConfig,
+	options: ResolveStdioSpawnOptions,
+): Promise<StdioSpawnCommand> {
+	const args = config.args ?? [];
+	if (options.platform !== "win32") return { cmd: [config.command, ...args] };
+
+	const resolvedCommand =
+		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
+	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
+
+	return {
+		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", [resolvedCommand, ...args].map(quoteCmdArg).join(" ")],
+	};
+}
 
 /** Minimal write surface of `Subprocess.stdin` we need for framed sends. */
 interface FrameSink {
@@ -100,15 +237,20 @@ export class StdioTransport implements MCPTransport {
 	async connect(): Promise<void> {
 		if (this.#connected) return;
 
-		const args = this.config.args ?? [];
 		const env = {
 			...Bun.env,
 			...this.config.env,
 		};
+		const cwd = this.config.cwd ?? getProjectDir();
+		const spawnCommand = await resolveStdioSpawnCommand(this.config, {
+			cwd,
+			env,
+			platform: process.platform,
+		});
 
 		this.#process = spawn({
-			cmd: [this.config.command, ...args],
-			cwd: this.config.cwd ?? getProjectDir(),
+			cmd: spawnCommand.cmd,
+			cwd,
 			env,
 			stdin: "pipe",
 			stdout: "pipe",

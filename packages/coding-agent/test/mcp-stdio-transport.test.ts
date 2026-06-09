@@ -1,5 +1,45 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { resolveStdioSpawnCommand, StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
+
+describe("resolveStdioSpawnCommand", () => {
+	it("resolves bare Windows commands through PATHEXT and wraps .cmd shims with cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-stdio-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `"${shim}" "serve" "--mcp"`]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves non-Windows commands untouched", async () => {
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
+			{ cwd: "/", env: {}, platform: "linux" },
+		);
+
+		expect(result.cmd).toEqual(["codegraph", "serve", "--mcp"]);
+	});
+});
 
 // ---------------------------------------------------------------------------
 // writeFrame — the seam that catches synchronous FileSink throws AND neutralizes
