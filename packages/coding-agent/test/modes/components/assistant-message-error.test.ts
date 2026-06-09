@@ -30,8 +30,8 @@ function erroredMessage(errorMessage: string): AssistantMessage {
 	};
 }
 
-function renderLines(message: AssistantMessage): string[] {
-	const component = new AssistantMessageComponent(message);
+function renderLines(message: AssistantMessage, hideThinkingBlock = false): string[] {
+	const component = new AssistantMessageComponent(message, hideThinkingBlock);
 	return Bun.stripANSI(component.render(RENDER_WIDTH).join("\n"))
 		.split("\n")
 		.map(line => line.trimEnd());
@@ -99,5 +99,42 @@ describe("AssistantMessageComponent error rendering", () => {
 	it("renders a short single-line error unchanged", () => {
 		const lines = renderLines(erroredMessage("overloaded_error: Overloaded"));
 		expect(lines.some(line => line.includes("Error: overloaded_error: Overloaded"))).toBe(true);
+	});
+});
+
+describe("AssistantMessageComponent hidden thinking rendering", () => {
+	function thinkingMessage(): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "private reasoning" },
+				{ type: "text", text: "Visible answer" },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+	}
+
+	it("omits hidden thinking instead of rendering a placeholder", () => {
+		const lines = renderLines(thinkingMessage(), true);
+		expect(lines.some(line => line.includes("Thinking..."))).toBe(false);
+		expect(lines.some(line => line.includes("private reasoning"))).toBe(false);
+		expect(lines.some(line => line.includes("Visible answer"))).toBe(true);
+	});
+
+	it("still renders thinking when it is not hidden", () => {
+		const lines = renderLines(thinkingMessage());
+		expect(lines.some(line => line.includes("private reasoning"))).toBe(true);
 	});
 });
