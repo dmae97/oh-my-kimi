@@ -103,6 +103,58 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
 	});
 
+	it("widens DeepSeek V4 reasoning streams on the official DeepSeek API", () => {
+		const model = {
+			...openAICompletionsModel,
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: true,
+		} satisfies Model<"openai-completions">;
+
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(300_000);
+	});
+
+	it("widens DeepSeek reasoning streams routed through an aliased OpenAI-compatible provider id", () => {
+		const model = {
+			...openAICompletionsModel,
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			provider: "openai",
+			baseUrl: "https://api.deepseek.com/v1",
+			reasoning: true,
+		} satisfies Model<"openai-completions">;
+
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(300_000);
+	});
+
+	it("leaves non-reasoning DeepSeek-hosted models on the global timeout", () => {
+		const model = {
+			...openAICompletionsModel,
+			id: "deepseek-chat",
+			name: "DeepSeek Chat",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: false,
+		} satisfies Model<"openai-completions">;
+
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBeUndefined();
+	});
+
+	it("does not widen DeepSeek V4 reasoning models hosted on third-party OpenAI-compatible proxies", () => {
+		const model = {
+			...openAICompletionsModel,
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			provider: "aimlapi",
+			baseUrl: "https://api.aimlapi.com/v1",
+			reasoning: true,
+		} satisfies Model<"openai-completions">;
+
+		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBeUndefined();
+	});
+
 	it("keeps ordinary OpenAI-compatible models on the global timeout", () => {
 		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(openAICompletionsModel)).toBeUndefined();
 	});
