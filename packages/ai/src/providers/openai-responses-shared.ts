@@ -57,15 +57,7 @@ export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Se
 export function isOpenAIResponsesProgressEvent(event: unknown): boolean {
 	if (!event || typeof event !== "object") return false;
 	const type = (event as { type?: unknown }).type;
-	if (typeof type !== "string") return false;
-	// Known OpenAI Responses event types always count as progress.
-	if (OPENAI_RESPONSES_PROGRESS_EVENT_TYPES.has(type)) return true;
-	// Custom/proxy providers may emit non-standard event types (keepalives,
-	// vendor-specific metadata, etc.) that are not in the canonical set. Any
-	// event with a valid `type` string still proves the upstream connection is
-	// alive, so count it as progress to prevent the idle watchdog from firing
-	// on a live stream. See: stream stall on custom response-compatible providers.
-	return true;
+	return typeof type === "string" && OPENAI_RESPONSES_PROGRESS_EVENT_TYPES.has(type);
 }
 
 export function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
@@ -467,7 +459,13 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 export interface ProcessResponsesStreamOptions {
 	onFirstToken?: () => void;
 	onOutputItemDone?: (item: ResponseOutputItem) => void;
-	/** Called when `response.completed` is successfully processed. Used by callers to detect premature stream closure. */
+	/**
+	 * Called when `response.completed` is successfully processed.
+	 * Only invoked on the successful-completion path; thrown failure
+	 * (`response.failed`) and cancellation paths never call this.
+	 * Used by callers to detect premature stream closure (i.e. the stream
+	 * ended without a `response.completed` event).
+	 */
 	onCompleted?: () => void;
 }
 
