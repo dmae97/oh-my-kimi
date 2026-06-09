@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.8] - 2026-06-09
+
 ### Added
 
 - Added an optional `fetch` option to `CustomToolContext` so custom tools can use a caller-provided HTTP implementation

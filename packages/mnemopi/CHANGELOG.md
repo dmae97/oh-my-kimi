@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.10.8] - 2026-06-09
 ### Added
 
 - Added a `fetch` option to `ExtractionClient` to inject a custom fetch implementation for remote LLM requests

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.10.8] - 2026-06-09
 ### Removed
 
 - Removed the exported `hookFetch` API, which previously intercepted `globalThis.fetch` via middleware handlers
