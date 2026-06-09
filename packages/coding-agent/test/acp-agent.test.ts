@@ -1313,7 +1313,19 @@ describe("ACP agent", () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
-		// Use custom prompt mock that lets us unblock both calls cleanly
+
+		// Block abort() until released so we can assert the second prompt waits
+		let releaseAbort!: () => void;
+		const abortStarted = Promise.withResolvers<void>();
+		const abortRelease = new Promise<void>(resolve => {
+			releaseAbort = resolve;
+		});
+		session.abort = async () => {
+			session.isStreaming = false;
+			abortStarted.resolve();
+			await abortRelease;
+		};
+
 		const blockers: Array<() => void> = [];
 		session.prompt = async (text: string): Promise<void> => {
 			session.promptCalls.push(text);
@@ -1335,7 +1347,6 @@ describe("ACP agent", () => {
 			prompt: [{ type: "text", text: "long running" }],
 		} as PromptRequest);
 		await Bun.sleep(0);
-		// First session.prompt is blocking; only "long running" has been seen so far
 		expect(session.promptCalls).toEqual(["long running"]);
 
 		// Second prompt arrives mid-flight — must auto-cancel first, then queue
@@ -1345,17 +1356,26 @@ describe("ACP agent", () => {
 			prompt: [{ type: "text", text: "overlap" }],
 		} as PromptRequest);
 
-		// First resolves immediately as cancelled; second is still queued
+		// First resolves immediately as cancelled
 		const firstResponse = await firstPrompt;
 		expect(firstResponse.stopReason).toBe("cancelled");
 
-		// Let microtasks settle: abort completes, second session.prompt starts
+		// abort() must have been called as part of cancel cleanup
+		await abortStarted.promise;
+
+		// Second prompt must NOT start until abort cleanup completes
 		await Bun.sleep(0);
-		// Unblock both session.prompt calls: first (background, fire-and-forget) + second
+		expect(session.promptCalls).toEqual(["long running"]);
+
+		// Release abort — second session.prompt should now start
+		releaseAbort();
+		await Bun.sleep(0);
+		expect(session.promptCalls).toEqual(["long running", "overlap"]);
+
+		// Unblock both session.prompt calls (first is fire-and-forget, second drives the response)
 		for (const resolve of blockers) resolve();
 		const secondResponse = await secondPrompt;
 		expect(secondResponse.stopReason).toBe("end_turn");
-		expect(session.promptCalls).toEqual(["long running", "overlap"]);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
