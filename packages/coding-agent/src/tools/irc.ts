@@ -244,11 +244,15 @@ function errorResult(text: string, details: IrcDetails): AgentToolResult<IrcDeta
 	return {
 		content: [{ type: "text", text }],
 		details,
+		isError: true,
 	};
 }
 
 function normalizeIrcTimeoutMs(value: number): number {
-	if (!Number.isFinite(value) || value === 0) return value === 0 ? 0 : DEFAULT_IRC_TIMEOUT_MS;
+	if (value === 0) return 0; // 0 = timeout disabled
+	// Negative or non-finite settings are misconfigurations — fall back to the
+	// default instead of producing an instant 1 ms timeout.
+	if (!Number.isFinite(value) || value < 0) return DEFAULT_IRC_TIMEOUT_MS;
 	return Math.max(1, Math.trunc(value));
 }
 

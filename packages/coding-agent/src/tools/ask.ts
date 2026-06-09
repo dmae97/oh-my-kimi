@@ -59,6 +59,8 @@ export interface QuestionResult {
 	multi: boolean;
 	selectedOptions: string[];
 	customInput?: string;
+	/** True when the answer was auto-selected because the dialog timed out. */
+	timedOut?: boolean;
 }
 
 export interface AskToolDetails {
@@ -67,6 +69,8 @@ export interface AskToolDetails {
 	multi?: boolean;
 	selectedOptions?: string[];
 	customInput?: string;
+	/** True when the answer was auto-selected because the dialog timed out. */
+	timedOut?: boolean;
 	/** Multi-part question mode */
 	results?: QuestionResult[];
 }
@@ -94,6 +98,10 @@ function toSelectOption(option: AskOption, label = option.label): ExtensionUISel
 
 const OTHER_OPTION = "Other (type your own)";
 const RECOMMENDED_SUFFIX = " (Recommended)";
+// Window after the timeout deadline within which an `undefined` selection is
+// attributed to a UI-enforced timeout (for surfaces that close the dialog at
+// the deadline but never invoke `onTimeout`). Cancels beyond it are user Esc.
+const TIMEOUT_DETECTION_TOLERANCE_MS = 1_000;
 
 function getDoneOptionLabel(): string {
 	return `${theme.symbol("tool.ask")} Done selecting`;
@@ -230,7 +238,12 @@ async function askSingleQuestion(
 			? await untilAborted(signal, () => ui.select(prompt, optionsToShow, dialogOptions))
 			: await ui.select(prompt, optionsToShow, dialogOptions);
 		if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
-			timeoutTriggered = Date.now() - startMs >= timeout;
+			// Fallback for UI surfaces that enforce `timeout` without invoking
+			// `onTimeout`: their auto-cancel resolves right at the deadline. A
+			// cancel arriving well past the deadline is a deliberate user Esc on
+			// a surface that kept the dialog open — keep treating it as a cancel.
+			const elapsed = Date.now() - startMs;
+			timeoutTriggered = elapsed >= timeout && elapsed <= timeout + TIMEOUT_DETECTION_TOLERANCE_MS;
 		}
 		return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
 	};
@@ -380,9 +393,10 @@ function formatQuestionResult(result: QuestionResult): string {
 		return `${result.id}: "${result.customInput}"`;
 	}
 	if (result.selectedOptions.length > 0) {
+		const suffix = result.timedOut ? " (auto-selected after timeout)" : "";
 		return result.multi
-			? `${result.id}: [${result.selectedOptions.join(", ")}]`
-			: `${result.id}: ${result.selectedOptions[0]}`;
+			? `${result.id}: [${result.selectedOptions.join(", ")}]${suffix}`
+			: `${result.id}: ${result.selectedOptions[0]}${suffix}`;
 	}
 	return `${result.id}: (cancelled)`;
 }
@@ -519,13 +533,15 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				multi: q.multi ?? false,
 				selectedOptions,
 				customInput,
+				timedOut: timedOut || undefined,
 			};
 
 			const responseParts: string[] = [];
 			if (selectedOptions.length > 0) {
-				responseParts.push(
-					q.multi ? `User selected: ${selectedOptions.join(", ")}` : `User selected: ${selectedOptions[0]}`,
-				);
+				const selectedText = q.multi
+					? `User selected: ${selectedOptions.join(", ")}`
+					: `User selected: ${selectedOptions[0]}`;
+				responseParts.push(timedOut ? `${selectedText} (auto-selected after timeout)` : selectedText);
 			}
 			if (customInput !== undefined) {
 				responseParts.push(
@@ -573,6 +589,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				multi: q.multi ?? false,
 				selectedOptions,
 				customInput,
+				timedOut: timedOut || undefined,
 			};
 
 			if (navAction === "back") {
@@ -828,9 +845,14 @@ export const askToolRenderer = {
 		const dSelected = details.selectedOptions;
 		const dMulti = details.multi;
 		const dCustom = details.customInput;
+		const dTimedOut = details.timedOut;
 		return framedBlock(uiTheme, width => {
 			const bodyLines = md(question, width);
 			bodyLines.push(...renderAnswerOptionLines(uiTheme, mdTheme, dOptions, dSelected, dMulti, dCustom));
+			if (dTimedOut) {
+				// Distinguish auto-selection from a real user choice in the transcript.
+				bodyLines.push(uiTheme.fg("dim", "auto-selected after timeout — not a user choice"));
+			}
 			return {
 				header,
 				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],

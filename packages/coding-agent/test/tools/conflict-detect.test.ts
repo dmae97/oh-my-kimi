@@ -94,6 +94,15 @@ describe("scanConflictLines", () => {
 		expect(blocks[0].oursLabel).toBe("second");
 		expect(blocks[0].oursLines).toEqual(["good ours"]);
 	});
+
+	it("detects conflicts in CRLF files and stores LF-normalized sections", () => {
+		const blocks = scanConflictLines(["<<<<<<< HEAD\r", "ours\r", "=======\r", "theirs\r", ">>>>>>> feat\r"], 1);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].oursLabel).toBe("HEAD");
+		expect(blocks[0].theirsLabel).toBe("feat");
+		expect(blocks[0].oursLines).toEqual(["ours"]);
+		expect(blocks[0].theirsLines).toEqual(["theirs"]);
+	});
 });
 
 describe("ConflictHistory", () => {
@@ -290,6 +299,20 @@ describe("spliceConflict", () => {
 
 	it("rejects when the file is shorter than the recorded region", () => {
 		expect(() => spliceConflict("short\n", entry, "x\n")).toThrow(/no longer present/);
+	});
+
+	it("splices CRLF files and preserves CRLF line endings", () => {
+		const crlfFile = ["before", "<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> feat", "after", ""].join(
+			"\r\n",
+		);
+		const result = spliceConflict(crlfFile, entry, "alpha\nbeta\n");
+		expect(result).toBe("before\r\nalpha\r\nbeta\r\nafter\r\n");
+	});
+
+	it("does not append \\r when the spliced region ends the file without a trailing newline", () => {
+		const crlfNoEof = ["before", "<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> feat"].join("\r\n");
+		const result = spliceConflict(crlfNoEof, entry, "resolved");
+		expect(result).toBe("before\r\nresolved");
 	});
 });
 
