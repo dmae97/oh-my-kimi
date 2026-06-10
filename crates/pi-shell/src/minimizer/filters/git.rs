@@ -1098,11 +1098,31 @@ fn condense_noisy_output(input: &str) -> String {
 
 fn condense_commit(input: &str, exit_code: i32) -> String {
 	if exit_code == 0 {
+		let mut hash = None;
+		let mut stat = None;
 		for line in input.lines() {
 			let trimmed = line.trim();
-			if let Some(hash) = parse_commit_hash(trimmed) {
-				return format!("ok {hash}\n");
+			if hash.is_none()
+				&& let Some(found) = parse_commit_hash(trimmed)
+			{
+				hash = Some(found);
+				continue;
 			}
+			// Default `git commit` success prints a "N files changed, …" stat line
+			// below the "[branch hash] msg" line; fold it back into the summary so
+			// the files/insertions signal survives the condense.
+			if stat.is_none() {
+				stat = parse_stat_summary(trimmed);
+			}
+		}
+		if let Some(hash) = hash {
+			return match stat {
+				Some((files, added, deleted)) => {
+					format!("ok {hash} ({files} files +{added} -{deleted})\n")
+				},
+				// `--quiet` (or otherwise stat-less) success keeps the bare hash.
+				None => format!("ok {hash}\n"),
+			};
 		}
 		// No commit hash found — likely a `--dry-run` invocation that exits 0
 		// but prints a status-style listing instead of a "[branch hash]" line.
@@ -2047,7 +2067,7 @@ mod tests {
 	}
 
 	#[test]
-	fn commit_success_compacts_to_hash_only() {
+	fn commit_success_compacts_to_hash_with_stat_summary() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("commit"), "git commit -m msg", &cfg);
 		let input = "\
@@ -2058,9 +2078,30 @@ mod tests {
 ";
 		let out = filter(&ctx, input, 0);
 
-		assert_eq!(out.text, "ok 5f490f764\n");
+		// Best-of: the change summary from the stat line is folded into `ok <hash>`.
+		assert_eq!(out.text, "ok 5f490f764 (70 files +3081 -403)\n");
 		assert!(!out.text.contains("files changed"));
 		assert!(!out.text.contains("create mode"));
+	}
+
+	#[test]
+	fn commit_success_with_stat_appends_change_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("commit"), "git commit -m msg", &cfg);
+		// Default `git commit` success body: "[branch hash] msg" + stat line.
+		let input = "[main 1a2b3c4] msg\n 3 files changed, 10 insertions(+), 2 deletions(-)\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "ok 1a2b3c4 (3 files +10 -2)\n");
+	}
+
+	#[test]
+	fn commit_success_without_stat_keeps_bare_hash() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("commit"), "git commit -m msg --quiet", &cfg);
+		// `--quiet` suppresses the stat line; the bare hash summary is preserved.
+		let input = "[main 1a2b3c4] msg\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "ok 1a2b3c4\n");
 	}
 
 	#[test]
