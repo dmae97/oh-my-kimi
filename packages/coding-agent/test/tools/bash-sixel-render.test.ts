@@ -257,4 +257,51 @@ describe("bashToolRenderer", () => {
 			expect(rendered[idx]).toMatch(/\u001b\[38;(?:2|5);/);
 		}
 	});
+
+	it("caches the framed lines across repeated render() calls with identical inputs (issue #2081)", async () => {
+		// The bash result renderer is called per TUI repaint; with a long
+		// transcript and a 50KB-tail output that's the hot path that pinned the
+		// main thread in #2081. The eval renderer already caches by (width,
+		// previewLines) — this test pins the same contract for bash so future
+		// refactors don't silently drop the cache.
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		// A non-trivial output so a missed cache hit would do real string work.
+		const output = Array.from({ length: 200 }, (_, i) => `line ${i}: payload ${"x".repeat(20)}`).join("\n");
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: output }],
+				details: { timeoutSeconds: 5, wallTimeMs: 12 },
+				isError: false,
+			},
+			{ expanded: false, isPartial: false, renderContext: { output, expanded: false, previewLines: 8 } },
+			uiTheme,
+			{ command: "printf '%s' big" },
+		);
+
+		const first = component.render(120);
+		const second = component.render(120);
+		// Identical inputs → cache hit returns the very same array reference.
+		expect(second).toBe(first);
+
+		// Width change busts the cache; fresh array.
+		const wider = component.render(160);
+		expect(wider).not.toBe(first);
+
+		// Original width hits the cache slot's current binding — proving the
+		// cache key includes width and isn't a stale-single-slot bug.
+		const sameAgain = component.render(120);
+		expect(sameAgain).not.toBe(first); // most-recent slot now holds the 160 result
+		expect(sameAgain).not.toBe(wider);
+
+		// Subsequent identical render reuses the freshly-cached 120 slot.
+		const sameAgainCached = component.render(120);
+		expect(sameAgainCached).toBe(sameAgain);
+
+		// invalidate() clears the cache so the next render produces a brand-new array.
+		(component as { invalidate?: () => void }).invalidate?.();
+		const postInvalidate = component.render(120);
+		expect(postInvalidate).not.toBe(sameAgainCached);
+	});
 });
