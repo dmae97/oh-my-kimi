@@ -87,11 +87,15 @@ test("ollama-chat sends think false when reasoning is disabled", async () => {
 });
 
 test("ollama-chat surfaces HTTP 400 response bodies", async () => {
-	const fetchMock: FetchImpl = vi.fn(async () =>
-		new Response(JSON.stringify({ error: { message: "num_predict exceeds model cap", type: "invalid_request" } }), {
-			status: 400,
-			headers: { "Content-Type": "application/json" },
-		}),
+	const fetchMock: FetchImpl = vi.fn(
+		async () =>
+			new Response(
+				JSON.stringify({ error: { message: "num_predict exceeds model cap", type: "invalid_request" } }),
+				{
+					status: 400,
+					headers: { "Content-Type": "application/json" },
+				},
+			),
 	);
 
 	const response = await streamSimple(
