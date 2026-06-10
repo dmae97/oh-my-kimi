@@ -468,6 +468,26 @@ describe("resolveModelRoleValue", () => {
 		expect(result.warning).toBeUndefined();
 	});
 
+	test("splits direct comma fallback chains before parsing thinking selectors", () => {
+		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:off,openai/gpt-4o:off", allModels);
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-sonnet-4-5");
+		expect(result.thinkingLevel).toBe("off");
+		expect(result.explicitThinkingLevel).toBe(true);
+		expect(result.warning).toBeUndefined();
+	});
+
+	test("tries later direct comma fallback entries when earlier entries miss", () => {
+		const result = resolveModelRoleValue("anthropic/missing:off,openai/gpt-4o:off", allModels);
+
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o");
+		expect(result.thinkingLevel).toBe("off");
+		expect(result.explicitThinkingLevel).toBe(true);
+		expect(result.warning).toBeUndefined();
+	});
+
 	test("does not resolve exact codex role values to codex-spark via substring matching", () => {
 		const providerQualified = resolveModelRoleValue("openai-codex/gpt-5.3-codex:xhigh", allModels);
 		expect(providerQualified.model?.provider).toBe("openai-codex");
