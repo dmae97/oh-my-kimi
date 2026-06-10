@@ -45,7 +45,10 @@ describe("ollama local provider discovery", () => {
 		expect(model?.api).toBe("openai-responses");
 		expect(model?.contextWindow).toBe(1048576);
 		expect(model?.reasoning).toBe(true);
-		expect(model?.thinking).toEqual({ mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High });
+		expect(model?.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+		});
 		expect(model?.input).toEqual(["text", "image"]);
 	});
 

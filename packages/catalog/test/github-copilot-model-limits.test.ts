@@ -198,8 +198,7 @@ describe("github copilot model limits mapping", () => {
 		expect(model?.premiumMultiplier).toBe(0.33);
 		expect(model?.thinking).toEqual({
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		});
 	});
 

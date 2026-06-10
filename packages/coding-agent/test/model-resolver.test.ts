@@ -25,8 +25,7 @@ const mockModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text", "image"],
 		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
@@ -58,8 +57,7 @@ const mockOpenRouterModels: Model<Api>[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text"],
 		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
@@ -87,8 +85,7 @@ const mockOpenRouterModels: Model<Api>[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text"],
 		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
@@ -134,8 +131,7 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text"],
 		cost: { input: 1.5, output: 6, cacheRead: 0.15, cacheWrite: 1.5 },
@@ -151,8 +147,7 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text"],
 		cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
@@ -171,8 +166,7 @@ function createOpusModel(provider: string, id: string, name: string): Model<"ant
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text", "image"],
 		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
@@ -191,8 +185,7 @@ const canonicalVariantModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text", "image"],
 		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
@@ -208,8 +201,7 @@ const canonicalVariantModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text", "image"],
 		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },

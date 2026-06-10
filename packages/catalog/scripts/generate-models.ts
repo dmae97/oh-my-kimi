@@ -17,11 +17,6 @@ import { $env } from "@oh-my-pi/pi-utils";
 import { fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
 import { createModelManager } from "../src/model-manager";
-import {
-	applyGeneratedModelPolicies,
-	CLOUDFLARE_FALLBACK_MODEL,
-	linkOpenAIPromotionTargets,
-} from "../src/model-thinking";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
 import {
@@ -44,6 +39,11 @@ import {
 } from "../src/provider-models/openai-compat";
 import type { ModelSpec } from "../src/types";
 import { JWT_CLAIM_PATH } from "../src/wire/codex";
+import {
+	applyGeneratedModelPolicies,
+	CLOUDFLARE_FALLBACK_MODEL,
+	linkOpenAIPromotionTargets,
+} from "./generated-policies";
 
 const packageRoot = path.join(import.meta.dir, "..");
 
@@ -429,7 +429,10 @@ async function generateModels() {
 	// Discovery-only providers (local inference servers) — never bundle static models.
 	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
 
-	for (const models of Object.values(prevModelsJson as Record<string, Record<string, ModelSpec>>)) {
+	// Previous-snapshot entries may carry an older ThinkingConfig vocabulary;
+	// applyGeneratedModelPolicies re-bakes `thinking` for every model, so the
+	// inbound shape is irrelevant beyond identity/pricing/compat fields.
+	for (const models of Object.values(prevModelsJson as unknown as Record<string, Record<string, ModelSpec>>)) {
 		for (const model of Object.values(models)) {
 			if (
 				!fetchedKeys.has(`${model.provider}/${model.id}`) &&

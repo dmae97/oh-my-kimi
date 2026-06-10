@@ -3,8 +3,7 @@ import * as fs from "node:fs";
 import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
 import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
-import { supportsAdaptiveThinkingDisplay } from "@oh-my-pi/pi-catalog/identity";
-import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import { mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
@@ -2279,7 +2278,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		claudeCodeSessionId,
 	} = args;
 	const compat = model.compat;
-	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
+	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
@@ -2754,7 +2753,7 @@ function buildParams(
 				// callers that rely on it. The `display` field is gated strictly on model
 				// support: Opus 4.6 / Sonnet 4.6+ reject it with a 400, so an explicit
 				// `thinkingDisplay` MUST NOT force it onto a model that can't accept it.
-				if (supportsAdaptiveThinkingDisplay(model.id)) {
+				if (model.thinking?.supportsDisplay) {
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
@@ -2817,7 +2816,7 @@ function buildParams(
 	// Opus 4.7+ and Fable/Mythos 5 reject non-default sampling parameters with 400 error.
 	const thinkingType = params.thinking?.type;
 	const allowSamplingParams =
-		!hasOpus47ApiRestrictions(model.id) && (thinkingType === undefined || thinkingType === "disabled");
+		model.compat.supportsSamplingParams && (thinkingType === undefined || thinkingType === "disabled");
 	if (allowSamplingParams && options?.temperature !== undefined) {
 		params.temperature = options.temperature;
 	}

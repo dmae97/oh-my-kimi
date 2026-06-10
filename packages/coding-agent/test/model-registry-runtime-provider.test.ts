@@ -141,7 +141,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, "Authorization", undefined);
 	});
 
-	test("registerProvider preserves explicit thinking on runtime models", () => {
+	test("registerProvider preserves explicit thinking and backfills wire facts", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
@@ -154,8 +154,7 @@ describe("ModelRegistry runtime provider registration", () => {
 					reasoning: true,
 					thinking: {
 						mode: "anthropic-adaptive",
-						minLevel: Effort.Minimal,
-						maxLevel: Effort.High,
+						efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 					},
 				},
 			],
@@ -166,8 +165,10 @@ describe("ModelRegistry runtime provider registration", () => {
 
 		expect(model?.thinking).toEqual({
 			mode: "anthropic-adaptive",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+			// Wire facts are backfilled from identity; non-claude ids get the
+			// 4-tier adaptive map.
+			effortMap: { minimal: "low", xhigh: "max" },
 		});
 	});
 

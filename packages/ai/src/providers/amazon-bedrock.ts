@@ -8,7 +8,6 @@
  */
 
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { supportsAdaptiveThinkingDisplay } from "@oh-my-pi/pi-catalog/identity";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { $env, $flag, extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
@@ -819,7 +818,7 @@ function buildAdditionalModelRequestFields(
 		// runs (issue #1373). Opt back into "summarized" by default on models that
 		// accept the field.
 		const adaptive: { type: "adaptive"; display?: BedrockThinkingDisplay } = { type: "adaptive" };
-		if (supportsAdaptiveThinkingDisplay(model.id)) {
+		if (model.thinking?.supportsDisplay) {
 			adaptive.display = options.thinkingDisplay ?? "summarized";
 		}
 		return {

@@ -37,7 +37,7 @@ function createReasoningModel(): Model<"openai-responses"> {
 		provider: "openai",
 		baseUrl: "https://example.invalid",
 		reasoning: true,
-		thinking: { mode: "effort", minLevel: Effort.Medium, maxLevel: Effort.High },
+		thinking: { mode: "effort", efforts: [Effort.Medium, Effort.High] },
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8192,

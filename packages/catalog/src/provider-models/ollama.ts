@@ -60,11 +60,7 @@ function getThinkingConfig(capabilities: string[] | undefined): ThinkingConfig |
 	if (!capabilities?.includes("thinking")) {
 		return undefined;
 	}
-	return {
-		mode: "effort",
-		minLevel: Effort.Minimal,
-		maxLevel: Effort.High,
-	};
+	return { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] };
 }
 async function fetchShowMetadata(
 	baseUrl: string,

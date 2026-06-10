@@ -284,7 +284,7 @@ describe("ModelRegistry", () => {
 			const variants = registry.getCanonicalVariants("deepseek-v4-pro");
 
 			expect(model?.cost.cacheRead).toBeGreaterThan(0);
-			expect(model?.thinking?.maxLevel).toBe(Effort.XHigh);
+			expect(model?.thinking?.efforts.at(-1)).toBe(Effort.XHigh);
 			expect(variants.some(variant => variant.selector === "ollama/deepseek-v4-pro:cloud")).toBe(true);
 		});
 
@@ -1132,12 +1132,10 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("thinking metadata normalization", () => {
-		test("custom models preserve explicit thinking", () => {
+		test("custom models preserve explicit thinking and gain backfilled wire facts", () => {
 			const thinking: ThinkingConfig = {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Minimal,
-				maxLevel: Effort.High,
-				levels: [Effort.Minimal, Effort.High],
+				efforts: [Effort.Minimal, Effort.High],
 			};
 
 			writeModelsJson({
@@ -1149,7 +1147,11 @@ describe("ModelRegistry", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			const model = getModelsForProvider(registry, "anthropic").find(m => m.id === "claude-custom");
 
-			expect(model?.thinking).toEqual(thinking);
+			expect(model?.thinking).toEqual({
+				...thinking,
+				// Versionless claude ids resolve to the 4-tier adaptive wire map.
+				effortMap: { minimal: "low", xhigh: "max" },
+			});
 		});
 
 		test("model overrides can replace canonical thinking metadata", () => {
@@ -1157,7 +1159,7 @@ describe("ModelRegistry", () => {
 				openrouter: {
 					modelOverrides: {
 						"anthropic/claude-sonnet-4": {
-							thinking: { mode: "budget", minLevel: Effort.Low, maxLevel: Effort.Medium },
+							thinking: { mode: "budget", efforts: [Effort.Low, Effort.Medium] },
 						},
 					},
 				},
@@ -1168,8 +1170,7 @@ describe("ModelRegistry", () => {
 
 			expect(model?.thinking).toEqual({
 				mode: "budget",
-				minLevel: Effort.Low,
-				maxLevel: Effort.Medium,
+				efforts: [Effort.Low, Effort.Medium],
 			});
 		});
 	});

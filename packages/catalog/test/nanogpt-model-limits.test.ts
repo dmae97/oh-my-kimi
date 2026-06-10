@@ -50,8 +50,7 @@ describe("nanogpt model limits mapping", () => {
 		expect(model?.premiumMultiplier).toBeUndefined();
 		expect(model?.thinking).toEqual({
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});

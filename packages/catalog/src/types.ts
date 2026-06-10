@@ -26,20 +26,27 @@ export type ThinkingControlMode =
 
 /** Per-model thinking capabilities used to clamp and map user-facing effort levels. */
 export interface ThinkingConfig {
-	/** Least intensive supported user-facing effort level. */
-	minLevel: Effort;
-	/** Most intensive supported user-facing effort level. */
-	maxLevel: Effort;
-	/**
-	 * Optional explicit list of supported levels. When present, takes precedence over
-	 * the `minLevel`..`maxLevel` range — used to encode discrete sets with gaps
-	 * (e.g. Gemini 3 Pro supports `low` and `high` but not `medium`).
-	 */
-	levels?: readonly Effort[];
-	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
-	defaultLevel?: Effort;
 	/** Provider-specific transport used to encode the selected effort. */
 	mode: ThinkingControlMode;
+	/**
+	 * Supported user-facing efforts, ordered least → most intensive. Never
+	 * empty: a reasoning model without a controllable effort surface carries
+	 * `thinking: undefined` instead of an empty list.
+	 */
+	efforts: readonly Effort[];
+	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
+	defaultLevel?: Effort;
+	/**
+	 * Effort → wire-value remap for `anthropic-adaptive` transports, baked at
+	 * build time (4-tier legacy scale vs the 5-tier Opus 4.7+/Fable/Mythos
+	 * scale). Identity for efforts the map omits.
+	 */
+	effortMap?: Partial<Record<Effort, string>>;
+	/**
+	 * Adaptive thinking accepts the `display` field (Opus 4.7+, Fable/Mythos
+	 * 5). Also implies native interleaved thinking — no beta header needed.
+	 */
+	supportsDisplay?: boolean;
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
@@ -246,6 +253,12 @@ export interface AnthropicCompat {
 	 * When unset, auto-detected from the model id. Default: true.
 	 */
 	supportsForcedToolChoice?: boolean;
+	/**
+	 * Whether the model accepts sampling parameters (`temperature`, `top_p`,
+	 * `top_k`). Opus 4.7+ and Fable/Mythos reject them with a 400. When unset,
+	 * auto-detected from the model id. Default: true.
+	 */
+	supportsSamplingParams?: boolean;
 	/**
 	 * Include a non-standard `id` field (aliasing `tool_use_id`) on
 	 * `tool_result` blocks. Z.AI's Anthropic-compatible proxy deserializes

@@ -7,6 +7,8 @@
  * here.
  */
 
+import { bareModelId, isFableOrMythos, parseAnthropicModel, semverGte } from "./classify";
+
 /** Kimi family ids in any namespace form (`moonshotai/kimi-*`, `kimi-k2.6`, `vendor/kimi.x`). */
 export function isKimiModelId(modelId: string): boolean {
 	return modelId.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(modelId);
@@ -44,16 +46,43 @@ export function isMimoModelIdOrName(value: string): boolean {
 
 /**
  * Adaptive thinking `display` is supported starting with Claude Opus 4.7 and
- * Claude Fable/Mythos 5. Older adaptive-thinking models (Opus 4.6, Sonnet
- * 4.6+) reject the field.
+ * the Claude Fable/Mythos 5 generation. Older adaptive-thinking models
+ * (Opus 4.6, Sonnet 4.6+) reject the field. Classifier-based, so dotted and
+ * dashed version forms both match while bare dated ids
+ * (`claude-opus-4-20250514` = Opus 4.0) stay excluded.
  */
 export function supportsAdaptiveThinkingDisplay(modelId: string): boolean {
-	if (/claude-(?:fable|mythos)-5\b/.test(modelId)) return true;
-	// Bound the minor to non-date digits: bare dated ids like
-	// `claude-opus-4-20250514` (Opus 4.0) must not parse as minor=20250514.
-	const match = /claude-opus-(\d+)-(\d{1,2})(?!\d)/.exec(modelId);
-	if (!match) return false;
-	const major = Number(match[1]);
-	const minor = Number(match[2]);
-	return major > 4 || (major === 4 && minor >= 7);
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	if (!parsed) return false;
+	if (isFableOrMythos(parsed.kind)) return semverGte(parsed.version, "5");
+	return parsed.kind === "opus" && semverGte(parsed.version, "4.7");
+}
+
+/**
+ * Returns true for Anthropic models with Opus 4.7+/Fable/Mythos API restrictions:
+ * - Sampling parameters (temperature/top_p/top_k) return 400 error
+ * - Thinking content is omitted by default (needs display: "summarized")
+ */
+export function hasOpus47ApiRestrictions(modelId: string): boolean {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	if (!parsed) return false;
+	return (parsed.kind === "opus" && semverGte(parsed.version, "4.7")) || isFableOrMythos(parsed.kind);
+}
+
+/**
+ * Mid-conversation `role: "system"` messages (system instructions appended at
+ * non-first positions in the `messages` array) are supported starting with
+ * Claude Opus 4.8 and the Claude Fable/Mythos 5 generation. Earlier Claude
+ * models reject the role.
+ * @see https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+ */
+export function supportsMidConversationSystemMessages(modelId: string): boolean {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	if (!parsed) return false;
+	return (parsed.kind === "opus" && semverGte(parsed.version, "4.8")) || isFableOrMythos(parsed.kind);
+}
+
+export function isAnthropicFableOrMythosModel(modelId: string): boolean {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	return parsed !== null && isFableOrMythos(parsed.kind);
 }

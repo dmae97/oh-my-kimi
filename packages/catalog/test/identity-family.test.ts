@@ -37,7 +37,11 @@ describe("supportsAdaptiveThinkingDisplay", () => {
 		expect(supportsAdaptiveThinkingDisplay("claude-fable-5")).toBe(true);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4-7")).toBe(true);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-5-0")).toBe(true);
+		// Dotted and dashed version separators are equivalent.
+		expect(supportsAdaptiveThinkingDisplay("claude-opus-4.7")).toBe(true);
+		expect(supportsAdaptiveThinkingDisplay("anthropic/claude-opus-4.8")).toBe(true);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4-6")).toBe(false);
+		expect(supportsAdaptiveThinkingDisplay("claude-opus-4.6")).toBe(false);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4-20250514")).toBe(false);
 		expect(supportsAdaptiveThinkingDisplay("claude-sonnet-4-6")).toBe(false);
 	});

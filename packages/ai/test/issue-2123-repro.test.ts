@@ -36,7 +36,10 @@ const OPUS_46_OAUTH: Model<"anthropic-messages"> = buildModel({
 	cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 	contextWindow: 1_000_000,
 	maxTokens: 128_000,
-	thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
+	thinking: {
+		mode: "anthropic-adaptive",
+		efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+	},
 });
 
 const todoTool: Tool = {

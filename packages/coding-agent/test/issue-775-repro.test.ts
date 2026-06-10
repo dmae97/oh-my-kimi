@@ -71,8 +71,7 @@ describe("issue #775: per-model defaultLevel", () => {
 			...opus,
 			thinking: {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Low,
-				maxLevel: Effort.XHigh,
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				defaultLevel: Effort.XHigh,
 			},
 		};

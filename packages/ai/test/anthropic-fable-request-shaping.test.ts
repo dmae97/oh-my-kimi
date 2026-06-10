@@ -24,7 +24,10 @@ function adaptiveModel(id: string): Model<"anthropic-messages"> {
 	const base = makeAnthropicModel(id);
 	return buildModel({
 		...base,
-		thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
+		thinking: {
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
 		compat: base.compatConfig,
 	} as ModelSpec<"anthropic-messages">);
 }

@@ -131,7 +131,10 @@ describe("issue #2113 — moonshot kimi-k2.6 discovery and wire format", () => {
 		const k26 = byId.get("kimi-k2.6");
 		expect(k26?.reasoning).toBe(true);
 		expect(k26?.input).toEqual(["text", "image"]);
-		expect(k26?.thinking).toEqual({ mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High });
+		expect(k26?.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+		});
 
 		const thinkingOnly = byId.get("kimi-k2-thinking");
 		expect(thinkingOnly?.reasoning).toBe(true);

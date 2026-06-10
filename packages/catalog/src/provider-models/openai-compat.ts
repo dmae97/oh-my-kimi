@@ -151,9 +151,8 @@ function buildAnthropicReferenceMap(
  * Seeded into model generation so the bundled catalog is never gated on
  * models.dev's update cadence; deduped behind upstream catalog / models.dev
  * entries once those appear. Token limits and pricing are pinned
- * authoritatively in
- * `applyAnthropicCatalogPolicy`, and `thinking` is derived by
- * `refreshModelThinking` during generation.
+ * authoritatively in `applyAnthropicCatalogPolicy`, and `thinking` is re-baked
+ * by the generator's policy pass (scripts/generated-policies.ts).
  */
 export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-messages">[] = [
 	{
@@ -343,11 +342,7 @@ function getOllamaThinkingConfig(capabilities: string[] | undefined): ThinkingCo
 	if (!capabilities?.includes("thinking")) {
 		return undefined;
 	}
-	return {
-		mode: "effort",
-		minLevel: Effort.Minimal,
-		maxLevel: Effort.High,
-	};
+	return { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] };
 }
 
 /**
@@ -2076,7 +2071,7 @@ export function moonshotModelManagerOptions(
 							thinking:
 								model.thinking ??
 								(isKimiK2Reasoning
-									? { mode: "effort", minLevel: Effort.Minimal, maxLevel: Effort.High }
+									? { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] }
 									: undefined),
 						};
 					},

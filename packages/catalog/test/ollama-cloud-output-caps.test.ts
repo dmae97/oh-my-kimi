@@ -14,6 +14,7 @@ const cloudModel: Model<"ollama-chat"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 128_000,
 	maxTokens: 8_192,
+	compat: undefined,
 };
 
 function createNdjsonResponse(lines: unknown[]): Response {

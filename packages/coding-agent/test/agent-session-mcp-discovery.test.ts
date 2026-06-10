@@ -699,7 +699,7 @@ describe("AgentSession MCP discovery", () => {
 		const reasoningModel: Model<"openai-responses"> = {
 			...createModel(),
 			reasoning: true,
-			thinking: { mode: "effort", minLevel: Effort.Medium, maxLevel: Effort.Medium },
+			thinking: { mode: "effort", efforts: [Effort.Medium] },
 		};
 
 		const agent = new Agent({

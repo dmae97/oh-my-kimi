@@ -539,10 +539,11 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
  * - Explicit effort → respect user choice → clamped per model.
  *
  * The clamp routes through `clampThinkingLevelForModel`, which returns
- * `undefined` for models with `compat.supportsReasoningEffort: false`
- * (e.g. `xai-oauth/grok-build`). That `undefined` then flows through to the
- * openai-responses mapper where `modelOmitsReasoningEffort` short-circuits
- * the wire param — no `requireSupportedEffort` throw.
+ * `undefined` for reasoning models without a thinking config — the build-time
+ * encoding of `compat.supportsReasoningEffort: false` (e.g.
+ * `xai-oauth/grok-build`). That `undefined` then flows through to the
+ * openai-responses mapper, which omits the wire param — no
+ * `requireSupportedEffort` throw.
  */
 function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined): Effort | undefined {
 	if (level === ThinkingLevel.Off) return undefined;

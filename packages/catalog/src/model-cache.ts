@@ -7,9 +7,9 @@ import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v3 rows predating the
-// resolved-compat redesign already carried sparse compat, so they stay valid.
-const CACHE_SCHEMA_VERSION = 3;
+// the model manager rebuilds via `buildModel` on load. v4 invalidates rows
+// carrying the pre-efforts ThinkingConfig shape (minLevel/maxLevel/levels).
+const CACHE_SCHEMA_VERSION = 4;
 
 interface CacheRow {
 	provider_id: string;

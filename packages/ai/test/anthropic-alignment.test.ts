@@ -376,7 +376,10 @@ describe("Anthropic request fingerprint alignment", () => {
 			...ANTHROPIC_MODEL_SPEC,
 			id: "claude-opus-4-8-20260528",
 			name: "Claude Opus 4.8",
-			thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
 		});
 
 		await streamAnthropic(
@@ -1677,8 +1680,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					minLevel: Effort.Minimal,
-					maxLevel: Effort.XHigh,
+					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				},
 			}),
 			{
@@ -1717,8 +1719,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					minLevel: Effort.Minimal,
-					maxLevel: Effort.XHigh,
+					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				},
 			}),
 			{
@@ -1745,8 +1746,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					minLevel: Effort.Minimal,
-					maxLevel: Effort.XHigh,
+					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				},
 			}),
 			{
@@ -1777,8 +1777,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					minLevel: Effort.Minimal,
-					maxLevel: Effort.XHigh,
+					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				},
 			}),
 			{
@@ -1811,8 +1810,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					minLevel: Effort.Minimal,
-					maxLevel: Effort.XHigh,
+					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				},
 			}),
 			{
@@ -1857,8 +1855,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					maxTokens: 128_000,
 					thinking: {
 						mode: "anthropic-adaptive",
-						minLevel: Effort.Minimal,
-						maxLevel: Effort.XHigh,
+						efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 					},
 				}),
 				{

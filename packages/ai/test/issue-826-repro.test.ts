@@ -83,8 +83,7 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 			reasoning: true,
 			thinking: {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Minimal,
-				maxLevel: Effort.XHigh,
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 			},
 			compat: baseModel.compatConfig,
 		} as ModelSpec<"anthropic-messages">);
@@ -110,8 +109,7 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 			reasoning: true,
 			thinking: {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Minimal,
-				maxLevel: Effort.XHigh,
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 			},
 			compat: { ...baseModel.compatConfig, disableAdaptiveThinking: true },
 		} as ModelSpec<"anthropic-messages">);

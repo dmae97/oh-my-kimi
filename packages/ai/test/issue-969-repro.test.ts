@@ -27,8 +27,7 @@ function customOpenAICompatModel(): Model<"openai-completions"> {
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

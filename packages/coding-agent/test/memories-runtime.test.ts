@@ -238,7 +238,7 @@ describe("memories runtime", () => {
 		const constrainedModel: Model = {
 			...fx.model,
 			reasoning: true,
-			thinking: { mode: "effort", minLevel: Effort.High, maxLevel: Effort.XHigh },
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.XHigh] },
 		};
 		fx.session.model = constrainedModel;
 		fx.modelRegistry.find = vi.fn(() => constrainedModel);

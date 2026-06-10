@@ -3,7 +3,6 @@ import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-ca
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
-	modelOmitsReasoningEffort,
 	requireSupportedEffort,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
@@ -654,14 +653,15 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 ): Effort | undefined {
 	const reasoning = options?.reasoning;
 	if (!reasoning || !model.reasoning) return undefined;
-	// Models with compat.supportsReasoningEffort: false reason natively but
-	// reject the wire effort param. The wire-side omitReasoningEffort gate
-	// (providers/xai-responses.ts:78) is the actual strip; returning
-	// undefined here avoids a redundant requireSupportedEffort throw that
-	// would defeat the gate and surface a confusing
-	// "Compaction failed: Thinking effort high is not supported by..." to
-	// the user.
-	if (modelOmitsReasoningEffort(model)) return undefined;
+	// Models that reason natively but expose no effort dial carry
+	// `thinking: undefined` (baked at build time from
+	// `compat.supportsReasoningEffort: false` on openai-responses*). The
+	// wire-side omitReasoningEffort gate (providers/xai-responses.ts:78) is the
+	// actual strip; returning undefined here avoids a redundant
+	// requireSupportedEffort throw that would defeat the gate and surface a
+	// confusing "Compaction failed: Thinking effort high is not supported
+	// by..." to the user.
+	if (!model.thinking) return undefined;
 	return requireSupportedEffort(model, reasoning);
 }
 
@@ -869,7 +869,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinking: {
 						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(googleModel, effort),
+						level: mapEffortToGoogleThinkingLevel(effort),
 					},
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});
@@ -903,7 +903,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinking: {
 						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(model, effort),
+						level: mapEffortToGoogleThinkingLevel(effort),
 					},
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});
@@ -956,7 +956,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinking: {
 						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(geminiModel, effort),
+						level: mapEffortToGoogleThinkingLevel(effort),
 					},
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});

@@ -5,7 +5,11 @@
  * classification, with explicit spec overrides assigned on top.
  */
 import { modelMatchesHost } from "../hosts";
-import { isAnthropicFableOrMythosModel, supportsMidConversationSystemMessages } from "../model-thinking";
+import {
+	hasOpus47ApiRestrictions,
+	isAnthropicFableOrMythosModel,
+	supportsMidConversationSystemMessages,
+} from "../identity/family";
 import type { ModelSpec, ResolvedAnthropicCompat } from "../types";
 import { applyCompatOverrides } from "./apply";
 
@@ -44,6 +48,8 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// supported model id.
 		supportsMidConversationSystem: official && supportsMidConversationSystemMessages(spec.id),
 		supportsForcedToolChoice: !isAnthropicFableOrMythosModel(spec.id),
+		// Opus 4.7+ and Fable/Mythos reject temperature/top_p/top_k with a 400.
+		supportsSamplingParams: !hasOpus47ApiRestrictions(spec.id),
 		// Z.AI workaround (issue #814): its proxy deserializes tool_result blocks
 		// into a class that reads `.id`.
 		requiresToolResultId: isZai,

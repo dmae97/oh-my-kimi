@@ -351,8 +351,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(qwen?.reasoning).toBe(true);
 		expect(qwen?.thinking).toEqual({
 			mode: "effort",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		});
 
 		const llama = registry.find("ollama", "llama3.2:3b");

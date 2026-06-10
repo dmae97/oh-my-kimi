@@ -8,6 +8,7 @@
  * never detect, resolve, or allocate.
  */
 import { hostMatchesUrl, modelMatchesHost } from "../hosts";
+import { bareModelId, isFableOrMythos, parseAnthropicModel, semverGte } from "../identity/classify";
 import {
 	isAnthropicNamespacedModelId,
 	isClaudeModelId,
@@ -17,6 +18,7 @@ import {
 	isMimoModelIdOrName,
 	isQwenModelId,
 } from "../identity/family";
+import { ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER, ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER } from "../model-thinking";
 import type { ModelSpec, OpenAICompat, ResolvedOpenAICompat, ResolvedOpenAIResponsesCompat } from "../types";
 import { applyCompatOverrides } from "./apply";
 
@@ -73,30 +75,17 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 function getOpenRouterAnthropicReasoningEffortMap(
 	modelId: string,
 ): Partial<Record<OpenAIReasoningEffort, string>> | undefined {
-	const match = /(?:^|\/)claude-(opus|fable|mythos)-(\d{1,2})(?:[.-](\d{1,2}))?/.exec(modelId);
-	if (!match) return undefined;
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	if (!parsed) return undefined;
+	// Adaptive efforts on OpenRouter's completions front: Fable/Mythos and
+	// Opus 4.6+ only — Sonnet stays on the plain effort vocabulary there.
+	const isOpusAdaptive = parsed.kind === "opus" && semverGte(parsed.version, "4.6");
+	if (!isFableOrMythos(parsed.kind) && !isOpusAdaptive) return undefined;
 
-	const kind = match[1];
-	const major = Number(match[2]);
-	const minor = Number(match[3] ?? 0);
-	const isFableOrMythos = kind === "fable" || kind === "mythos";
-	const isOpusAdaptive = kind === "opus" && (major > 4 || (major === 4 && minor >= 6));
-	if (!isFableOrMythos && !isOpusAdaptive) return undefined;
-
-	const hasRealXHigh = isFableOrMythos || major > 4 || (major === 4 && minor >= 7);
-	if (hasRealXHigh) {
-		return {
-			minimal: "low",
-			low: "medium",
-			medium: "high",
-			high: "xhigh",
-			xhigh: "max",
-		};
-	}
-	return {
-		minimal: "low",
-		xhigh: "max",
-	};
+	const hasRealXHigh = isFableOrMythos(parsed.kind) || semverGte(parsed.version, "4.7");
+	return (hasRealXHigh ? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER : ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER) as Partial<
+		Record<OpenAIReasoningEffort, string>
+	>;
 }
 
 /**
