@@ -641,6 +641,56 @@ interface AskRenderArgs {
 	}>;
 }
 
+/**
+ * Coerce an untrusted option list (streamed or model-mangled call args) into
+ * well-formed render options. Bare strings become labels; entries without a
+ * string label are dropped.
+ */
+function normalizeRenderOptions(raw: unknown): AskRenderOption[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: AskRenderOption[] = [];
+	for (const entry of raw) {
+		if (typeof entry === "string") {
+			out.push({ label: entry });
+			continue;
+		}
+		if (!entry || typeof entry !== "object") continue;
+		const { label, description } = entry as Partial<AskRenderOption>;
+		if (typeof label !== "string") continue;
+		out.push(typeof description === "string" ? { label, description } : { label });
+	}
+	return out;
+}
+
+/**
+ * Coerce untrusted `questions` call args into a renderable array. Models
+ * occasionally double-encode the array as a JSON string — a bare string passes
+ * a truthy `.length` check but has no `.map`, which used to crash the TUI
+ * render loop. Partially streamed args can also be missing fields.
+ */
+function normalizeRenderQuestions(raw: unknown): NonNullable<AskRenderArgs["questions"]> | undefined {
+	if (typeof raw === "string") {
+		try {
+			raw = JSON.parse(raw);
+		} catch {
+			return undefined;
+		}
+	}
+	if (!Array.isArray(raw)) return undefined;
+	const out: NonNullable<AskRenderArgs["questions"]> = [];
+	for (const entry of raw) {
+		if (!entry || typeof entry !== "object") continue;
+		const q = entry as Partial<NonNullable<AskRenderArgs["questions"]>[number]>;
+		out.push({
+			id: typeof q.id === "string" ? q.id : "?",
+			question: typeof q.question === "string" ? q.question : "",
+			options: normalizeRenderOptions(q.options) ?? [],
+			multi: q.multi === true,
+		});
+	}
+	return out;
+}
+
 /** Render a custom free-text answer as a status line plus indented continuation rows. */
 function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 	const lines = customInput.split("\n");
@@ -724,8 +774,10 @@ export const askToolRenderer = {
 			new Markdown(text, 1, 0, mdTheme, accentStyle).render(Math.max(1, width - 3 + 1));
 
 		// Multi-part questions: one divider-labelled section per question.
-		if (args.questions && args.questions.length > 0) {
-			const questions = args.questions;
+		// Call args are untrusted (partially streamed or model-mangled) and a
+		// throw here takes down the whole TUI render loop — normalize first.
+		const questions = normalizeRenderQuestions(args.questions);
+		if (questions && questions.length > 0) {
 			const header = `${label} ${uiTheme.fg("muted", `${questions.length} questions`)}`;
 			return framedBlock(uiTheme, width => {
 				const sections = questions.map(q => {
@@ -742,7 +794,7 @@ export const askToolRenderer = {
 		}
 
 		// Single question
-		if (!args.question) {
+		if (typeof args.question !== "string" || !args.question) {
 			const errorLine = formatErrorMessage("No question provided", uiTheme);
 			return framedBlock(uiTheme, width => ({
 				header: errorLine,
@@ -756,9 +808,9 @@ export const askToolRenderer = {
 		const question = args.question;
 		const meta: string[] = [];
 		if (args.multi) meta.push("multi");
-		if (args.options?.length) meta.push(`options:${args.options.length}`);
+		const questionOptions = normalizeRenderOptions(args.options);
+		if (questionOptions?.length) meta.push(`options:${questionOptions.length}`);
 		const header = `${label}${formatMeta(meta, uiTheme)}`;
-		const questionOptions = args.options;
 		const multi = args.multi;
 		return framedBlock(uiTheme, width => {
 			const bodyLines = md(question, width);

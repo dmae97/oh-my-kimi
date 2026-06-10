@@ -1237,3 +1237,59 @@ describe("AskTool option markers", () => {
 		expect(text).not.toContain(theme!.radio.selected);
 	});
 });
+
+describe("askToolRenderer malformed call args", () => {
+	it("renders double-encoded questions string instead of crashing the TUI", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		// Models occasionally JSON-encode the questions array as a string; a bare
+		// string passes a truthy `.length` check but has no `.map` (TUI crash).
+		const doubleEncoded = JSON.stringify([
+			{ id: "q1", question: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] },
+		]);
+		const rendered = askToolRenderer.renderCall(
+			{ questions: doubleEncoded } as never,
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const text = stripAnsi(rendered.render(120).join("\n"));
+		expect(text).toContain("[q1]");
+		expect(text).toContain("Pick one");
+		expect(text).toContain("Alpha");
+	});
+
+	it("falls back to the error frame for unparseable questions without throwing", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		for (const questions of ["[{trunc", 42, { 0: { id: "x" } }]) {
+			const rendered = askToolRenderer.renderCall(
+				{ questions } as never,
+				{ expanded: true, isPartial: true },
+				theme!,
+			);
+			const text = stripAnsi(rendered.render(120).join("\n"));
+			expect(text).toContain("No question provided");
+		}
+	});
+
+	it("drops malformed question entries and option items while keeping valid ones", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const rendered = askToolRenderer.renderCall(
+			{
+				questions: [
+					null,
+					"garbage",
+					{ id: "ok", question: "Real question", options: ["BareString", { label: "Proper" }, { nope: 1 }, 7] },
+				],
+			} as never,
+			{ expanded: true, isPartial: true },
+			theme!,
+		);
+		const text = stripAnsi(rendered.render(120).join("\n"));
+		expect(text).toContain("[ok]");
+		expect(text).toContain("Real question");
+		expect(text).toContain("BareString");
+		expect(text).toContain("Proper");
+	});
+});
