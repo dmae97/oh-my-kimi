@@ -539,6 +539,23 @@ export function isDefinitiveOAuthFailure(errorMsg: string): boolean {
 	return false;
 }
 
+/**
+ * Outcome of {@link AuthStorage.markUsageLimitReached}.
+ *
+ * `switched` is `true` when an unblocked same-type sibling credential is
+ * available right now, so the caller can retry immediately and the next
+ * `getApiKey` will hand it out. When `false`, `retryAtMs` (epoch ms) carries
+ * the earliest moment any same-type sibling's temporary block expires —
+ * callers should prefer waiting until then over the provider's (often
+ * multi-hour) retry-after when it is sooner. `retryAtMs` is `undefined` when
+ * no sibling credentials exist at all, or when the session has no tracked
+ * credential to rotate away from.
+ */
+export interface UsageLimitMarkResult {
+	switched: boolean;
+	retryAtMs?: number;
+}
+
 type UsageCacheEntry<T> = {
 	value: T;
 	expiresAt: number;
@@ -2451,15 +2468,17 @@ export class AuthStorage {
 	/**
 	 * Marks the current session's credential as temporarily blocked due to usage limits.
 	 * Uses usage reports to determine accurate reset time when available.
-	 * Returns true if a credential was blocked, enabling automatic fallback to the next credential.
+	 * Returns whether a sibling credential is available now; when none is, also
+	 * reports the earliest time a blocked sibling becomes available again so
+	 * callers can wait for the sibling instead of the provider's full window.
 	 */
 	async markUsageLimitReached(
 		provider: string,
 		sessionId: string | undefined,
 		options?: { retryAfterMs?: number; baseUrl?: string; signal?: AbortSignal },
-	): Promise<boolean> {
+	): Promise<UsageLimitMarkResult> {
 		const sessionCredential = this.#getSessionCredential(provider, sessionId);
-		if (!sessionCredential) return false;
+		if (!sessionCredential) return { switched: false };
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
 		const now = Date.now();
@@ -2487,7 +2506,13 @@ export class AuthStorage {
 					entry.credential.type === sessionCredential.type && entry.index !== sessionCredential.index,
 			);
 
-		return remainingCredentials.some(candidate => !this.#isCredentialBlocked(providerKey, candidate.index));
+		let retryAtMs: number | undefined;
+		for (const candidate of remainingCredentials) {
+			const candidateBlockedUntil = this.#getCredentialBlockedUntil(providerKey, candidate.index);
+			if (candidateBlockedUntil === undefined) return { switched: true };
+			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
+		}
+		return { switched: false, retryAtMs };
 	}
 
 	#resolveWindowResetAt(window: UsageLimit["window"]): number | undefined {
@@ -3456,7 +3481,7 @@ export class AuthStorage {
 		const error = options?.error;
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		if (message && isUsageLimitError(message)) {
-			return this.markUsageLimitReached(provider, sessionId, { signal: options?.signal });
+			return (await this.markUsageLimitReached(provider, sessionId, { signal: options?.signal })).switched;
 		}
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);

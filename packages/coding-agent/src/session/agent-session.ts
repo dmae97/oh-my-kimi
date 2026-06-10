@@ -287,6 +287,11 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
 const EMPTY_STOP_MAX_RETRIES = 3;
+/**
+ * Slack added past a sibling credential's block expiry before retrying, so
+ * the next getApiKey lands after the block has actually lapsed.
+ */
+const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
 const NON_WHITESPACE_RE = /\S/;
 
 function hasNonWhitespace(value: string): boolean {
@@ -8310,10 +8315,13 @@ export class AgentSession {
 		let delayMs = retrySettings.baseDelayMs * 2 ** (this.#retryAttempt - 1);
 		let switchedCredential = false;
 		let switchedModel = false;
+		// Set when a usage-limit error pinned the wait to credential
+		// availability — suppresses the generic retry-after bump below.
+		let usageLimitWaitMs: number | undefined;
 
 		if (this.model && isUsageLimitError(errorMessage)) {
 			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
-			const switched = await this.#modelRegistry.authStorage.markUsageLimitReached(
+			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
 				this.sessionId,
 				{
@@ -8321,12 +8329,28 @@ export class AgentSession {
 					baseUrl: this.model.baseUrl,
 				},
 			);
-			if (switched) {
+			if (outcome.switched) {
 				switchedCredential = true;
 				delayMs = 0;
-			} else if (retryAfterMs > delayMs) {
-				// No more accounts to switch to — wait out the backoff
-				delayMs = retryAfterMs;
+			} else {
+				// No sibling credential is usable right now. Wait for whichever
+				// comes first: the provider's retry-after window for the current
+				// account, or the earliest moment a temporarily blocked sibling
+				// frees up (e.g. a 60s post-401 block or a 5-min usage-probe
+				// block) — the next attempt's getApiKey re-ranks and picks it up.
+				// Without this, one short-lived sibling block escalates a
+				// recoverable situation into the provider's multi-hour wait and
+				// trips the fail-fast cap below.
+				usageLimitWaitMs = retryAfterMs;
+				if (outcome.retryAtMs !== undefined) {
+					const siblingWaitMs = Math.max(0, outcome.retryAtMs - Date.now()) + SIBLING_UNBLOCK_BUFFER_MS;
+					if (siblingWaitMs < usageLimitWaitMs) {
+						usageLimitWaitMs = siblingWaitMs;
+					}
+				}
+				if (usageLimitWaitMs > delayMs) {
+					delayMs = usageLimitWaitMs;
+				}
 			}
 		}
 
@@ -8338,7 +8362,7 @@ export class AgentSession {
 			}
 			if (switchedModel) {
 				delayMs = 0;
-			} else if (parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
+			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
 		}

@@ -315,7 +315,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 	const message = error instanceof Error ? error.message : String(error);
 	if (isUsageLimitError(message)) {
 		const retryAfterMs = extractRetryHint(undefined, message);
-		const switched = await storage.markUsageLimitReached(provider, sessionId, {
+		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
 			retryAfterMs,
 			baseUrl: model.baseUrl,
 			signal,
@@ -326,6 +326,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 			peer,
 			switched,
 			retryAfterMs,
+			retryAtMs,
 			error: message,
 		});
 		if (!switched) return undefined;
