@@ -438,7 +438,7 @@ class TreeList implements Component {
 		}
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 
 		if (this.#filteredNodes.length === 0) {
@@ -835,7 +835,7 @@ class SearchLine implements Component {
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const query = this.treeList.getSearchQuery();
 		if (query) {
 			return [truncateToWidth(`  ${theme.fg("muted", "Search:")} ${theme.fg("accent", query)}`, width)];
@@ -864,7 +864,7 @@ class LabelInput implements Component {
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 		const indent = "  ";
 		const availableWidth = width - indent.length;

@@ -39,7 +39,7 @@ export class Loader extends Text {
 		this.start();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines = ["", ...super.render(width)];
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];

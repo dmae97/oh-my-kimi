@@ -234,7 +234,7 @@ class BashInteractiveOverlayComponent implements Component {
 		}
 		return visibleLines;
 	}
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const safeWidth = Math.max(20, width);
 		const innerWidth = Math.max(1, safeWidth - 2);
 		const maxOverlayRows = Math.max(5, Math.floor(this.getTerminalRows() * 0.8));

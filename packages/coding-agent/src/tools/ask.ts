@@ -785,8 +785,11 @@ export const askToolRenderer = {
 					if (q.multi) meta.push("multi");
 					if (q.options?.length) meta.push(`options:${q.options.length}`);
 					const metaStr = meta.length > 0 ? uiTheme.fg("dim", ` · ${meta.join(" · ")}`) : "";
-					const lines = md(q.question, width);
-					if (q.options?.length) lines.push(...renderQuestionOptionLines(uiTheme, mdTheme, q.options, q.multi));
+					// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
+					const mdLines = md(q.question, width);
+					const lines = q.options?.length
+						? [...mdLines, ...renderQuestionOptionLines(uiTheme, mdTheme, q.options, q.multi)]
+						: mdLines;
 					return { label: `${uiTheme.fg("dim", `[${q.id}]`)}${metaStr}`, lines };
 				});
 				return { header, sections, state: "pending", borderColor: "borderMuted", width };
@@ -813,9 +816,11 @@ export const askToolRenderer = {
 		const header = `${label}${formatMeta(meta, uiTheme)}`;
 		const multi = args.multi;
 		return framedBlock(uiTheme, width => {
-			const bodyLines = md(question, width);
-			if (questionOptions?.length)
-				bodyLines.push(...renderQuestionOptionLines(uiTheme, mdTheme, questionOptions, multi));
+			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
+			const mdLines = md(question, width);
+			const bodyLines = questionOptions?.length
+				? [...mdLines, ...renderQuestionOptionLines(uiTheme, mdTheme, questionOptions, multi)]
+				: mdLines;
 			return {
 				header,
 				sections: bodyLines.length > 0 ? [{ lines: bodyLines }] : [],
@@ -861,10 +866,11 @@ export const askToolRenderer = {
 			);
 			return framedBlock(uiTheme, width => {
 				const sections = results.map(r => {
-					const lines = md(r.question, width);
-					lines.push(
+					// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
+					const lines = [
+						...md(r.question, width),
 						...renderAnswerOptionLines(uiTheme, mdTheme, r.options, r.selectedOptions, r.multi, r.customInput),
-					);
+					];
 					return { label: uiTheme.fg("dim", `[${r.id}]`), lines };
 				});
 				return {
@@ -899,8 +905,11 @@ export const askToolRenderer = {
 		const dCustom = details.customInput;
 		const dTimedOut = details.timedOut;
 		return framedBlock(uiTheme, width => {
-			const bodyLines = md(question, width);
-			bodyLines.push(...renderAnswerOptionLines(uiTheme, mdTheme, dOptions, dSelected, dMulti, dCustom));
+			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
+			const bodyLines = [
+				...md(question, width),
+				...renderAnswerOptionLines(uiTheme, mdTheme, dOptions, dSelected, dMulti, dCustom),
+			];
 			if (dTimedOut) {
 				// Distinguish auto-selection from a real user choice in the transcript.
 				bodyLines.push(uiTheme.fg("dim", "auto-selected after timeout — not a user choice"));

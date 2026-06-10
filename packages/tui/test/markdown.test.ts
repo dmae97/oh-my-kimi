@@ -1241,27 +1241,22 @@ describe("Module-level LRU render cache", () => {
 		expect(lines2).toEqual(lines1);
 	});
 
-	it("returns caller-owned arrays from L1 and L2 cache hits", () => {
+	it("returns the same array reference from L1 and L2 cache hits", () => {
 		clearRenderCache();
-		const text = "Cache mutability sentinel";
+		const text = "Cache identity sentinel";
 		const width = 80;
 		const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
 
+		// L1: same instance, same text, same width → exact same reference.
+		// Reference identity is load-bearing: parents memoize their
+		// concatenation on it (Container/TUI skip work for stable refs).
 		const first = markdown.render(width);
-		const expected = [...first];
-		first.push("mutated first render");
+		expect(markdown.render(width)).toBe(first);
 
-		const l1Hit = markdown.render(width);
-		expect(l1Hit).toEqual(expected);
-		l1Hit.push("mutated L1 hit");
-		expect(markdown.render(width)).toEqual(expected);
-
+		// L2: a distinct instance with identical inputs shares the module-level
+		// cache entry — same reference, not just equal content.
 		const l2Markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
-		const l2Hit = l2Markdown.render(width);
-		expect(l2Hit).toEqual(expected);
-		l2Hit.push("mutated L2 hit");
-		expect(l2Markdown.render(width)).toEqual(expected);
-		expect(new Markdown(text, 0, 0, defaultMarkdownTheme).render(width)).toEqual(expected);
+		expect(l2Markdown.render(width)).toBe(first);
 	});
 });
 
@@ -1332,42 +1327,49 @@ describe("OSC 66 text-sizing headings", () => {
 	});
 });
 
-describe("Markdown.render cache ownership", () => {
-	// Regression: the ask tool renderer did `md(question).push(...optionLines)`,
-	// mutating Markdown's cached array in place. render() handed out the live L1
-	// (per-instance) and L2 (module-level, shared across instances) cache arrays,
-	// so every redraw re-pushed onto the same growing array (+N lines/frame). That
-	// inflated the chat block unboundedly and cascaded into native-scrollback
-	// duplication. render() must return a caller-owned copy so push/splice can
-	// never poison the cache or a future render.
+describe("Markdown.render reference stability", () => {
+	// History: render() used to return caller-owned copies because the ask tool
+	// renderer did `md(question).push(...optionLines)` and grew the shared cache
+	// array every frame. The contract is now the opposite — render() hands out
+	// the live cached array by reference (parents memoize on reference identity)
+	// and callers that decorate results must copy first; ask.ts was fixed to
+	// copy. These tests pin the reference-identity contract.
 	afterEach(() => clearRenderCache());
 
-	it("does not let a caller's mutation grow the next render (per-instance cache)", () => {
+	it("returns the identical reference for repeated renders of an unchanged instance", () => {
 		const md = new Markdown("Question text", 1, 0, defaultMarkdownTheme);
-		const baseline = md.render(40).length;
-		md.render(40).push("INJECTED-A", "INJECTED-B");
-		const after = md.render(40);
-		expect(after.length).toBe(baseline);
-		expect(after.some(line => line.includes("INJECTED"))).toBe(false);
+		const first = md.render(40);
+		expect(md.render(40)).toBe(first);
+		expect(md.render(40)).toBe(first);
 	});
 
-	it("does not let one instance's mutation leak into another via the shared L2 cache", () => {
+	it("shares one array across instances with identical inputs via the L2 cache", () => {
 		const a = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
 		const b = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
-		const baseline = b.render(40).length;
-		// `a` populates L2; mutating its result must not corrupt the entry `b` reads.
-		a.render(40).push("LEAKED-1", "LEAKED-2", "LEAKED-3");
-		const fromB = b.render(40);
-		expect(fromB.length).toBe(baseline);
-		expect(fromB.some(line => line.includes("LEAKED"))).toBe(false);
+		expect(b.render(40)).toBe(a.render(40));
 	});
 
-	it("stays stable across many mutate-then-render cycles (no accumulation)", () => {
-		const md = new Markdown("Pick one", 1, 0, defaultMarkdownTheme);
-		const baseline = md.render(40).length;
-		for (let i = 0; i < 25; i++) {
-			md.render(40).push(`OPT-${i}`);
-		}
-		expect(md.render(40).length).toBe(baseline);
+	it("returns a new reference with updated content after setText", () => {
+		const md = new Markdown("Before edit", 1, 0, defaultMarkdownTheme);
+		const before = md.render(40);
+		expect(before.some(line => stripVTControlCharacters(line).includes("Before edit"))).toBe(true);
+
+		md.setText("After edit");
+		const after = md.render(40);
+		expect(after).not.toBe(before);
+		expect(after.some(line => stripVTControlCharacters(line).includes("After edit"))).toBe(true);
+		expect(after.some(line => stripVTControlCharacters(line).includes("Before edit"))).toBe(false);
+
+		// Re-render after the change is stable again at the new reference.
+		expect(md.render(40)).toBe(after);
+	});
+
+	it("returns a different reference per width, each with correctly fitted rows", () => {
+		const md = new Markdown("Width sentinel content", 1, 0, defaultMarkdownTheme);
+		const narrow = md.render(30);
+		const wide = md.render(60);
+		expect(wide).not.toBe(narrow);
+		expect(narrow.every(line => visibleWidth(line) <= 30)).toBe(true);
+		expect(wide.every(line => visibleWidth(line) <= 60)).toBe(true);
 	});
 });

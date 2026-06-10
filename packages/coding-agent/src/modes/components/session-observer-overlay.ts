@@ -118,12 +118,12 @@ export class SessionObserverOverlayComponent extends Container {
 		return pool.sort((a, b) => b.lastUpdate - a.lastUpdate)[0];
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		return this.#renderViewer(width);
 	}
 
 	#setupViewer(): void {
-		this.children = [];
+		this.clear();
 		this.#scrollOffset = 0;
 		this.#selectedEntryIndex = 0;
 		this.#expandedEntries.clear();

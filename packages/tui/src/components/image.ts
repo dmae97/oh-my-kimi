@@ -266,7 +266,7 @@ export class Image implements Component {
 		this.#cachedWidth = undefined;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const hasProtocol = TERMINAL.imageProtocol != null;
 		// observe() must run on every pass — even a cache hit — so the image keeps
 		// its display-order slot in the budget. Only graphics-capable frames count

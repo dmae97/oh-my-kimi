@@ -235,8 +235,8 @@ describe("Image budget integration", () => {
 
 		// First pass lets the budget notice the overflow; the second applies the
 		// demotion (older image is observed first, so it is demoted first).
-		let olderLines: string[] = [];
-		let newerLines: string[] = [];
+		let olderLines: readonly string[] = [];
+		let newerLines: readonly string[] = [];
 		for (let i = 0; i < 2; i++) {
 			budget.beginPass();
 			olderLines = older.render(20);

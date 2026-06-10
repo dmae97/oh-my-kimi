@@ -137,7 +137,7 @@ export class ExtensionDashboard extends Container {
 		return Math.max(3, this.#computeBodyHeight() - 3);
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		// Rebuild when terminal geometry changes so the full-screen overlay
 		// re-fits on resize.
 		if (this.#terminalRows() !== this.#builtRows || this.#uiWidth() !== this.#builtCols) {
@@ -145,10 +145,13 @@ export class ExtensionDashboard extends Container {
 		}
 		const lines = super.render(width);
 		// Pad to the full viewport so the dashboard covers the screen instead of
-		// letting the transcript peek through below it.
+		// letting the transcript peek through below it. Copy before padding — the
+		// container's render result is component-owned and must not be mutated.
 		const rows = this.#terminalRows();
-		while (lines.length < rows) lines.push("");
-		return lines;
+		if (lines.length >= rows) return lines;
+		const padded = lines.slice();
+		while (padded.length < rows) padded.push("");
+		return padded;
 	}
 
 	#buildLayout(): void {
@@ -367,7 +370,7 @@ class TwoColumnBody implements Component {
 		private readonly maxHeight: number,
 	) {}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const leftWidth = Math.floor(width * 0.5);
 		const rightWidth = Math.max(0, width - leftWidth - 3);
 

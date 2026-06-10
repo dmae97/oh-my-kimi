@@ -769,7 +769,7 @@ export class StatusLineComponent implements Component {
 		};
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		// Only render hook statuses - main status is in editor's top border
 		const showHooks = this.#settings.showHookStatus ?? true;
 		if (!showHooks || this.#hookStatuses.size === 0) {

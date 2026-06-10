@@ -39,7 +39,13 @@ describe("WelcomeComponent fixed geometry", () => {
 		const heights = new Set<number>();
 		for (const sessionCount of [0, 1, 4, 6]) {
 			for (const lspCount of [0, 1, 4, 6]) {
-				const welcome = new WelcomeComponent("1.0.0", "Model", "provider", sessions(sessionCount), lspServers(lspCount));
+				const welcome = new WelcomeComponent(
+					"1.0.0",
+					"Model",
+					"provider",
+					sessions(sessionCount),
+					lspServers(lspCount),
+				);
 				heights.add(welcome.render(120).length);
 			}
 		}

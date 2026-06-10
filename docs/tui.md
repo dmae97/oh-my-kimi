@@ -25,12 +25,14 @@ If your extension/tool can run in non-interactive mode, guard with `ctx.hasUI` /
 
 ```ts
 export interface Component {
-  render(width: number): string[];
+  render(width: number): readonly string[];
   handleInput?(data: string): void;
   wantsKeyRelease?: boolean;
   invalidate?(): void;
 }
 ```
+
+Render results are component-owned and immutable to callers; a component that did not change should return the **same array reference** it returned last time (reference equality is what enables the renderer's memoization and row virtualization), and must return a new array whenever its content changed.
 
 `Focusable` is separate:
 
@@ -56,7 +58,7 @@ Minimal pattern:
 ```ts
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 
-render(width: number): string[] {
+render(width: number): readonly string[] {
   return this.lines.map(line => truncateToWidth(replaceTabs(line), width));
 }
 ```
@@ -218,7 +220,7 @@ class Picker implements Component {
     this.list.handleInput(data);
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.list
       .render(width)
       .map((line) => truncateToWidth(replaceTabs(line), width));

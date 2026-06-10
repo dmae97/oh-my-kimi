@@ -289,8 +289,9 @@ export class Markdown implements Component {
 	/** Number of spaces used to indent code block content. */
 	#codeBlockIndent: number;
 
-	// Cache for rendered output. Cached arrays are internal snapshots; render()
-	// returns caller-owned arrays because several renderers append surrounding rows.
+	// Cache for rendered output. Cached arrays are shared and returned by
+	// reference (render contract: results are component-owned and immutable to
+	// callers); the L2 LRU may hand the same array to multiple instances.
 	#cachedText?: string;
 	#cachedWidth?: number;
 	#cachedLines?: readonly string[];
@@ -326,11 +327,13 @@ export class Markdown implements Component {
 		this.#cachedLines = undefined;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		// L1: per-instance cache — fastest path for repeated renders of the same
 		// instance at the same width (e.g. resize debounce, repeated redraws).
+		// Returning the cached reference is load-bearing: parents memoize their
+		// concatenation on reference equality.
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
-			return this.#cachedLines.slice();
+			return this.#cachedLines;
 		}
 
 		// Calculate available width for content (subtract horizontal padding)
@@ -341,7 +344,7 @@ export class Markdown implements Component {
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
 			this.#cachedLines = EMPTY_RENDER_LINES;
-			return [];
+			return EMPTY_RENDER_LINES;
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
@@ -370,7 +373,7 @@ export class Markdown implements Component {
 				this.#cachedText = this.#text;
 				this.#cachedWidth = width;
 				this.#cachedLines = cached;
-				return cached.slice();
+				return cached;
 			}
 		}
 
@@ -452,17 +455,17 @@ export class Markdown implements Component {
 		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
 		const result = rawResult.length > 0 ? rawResult : [""];
 
-		// Update caches with a private snapshot. The returned array remains owned by
-		// the caller, so push/splice by tool renderers cannot poison future redraws.
-		const cachedLines = result.slice();
+		// Update caches and hand the array out by reference. Callers must not
+		// mutate it (Component render contract); the L2 entry is shared across
+		// instances keyed on identical inputs.
 		this.#cachedText = this.#text;
 		this.#cachedWidth = width;
-		this.#cachedLines = cachedLines;
+		this.#cachedLines = result;
 
 		// Update L2 module-level LRU so future instances with the same key skip
 		// the marked.lexer + highlightCode (Rust FFI) work entirely.
 		if (cacheKey !== undefined) {
-			renderCache.set(cacheKey, cachedLines);
+			renderCache.set(cacheKey, result);
 		}
 
 		return result;

@@ -1163,7 +1163,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					: renderStatusLine({ icon: "pending", title: config.resolveTitle(args, options) }, uiTheme);
 			const outputBlock = new CachedOutputBlock();
 			return markFramedBlockComponent({
-				render: (width: number): string[] =>
+				render: (width: number): readonly string[] =>
 					outputBlock.render(
 						{
 							header,
@@ -1213,7 +1213,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const outputBlock = new CachedOutputBlock();
 
 			return markFramedBlockComponent({
-				render: (width: number): string[] => {
+				render: (width: number): readonly string[] => {
 					// REACTIVE: read mutable options at render time
 					const { renderContext } = options;
 					const expanded = renderContext?.expanded ?? options.expanded;

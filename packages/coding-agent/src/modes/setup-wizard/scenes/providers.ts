@@ -52,7 +52,7 @@ class ProvidersSceneController implements SetupSceneController {
 		tab.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		return [...this.#tabBar.render(width), "", ...this.#activeTab().render(width)];
 	}
 

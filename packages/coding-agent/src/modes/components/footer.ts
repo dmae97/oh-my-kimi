@@ -110,7 +110,7 @@ export class FooterComponent implements Component {
 		return this.#cachedBranch;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const state = this.session.state;
 
 		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)

@@ -126,7 +126,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		// resolves only when this chunk's recompute has updated the preview.
 		await component.whenPreviewSettled();
 
-		const trailingBlankRows = (rows: string[]): number => {
+		const trailingBlankRows = (rows: readonly string[]): number => {
 			let n = 0;
 			for (let i = rows.length - 1; i >= 0; i--) {
 				if (rows[i].replace(/\x1b\[[0-9;]*m/gu, "").trimEnd() === "") n++;
@@ -308,7 +308,7 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		resetSettingsForTest();
 	});
 
-	function renderPending(toolName: string, args: unknown): { lines: string[]; text: string } {
+	function renderPending(toolName: string, args: unknown): { lines: readonly string[]; text: string } {
 		const term = new VirtualTerminal(80, 20);
 		const tui = new TUI(term);
 		const component = new ToolExecutionComponent(toolName, args, {}, undefined, tui, process.cwd());

@@ -122,7 +122,7 @@ class OutlinedList extends Container {
 		this.invalidate();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const borderColor = (text: string) => theme.fg("border", text);
 		const horizontal = borderColor(theme.boxSharp.horizontal.repeat(Math.max(1, width)));
 		const innerWidth = Math.max(1, width - 2);
@@ -645,7 +645,7 @@ export class HookSelectorComponent extends Container {
 		}
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const renderWidth = Math.max(1, width);
 		if (this.#lastRenderWidth !== renderWidth) {
 			this.#lastRenderWidth = renderWidth;

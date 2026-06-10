@@ -4,7 +4,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, "");
-const hasLine = (lines: string[], n: number): boolean =>
+const hasLine = (lines: readonly string[], n: number): boolean =>
 	new RegExp(`\\bline ${n}\\b`).test(stripAnsi(lines.join("\n")));
 
 describe("write streaming preview honors Ctrl+O expansion", () => {

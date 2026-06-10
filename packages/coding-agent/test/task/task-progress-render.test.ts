@@ -27,7 +27,7 @@ function detailsFor(progress: AgentProgress): TaskToolDetails {
 	return { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: [progress] };
 }
 
-function findRow(component: { render: (w: number) => string[] }, needle: string): string {
+function findRow(component: { render: (w: number) => readonly string[] }, needle: string): string {
 	const row = component
 		.render(120)
 		.join("\n")

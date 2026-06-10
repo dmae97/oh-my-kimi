@@ -541,7 +541,7 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, expanded: boolean, t
  * the merged result frame so the brief stays visible for the whole task
  * lifecycle — not just until the first progress snapshot replaces the call view.
  */
-type TaskRenderSection = { lines: string[] };
+type TaskRenderSection = { lines: readonly string[] };
 type ContextSectionRenderer = (width: number) => TaskRenderSection;
 
 // Default output-block layout is: left border + one-cell content inset + right
@@ -578,7 +578,7 @@ export function renderCall(
 	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
 	const contextSectionRenderer = createContextSectionRenderer(args, theme);
 	return framedBlock(theme, width => {
-		const sections: Array<{ label?: string; lines: string[]; separator?: boolean }> = [];
+		const sections: Array<{ label?: string; lines: readonly string[]; separator?: boolean }> = [];
 
 		if (contextSectionRenderer) sections.push(contextSectionRenderer(width));
 

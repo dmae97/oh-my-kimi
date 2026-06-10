@@ -1193,7 +1193,7 @@ class StressDriver {
 		this.#tui = new TUI(this.#term, true, { renderScheduler: this.#scheduler });
 		this.#tui.addChild(this.#component);
 		const realRender = this.#tui.render.bind(this.#tui);
-		(this.#tui as { render: (width: number) => string[] }).render = (width: number) => {
+		(this.#tui as { render: (width: number) => readonly string[] }).render = (width: number) => {
 			const lines = realRender(width);
 			this.#shadowFrameGeometryChanged =
 				this.#shadowResizePending ||

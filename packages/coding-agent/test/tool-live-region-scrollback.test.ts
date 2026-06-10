@@ -41,14 +41,17 @@ function stripRows(rows: string[]): string {
 describe("transcript reactive commit boundary", () => {
 	it("treats growth before stable trailing chrome as append-only", async () => {
 		const chat = new TranscriptContainer();
-		const block = new MutableLiveBlock(["top", "stable", "bottom"]);
+		const head = markerLines("head-", 6);
+		const block = new MutableLiveBlock([...head, "bottom"]);
 		chat.addChild(block);
 
-		expect(chat.render(80)).toEqual(["top", "stable", "bottom"]);
+		expect(chat.render(80)).toEqual([...head, "bottom"]);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 
-		block.setLines(["top", "stable", "inserted", "bottom"]);
-		expect(chat.render(80)).toEqual(["top", "stable", "inserted", "bottom"]);
+		block.setLines([...head, "inserted", "bottom"]);
+		expect(chat.render(80)).toEqual([...head, "inserted", "bottom"]);
+		// Append-only earned; the body is offered up to the volatile-tail
+		// holdback (8 rows - 4).
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
 	});
 
@@ -69,15 +72,18 @@ describe("transcript reactive commit boundary", () => {
 
 	it("marks interior live re-layout volatile and defers commit", async () => {
 		const chat = new TranscriptContainer();
-		const block = new MutableLiveBlock(["top", "old", "bottom"]);
+		const mid = markerLines("mid-", 8);
+		const block = new MutableLiveBlock(["top", "old", ...mid]);
 		chat.addChild(block);
 
 		chat.render(80);
-		block.setLines(["top", "new", "extra", "bottom"]);
-		expect(chat.render(80)).toEqual(["top", "new", "extra", "bottom"]);
+		// A rewrite above the volatile-tail zone is a re-layout of
+		// committed-candidate content, no matter how small the gap.
+		block.setLines(["top", "new", ...mid]);
+		expect(chat.render(80)).toEqual(["top", "new", ...mid]);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 
-		block.setLines(["top", "new", "extra", "more", "bottom"]);
+		block.setLines(["top", "new", ...mid, "more"]);
 		chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 	});
@@ -89,48 +95,54 @@ describe("transcript reactive commit boundary", () => {
 		// paragraph wrapped onto a new row, the close moved to the new last row
 		// while the first row's visible cells stayed identical.
 		const sty = "\x1b[38;2;156;163;176m";
-		const block = new MutableLiveBlock([`${sty}alpha beta\x1b[39m   `]);
+		const head = markerLines("head-", 6);
+		const block = new MutableLiveBlock([...head, `${sty}alpha beta\x1b[39m   `]);
 		chat.addChild(block);
 
 		chat.render(80);
-		block.setLines([`${sty}alpha beta   `, `${sty}gamma\x1b[39m        `]);
+		block.setLines([...head, `${sty}alpha beta   `, `${sty}gamma\x1b[39m        `]);
 		chat.render(80);
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(2);
+		// Append-only earned despite the escape drift: offered up to the
+		// volatile-tail holdback (8 rows - 4).
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
 	});
 
 	it("treats a wrap-shrink of the trailing line as append-only", async () => {
 		const chat = new TranscriptContainer();
 		// A streamed token extends the last word past the wrap column, so the
 		// word moves down onto an appended row and the previous bottom line
-		// shrinks. The bottom line is on screen by definition, so this is not a
-		// rewrite of committed-candidate rows.
-		const block = new MutableLiveBlock(["para one", "foo bar baz"]);
+		// shrinks. The bottom line sits inside the volatile-tail zone, so this
+		// is not a rewrite of committed-candidate rows.
+		const head = markerLines("head-", 6);
+		const block = new MutableLiveBlock([...head, "foo bar baz"]);
 		chat.addChild(block);
 
 		chat.render(80);
-		block.setLines(["para one", "foo bar", "bazqux and more"]);
+		block.setLines([...head, "foo bar", "bazqux and more"]);
 		chat.render(80);
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(3);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
 	});
 
 	it("re-earns append-only after a one-off interior rewrite heals", async () => {
 		const chat = new TranscriptContainer();
-		const block = new MutableLiveBlock(["top", "old", "bottom"]);
+		const mid = markerLines("mid-", 8);
+		const block = new MutableLiveBlock(["top", "old", ...mid]);
 		chat.addChild(block);
 
 		chat.render(80);
 		// Interior rewrite (a codespan finalizing across a wrap) suspends commits.
-		block.setLines(["top", "new", "bottom"]);
+		block.setLines(["top", "new", ...mid]);
 		chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 
 		// Clean static frames re-arm the block...
 		for (let i = 0; i < 30; i++) chat.render(80);
-		// ...and the next append-shaped frame resumes committing the full block,
-		// so the pinned emitter can backfill the stalled gap contiguously.
-		block.setLines(["top", "new", "bottom", "appended"]);
+		// ...and the next append-shaped frame resumes committing up to the
+		// volatile-tail holdback (11 rows - 4), so the pinned emitter can
+		// backfill the stalled gap contiguously.
+		block.setLines(["top", "new", ...mid, "appended"]);
 		chat.render(80);
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(7);
 	});
 
 	it("keeps a periodically rewriting block (spinner) deferred", async () => {
@@ -160,17 +172,18 @@ describe("transcript reactive commit boundary", () => {
 		chat.addChild(block);
 		chat.render(80);
 
-		// The progress tail rewrites every frame, so append-only is never
-		// earned — but the head rows stay visibly identical the whole time.
+		// The progress tail rewrites every frame, but it lives inside the
+		// volatile-tail zone, so the block still classifies as clean streaming
+		// and the settled head is offered immediately — up to the holdback
+		// (9 rows - 4). Otherwise a tall block's scrolled-off head is neither
+		// committed nor on screen for the whole run — the transcript reads as
+		// cut off until the tool seals.
 		for (let i = 1; i <= 62; i++) {
 			block.setLines([...head, `⠋ agents running · ${i} tools`]);
 			chat.render(80);
 		}
 
-		// The settled head must become commit-safe; otherwise a tall block's
-		// scrolled-off head is neither committed nor on screen for the whole
-		// run — the transcript reads as cut off until the tool seals.
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(5);
 	});
 
 	it("retreats the settled-head boundary when a promoted row is rewritten", () => {
@@ -183,7 +196,8 @@ describe("transcript reactive commit boundary", () => {
 			block.setLines([...head, `tail-${i}`]);
 			chat.render(80);
 		}
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
+		// Offered up to the volatile-tail holdback (9 rows - 4).
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(5);
 
 		// A collapse/re-layout rewrites a promoted row: the boundary retreats
 		// to the divergence (the engine audit owns rows already committed).
@@ -210,53 +224,120 @@ describe("transcript reactive commit boundary", () => {
 		chat.addChild(block);
 		chat.render(80);
 
-		// Stagger slow updates with quiet stretches longer than the promotion
-		// window. The floor arms the first time an already-promoted row ticks
-		// and descends to each promoted ticker as it re-ticks; after the
-		// topmost ticker has re-ticked once post-promotion, the boundary must
-		// converge to the static head and never reach into the tree again.
-		let maxSafeEndAfterConvergence = 0;
+		// Tickers in the trailing volatile zone are never offered: the boundary
+		// converges to the holdback (11 rows - 4) and never reaches into the
+		// tree, so no tick can rewrite a committed row.
+		let maxSafeEnd = 0;
 		const counters: [number, number, number] = [0, 0, 0];
 		for (let tick = 0; tick < 9; tick++) {
 			counters[tick % 3] += 1;
 			block.setLines([...head, ...tree(...counters)]);
 			for (let frame = 0; frame < 40; frame++) {
 				chat.render(80);
-				const safeEnd = chat.getNativeScrollbackCommitSafeEnd() ?? 0;
-				if (tick >= 4) maxSafeEndAfterConvergence = Math.max(maxSafeEndAfterConvergence, safeEnd);
+				maxSafeEnd = Math.max(maxSafeEnd, chat.getNativeScrollbackCommitSafeEnd() ?? 0);
 			}
 		}
 
-		// The static head still commits; the slow-ticking tree stays deferred.
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(8);
-		expect(maxSafeEndAfterConvergence).toBe(8);
+		// The static head commits; the ticking tree stays deferred forever.
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(7);
+		expect(maxSafeEnd).toBe(7);
 	});
 
 	it("keeps the rewrite floor anchored across append growth below it", () => {
 		const chat = new TranscriptContainer();
+		// The ticker sits ABOVE the volatile-tail zone: 4 head rows, the ticker,
+		// then 6 rows of stable trailing chrome. Quiet stretches promote through
+		// it; its first tick is a genuine committed-candidate rewrite.
 		const head = markerLines("head-", 4);
-		const block = new MutableLiveBlock([...head, "ticker · 0"]);
+		const chrome = markerLines("chrome-", 6);
+		const block = new MutableLiveBlock([...head, "ticker · 0", ...chrome]);
 		chat.addChild(block);
 		chat.render(80);
 
-		// Let the ratchet over-promote through the quiet ticker, then tick it:
-		// the floor lands on the ticker row (index 4).
+		// Let the ratchet over-promote through the quiet ticker (up to the
+		// holdback: 11 rows - 4), then tick it: the floor lands on the ticker
+		// row (index 4) and the boundary retreats to it.
 		for (let i = 0; i < 70; i++) chat.render(80);
-		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(5);
-		block.setLines([...head, "ticker · 1"]);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(7);
+		block.setLines([...head, "ticker · 1", ...chrome]);
 		chat.render(80);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(4);
 
 		// Settled rows are inserted above the ticker (append above stable
 		// trailing chrome): the ticker shifts down and the floor must travel
 		// with it, or the new settled rows would be barred from promoting.
-		block.setLines([...head, "settled-a", "settled-b", "ticker · 1"]);
+		block.setLines([...head, "settled-a", "settled-b", "ticker · 1", ...chrome]);
 		for (let i = 0; i < 70; i++) chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(6);
 
 		// And the shifted ticker itself never re-promotes.
-		block.setLines([...head, "settled-a", "settled-b", "ticker · 2"]);
+		block.setLines([...head, "settled-a", "settled-b", "ticker · 2", ...chrome]);
 		for (let i = 0; i < 70; i++) chat.render(80);
 		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(6);
+	});
+
+	it("keeps committing through streaming markdown tail jitter (re-wrap + token resolution)", () => {
+		// Regression: real markdown streaming is not strictly append-only at the
+		// bottom — the in-flight paragraph re-wraps (rewriting its last 2 rows)
+		// and unclosed tokens (`**bold`) re-render when the closer arrives. The
+		// old classifier treated every such frame as a rewrite and tripped a
+		// 30-frame cooldown, so a continuously streaming reply never re-earned
+		// append-only: the boundary crawled via the ratchet (~12 rows committed
+		// out of 109) and the engine rewrote the window in place instead of
+		// scroll-appending ("replaces instead of appending").
+		const chat = new TranscriptContainer();
+		const block = new MutableLiveBlock(["row-0"]);
+		chat.addChild(block);
+		chat.render(80);
+
+		const rows: string[] = ["row-0"];
+		let maxLag = 0;
+		for (let i = 1; i <= 80; i++) {
+			if (i % 7 === 0 && rows.length >= 2) {
+				// Token resolution: the trailing row is replaced (not a prefix
+				// extension) — e.g. literal `**thin` re-rendering as bold text.
+				rows[rows.length - 1] = `resolved-${i}`;
+				rows.push(`row-${i}`);
+			} else if (i % 5 === 0 && rows.length >= 2) {
+				// Trailing-paragraph re-wrap: the last TWO rows rewrite while
+				// new rows append below.
+				rows[rows.length - 2] = `rewrapped-${i}`;
+				rows[rows.length - 1] = `rewrapped-tail-${i}`;
+				rows.push(`row-${i}`);
+			} else {
+				rows.push(`row-${i}`);
+			}
+			block.setLines(rows);
+			chat.render(80);
+			const safeEnd = chat.getNativeScrollbackCommitSafeEnd() ?? 0;
+			maxLag = Math.max(maxLag, rows.length - safeEnd);
+		}
+
+		// The boundary must track the stream the whole way: never more than the
+		// volatile-tail holdback behind the frame.
+		expect(maxLag).toBeLessThanOrEqual(4);
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBe(rows.length - 4);
+	});
+
+	it("defers a tall block whose head row keeps animating", () => {
+		// A streaming block with an animated glyph in its header (the old
+		// edit/write streaming shape) can never commit anything: commits are
+		// prefix-only, and the head row rewrites every glyph advance. The
+		// classifier must treat a head-row rewrite as volatile, not as
+		// tail-confined jitter, regardless of how small the divergence is.
+		const chat = new TranscriptContainer();
+		const body = markerLines("body-", 12);
+		const block = new MutableLiveBlock(["⠋ streaming", ...body]);
+		chat.addChild(block);
+		chat.render(80);
+
+		const glyphs = ["⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠋"];
+		for (const [i, glyph] of glyphs.entries()) {
+			block.setLines([`${glyph} streaming`, ...body, ...markerLines(`grow-${i}-`, i)]);
+			chat.render(80);
+			chat.render(80);
+		}
+		expect(chat.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
 	});
 });
 
@@ -308,6 +389,69 @@ describe("tool live-region scrollback", () => {
 			expect(bufferText).not.toContain("pending [1/1]");
 			expect(bufferText).toContain("const line9 = 9;");
 			expect(bufferText).toContain("const line19 = 19;");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("scroll-appends a tall expanded streaming write into native scrollback mid-stream", async () => {
+		if (process.platform === "win32") return;
+
+		// Regression for "streaming previews replace instead of appending": a
+		// tall expanded write preview must reach pane history WHILE args are
+		// still streaming — not only after the result lands. Two ingredients:
+		// the commit classifier tolerating streaming-edge jitter, and the
+		// renderer keeping the animated glyph out of the block's head row.
+		const term = new VirtualTerminal(120, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const fullContent = Array.from({ length: 60 }, (_unused, i) => `const streamed_line_${i} = ${i};`).join("\n");
+		const component = new ToolExecutionComponent(
+			"write",
+			{ file_path: "packages/coding-agent/test/probe.ts", content: "" },
+			{},
+			undefined,
+			tui,
+			process.cwd(),
+		);
+		component.setExpanded(true);
+
+		try {
+			chat.addChild(new Text("prior filler", 0, 0));
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			chat.addChild(component);
+			tui.requestRender();
+			await term.waitForRender();
+
+			const chunk = Math.ceil(fullContent.length / 12);
+			for (let off = chunk; off < fullContent.length; off += chunk) {
+				component.updateArgs({
+					file_path: "packages/coding-agent/test/probe.ts",
+					content: fullContent.slice(0, off),
+				});
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			// Still streaming: no result, args incomplete. The head of the
+			// preview must already be in the buffer (committed above the
+			// window), not cut off — and the viewport itself only shows the
+			// streaming tail.
+			const rows = term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+			const bufferText = rows.join("\n");
+			expect(bufferText).toContain("const streamed_line_0 = 0;");
+			expect(bufferText).toContain("const streamed_line_30 = 30;");
+			expect(rows.length).toBeGreaterThan(term.rows);
+			const viewportText = term
+				.getViewport()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			expect(viewportText).not.toContain("const streamed_line_0 = 0;");
 		} finally {
 			component.stopAnimation();
 			tui.stop();

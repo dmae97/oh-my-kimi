@@ -761,7 +761,7 @@ export function createCachedComponent(
 ): Component {
 	let cached: { key: bigint; lines: string[] } | undefined;
 	return {
-		render(width: number): string[] {
+		render(width: number): readonly string[] {
 			const expanded = getExpanded();
 			const key = new Hasher().bool(expanded).u32(width).digest();
 			if (cached?.key === key) return cached.lines;

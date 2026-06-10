@@ -121,14 +121,26 @@ const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
 
 /**
  * Component interface - all components must implement this
+ *
+ * Render contract: the returned array (and its rows) belongs to the component.
+ * Callers MUST NOT mutate it — components are allowed to return a cached array
+ * and will return the exact same reference for as long as their rendered
+ * content is unchanged. Conversely, a component MUST return a fresh array
+ * reference whenever its content changed; reference equality across two
+ * render() calls is the engine's proof that the rows are byte-identical
+ * (containers memoize their concatenation on it, and the TUI derives the
+ * frame's stable prefix from it). A component that mutates a previously
+ * returned array in place must implement {@link RenderStablePrefix} to declare
+ * which leading rows survived.
  */
 export interface Component {
 	/**
-	 * Render the component to lines for the given viewport width
-	 * @param width - Current viewport width
-	 * @returns Array of strings, each representing a line
+	 * Render the component to an array of physical rows at the given width.
+	 * The result is component-owned and `readonly` to the caller; an unchanged
+	 * component may (and should) return the same array reference it returned
+	 * last time.
 	 */
-	render(width: number): string[];
+	render(width: number): readonly string[];
 
 	/**
 	 * Optional handler for keyboard input when component has focus
@@ -185,6 +197,34 @@ function getNativeScrollbackLiveRegionStart(component: Component): number | unde
 
 function getNativeScrollbackCommitSafeEnd(component: Component): number | undefined {
 	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackCommitSafeEnd?.();
+}
+
+/**
+ * Opt-in stability report for components that mutate their returned render
+ * array in place across frames (instead of returning a fresh array per
+ * change). The engine reads it right after the component's `render()` returns:
+ * the report counts the leading rows of the just-returned array that are
+ * byte-identical to the array state the reader last observed. The engine uses
+ * it to reuse the composed frame's prefix — skipping marker extraction, line
+ * preparation, and the committed-prefix audit for those rows.
+ *
+ * Contract:
+ * - Reading CONSUMES the report: it re-bases the baseline to the current
+ *   array state. The accumulated count therefore covers every render since
+ *   the previous read, so out-of-band `render()` calls between engine frames
+ *   (an exporter walking the tree) can only lower the report, never inflate
+ *   it past what the engine actually has.
+ * - An implementer that cannot prove stability for a frame must lower the
+ *   accumulated count to 0 for that render.
+ * - Rows at or beyond the report may have been mutated in place; rows before
+ *   it must be the identical string values at the identical indices.
+ */
+export interface RenderStablePrefix {
+	getRenderStablePrefixRows(): number;
+}
+
+function getRenderStablePrefixRows(component: Component): number | undefined {
+	return (component as Component & Partial<RenderStablePrefix>).getRenderStablePrefixRows?.();
 }
 
 /**
@@ -338,22 +378,37 @@ export interface OverlayHandle {
 export class Container implements Component {
 	children: Component[] = [];
 
+	// Memoized concatenation of the children's latest renders. Children are
+	// still rendered every frame (renders carry side effects: image placement
+	// registration, seam/stability reports); the memo only skips rebuilding
+	// the concatenated array when every child returned the exact same array
+	// reference at the same width — which, per the Component render contract,
+	// proves the rows are byte-identical. Cleared on any child-list change and
+	// on invalidate().
+	#memoLines: string[] | undefined;
+	#memoChildLines: (readonly string[])[] = [];
+	#memoWidth = -1;
+
 	addChild(component: Component): void {
 		this.children.push(component);
+		this.#memoLines = undefined;
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
+			this.#memoLines = undefined;
 		}
 	}
 
 	clear(): void {
 		this.children = [];
+		this.#memoLines = undefined;
 	}
 
 	invalidate(): void {
+		this.#memoLines = undefined;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -370,13 +425,31 @@ export class Container implements Component {
 		}
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		width = Math.max(1, width);
-		const lines: string[] = [];
-		for (const child of this.children) {
-			const childLines = child.render(width);
-			for (let i = 0; i < childLines.length; i++) lines.push(childLines[i]);
+		const children = this.children;
+		const count = children.length;
+		let refs = this.#memoChildLines;
+		let unchanged = this.#memoLines !== undefined && this.#memoWidth === width && refs.length === count;
+		if (refs.length !== count) {
+			refs = new Array(count);
+			this.#memoChildLines = refs;
 		}
+		for (let i = 0; i < count; i++) {
+			const childLines = children[i]!.render(width);
+			if (refs[i] !== childLines) {
+				unchanged = false;
+				refs[i] = childLines;
+			}
+		}
+		this.#memoWidth = width;
+		if (unchanged) return this.#memoLines!;
+		const lines: string[] = [];
+		for (let i = 0; i < count; i++) {
+			const childLines = refs[i]!;
+			for (let j = 0; j < childLines.length; j++) lines.push(childLines[j]!);
+		}
+		this.#memoLines = lines;
 		return lines;
 	}
 }
@@ -413,6 +486,18 @@ interface CursorControlResult extends HardwareCursorUpdate {
 	seq: string;
 	toCol: number;
 	visible: boolean;
+}
+
+/**
+ * One root child's contribution to the composed frame: the array reference its
+ * render() returned, the frame row it starts at, and the row count recorded at
+ * compose time (in-place mutators keep the reference but may change length).
+ */
+interface FrameSegment {
+	component: Component;
+	lines: readonly string[];
+	start: number;
+	rowCount: number;
 }
 
 interface PreparedLine {
@@ -493,7 +578,7 @@ export function findCommittedPrefixResync(frame: readonly string[], prefix: read
  */
 export class TUI extends Container {
 	terminal: Terminal;
-	#previousLines: string[] = [];
+	#previousFrameLength = 0;
 	#previousWidth = 0;
 	#previousHeight = 0;
 	#focusedComponent: Component | null = null;
@@ -605,7 +690,7 @@ export class TUI extends Container {
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
 	// engine paints only the modal on the alt buffer and leaves every
-	// normal-screen accounting field (#previousLines, #viewportTopRow, …)
+	// normal-screen accounting field (#previousFrameLength, #viewportTopRow, …)
 	// untouched, so exiting reconciles cleanly against the terminal-restored
 	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
 	#altActive = false;
@@ -613,10 +698,30 @@ export class TUI extends Container {
 	#altEnterWidth = 0;
 	#altEnterHeight = 0;
 
-	// Last-frame line preparation cache. Entries store normalized, width-fitted
-	// content rows without the per-line terminal terminator; terminators are
-	// appended only at write time so width checks stay on content, not reset bytes.
-	#preparedLineCache: PreparedLine[] = [];
+	// Persistent composed frame. The render override splices only rows at/after
+	// the stable prefix each frame; cursor markers are stripped at ingestion so
+	// the frame never carries them. Returned to render() callers — treated as
+	// immutable by them per the Component render contract.
+	#composedFrame: string[] = [];
+	// Per-root-child segment ledger backing the stable-prefix computation.
+	#frameSegments: FrameSegment[] = [];
+	#composeWidth = -1;
+	// Cursor markers stripped at ingestion, ascending by frame row.
+	#frameCursorMarkers: { row: number; col: number }[] = [];
+	// Leading rows of #composedFrame byte-identical to the previous compose.
+	#renderStablePrefixRows = 0;
+
+	// Persistent prepared frame, row-aligned with #composedFrame. Entries store
+	// normalized, width-fitted content rows without the per-line terminal
+	// terminator; terminators are appended only at write time so width checks
+	// stay on content, not reset bytes. #preparedValidRows counts the leading
+	// rows known prepared against the CURRENT composed frame: a compose lowers
+	// it to the stable prefix, a completed prepare raises it to the frame
+	// length, and an abandoned frame (ghostty image defer) leaves it lowered so
+	// the next prepare revalidates the splice.
+	#preparedFrame: string[] = [];
+	#preparedMeta: PreparedLine[] = [];
+	#preparedValidRows = 0;
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -633,13 +738,20 @@ export class TUI extends Container {
 		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
-		const lines: string[] = [];
-		for (const child of this.children) {
-			const offset = lines.length;
+		const children = this.children;
+		const previousSegments = this.#frameSegments;
+		const segments: FrameSegment[] = new Array(children.length);
+		// A width change re-renders every child; nothing carries over.
+		let chainStable = this.#composeWidth === width;
+		this.#composeWidth = width;
+		let offset = 0;
+		let stableRows = 0;
+		for (let index = 0; index < children.length; index++) {
+			const child = children[index]!;
 			const childLines = child.render(width);
 			const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
 			if (liveRegionStart !== undefined) {
@@ -655,9 +767,88 @@ export class TUI extends Container {
 					this.#nativeScrollbackCommitSafeEnd = offset + boundedEnd;
 				}
 			}
-			for (let i = 0; i < childLines.length; i++) lines.push(childLines[i]);
+			// Consume the stability report unconditionally for implementers:
+			// reading re-bases the component's baseline to the state this
+			// compose is about to ingest (used or not, the current rows are
+			// what ends up in the composed frame).
+			const reported = getRenderStablePrefixRows(child);
+			if (chainStable) {
+				const previous = previousSegments[index];
+				if (previous !== undefined && previous.component === child && previous.start === offset) {
+					let stableCount = 0;
+					if (reported !== undefined) {
+						// In-place mutator: its report overrides reference equality.
+						// Rows beyond the previous row count cannot be "unchanged".
+						stableCount = Number.isFinite(reported)
+							? Math.max(0, Math.min(childLines.length, previous.rowCount, Math.trunc(reported)))
+							: 0;
+					} else if (previous.lines === childLines) {
+						stableCount = childLines.length;
+					}
+					stableRows += stableCount;
+					// The chain survives only a fully stable segment: identical rows
+					// AND identical row count (a grown/shrunk segment shifts every
+					// row below it).
+					if (stableCount < childLines.length || previous.rowCount !== childLines.length) chainStable = false;
+				} else {
+					chainStable = false;
+				}
+			}
+			segments[index] = { component: child, lines: childLines, start: offset, rowCount: childLines.length };
+			offset += childLines.length;
 		}
-		return lines;
+		this.#frameSegments = segments;
+
+		const frame = this.#composedFrame;
+		// Defensive clamp: stable rows can never exceed what the previous
+		// compose actually materialized (only reachable if a child render threw
+		// mid-compose on the previous frame).
+		if (stableRows > frame.length) stableRows = frame.length;
+		if (stableRows !== offset || frame.length !== offset) {
+			// Re-ingest every row at/after the stable prefix: truncate, strip
+			// cursor markers, record their positions.
+			frame.length = stableRows;
+			this.#pruneFrameCursorMarkers(stableRows);
+			for (const segment of segments) {
+				const lines = segment.lines;
+				const from = segment.start >= stableRows ? 0 : stableRows - segment.start;
+				for (let i = from; i < lines.length; i++) this.#ingestFrameRow(lines[i]!);
+			}
+		}
+		this.#renderStablePrefixRows = stableRows;
+		this.#preparedValidRows = Math.min(this.#preparedValidRows, stableRows);
+		return frame;
+	}
+
+	/** Drop cached cursor markers at/after `fromRow` (those rows re-ingest). */
+	#pruneFrameCursorMarkers(fromRow: number): void {
+		const markers = this.#frameCursorMarkers;
+		let keep = markers.length;
+		while (keep > 0 && markers[keep - 1]!.row >= fromRow) keep--;
+		markers.length = keep;
+	}
+
+	/**
+	 * Append one row to the composed frame, stripping CURSOR_MARKER occurrences
+	 * (internal sentinels that must never reach the terminal, the committed
+	 * prefix, or the resync audit) and recording the first marker's position.
+	 */
+	#ingestFrameRow(line: string): void {
+		let markerIndex = line.indexOf(CURSOR_MARKER);
+		if (markerIndex === -1) {
+			this.#composedFrame.push(line);
+			return;
+		}
+		this.#frameCursorMarkers.push({
+			row: this.#composedFrame.length,
+			col: visibleWidth(line.slice(0, markerIndex)),
+		});
+		let stripped = line;
+		while (markerIndex !== -1) {
+			stripped = stripped.slice(0, markerIndex) + stripped.slice(markerIndex + CURSOR_MARKER.length);
+			markerIndex = stripped.indexOf(CURSOR_MARKER, markerIndex);
+		}
+		this.#composedFrame.push(stripped);
 	}
 
 	#syncTerminalCursorMode(component: Component | null): void {
@@ -1091,8 +1282,8 @@ export class TUI extends Container {
 		// enough; emitting `\r\n` would create an extra blank row. If the content
 		// already reaches the viewport bottom, scroll exactly once so the prompt
 		// lands directly below the last visible TUI row.
-		if (this.#previousLines.length > 0) {
-			const targetRow = this.#previousLines.length;
+		if (this.#previousFrameLength > 0) {
+			const targetRow = this.#previousFrameLength;
 			const viewportBottom = this.#windowTopRow + this.terminal.rows - 1;
 			const clampedCursorRow = Math.max(this.#windowTopRow, Math.min(this.#hardwareCursorRow, viewportBottom));
 			const moveTargetRow = Math.min(targetRow, viewportBottom);
@@ -1731,10 +1922,11 @@ export class TUI extends Container {
 		// render recomposes from scratch, so consuming state here would
 		// misclassify a pending resize as an ordinary diff and corrupt the paint.
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
-		// Strip cursor markers immediately (they are internal sentinels and
-		// must never reach the terminal, the committed prefix, or the audit);
-		// the visible marker is chosen after the window top is known.
-		const cursorMarkers = this.#extractCursorMarkers(rawFrame);
+		// Cursor markers were stripped at compose time (they are internal
+		// sentinels and must never reach the terminal, the committed prefix, or
+		// the audit); the visible marker is chosen after the window top is
+		// known. Ascending by frame row.
+		const cursorMarkers = this.#frameCursorMarkers;
 		const liveRegionStart = this.#nativeScrollbackLiveRegionStart;
 		const commitSafeEnd = this.#nativeScrollbackCommitSafeEnd;
 
@@ -1762,8 +1954,16 @@ export class TUI extends Container {
 		// the stale copy stays in history and rows recommit from there —
 		// duplication, never loss. Skipped on geometry frames (a rewrap
 		// legitimately reflows every row; the mux branch re-bases the prefix
-		// and non-mux geometry replays from scratch).
-		if (this.#hasEverRendered && !geometryChanged && !this.#clearScrollbackOnNextRender) {
+		// and non-mux geometry replays from scratch), and skipped when the
+		// composed frame's stable prefix covers every committed row — bytes
+		// that provably did not change since the last (aligned) frame cannot
+		// have diverged.
+		if (
+			this.#hasEverRendered &&
+			!geometryChanged &&
+			!this.#clearScrollbackOnNextRender &&
+			this.#renderStablePrefixRows < this.#committedRows
+		) {
 			this.#auditCommittedPrefix(rawFrame);
 		}
 
@@ -1833,13 +2033,14 @@ export class TUI extends Container {
 		// 5. Pick the visible cursor marker (bottom-most at or below the window
 		// top), prepare lines, and build the visible window slice.
 		let cursorPos: { row: number; col: number } | null = null;
-		for (const marker of cursorMarkers) {
+		for (let i = cursorMarkers.length - 1; i >= 0; i--) {
+			const marker = cursorMarkers[i]!;
 			if (marker.row >= windowTop) {
 				cursorPos = marker;
 				break;
 			}
 		}
-		const frame = this.#prepareLines(rawFrame, width, true);
+		const frame = this.#prepareFrame(rawFrame, width);
 		let window: string[] = new Array(height);
 		for (let r = 0; r < height; r++) window[r] = frame[windowTop + r] ?? "";
 		if (hasVisibleOverlay) {
@@ -1848,7 +2049,7 @@ export class TUI extends Container {
 			if (overlayMarkers.length > 0) {
 				cursorPos = { row: windowTop + overlayMarkers[0]!.row, col: overlayMarkers[0]!.col };
 			}
-			window = this.#prepareLines(window, width, false);
+			window = this.#prepareLinesArray(window, width);
 		}
 
 		const intent: RenderIntent = fullPaint
@@ -1909,7 +2110,7 @@ export class TUI extends Container {
 	 * restyles keep their alignment and are left alone (stale styling in
 	 * history was always the accepted artifact).
 	 */
-	#auditCommittedPrefix(rawFrame: string[]): void {
+	#auditCommittedPrefix(rawFrame: readonly string[]): void {
 		const prefix = this.#committedPrefix;
 		if (prefix.length === 0) return;
 		const resyncTo = findCommittedPrefixResync(rawFrame, prefix);
@@ -1922,23 +2123,41 @@ export class TUI extends Container {
 		}
 	}
 
-	#prepareLines(lines: string[], width: number, useCache: boolean): string[] {
-		const prepared: string[] = new Array(lines.length);
-		const previous = useCache ? this.#preparedLineCache : [];
-		const nextCache: PreparedLine[] | undefined = useCache ? new Array(lines.length) : undefined;
-		for (let i = 0; i < lines.length; i++) {
-			const raw = lines[i]!;
-			const cached = previous[i];
-			if (cached && cached.raw === raw && cached.width === width) {
+	/**
+	 * Prepare the composed frame for emission, in place. Rows below
+	 * `#preparedValidRows` are already prepared against the current frame (the
+	 * compose lowered that floor to the stable prefix); rows at/after it are
+	 * revalidated positionally — a row whose raw content and width match its
+	 * cached entry reuses the prepared line, anything else re-prepares.
+	 */
+	#prepareFrame(frame: readonly string[], width: number): string[] {
+		const prepared = this.#preparedFrame;
+		const meta = this.#preparedMeta;
+		if (prepared.length > frame.length) {
+			prepared.length = frame.length;
+			meta.length = frame.length;
+		}
+		for (let i = Math.min(this.#preparedValidRows, prepared.length); i < frame.length; i++) {
+			const raw = frame[i]!;
+			const cached = meta[i];
+			if (cached !== undefined && cached.raw === raw && cached.width === width) {
 				prepared[i] = cached.line;
-				if (nextCache) nextCache[i] = cached;
 				continue;
 			}
 			const entry = this.#prepareLine(raw, width);
+			meta[i] = entry;
 			prepared[i] = entry.line;
-			if (nextCache) nextCache[i] = entry;
 		}
-		if (nextCache) this.#preparedLineCache = nextCache;
+		this.#preparedValidRows = frame.length;
+		return prepared;
+	}
+
+	/** Stateless variant for overlay-composited windows and alt-screen frames. */
+	#prepareLinesArray(lines: readonly string[], width: number): string[] {
+		const prepared: string[] = new Array(lines.length);
+		for (let i = 0; i < lines.length; i++) {
+			prepared[i] = this.#prepareLine(lines[i]!, width).line;
+		}
 		return prepared;
 	}
 
@@ -2117,13 +2336,13 @@ export class TUI extends Container {
 	 * the end so cursor/window accounting stays consistent.
 	 */
 	#commit(
-		lines: string[],
+		lines: readonly string[],
 		window: string[],
 		width: number,
 		height: number,
 		hardwareCursor: HardwareCursorUpdate,
 	): void {
-		this.#previousLines = lines;
+		this.#previousFrameLength = lines.length;
 		this.#previousWindow = window;
 		this.#forceViewportRepaintOnNextRender = false;
 		this.#previousWidth = width;
@@ -2194,7 +2413,7 @@ export class TUI extends Container {
 	 * `clearScrollback` initial paint).
 	 */
 	#emitFullPaint(
-		frame: string[],
+		frame: readonly string[],
 		window: string[],
 		width: number,
 		height: number,
@@ -2271,7 +2490,7 @@ export class TUI extends Container {
 		const base: string[] = new Array(Math.max(0, height)).fill("");
 		let lines = this.#compositeOverlaysIntoWindow(base, width, height);
 		this.#extractCursorMarkers(lines);
-		lines = this.#prepareLines(lines, width, false);
+		lines = this.#prepareLinesArray(lines, width);
 		this.#emitAltFrame(lines, width, height);
 	}
 
@@ -2328,7 +2547,7 @@ export class TUI extends Container {
 	 * bottom on several terminal families.
 	 */
 	#emitUpdate(
-		frame: string[],
+		frame: readonly string[],
 		window: string[],
 		width: number,
 		height: number,
@@ -2501,7 +2720,7 @@ export class TUI extends Container {
 		const state =
 			`committed=${this.#committedRows}, windowTop=${this.#windowTopRow}, ` +
 			`lrStart=${this.#nativeScrollbackLiveRegionStart}, commitSafeEnd=${this.#nativeScrollbackCommitSafeEnd}`;
-		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height}, ${state})\n`;
+		const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousFrameLength}, new=${newLength}, height=${height}, ${state})\n`;
 		fs.appendFileSync(getDebugLogPath(), msg);
 	}
 

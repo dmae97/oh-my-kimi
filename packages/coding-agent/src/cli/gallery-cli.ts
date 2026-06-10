@@ -104,7 +104,7 @@ export async function renderGalleryState(
 	state: GalleryState,
 	width: number,
 	expanded = false,
-): Promise<string[]> {
+): Promise<readonly string[]> {
 	if (fixture.renderState) {
 		return await fixture.renderState(state, width, expanded);
 	}

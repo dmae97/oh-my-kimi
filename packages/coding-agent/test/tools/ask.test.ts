@@ -1205,6 +1205,42 @@ describe("AskTool option markers", () => {
 		expect(secondResult.match(/TypeScript/g)?.length).toBe(1);
 		expect(secondResult.match(/Haskell/g)?.length).toBe(1);
 	});
+
+	it("keeps single-question option rows stable across repeated renders", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		// The question body comes from the Markdown render cache, which returns
+		// the SAME array on every render of identical text at identical width.
+		// Appending option rows in place would poison that cached entry, so a
+		// second render of the component would duplicate the options.
+		const renderedCall = askToolRenderer.renderCall(
+			{ question: "Which **language** do you prefer?", options: [{ label: "OptionDupCanary" }] },
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const first = stripAnsi(renderedCall.render(120).join("\n"));
+		const second = stripAnsi(renderedCall.render(120).join("\n"));
+		expect(second).toBe(first);
+		expect(second.match(/OptionDupCanary/g)?.length).toBe(1);
+
+		const renderedResult = askToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					question: "Which **language** do you prefer?",
+					multi: false,
+					options: ["OptionDupCanary"],
+					selectedOptions: ["OptionDupCanary"],
+				},
+			},
+			{ expanded: true, isPartial: false },
+			theme!,
+		);
+		const firstResult = stripAnsi(renderedResult.render(120).join("\n"));
+		const secondResult = stripAnsi(renderedResult.render(120).join("\n"));
+		expect(secondResult).toBe(firstResult);
+		expect(secondResult.match(/OptionDupCanary/g)?.length).toBe(1);
+	});
 	it("renders single-choice result selection with a filled radio marker", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();

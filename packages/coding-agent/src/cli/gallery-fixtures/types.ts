@@ -22,7 +22,11 @@ export interface GalleryFixture {
 	 * Custom gallery-only renderer for fixtures that are not one ToolExecutionComponent
 	 * (for example the read-group transcript component).
 	 */
-	renderState?: (state: GalleryFixtureState, width: number, expanded: boolean) => string[] | Promise<string[]>;
+	renderState?: (
+		state: GalleryFixtureState,
+		width: number,
+		expanded: boolean,
+	) => readonly string[] | Promise<readonly string[]>;
 	/**
 	 * Set for tools whose real `AgentTool` attaches `renderCall`/`renderResult`
 	 * directly on the instance (e.g. `task`). The harness then attaches

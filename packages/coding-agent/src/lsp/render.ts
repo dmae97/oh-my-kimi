@@ -139,7 +139,7 @@ export function renderResult(
 	const outputBlock = new CachedOutputBlock();
 
 	return markFramedBlockComponent({
-		render(width: number): string[] {
+		render(width: number): readonly string[] {
 			// Read mutable state at render time
 			const { expanded, isPartial, spinnerFrame } = options;
 

@@ -173,7 +173,7 @@ export class CopySelectorComponent implements Component {
 		return out;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
 		const flat = this.#flatten();
 		const cursorIdx = Math.max(

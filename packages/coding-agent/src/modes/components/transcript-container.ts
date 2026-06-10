@@ -1,4 +1,4 @@
-import { type Component, Container, type NativeScrollbackLiveRegion } from "@oh-my-pi/pi-tui";
+import { type Component, Container, type NativeScrollbackLiveRegion, type RenderStablePrefix } from "@oh-my-pi/pi-tui";
 
 const kSnapshot = Symbol("transcript.liveDiffSnapshot");
 
@@ -10,7 +10,7 @@ const kSnapshot = Symbol("transcript.liveDiffSnapshot");
  */
 interface LiveDiffSnapshot {
 	width: number;
-	lines: string[];
+	lines: readonly string[];
 	generation: number;
 	appendOnly: boolean;
 	/**
@@ -66,13 +66,35 @@ function isPlainBlank(line: string): boolean {
 // Strip leading/trailing plain-blank rows so each block contributes only its
 // visible body; the container owns the gaps between blocks. Returns the input
 // array unchanged when there is nothing to trim (no allocation on the hot path).
-function stripPlainBlankEdges(lines: string[]): string[] {
+function stripPlainBlankEdges(lines: readonly string[]): readonly string[] {
 	let start = 0;
 	let end = lines.length;
 	while (start < end && isPlainBlank(lines[start]!)) start++;
 	while (end > start && isPlainBlank(lines[end - 1]!)) end--;
 	return start === 0 && end === lines.length ? lines : lines.slice(start, end);
 }
+
+/**
+ * One block's recorded contribution to the assembled transcript: the raw array
+ * reference its render() returned, the stripped contribution derived from it,
+ * and where those rows landed. Reference-compared on the next render — per the
+ * Component render contract, an identical raw reference proves the block's
+ * rows are byte-identical, so the stripped contribution and the assembled rows
+ * can be reused without re-deriving anything.
+ */
+interface BlockSegment {
+	component: Component;
+	rawRef: readonly string[];
+	contribution: readonly string[];
+	width: number;
+	/** Frame row of this block's first emitted row (the separator when present). */
+	startRow: number;
+	/** Rows emitted: separator + contribution (0 for empty contributions). */
+	rowCount: number;
+	sep: number;
+}
+
+const EMPTY_SEGMENTS: BlockSegment[] = [];
 
 interface LiveCommitState {
 	appendOnly: boolean;
@@ -114,6 +136,22 @@ const VOLATILE_REARM_FRAMES = 30;
 const STABLE_PREFIX_COMMIT_FRAMES = 30;
 
 /**
+ * Rows at a live block's tail treated as the volatile streaming edge. Real
+ * streaming is not strictly append-only at the bottom: the in-flight markdown
+ * paragraph re-wraps as words arrive (rewriting its last 1-2 visual rows), an
+ * unclosed token (`**bold`, a half-streamed link) re-renders when its closer
+ * arrives, and a wrap-shrink moves the last word onto a new row. Divergence
+ * confined to this zone is clean growth, and the zone itself is held back
+ * from the offered commit boundary — so a tolerated rewrite can never touch a
+ * row the engine may have committed. Width 4 covers the observed shapes (≤2
+ * rows) with margin for wide glyphs and multi-row token spans; the cost is
+ * only that the last 4 rows of a live block commit at finalization instead of
+ * mid-stream, which is invisible (they are on screen — the viewport is always
+ * taller than the holdback).
+ */
+const TAIL_VOLATILITY_ROWS = 4;
+
+/**
  * Visible-content form of a row: SGR/OSC bytes and trailing pad spaces are
  * write framing, not content. A styled line's closing escape moves when the
  * line stops being the last of its span (a wrapped thinking paragraph growing
@@ -131,6 +169,15 @@ function rowsVisiblyEqual(prev: string, cur: string): boolean {
 	return prev === cur || normalizeRow(prev) === normalizeRow(cur);
 }
 
+/**
+ * Whether `cur` is `prev` grown in place: the visible content of `prev` is a
+ * strict-or-equal prefix of `cur`'s (token streaming appending to the cursor
+ * row). Escape placement and pad drift are ignored, same as rowsVisiblyEqual.
+ */
+function rowVisiblyGrew(prev: string, cur: string): boolean {
+	return normalizeRow(cur).startsWith(normalizeRow(prev));
+}
+
 function hasValidSnapshot(
 	snapshot: LiveDiffSnapshot | undefined,
 	width: number,
@@ -139,14 +186,14 @@ function hasValidSnapshot(
 	return snapshot !== undefined && snapshot.generation === generation && snapshot.width === width;
 }
 
-function commonPrefixLength(prev: string[], cur: string[]): number {
+function commonPrefixLength(prev: readonly string[], cur: readonly string[]): number {
 	const limit = Math.min(prev.length, cur.length);
 	let i = 0;
 	while (i < limit && rowsVisiblyEqual(prev[i]!, cur[i]!)) i++;
 	return i;
 }
 
-function commonSuffixLength(prev: string[], cur: string[], prefixLength: number): number {
+function commonSuffixLength(prev: readonly string[], cur: readonly string[], prefixLength: number): number {
 	const limit = Math.min(prev.length - prefixLength, cur.length - prefixLength);
 	let i = 0;
 	while (i < limit && rowsVisiblyEqual(prev[prev.length - 1 - i]!, cur[cur.length - 1 - i]!)) i++;
@@ -155,7 +202,7 @@ function commonSuffixLength(prev: string[], cur: string[], prefixLength: number)
 
 function deriveLiveCommitState(
 	previous: LiveDiffSnapshot | undefined,
-	current: string[],
+	current: readonly string[],
 	width: number,
 	generation: number,
 ): LiveCommitState {
@@ -165,6 +212,7 @@ function deriveLiveCommitState(
 	let candidatePrefixLength = 0;
 	let candidatePrefixAge = 0;
 	let rewriteFloor = Number.POSITIVE_INFINITY;
+	let trailingRowGrowth = false;
 	if (hasValidSnapshot(previous, width, generation)) {
 		appendOnly = previous.appendOnly;
 		volatileCooldown = previous.volatileCooldown;
@@ -179,40 +227,49 @@ function deriveLiveCommitState(
 		if (!staticRender) {
 			const suffixLength = commonSuffixLength(previous.lines, current, prefixLength);
 			// Append-only growth never rewrites a row that may already have scrolled
-			// into native scrollback; it only grows the block at/near its tail. Four
-			// shapes qualify: a pure bottom append, an insertion above stable trailing
-			// chrome (a streaming tool's footer/border), an in-place extension of the
-			// current line by one streamed token (line count unchanged), and a
-			// wrap-shrink of the current line where its last word grew past the wrap
-			// column and moved down onto an appended row. The first two preserve every
-			// previous row across a matching prefix + suffix; the last two leave a
-			// single divergent previous row — the block's in-flight bottom line, which
-			// cannot have been committed (commits stop at the viewport top and the
-			// bottom line is by definition on screen). Any other divergent interior
-			// row means the block re-laid-out committed-candidate content — a rewrite,
-			// which suspends commits until the block re-earns append-only.
+			// into native scrollback; it only grows the block at/near its tail. Two
+			// shapes qualify:
+			// - a pure insertion that preserves every previous row across a
+			//   matching prefix + suffix (a bottom append, or an insertion above
+			//   stable trailing chrome like a streaming tool's footer/border);
+			// - a rewrite whose divergence BEGINS inside the trailing
+			//   TAIL_VOLATILITY_ROWS of the previous render — the streaming edge:
+			//   the in-flight paragraph re-wrapping as words arrive (its last 1-2
+			//   visual rows), an unclosed markdown token (`**bold`) re-rendering
+			//   when its closer streams in, a wrap-shrink pushing the last word
+			//   onto an appended row. That zone is held back from `safeLength`
+			//   below, so a tolerated rewrite can never touch a row that was
+			//   offered for commit.
+			// The anchor matters: the gap must START in the tail zone, not merely
+			// be small — a one-row ticker mid-block with stable rows beneath it
+			// would otherwise classify clean, get offered past, and rewrite
+			// committed rows on every tick. Any deeper divergent row means the
+			// block re-laid-out committed-candidate content — a rewrite, which
+			// suspends commits until the block re-earns append-only.
 			const preservedEveryRow = prefixLength + suffixLength >= previous.lines.length;
-			let tailExtendedInPlace = false;
-			if (
-				!preservedEveryRow &&
-				prefixLength + suffixLength === previous.lines.length - 1 &&
-				prefixLength < current.length
-			) {
-				const prevTail = normalizeRow(previous.lines[prefixLength]!);
-				const curTail = normalizeRow(current[prefixLength]!);
-				tailExtendedInPlace =
-					curTail.startsWith(prevTail) || (current.length > previous.lines.length && prevTail.startsWith(curTail));
-			}
-			if ((preservedEveryRow || tailExtendedInPlace) && current.length >= previous.lines.length) {
+			const tailConfined = preservedEveryRow || prefixLength >= previous.lines.length - TAIL_VOLATILITY_ROWS;
+			if (tailConfined && current.length >= previous.lines.length) {
+				// Strict trailing-row growth: every previous row except the last
+				// is visibly unchanged and the last grew in place as a visible
+				// prefix, with no rows appended — a line accumulating tokens.
+				// The sole divergent row is the block's physical last row, which
+				// the engine's window floor never commits while it stays last
+				// (chunkTo ≤ windowTop ≤ last row index), so the volatile-tail
+				// holdback below is unnecessary: the whole body is offerable and
+				// the block's scrolled-off head reaches native scrollback.
+				trailingRowGrowth =
+					current.length === previous.lines.length &&
+					prefixLength === previous.lines.length - 1 &&
+					rowVisiblyGrew(previous.lines[prefixLength]!, current[prefixLength]!);
 				if (volatileCooldown === 0) appendOnly = true;
-				// Clean growth inserts rows at the divergence; rows the floor
-				// points at travel down with the preserved suffix. (On a tail
-				// extension the divergent row itself stays put — only rows
-				// strictly below it shift.)
+				// Clean growth inserts/rewrites rows at the divergence; a floor
+				// inside the preserved suffix travels down with it, a floor at or
+				// above the divergent zone stays put (conservative: a stale floor
+				// index can only point at an earlier row, never a later one).
 				const delta = current.length - previous.lines.length;
 				if (delta > 0 && Number.isFinite(rewriteFloor)) {
-					const floorShifts = preservedEveryRow ? rewriteFloor >= prefixLength : rewriteFloor > prefixLength;
-					if (floorShifts) rewriteFloor += delta;
+					const suffixStart = Math.max(prefixLength, previous.lines.length - suffixLength);
+					if (rewriteFloor >= suffixStart) rewriteFloor += delta;
 				}
 			} else {
 				cleanFrame = false;
@@ -253,7 +310,15 @@ function deriveLiveCommitState(
 				candidatePrefixAge === 0 ? prefixLength : Math.min(candidatePrefixLength, prefixLength);
 			candidatePrefixAge++;
 			if (candidatePrefixAge >= STABLE_PREFIX_COMMIT_FRAMES) {
-				stablePrefixLength = Math.min(candidatePrefixLength, rewriteFloor);
+				// Cap at the volatile-tail holdback: a long static stretch would
+				// otherwise promote the streaming edge itself (min prefix == full
+				// length), and the next chunk's tail re-wrap would then rewrite
+				// offered rows.
+				stablePrefixLength = Math.min(
+					candidatePrefixLength,
+					rewriteFloor,
+					Math.max(0, current.length - TAIL_VOLATILITY_ROWS),
+				);
 				candidatePrefixLength = prefixLength;
 				candidatePrefixAge = 0;
 			}
@@ -267,16 +332,24 @@ function deriveLiveCommitState(
 		candidatePrefixLength,
 		candidatePrefixAge,
 		rewriteFloor,
-		// An append-only block's whole body is committable; otherwise the
-		// settled head still is — only the volatile tail stays deferred.
-		safeLength: appendOnly ? current.length : stablePrefixLength,
+		// A clean-streaming block's body is committable up to the volatile-tail
+		// holdback (the streaming edge is never offered, so its tolerated
+		// rewrites can never touch committed rows); otherwise the settled head
+		// still is — only the volatile tail stays deferred. Strict in-place
+		// growth of the trailing row skips the holdback: its only mutable row
+		// is the block's last, which cannot commit while it remains last.
+		safeLength: appendOnly
+			? trailingRowGrowth
+				? current.length
+				: Math.max(stablePrefixLength, current.length - TAIL_VOLATILITY_ROWS, 0)
+			: stablePrefixLength,
 	};
 }
 
 /**
- * Transcript container that always renders every block's current content and
- * reports the live-region seam (`NativeScrollbackLiveRegion`) that gates the
- * engine's append-only scrollback commits.
+ * Transcript container that renders every block's current content each frame
+ * and reports the live-region seam (`NativeScrollbackLiveRegion`) that gates
+ * the engine's append-only scrollback commits.
  *
  * The engine never rewrites committed history: rows above the seam that have
  * entered the tape keep whatever bytes they were committed with ("let the
@@ -287,8 +360,16 @@ function deriveLiveCommitState(
  * their rows do not enter history while they can still change; a streaming
  * block whose render grows append-only deepens the seam through its settled
  * head so a long reply's scrolled-off rows still reach scrollback mid-stream.
+ *
+ * Assembly is incremental: the returned array is persistent and mutated in
+ * place. Each block's render is still called every frame, but a block whose
+ * render returned the same array reference at an unchanged offset reuses its
+ * previously assembled rows; the array is truncated and re-pushed only from
+ * the first divergent block. The leading byte-identical row count is reported
+ * through {@link RenderStablePrefix} so the engine can skip marker scanning,
+ * line preparation, and the committed-prefix audit for those rows.
  */
-export class TranscriptContainer extends Container implements NativeScrollbackLiveRegion {
+export class TranscriptContainer extends Container implements NativeScrollbackLiveRegion, RenderStablePrefix {
 	// Bumped to retire every block's diff snapshot at once (theme change /
 	// clear); a snapshot is only honored when its stored generation matches.
 	#generation = 0;
@@ -304,7 +385,16 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	// until it re-earns append-only via VOLATILE_REARM_FRAMES clean frames;
 	// the engine then backfills the stalled gap.
 	#nativeScrollbackCommitSafeEnd: number | undefined;
-
+	// Persistent assembled transcript rows. Rows before the stable floor are
+	// byte-identical to the previous render; rows at/after it were re-pushed.
+	#lines: string[] = [];
+	#segments: BlockSegment[] = EMPTY_SEGMENTS;
+	#renderWidth = -1;
+	// Stable-prefix floor accumulated across renders since the last
+	// getRenderStablePrefixRows() read (see RenderStablePrefix: reading
+	// consumes the report and re-bases the baseline). Out-of-band renders
+	// between engine frames lower it; they can never inflate it.
+	#stableRowsFloor = 0;
 	override invalidate(): void {
 		// Theme/global invalidation: retire every diff snapshot so stale styling
 		// is not diffed against the recolored render.
@@ -315,6 +405,12 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	override clear(): void {
 		this.#generation++;
 		super.clear();
+	}
+
+	getRenderStablePrefixRows(): number {
+		const value = Math.min(this.#stableRowsFloor, this.#lines.length);
+		this.#stableRowsFloor = this.#lines.length;
+		return value;
 	}
 
 	getNativeScrollbackLiveRegionStart(): number | undefined {
@@ -343,7 +439,7 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		return false;
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
@@ -364,7 +460,27 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			}
 		}
 
-		const lines: string[] = [];
+		const lines = this.#lines;
+		const previousSegments = this.#segments;
+		const segments: BlockSegment[] = new Array(count);
+		// Poisoned until the walk completes: a block render throwing mid-walk
+		// leaves the persistent array half-rebuilt, and the next render must
+		// not trust stale segments against it. Restored at the end.
+		this.#segments = EMPTY_SEGMENTS;
+		const stableFloorBefore = this.#stableRowsFloor;
+		this.#stableRowsFloor = 0;
+		// Stability requires the same width and, per segment, the same block at
+		// the same offset returning the same array reference. The first
+		// divergence truncates the persistent array there; everything after
+		// re-pushes.
+		let chainStable = this.#renderWidth === width;
+		this.#renderWidth = width;
+		// Entry-unstable (width change): the divergence truncation inside the
+		// loop only fires on a stable→unstable transition, so reset the
+		// persistent array here to keep the `!chainStable ⇒ lines.length === row`
+		// invariant — otherwise re-pushed rows land after the stale frame.
+		if (!chainStable) lines.length = 0;
+
 		// Tracks whether we are still inside the leading run of commit-safe live
 		// blocks. The first still-live volatile block closes it, but rendering
 		// continues so lower blocks remain visible.
@@ -373,6 +489,9 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		// liveStartIndex; empty leading blocks (or a separator) must not claim it
 		// early.
 		let liveRecorded = false;
+		// Frame row cursor: rows emitted (reused or pushed) so far.
+		let row = 0;
+		let stableRows = 0;
 		for (let i = 0; i < count; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
 
@@ -381,10 +500,20 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			// Always the latest content — committed history keeps whatever bytes
 			// it was written with, but the window must reflect the present state
 			// (late tool results, post-finalize re-layouts, expand toggles).
+			// A block whose render returned the same array reference reuses the
+			// previously stripped contribution (same ref ⇒ identical rows).
 			const previousSnapshot = child[kSnapshot];
-			const contribution = stripPlainBlankEdges(child.render(width));
+			const raw = child.render(width);
+			const previous = previousSegments[i];
+			const reusable =
+				previous !== undefined &&
+				previous.component === child &&
+				previous.rawRef === raw &&
+				previous.width === width;
+			const contribution = reusable ? previous.contribution : stripPlainBlankEdges(raw);
+			const finalized = isBlockFinalized(child);
 			let liveCommitState: LiveCommitState | undefined;
-			if (i >= liveStartIndex && !isBlockFinalized(child)) {
+			if (i >= liveStartIndex && !finalized) {
 				liveCommitState = deriveLiveCommitState(previousSnapshot, contribution, width, this.#generation);
 			}
 			// Cache the latest contribution as the next frame's diff input.
@@ -405,29 +534,46 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			// still closes the commit-safe run: if it later gains rows, it pushes
 			// everything below it.
 			if (contribution.length === 0) {
-				if (i >= liveStartIndex && commitSafeOpen && !isBlockFinalized(child)) commitSafeOpen = false;
+				if (i >= liveStartIndex && commitSafeOpen && !finalized) commitSafeOpen = false;
+				if (chainStable && !(reusable && previous.rowCount === 0 && previous.startRow === row)) {
+					chainStable = false;
+					lines.length = row;
+				}
+				if (chainStable) stableRows = row;
+				segments[i] = { component: child, rawRef: raw, contribution, width, startRow: row, rowCount: 0, sep: 0 };
 				continue;
 			}
 
 			// Every block is separated from preceding visible content by exactly one
 			// blank row — skipped when it opens the transcript or the prior row is
 			// already a plain blank (a fragment's own trailing pad), never doubling.
-			const sep = lines.length > 0 && !isPlainBlank(lines[lines.length - 1]!) ? 1 : 0;
+			// `lines[row - 1]` is valid in both modes: reused rows are still present
+			// in the persistent array, re-pushed rows were just written.
+			const sep = row > 0 && !isPlainBlank(lines[row - 1]!) ? 1 : 0;
 
 			// The separator before the first live block stays in the committed
 			// prefix (it is deterministic once the prior block's body is settled),
 			// so the live region begins at the block's first content row.
 			if (!liveRecorded && i >= liveStartIndex) {
-				this.#nativeScrollbackLiveRegionStart = lines.length + sep;
+				this.#nativeScrollbackLiveRegionStart = row + sep;
 				liveRecorded = true;
 			}
 
-			if (sep) lines.push("");
-			const blockStart = lines.length;
-			for (let j = 0; j < contribution.length; j++) lines.push(contribution[j]!);
+			const rowCount = sep + contribution.length;
+			const stable = chainStable && reusable && previous.startRow === row && previous.sep === sep;
+			if (stable) {
+				stableRows = row + rowCount;
+			} else {
+				if (chainStable) {
+					chainStable = false;
+					lines.length = row;
+				}
+				if (sep) lines.push("");
+				for (let j = 0; j < contribution.length; j++) lines.push(contribution[j]!);
+			}
 
+			const blockStart = row + sep;
 			if (i >= liveStartIndex && commitSafeOpen) {
-				const finalized = isBlockFinalized(child);
 				const safeLength = finalized ? contribution.length : (liveCommitState?.safeLength ?? 0);
 				if (safeLength > 0) {
 					this.#nativeScrollbackCommitSafeEnd = blockStart + safeLength;
@@ -437,7 +583,15 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 				// rows around as it grows, so the run closes there.
 				if (!(finalized && safeLength >= contribution.length)) commitSafeOpen = false;
 			}
+
+			segments[i] = { component: child, rawRef: raw, contribution, width, startRow: row, rowCount, sep };
+			row += rowCount;
 		}
+		// Trailing shrink: blocks removed from the tail leave stale rows behind
+		// when every surviving segment was reused.
+		if (lines.length !== row) lines.length = row;
+		this.#segments = segments;
+		this.#stableRowsFloor = Math.min(stableFloorBefore, stableRows, row);
 		return lines;
 	}
 }

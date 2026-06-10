@@ -245,7 +245,7 @@ export const sshToolRenderer = {
 		const cmdLines = formatSshCommandLines(command, uiTheme);
 		const outputBlock = new CachedOutputBlock();
 		return markFramedBlockComponent({
-			render: (width: number): string[] =>
+			render: (width: number): readonly string[] =>
 				outputBlock.render(
 					{
 						header,
@@ -282,7 +282,7 @@ export const sshToolRenderer = {
 		const outputBlock = new CachedOutputBlock();
 
 		return markFramedBlockComponent({
-			render: (width: number): string[] => {
+			render: (width: number): readonly string[] => {
 				// REACTIVE: read mutable options at render time
 				const { expanded, renderContext } = options;
 				// Strip LLM-facing notice so we don't echo it next to the styled warning.

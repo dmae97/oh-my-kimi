@@ -454,7 +454,7 @@ export const jobToolRenderer = {
 
 		let cached: RenderCache | undefined;
 		return {
-			render(width: number): string[] {
+			render(width: number): readonly string[] {
 				const expanded = options.expanded;
 				const spinnerFrame = options.spinnerFrame ?? 0;
 				const key = new Hasher().bool(expanded).u32(width).u32(spinnerFrame).digest();

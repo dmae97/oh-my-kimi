@@ -68,7 +68,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 			// Refresh tool list
 			allTools = pi.getAllTools();
 
-			await ctx.ui.custom((tui, theme, done) => {
+			await ctx.ui.custom((tui, theme, _keybindings, done) => {
 				// Build settings items for each tool
 				const items: SettingItem[] = allTools.map(tool => ({
 					id: tool,
@@ -78,10 +78,11 @@ export default function toolsExtension(pi: ExtensionAPI) {
 				}));
 
 				const container = new Container();
+				const header: readonly string[] = [theme.fg("accent", theme.bold("Tool Configuration")), ""];
 				container.addChild(
 					new (class {
-						render(_width: number) {
-							return [theme.fg("accent", theme.bold("Tool Configuration")), ""];
+						render(_width: number): readonly string[] {
+							return header;
 						}
 						invalidate() {}
 					})(),
@@ -110,7 +111,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 				container.addChild(settingsList);
 
 				const component = {
-					render(width: number) {
+					render(width: number): readonly string[] {
 						return container.render(width);
 					},
 					invalidate() {

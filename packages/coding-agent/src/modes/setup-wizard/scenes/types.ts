@@ -31,7 +31,7 @@ export interface SetupTab {
 	 * login). The parent scene MUST NOT switch tabs or finish while modal.
 	 */
 	readonly modal: boolean;
-	render(width: number): string[];
+	render(width: number): readonly string[];
 	handleInput(data: string): void;
 	invalidate(): void;
 	/** Called when the tab becomes active (including initial mount). */

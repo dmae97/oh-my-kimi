@@ -62,7 +62,7 @@ export class MCPAuthorizationLinkPrompt implements Component {
 
 	invalidate(): void {}
 
-	render(_width: number): string[] {
+	render(_width: number): readonly string[] {
 		const link = urlHyperlinkAlways(this.#url, "Click here to authorize");
 		return [
 			` ${theme.fg("success", "Open authorization URL:")}`,

@@ -107,7 +107,7 @@ export class SelectList implements Component {
 		// No cached state to invalidate currently
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 		const showSearchStatus = this.#shouldRenderSearchStatus();
 
