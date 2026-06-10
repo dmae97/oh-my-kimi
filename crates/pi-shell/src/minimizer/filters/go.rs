@@ -373,7 +373,19 @@ fn is_go_noise(line: &str) -> bool {
 
 fn is_golangci_noise(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
-	lower.starts_with("level=") && lower.contains("msg=\"[linters_context]")
+	// Strip runner-log info/warn chatter (snip strips `^level=` wholesale), but
+	// DELIBERATELY KEEP `level=error` — those lines carry config/typecheck failures
+	// that would otherwise vanish silently.
+	// `level=error` carries config/typecheck failures (incl. the canonical
+	// `level=error msg="[linters_context]…"` typecheck headline) — never strip it,
+	// even when it routes through the linters_context component.
+	if lower.starts_with("level=error") {
+		return false;
+	}
+	lower.starts_with("level=info")
+		|| lower.starts_with("level=warning")
+		|| lower.starts_with("level=warn")
+		|| lower.starts_with("level=") && lower.contains("msg=\"[linters_context]")
 		|| lower.starts_with("golangci-lint has version")
 		|| lower.starts_with("running ") && lower.contains("linters")
 }
@@ -549,6 +561,37 @@ mod tests {
 			out.text
 				.contains("function main is undeclared in the main package")
 		);
+	}
+
+	#[test]
+	fn golangci_strips_info_warn_but_keeps_level_error() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "golangci-lint",
+			subcommand: Some("run"),
+			command:    "golangci-lint run ./...",
+			config:     &cfg,
+		};
+		// Real default (non-json) golangci run: the typecheck headline is emitted by
+		// the logrus logger in its canonical `level=error msg="[linters_context]…"`
+		// shape — the exact format that must survive. Surrounding runner chatter
+		// (incl. a warn-level linters_context line) is stripped.
+		let input = "level=info Active 5 linters\nlevel=warning The linter 'deadcode' is \
+		             deprecated\nlevel=warning msg=\"[linters_context] stale cache\"\nlevel=error \
+		             msg=\"[linters_context] typechecking error: cannot find package\"\nmain.go:10:2: \
+		             undefined: Foo (typecheck)\n";
+		let out = filter(&ctx, input, 1);
+		assert!(out.text.contains("level=error"));
+		assert!(out.text.contains("typechecking error"));
+		// `group_by_file` regroups the per-issue line under a `main.go:` header,
+		// so assert on the surviving location + linter, not the joined string.
+		assert!(out.text.contains("main.go"));
+		assert!(out.text.contains("undefined: Foo (typecheck)"));
+		assert!(!out.text.contains("level=info"));
+		assert!(!out.text.contains("level=warning"));
+		// The warn-level linters_context chatter is still dropped — the keep is
+		// scoped to error level, not to every linters_context line.
+		assert!(!out.text.contains("stale cache"));
 	}
 
 	#[test]
