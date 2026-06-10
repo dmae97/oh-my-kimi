@@ -862,13 +862,7 @@ async function prepareAnthropicManyImageContext(context: Context, supportsImages
 	return { ...context, messages };
 }
 
-/**
- * Convert content blocks to Anthropic API format
- */
-function convertContentBlocks(
-	content: (TextContent | ImageContent)[],
-	supportsImages = true,
-):
+type AnthropicToolResultContent =
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -880,7 +874,15 @@ function convertContentBlocks(
 						data: string;
 					};
 			  }
-	  > {
+	  >;
+
+/**
+ * Convert content blocks to Anthropic API format
+ */
+function convertContentBlocks(
+	content: (TextContent | ImageContent)[],
+	supportsImages = true,
+): AnthropicToolResultContent {
 	const blocks: Array<
 		| { type: "text"; text: string }
 		| {
@@ -2872,7 +2874,7 @@ function buildParams(
 
 const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
 
-function isEmptyToolResultWireContent(content: ReturnType<typeof convertContentBlocks>): boolean {
+function isEmptyToolResultWireContent(content: AnthropicToolResultContent): boolean {
 	if (typeof content === "string") {
 		return content.trim().length === 0;
 	}
@@ -2880,9 +2882,9 @@ function isEmptyToolResultWireContent(content: ReturnType<typeof convertContentB
 }
 
 function ensureErrorToolResultWireContent(
-	content: ReturnType<typeof convertContentBlocks>,
+	content: AnthropicToolResultContent,
 	isError: boolean | undefined,
-): ReturnType<typeof convertContentBlocks> {
+): AnthropicToolResultContent {
 	if (!isError || !isEmptyToolResultWireContent(content)) {
 		return content;
 	}

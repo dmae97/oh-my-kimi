@@ -1364,6 +1364,4 @@ describe("agentLoopContinue with AgentMessage", () => {
 			expect(toolEnd.result.content).toEqual([{ type: "text", text: "Tool failed with no output." }]);
 		}
 	});
-
 });
-
