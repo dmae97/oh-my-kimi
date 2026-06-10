@@ -333,7 +333,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"thinking.medium": "◒ med",
 	"thinking.high": "◕ high",
 	"thinking.xhigh": "◉ xhigh",
-	"thinking.autoPending": "▣?",
+	"thinking.autoPending": "⟳",
 	// Checkboxes
 	"checkbox.checked": "☑",
 	"checkbox.unchecked": "☐",
@@ -618,8 +618,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"thinking.high": "\u{F111} high",
 	// pick: 🧠 xhi | alt:  xhi  xhi
 	"thinking.xhigh": "\u{F06D} xhi",
-	// pick: 󰞋 (nf-md-help_box) | alt:  [?]
-	"thinking.autoPending": "\u{f078b}",
+	// pick:  (fa-circle-o-notch) | alt: 󰂼 (nf-md-cached) ⟳
+	"thinking.autoPending": "\uf1ce",
 	// Checkboxes
 	// pick:  | alt:  
 	"checkbox.checked": "\uf14a",
@@ -825,7 +825,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"thinking.medium": "[med]",
 	"thinking.high": "[high]",
 	"thinking.xhigh": "[xhi]",
-	"thinking.autoPending": "[?]",
+	"thinking.autoPending": "[~]",
 	// Checkboxes
 	"checkbox.checked": "[x]",
 	"checkbox.unchecked": "[ ]",

@@ -43,6 +43,10 @@
 - Added verification of a `<div id="root"></div>` and `index.js` in smoke-test dashboard responses
 - Restored the checkmark glyph on ask-tool custom answers and the multi-select "Done selecting" option, which a status-glyph sweep had swapped for the ask tool icon
 
+### Fixed
+
+- Fixed the `thinking.autoPending` statusbar indicator using question-mark glyphs (`▣?`, nf-md-help_box, `[?]`) in every symbol preset, which made the auto-thinking pending state indistinguishable from a terminal missing-glyph fallback. Replaced with clear loading indicators (`⟳`, fa-circle-o-notch, `[~]`) ([#2267](https://github.com/can1357/oh-my-pi/issues/2267)).
+
 ## [15.10.12] - 2026-06-10
 
 ### Added
