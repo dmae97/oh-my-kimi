@@ -184,7 +184,12 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
+import {
+	deobfuscateSessionContext,
+	obfuscateProviderContext,
+	obfuscateProviderTools,
+	type SecretObfuscator,
+} from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
 import {
 	AUTO_THINKING,
@@ -3999,6 +4004,39 @@ export class AgentSession {
 		return deobfuscateSessionContext(this.sessionManager.buildSessionContext(), this.#obfuscator);
 	}
 
+	#obfuscateForProvider<T>(value: T): T {
+		if (!this.#obfuscator?.hasSecrets()) return value;
+		return this.#obfuscator.obfuscateObject(value);
+	}
+
+	#obfuscateTextForProvider(text: string | undefined): string | undefined {
+		if (!text || !this.#obfuscator?.hasSecrets()) return text;
+		return this.#obfuscator.obfuscate(text);
+	}
+
+	#obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation {
+		if (!this.#obfuscator?.hasSecrets()) return preparation;
+		if (!preparation.previousSummary && !preparation.previousPreserveData) return preparation;
+		return {
+			...preparation,
+			previousSummary: preparation.previousSummary
+				? this.#obfuscator.obfuscate(preparation.previousSummary)
+				: preparation.previousSummary,
+			previousPreserveData: preparation.previousPreserveData
+				? this.#obfuscator.obfuscateObject(preparation.previousPreserveData)
+				: preparation.previousPreserveData,
+		};
+	}
+
+	#deobfuscateFromProvider(text: string): string {
+		if (!this.#obfuscator?.hasSecrets()) return text;
+		return this.#obfuscator.deobfuscate(text);
+	}
+
+	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
+		return this.#obfuscateForProvider(convertToLlm(messages));
+	}
+
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
 		const transformedMessages = await this.#transformContext(messages, signal);
@@ -6185,10 +6223,10 @@ export class AgentSession {
 						customInstructions,
 						compactionAbortController.signal,
 						{
-							promptOverride: compactionPrep.hookPrompt,
-							extraContext: compactionPrep.hookContext,
-							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
-							convertToLlm,
+							promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+							extraContext: this.#obfuscateForProvider(compactionPrep.hookContext),
+							remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
+							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						},
 					);
 					summary = result.summary;
@@ -6371,15 +6409,15 @@ export class AgentSession {
 				throw new Error(`No API key for ${model.provider}`);
 			}
 
-			const handoffText = await generateHandoff(
+			const rawHandoffText = await generateHandoff(
 				this.agent.state.messages,
 				model,
 				apiKey,
 				{
-					systemPrompt: this.#baseSystemPrompt,
-					tools: this.agent.state.tools,
-					customInstructions,
-					convertToLlm,
+					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
+					tools: obfuscateProviderTools(this.#obfuscator, this.agent.state.tools),
+					customInstructions: this.#obfuscateTextForProvider(customInstructions),
+					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 					initiatorOverride: "agent",
 					metadata: this.agent.metadataForProvider(model.provider),
 					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
@@ -6391,6 +6429,7 @@ export class AgentSession {
 				},
 				handoffSignal,
 			);
+			const handoffText = this.#deobfuscateFromProvider(rawHandoffText);
 
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
@@ -7352,17 +7391,24 @@ export class AgentSession {
 			if (!apiKey) continue;
 
 			try {
-				return await compact(preparation, candidate, apiKey, customInstructions, signal, {
-					...options,
-					metadata: this.agent.metadataForProvider(candidate.provider),
-					convertToLlm,
-					telemetry,
-					// Honor the user's /model thinking selection (incl. `off`) on
-					// the manual `/compact` path. Clamped per-model inside compact()
-					// via resolveCompactionEffort so unsupported-effort models
-					// (xai-oauth/grok-build) don't trip requireSupportedEffort.
-					thinkingLevel: this.thinkingLevel,
-				});
+				return await compact(
+					this.#obfuscatePreparationForProvider(preparation),
+					candidate,
+					apiKey,
+					this.#obfuscateTextForProvider(customInstructions),
+					signal,
+					{
+						...options,
+						metadata: this.agent.metadataForProvider(candidate.provider),
+						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+						telemetry,
+						// Honor the user's /model thinking selection (incl. `off`) on
+						// the manual `/compact` path. Clamped per-model inside compact()
+						// via resolveCompactionEffort so unsupported-effort models
+						// (xai-oauth/grok-build) don't trip requireSupportedEffort.
+						thinkingLevel: this.thinkingLevel,
+					},
+				);
 			} catch (error) {
 				if (!this.#isCompactionAuthFailure(error)) {
 					throw error;
@@ -7642,20 +7688,27 @@ export class AgentSession {
 					let attempt = 0;
 					while (true) {
 						try {
-							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
-								promptOverride: compactionPrep.hookPrompt,
-								extraContext: compactionPrep.hookContext,
-								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
-								metadata: this.agent.metadataForProvider(candidate.provider),
-								initiatorOverride: "agent",
-								convertToLlm,
-								telemetry,
-								// Honor the user's /model thinking selection on the
-								// auto-compaction path — the most-fired compaction
-								// site. Clamped per-model inside compact() via
-								// resolveCompactionEffort.
-								thinkingLevel: this.thinkingLevel,
-							});
+							compactResult = await compact(
+								this.#obfuscatePreparationForProvider(preparation),
+								candidate,
+								apiKey,
+								undefined,
+								autoCompactionSignal,
+								{
+									promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+									extraContext: this.#obfuscateForProvider(compactionPrep.hookContext),
+									remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
+									metadata: this.agent.metadataForProvider(candidate.provider),
+									initiatorOverride: "agent",
+									convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+									telemetry,
+									// Honor the user's /model thinking selection on the
+									// auto-compaction path — the most-fired compaction
+									// site. Clamped per-model inside compact() via
+									// resolveCompactionEffort.
+									thinkingLevel: this.thinkingLevel,
+								},
+							);
 							break;
 						} catch (error) {
 							if (autoCompactionSignal.aborted) {
@@ -9000,7 +9053,7 @@ export class AgentSession {
 
 		let replyText = "";
 		let assistantMessage: AssistantMessage | undefined;
-		const stream = streamSimple(model, context, options);
+		const stream = streamSimple(model, obfuscateProviderContext(this.#obfuscator, context), options);
 		for await (const event of stream) {
 			if (event.type === "text_delta") {
 				replyText += event.delta;
@@ -9519,10 +9572,10 @@ export class AgentSession {
 				model,
 				apiKey,
 				signal: this.#branchSummaryAbortController.signal,
-				customInstructions: options.customInstructions,
+				customInstructions: this.#obfuscateTextForProvider(options.customInstructions),
 				reserveTokens: branchSummarySettings.reserveTokens,
 				metadata: this.agent.metadataForProvider(model.provider),
-				convertToLlm,
+				convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 			});
 			this.#branchSummaryAbortController = undefined;
