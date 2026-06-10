@@ -20,8 +20,8 @@
 //!   OpenAI-optimal "6x6u" shape), producing an anti-aliased RGB frame.
 //!
 //! Text normalization, frame chunking, provider shape selection, and archive
-//! management live in `packages/agent/src/compaction/snapcompact.ts`; this
-//! module is only the hot `text -> PNG bytes` path.
+//! management live in `packages/snapcompact/src/snapcompact.ts`; this module
+//! is only the hot `text -> PNG bytes` path.
 
 use std::{borrow::Cow, collections::HashMap, f32::consts::PI, sync::LazyLock};
 

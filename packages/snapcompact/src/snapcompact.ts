@@ -109,6 +109,30 @@ export const SNAPCOMPACT_SHAPES = {
 	},
 } as const satisfies Record<string, SnapcompactShape>;
 
+/** Runtime guard for shape overrides loaded from config or preserve data. */
+export function isSnapcompactShape(value: unknown): value is SnapcompactShape {
+	if (!value || typeof value !== "object") return false;
+	const shape = value as Record<string, unknown>;
+	const font = shape.font;
+	const variant = shape.variant;
+	const detail = shape.imageDetail;
+	return (
+		(font === "5x8" || font === "8x8") &&
+		typeof shape.cellWidth === "number" &&
+		shape.cellWidth > 0 &&
+		typeof shape.cellHeight === "number" &&
+		shape.cellHeight > 0 &&
+		(variant === "sent" || variant === "bw") &&
+		typeof shape.lineRepeat === "number" &&
+		shape.lineRepeat > 0 &&
+		typeof shape.frameSize === "number" &&
+		shape.frameSize > 0 &&
+		typeof shape.frameTokenEstimate === "number" &&
+		shape.frameTokenEstimate > 0 &&
+		(detail === undefined || detail === "auto" || detail === "low" || detail === "high" || detail === "original")
+	);
+}
+
 /** Pick the eval-optimal frame shape for a provider API. */
 export function resolveSnapcompactShape(api?: Api): SnapcompactShape {
 	switch (api) {

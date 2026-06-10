@@ -3,6 +3,7 @@ import type { AssistantMessage, Message, Usage } from "@oh-my-pi/pi-ai";
 import {
 	createSnapcompactFileOps,
 	getPreservedSnapcompactArchive,
+	isSnapcompactShape,
 	normalizeForSnapcompact,
 	renderSnapcompactFrame,
 	resolveSnapcompactShape,
@@ -148,6 +149,13 @@ describe("shape resolution", () => {
 		// Unknown and absent APIs fall back to the refusal-robust plain shape.
 		expect(resolveSnapcompactShape("some-future-api")).toBe(SNAPCOMPACT_SHAPES.anthropic);
 		expect(resolveSnapcompactShape(undefined)).toBe(SNAPCOMPACT_SHAPES.anthropic);
+	});
+
+	it("recognizes complete shape overrides and rejects malformed ones", () => {
+		expect(isSnapcompactShape(SNAPCOMPACT_SHAPES.openaiDense)).toBe(true);
+		expect(isSnapcompactShape({ ...SNAPCOMPACT_SHAPES.openaiDense, cellWidth: 0 })).toBe(false);
+		expect(isSnapcompactShape({ ...SNAPCOMPACT_SHAPES.openaiDense, variant: "color" })).toBe(false);
+		expect(isSnapcompactShape({ ...SNAPCOMPACT_SHAPES.openaiDense, imageDetail: "original" })).toBe(true);
 	});
 
 	it("snapcompactImages forwards the per-frame detail hint", () => {
