@@ -10,6 +10,7 @@ Both are persisted as session entries and converted back into user-context messa
 ## Key implementation files
 
 - `packages/agent/src/compaction/compaction.ts` (context-full summarization and handoff generation)
+- `packages/agent/src/compaction/snapcompact.ts` (snapcompact strategy: history archived as dense bitmap images)
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
 - `packages/agent/src/compaction/utils.ts`
@@ -125,6 +126,20 @@ The automatic paths are intentionally different:
 - **Idle maintenance**
   - Trigger: `runIdleCompaction()` when not streaming or already compacting.
   - Uses `reason: "idle"` and does not auto-continue afterward.
+
+### Snapcompact strategy
+
+`compaction.strategy: "snapcompact"` replaces the LLM summarization call with a local, deterministic archival pass (`snapcompactCompact` in `packages/agent/src/compaction/snapcompact.ts`):
+
+- The discarded history is serialized (same `serializeConversation` path the summarizer uses), whitespace-collapsed, and printed onto square PNG frames using the bundled public-domain X.org `5x8` pixel font — 2576px frames carrying ~165k characters each. Glyph ink cycles through six hues at sentence boundaries to help the model keep its place.
+- Frames persist under `CompactionEntry.preserveData.snapcompact` and are re-attached to the `compactionSummary` message as image blocks on every context rebuild; the entry's `summary` is a deterministic reading guide (grid geometry, role tags, truncation notes) plus the usual file-operation lists.
+- Later compactions carry earlier frames forward. Beyond an 8-frame budget the archive fades from the middle out: the earliest frame (session head — the original request, or the filmed summary of older history) is pinned, and the oldest *unpinned* frames are evicted, so head and tail both survive. If the previous compaction was text-based, its summary is printed at the head of the frame archive as `[Summary of earlier history]`.
+- No model, API key, or network is involved, so snapcompact is also safe for overflow recovery. It requires a vision-capable current model (`model.input` includes `"image"`); otherwise the run falls back to context-full and emits a warning notice (auto and manual paths). Manual `/compact` honors the strategy unless custom instructions are given (those imply a directed LLM summary).
+- Rationale: a vision model reads ~50 chars per image token after provider downscaling, ~7x cheaper than raw text at near-parity recall (SQuAD eval: F1 0.878 vs 0.899).
+
+### Display transcript
+
+Compaction no longer visually restarts the conversation. The TUI renders the **display transcript** (`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`): every path entry in chronological order, with each compaction shown inline as a slim divider — `── 📷 compacted · ctrl+o ──` — at the point it fired. Expanding (ctrl+o) reveals the summary. Only the LLM context resets at the compaction boundary; the scrollback above the divider stays intact, including across session resume.
 
 ### Pre-compaction pruning
 
@@ -373,7 +388,7 @@ Post-navigation event exposing new/old leaf and optional summary entry.
 From `settings-schema.ts`:
 
 - `compaction.enabled` = `true`
-- `compaction.strategy` = `"context-full"` (`"handoff"` and `"off"` are also supported)
+- `compaction.strategy` = `"context-full"` (`"handoff"`, `"shake"`, `"snapcompact"`, and `"off"` are also supported)
 - `compaction.reserveTokens` = `16384`
 - `compaction.keepRecentTokens` = `20000`
 - `compaction.autoContinue` = `true`
