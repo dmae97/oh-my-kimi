@@ -1,6 +1,5 @@
-import { syntheticModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 export const loginSynthetic = createApiKeyLogin({
 	providerLabel: "Synthetic",
@@ -18,10 +17,5 @@ export const loginSynthetic = createApiKeyLogin({
 export const syntheticProvider = {
 	id: "synthetic",
 	name: "Synthetic",
-	defaultModel: "hf:zai-org/GLM-5.1",
-	createModelManagerOptions: (config: ModelManagerConfig) => syntheticModelManagerOptions(config),
-	dynamicModelsAuthoritative: true,
-	catalogDiscovery: { label: "Synthetic", envVars: ["SYNTHETIC_API_KEY"] },
-	envKeys: "SYNTHETIC_API_KEY",
 	login: loginSynthetic,
 } as const satisfies ProviderDefinition;

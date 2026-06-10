@@ -1,5 +1,12 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import {
+	CODEX_BASE_URL,
+	getCodexAccountId,
+	OPENAI_HEADER_VALUES,
+	OPENAI_HEADERS,
+} from "@oh-my-pi/pi-catalog/wire/codex";
 import {
 	$env,
 	$flag,
@@ -20,7 +27,6 @@ import type {
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
 import packageJson from "../../package.json" with { type: "json" };
-import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
 import {
 	type Api,
@@ -58,7 +64,6 @@ import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResp
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
-import { CODEX_BASE_URL, getCodexAccountId, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "./openai-codex/constants";
 import {
 	type CodexRequestOptions,
 	type InputItem,

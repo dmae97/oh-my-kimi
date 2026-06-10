@@ -63,7 +63,7 @@ export class WebSearchTab implements SetupTab {
 		this.#disposed = true;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines = [
 			theme.fg("muted", "Choose the provider the web_search tool should prefer."),
 			"",

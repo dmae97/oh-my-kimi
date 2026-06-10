@@ -9,9 +9,11 @@ import {
 } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { getOAuthApiKey } from "@oh-my-pi/pi-ai/registry/oauth";
 import type { Context, FetchImpl, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 function createModel(provider: "google-gemini-cli" | "google-antigravity"): Model<"google-gemini-cli"> {
-	return {
+	return buildModel({
 		id: provider === "google-antigravity" ? "gemini-3-flash" : "gemini-2.5-flash",
 		name: provider,
 		api: "google-gemini-cli",
@@ -27,7 +29,7 @@ function createModel(provider: "google-gemini-cli" | "google-antigravity"): Mode
 		},
 		contextWindow: 200000,
 		maxTokens: 8192,
-	};
+	});
 }
 
 function createContext(): Context {
@@ -205,10 +207,10 @@ describe("Google Gemini CLI alignment", () => {
 		// "gemini-3-pro-high" (hyphen) but the deployed model IDs use "gemini-3.1-pro-high" (dot),
 		// so the injection was silently skipped and the Cloud Code Assist API returned HTTP 400.
 		for (const modelId of ["gemini-3.1-pro-high", "gemini-3.1-pro-low"] as const) {
-			const model: Model<"google-gemini-cli"> = {
+			const model: Model<"google-gemini-cli"> = buildModel({
 				...createModel("google-antigravity"),
 				id: modelId,
-			};
+			} as ModelSpec<"google-gemini-cli">);
 			const context: Context = {
 				systemPrompt: ["my instructions"],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
@@ -231,12 +233,12 @@ describe("Google Gemini CLI alignment", () => {
 			return new Response('{"error":{"message":"bad request"}}', { status: 400 });
 		};
 
-		const model: Model<"google-gemini-cli"> = {
+		const model: Model<"google-gemini-cli"> = buildModel({
 			...createModel("google-antigravity"),
 			id: "claude-sonnet-4-6",
 			name: "Claude Sonnet 4.6",
 			reasoning: true,
-		};
+		} as ModelSpec<"google-gemini-cli">);
 
 		const result = await streamGoogleGeminiCli(model, createContext(), {
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),

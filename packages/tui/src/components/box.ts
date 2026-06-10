@@ -2,7 +2,9 @@ import type { Component } from "../tui";
 import { applyBackgroundToLine, padding, visibleWidth } from "../utils";
 
 type Cache = {
-	key: bigint | number;
+	width: number;
+	bgSample: string | undefined;
+	childLines: (readonly string[])[];
 	result: string[];
 };
 
@@ -63,24 +65,6 @@ export class Box implements Component {
 		this.#cached = undefined;
 	}
 
-	static #tmp = new Uint32Array(2);
-	#computeCacheKey(width: number, childLines: string[], bgSample: string | undefined): bigint | number {
-		Box.#tmp[0] = width;
-		Box.#tmp[1] = childLines.length;
-		let h = Bun.hash(Box.#tmp);
-		for (const line of childLines) {
-			h = Bun.hash(line, h);
-		}
-		if (bgSample) {
-			h = Bun.hash(bgSample, h);
-		}
-		return h;
-	}
-
-	#matchCache(cacheKey: bigint | number): boolean {
-		return this.#cached?.key === cacheKey;
-	}
-
 	invalidate(): void {
 		this.#invalidateCache();
 		for (const child of this.children) {
@@ -88,58 +72,54 @@ export class Box implements Component {
 		}
 	}
 
-	render(width: number): string[] {
-		if (this.children.length === 0) {
-			return [];
-		}
-
+	render(width: number): readonly string[] {
+		const children = this.children;
+		const count = children.length;
 		const contentWidth = Math.max(1, width - this.#paddingX * 2);
-		const leftPad = padding(this.#paddingX);
+		// bgFn output can change without the function reference changing (theme
+		// mutation); sample it so a silent palette swap still misses the cache.
+		const bgSample = this.#bgFn ? this.#bgFn("test") : undefined;
 
-		// Render all children
-		const childLines: string[] = [];
-		for (const child of this.children) {
-			const lines = child.render(contentWidth);
-			for (const line of lines) {
-				childLines.push(leftPad + line);
+		// Render every child every frame (renders may carry side effects); the
+		// memo only skips re-deriving the padded/background rows. Per the
+		// Component render contract, identical child array references prove the
+		// content is unchanged.
+		const cached = this.#cached;
+		let unchanged =
+			cached !== undefined &&
+			cached.width === width &&
+			cached.bgSample === bgSample &&
+			cached.childLines.length === count;
+		const childLines: (readonly string[])[] = new Array(count);
+		let contentRows = 0;
+		for (let i = 0; i < count; i++) {
+			const lines = children[i]!.render(contentWidth);
+			childLines[i] = lines;
+			contentRows += lines.length;
+			if (unchanged && cached!.childLines[i] !== lines) unchanged = false;
+		}
+		if (unchanged) return cached!.result;
+
+		const result: string[] = [];
+		if (contentRows > 0) {
+			const leftPad = padding(this.#paddingX);
+			// Top padding
+			for (let i = 0; i < this.#paddingY; i++) {
+				result.push(this.#applyBg("", width));
+			}
+			// Content
+			for (const lines of childLines) {
+				for (const line of lines) {
+					result.push(this.#applyBg(leftPad + line, width));
+				}
+			}
+			// Bottom padding
+			for (let i = 0; i < this.#paddingY; i++) {
+				result.push(this.#applyBg("", width));
 			}
 		}
 
-		if (childLines.length === 0) {
-			return [];
-		}
-
-		// Check if bgFn output changed by sampling
-		const bgSample = this.#bgFn ? this.#bgFn("test") : undefined;
-
-		const cacheKey = this.#computeCacheKey(width, childLines, bgSample);
-
-		// Check cache validity
-		if (this.#matchCache(cacheKey)) {
-			return this.#cached!.result;
-		}
-
-		// Apply background and padding
-		const result: string[] = [];
-
-		// Top padding
-		for (let i = 0; i < this.#paddingY; i++) {
-			result.push(this.#applyBg("", width));
-		}
-
-		// Content
-		for (const line of childLines) {
-			result.push(this.#applyBg(line, width));
-		}
-
-		// Bottom padding
-		for (let i = 0; i < this.#paddingY; i++) {
-			result.push(this.#applyBg("", width));
-		}
-
-		// Update cache
-		this.#cached = { key: cacheKey, result };
-
+		this.#cached = { width, bgSample, childLines, result };
 		return result;
 	}
 

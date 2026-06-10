@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { reset as resetCapabilities } from "@oh-my-pi/pi-coding-agent/capability";
 import { type SSHHost, sshCapability } from "@oh-my-pi/pi-coding-agent/capability/ssh";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -13,7 +14,7 @@ import { loadSshTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { getSSHConfigPath, TempDir } from "@oh-my-pi/pi-utils";
 
 function createModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		id: "mock",
 		name: "mock",
 		api: "openai-responses",
@@ -24,7 +25,7 @@ function createModel(): Model<"openai-responses"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8192,
 		maxTokens: 2048,
-	};
+	});
 }
 
 describe("AgentSession SSH tool refresh", () => {

@@ -56,7 +56,7 @@ function addGroupedReadArgs(component: ReadToolGroupComponent): void {
 	component.updateArgs({ path: groupedReadRepeatedRanges }, "read-ranges");
 }
 
-function renderReadGroupFixtureState(state: GalleryFixtureState, width: number, expanded: boolean): string[] {
+function renderReadGroupFixtureState(state: GalleryFixtureState, width: number, expanded: boolean): readonly string[] {
 	const component = new ReadToolGroupComponent();
 	component.setExpanded(expanded);
 

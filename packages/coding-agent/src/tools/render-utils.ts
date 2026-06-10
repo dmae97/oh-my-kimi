@@ -521,7 +521,7 @@ function parseDiffSegments(lines: string[]): DiffSegment[] {
 
 	for (const line of lines) {
 		const isChange = line.startsWith("+") || line.startsWith("-");
-		const isEllipsis = line.trimStart().startsWith("...");
+		const isEllipsis = line.trimStart().startsWith("...") || line.trim().length === 0;
 
 		if (isEllipsis) {
 			if (current) segments.push(current);
@@ -628,7 +628,7 @@ export function truncateDiffByHunk(
 					const half = Math.ceil(allowedLines / 2);
 					if (seg.lines.length > allowedLines) {
 						kept.push(...seg.lines.slice(0, half));
-						kept.push(seg.lines[0].replace(/^(\s*\d*\s*).*/, "$1..."));
+						kept.push("");
 						kept.push(...seg.lines.slice(-half));
 					} else {
 						kept.push(...seg.lines);
@@ -761,7 +761,7 @@ export function createCachedComponent(
 ): Component {
 	let cached: { key: bigint; lines: string[] } | undefined;
 	return {
-		render(width: number): string[] {
+		render(width: number): readonly string[] {
 			const expanded = getExpanded();
 			const key = new Hasher().bool(expanded).u32(width).digest();
 			if (cached?.key === key) return cached.lines;

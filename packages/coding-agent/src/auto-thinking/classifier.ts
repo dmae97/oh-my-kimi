@@ -86,6 +86,7 @@ async function classifyOnline(input: string, deps: ClassifyDifficultyDeps): Prom
 			apiKey: deps.registry.resolver(model.provider, {
 				sessionId: deps.sessionId,
 				baseUrl: model.baseUrl,
+				modelId: model.id,
 			}),
 			maxTokens,
 			disableReasoning: true,

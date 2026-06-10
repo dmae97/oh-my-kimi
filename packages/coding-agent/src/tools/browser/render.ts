@@ -66,7 +66,7 @@ function dropTrailingBlankLines(text: string): string {
 function appendLine(component: Component, line: string | undefined): Component {
 	if (!line) return component;
 	const wrapped = {
-		render: (width: number): string[] => {
+		render: (width: number): readonly string[] => {
 			const base = component.render(width);
 			return [...base, line];
 		},
@@ -95,7 +95,7 @@ function renderRunCell(
 
 	let cached: { key: bigint; width: number; lines: string[] } | undefined;
 	return markFramedBlockComponent({
-		render: (width: number): string[] => {
+		render: (width: number): readonly string[] => {
 			const expanded = options.renderContext?.expanded ?? options.expanded;
 			const previewLines = options.renderContext?.previewLines ?? BROWSER_DEFAULT_PREVIEW_LINES;
 			const key = new Hasher()

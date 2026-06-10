@@ -1,5 +1,7 @@
 //! Cargo build/test output filters.
 
+use std::{collections::BTreeMap, fmt::Write as _};
+
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
 pub fn supports(subcommand: Option<&str>) -> bool {
@@ -26,9 +28,11 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		Some("metadata") => input.to_string(),
 		Some("test" | "bench") => failures_only(&cleaned, exit_code),
 		Some("nextest") => filter_nextest(&cleaned),
-		Some("build" | "check" | "clippy" | "doc" | "run") => condense_build(&cleaned),
+		Some("clippy") => filter_clippy(&cleaned, exit_code),
+		Some("build" | "check" | "doc" | "run") => condense_build(&cleaned),
 		Some("fmt") => condense_fmt(&cleaned),
-		Some("tree" | "update" | "install" | "publish") => compact_general(&cleaned),
+		Some("install") => filter_install(&cleaned, exit_code),
+		Some("tree" | "update" | "publish") => compact_general(&cleaned),
 		_ => cleaned,
 	};
 	if text == input {
@@ -289,6 +293,182 @@ fn is_general_cargo_noise(line: &str) -> bool {
 		|| trimmed.starts_with("Checking ")
 		|| trimmed.starts_with("Fresh ")
 }
+/// Filter `cargo install` output: strip compilation/download noise, keep
+/// install/error summaries.
+fn filter_install(input: &str, exit_code: i32) -> String {
+	let stripped = primitives::strip_lines(input, &[is_compiling_noise]);
+
+	if exit_code != 0 {
+		return primitives::head_tail_lines(&stripped, 100, 40);
+	}
+
+	let mut summaries = String::new();
+	for line in stripped.lines() {
+		let trimmed = line.trim_start();
+		if is_install_summary(trimmed) || trimmed.starts_with("WARNING:") {
+			summaries.push_str(line);
+			summaries.push('\n');
+		}
+	}
+
+	if summaries.is_empty() {
+		let deduped = primitives::dedup_consecutive_lines(&stripped);
+		primitives::head_tail_lines(&deduped, 60, 20)
+	} else {
+		primitives::dedup_consecutive_lines(&summaries)
+	}
+}
+
+fn is_install_summary(line: &str) -> bool {
+	line.starts_with("Installed ")
+		|| line.starts_with("Replaced ")
+		|| line.starts_with("Replacing ")
+		|| line.starts_with("Ignored ")
+}
+
+#[derive(Debug)]
+struct ClippyWarning {
+	location:  String,
+	message:   String,
+	lint_rule: Option<String>,
+}
+
+/// Filter `cargo clippy`: group warnings by lint rule; keep errors verbatim.
+fn filter_clippy(input: &str, exit_code: i32) -> String {
+	let no_noise = primitives::strip_lines(input, &[is_compiling_noise]);
+
+	let has_compile_error = no_noise.lines().any(|l| {
+		let t = l.trim_start();
+		(t.starts_with("error:")
+			&& !t.starts_with("error: could not compile")
+			&& !t.starts_with("error: aborting"))
+			|| t.starts_with("error[")
+	});
+
+	if has_compile_error {
+		let grouped = primitives::group_by_file(&no_noise, 20);
+		return primitives::head_tail_lines(&grouped, 120, 60);
+	}
+
+	let warnings = parse_clippy_warnings(&no_noise);
+	if warnings.is_empty() {
+		let deduped = primitives::dedup_consecutive_lines(&no_noise);
+		return primitives::head_tail_lines(&deduped, 80, 40);
+	}
+
+	format_clippy_grouped(&warnings, exit_code)
+}
+
+fn parse_clippy_warnings(input: &str) -> Vec<ClippyWarning> {
+	let mut warnings = Vec::new();
+	let lines: Vec<&str> = input.lines().collect();
+	let mut i = 0;
+
+	while i < lines.len() {
+		let trimmed = lines[i].trim();
+		if !trimmed.starts_with("warning: ") {
+			i += 1;
+			continue;
+		}
+
+		let msg = trimmed.strip_prefix("warning: ").unwrap_or("");
+		// Skip summary lines like "warning: `crate` (lib) generated N warning(s)"
+		if msg.contains(" generated ") && (msg.ends_with(" warnings") || msg.ends_with(" warning")) {
+			i += 1;
+			continue;
+		}
+
+		let message = msg.to_string();
+		let mut location = String::new();
+		let mut lint_rule = None;
+
+		i += 1;
+		while i < lines.len() {
+			let t = lines[i].trim();
+			if t.starts_with("--> ") {
+				location = t.strip_prefix("--> ").unwrap_or("").to_string();
+			}
+			if let Some(rule) = extract_lint_rule(t) {
+				lint_rule = Some(rule);
+			}
+			i += 1;
+			if i >= lines.len() {
+				break;
+			}
+			let next = lines[i].trim();
+			if next.starts_with("warning: ")
+				|| next.starts_with("error:")
+				|| next.starts_with("error[")
+			{
+				break;
+			}
+		}
+
+		if !message.is_empty() {
+			warnings.push(ClippyWarning { location, message, lint_rule });
+		}
+	}
+
+	warnings
+}
+
+fn extract_lint_rule(line: &str) -> Option<String> {
+	let line = line.trim();
+	if !line.starts_with("= note:") {
+		return None;
+	}
+	let after_note = line.strip_prefix("= note:")?.trim();
+	let rest = after_note
+		.strip_prefix("`#[warn(")
+		.or_else(|| after_note.strip_prefix("`#[deny("))
+		.or_else(|| after_note.strip_prefix("`#[allow("))?;
+	Some(rest.split(")]`").next()?.to_string())
+}
+
+fn format_clippy_grouped(warnings: &[ClippyWarning], exit_code: i32) -> String {
+	let mut groups: BTreeMap<String, Vec<&ClippyWarning>> = BTreeMap::new();
+	let mut ungrouped = Vec::new();
+
+	for w in warnings {
+		if let Some(ref rule) = w.lint_rule {
+			groups.entry(rule.clone()).or_default().push(w);
+		} else {
+			ungrouped.push(w);
+		}
+	}
+
+	let mut out = String::new();
+
+	for (rule, warns) in &groups {
+		if warns.len() == 1 {
+			let loc = if warns[0].location.is_empty() {
+				String::new()
+			} else {
+				format!("{}  ", warns[0].location)
+			};
+			let _ = writeln!(out, "clippy: {} — {}{}", rule, loc, warns[0].message);
+		} else {
+			let _ = writeln!(out, "clippy: {} ({} warnings)", rule, warns.len());
+			for w in warns {
+				let _ = writeln!(out, "  {}  {}", w.location, w.message);
+			}
+		}
+	}
+
+	for w in &ungrouped {
+		let _ = writeln!(out, "clippy warning: {}  {}", w.location, w.message);
+	}
+
+	if exit_code != 0 {
+		out.push_str("(clippy found issues)\n");
+	}
+
+	if out.is_empty() {
+		"cargo clippy: ok\n".to_string()
+	} else {
+		out
+	}
+}
 
 #[cfg(test)]
 mod tests {
@@ -337,21 +517,170 @@ mod tests {
 		assert!(out.contains("stdout text"));
 		assert!(out.contains("Summary [0.2s] 2 tests run: 1 passed, 1 failed"));
 	}
+	#[test]
+	fn install_strips_noise_keeps_summary() {
+		assert!(supports(Some("install")));
+		let input = concat!(
+			"    Updating crates.io index\n",
+			"  Downloaded foo v1.0.0\n",
+			"   Compiling bar v0.1.0\n",
+			"   Compiling tool v3.0.0\n",
+			"    Finished release [optimized] target(s) in 45.2s\n",
+			"  Installing /home/user/.cargo/bin/tool\n",
+			"   Installed package `tool v3.0.0` (executable `tool`)\n",
+		);
+		let out = filter_install(input, 0);
+		assert!(!out.contains("Compiling"));
+		assert!(!out.contains("Downloaded"));
+		assert!(!out.contains("Updating"));
+		assert!(!out.contains("Finished"));
+		assert!(out.contains("Installed package `tool v3.0.0`"));
+	}
 
 	#[test]
-	fn install_uses_general_head_tail_dedup_strategy() {
-		assert!(supports(Some("install")));
-		let mut input = "Downloading crate\n".repeat(2);
-		input.push_str("Installed package `tool v1.0.0`\n");
-		for i in 0..130 {
-			input.push_str("line ");
-			input.push_str(&i.to_string());
-			input.push('\n');
-		}
-		let out = compact_general(&input);
-		assert!(!out.contains("Downloading crate"));
-		assert!(out.contains("Installed package `tool v1.0.0`"));
-		assert!(out.contains("lines omitted"));
+	fn install_already_installed() {
+		let input = concat!(
+			"    Updating crates.io index\n",
+			"     Ignored package `tool v1.0.0` is already installed, use --force to override\n",
+		);
+		let out = filter_install(input, 0);
+		assert!(!out.contains("Updating"));
+		assert!(out.contains("Ignored package `tool v1.0.0`"));
+	}
+
+	#[test]
+	fn install_error_preserves_context() {
+		let input = concat!(
+			"    Updating crates.io index\n",
+			"   Compiling foo v0.1.0\n",
+			"error[E0425]: cannot find value `x` in this scope\n",
+			" --> src/main.rs:5:9\n",
+			"  |\n",
+			"5 |     let y = x;\n",
+			"  |             ^ not found in this scope\n",
+			"error: could not compile `foo` due to 1 previous error\n",
+		);
+		let out = filter_install(input, 1);
+		assert!(!out.contains("Compiling"));
+		assert!(!out.contains("Updating"));
+		assert!(out.contains("error[E0425]"));
+		assert!(out.contains("cannot find value `x`"));
+	}
+
+	#[test]
+	fn clippy_groups_warnings_by_lint_rule() {
+		assert!(supports(Some("clippy")));
+		let input = concat!(
+			"    Checking foo v0.1.0\n",
+			"warning: unused variable: `x`\n",
+			" --> src/lib.rs:2:9\n",
+			"  |\n",
+			"2 |     let x = 1;\n",
+			"  |         ^ help: if this is intentional, prefix with an underscore: `_x`\n",
+			"  |\n",
+			"  = note: `#[warn(unused_variables)]` on by default\n",
+			"\n",
+			"warning: unused variable: `y`\n",
+			" --> src/lib.rs:5:9\n",
+			"  |\n",
+			"5 |     let y = 2;\n",
+			"  |         ^ help: if this is intentional, prefix with an underscore: `_y`\n",
+			"  |\n",
+			"  = note: `#[warn(unused_variables)]` on by default\n",
+			"\n",
+			"warning: `foo` (lib) generated 2 warnings\n",
+		);
+		let out = filter_clippy(input, 0);
+		assert!(!out.contains("Checking"));
+		assert!(!out.contains("generated"));
+		assert!(out.contains("unused_variables"));
+		assert!(out.contains("2 warnings"));
+		assert!(out.contains("src/lib.rs:2:9"));
+		assert!(out.contains("src/lib.rs:5:9"));
+	}
+
+	#[test]
+	fn clippy_single_warning_compact() {
+		let input = concat!(
+			"warning: redundant clone\n",
+			" --> src/main.rs:10:3\n",
+			"  |\n",
+			"10|     foo.clone()\n",
+			"  |     ^^^^^^^^^^^^ help: remove this\n",
+			"  |\n",
+			"  = note: `#[warn(clippy::redundant_clone)]` on by default\n",
+			"\n",
+			"warning: `foo` (bin \"foo\") generated 1 warning\n",
+		);
+		let out = filter_clippy(input, 0);
+		assert!(!out.contains("generated"));
+		assert!(out.contains("clippy::redundant_clone"));
+		assert!(out.contains("src/main.rs:10:3"));
+		assert!(out.contains("redundant clone"));
+	}
+
+	#[test]
+	fn clippy_multiple_rules_grouped_separately() {
+		let input = concat!(
+			"warning: unused variable: `x`\n",
+			" --> src/lib.rs:2:9\n",
+			"  |\n",
+			"2 |     let x = 1;\n",
+			"  |         ^\n",
+			"  |\n",
+			"  = note: `#[warn(unused_variables)]` on by default\n",
+			"\n",
+			"warning: redundant clone\n",
+			" --> src/main.rs:10:3\n",
+			"  |\n",
+			"10|     foo.clone()\n",
+			"  |     ^^^^^^^^^^^^ help: remove this\n",
+			"  |\n",
+			"  = note: `#[warn(clippy::redundant_clone)]` on by default\n",
+			"\n",
+			"warning: `foo` (lib) generated 2 warnings\n",
+		);
+		let out = filter_clippy(input, 0);
+		assert!(out.contains("unused_variables"));
+		assert!(out.contains("clippy::redundant_clone"));
+		// Two separate groups, not merged
+		let unused_pos = out.find("unused_variables").unwrap();
+		let clone_pos = out.find("clippy::redundant_clone").unwrap();
+		assert!(unused_pos != clone_pos);
+	}
+
+	#[test]
+	fn clippy_compile_error_falls_back_to_build_style() {
+		let input = concat!(
+			"   Compiling foo v0.1.0\n",
+			"error[E0425]: cannot find value `x` in this scope\n",
+			" --> src/lib.rs:5:9\n",
+			"  |\n",
+			"5 |     let y = x;\n",
+			"  |             ^ not found in this scope\n",
+			"error: could not compile `foo` due to 1 previous error\n",
+		);
+		let out = filter_clippy(input, 1);
+		assert!(!out.contains("Compiling"));
+		assert!(out.contains("error[E0425]"));
+		assert!(out.contains("cannot find value `x`"));
+		// Should NOT have clippy: prefix since it fell back to build style
+		assert!(!out.contains("clippy:"));
+	}
+
+	#[test]
+	fn clippy_exit_code_signals_issues() {
+		let input = concat!(
+			"warning: unused variable: `x`\n",
+			" --> src/lib.rs:2:9\n",
+			"  |\n",
+			"2 |     let x = 1;\n",
+			"  |         ^\n",
+			"  |\n",
+			"  = note: `#[deny(unused_variables)]` on by default\n",
+		);
+		let out = filter_clippy(input, 1);
+		assert!(out.contains("(clippy found issues)"));
 	}
 
 	#[test]
@@ -367,5 +696,122 @@ mod tests {
 		let out = filter(&ctx, input, 0);
 		assert_eq!(out.text, input);
 		assert!(!out.changed);
+	}
+
+	// --- cargo test failure — failure block and panic line survive ---
+
+	#[test]
+	fn cargo_test_failure_keeps_thread_panic_and_failures_block() {
+		// `cargo test` with exit 101 must surface the thread panic message,
+		// the `failures:` block listing the failing test names, and the
+		// `test result: FAILED` summary line.  Passing test lines and
+		// `Compiling` noise must not appear.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "cargo",
+			subcommand: Some("test"),
+			command:    "cargo test",
+			config:     &cfg,
+		};
+		let input = concat!(
+			"   Compiling pi-shell v0.1.0\n",
+			"running 3 tests\n",
+			"test ok_one ... ok\n",
+			"test ok_two ... ok\n",
+			"test bad_parse ... FAILED\n",
+			"\n",
+			"---- bad_parse stdout ----\n",
+			"thread 'bad_parse' panicked at 'assertion failed: result.is_ok()', src/lib.rs:42:5\n",
+			"note: run with RUST_BACKTRACE=1 for a backtrace.\n",
+			"\n",
+			"failures:\n",
+			"    bad_parse\n",
+			"\n",
+			"test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured\n",
+		);
+
+		let out = filter(&ctx, input, 101);
+
+		// Failure evidence must survive.
+		assert!(
+			out.text.contains("thread 'bad_parse' panicked"),
+			"panic line must survive: {:?}",
+			out.text
+		);
+		assert!(out.text.contains("failures:\n"), "failures block must survive: {:?}", out.text);
+		assert!(out.text.contains("bad_parse"), "failing test name must survive: {:?}", out.text);
+		assert!(out.text.contains("test result: FAILED"), "result line must survive: {:?}", out.text);
+		// Noise must be stripped.
+		assert!(!out.text.contains("Compiling"), "Compiling noise must be stripped");
+		assert!(!out.text.contains("test ok_one"), "passing test lines must be stripped");
+		assert!(!out.text.contains("test ok_two"), "passing test lines must be stripped");
+	}
+
+	#[test]
+	fn cargo_test_success_via_filter_produces_one_line_summary() {
+		// The token-savings contract: a full passing run must collapse to a
+		// single `cargo test: N passed (M suite[s])` line through filter(),
+		// not through the helper directly.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "cargo",
+			subcommand: Some("test"),
+			command:    "cargo test --workspace",
+			config:     &cfg,
+		};
+		let input = concat!(
+			"   Compiling pi-shell v0.1.0\n",
+			"running 42 tests\n",
+			"test a ... ok\n",
+			"test b ... ok\n",
+			"test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+			"running 18 tests\n",
+			"test c ... ok\n",
+			"test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+			"warning: `pi-shell` (test \"integration\") generated 2 warnings\n",
+		);
+
+		let out = filter(&ctx, input, 0);
+
+		assert!(out.changed, "successful run must be compacted");
+		// One-line summary: total passed, suite count, warnings.
+		assert!(out.text.contains("60 passed"), "total across suites must be summed: {:?}", out.text);
+		assert!(out.text.contains("2 suites"), "suite count must appear: {:?}", out.text);
+		assert!(out.text.contains("2 warnings"), "warning count must appear: {:?}", out.text);
+		// No per-test lines.
+		assert!(!out.text.contains("test a"), "individual test lines must be stripped");
+		assert!(!out.text.contains("Compiling"), "Compiling noise must be stripped");
+	}
+
+	#[test]
+	fn cargo_test_failure_exit_code_non_zero_is_not_summarized() {
+		// A run that reports `test result: ok` but then exits non-zero
+		// (e.g. a post-test hook failing) must not be falsely summarized
+		// as a clean pass — failures_only should fall through to condense_build
+		// rather than fabricating a `cargo test: N passed` line.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "cargo",
+			subcommand: Some("test"),
+			command:    "cargo test",
+			config:     &cfg,
+		};
+		// The test suite itself says ok, but a subsequent build step failed.
+		let input = concat!(
+			"running 1 tests\n",
+			"test it_works ... ok\n",
+			"test result: ok. 1 passed; 0 failed\n",
+			"error: could not compile `pi-shell` due to 1 previous error\n",
+		);
+
+		let out = filter(&ctx, input, 1);
+
+		// Must not emit a clean "cargo test: N passed" summary because exit was
+		// non-zero.
+		assert!(
+			!out.text.starts_with("cargo test:"),
+			"must not fabricate a pass summary on non-zero exit: {:?}",
+			out.text
+		);
 	}
 }

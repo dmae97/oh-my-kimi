@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
-import { type Context, type Model, OPENAI_MAX_OUTPUT_TOKENS } from "@oh-my-pi/pi-ai/types";
+import { type Context, type Model, type ModelSpec, OPENAI_MAX_OUTPUT_TOKENS } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 // Output-token wire policy for OpenAI-family providers:
 //   - Non-aggregator completions + all responses: clamp to OPENAI_MAX_OUTPUT_TOKENS
@@ -92,7 +93,7 @@ async function captureCompletionsBody(
 
 // The OpenRouter z-ai/glm-4.7 entry that triggered the report.
 function glmCompletionsModel(maxTokens: number): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "z-ai/glm-4.7",
 		name: "GLM 4.7",
 		api: "openai-completions",
@@ -103,12 +104,12 @@ function glmCompletionsModel(maxTokens: number): Model<"openai-completions"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 202_752,
 		maxTokens,
-	};
+	});
 }
 
 // Non-aggregator completions model: the 64k clamp applies (max_tokens is sent).
 function directCompletionsModel(maxTokens: number): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "glm-4.7",
 		name: "GLM 4.7 (direct)",
 		api: "openai-completions",
@@ -119,12 +120,12 @@ function directCompletionsModel(maxTokens: number): Model<"openai-completions"> 
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 131_072,
 		maxTokens,
-	};
+	});
 }
 
 // Kimi via OpenRouter stays exempt from the omit (TPM rate limits need max_tokens).
 function kimiOpenRouterModel(maxTokens: number): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "moonshotai/kimi-k2.5",
 		name: "Kimi K2.5",
 		api: "openai-completions",
@@ -135,16 +136,18 @@ function kimiOpenRouterModel(maxTokens: number): Model<"openai-completions"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 131_072,
 		maxTokens,
-	};
+	});
 }
 
 describe("OpenAI-family output-token cap", () => {
 	it("clamps openai-responses max_output_tokens to the 64k ceiling", async () => {
-		const model: Model<"openai-responses"> = {
-			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-responses">),
+		const base = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-responses">;
+		const model: Model<"openai-responses"> = buildModel({
+			...base,
 			reasoning: false,
 			maxTokens: 200_000,
-		};
+			compat: base.compatConfig,
+		} as ModelSpec<"openai-responses">);
 		const body = await drainResponses(model);
 		expect(body.max_output_tokens).toBe(OPENAI_MAX_OUTPUT_TOKENS);
 	});

@@ -16,63 +16,35 @@ import * as path from "node:path";
  * relative imports inside the compiled binary, so the worker still failed
  * to load (issue #1027 was the same root cause, retriggered).
  *
- * The working pattern documented in AGENTS.md is a two-part contract:
- *
- *   1. `spawnTabWorker` branches on `isCompiledBinary()` and uses a literal
- *      string path under `--compile`. Bun's `--compile` analyzer discovers
- *      that literal at the `new Worker("...", ...)` call site. The path is
- *      `--root`-relative (`./packages/coding-agent/src/...`) because the
- *      build script passes `--root ../..`.
- *   2. `scripts/build-binary.ts` lists the worker as an explicit additional
- *      `--compile` entrypoint. Without this, Bun sees the literal at the
- *      spawn site but never emits the worker module into bunfs.
- *
- * Either half alone is insufficient — both must agree on the exact path.
- * Runtime end-to-end coverage lives in `omp --smoke-test` (via the stats
- * sync worker). This test is the cheap static contract that catches an
- * accidental regression of either half in code review / CI.
+ * The current contract is simpler: when the process was started from the omp
+ * CLI (source, npm bundle, or compiled binary), spawn sites re-enter the
+ * declared worker-host entry — `new Worker(workerHostEntry(), { argv })` — and
+ * the CLI dispatches the hidden argv selector. Outside a CLI host (bun test,
+ * SDK embedding) they load the worker module directly. No separate worker
+ * module is ever bundled or listed as a `--compile` entrypoint.
  */
-describe("issue #1011 — tab worker entry must survive `bun build --compile`", () => {
+describe("issue #1011 — tab worker must re-enter the CLI entrypoint", () => {
 	const packageDir = path.resolve(import.meta.dir, "..");
 	const supervisorPath = path.join(packageDir, "src/tools/browser/tab-supervisor.ts");
 	const buildBinaryPath = path.join(packageDir, "scripts/build-binary.ts");
-	// `--root` is `../..` from packages/coding-agent, so the literal that
-	// matches at runtime inside the compiled bunfs is repo-relative.
-	const compiledLiteral = "./packages/coding-agent/src/tools/browser/tab-worker-entry.ts";
-	// The build script's cwd is packages/coding-agent, so its entrypoint
-	// path is package-relative.
-	const buildEntrypoint = "./src/tools/browser/tab-worker-entry.ts";
+	const workerArg = "__omp_tab_worker";
 
-	it("tab-supervisor uses the isCompiledBinary() hybrid spawn pattern with a static literal", async () => {
+	it("tab-supervisor re-enters the worker-host entry with the argv selector", async () => {
 		const source = await Bun.file(supervisorPath).text();
 
-		// The exact literal at the `new Worker(...)` call must be present
-		// and discoverable to Bun's `--compile` static analyzer.
 		expect(
-			source.includes(`new Worker("${compiledLiteral}"`),
-			`tab-supervisor.ts must spawn the worker with the literal "${compiledLiteral}" so Bun's --compile analyzer can embed it`,
+			source.includes("workerHostEntry()"),
+			"tab-supervisor.ts must spawn via the declared worker-host entry",
 		).toBe(true);
-
-		// And the dev-mode branch should keep the portable import.meta.url
-		// form so spawns work outside of compiled binaries too.
+		expect(source).toContain(`argv: ["${workerArg}"]`);
 		expect(
-			/new Worker\(\s*new URL\("\.\/tab-worker-entry\.ts",\s*import\.meta\.url\)/.test(source),
-			"tab-supervisor.ts must keep a `new URL('./tab-worker-entry.ts', import.meta.url)` branch for dev/source spawns",
-		).toBe(true);
-
-		// And the branching must come from `isCompiledBinary()` — not, say,
-		// a hard-coded check, an env var, or a renamed helper.
-		expect(
-			source.includes("isCompiledBinary()"),
-			"tab-supervisor.ts must select the spawn pattern via isCompiledBinary()",
+			source.includes('new URL("./tab-worker-entry.ts", import.meta.url)'),
+			"tab-supervisor.ts must keep the direct-module fallback for non-CLI hosts",
 		).toBe(true);
 	});
 
-	it("build-binary.ts lists tab-worker-entry as an explicit --compile entrypoint", async () => {
+	it("build-binary.ts no longer lists tab-worker-entry as a separate --compile entrypoint", async () => {
 		const source = await Bun.file(buildBinaryPath).text();
-		expect(
-			source.includes(`"${buildEntrypoint}"`),
-			`scripts/build-binary.ts must include "${buildEntrypoint}" as an explicit --compile entrypoint so Bun emits the worker into bunfs`,
-		).toBe(true);
+		expect(source).not.toContain("./src/tools/browser/tab-worker-entry.ts");
 	});
 });

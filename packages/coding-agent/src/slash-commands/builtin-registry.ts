@@ -30,6 +30,7 @@ import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
 import { handleSshAcp } from "./helpers/ssh";
+import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
@@ -78,6 +79,23 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open settings menu",
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showSettingsSelector();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "setup",
+		aliases: ["providers"],
+		description: "Open provider setup",
+		allowArgs: true,
+		subcommands: [{ name: "providers", description: "Configure sign-in and web search providers" }],
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim().toLowerCase();
+			const opensProviders = args === "" || args === "providers";
+			if (opensProviders) {
+				await runtime.ctx.showProviderSetup();
+			} else {
+				runtime.ctx.showWarning(`Usage: /${command.name} [providers]`);
+			}
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -540,6 +558,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleUsageCommand();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "stats",
+		description: "Launch the local stats dashboard",
+		inlineHint: "[--port <port>]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const parsed = parseStatsDashboardArgs(command.args);
+			if ("error" in parsed) return usage(parsed.error, runtime);
+
+			await runtime.output("Syncing session files...");
+			try {
+				const result = await launchStatsDashboard(parsed);
+				await runtime.output(result.message);
+			} catch (error) {
+				await runtime.output(`Stats dashboard failed: ${errorMessage(error)}`);
+			}
+			return commandConsumed();
 		},
 	},
 	{
@@ -1677,10 +1714,13 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 	}
 }
 
+export const BUILTIN_SLASH_COMMAND_RESERVED_NAMES: ReadonlySet<string> = new Set(BUILTIN_SLASH_COMMAND_LOOKUP.keys());
+
 /** Builtin command metadata used for slash-command autocomplete and help text. */
 export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BUILTIN_SLASH_COMMAND_REGISTRY.map(
 	command => ({
 		name: command.name,
+		aliases: command.aliases,
 		description: command.description,
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,

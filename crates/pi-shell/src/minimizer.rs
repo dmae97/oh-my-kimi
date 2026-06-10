@@ -44,8 +44,11 @@ pub struct MinimizerOutput {
 	/// Byte length of `text` after minimization.
 	#[allow(dead_code, reason = "test-only API surface")]
 	pub output_bytes:  usize,
-	/// Name of the dispatch path that produced this output (e.g. `"git"`,
-	/// `"pipeline:gradle"`, or `"passthrough"`). Useful for telemetry.
+	/// Label for the dispatch path that produced this output (e.g. `"git"`,
+	/// `"pipeline:gradle"`, or `"passthrough"`). For non-rewrite misses, this
+	/// carries the reason label (e.g. `"compound"`, `"piped"`, `"parse-error"`,
+	/// `"too-large"`, `"disabled"`, `"unknown"`, `"unsupported"`,
+	/// `"pipeline-noop"`).
 	pub filter:        &'static str,
 	/// Original (un-minimized) capture, surfaced only when the filter
 	/// actually rewrote the output. The caller (JS session layer) is expected
@@ -79,7 +82,7 @@ impl MinimizerOutput {
 	}
 
 	/// Attach a `filter` label (e.g. `"git"`, `"pipeline:gradle"`) to an
-	/// output for telemetry. No-op on passthrough outputs.
+	/// output for telemetry, including non-rewrite miss reasons.
 	#[must_use]
 	pub const fn labeled(mut self, filter: &'static str) -> Self {
 		self.filter = filter;
@@ -113,8 +116,29 @@ impl MinimizerOutput {
 	}
 }
 
+/// Aggregate output for a segmented chain.
+#[allow(
+	clippy::missing_const_for_fn,
+	reason = "kept non-const because this constructs owned output used only at runtime"
+)]
+pub(crate) fn chain_output(
+	text: String,
+	original_text: String,
+	input_bytes: usize,
+	changed: bool,
+) -> MinimizerOutput {
+	let filter = if changed { "chain" } else { "chain-noop" };
+	let output_bytes = text.len();
+	MinimizerOutput {
+		text,
+		changed,
+		input_bytes,
+		output_bytes,
+		filter,
+		original_text: Some(original_text),
+	}
+}
 /// Apply the configured filter pipeline to a captured buffer.
-///
 /// Returns the original text unchanged when minimization is disabled, no
 /// filter matches, or a filter panics.
 pub fn apply(

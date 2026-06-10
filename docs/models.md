@@ -137,6 +137,20 @@ Must define at least one of:
 - `id` required
 - `contextWindow` and `maxTokens` must be positive if provided
 
+### Command-resolved secrets
+
+Provider `apiKey` values and provider/model `headers` values may start with `!` to read a secret from command stdout. The command is run with a 10 s timeout, stdout is trimmed, and empty/failing commands are omitted:
+
+```yaml
+providers:
+  openai:
+    apiKey: "!op read op://dev/openai/api-key"
+    headers:
+      X-Team-Key: "!bw get password omp-team-key"
+```
+
+Successful command outputs are cached for the process lifetime so the command is not re-run for every model.
+
 ## Merge and override order
 
 ModelRegistry pipeline (on refresh):
@@ -271,6 +285,8 @@ If `lm-studio` is not explicitly configured, registry adds an implicit discovera
 - auth mode: keyless (`auth: none` behavior)
 
 Runtime discovery fetches models (`GET /models`) and synthesizes model entries with local defaults.
+
+This path also works for local OpenAI-compatible servers that are not LM Studio. For example, if oMLX is bound to Ollama's usual port, set `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1` to discover it through the existing `/v1/models` flow. Running oMLX and Ollama side by side requires assigning a different port to one of them. Do not configure oMLX as `ollama`: Ollama discovery uses native `/api/tags` and `/api/show` endpoints, not OpenAI `/v1/models`.
 
 ### Explicit provider discovery
 
@@ -604,6 +620,18 @@ providers:
     models:
       - id: Qwen/Qwen2.5-Coder-32B-Instruct
         name: Qwen 2.5 Coder 32B (local)
+```
+
+For oMLX or another local OpenAI-compatible server with a discoverable `/v1/models` endpoint, prefer discovery instead of listing models by hand. Set `api` to the endpoint family your server actually exposes: `openai-completions` uses `/v1/chat/completions`; servers that expose `/v1/responses` need `openai-responses` instead.
+
+```yaml
+providers:
+  omlx:
+    baseUrl: http://127.0.0.1:11434/v1
+    auth: none
+    api: openai-completions
+    discovery:
+      type: openai-models-list
 ```
 
 ### Hosted proxy with env-based key

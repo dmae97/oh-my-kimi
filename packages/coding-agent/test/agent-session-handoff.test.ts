@@ -3,15 +3,18 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+
+const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 
 describe("AgentSession handoff", () => {
 	// Immutable across the whole file: the model registry's synchronous bundled-model
@@ -27,6 +30,7 @@ describe("AgentSession handoff", () => {
 	let session: AgentSession;
 	let sessionManager: SessionManager;
 	let events: AgentSessionEvent[];
+	let obfuscator: SecretObfuscator;
 
 	/** Poll `predicate` until it holds (returns as soon as the state is reached) or the
 	 *  deadline elapses. Replaces blind settle sleeps for tests with a positive signal. */
@@ -74,6 +78,7 @@ describe("AgentSession handoff", () => {
 		tempDir = TempDir.createSync("@pi-handoff-");
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		events = [];
+		obfuscator = new SecretObfuscator([{ type: "plain", content: HANDOFF_SECRET }]);
 
 		const agent = new Agent({
 			initialState: {
@@ -92,6 +97,7 @@ describe("AgentSession handoff", () => {
 				"compaction.autoContinue": false,
 			}),
 			modelRegistry,
+			obfuscator,
 		});
 
 		session.subscribe(event => {
@@ -141,9 +147,68 @@ describe("AgentSession handoff", () => {
 
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(result?.document).toBe(handoffText);
+
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+	});
+
+	it("obfuscates custom instructions before generating a handoff", async () => {
+		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoff")
+			.mockResolvedValue(`## Goal\nKeep ${placeholder}`);
+
+		const result = await session.handoff(`preserve ${HANDOFF_SECRET}`);
+
+		const handoffCall = generateHandoffSpy.mock.calls[0];
+		if (!handoffCall) throw new Error("Expected generateHandoff call");
+		expect(handoffCall[3].customInstructions).toBe(`preserve ${placeholder}`);
+		expect(handoffCall[3].customInstructions).not.toContain(HANDOFF_SECRET);
+		expect(result?.document).toContain(HANDOFF_SECRET);
+		expect(result?.document).not.toContain(placeholder);
+	});
+
+	it("obfuscates previous compaction summary and preserve data before forwarding to compact()", async () => {
+		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
+		const entries = sessionManager.getBranch();
+		const lastEntryId = entries[entries.length - 1]?.id;
+		if (!lastEntryId) throw new Error("Expected a seeded entry id");
+		const fixedPreparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId: lastEntryId,
+			messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "old" }], timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 100,
+			previousSummary: `summary ${HANDOFF_SECRET}`,
+			previousPreserveData: {
+				openaiRemoteCompaction: {
+					replacementHistory: [{ role: "user", content: `history ${HANDOFF_SECRET}` }],
+				},
+			},
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: compactionModule.DEFAULT_COMPACTION_SETTINGS,
+		};
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockResolvedValue({
+			summary: "new summary",
+			shortSummary: undefined,
+			firstKeptEntryId: lastEntryId,
+			tokensBefore: 100,
+			details: {},
+		});
+
+		await session.compact();
+
+		const call = compactSpy.mock.calls[0];
+		if (!call) throw new Error("Expected compact call");
+		expect(call[0].previousSummary).toBe(`summary ${placeholder}`);
+		expect(call[0].previousSummary).not.toContain(HANDOFF_SECRET);
+		const preserveData = JSON.stringify(call[0].previousPreserveData);
+		expect(preserveData).toContain(placeholder);
+		expect(preserveData).not.toContain(HANDOFF_SECRET);
 	});
 
 	it("runs context maintenance before sending an oversized pending prompt", async () => {

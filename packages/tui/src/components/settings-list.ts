@@ -1,7 +1,16 @@
+import { fuzzyFilter } from "../fuzzy";
 import { getKeybindings } from "../keybindings";
+import { extractPrintableText } from "../keys";
 import type { Component } from "../tui";
-import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
+import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
+
+function sanitizeSingleLine(text: string): string {
+	return replaceTabs(text)
+		.replace(/[\r\n]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
 
 export interface SettingItem {
 	/** Unique identifier for this setting */
@@ -30,16 +39,17 @@ export interface SettingsListTheme {
 
 export class SettingsList implements Component {
 	#items: SettingItem[];
+	#filteredItems: SettingItem[];
 	#theme: SettingsListTheme;
 	#selectedIndex = 0;
 	#maxVisible: number;
 	#onChange: (id: string, newValue: string) => void;
 	#onCancel: () => void;
+	#filterQuery = "";
 
 	// Submenu state
 	#submenuComponent: Component | null = null;
 	#submenuItemIndex: number | null = null;
-
 	constructor(
 		items: SettingItem[],
 		maxVisible: number,
@@ -48,41 +58,127 @@ export class SettingsList implements Component {
 		onCancel: () => void,
 	) {
 		this.#items = items;
+		this.#filteredItems = items;
 		this.#maxVisible = maxVisible;
 		this.#theme = theme;
 		this.#onChange = onChange;
 		this.#onCancel = onCancel;
 	}
 
+	getSearchQuery(): string {
+		return this.#filterQuery;
+	}
+
+	hasSearchQuery(): boolean {
+		return this.#filterQuery.length > 0;
+	}
+
+	clearSearch(): void {
+		if (this.#filterQuery.length === 0) return;
+		this.#setFilter("");
+	}
+
 	/** Update an item's currentValue */
 	updateValue(id: string, newValue: string): void {
 		const item = this.#items.find(i => i.id === id);
-		if (item) {
-			item.currentValue = newValue;
+		if (!item) return;
+
+		item.currentValue = newValue;
+		if (this.#filterQuery.trim()) {
+			this.#applyFilter();
+			this.#clampSelectedIndex();
 		}
 	}
 
 	/**
-	 * Replace the entire items array. Selection is preserved when the prior
-	 * index is still valid, otherwise clamped to the last item (or 0 if the
-	 * list is now empty). An open submenu is left untouched — its lifetime
-	 * is bounded by its own done callback, and `#closeSubmenu` re-clamps the
-	 * restored index against the new list on the way out.
+	 * Replace the entire items array. Selection is preserved by item id when
+	 * the previous selection still survives the active filter, otherwise
+	 * clamped to the last filtered item (or 0 if there are no matches).
+	 * An open submenu is left untouched — its lifetime is bounded by its own
+	 * done callback, and `#closeSubmenu` re-clamps the restored index on exit.
 	 */
 	setItems(items: SettingItem[]): void {
+		const selectedId = this.#filteredItems[this.#selectedIndex]?.id;
 		this.#items = items;
-		if (this.#items.length === 0) {
-			this.#selectedIndex = 0;
-		} else if (this.#selectedIndex >= this.#items.length) {
-			this.#selectedIndex = this.#items.length - 1;
+		this.#applyFilter();
+
+		if (selectedId) {
+			const nextIndex = this.#filteredItems.findIndex(item => item.id === selectedId);
+			if (nextIndex >= 0) {
+				this.#selectedIndex = nextIndex;
+				return;
+			}
 		}
+
+		this.#clampSelectedIndex();
+	}
+
+	#setFilter(filter: string): void {
+		this.#filterQuery = filter;
+		this.#applyFilter();
+		this.#selectedIndex = 0;
+	}
+
+	#applyFilter(): void {
+		this.#filteredItems = this.#filterQuery.trim()
+			? fuzzyFilter([...this.#items], this.#filterQuery, item => this.#getFilterText(item))
+			: this.#items;
+	}
+
+	#clampSelectedIndex(): void {
+		if (this.#filteredItems.length === 0) {
+			this.#selectedIndex = 0;
+			return;
+		}
+		this.#selectedIndex = Math.max(0, Math.min(this.#selectedIndex, this.#filteredItems.length - 1));
+	}
+
+	#getFilterText(item: SettingItem): string {
+		let text = `${item.label} ${item.id} ${item.currentValue}`;
+		if (item.description) {
+			text += ` ${item.description}`;
+		}
+		if (item.values) {
+			text += ` ${item.values.join(" ")}`;
+		}
+		return sanitizeSingleLine(text);
+	}
+
+	#renderSearchStatus(width: number): string {
+		const query = sanitizeSingleLine(this.#filterQuery);
+		const statusText = query ? `  Search: ${query}` : "  Type to search";
+		return this.#theme.hint(truncateToWidth(statusText, width, Ellipsis.Omit));
+	}
+
+	#shouldRenderSearchStatus(): boolean {
+		return this.#items.length > this.#maxVisible || this.#filterQuery.length > 0;
+	}
+
+	#handleSearchInput(data: string): boolean {
+		if (this.#items.length === 0) return false;
+
+		const kb = getKeybindings();
+		if (kb.matches(data, "tui.editor.deleteCharBackward")) {
+			if (this.#filterQuery.length === 0) return false;
+			const chars = [...this.#filterQuery];
+			chars.pop();
+			this.#setFilter(chars.join(""));
+			return true;
+		}
+
+		const printableText = extractPrintableText(data);
+		if (printableText === undefined) return false;
+		if (this.#filterQuery.length === 0 && printableText.trim().length === 0) return false;
+
+		this.#setFilter(this.#filterQuery + printableText);
+		return true;
 	}
 
 	invalidate(): void {
 		this.#submenuComponent?.invalidate?.();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		// If submenu is active, render it instead
 		if (this.#submenuComponent) {
 			return this.#submenuComponent.render(width);
@@ -115,22 +211,32 @@ export class SettingsList implements Component {
 			return lines;
 		}
 
-		const viewportHeight = Math.min(this.#maxVisible, this.#items.length);
+		if (this.#filteredItems.length === 0) {
+			if (this.#shouldRenderSearchStatus()) {
+				lines.push(this.#renderSearchStatus(width));
+			}
+			lines.push(this.#theme.hint("  No matching settings"));
+			lines.push("");
+			lines.push(truncateToWidth(this.#theme.hint("  Backspace to edit search · Esc to cancel"), width));
+			return lines;
+		}
+
+		const viewportHeight = Math.min(this.#maxVisible, this.#filteredItems.length);
 		const startIndex = Math.max(
 			0,
-			Math.min(this.#selectedIndex - Math.floor(viewportHeight / 2), this.#items.length - viewportHeight),
+			Math.min(this.#selectedIndex - Math.floor(viewportHeight / 2), this.#filteredItems.length - viewportHeight),
 		);
-		const maxLabelWidth = Math.min(30, Math.max(...this.#items.map(item => visibleWidth(item.label))));
-		const itemRowsOverflow = this.#items.length > viewportHeight;
+		const maxLabelWidth = Math.min(30, Math.max(...this.#filteredItems.map(item => visibleWidth(item.label))));
+		const itemRowsOverflow = this.#filteredItems.length > viewportHeight;
 		const itemRowWidth = Math.max(0, width - (itemRowsOverflow ? 1 : 0));
-		const visibleItems = this.#items.slice(startIndex, startIndex + viewportHeight);
+		const visibleItems = this.#filteredItems.slice(startIndex, startIndex + viewportHeight);
 		const itemRows = visibleItems.map((item, index) =>
 			this.#renderItemRow(item, startIndex + index, maxLabelWidth, itemRowWidth),
 		);
 		const scrollView = new ScrollView(itemRows, {
 			height: viewportHeight,
 			scrollbar: "auto",
-			totalRows: this.#items.length,
+			totalRows: this.#filteredItems.length,
 			theme: {
 				track: text => this.#theme.hint(text),
 				thumb: text => this.#theme.label(text, true, false),
@@ -140,7 +246,7 @@ export class SettingsList implements Component {
 		lines.push(...scrollView.render(width));
 
 		// Add description for selected item
-		const selectedItem = this.#items[this.#selectedIndex];
+		const selectedItem = this.#filteredItems[this.#selectedIndex];
 		if (selectedItem?.description) {
 			lines.push("");
 			const wrappedDesc = wrapTextWithAnsi(selectedItem.description, width - 4);
@@ -149,9 +255,13 @@ export class SettingsList implements Component {
 			}
 		}
 
+		if (this.#shouldRenderSearchStatus()) {
+			lines.push(this.#renderSearchStatus(width));
+		}
+
 		// Add hint
 		lines.push("");
-		lines.push(truncateToWidth(this.#theme.hint("  Enter/Space to change · Esc to cancel"), width));
+		lines.push(truncateToWidth(this.#theme.hint("  Enter/Space to change · Type to search · Esc to cancel"), width));
 
 		return lines;
 	}
@@ -166,19 +276,32 @@ export class SettingsList implements Component {
 
 		// Main list input handling
 		const kb = getKeybindings();
+		if (kb.matches(data, "tui.select.cancel")) {
+			if (this.#filterQuery.length > 0) {
+				this.clearSearch();
+				return;
+			}
+			this.#onCancel();
+			return;
+		}
+
+		if (this.#handleSearchInput(data)) {
+			return;
+		}
+
+		if (this.#filteredItems.length === 0) return;
+
 		if (kb.matches(data, "tui.select.up")) {
-			this.#selectedIndex = this.#selectedIndex === 0 ? this.#items.length - 1 : this.#selectedIndex - 1;
+			this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredItems.length - 1 : this.#selectedIndex - 1;
 		} else if (kb.matches(data, "tui.select.down")) {
-			this.#selectedIndex = this.#selectedIndex === this.#items.length - 1 ? 0 : this.#selectedIndex + 1;
+			this.#selectedIndex = this.#selectedIndex === this.#filteredItems.length - 1 ? 0 : this.#selectedIndex + 1;
 		} else if (kb.matches(data, "tui.select.confirm") || data === " " || data === "\n") {
 			this.#activateItem();
-		} else if (kb.matches(data, "tui.select.cancel")) {
-			this.#onCancel();
 		}
 	}
 
 	#activateItem(): void {
-		const item = this.#items[this.#selectedIndex];
+		const item = this.#filteredItems[this.#selectedIndex];
 		if (!item) return;
 
 		if (item.submenu) {
@@ -207,6 +330,7 @@ export class SettingsList implements Component {
 		if (this.#submenuItemIndex !== null) {
 			this.#selectedIndex = this.#submenuItemIndex;
 			this.#submenuItemIndex = null;
+			this.#clampSelectedIndex();
 		}
 	}
 }

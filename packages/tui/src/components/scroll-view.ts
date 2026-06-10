@@ -178,7 +178,7 @@ export class ScrollView implements Component {
 		// No cached layout to invalidate.
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		this.#clampScrollOffset();
 		const safeWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
 		if (this.#height === 0) return [];

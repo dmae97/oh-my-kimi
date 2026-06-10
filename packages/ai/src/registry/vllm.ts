@@ -1,6 +1,5 @@
-import { vllmModelManagerOptions } from "../provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks, OAuthProvider } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const PROVIDER_ID: OAuthProvider = "vllm";
 const AUTH_URL = "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html";
@@ -30,9 +29,5 @@ export async function loginVllm(options: OAuthController): Promise<string> {
 export const vllmProvider = {
 	id: "vllm",
 	name: "vLLM (Local OpenAI-compatible)",
-	defaultModel: "gpt-oss-20b",
-	createModelManagerOptions: (config: ModelManagerConfig) => vllmModelManagerOptions(config),
-	catalogDiscovery: { label: "vLLM", envVars: ["VLLM_API_KEY"], allowUnauthenticated: true },
-	envKeys: "VLLM_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginVllm(cb),
 } as const satisfies ProviderDefinition;

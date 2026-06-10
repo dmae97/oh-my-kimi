@@ -68,7 +68,7 @@ export class SignInTab implements SetupTab {
 		this.#selector.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 		if (this.#loggingInProvider) {
 			lines.push(theme.bold(`Signing in to ${this.#loggingInProvider}`));

@@ -60,7 +60,7 @@ class GlyphSceneController implements SetupSceneController {
 		this.#selectList.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		return [
 			theme.fg("muted", "If a row shows boxes, tofu, or misaligned icons, pick another."),
 			"",

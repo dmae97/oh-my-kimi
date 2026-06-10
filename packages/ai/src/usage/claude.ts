@@ -1,4 +1,5 @@
 import { scheduler } from "node:timers/promises";
+import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 import { claudeCodeVersion } from "../providers/anthropic";
 import type {
 	CredentialRankingStrategy,
@@ -11,7 +12,7 @@ import type {
 	UsageStatus,
 	UsageWindow,
 } from "../usage";
-import { isRecord, toNumber } from "../utils";
+import { isRecord } from "../utils";
 
 const DEFAULT_ENDPOINT = "https://api.anthropic.com/api/oauth";
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;

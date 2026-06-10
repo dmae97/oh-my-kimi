@@ -1,5 +1,5 @@
-import type { Effort } from "../../effort";
-import { requireSupportedEffort } from "../../model-thinking";
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Api, Model } from "../../types";
 
 export interface ReasoningConfig {

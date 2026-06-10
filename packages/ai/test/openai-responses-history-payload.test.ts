@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { type OpenAIResponsesOptions, streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { createOpenAIResponsesHistoryPayload, truncateResponseItemId } from "@oh-my-pi/pi-ai/utils";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -323,10 +324,12 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("uses canonical instructions field for endpoints without developer-role support", async () => {
-		const model = {
-			...getOpenAIReasoningModel("openai", "gpt-5-mini"),
+		const baseModel = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const model = buildModel({
+			...baseModel,
 			baseUrl: "https://proxy.example.com/v1",
-		};
+			compat: baseModel.compatConfig,
+		} as ModelSpec<"openai-responses">);
 		const payload = (await captureResponsesPayload(model, {
 			systemPrompt: ["stable instructions", "second instructions"],
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],

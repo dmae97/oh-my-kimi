@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { runCommitAgentSession } from "@oh-my-pi/pi-coding-agent/commit/agentic/agent";
 import * as toolsModule from "@oh-my-pi/pi-coding-agent/commit/agentic/tools";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";

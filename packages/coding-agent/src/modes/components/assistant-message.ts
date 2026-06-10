@@ -222,7 +222,9 @@ export class AssistantMessageComponent extends Container {
 		this.#contentContainer.clear();
 
 		const hasVisibleContent = message.content.some(
-			c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+			c =>
+				(c.type === "text" && c.text.trim()) ||
+				(!this.hideThinkingBlock && c.type === "thinking" && c.thinking.trim()),
 		);
 
 		// Render content in order
@@ -236,32 +238,28 @@ export class AssistantMessageComponent extends Container {
 				markdown.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(markdown);
 			} else if (content.type === "thinking" && content.thinking.trim()) {
+				if (this.hideThinkingBlock) {
+					thinkingIndex += 1;
+					continue;
+				}
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
 				const hasVisibleContentAfter = message.content
 					.slice(i + 1)
 					.some(c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 
-				if (this.hideThinkingBlock) {
-					// Show static "Thinking..." label when hidden
-					this.#contentContainer.addChild(new Text(theme.italic(theme.fg("thinkingText", "Thinking...")), 1, 0));
-					if (hasVisibleContentAfter) {
-						this.#contentContainer.addChild(new Spacer(1));
-					}
-				} else {
-					const thinkingText = content.thinking.trim();
-					// Thinking traces in thinkingText color, italic
-					const thinkingMarkdown = new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
-						color: (text: string) => theme.fg("thinkingText", text),
-						italic: true,
-					});
-					thinkingMarkdown.transientRenderCache = this.#lastUpdateTransient;
-					this.#contentContainer.addChild(thinkingMarkdown);
-					this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
-					thinkingIndex += 1;
-					if (hasVisibleContentAfter) {
-						this.#contentContainer.addChild(new Spacer(1));
-					}
+				const thinkingText = content.thinking.trim();
+				// Thinking traces in thinkingText color, italic
+				const thinkingMarkdown = new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
+					color: (text: string) => theme.fg("thinkingText", text),
+					italic: true,
+				});
+				thinkingMarkdown.transientRenderCache = this.#lastUpdateTransient;
+				this.#contentContainer.addChild(thinkingMarkdown);
+				this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
+				thinkingIndex += 1;
+				if (hasVisibleContentAfter) {
+					this.#contentContainer.addChild(new Spacer(1));
 				}
 			}
 		}

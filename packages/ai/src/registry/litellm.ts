@@ -1,6 +1,5 @@
-import { litellmModelManagerOptions } from "../provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://docs.litellm.ai/docs/proxy/deploy";
 
@@ -40,9 +39,5 @@ export async function loginLiteLLM(options: OAuthController): Promise<string> {
 export const litellmProvider = {
 	id: "litellm",
 	name: "LiteLLM",
-	defaultModel: "claude-opus-4-6",
-	createModelManagerOptions: (config: ModelManagerConfig) => litellmModelManagerOptions(config),
-	catalogDiscovery: { label: "LiteLLM", envVars: ["LITELLM_API_KEY"], allowUnauthenticated: true },
-	envKeys: "LITELLM_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginLiteLLM(cb),
 } as const satisfies ProviderDefinition;

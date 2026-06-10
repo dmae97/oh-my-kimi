@@ -1,5 +1,6 @@
-import { getAntigravityUserAgent } from "../providers/google-gemini-headers";
+import { getAntigravityUserAgent } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import type {
+	CredentialRankingContext,
 	CredentialRankingStrategy,
 	UsageAmount,
 	UsageFetchContext,
@@ -301,38 +302,68 @@ export const antigravityUsageProvider: UsageProvider = {
 	supports: params => params.provider === "google-antigravity",
 };
 
-const ANTIGRAVITY_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function getAntigravityCounterKeyForModel(context: CredentialRankingContext | undefined): string | undefined {
+	const modelId = context?.modelId?.toLowerCase();
+	if (!modelId) return undefined;
+	if (modelId.startsWith("claude-")) return "anthropic";
+	if (modelId.startsWith("gemini-") || modelId.startsWith("gemma-")) return "google";
+	if (modelId.startsWith("gpt-") || modelId.startsWith("openai/")) return "openai";
+	return undefined;
+}
+
+function getAntigravityCounterLimits(report: UsageReport, counterKey: string): UsageLimit[] {
+	const prefix = `${report.provider}:${counterKey}:`;
+	return report.limits.filter(limit => limit.id.toLowerCase().startsWith(prefix));
+}
+
+// Exhaustion checks are only safe with a concrete backend counter. A no-model
+// Antigravity credential lookup (for example image-provider discovery) must
+// not turn one exhausted family into a provider-wide block.
+function scopeAntigravityLimitsForModel(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit[] {
+	const counterKey = getAntigravityCounterKeyForModel(context);
+	if (!counterKey) return [];
+	const backendLimits = getAntigravityCounterLimits(report, counterKey);
+	if (backendLimits.length > 0) return backendLimits;
+	return getAntigravityCounterLimits(report, "default");
+}
+
+function rankAntigravityLimits(report: UsageReport, context: CredentialRankingContext | undefined): UsageLimit[] {
+	const counterKey = getAntigravityCounterKeyForModel(context);
+	if (!counterKey) return report.limits;
+	return scopeAntigravityLimitsForModel(report, context);
+}
 
 /**
- * Credential ranking strategy for `google-antigravity`. Drives proactive
- * multi-account selection in {@link AuthStorage} by reading the per-counter
- * Antigravity usage reports.
+ * Antigravity quotas reset daily and are returned per backend counter
+ * (Anthropic / Google / OpenAI) without a fixed "primary vs secondary"
+ * split. `fetchAntigravityUsage` already sorts `limits` ascending by
+ * `remainingFraction`; after model-family scoping, the most-pressured
+ * relevant counter is index 0.
  *
- * Antigravity reports one {@link UsageLimit} per backend counter (Google /
- * Anthropic / OpenAI) per tier per window, and {@link fetchAntigravityUsage}
- * sorts them ascending by `remainingFraction` — so `limits[0]` is always the
- * most-pressured counter for the credential, and `limits[1]` (when present)
- * is the next-most-pressured counter.
- *
- * `AuthStorage` compares the `secondary*` ranking metrics before `primary*`
- * because other providers model a long-window budget as secondary. Antigravity
- * does not expose a short/long split; every counter is a sibling bottleneck.
- * Therefore the most-pressured counter goes in `secondary`, with the runner-up
- * in `primary`, so proactive account selection always ranks the bottleneck
- * before any healthier sibling counter.
- *
- * The Antigravity API exposes `resetTime` but not window duration, so the
- * drain-rate calculation depends on `windowDefaults`. Antigravity quotas are
- * effectively daily; 24h is the right fallback for both axes — any 5h tier
- * still ranks correctly because both credentials are normalised against the
- * same fallback.
+ * Leave `secondary` unset: AuthStorage compares secondary metrics before
+ * primary metrics, which is correct for providers with explicit long-window
+ * limits but wrong here. Ranking Antigravity by the bottleneck counter first
+ * avoids preferring an account at 95% Gemini / 0% Claude over one at
+ * 80% Gemini / 70% Claude.
  */
 export const antigravityRankingStrategy: CredentialRankingStrategy = {
-	findWindowLimits(report) {
-		return { primary: report.limits[1], secondary: report.limits[0] };
+	findWindowLimits(report, context) {
+		return { primary: rankAntigravityLimits(report, context)[0] };
 	},
-	windowDefaults: {
-		primaryMs: ANTIGRAVITY_DAILY_WINDOW_MS,
-		secondaryMs: ANTIGRAVITY_DAILY_WINDOW_MS,
+	scopeLimits: scopeAntigravityLimitsForModel,
+	// Always return a scope for Antigravity so missing/unknown model context
+	// cannot fall through to AuthStorage's provider-wide block bucket.
+	blockScope(context) {
+		const counterKey = getAntigravityCounterKeyForModel(context);
+		return `counter:${counterKey ?? "unknown"}`;
 	},
+	// Antigravity windows omit `durationMs`; the endpoint is
+	// `daily-cloudcode-pa.googleapis.com`, so fall back to 24h when computing
+	// drain rate.
+	windowDefaults: { primaryMs: ONE_DAY_MS, secondaryMs: ONE_DAY_MS },
 };

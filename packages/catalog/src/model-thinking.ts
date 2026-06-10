@@ -1,0 +1,407 @@
+/**
+ * Thinking metadata: build-time derivation and runtime field-read helpers.
+ *
+ * Derivation (`resolveModelThinking`) runs exactly once per model — from
+ * `buildModel` for dynamic specs and from the catalog generator for bundled
+ * entries. Everything below the "runtime helpers" divider reads baked fields
+ * only: no id parsing, no host matching, no compat detection per request.
+ */
+import { Effort, THINKING_EFFORTS } from "./effort";
+import { modelMatchesHost } from "./hosts";
+import {
+	type AnthropicModel,
+	type GeminiModel,
+	isFableOrMythos,
+	type OpenAIModel,
+	type ParsedModel,
+	parseKnownModel,
+	semverEqual,
+	semverGte,
+} from "./identity/classify";
+import { supportsAdaptiveThinkingDisplay } from "./identity/family";
+import type {
+	Api,
+	CompatOf,
+	Model,
+	ModelSpec,
+	ResolvedOpenAICompat,
+	ResolvedOpenAIResponsesCompat,
+	ThinkingConfig,
+} from "./types";
+
+/**
+ * Runtime helpers read baked metadata only, so they accept both pre-build
+ * specs and built models.
+ */
+type ApiModel<TApi extends Api = Api> = ModelSpec<TApi> | Model<TApi>;
+
+const DEFAULT_REASONING_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
+const DEFAULT_REASONING_EFFORTS_WITH_XHIGH: readonly Effort[] = [
+	Effort.Minimal,
+	Effort.Low,
+	Effort.Medium,
+	Effort.High,
+	Effort.XHigh,
+];
+const GEMINI_3_PRO_EFFORTS: readonly Effort[] = [Effort.Low, Effort.High];
+const GEMINI_3_FLASH_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
+const GPT_5_2_PLUS_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
+const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.High];
+
+/**
+ * Effort → wire-value map for the 5-tier adaptive scale (Opus 4.7+ and
+ * Fable/Mythos 5 on the Messages API). User-facing efforts shift up one notch
+ * so the top tier reaches the genuine "max" and "high" lands on Anthropic's
+ * recommended "xhigh" coding/agentic default.
+ */
+export const ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER: Readonly<Partial<Record<Effort, string>>> = {
+	[Effort.Minimal]: "low",
+	[Effort.Low]: "medium",
+	[Effort.Medium]: "high",
+	[Effort.High]: "xhigh",
+	[Effort.XHigh]: "max",
+};
+
+/**
+ * Effort → wire-value map for the legacy 4-tier adaptive scale (Opus 4.6,
+ * Sonnet 4.6+, and every adaptive model on Bedrock Converse). `low..high` pass
+ * through verbatim; there is no real "xhigh", so it aliases the top "max" tier.
+ */
+export const ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER: Readonly<Partial<Record<Effort, string>>> = {
+	[Effort.Minimal]: "low",
+	[Effort.XHigh]: "max",
+};
+
+// ---------------------------------------------------------------------------
+// Build-time derivation (buildModel + catalog generator only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the canonical thinking metadata for a spec. Called exactly once per
+ * model by `buildModel`, after compat resolution.
+ *
+ * - Non-reasoning models never carry thinking.
+ * - Models that reason natively but reject the wire effort param
+ *   (`compat.supportsReasoningEffort: false` on openai-responses*) carry no
+ *   thinking either: `reasoning: true, thinking: undefined` IS the encoding
+ *   for "thinks, but exposes no control surface".
+ * - Explicit spec thinking (generator-baked or user-authored) owns the
+ *   capability surface (`mode`, `efforts`, `defaultLevel`); the wire facts
+ *   (`effortMap`, `supportsDisplay`) are backfilled from identity when not
+ *   explicitly set, so configs never need to know Anthropic's tier tables.
+ * - Sparse specs go through full inference.
+ */
+export function resolveModelThinking<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): ThinkingConfig | undefined {
+	if (!spec.reasoning) return undefined;
+	if (omitsWireReasoningEffort(spec.api, compat)) return undefined;
+	if (spec.thinking && spec.thinking.efforts.length > 0) {
+		return fillThinkingWireDefaults(spec, spec.thinking);
+	}
+	// Empty/malformed explicit metadata is treated as absent — infer instead.
+	return deriveThinking(spec, compat);
+}
+
+/**
+ * Backfill identity-derived wire facts onto explicit thinking metadata.
+ * Explicit `effortMap` / `supportsDisplay` (including `false`) always win;
+ * untouched configs are returned as-is with zero allocation.
+ */
+function fillThinkingWireDefaults<TApi extends Api>(spec: ModelSpec<TApi>, thinking: ThinkingConfig): ThinkingConfig {
+	const needsEffortMap = thinking.mode === "anthropic-adaptive" && thinking.effortMap === undefined;
+	const needsDisplay =
+		thinking.supportsDisplay === undefined &&
+		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
+		supportsAdaptiveThinkingDisplay(spec.id);
+	if (!needsEffortMap && !needsDisplay) {
+		return thinking;
+	}
+	const filled: ThinkingConfig = { ...thinking };
+	if (needsEffortMap) {
+		filled.effortMap = anthropicModelHasRealXHighEffort(spec, parseKnownModel(spec.id))
+			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
+			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
+	}
+	if (needsDisplay) {
+		filled.supportsDisplay = true;
+	}
+	return filled;
+}
+
+/** Derive thinking from identity + resolved compat, ignoring any baked value. Generator-side entry. */
+export function deriveThinking<TApi extends Api>(spec: ModelSpec<TApi>, compat: CompatOf<TApi>): ThinkingConfig {
+	const parsed = parseKnownModel(spec.id);
+	const efforts = inferSupportedEfforts(parsed, spec, compat);
+	if (efforts.length === 0) {
+		throw new Error(`Model ${spec.provider}/${spec.id} resolved to an empty thinking range`);
+	}
+	const config: ThinkingConfig = {
+		mode: inferThinkingControlMode(spec, parsed),
+		efforts,
+	};
+	if (config.mode === "anthropic-adaptive") {
+		config.effortMap = anthropicModelHasRealXHighEffort(spec, parsed)
+			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
+			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
+	}
+	if (
+		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
+		supportsAdaptiveThinkingDisplay(spec.id)
+	) {
+		config.supportsDisplay = true;
+	}
+	return config;
+}
+
+/**
+ * True when the model reasons natively but rejects the wire `reasoning.effort`
+ * param. Scoped to openai-responses* because that's the only API surface where
+ * `compat.supportsReasoningEffort: false` means "omit the field entirely"
+ * (xAI Grok off the GROK_EFFORT_CAPABLE_PREFIXES allowlist: grok-build,
+ * grok-4.20-0309-reasoning). openai-completions keeps its thinking config even
+ * without effort support — binary thinking formats (zai/qwen) drive reasoning
+ * through other request fields.
+ */
+function omitsWireReasoningEffort(api: Api, compat: CompatOf<Api>): boolean {
+	if (api !== "openai-responses" && api !== "openai-codex-responses") {
+		return false;
+	}
+	return (compat as ResolvedOpenAIResponsesCompat | undefined)?.supportsReasoningEffort === false;
+}
+
+function inferSupportedEfforts<TApi extends Api>(
+	parsedModel: ParsedModel,
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): readonly Effort[] {
+	switch (parsedModel.family) {
+		case "openai":
+			return inferOpenAISupportedEfforts(parsedModel);
+		case "gemini":
+			return inferGeminiSupportedEfforts(parsedModel);
+		case "anthropic":
+			return inferAnthropicSupportedEfforts(parsedModel, spec, compat);
+		case "unknown":
+			return inferFallbackEfforts(spec, compat);
+	}
+}
+
+function inferOpenAISupportedEfforts(model: OpenAIModel): readonly Effort[] {
+	if (model.variant === "codex-mini" && semverEqual(model.version, "5.1")) {
+		return GPT_5_1_CODEX_MINI_EFFORTS;
+	}
+	if (semverGte(model.version, "5.2")) {
+		return GPT_5_2_PLUS_EFFORTS;
+	}
+	return DEFAULT_REASONING_EFFORTS;
+}
+
+function inferGeminiSupportedEfforts(model: GeminiModel): readonly Effort[] {
+	if (!semverGte(model.version, "3.0")) {
+		return DEFAULT_REASONING_EFFORTS;
+	}
+	return model.kind === "pro" ? GEMINI_3_PRO_EFFORTS : GEMINI_3_FLASH_EFFORTS;
+}
+
+function inferAnthropicSupportedEfforts<TApi extends Api>(
+	parsedModel: AnthropicModel,
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): readonly Effort[] {
+	if (
+		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
+		semverGte(parsedModel.version, "4.6")
+	) {
+		return parsedModel.kind === "opus" || isFableOrMythos(parsedModel.kind)
+			? DEFAULT_REASONING_EFFORTS_WITH_XHIGH
+			: DEFAULT_REASONING_EFFORTS;
+	}
+	if (isOpenRouterAnthropicAdaptiveReasoningModel(parsedModel, spec)) {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	}
+	return inferFallbackEfforts(spec, compat);
+}
+
+function inferFallbackEfforts<TApi extends Api>(spec: ModelSpec<TApi>, compat: CompatOf<TApi>): readonly Effort[] {
+	if (spec.api === "anthropic-messages") {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	}
+	if (spec.name.includes("deepseek-v4")) {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	}
+	if (spec.api === "bedrock-converse-stream") {
+		return DEFAULT_REASONING_EFFORTS;
+	}
+	if (spec.api === "openai-completions") {
+		const resolved = compat as ResolvedOpenAICompat;
+		if (resolved.thinkingFormat === "openai" && resolved.supportsReasoningEffort) {
+			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+		}
+		return DEFAULT_REASONING_EFFORTS;
+	}
+	// OpenAI Responses APIs encode discrete effort levels, including xhigh.
+	if (spec.api === "openai-responses" || spec.api === "openai-codex-responses") {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	}
+	return DEFAULT_REASONING_EFFORTS;
+}
+
+function inferThinkingControlMode<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+	parsedModel: ParsedModel,
+): ThinkingConfig["mode"] {
+	switch (spec.api) {
+		case "google-generative-ai":
+		case "google-gemini-cli":
+		case "google-vertex":
+			return parsedModel.family === "gemini" &&
+				semverGte(parsedModel.version, "3.0") &&
+				parsedModel.version.major === 3
+				? "google-level"
+				: "budget";
+
+		case "anthropic-messages":
+			if (parsedModel.family === "anthropic") {
+				if (semverGte(parsedModel.version, "4.6")) {
+					return "anthropic-adaptive";
+				}
+				if (semverGte(parsedModel.version, "4.5")) {
+					return "anthropic-budget-effort";
+				}
+			}
+			return "budget";
+
+		case "bedrock-converse-stream":
+			if (parsedModel.family === "anthropic") {
+				if (
+					semverGte(parsedModel.version, "4.6") &&
+					(parsedModel.kind === "opus" || isFableOrMythos(parsedModel.kind))
+				) {
+					return "anthropic-adaptive";
+				}
+				if (semverGte(parsedModel.version, "4.5")) {
+					return "anthropic-budget-effort";
+				}
+			}
+			return "budget";
+
+		default:
+			return "effort";
+	}
+}
+
+function isOpenRouterAnthropicAdaptiveReasoningModel<TApi extends Api>(
+	parsedModel: AnthropicModel,
+	spec: ModelSpec<TApi>,
+): boolean {
+	if (spec.api !== "openai-completions") return false;
+	if (!modelMatchesHost(spec, "openrouter")) return false;
+	return isFableOrMythos(parsedModel.kind) || (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.6"));
+}
+
+/**
+ * Opus 4.7+ and Fable/Mythos on the Messages API expose the full five-tier
+ * adaptive scale (low/medium/high/xhigh/max). Bedrock Converse stays on the
+ * four-tier scale regardless of model version.
+ */
+function anthropicModelHasRealXHighEffort<TApi extends Api>(spec: ModelSpec<TApi>, parsedModel: ParsedModel): boolean {
+	if (spec.api !== "anthropic-messages") return false;
+	if (parsedModel.family !== "anthropic") return false;
+	if (isFableOrMythos(parsedModel.kind)) return true;
+	return parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.7");
+}
+
+// ---------------------------------------------------------------------------
+// Runtime helpers (field reads only — safe per request)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the supported thinking efforts declared on the model metadata.
+ * Empty for non-reasoning models and for reasoning models without a
+ * controllable effort surface (`thinking: undefined`).
+ */
+export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): readonly Effort[] {
+	if (!model.reasoning) {
+		return [];
+	}
+	return model.thinking?.efforts ?? [];
+}
+
+/**
+ * Clamps a requested thinking level against explicit model metadata.
+ *
+ * Non-reasoning models always resolve to `undefined`.
+ */
+export function clampThinkingLevelForModel<TApi extends Api>(
+	model: ApiModel<TApi> | undefined,
+	requested: Effort | undefined,
+): Effort | undefined {
+	if (!model) {
+		return requested;
+	}
+	if (!model.reasoning || requested === undefined) {
+		return undefined;
+	}
+
+	const levels = getSupportedEfforts(model);
+	if (levels.includes(requested)) {
+		return requested;
+	}
+
+	const requestedIndex = THINKING_EFFORTS.indexOf(requested);
+	if (requestedIndex === -1) {
+		return undefined;
+	}
+
+	let clamped: Effort | undefined;
+	for (const effort of levels) {
+		if (THINKING_EFFORTS.indexOf(effort) > requestedIndex) {
+			break;
+		}
+		clamped = effort;
+	}
+
+	return clamped ?? levels[0];
+}
+
+export function requireSupportedEffort<TApi extends Api>(model: ApiModel<TApi>, effort: Effort): Effort {
+	if (!model.reasoning) {
+		throw new Error(`Model ${model.provider}/${model.id} does not support thinking`);
+	}
+	const levels = getSupportedEfforts(model);
+	if (!levels.includes(effort)) {
+		throw new Error(
+			`Thinking effort ${effort} is not supported by ${model.provider}/${model.id}. Supported efforts: ${levels.join(", ")}`,
+		);
+	}
+	return effort;
+}
+
+/** Maps a normalized thinking effort to Google's `thinkingLevel` enum values. */
+export function mapEffortToGoogleThinkingLevel(effort: Effort): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+	switch (effort) {
+		case Effort.Minimal:
+			return "MINIMAL";
+		case Effort.Low:
+			return "LOW";
+		case Effort.Medium:
+			return "MEDIUM";
+		case Effort.High:
+		case Effort.XHigh:
+			return "HIGH";
+	}
+}
+
+/**
+ * Maps a normalized thinking effort to Anthropic adaptive effort values via
+ * the model's baked `thinking.effortMap` (identity for unmapped efforts).
+ */
+export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
+	model: ApiModel<TApi>,
+	effort: Effort,
+): "low" | "medium" | "high" | "xhigh" | "max" {
+	const supported = requireSupportedEffort(model, effort);
+	return (model.thinking?.effortMap?.[supported] ?? supported) as "low" | "medium" | "high" | "xhigh" | "max";
+}

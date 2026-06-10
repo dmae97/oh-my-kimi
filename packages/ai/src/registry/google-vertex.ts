@@ -2,8 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env } from "@oh-my-pi/pi-utils";
-import { googleVertexModelManagerOptions } from "../provider-models/google";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
 
@@ -24,9 +23,6 @@ function hasVertexAdcCredentials(): boolean {
 export const googleVertexProvider = {
 	id: "google-vertex",
 	name: "Google Vertex AI",
-	defaultModel: "gemini-3-pro-preview",
-	createModelManagerOptions: (config: ModelManagerConfig) => googleVertexModelManagerOptions(config),
-	allowUnauthenticated: true,
 	// Vertex AI supports either GOOGLE_CLOUD_API_KEY or Application Default Credentials.
 	envKeys: () => {
 		if ($env.GOOGLE_CLOUD_API_KEY) {

@@ -113,7 +113,7 @@ export class ExtensionList implements Component {
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 
 		// Search bar

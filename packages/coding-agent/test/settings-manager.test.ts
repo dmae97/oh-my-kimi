@@ -404,5 +404,30 @@ describe("Settings", () => {
 
 			expect(settings.get("mnemopi.dbPath")).toBe("/tmp/new.db");
 		});
+
+		it("moves legacy lastChangelogVersion out of config.yml into the marker file", async () => {
+			await writeSettings({ lastChangelogVersion: "0.40.0" });
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// Marker seeded from the legacy key.
+			expect(fs.readFileSync(path.join(agentDir, "last-changelog-version"), "utf8")).toBe("0.40.0");
+
+			// Key stripped from config.yml on the next save.
+			settings.set("display.showTokenUsage", true);
+			await settings.flush();
+			const onDisk = await readSettings();
+			expect("lastChangelogVersion" in onDisk).toBe(false);
+			expect((onDisk.display as Record<string, unknown>).showTokenUsage).toBe(true);
+		});
+
+		it("never clobbers an existing marker with the legacy config value", async () => {
+			fs.writeFileSync(path.join(agentDir, "last-changelog-version"), "0.41.0");
+			await writeSettings({ lastChangelogVersion: "0.40.0" });
+
+			await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(fs.readFileSync(path.join(agentDir, "last-changelog-version"), "utf8")).toBe("0.41.0");
+		});
 	});
 });

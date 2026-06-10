@@ -3,7 +3,8 @@ import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type ApiKey, clampThinkingLevelForModel, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type ApiKey, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
@@ -275,6 +276,7 @@ async function runPhase1(options: {
 				apiKey: modelRegistry.resolver(phase1Model.provider, {
 					sessionId: session.sessionId,
 					baseUrl: phase1Model.baseUrl,
+					modelId: phase1Model.id,
 				}),
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
@@ -435,6 +437,7 @@ async function runPhase2(options: {
 				apiKey: modelRegistry.resolver(phase2Model.provider, {
 					sessionId: session.sessionId,
 					baseUrl: phase2Model.baseUrl,
+					modelId: phase2Model.id,
 				}),
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});

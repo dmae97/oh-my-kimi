@@ -1,7 +1,6 @@
-import { openrouterModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 /** OpenRouter login flow (API key paste, validated via /auth/key).
  *
@@ -25,9 +24,5 @@ export const loginOpenRouter = createApiKeyLogin({
 export const openrouterProvider = {
 	id: "openrouter",
 	name: "OpenRouter",
-	defaultModel: "openai/gpt-5.4",
-	createModelManagerOptions: (config: ModelManagerConfig) => openrouterModelManagerOptions(config),
-	catalogDiscovery: { label: "OpenRouter", envVars: ["OPENROUTER_API_KEY"], allowUnauthenticated: true },
-	envKeys: "OPENROUTER_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginOpenRouter(cb),
 } as const satisfies ProviderDefinition;

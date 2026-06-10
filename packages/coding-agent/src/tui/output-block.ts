@@ -13,7 +13,7 @@ export interface OutputBlockOptions {
 	header?: string;
 	headerMeta?: string;
 	state?: State;
-	sections?: Array<{ label?: string; lines: string[]; separator?: boolean }>;
+	sections?: Array<{ label?: string; lines: readonly string[]; separator?: boolean }>;
 	width: number;
 	applyBg?: boolean;
 	contentPaddingLeft?: number;
@@ -186,8 +186,8 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 export class CachedOutputBlock {
 	#cache?: RenderCache;
 
-	/** Render with caching. Returns cached result if options haven't changed. */
-	render(options: OutputBlockOptions, theme: Theme): string[] {
+	/** Render with caching. Returns the cached (shared, caller-immutable) lines if options haven't changed. */
+	render(options: OutputBlockOptions, theme: Theme): readonly string[] {
 		const key = this.#buildKey(options);
 		if (this.#cache?.key === key) return this.#cache.lines;
 		const lines = renderOutputBlock(options, theme);
@@ -234,7 +234,7 @@ export function framedBlock(theme: Theme, build: (width: number) => OutputBlockO
 	// flush, no extra padding/background) the same way `markFramedBlockComponent`
 	// blocks are treated.
 	return markFramedBlockComponent({
-		render: (width: number): string[] => block.render(build(width), theme),
+		render: (width: number): readonly string[] => block.render(build(width), theme),
 		invalidate: () => block.invalidate(),
 	});
 }

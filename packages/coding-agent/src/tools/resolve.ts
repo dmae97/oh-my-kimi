@@ -254,7 +254,7 @@ export const resolveToolRenderer = {
 		const lines = ["", headerLine, "", uiTheme.italic(reason), ""];
 
 		return {
-			render(width: number) {
+			render(width: number): readonly string[] {
 				const lineWidth = Math.max(3, width);
 				const innerWidth = Math.max(1, lineWidth - 2);
 				return lines.map(line => {

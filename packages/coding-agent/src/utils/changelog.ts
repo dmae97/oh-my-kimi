@@ -1,4 +1,4 @@
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getLastChangelogVersionPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 export interface ChangelogEntry {
 	major: number;
@@ -104,3 +104,29 @@ export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): C
 
 // Re-export getChangelogPath from paths.ts for convenience
 export { getChangelogPath } from "../config";
+
+/**
+ * Last omp version whose changelog the user has seen. Stored as a plain-text
+ * marker file (`~/.omp/agent/last-changelog-version`) rather than in
+ * `config.yml`, so version bumps never dirty user-tracked config files.
+ */
+export async function readLastChangelogVersion(agentDir?: string): Promise<string | undefined> {
+	try {
+		const value = (await Bun.file(getLastChangelogVersionPath(agentDir)).text()).trim();
+		return value || undefined;
+	} catch (error) {
+		if (!isEnoent(error)) {
+			logger.warn("Failed to read last-changelog-version marker", { error: String(error) });
+		}
+		return undefined;
+	}
+}
+
+/** Persist the last-seen changelog version marker. Best-effort: failures are logged, never thrown. */
+export async function writeLastChangelogVersion(version: string, agentDir?: string): Promise<void> {
+	try {
+		await Bun.write(getLastChangelogVersionPath(agentDir), version);
+	} catch (error) {
+		logger.warn("Failed to persist last-changelog-version marker", { error: String(error) });
+	}
+}

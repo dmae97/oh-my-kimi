@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -16,7 +17,7 @@ function createSseResponse(events: unknown[]): Response {
 }
 
 function createReasoningEffortModel(): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "minimal-reasoner",
 		name: "Minimal Reasoner",
 		api: "openai-completions",
@@ -25,24 +26,25 @@ function createReasoningEffortModel(): Model<"openai-completions"> {
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,
 		maxTokens: 16_384,
-	};
+	});
 }
 
 function createFireworksReasoningEffortModel(): Model<"openai-completions"> {
-	return {
-		...createReasoningEffortModel(),
+	const base = createReasoningEffortModel();
+	return buildModel({
+		...base,
 		id: "glm-5.1",
 		name: "GLM 5.1",
 		provider: "fireworks",
 		baseUrl: "https://api.fireworks.ai/inference/v1",
-	};
+		compat: base.compatConfig,
+	} as ModelSpec<"openai-completions">);
 }
 
 async function captureDisableReasoningPayload(model: Model<"openai-completions">): Promise<Record<string, unknown>> {

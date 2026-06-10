@@ -82,7 +82,7 @@ class UserMessageList implements Component {
 		return true;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 
 		if (this.messages.length === 0) {

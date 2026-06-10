@@ -1,6 +1,5 @@
-import { vercelAiGatewayModelManagerOptions } from "../provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys";
 
@@ -34,9 +33,5 @@ export async function loginVercelAiGateway(options: OAuthController): Promise<st
 export const vercelAiGatewayProvider = {
 	id: "vercel-ai-gateway",
 	name: "Vercel AI Gateway",
-	defaultModel: "anthropic/claude-sonnet-4-6",
-	createModelManagerOptions: (config: ModelManagerConfig) => vercelAiGatewayModelManagerOptions(config),
-	catalogDiscovery: { label: "Vercel AI Gateway", envVars: ["VERCEL_AI_GATEWAY_API_KEY"], allowUnauthenticated: true },
-	envKeys: "AI_GATEWAY_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginVercelAiGateway(cb),
 } as const satisfies ProviderDefinition;

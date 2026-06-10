@@ -25,7 +25,13 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `"${shim}" "serve" "--mcp"`]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--mcp""`,
+			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -55,7 +61,7 @@ describe("resolveStdioSpawnCommand", () => {
 				"/d",
 				"/s",
 				"/c",
-				`"${shim}" "serve" "--header" "Authorization=^%TOKEN^%"`,
+				`""${shim}" "serve" "--header" "Authorization=^%TOKEN^%""`,
 			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
@@ -86,7 +92,7 @@ describe("resolveStdioSpawnCommand", () => {
 				"/d",
 				"/s",
 				"/c",
-				`"${shim}" "--config" "{^"a^":^"b&c|d^"}"`,
+				`""${shim}" "--config" "{^"a^":^"b&c|d^"}""`,
 			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
@@ -120,10 +126,39 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `"${shim}" "serve" "--mcp"`]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--mcp""`,
+			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("wraps explicit Windows .cmd commands with cmd.exe while preserving quoted argv", async () => {
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
+			{
+				cwd: "C:\\project",
+				env: {
+					COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+					PATH: "C:\\Users\\me\\AppData\\Roaming\\npm",
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				},
+				platform: "win32",
+			},
+		);
+
+		expect(result.cmd).toEqual([
+			"C:\\Windows\\System32\\cmd.exe",
+			"/d",
+			"/s",
+			"/c",
+			`""codegraph.cmd" "serve" "--mcp""`,
+		]);
 	});
 
 	it("leaves non-Windows commands untouched", async () => {

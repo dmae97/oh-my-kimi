@@ -111,7 +111,7 @@ export class TabBar implements Component {
 	}
 
 	/** Render the tab bar, wrapping to multiple lines if needed */
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const maxWidth = Math.max(1, width);
 		const chunks: string[] = [];
 

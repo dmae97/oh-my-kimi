@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { Effort, getBundledModel } from "@oh-my-pi/pi-ai";
+import { Effort } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { parseDifficultyBucket, parseDifficultyLevel } from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
 import {
 	AUTO_THINKING,

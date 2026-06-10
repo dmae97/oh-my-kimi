@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "@oh-my-pi/pi-ai/effort";
-import { getSupportedEfforts } from "@oh-my-pi/pi-ai/model-thinking";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -17,7 +18,7 @@ function createSseResponse(events: unknown[]): Response {
 }
 
 function customOpenAICompatModel(): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "gpt-5.1",
 		name: "GPT-5.1 proxy",
 		api: "openai-completions",
@@ -26,14 +27,13 @@ function customOpenAICompatModel(): Model<"openai-completions"> {
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,
 		maxTokens: 16_384,
-	};
+	});
 }
 
 describe("issue #969 — custom thinking metadata must preserve explicit xhigh", () => {

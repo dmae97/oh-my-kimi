@@ -1,8 +1,6 @@
-import { $pickenv } from "@oh-my-pi/pi-utils";
-import { qwenPortalModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://chat.qwen.ai";
 const API_BASE_URL = "https://portal.qwen.ai/v1";
@@ -47,13 +45,5 @@ export async function loginQwenPortal(options: OAuthController): Promise<string>
 export const qwenPortalProvider = {
 	id: "qwen-portal",
 	name: "Qwen Portal",
-	defaultModel: "coder-model",
-	createModelManagerOptions: (config: ModelManagerConfig) => qwenPortalModelManagerOptions(config),
-	catalogDiscovery: {
-		label: "Qwen Portal",
-		envVars: ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
-		oauthProvider: "qwen-portal",
-	},
-	envKeys: () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
 	login: (cb: OAuthLoginCallbacks) => loginQwenPortal(cb),
 } as const satisfies ProviderDefinition;

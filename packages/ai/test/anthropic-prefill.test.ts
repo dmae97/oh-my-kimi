@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import type { AssistantMessage, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Model, ModelSpec, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 /**
  * Regression: some Anthropic-routed models reject "assistant prefill" requests
@@ -9,7 +10,7 @@ import type { AssistantMessage, Model, UserMessage } from "@oh-my-pi/pi-ai/types
  * synthetic user message to keep the request valid.
  */
 describe("Anthropic assistant-prefill fallback", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -20,7 +21,7 @@ describe("Anthropic assistant-prefill fallback", () => {
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 
 	it("appends a user Continue. message when the last turn is assistant", () => {
 		const user: UserMessage = {
@@ -121,7 +122,7 @@ describe("Anthropic assistant-prefill fallback", () => {
 });
 
 it("preserves redacted thinking blocks in assistant replay payloads", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -132,7 +133,7 @@ it("preserves redacted thinking blocks in assistant replay payloads", () => {
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 	const user: UserMessage = {
 		role: "user",
 		content: "continue",
@@ -171,7 +172,7 @@ it("preserves redacted thinking blocks in assistant replay payloads", () => {
 });
 
 it("preserves latest Anthropic thinking blocks even when model id changes", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -182,8 +183,12 @@ it("preserves latest Anthropic thinking blocks even when model id changes", () =
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
-	const switchedModel: Model<"anthropic-messages"> = { ...model, id: "claude-opus-4-6-20251201" };
+	});
+	const switchedModel: Model<"anthropic-messages"> = buildModel({
+		...model,
+		id: "claude-opus-4-6-20251201",
+		compat: model.compatConfig,
+	} as ModelSpec<"anthropic-messages">);
 	const assistant: AssistantMessage = {
 		role: "assistant",
 		content: [
@@ -223,7 +228,7 @@ it("preserves a completed thinking signature on an aborted turn interrupted duri
 	// signature is whole and must survive transform. Interrupting during the visible text output
 	// after thinking finished is the common case; dropping the valid signature and replaying it
 	// empty makes Anthropic reject the request with 400 "Invalid `signature` in `thinking` block".
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -234,7 +239,7 @@ it("preserves a completed thinking signature on an aborted turn interrupted duri
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 	const assistant: AssistantMessage = {
 		role: "assistant",
 		content: [

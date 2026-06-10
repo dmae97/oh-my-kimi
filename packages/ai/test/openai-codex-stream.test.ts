@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
 	prewarmOpenAICodexResponses,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 const originalAgentDir = getAgentDir();
@@ -53,7 +53,7 @@ function createCodexTestToken(accountId = "acc_test"): string {
 }
 
 function createCodexTestModel(baseUrl?: string): Model<"openai-codex-responses"> {
-	return {
+	return buildModel({
 		id: "gpt-5.3-codex-spark",
 		name: "GPT-5.3 Codex Spark",
 		api: "openai-codex-responses",
@@ -65,7 +65,7 @@ function createCodexTestModel(baseUrl?: string): Model<"openai-codex-responses">
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128000,
 		maxTokens: 128000,
-	};
+	});
 }
 
 function createCodexTestContext(): Context {
@@ -679,7 +679,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -690,7 +690,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -741,7 +741,7 @@ describe("openai-codex streaming", () => {
 			});
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -752,7 +752,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -811,7 +811,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -822,7 +822,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -859,7 +859,7 @@ describe("openai-codex streaming", () => {
 			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
 		);
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -870,7 +870,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -916,7 +916,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -927,7 +927,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -982,7 +982,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -993,7 +993,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -1086,7 +1086,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -1097,7 +1097,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -1224,7 +1224,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model = enrichModelThinking({
+		const model = buildModel({
 			id: "gpt-5.3-codex",
 			name: "GPT-5.3 Codex",
 			api: "openai-codex-responses",
@@ -1315,7 +1315,7 @@ describe("openai-codex streaming", () => {
 			return new Response("not found", { status: 404 });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -1326,7 +1326,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
@@ -1380,7 +1380,7 @@ describe("openai-codex streaming", () => {
 		}
 
 		global.WebSocket = FailingWebSocket as unknown as typeof WebSocket;
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -1392,7 +1392,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -1449,7 +1449,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = FailingConnectWebSocket as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -1461,7 +1461,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -1528,7 +1528,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = HandshakeWebSocket as unknown as typeof WebSocket;
 
-		const websocketModel: Model<"openai-codex-responses"> = {
+		const websocketModel: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -1540,11 +1540,12 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
-		const sseModel: Model<"openai-codex-responses"> = {
+		});
+		const sseModel: Model<"openai-codex-responses"> = buildModel({
 			...websocketModel,
 			preferWebsockets: false,
-		};
+			compat: websocketModel.compatConfig,
+		} as ModelSpec<"openai-codex-responses">);
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -1614,7 +1615,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = ServiceTierWebSocket as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -1626,7 +1627,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -1679,7 +1680,7 @@ describe("openai-codex streaming", () => {
 		}
 
 		global.WebSocket = DeltaWebSocket as unknown as typeof WebSocket;
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -1691,7 +1692,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant.", "Use concise answers."],
@@ -1884,7 +1885,7 @@ describe("openai-codex streaming", () => {
 			capturedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -1895,7 +1896,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -1943,7 +1944,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = WebSocketV2HeaderProbe as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -1955,7 +1956,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -2001,7 +2002,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = IdleWebSocket as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -2013,7 +2014,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -2669,7 +2670,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = FlakyCloseWebSocket as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -2681,7 +2682,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -2743,7 +2744,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = UnavailableBeforeStreamWebSocket as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -2755,7 +2756,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -2841,7 +2842,7 @@ describe("openai-codex streaming", () => {
 		}
 
 		global.WebSocket = AbortResetWebSocket as unknown as typeof WebSocket;
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -2853,7 +2854,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -2960,7 +2961,7 @@ describe("openai-codex streaming", () => {
 		}
 
 		global.WebSocket = ErrorResetWebSocket as unknown as typeof WebSocket;
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -2972,7 +2973,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -3058,7 +3059,7 @@ describe("openai-codex streaming", () => {
 		}
 
 		global.WebSocket = MalformedMessageWebSocket as unknown as typeof WebSocket;
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -3070,7 +3071,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const result = await streamOpenAICodexResponses(
 			model,
 			{
@@ -3138,7 +3139,7 @@ describe("openai-codex streaming", () => {
 		}
 
 		global.WebSocket = BufferedCloseWebSocket as unknown as typeof WebSocket;
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -3150,7 +3151,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 		const result = await streamOpenAICodexResponses(
 			model,
 			{
@@ -3224,7 +3225,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = DivergedAppendWebSocket as unknown as typeof WebSocket;
 
-		const websocketModel: Model<"openai-codex-responses"> = {
+		const websocketModel: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -3236,11 +3237,12 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
-		const sseModel: Model<"openai-codex-responses"> = {
+		});
+		const sseModel: Model<"openai-codex-responses"> = buildModel({
 			...websocketModel,
 			preferWebsockets: false,
-		};
+			compat: websocketModel.compatConfig,
+		} as ModelSpec<"openai-codex-responses">);
 		const firstContext: Context = {
 			systemPrompt: ["Prompt A"],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -3313,7 +3315,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = ReusableWebSocket as unknown as typeof WebSocket;
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.3-codex-spark",
 			name: "GPT-5.3 Codex Spark",
 			api: "openai-codex-responses",
@@ -3325,7 +3327,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 128000,
-		};
+		});
 
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		await prewarmOpenAICodexResponses(model, {
@@ -3402,7 +3404,7 @@ describe("openai-codex streaming", () => {
 			return new Response(sse, { status: 200, headers: responseHeaders });
 		});
 
-		const model: Model<"openai-codex-responses"> = {
+		const model: Model<"openai-codex-responses"> = buildModel({
 			id: "gpt-5.1-codex",
 			name: "GPT-5.1 Codex",
 			api: "openai-codex-responses",
@@ -3413,7 +3415,7 @@ describe("openai-codex streaming", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 400000,
 			maxTokens: 128000,
-		};
+		});
 
 		const context: Context = {
 			systemPrompt: ["You are a helpful assistant."],

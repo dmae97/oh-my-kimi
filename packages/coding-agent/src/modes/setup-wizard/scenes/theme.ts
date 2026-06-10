@@ -117,7 +117,7 @@ class ThemeSceneController implements SetupSceneController {
 		this.#selectList.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines = [
 			theme.fg("muted", "Theme changes preview live. Nothing is saved until you press Enter."),
 			this.#mode === "all"

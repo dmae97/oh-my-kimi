@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
+	type Api,
+	type Context,
 	clearCustomApis,
 	type Message,
 	type Model,
+	type ModelSpec,
 	registerCustomApi,
 	type SimpleStreamOptions,
 	type TextContent,
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -179,7 +184,7 @@ describe("AgentSession message pipeline", () => {
 			return stream;
 		});
 
-		const model = {
+		const model = buildModel({
 			id: "side-model",
 			name: "Side Model",
 			api,
@@ -190,7 +195,7 @@ describe("AgentSession message pipeline", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 4096,
 			maxTokens: 1024,
-		} satisfies Model;
+		} as ModelSpec<Api>) as Model<Api>;
 		const session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -232,7 +237,7 @@ describe("AgentSession message pipeline", () => {
 			return stream;
 		});
 
-		const model = {
+		const model = buildModel({
 			id: "anthropic/claude-sonnet-4",
 			name: "OpenRouter Model",
 			api,
@@ -243,7 +248,7 @@ describe("AgentSession message pipeline", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 4096,
 			maxTokens: 1024,
-		} satisfies Model;
+		} as ModelSpec<Api>) as Model<Api>;
 		const session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -268,6 +273,58 @@ describe("AgentSession message pipeline", () => {
 
 		expect(result.replyText).toBe("Answer");
 		expect(capturedOptions?.openrouterVariant).toBe("nitro");
+	});
+
+	it("obfuscates the system prompt and messages on ephemeral side-channel requests", async () => {
+		const api = "test-ephemeral-secret-redaction";
+		const secret = "EPHEMERAL_SECRET_TOKEN_12345";
+		let capturedContext: Context | undefined;
+		registerCustomApi(api, (_model, context, _options) => {
+			capturedContext = context;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Answer");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = buildModel({
+			id: "side-model-secrets",
+			name: "Side Model Secrets",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: [`system prompt with ${secret}`],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {
+				getApiKey: vi.fn(async () => "key"),
+			} as never,
+			obfuscator: new SecretObfuscator([{ type: "plain", content: secret }]),
+		});
+		sessions.push(session);
+
+		const result = await session.runEphemeralTurn({ promptText: `question about ${secret}` });
+
+		expect(result.replyText).toBe("Answer");
+		expect(capturedContext).toBeDefined();
+		expect(JSON.stringify(capturedContext)).not.toContain(secret);
 	});
 
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {

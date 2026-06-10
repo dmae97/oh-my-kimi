@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { detectOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
-import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
 
 const echoTool: Tool = {
@@ -36,7 +36,7 @@ async function capturePayload(model: Model<"openai-completions">): Promise<Recor
 }
 
 function customDeepseekFlash(): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		...getBundledModel("openai", "gpt-4o-mini"),
 		api: "openai-completions",
 		id: "deepseek-v4-flash",
@@ -48,13 +48,13 @@ function customDeepseekFlash(): Model<"openai-completions"> {
 			supportsReasoningEffort: true,
 			reasoningEffortMap: { xhigh: "max" },
 		},
-	};
+	} as ModelSpec<"openai-completions">);
 }
 
 describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 	it("detects the documented direct DeepSeek V4 compat shape", () => {
 		const model = getBundledModel("deepseek", "deepseek-v4-flash") as Model<"openai-completions">;
-		const compat = detectOpenAICompat(model);
+		const compat = model.compat;
 
 		expect(compat.supportsToolChoice).toBe(false);
 		expect(compat.maxTokensField).toBe("max_tokens");
@@ -69,7 +69,7 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 	});
 
 	it("merges partial user reasoning maps with DeepSeek defaults", () => {
-		const compat = resolveOpenAICompat(customDeepseekFlash());
+		const compat = customDeepseekFlash().compat;
 
 		expect(compat.supportsToolChoice).toBe(false);
 		expect(compat.reasoningEffortMap).toMatchObject({
@@ -93,7 +93,7 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 
 	it("does not mix Fireworks DeepSeek effort with the native thinking toggle", async () => {
 		const model = getBundledModel("fireworks", "deepseek-v4-pro") as Model<"openai-completions">;
-		const compat = resolveOpenAICompat(model);
+		const compat = model.compat;
 		const body = await capturePayload(model);
 
 		expect(compat.extraBody).toBeUndefined();
@@ -106,7 +106,7 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 
 	it("preserves OpenRouter reasoning when tool_choice auto is present", async () => {
 		const model = getBundledModel("openrouter", "deepseek/deepseek-v4-flash") as Model<"openai-completions">;
-		const compat = detectOpenAICompat(model);
+		const compat = model.compat;
 		const body = await capturePayload(model);
 
 		expect(compat.disableReasoningOnToolChoice).toBe(false);

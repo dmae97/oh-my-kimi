@@ -15,9 +15,10 @@ import {
 	tryEnforceStrictSchema,
 	upgradeJsonSchemaTo202012,
 } from "@oh-my-pi/pi-ai/utils/schema";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function createGoogleCliModel(id: string): Model<"google-gemini-cli"> {
-	return {
+	return buildModel({
 		id,
 		name: id,
 		api: "google-gemini-cli",
@@ -33,7 +34,7 @@ function createGoogleCliModel(id: string): Model<"google-gemini-cli"> {
 		},
 		contextWindow: 200000,
 		maxTokens: 8192,
-	};
+	});
 }
 
 // ---------------------------------------------------------------------------

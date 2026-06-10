@@ -62,7 +62,7 @@
 			"!**/test-sessions.ts",
 			"!**/template.generated.ts",
 			"!**/docs-index.generated.ts",
-			"!**/gen/agent_pb.ts",
+			"!**/agent_pb.ts",
 			"!.worktrees/**/*",
 			"!.wt/**/*"
 		]

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Message,
+	Model,
+	ModelSpec,
+	ToolResultMessage,
+	UserMessage,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 // These tests pin the wire-validity contract that was verified end-to-end against the
 // live Anthropic Messages API (claude-opus-4-8):
@@ -25,7 +33,7 @@ import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage }
 // continues. That continuation is valid only when the transform preserves latest signed
 // thinking and downgrades historical/invalid signed thinking.
 
-const model: Model<"anthropic-messages"> = {
+const model: Model<"anthropic-messages"> = buildModel({
 	api: "anthropic-messages",
 	provider: "anthropic",
 	id: "claude-opus-4-8",
@@ -36,7 +44,7 @@ const model: Model<"anthropic-messages"> = {
 	maxTokens: 8_192,
 	contextWindow: 200_000,
 	reasoning: true,
-};
+});
 
 const emptyUsage = {
 	input: 0,
@@ -158,10 +166,11 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		// The whole signature must replay as native signed thinking even when the first-party
 		// provider is routed through an LLM gateway baseUrl, which still reaches signature-enforcing
 		// Anthropic. Dropping it would emit signature:"" and 400 the gateway.
-		const gatewayModel: Model<"anthropic-messages"> = {
+		const gatewayModel: Model<"anthropic-messages"> = buildModel({
 			...model,
 			baseUrl: "https://llm2.example.com/abc/v1/messages",
-		};
+			compat: model.compatConfig,
+		} as ModelSpec<"anthropic-messages">);
 		const user: UserMessage = { role: "user", content: "deploy the update", timestamp: 1 };
 		const aborted: AssistantMessage = {
 			role: "assistant",

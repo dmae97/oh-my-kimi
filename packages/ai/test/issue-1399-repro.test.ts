@@ -5,8 +5,9 @@ import * as path from "node:path";
 import { streamBedrock } from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
 import { clearAwsCredentialCache } from "@oh-my-pi/pi-ai/providers/aws-credentials";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const model: Model<"bedrock-converse-stream"> = {
+const model: Model<"bedrock-converse-stream"> = buildModel({
 	id: "zai.glm-5",
 	name: "GLM-5",
 	api: "bedrock-converse-stream",
@@ -17,7 +18,7 @@ const model: Model<"bedrock-converse-stream"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 131_072,
 	maxTokens: 16_384,
-};
+});
 
 const context: Context = {
 	systemPrompt: [],

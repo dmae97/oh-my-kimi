@@ -116,7 +116,7 @@ export class SetupWizardComponent implements Component {
 		this.#activeScene?.handleInput?.(data);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const safeWidth = Math.max(1, width);
 		const height = Math.max(1, this.ctx.ui.terminal.rows);
 		let lines: string[];

@@ -1,8 +1,12 @@
 //! Command execution utilities.
+//!
+//! On Windows, process creation flags are applied uniformly in
+//! `sys::process::spawn` (`CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`); the
+//! per-command extension methods below intentionally do not touch creation
+//! flags, because `CommandExt::creation_flags` replaces rather than ORs and
+//! two writers would silently clobber each other.
 
-use std::{ffi::OsStr, os::windows::process::CommandExt as WindowsCommandExt};
-
-use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+use std::ffi::OsStr;
 
 use crate::{ShellFd, error, openfiles};
 
@@ -34,10 +38,9 @@ impl CommandExt for std::process::Command {
 		self
 	}
 
-	fn process_group(&mut self, pgroup: i32) -> &mut Self {
-		if pgroup == 0 {
-			self.creation_flags(CREATE_NEW_PROCESS_GROUP);
-		}
+	fn process_group(&mut self, _pgroup: i32) -> &mut Self {
+		// NOTE: Windows cannot join an existing process group, and new-group
+		// creation is handled uniformly by `sys::process::spawn`.
 		self
 	}
 }
@@ -95,19 +98,21 @@ pub trait CommandFgControlExt {
 
 impl CommandFgControlExt for std::process::Command {
 	fn take_foreground(&mut self) {
-		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
+		// NOTE: no terminal foregrounding on Windows; group/console flags are
+		// applied uniformly by `sys::process::spawn`.
 	}
 
 	fn lead_session(&mut self) {
-		self.creation_flags(CREATE_NEW_PROCESS_GROUP);
+		// NOTE: no sessions on Windows; group/console flags are applied
+		// uniformly by `sys::process::spawn`.
 	}
 }
 
 /// Extension trait for detaching a command from the parent's controlling terminal.
 pub trait CommandSessionExt {
 	/// Arranges for the command to run in a new POSIX session with no controlling
-	/// terminal. On Windows this is a no-op; process-group behavior is handled
-	/// by `CommandFgControlExt` via `CREATE_NEW_PROCESS_GROUP`.
+	/// terminal. On Windows this is a no-op; process-group and console behavior
+	/// are handled uniformly by `sys::process::spawn`.
 	fn detach_session(&mut self);
 }
 

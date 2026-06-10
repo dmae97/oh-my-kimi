@@ -346,4 +346,39 @@ describe("mcp oauth flow", () => {
 		expect(flow.registeredClientSecret).toBeUndefined();
 		expect(registrationCalled).toBe(false);
 	});
+
+	it("accepts pasted redirect URLs through manual input", async () => {
+		let tokenRequestBody = "";
+		let manualAuthUrl = "";
+
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				callbackPort: 14570,
+				fetch: mockProviderTokenEndpoint(body => {
+					tokenRequestBody = body;
+				}),
+			},
+			{
+				onAuth: info => {
+					manualAuthUrl = info.url;
+				},
+				onManualCodeInput: async () => {
+					const authUrl = new URL(manualAuthUrl);
+					const redirectUri = authUrl.searchParams.get("redirect_uri") ?? "";
+					const state = authUrl.searchParams.get("state") ?? "";
+					return `${redirectUri}?code=manual-code&state=${encodeURIComponent(state)}`;
+				},
+				signal: AbortSignal.timeout(1_000),
+			},
+		);
+
+		const credentials = await flow.login();
+		const tokenParams = new URLSearchParams(tokenRequestBody);
+
+		expect(credentials.access).toBe("access-token");
+		expect(tokenParams.get("code")).toBe("manual-code");
+	});
 });

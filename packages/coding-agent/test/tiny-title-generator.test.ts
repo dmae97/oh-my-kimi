@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { type Api, type AssistantMessage, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { isSubcommand } from "@oh-my-pi/pi-coding-agent/cli-commands";
 import { getDefault, getEnumValues, getUi } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { TinyTitleDownloadProgressComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tiny-title-download-progress";
@@ -239,6 +240,27 @@ describe("tiny title generator routing", () => {
 
 		expect(title).toBe("Local Title");
 		expect(local).toHaveBeenCalledWith("lfm2-350m", "Investigate routing");
+		expect(online).not.toHaveBeenCalled();
+	});
+
+	it("passes the resolved TITLE_SYSTEM.md prompt to the local client", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const customPrompt = "Generate lowercase colon-delimited session names.";
+		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local Title");
+		const online = mockOnlineTitle("Online Title");
+
+		const title = await generateSessionTitle(
+			"Investigate routing",
+			createRegistry(model),
+			createSettings(model, "lfm2-350m"),
+			undefined,
+			undefined,
+			undefined,
+			customPrompt,
+		);
+
+		expect(title).toBe("Local Title");
+		expect(local).toHaveBeenCalledWith("lfm2-350m", "Investigate routing", { systemPrompt: customPrompt });
 		expect(online).not.toHaveBeenCalled();
 	});
 

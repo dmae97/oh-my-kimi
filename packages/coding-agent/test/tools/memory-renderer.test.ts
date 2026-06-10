@@ -13,7 +13,7 @@ async function theme() {
 	return t!;
 }
 
-const lines = (component: { render: (w: number) => string[] }, width = 200) =>
+const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>
 	sanitizeText(component.render(width).join("\n")).split("\n");
 
 describe("retainToolRenderer", () => {

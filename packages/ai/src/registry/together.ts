@@ -1,6 +1,5 @@
-import { togetherModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 export const loginTogether = createApiKeyLogin({
 	providerLabel: "Together",
@@ -19,9 +18,5 @@ export const loginTogether = createApiKeyLogin({
 export const togetherProvider = {
 	id: "together",
 	name: "Together",
-	defaultModel: "moonshotai/Kimi-K2.5",
-	createModelManagerOptions: (config: ModelManagerConfig) => togetherModelManagerOptions(config),
-	catalogDiscovery: { label: "Together", envVars: ["TOGETHER_API_KEY"] },
-	envKeys: "TOGETHER_API_KEY",
 	login: (cb: Parameters<typeof loginTogether>[0]) => loginTogether(cb),
 } as const satisfies ProviderDefinition;

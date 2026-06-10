@@ -436,9 +436,10 @@ async function loadPipeline(
 	return loaded;
 }
 
-function buildPrompt(generator: TextGenerationPipeline, message: string): string {
+function buildPrompt(generator: TextGenerationPipeline, message: string, systemPrompt?: string): string {
+	const selectedSystemPrompt = systemPrompt?.trim() || TINY_TITLE_SYSTEM_PROMPT;
 	const chat = [
-		{ role: "system", content: TINY_TITLE_SYSTEM_PROMPT },
+		{ role: "system", content: selectedSystemPrompt },
 		{ role: "user", content: formatTitleUserMessage(message) },
 	];
 	const chatTemplateOptions = {
@@ -464,9 +465,10 @@ async function generateTitle(
 	requestId: string,
 	modelKey: TinyTitleLocalModelKey,
 	message: string,
+	systemPrompt?: string,
 ): Promise<string | null> {
 	const generator = await loadPipeline(modelKey, transport, requestId);
-	const promptText = buildPrompt(generator, message);
+	const promptText = buildPrompt(generator, message, systemPrompt);
 	const transformers = await loadTransformers(transport, requestId, modelKey);
 	const output = (await generator(promptText, {
 		max_new_tokens: TITLE_MAX_NEW_TOKENS,
@@ -548,7 +550,7 @@ async function handleQueuedRequest(
 			transport.send({ type: "completion", id: request.id, text });
 			return;
 		}
-		const title = await generateTitle(transport, request.id, request.modelKey, request.message);
+		const title = await generateTitle(transport, request.id, request.modelKey, request.message, request.systemPrompt);
 		transport.send({ type: "title", id: request.id, title });
 	} catch (error) {
 		transport.send({ type: "error", id: request.id, error: errorText(error) });

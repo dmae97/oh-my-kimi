@@ -107,4 +107,57 @@ describe("SettingsList", () => {
 
 		expect(list.render(16)[0]).toBe("→ Mode  123456");
 	});
+
+	it("filters settings with printable search text", () => {
+		const list = new SettingsList(
+			[
+				{ id: "mode", label: "Mode", currentValue: "off", values: ["off", "on"] },
+				{ id: "theme.dark", label: "Theme", currentValue: "dark", values: ["dark", "light"] },
+				{
+					id: "browser.path",
+					label: "Browser Path",
+					description: "Executable used for browser launches",
+					currentValue: "",
+				},
+			],
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		list.handleInput("b");
+
+		const output = list.render(80).join("\n");
+		expect(output).toContain("Search: b");
+		expect(output).toContain("Browser Path");
+		expect(output).not.toContain("Theme");
+		expect(output).not.toContain("Mode");
+	});
+
+	it("clears active search on Escape before canceling", () => {
+		let cancelCount = 0;
+		const list = new SettingsList(
+			[
+				{ id: "mode", label: "Mode", currentValue: "off", values: ["off", "on"] },
+				{ id: "browser.path", label: "Browser Path", currentValue: "" },
+			],
+			5,
+			testTheme,
+			() => {},
+			() => {
+				cancelCount++;
+			},
+		);
+
+		list.handleInput("b");
+		expect(list.hasSearchQuery()).toBe(true);
+
+		list.handleInput("\x1b");
+		expect(list.hasSearchQuery()).toBe(false);
+		expect(cancelCount).toBe(0);
+
+		list.handleInput("\x1b");
+		expect(cancelCount).toBe(1);
+	});
 });

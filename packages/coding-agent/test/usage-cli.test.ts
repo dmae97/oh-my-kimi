@@ -44,44 +44,44 @@ function makeReport(provider: string, email: string, limits: UsageReport["limits
 
 describe("buildRedactionMap", () => {
 	it("masks everything past a two-char anchor when the anchor is unique", () => {
-		const map = buildRedactionMap(["annenburada123@gmail.com", "hakkicanboluk@gmail.com"]);
-		expect(map.get("annenburada123@gmail.com")).toBe("an*");
-		expect(map.get("hakkicanboluk@gmail.com")).toBe("ha*");
+		const map = buildRedactionMap(["alpha@example.test", "bravo@example.test"]);
+		expect(map.get("alpha@example.test")).toBe("al*");
+		expect(map.get("bravo@example.test")).toBe("br*");
 	});
 
 	it("reveals a minimal middle-out differentiator instead of growing the prefix", () => {
-		const values = ["can.boluk@zellic.io", "can.boluk89@gmail.com", "canboluk@gmail.com"];
+		const values = ["dum.my@example.org", "dum.my9@example.net", "dummy@example.net"];
 		const map = buildRedactionMap(values);
 		const masks = values.map(value => map.get(value)!);
 		// Masks must be pairwise distinct so accounts stay tellable-apart.
 		expect(new Set(masks).size).toBe(masks.length);
 		for (const mask of masks) {
-			// Never leak the local part the way prefix growth would ("can.boluk@*").
-			expect(mask).not.toContain("boluk");
+			// Never leak the whole local part the way prefix growth would ("dummy@*").
+			expect(mask).not.toContain("dummy");
 			// anchor + at most a two-char differentiator.
-			expect(mask).toMatch(/^ca\*(.{1,2}\*)?$/);
+			expect(mask).toMatch(/^du\*(.{1,2}\*)?$/);
 		}
 		// The "89" account is distinguished by a digit only it contains.
-		expect(map.get("can.boluk89@gmail.com")).toBe("ca*9*");
+		expect(map.get("dum.my9@example.net")).toBe("du*9*");
 	});
 
 	it("gives duplicate identities the same mask", () => {
-		const map = buildRedactionMap(["me@can.ac", "me@can.ac"]);
+		const map = buildRedactionMap(["user@example.test", "user@example.test"]);
 		expect(map.size).toBe(1);
-		expect(map.get("me@can.ac")).toBe("me*");
+		expect(map.get("user@example.test")).toBe("us*");
 	});
 });
 
 describe("computeProviderWindowStats", () => {
-	it("buckets by window duration, binds each account to its worst meter, and ceils the need", () => {
+	it("buckets by window duration, binds each account to its worst meter, and reports remaining capacity", () => {
 		const reports = [
-			makeReport("anthropic", "a@x", [
+			makeReport("anthropic", "account-a@example.test", [
 				makeLimit({ id: "5h", usedFraction: 0.9, durationMs: FIVE_HOURS, windowId: "5h" }),
 				makeLimit({ id: "7d", usedFraction: 0.1, durationMs: SEVEN_DAYS, windowId: "7d" }),
 				// Tiered meter on the same window: higher burn must bind.
 				makeLimit({ id: "7d-opus", usedFraction: 0.4, durationMs: SEVEN_DAYS, windowId: "7d", tier: "opus" }),
 			]),
-			makeReport("anthropic", "b@x", [
+			makeReport("anthropic", "account-b@example.test", [
 				makeLimit({ id: "5h", usedFraction: 0.4, durationMs: FIVE_HOURS, windowId: "5h" }),
 				makeLimit({ id: "7d", usedFraction: 0.2, durationMs: SEVEN_DAYS, windowId: "7d" }),
 			]),
@@ -93,15 +93,15 @@ describe("computeProviderWindowStats", () => {
 		expect(fiveHour.window).toBe("5h");
 		expect(fiveHour.accounts).toBe(2);
 		expect(fiveHour.usedAccounts).toBeCloseTo(1.3);
-		expect(fiveHour.needed).toBe(2);
+		expect(fiveHour.remainingAccounts).toBeCloseTo(0.7);
 		expect(sevenDay.window).toBe("7d");
 		expect(sevenDay.usedAccounts).toBeCloseTo(0.6); // 0.4 (opus binds) + 0.2
-		expect(sevenDay.needed).toBe(1);
+		expect(sevenDay.remainingAccounts).toBeCloseTo(1.4);
 	});
 
 	it("ignores limits without a resolvable fraction", () => {
 		const reports = [
-			makeReport("anthropic", "a@x", [
+			makeReport("anthropic", "account-a@example.test", [
 				{
 					id: "mystery",
 					label: "mystery",
@@ -116,23 +116,23 @@ describe("computeProviderWindowStats", () => {
 
 describe("collectUnreportedAccounts", () => {
 	const accounts: UsageAccountIdentity[] = [
-		{ provider: "anthropic", type: "oauth", email: "seen@x.com" },
-		{ provider: "anthropic", type: "oauth", email: "missing@x.com" },
+		{ provider: "anthropic", type: "oauth", email: "seen@example.test" },
+		{ provider: "anthropic", type: "oauth", email: "missing@example.test" },
 		{ provider: "anthropic", type: "api_key" },
 		{ provider: "cerebras", type: "api_key" },
 	];
-	const reports = [makeReport("anthropic", "seen@x.com", [])];
+	const reports = [makeReport("anthropic", "seen@example.test", [])];
 
 	it("flags providers without reports and identified accounts missing from reports", () => {
 		const unreported = collectUnreportedAccounts(reports, accounts);
 		expect(unreported).toEqual([
-			{ provider: "anthropic", type: "oauth", email: "missing@x.com" },
+			{ provider: "anthropic", type: "oauth", email: "missing@example.test" },
 			{ provider: "cerebras", type: "api_key" },
 		]);
 	});
 
 	it("does not claim unattributable credentials are missing when reports carry no identity", () => {
-		const anonymous = [{ ...makeReport("anthropic", "seen@x.com", []), metadata: {} }];
+		const anonymous = [{ ...makeReport("anthropic", "seen@example.test", []), metadata: {} }];
 		const unreported = collectUnreportedAccounts(anonymous, accounts);
 		expect(unreported).toEqual([{ provider: "cerebras", type: "api_key" }]);
 	});
@@ -140,33 +140,47 @@ describe("collectUnreportedAccounts", () => {
 
 describe("formatUsageBreakdown", () => {
 	const reports = [
-		makeReport("anthropic", "can.boluk89@gmail.com", [
+		makeReport("anthropic", "dummy.primary@example.test", [
 			makeLimit({ id: "Claude 5 Hour", usedFraction: 0.84, durationMs: FIVE_HOURS, windowId: "5h" }),
 		]),
-		makeReport("anthropic", "canboluk@gmail.com", [
+		makeReport("anthropic", "dummy.secondary@example.test", [
 			makeLimit({ id: "Claude 5 Hour", usedFraction: 0.5, durationMs: FIVE_HOURS, windowId: "5h" }),
 		]),
 	];
 	const accounts: UsageAccountIdentity[] = [
-		{ provider: "anthropic", type: "oauth", email: "can.boluk89@gmail.com" },
-		{ provider: "anthropic", type: "oauth", email: "canboluk@gmail.com" },
+		{ provider: "anthropic", type: "oauth", email: "dummy.primary@example.test" },
+		{ provider: "anthropic", type: "oauth", email: "dummy.secondary@example.test" },
 		{ provider: "cerebras", type: "api_key" },
 	];
 
 	it("renders every account: reported ones with limits, credential-only ones as no-data rows", () => {
 		const text = stripVTControlCharacters(formatUsageBreakdown(reports, accounts, Date.now()));
-		expect(text).toContain("can.boluk89@gmail.com");
+		expect(text).toContain("dummy.primary@example.test");
 		expect(text).toContain("84.0% used");
 		expect(text).toContain("Cerebras");
 		expect(text).toContain("API key — no usage data");
-		expect(text).toContain("need: 5h → 2 of 2 accounts");
+		expect(text).toContain("capacity: 5h → 1.34/2 accounts used (0.66× quota left)");
+	});
+
+	it("keeps near-exhausted capacity fractional instead of rounding it to an exact need", () => {
+		const nearReports = [
+			makeReport("anthropic", "near-a@example.test", [
+				makeLimit({ id: "Claude 5 Hour", usedFraction: 1, durationMs: FIVE_HOURS, windowId: "5h" }),
+			]),
+			makeReport("anthropic", "near-b@example.test", [
+				makeLimit({ id: "Claude 5 Hour", usedFraction: 0.99, durationMs: FIVE_HOURS, windowId: "5h" }),
+			]),
+		];
+		const text = stripVTControlCharacters(formatUsageBreakdown(nearReports, [], Date.now()));
+		expect(text).toContain("capacity: 5h → 1.99/2 accounts used (0.01× quota left)");
+		expect(text).not.toContain("need:");
 	});
 
 	it("redacts account labels through the provided map without leaking the originals", () => {
-		const redaction = buildRedactionMap(["can.boluk89@gmail.com", "canboluk@gmail.com"]);
+		const redaction = buildRedactionMap(["dummy.primary@example.test", "dummy.secondary@example.test"]);
 		const text = stripVTControlCharacters(formatUsageBreakdown(reports, accounts, Date.now(), redaction));
-		expect(text).not.toContain("can.boluk89@gmail.com");
-		expect(text).not.toContain("canboluk@gmail.com");
+		expect(text).not.toContain("dummy.primary@example.test");
+		expect(text).not.toContain("dummy.secondary@example.test");
 		for (const mask of redaction.values()) expect(text).toContain(mask);
 	});
 });

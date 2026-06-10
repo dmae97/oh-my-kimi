@@ -13,6 +13,8 @@
  * deltas for thinking blocks, and holds partial tags across chunk boundaries.
  */
 
+import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
+
 import { parseJsonWithRepair } from "./json-parse";
 
 const KIMI_SECTION_BEGIN = "<|tool_calls_section_begin|>";
@@ -622,7 +624,7 @@ export function modelMayLeakKimiToolCalls(provider: string, modelId: string): bo
 
 /** Cheap model/provider gate for DeepSeek DSML envelope leaks. */
 export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): boolean {
-	if (!/deepseek/i.test(modelId)) return false;
+	if (!isDeepseekModelIdOrName(modelId)) return false;
 	return (
 		provider === "ollama" ||
 		provider === "ollama-cloud" ||

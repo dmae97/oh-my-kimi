@@ -349,7 +349,7 @@ function formatLimitLine(limit: UsageLimit, labelWidth: number, nowMs: number): 
 	return lines;
 }
 
-/** Per-window capacity stat: how many accounts the current burn requires. */
+/** Per-window capacity stat: how much account quota is burned and left. */
 export interface ProviderWindowStat {
 	/** Compact window label, e.g. "5h", "7d". */
 	window: string;
@@ -358,12 +358,12 @@ export interface ProviderWindowStat {
 	accounts: number;
 	/** Sum of each account's binding used fraction — accounts' worth of quota burned. */
 	usedAccounts: number;
-	/** Accounts the current burn requires: max(1, ceil(usedAccounts)). */
-	needed: number;
+	/** Accounts' worth of quota still available across reporting accounts. */
+	remainingAccounts: number;
 }
 
 /**
- * Aggregate one provider's reports into per-window "accounts needed" stats.
+ * Aggregate one provider's reports into per-window quota capacity stats.
  *
  * Limits are bucketed by window duration (5h, 7d, ...). Within a bucket each
  * account contributes its single highest used fraction — when an account has
@@ -401,7 +401,7 @@ export function computeProviderWindowStats(reports: UsageReport[]): ProviderWind
 				durationMs: bucket.durationMs,
 				accounts: bucket.fractions.length,
 				usedAccounts,
-				needed: Math.max(1, Math.ceil(usedAccounts - 1e-9)),
+				remainingAccounts: Math.max(0, bucket.fractions.length - usedAccounts),
 			};
 		});
 }
@@ -473,9 +473,9 @@ export function formatUsageBreakdown(
 		if (stats.length > 0) {
 			const parts = stats.map(
 				stat =>
-					`${stat.window} → ${stat.needed} of ${stat.accounts} ${stat.accounts === 1 ? "account" : "accounts"} (${stat.usedAccounts.toFixed(2)}× quota burned)`,
+					`${stat.window} → ${stat.usedAccounts.toFixed(2)}/${stat.accounts} ${stat.accounts === 1 ? "account" : "accounts"} used (${stat.remainingAccounts.toFixed(2)}× quota left)`,
 			);
-			lines.push(`  ${chalk.dim(`need: ${parts.join(" · ")}`)}`);
+			lines.push(`  ${chalk.dim(`capacity: ${parts.join(" · ")}`)}`);
 		}
 	}
 

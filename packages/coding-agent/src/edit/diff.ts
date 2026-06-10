@@ -74,6 +74,49 @@ function isDiffChangeRow(row: string | undefined): boolean {
 	return row !== undefined && (row.startsWith("+") || row.startsWith("-"));
 }
 
+/** Blank row separating non-contiguous regions of a numbered diff. */
+const DIFF_GAP_ROW = "";
+
+/** Old-file line number of a source-visible row (`-` or context); `+`/gap/other rows yield undefined. */
+function parseSourceRowLineNumber(row: string): number | undefined {
+	const parsed = parseNumberedDiffRow(row);
+	return parsed === undefined || parsed.prefix === "+" ? undefined : parsed.lineNumber;
+}
+
+/**
+ * Drop gap rows that no longer separate anything. Context rows are inserted
+ * one at a time, each adding its own gap rows from a snapshot of the diff, so
+ * the raw result can contain adjacent gap rows, gap rows whose neighbors
+ * became contiguous after a later insert filled the hole, and gap rows at the
+ * diff edges. The sweep keeps a gap row only when it sits between two
+ * source-numbered rows (old-file coordinates — the same numbering the
+ * insertion gap test uses) that are actually non-contiguous, and never keeps
+ * two in a row.
+ */
+function normalizeDiffGapRows(rows: string[]): void {
+	const kept: string[] = [];
+	for (let i = 0; i < rows.length; i++) {
+		const row = rows[i];
+		if (row !== DIFF_GAP_ROW) {
+			kept.push(row);
+			continue;
+		}
+		if (kept.length === 0 || kept[kept.length - 1] === DIFF_GAP_ROW) continue;
+		let before: number | undefined;
+		for (let j = kept.length - 1; j >= 0 && before === undefined; j--) {
+			before = parseSourceRowLineNumber(kept[j]);
+		}
+		let after: number | undefined;
+		for (let j = i + 1; j < rows.length && after === undefined; j++) {
+			if (rows[j] === DIFF_GAP_ROW) continue;
+			after = parseSourceRowLineNumber(rows[j]);
+		}
+		if (before === undefined || after === undefined || after <= before + 1) continue;
+		kept.push(row);
+	}
+	if (kept.length !== rows.length) rows.splice(0, rows.length, ...kept);
+}
+
 function adjustedContextInsertIndex(rows: readonly string[], index: number): number {
 	let start = index;
 	while (start > 0 && isDiffChangeRow(rows[start - 1])) start--;
@@ -108,13 +151,13 @@ function insertBracketContextRows(
 		}
 
 		const chunk: string[] = [];
-		if (previousSourceLine !== undefined && lineNumber > previousSourceLine + 1) chunk.push("...");
+		if (previousSourceLine !== undefined && lineNumber > previousSourceLine + 1) chunk.push(DIFF_GAP_ROW);
 		chunk.push(row);
-		if (nextSourceLine !== undefined && nextSourceLine > lineNumber + 1) chunk.push("...");
+		if (nextSourceLine !== undefined && nextSourceLine > lineNumber + 1) chunk.push(DIFF_GAP_ROW);
 
 		const adjustedIndex = adjustedContextInsertIndex(rows, insertIndex);
 		rows.splice(adjustedIndex, 0, ...chunk);
-		for (const inserted of chunk) seenRows.add(inserted);
+		seenRows.add(row);
 	}
 }
 
@@ -179,6 +222,7 @@ function addMatchingBracketContextRows(
 		if (!contextRows.has(oldLineNumber)) contextRows.set(oldLineNumber, text);
 	}
 	insertBracketContextRows(rows, contextRows, seenRows);
+	normalizeDiffGapRows(rows);
 }
 
 /**

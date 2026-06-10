@@ -13,7 +13,8 @@ import {
 	convertResponsesAssistantMessage,
 	processResponsesStream,
 } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
-import type { AssistantMessage, Model, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Model, ModelSpec, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 import * as z from "zod/v4";
 
@@ -27,8 +28,8 @@ const GRAMMAR = [
 ].join("\n");
 const COMPACT_GRAMMAR = 'start: "*** Begin Patch" LF\nPATH: /https?:\\/\\/[^\\n]+/\nLITERAL: "//"';
 
-function makeModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"openai-responses"> {
-	return {
+function makeModel(overrides: Partial<ModelSpec<"openai-responses">> = {}): Model<"openai-responses"> {
+	return buildModel({
 		id: "gpt-5",
 		name: "GPT-5",
 		api: "openai-responses",
@@ -40,11 +41,11 @@ function makeModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"o
 		contextWindow: 400000,
 		maxTokens: 128000,
 		...overrides,
-	};
+	} as ModelSpec<"openai-responses">);
 }
 
-function makeCodexModel(overrides: Partial<Model<"openai-codex-responses">> = {}): Model<"openai-codex-responses"> {
-	return {
+function makeCodexModel(overrides: Partial<ModelSpec<"openai-codex-responses">> = {}): Model<"openai-codex-responses"> {
+	return buildModel({
 		id: "gpt-5",
 		name: "GPT-5",
 		api: "openai-codex-responses",
@@ -56,7 +57,7 @@ function makeCodexModel(overrides: Partial<Model<"openai-codex-responses">> = {}
 		contextWindow: 272000,
 		maxTokens: 128000,
 		...overrides,
-	};
+	} as ModelSpec<"openai-codex-responses">);
 }
 
 const editTool: Tool = {

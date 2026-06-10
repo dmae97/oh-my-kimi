@@ -17,6 +17,7 @@ import * as path from "node:path";
 import {
 	getAgentDbPath,
 	getAgentDir,
+	getLastChangelogVersionPath,
 	getProjectDir,
 	isEnoent,
 	logger,
@@ -25,7 +26,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
-import type { ModelRole } from "../config/model-registry";
+import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
@@ -63,6 +64,8 @@ export interface SettingsOptions {
 	inMemory?: boolean;
 	/** Initial overrides */
 	overrides?: Partial<Record<SettingPath, unknown>>;
+	/** Extra config.yml-style overlays loaded after global/project settings */
+	configFiles?: string[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -115,10 +118,12 @@ type PathScopedStringArrayEntry = {
 	providers?: unknown;
 };
 
+function expandTilde(p: string): string {
+	return p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
+}
+
 function normalizePathPrefix(prefix: string): string {
-	const expanded =
-		prefix === "~" ? os.homedir() : prefix.startsWith("~/") ? path.join(os.homedir(), prefix.slice(2)) : prefix;
-	return path.resolve(expanded);
+	return path.resolve(expandTilde(prefix));
 }
 
 function pathMatchesPrefix(cwd: string, prefix: string): boolean {
@@ -192,10 +197,13 @@ export class Settings {
 	#agentDir: string;
 	#storage: AgentStorage | null = null;
 
+	#configFiles: string[] = [];
 	/** Global settings from config.yml */
 	#global: RawSettings = {};
 	/** Project settings from .claude/settings.yml etc */
 	#project: RawSettings = {};
+	/** Extra config.yml-style overlays passed by CLI */
+	#configOverlay: RawSettings = {};
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
 	/** Merged view (global + project + overrides) */
@@ -205,6 +213,9 @@ export class Settings {
 
 	/** Paths modified during this session (for partial save) */
 	#modified = new Set<string>();
+
+	/** Legacy `lastChangelogVersion` captured from config.yml during migration (now a marker file). */
+	#legacyLastChangelogVersion?: string;
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -217,6 +228,7 @@ export class Settings {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
 		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, "config.yml");
+		this.#configFiles = options.configFiles?.map(file => path.resolve(this.#cwd, expandTilde(file))) ?? [];
 		this.#persist = !options.inMemory;
 
 		if (options.overrides) {
@@ -252,6 +264,7 @@ export class Settings {
 			},
 			error => {
 				globalInstance = null;
+				globalInstancePromise = null;
 				clearBoundSettingsMethods();
 				throw error;
 			},
@@ -297,6 +310,14 @@ export class Settings {
 			value !== undefined ? (resolvePathScopedStringArray(path, value, this.#cwd) ?? value) : getDefault(path);
 		this.#resolvedCache.set(path, resolved);
 		return resolved as SettingValue<P>;
+	}
+
+	/**
+	 * Whether `path` has an explicitly configured value (global config, project
+	 * config, or runtime override) rather than falling back to the schema default.
+	 */
+	isConfigured(path: SettingPath): boolean {
+		return getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]) !== undefined;
 	}
 
 	/**
@@ -382,6 +403,8 @@ export class Settings {
 		cloned.#storage = this.#storage;
 		cloned.#global = structuredClone(this.#global);
 		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
+		cloned.#configFiles = [...this.#configFiles];
+		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		cloned.#overrides = structuredClone(this.#overrides);
 		cloned.#rebuildMerged();
 		cloned.#fireAllHooks();
@@ -549,9 +572,11 @@ export class Settings {
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
 			await this.#migrateFromLegacy();
 			this.#global = await this.#loadYaml(this.#configPath!);
+			await this.#seedLastChangelogVersionMarker();
 		}
 
 		this.#project = await projectPromise;
+		this.#configOverlay = await this.#loadConfigOverlays();
 
 		// Build merged view (global → project → overrides; project wins over global)
 		this.#rebuildMerged();
@@ -587,6 +612,43 @@ export class Settings {
 		} catch {
 			return {};
 		}
+	}
+
+	async #loadConfigOverlays(): Promise<RawSettings> {
+		let merged: RawSettings = {};
+		for (const filePath of this.#configFiles) {
+			merged = this.#deepMerge(merged, await this.#loadOverlayYaml(filePath));
+		}
+		return merged;
+	}
+
+	/**
+	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
+	 * missing or malformed files are hard errors so a typo'd path cannot
+	 * silently fall back to the persistent settings.
+	 */
+	async #loadOverlayYaml(filePath: string): Promise<RawSettings> {
+		let content: string;
+		try {
+			content = await Bun.file(filePath).text();
+		} catch (error) {
+			throw new Error(
+				isEnoent(error)
+					? `Config overlay not found: ${filePath}`
+					: `Failed to read config overlay ${filePath}: ${String(error)}`,
+			);
+		}
+		let parsed: unknown;
+		try {
+			parsed = YAML.parse(content);
+		} catch (error) {
+			throw new Error(`Failed to parse config overlay ${filePath}: ${String(error)}`);
+		}
+		if (parsed === null || parsed === undefined) return {};
+		if (typeof parsed !== "object" || Array.isArray(parsed)) {
+			throw new Error(`Config overlay must be a YAML mapping: ${filePath}`);
+		}
+		return this.#migrateRawSettings(parsed as RawSettings);
 	}
 
 	async #migrateFromLegacy(): Promise<void> {
@@ -641,6 +703,16 @@ export class Settings {
 			raw.steeringMode = raw.queueMode;
 			delete raw.queueMode;
 		}
+
+		// lastChangelogVersion moved out of config.yml into the
+		// <agentDir>/last-changelog-version marker file so version bumps no
+		// longer dirty user-tracked configs. Capture for marker seeding (see
+		// #seedLastChangelogVersionMarker), then strip the key — the next
+		// config save drops it from disk.
+		if (typeof raw.lastChangelogVersion === "string") {
+			this.#legacyLastChangelogVersion ??= raw.lastChangelogVersion;
+		}
+		delete raw.lastChangelogVersion;
 
 		// ask.timeout: ms -> seconds (if value > 1000, it's old ms format)
 		if (raw.ask && typeof (raw.ask as Record<string, unknown>).timeout === "number") {
@@ -803,6 +875,27 @@ export class Settings {
 		return raw;
 	}
 
+	/**
+	 * One-time migration: seed the last-changelog-version marker file from the
+	 * legacy config.yml key. An existing marker always wins — it is the newer
+	 * source of truth.
+	 */
+	async #seedLastChangelogVersionMarker(): Promise<void> {
+		const legacy = this.#legacyLastChangelogVersion;
+		if (!legacy) return;
+		const markerPath = getLastChangelogVersionPath(this.#agentDir);
+		try {
+			if ((await Bun.file(markerPath).text()).trim()) return;
+		} catch (error) {
+			if (!isEnoent(error)) return;
+		}
+		try {
+			await Bun.write(markerPath, legacy);
+		} catch (error) {
+			logger.warn("Settings: failed to seed last-changelog-version marker", { error: String(error) });
+		}
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Saving
 	// ─────────────────────────────────────────────────────────────────────────
@@ -862,6 +955,7 @@ export class Settings {
 
 	#rebuildMerged(): void {
 		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#project);
+		this.#merged = this.#deepMerge(this.#merged, this.#configOverlay);
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
 		this.#resolvedCache.clear();
 	}

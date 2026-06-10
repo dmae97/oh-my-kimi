@@ -89,7 +89,7 @@ describe("AuthStorage account rotation", () => {
 		expect(firstKey).toMatch(/^api-acct-/);
 
 		usageExhausted = true;
-		const switched = await authStorage.markUsageLimitReached("openai-codex", sessionId);
+		const { switched } = await authStorage.markUsageLimitReached("openai-codex", sessionId);
 		expect(switched).toBe(true);
 
 		const exhaustedFallbackKey = await authStorage.getApiKey("openai-codex", sessionId);

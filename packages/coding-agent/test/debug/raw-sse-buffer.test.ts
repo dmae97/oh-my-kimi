@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	RawSseDebugBuffer,
 	rawSseRecordLines,
 	resolveRawSseDebugBuffer,
 } from "@oh-my-pi/pi-coding-agent/debug/raw-sse-buffer";
 
-const model: Model<"anthropic-messages"> = {
+const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-test",
 	name: "Claude Test",
 	api: "anthropic-messages",
@@ -17,7 +18,7 @@ const model: Model<"anthropic-messages"> = {
 	cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 describe("RawSseDebugBuffer", () => {
 	it("records response metadata and raw SSE frame lines for diagnostics", () => {

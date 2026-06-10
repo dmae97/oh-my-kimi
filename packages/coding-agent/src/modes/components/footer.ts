@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
@@ -65,7 +66,8 @@ export class FooterComponent implements Component {
 				}
 
 				try {
-					this.#gitWatcher = fs.watch(head.headPath, () => {
+					const watchPath = head.isReftable ? path.join(head.gitDir, "reftable") : head.headPath;
+					this.#gitWatcher = fs.watch(watchPath, () => {
 						this.#cachedBranch = undefined; // Invalidate cache
 						if (this.#onBranchChange) {
 							this.#onBranchChange();
@@ -110,7 +112,7 @@ export class FooterComponent implements Component {
 		return this.#cachedBranch;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const state = this.session.state;
 
 		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)

@@ -11,8 +11,8 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import type * as XtermModule from "@xterm/headless";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
-import xterm from "@xterm/headless";
 import { Settings } from "../config/settings";
 import type { Theme } from "../modes/theme/theme";
 import { OutputSink, type OutputSummary } from "../session/streaming-output";
@@ -31,7 +31,17 @@ function normalizeCaptureChunk(chunk: string): string {
 	return sanitizeWithOptionalSixelPassthrough(normalized, sanitizeText);
 }
 
-const XtermTerminal = xterm.Terminal;
+// @xterm/headless is only needed once an interactive PTY session actually starts,
+// so it is loaded lazily (and memoized) instead of weighing down CLI startup.
+let xtermTerminalCtor: typeof XtermModule.Terminal | undefined;
+
+async function loadXtermTerminal(): Promise<typeof XtermModule.Terminal> {
+	if (!xtermTerminalCtor) {
+		const mod = (await import("@xterm/headless")) as typeof XtermModule & { default?: typeof XtermModule };
+		xtermTerminalCtor = (mod.default ?? mod).Terminal;
+	}
+	return xtermTerminalCtor;
+}
 
 function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean): string {
 	const kitty = parseKittySequence(data);
@@ -112,8 +122,9 @@ class BashInteractiveOverlayComponent implements Component {
 		private readonly command: string,
 		private readonly uiTheme: Theme,
 		private readonly getTerminalRows: () => number,
+		terminalCtor: typeof XtermModule.Terminal,
 	) {
-		this.#terminal = new XtermTerminal({
+		this.#terminal = new terminalCtor({
 			cols: 120,
 			rows: 40,
 			disableStdin: true,
@@ -223,7 +234,7 @@ class BashInteractiveOverlayComponent implements Component {
 		}
 		return visibleLines;
 	}
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const safeWidth = Math.max(20, width);
 		const innerWidth = Math.max(1, safeWidth - 2);
 		const maxOverlayRows = Math.max(5, Math.floor(this.getTerminalRows() * 0.8));
@@ -297,6 +308,8 @@ export async function runInteractiveBashPty(
 	},
 ): Promise<BashInteractiveResult> {
 	const settings = await Settings.init();
+	// Load the xterm Terminal ctor here (async boundary) — the ui.custom factory below is sync.
+	const XtermTerminal = await loadXtermTerminal();
 	const { shell: resolvedShell } = settings.getShellConfig();
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
@@ -307,7 +320,12 @@ export async function runInteractiveBashPty(
 	const result = await ui.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {
 			const session = new PtySession();
-			const component = new BashInteractiveOverlayComponent(options.command, uiTheme, () => tui.terminal.rows);
+			const component = new BashInteractiveOverlayComponent(
+				options.command,
+				uiTheme,
+				() => tui.terminal.rows,
+				XtermTerminal,
+			);
 			component.setSession(session);
 			let finished = false;
 			const finalize = (run: PtyRunResult) => {

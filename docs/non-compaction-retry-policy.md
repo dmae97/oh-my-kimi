@@ -62,8 +62,8 @@ Flow (`#handleRetryableError`):
 3. Increment `#retryAttempt`.
 4. Create `#retryPromise` once (first attempt in a chain).
 5. If attempt exceeded `retry.maxRetries`, emit final failure event and stop.
-6. Compute base delay: `retry.baseDelayMs * 2^(attempt-1)`.
-7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`, otherwise use a larger retry-after/backoff hint when present.
+6. Compute capped jittered local delay: `min(retry.baseDelayMs * 2^(attempt-1), 8000ms) * (75–100% jitter)`.
+7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`. Otherwise wait for whichever comes first — the provider's retry-after/backoff hint, or the earliest moment a temporarily blocked sibling credential frees up (`retryAtMs` + 1s buffer) so the next attempt can pick it up.
 8. If no credential switch occurred, suppress the current model selector for cooldown, try configured retry model fallback chains, and force delay to `0` on model switch.
 9. If the final delay exceeds `retry.maxDelayMs` and no credential/model switch happened, emit final failure and do not sleep.
 10. Emit `auto_retry_start`.
@@ -87,8 +87,8 @@ Flow (`#handleRetryableError`):
 Settings:
 
 - `retry.enabled` (default `true`)
-- `retry.maxRetries` (default `3`)
-- `retry.baseDelayMs` (default `2000`)
+- `retry.maxRetries` (default `10`)
+- `retry.baseDelayMs` (default `500`)
 - `retry.maxDelayMs` (default `300000`, 5 minutes; `<= 0` disables the fail-fast cap)
 
 Attempt numbering:
@@ -97,13 +97,17 @@ Attempt numbering:
 - start events use current attempt (1-based)
 - max-exceeded end event reports `attempt: this.#retryAttempt - 1` (last attempted retry count)
 
-Backoff sequence with default settings:
+Backoff sequence with default settings, before jitter:
 
-- attempt 1: 2000 ms
-- attempt 2: 4000 ms
-- attempt 3: 8000 ms
+- attempt 1: 500 ms
+- attempt 2: 1000 ms
+- attempt 3: 2000 ms
+- attempt 4: 4000 ms
+- attempt 5+: 8000 ms
 
-Delay override inputs can come from parsed retry headers (`retry-after-ms`, `retry-after`, `x-ratelimit-reset-ms`, `x-ratelimit-reset`) or usage-limit backoff. Credential/model fallback switches set delay to `0`; otherwise parsed hints can extend the exponential local delay. If the computed delay is greater than `retry.maxDelayMs` and no switch succeeded, retry ends immediately with a final error instead of sleeping.
+The actual local sleep is 75–100% of the nominal value, matching Anthropic-style retry jitter so concurrent sessions do not retry in lockstep.
+
+Delay override inputs can come from parsed retry headers (`retry-after-ms`, `retry-after`, `x-ratelimit-reset-ms`, `x-ratelimit-reset`) or usage-limit backoff. Credential/model fallback switches set delay to `0`; otherwise parsed hints can extend the capped local delay. If the computed delay is greater than `retry.maxDelayMs` and no switch succeeded, retry ends immediately with a final error instead of sleeping.
 
 ## Abort mechanics
 

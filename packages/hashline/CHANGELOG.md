@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Breaking Changes
 
 - Changed `BlockResolution.isDelete` to `BlockResolution.op` (`"replace" | "delete" | "insert_after"`) so resolutions can describe every block-anchored op
@@ -15,6 +17,7 @@
 ### Changed
 
 - Trimmed the `replace block N:` ops entry in the patch prompt to grammar and pointing rules; the usage doctrine it duplicated stays in the rules section
+- Changed `buildCompactDiffPreview` to treat blank rows as gap separators alongside `…` markers: separators never stack (removed lines omitted from the preview no longer leave two adjacent), and leading/trailing separators are trimmed
 
 ### Fixed
 

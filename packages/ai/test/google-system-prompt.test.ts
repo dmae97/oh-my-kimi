@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const model: Model<"google-generative-ai"> = {
+const model: Model<"google-generative-ai"> = buildModel({
 	id: "gemini-3-pro-preview",
 	name: "Gemini 3 Pro Preview",
 	api: "google-generative-ai",
@@ -13,7 +14,7 @@ const model: Model<"google-generative-ai"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 32_000,
-};
+});
 
 async function captureGooglePayload(
 	context: Context,

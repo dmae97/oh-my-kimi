@@ -3,6 +3,10 @@ type PendingInput = {
 	resolve: (value: string) => void;
 	reject: (error: Error) => void;
 };
+type ClaimedInput = {
+	promise: Promise<string>;
+	clear: (reason?: string) => void;
+};
 
 export class OAuthManualInputManager {
 	#pending?: PendingInput;
@@ -12,9 +16,27 @@ export class OAuthManualInputManager {
 			this.clear("Manual OAuth input superseded by a new login");
 		}
 
-		const { promise, resolve, reject } = Promise.withResolvers<string>();
-		this.#pending = { providerId, resolve, reject };
-		return promise;
+		const pending = this.#createPending(providerId);
+		this.#pending = pending;
+		return pending.promise;
+	}
+
+	tryWaitForInput(providerId: string): Promise<string> | undefined {
+		if (this.#pending) return undefined;
+		return this.waitForInput(providerId);
+	}
+
+	tryClaimInput(providerId: string): ClaimedInput | undefined {
+		if (this.#pending) return undefined;
+		const pending = this.#createPending(providerId);
+		this.#pending = pending;
+		return {
+			promise: pending.promise,
+			clear: (reason?: string) => {
+				if (this.#pending !== pending) return;
+				this.clear(reason);
+			},
+		};
 	}
 
 	submit(input: string): boolean {
@@ -38,5 +60,10 @@ export class OAuthManualInputManager {
 
 	get pendingProviderId(): string | undefined {
 		return this.#pending?.providerId;
+	}
+
+	#createPending(providerId: string): PendingInput & { promise: Promise<string> } {
+		const { promise, resolve, reject } = Promise.withResolvers<string>();
+		return { providerId, resolve, reject, promise };
 	}
 }

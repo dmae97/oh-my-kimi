@@ -38,7 +38,7 @@ const SLOW = makeModel("p", "slow");
 const REASONING_SLOW = makeModel("p", "slow", {
 	api: "anthropic-messages",
 	reasoning: true,
-	thinking: { minLevel: Effort.Low, maxLevel: Effort.High, mode: "anthropic-adaptive" },
+	thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High], mode: "anthropic-adaptive" },
 });
 
 interface SessionOptions {

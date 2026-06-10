@@ -119,6 +119,7 @@ export type {
 	AgentDefinition,
 	AgentProgress,
 	SingleResult,
+	SubagentEventPayload,
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 	TaskParams,
@@ -412,7 +413,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	async execute(
-		_toolCallId: string,
+		toolCallId: string,
 		rawParams: unknown,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
@@ -427,7 +428,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const asyncEnabled = this.session.settings.get("async.enabled");
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		if (!asyncEnabled || selectedAgent?.blocking === true) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(toolCallId, params, signal, onUpdate);
 		}
 
 		const manager = this.session.asyncJobManager;
@@ -437,12 +438,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			// to the sync path keeps the tool usable; only background/job-poll
 			// semantics are lost.
 			logger.warn("task: async.enabled but no AsyncJobManager registered; falling back to sync execution");
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(toolCallId, params, signal, onUpdate);
 		}
 
 		const taskItems = params.tasks ?? [];
 		if (taskItems.length === 0) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(toolCallId, params, signal, onUpdate);
 		}
 
 		const taskIdProblem = validateTaskIds(taskItems);
@@ -552,9 +553,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 							buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<string, unknown>,
 						);
 						try {
-							const result = await this.#executeSync(_toolCallId, singleParams, runSignal, undefined, [
-								uniqueId,
-							]);
+							const result = await this.#executeSync(toolCallId, singleParams, runSignal, undefined, [uniqueId]);
 							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 							const singleResult = result.details?.results[0];
 							// A missing per-task result means #executeSync failed at the
@@ -707,7 +706,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	async #executeSync(
-		_toolCallId: string,
+		toolCallId: string,
 		params: TaskParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
@@ -1035,6 +1034,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						planReference,
 						description: task.description,
 						index,
+						parentToolCallId: toolCallId,
 						id: task.id,
 						taskDepth,
 						modelOverride,
@@ -1097,6 +1097,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						planReference,
 						description: task.description,
 						index,
+						parentToolCallId: toolCallId,
 						id: task.id,
 						taskDepth,
 						modelOverride,

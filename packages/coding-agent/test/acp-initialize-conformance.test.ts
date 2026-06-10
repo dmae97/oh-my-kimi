@@ -10,6 +10,7 @@ import * as path from "node:path";
 import type { AgentSideConnection, InitializeRequest } from "@agentclientprotocol/sdk";
 import { zInitializeResponse } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { AcpAgent } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
 import { ACP_TERMINAL_AUTH_FLAG, prepareAcpTerminalAuthArgs } from "@oh-my-pi/pi-coding-agent/modes/acp/terminal-auth";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -18,7 +19,7 @@ import { getConfigRootDir, setAgentDir, VERSION } from "@oh-my-pi/pi-utils";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
 const TEST_MODELS: Model[] = [
-	{
+	buildModel({
 		id: "claude-sonnet-4-20250514",
 		name: "Claude Sonnet",
 		api: "anthropic-messages",
@@ -29,7 +30,7 @@ const TEST_MODELS: Model[] = [
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 8_192,
-	},
+	}),
 ];
 
 class FakeAgentSession {

@@ -66,7 +66,7 @@ export function createDashboardController(): DashboardController {
 
 					let scrollOffset = 0;
 					return {
-						render(width: number): string[] {
+						render(width: number): readonly string[] {
 							const terminalRows = process.stdout.rows ?? 40;
 							const header = renderExpandedHeader(runtime, width, theme);
 							const body = renderDashboardLines(runtime, width, theme, 0);

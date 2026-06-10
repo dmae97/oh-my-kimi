@@ -861,7 +861,9 @@
           html += '<div class="tool-diff">';
           for (const line of diffLines) {
             const cls = line.match(/^\+/) ? 'diff-added' : line.match(/^-/) ? 'diff-removed' : 'diff-context';
-            html += '<div class="' + cls + '">' + escapeHtml(replaceTabs(line)) + '</div>';
+            // Blank gap rows mark non-contiguous regions; show a unicode ellipsis.
+            const display = line.trim().length === 0 ? '\u2026' : replaceTabs(line);
+            html += '<div class="' + cls + '">' + escapeHtml(display) + '</div>';
           }
           html += '</div>';
         } else if (result) {

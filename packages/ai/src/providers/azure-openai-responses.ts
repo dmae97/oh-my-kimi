@@ -31,7 +31,7 @@ import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schem
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { getOpenAIResponsesCacheSessionId, supportsDeveloperRole } from "./openai-responses";
+import { getOpenAIResponsesCacheSessionId } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
@@ -136,7 +136,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const client = createClient(model, apiKey, options);
 			const { baseUrl } = resolveAzureConfig(model, options);
-			const params = buildParams(model, context, options, deploymentName, baseUrl);
+			const params = buildParams(model, context, options, deploymentName);
 			options?.onPayload?.(params);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
@@ -179,12 +179,16 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				abortSignal: options?.signal,
 				isProgressItem: isOpenAIResponsesProgressEvent,
 			});
+			let sawCompleted = false;
 			const observedOpenaiStream = rawSseObserver
 				? observeDecodedAzureResponsesEvents(timedOpenaiStream, rawSseObserver)
 				: timedOpenaiStream;
 			await processResponsesStream(observedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
 					if (!firstTokenTime) firstTokenTime = Date.now();
+				},
+				onCompleted: () => {
+					sawCompleted = true;
 				},
 			});
 
@@ -195,6 +199,10 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 
 			if (abortTracker.wasCallerAbort()) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!sawCompleted) {
+				throw new Error("Azure OpenAI responses stream closed before response.completed was received");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
@@ -296,9 +304,8 @@ function buildParams(
 	context: Context,
 	options: AzureOpenAIResponsesOptions | undefined,
 	deploymentName: string,
-	resolvedBaseUrl?: string,
 ) {
-	const messages = convertMessages(model, context, true, resolvedBaseUrl);
+	const messages = convertMessages(model, context, true);
 
 	const params: AzureOpenAIResponsesSamplingParams = {
 		model: deploymentName,
@@ -328,7 +335,6 @@ function convertMessages(
 	model: Model<"azure-openai-responses">,
 	context: Context,
 	strictResponsesPairing: boolean,
-	resolvedBaseUrl?: string,
 ): ResponseInput {
 	const messages: ResponseInput = [];
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
@@ -337,7 +343,7 @@ function convertMessages(
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	if (systemPrompts.length > 0) {
-		const role = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
+		const role = model.reasoning && model.compat.supportsDeveloperRole ? "developer" : "system";
 		for (const systemPrompt of systemPrompts) {
 			messages.push({ role, content: systemPrompt });
 		}

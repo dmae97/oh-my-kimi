@@ -38,6 +38,18 @@ export const commands: CommandEntry[] = [
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
+const RESERVED_TOP_LEVEL_WORDS = new Map<string, string>([
+	[
+		"extensions",
+		'`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
+	],
+]);
+
+export function reservedTopLevelWordMessage(first: string | undefined, argc = 1): string | undefined {
+	if (argc !== 1 || !first || first.startsWith("-") || first.startsWith("@")) return undefined;
+	return RESERVED_TOP_LEVEL_WORDS.get(first);
+}
+
 /**
  * Return true when `first` matches a registered subcommand name or alias.
  *
@@ -47,4 +59,21 @@ export const commands: CommandEntry[] = [
 export function isSubcommand(first: string | undefined): boolean {
 	if (!first || first.startsWith("-") || first.startsWith("@")) return false;
 	return commands.some(entry => entry.name === first || entry.aliases?.includes(first));
+}
+
+export type ResolvedCliArgv = { argv: string[] } | { error: string };
+
+/**
+ * Decide what the CLI runner should do with raw argv: reject bare reserved
+ * management words, pass help/version through untouched, and route everything
+ * that is not a known subcommand to `launch`.
+ */
+export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
+	const first = argv[0];
+	const reservedMessage = reservedTopLevelWordMessage(first, argv.length);
+	if (reservedMessage) return { error: reservedMessage };
+	if (first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help") {
+		return { argv };
+	}
+	return { argv: isSubcommand(first) ? argv : ["launch", ...argv] };
 }

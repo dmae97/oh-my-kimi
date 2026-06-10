@@ -592,7 +592,7 @@ export const debugToolRenderer = {
 	): Component {
 		const outputBlock = new CachedOutputBlock();
 		return markFramedBlockComponent({
-			render(width: number): string[] {
+			render(width: number): readonly string[] {
 				const action = (args?.action ?? result.details?.action ?? "debug").replaceAll("_", " ");
 				const success = !options.isPartial && !result.isError;
 				const statusIcon = success

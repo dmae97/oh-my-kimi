@@ -1,4 +1,4 @@
-import { getPuppeteerDir, isCompiledBinary, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { getPuppeteerDir, logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import type { ToolSession } from "../../sdk";
@@ -18,14 +18,8 @@ import type {
 	WorkerOutbound,
 } from "./tab-protocol";
 
-// Worker entry. The literal string in `new Worker("./packages/coding-agent/src/tools/browser/tab-worker-entry.ts", …)`
-// below is what Bun's `--compile` static analyzer needs to bundle the worker
-// (registered as an additional entrypoint in `scripts/build-binary.ts`); in
-// dev we resolve the same source via `import.meta.url`. Replaces the older
-// `with { type: "file" }` pattern, which only copied the entry as a raw
-// asset and could not resolve the worker's relative imports inside a
-// compiled binary (issue #1011 was a false-positive fix — the regression
-// test only checked emission, not actual worker startup).
+// Coding-agent binary/bundle workers route through the CLI entrypoint with a
+// hidden argv mode, so compiled/npm builds only need one JavaScript entry.
 
 interface WorkerHandle {
 	send(msg: WorkerInbound, transferList?: Transferable[]): void;
@@ -518,8 +512,9 @@ async function raceWithTimeout<T>(
 
 async function spawnTabWorker(): Promise<WorkerHandle> {
 	try {
-		const worker = isCompiledBinary()
-			? new Worker("./packages/coding-agent/src/tools/browser/tab-worker-entry.ts", { type: "module" })
+		const hostEntry = workerHostEntry();
+		const worker = hostEntry
+			? new Worker(hostEntry, { type: "module", argv: ["__omp_tab_worker"] })
 			: new Worker(new URL("./tab-worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {

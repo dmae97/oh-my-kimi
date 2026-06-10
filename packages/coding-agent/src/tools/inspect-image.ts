@@ -141,6 +141,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 				apiKey: modelRegistry.resolver(model.provider, {
 					sessionId: this.session.getSessionId?.() ?? undefined,
 					baseUrl: model.baseUrl,
+					modelId: model.id,
 				}),
 				signal,
 			},

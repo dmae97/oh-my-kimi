@@ -1,7 +1,6 @@
-import { zaiModelManagerOptions } from "../provider-models/special";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://z.ai/manage-apikey/apikey-list";
 const API_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -45,9 +44,5 @@ export async function loginZai(options: OAuthController): Promise<string> {
 export const zaiProvider = {
 	id: "zai",
 	name: "Z.AI (GLM Coding Plan)",
-	defaultModel: "glm-5.1",
-	createModelManagerOptions: (config: ModelManagerConfig) => zaiModelManagerOptions(config),
-	catalogDiscovery: { label: "zAI", envVars: ["ZAI_API_KEY"] },
-	envKeys: "ZAI_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginZai(cb),
 } as const satisfies ProviderDefinition;

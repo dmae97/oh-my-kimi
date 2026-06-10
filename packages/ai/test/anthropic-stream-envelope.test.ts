@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
-import type { AssistantMessageEvent, Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEvent, Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const model: Model<"anthropic-messages"> = {
+const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-sonnet-4-5",
 	name: "Claude Sonnet 4.5",
 	api: "anthropic-messages",
@@ -15,7 +16,7 @@ const model: Model<"anthropic-messages"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 const context: Context = {
 	messages: [{ role: "user", content: "Say hi", timestamp: Date.now() }],
@@ -839,7 +840,10 @@ describe("anthropic stream envelope handling", () => {
 		await eagerStream.result();
 
 		const disabledStream = streamAnthropic(
-			{ ...model, compat: { supportsEagerToolInputStreaming: false } },
+			buildModel({
+				...model,
+				compat: { ...model.compatConfig, supportsEagerToolInputStreaming: false },
+			} as ModelSpec<"anthropic-messages">),
 			toolContext,
 			{ apiKey: "sk-ant-test" },
 		);
@@ -863,8 +867,15 @@ describe("anthropic stream envelope handling", () => {
 
 		for (const testModel of [
 			model,
-			{ ...model, compat: { supportsLongCacheRetention: false } },
-			{ ...model, baseUrl: "https://proxy.example.com/anthropic" },
+			buildModel({
+				...model,
+				compat: { ...model.compatConfig, supportsLongCacheRetention: false },
+			} as ModelSpec<"anthropic-messages">),
+			buildModel({
+				...model,
+				baseUrl: "https://proxy.example.com/anthropic",
+				compat: model.compatConfig,
+			} as ModelSpec<"anthropic-messages">),
 		]) {
 			const stream = streamAnthropic(testModel, context, {
 				apiKey: "sk-ant-test",

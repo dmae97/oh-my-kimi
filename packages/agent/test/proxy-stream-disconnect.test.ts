@@ -10,8 +10,9 @@ import { describe, expect, it } from "bun:test";
 import type { ProxyAssistantMessageEvent } from "@oh-my-pi/pi-agent-core/proxy";
 import { type ProxyMessageEventStream, streamProxy } from "@oh-my-pi/pi-agent-core/proxy";
 import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const mockModel: Model = {
+const mockModel: Model = buildModel({
 	id: "test-model",
 	name: "Test Model",
 	api: "openai",
@@ -22,7 +23,7 @@ const mockModel: Model = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 4096,
 	maxTokens: 1024,
-};
+});
 
 const mockContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],

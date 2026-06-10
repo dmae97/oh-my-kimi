@@ -1,7 +1,6 @@
-import { deepseekModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthController, OAuthLoginCallbacks, OAuthPrompt } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const innerLogin = createApiKeyLogin({
 	providerLabel: "DeepSeek",
@@ -42,9 +41,5 @@ export const loginDeepSeek = async (options: OAuthController): Promise<string> =
 export const deepseekProvider = {
 	id: "deepseek",
 	name: "DeepSeek",
-	defaultModel: "deepseek-v4-pro",
-	createModelManagerOptions: (config: ModelManagerConfig) => deepseekModelManagerOptions(config),
-	catalogDiscovery: { label: "DeepSeek", envVars: ["DEEPSEEK_API_KEY"] },
-	envKeys: "DEEPSEEK_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginDeepSeek(cb),
 } as const satisfies ProviderDefinition;

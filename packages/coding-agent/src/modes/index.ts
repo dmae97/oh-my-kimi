@@ -8,27 +8,9 @@ import { postmortem } from "@oh-my-pi/pi-utils";
  * barrel does not pull print, RPC server, or ACP server mode into the normal
  * TUI graph.
  */
-export { InteractiveMode, type InteractiveModeOptions } from "./interactive-mode";
-export {
-	defineRpcClientTool,
-	type ModelInfo,
-	RpcClient,
-	type RpcClientCustomTool,
-	type RpcClientOptions,
-	type RpcClientToolContext,
-	type RpcClientToolResult,
-	type RpcEventListener,
-} from "./rpc/rpc-client";
-export type {
-	RpcCommand,
-	RpcHostToolCallRequest,
-	RpcHostToolCancelRequest,
-	RpcHostToolDefinition,
-	RpcHostToolResult,
-	RpcHostToolUpdate,
-	RpcResponse,
-	RpcSessionState,
-} from "./rpc/rpc-types";
+export * from "./interactive-mode";
+export * from "./rpc/rpc-client";
+export * from "./rpc/rpc-types";
 
 postmortem.register("terminal-restore", () => {
 	emergencyTerminalRestore();

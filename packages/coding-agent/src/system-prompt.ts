@@ -8,6 +8,7 @@ import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prom
 import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
+import { findConfigFile } from "./config";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { expandAtImports } from "./discovery/at-imports";
@@ -206,6 +207,19 @@ async function getEnvironmentInfo(): Promise<Array<{ label: string; value: strin
 		{ label: "Terminal", value: getTerminalName() },
 	];
 	return entries.filter((e): e is { label: string; value: string } => !!e.value);
+}
+
+/** Discover TITLE_SYSTEM.md file for automatic session-title prompt overrides */
+export function discoverTitleSystemPromptFile(cwd?: string): string | undefined {
+	const projectPath = findConfigFile("TITLE_SYSTEM.md", { user: false, cwd });
+	if (projectPath) {
+		return projectPath;
+	}
+	const globalPath = findConfigFile("TITLE_SYSTEM.md", { user: true, cwd });
+	if (globalPath) {
+		return globalPath;
+	}
+	return undefined;
 }
 
 /** Resolve input as file path or literal string */

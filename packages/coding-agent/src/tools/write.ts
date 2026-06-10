@@ -41,6 +41,7 @@ import {
 	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
+	formatStatusIcon,
 	getLspBatchRequest,
 	replaceTabs,
 	shortenPath,
@@ -1024,11 +1025,23 @@ function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
+/**
+ * Minimum line-number gutter width for write previews. The streaming preview's
+ * gutter must stay byte-stable as the line count grows: a width derived purely
+ * from `String(totalLines).length` widens at the 10/100/1000-line crossings,
+ * rewriting every already-rendered row — which forces the transcript's commit
+ * audit to recommit the block's committed prefix (a full duplicate in native
+ * scrollback). Reserving 3 digits keeps the gutter constant through 999 lines
+ * and keeps the streamed rows byte-identical to the final result render.
+ */
+const WRITE_GUTTER_MIN_WIDTH = 3;
+
 function formatStreamingContent(
 	content: string,
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
+	spinnerFrame?: number,
 ): string {
 	if (!content) return "";
 	const lines = normalizeDisplayText(content).split("\n");
@@ -1041,7 +1054,7 @@ function formatStreamingContent(
 	const visibleLines = lines.slice(startIndex);
 	const hidden = startIndex;
 	const highlighted = highlightCode(visibleLines.join("\n"), language);
-	const lineNumberWidth = String(totalLines).length;
+	const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
 
 	let text = "\n\n";
 	if (hidden > 0) {
@@ -1053,7 +1066,12 @@ function formatStreamingContent(
 		const body = replaceTabs(highlighted[i] ?? "");
 		text += `${gutter}${body}\n`;
 	}
-	text += uiTheme.fg("dim", `… (streaming)`);
+	// The animated glyph lives on this trailing line — inside the transcript's
+	// volatile-tail holdback — never in the header: an animating head row pins
+	// the native-scrollback commit boundary at the top of the block, so a long
+	// expanded preview could never scroll-append mid-stream.
+	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
+	text += `${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
 	return text;
 }
 
@@ -1069,7 +1087,7 @@ function renderContentPreview(
 	const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
 	const visibleLines = rawLines.slice(0, maxLines);
 	const highlighted = highlightCode(visibleLines.join("\n"), language);
-	const lineNumberWidth = String(maxLines).length;
+	const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
 	const hidden = totalLines - maxLines;
 
 	let text = "\n\n";
@@ -1094,10 +1112,14 @@ export const writeToolRenderer = {
 		const lang = getLanguageFromPath(rawPath) ?? "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		// Static pending icon, never the animated glyph: the header is the head
+		// row of the framed block, and native-scrollback commits are prefix-only
+		// — an animating head row would pin the commit boundary at the top and
+		// keep a tall expanded preview from scroll-appending mid-stream. The
+		// liveness cue rides the trailing "(streaming)" line instead.
 		const header = renderStatusLine(
 			{
 				icon: "pending",
-				spinnerFrame: options?.spinnerFrame,
 				title: "Write",
 				description: `${langIcon} ${pathDisplay}`,
 			},
@@ -1105,7 +1127,7 @@ export const writeToolRenderer = {
 		);
 		return framedBlock(uiTheme, width => {
 			const body = args.content
-				? formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme)
+				? formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme, options?.spinnerFrame)
 				: "";
 			const bodyLines = body ? body.split("\n") : [];
 			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();

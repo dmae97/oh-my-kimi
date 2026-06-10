@@ -46,9 +46,14 @@ import { theme } from "../theme/theme";
 import type { InteractiveModeContext } from "../types";
 import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+const MCP_MANUAL_INPUT_PROVIDER_ID = "mcp";
+const MCP_MANUAL_LOGIN_TIP = "Headless? Paste the redirect URL or code with /login <value>.";
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string, onTimeout?: () => void): Promise<T> {
 	const { promise: timeoutPromise, reject } = Promise.withResolvers<T>();
-	const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+	const timer = setTimeout(() => {
+		onTimeout?.();
+		reject(new Error(message));
+	}, timeoutMs);
 	return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
@@ -62,7 +67,7 @@ export class MCPAuthorizationLinkPrompt implements Component {
 
 	invalidate(): void {}
 
-	render(_width: number): string[] {
+	render(_width: number): readonly string[] {
 		const link = urlHyperlinkAlways(this.#url, "Click here to authorize");
 		return [
 			` ${theme.fg("success", "Open authorization URL:")}`,
@@ -591,6 +596,15 @@ export class MCPCommandController {
 		const resolvedClientId = clientId.trim() || parsedAuthUrl.searchParams.get("client_id") || undefined;
 		const resolvedClientSecret = clientSecret.trim() || undefined;
 
+		const manualInput = this.ctx.oauthManualInput;
+		if (manualInput.hasPending()) {
+			const pendingProvider = manualInput.pendingProviderId ?? "another provider";
+			throw new Error(
+				`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
+			);
+		}
+		let manualInputClaim: { promise: Promise<string>; clear: (reason?: string) => void } | undefined;
+		const oauthTimeout = new AbortController();
 		try {
 			// Create OAuth flow
 			const flow = new MCPOAuthFlow(
@@ -620,6 +634,7 @@ export class MCPCommandController {
 								0,
 							),
 						);
+						block.addChild(new Text(theme.fg("muted", MCP_MANUAL_LOGIN_TIP), 1, 0));
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0));
 						// Try to open browser automatically
@@ -644,11 +659,29 @@ export class MCPCommandController {
 					onProgress: (message: string) => {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
+					onManualCodeInput: () => {
+						if (manualInputClaim) return manualInputClaim.promise;
+						const pendingInput = manualInput.tryClaimInput(MCP_MANUAL_INPUT_PROVIDER_ID);
+						if (!pendingInput) {
+							const pendingProvider = manualInput.pendingProviderId ?? "another provider";
+							throw new Error(
+								`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
+							);
+						}
+						manualInputClaim = pendingInput;
+						return pendingInput.promise;
+					},
+					signal: oauthTimeout.signal,
 				},
 			);
 
 			// Execute OAuth flow with 5 minute timeout
-			const credentials = await withTimeout(flow.login(), 5 * 60 * 1000, "OAuth flow timed out after 5 minutes");
+			const credentials = await withTimeout(
+				flow.login(),
+				5 * 60 * 1000,
+				"OAuth flow timed out after 5 minutes",
+				() => oauthTimeout.abort("MCP OAuth flow timed out"),
+			);
 
 			this.ctx.present([
 				new Spacer(1),
@@ -687,6 +720,8 @@ export class MCPCommandController {
 			} else {
 				throw new Error(`OAuth authentication failed: ${errorMsg}`);
 			}
+		} finally {
+			manualInputClaim?.clear("Manual MCP OAuth input cleared");
 		}
 	}
 

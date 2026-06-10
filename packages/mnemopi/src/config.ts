@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	type Env,
 	envBool,
@@ -102,7 +103,7 @@ export function isApiEmbeddingModel(model = embeddingModel(), env: Env = process
 	if (model.startsWith("openai/") || model.includes("text-embedding") || model.startsWith("text-embedding"))
 		return true;
 	const baseUrl = envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", "", env), env);
-	if (baseUrl && !baseUrl.includes("openrouter.ai")) return true;
+	if (baseUrl && !hostMatchesUrl(baseUrl, "openrouter")) return true;
 	return embeddingsViaApi(env);
 }
 
@@ -110,7 +111,7 @@ export function apiEmbeddingsAvailable(env: Env = process.env): boolean {
 	if (embeddingsDisabled(env)) return false;
 	if (!isApiEmbeddingModel(embeddingModel(env), env)) return false;
 	const baseUrl = envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", "", env), env);
-	return Boolean(baseUrl && !baseUrl.includes("openrouter.ai")) || Boolean(embeddingApiKey(env));
+	return Boolean(baseUrl && !hostMatchesUrl(baseUrl, "openrouter")) || Boolean(embeddingApiKey(env));
 }
 
 export function workingMemoryMaxItems(env: Env = process.env): number {

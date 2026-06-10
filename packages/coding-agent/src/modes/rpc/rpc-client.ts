@@ -9,8 +9,9 @@ import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
+import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
-import type { SessionStats } from "../../session/agent-session";
+import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -22,6 +23,12 @@ import type {
 	RpcHostToolUpdate,
 	RpcResponse,
 	RpcSessionState,
+	RpcSubagentEventFrame,
+	RpcSubagentLifecycleFrame,
+	RpcSubagentMessagesResult,
+	RpcSubagentProgressFrame,
+	RpcSubagentSnapshot,
+	RpcSubagentSubscriptionLevel,
 } from "./rpc-types";
 
 /** Distributive Omit that works with union types */
@@ -52,6 +59,10 @@ export interface RpcClientOptions {
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
 export type RpcEventListener = (event: AgentEvent) => void;
+export type RpcSessionEventListener = (event: AgentSessionEvent) => void;
+export type RpcSubagentLifecycleListener = (payload: RpcSubagentLifecycleFrame["payload"]) => void;
+export type RpcSubagentProgressListener = (payload: RpcSubagentProgressFrame["payload"]) => void;
+export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"]) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -92,6 +103,23 @@ const agentEventTypes = new Set<AgentEvent["type"]>([
 	"tool_execution_end",
 ]);
 
+const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
+	...agentEventTypes,
+	"auto_compaction_start",
+	"auto_compaction_end",
+	"auto_retry_start",
+	"auto_retry_end",
+	"retry_fallback_applied",
+	"retry_fallback_succeeded",
+	"ttsr_triggered",
+	"todo_reminder",
+	"todo_auto_clear",
+	"irc_message",
+	"notice",
+	"thinking_level_changed",
+	"goal_updated",
+]);
+
 function isRpcResponse(value: unknown): value is RpcResponse {
 	if (!isRecord(value)) return false;
 	if (value.type !== "response") return false;
@@ -109,6 +137,28 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 	const type = value.type;
 	if (typeof type !== "string") return false;
 	return agentEventTypes.has(type as AgentEvent["type"]);
+}
+
+function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {
+	if (!isRecord(value)) return false;
+	const type = value.type;
+	if (typeof type !== "string") return false;
+	return sessionEventTypes.has(type as AgentSessionEvent["type"]);
+}
+
+function isRpcSubagentLifecycleFrame(value: unknown): value is RpcSubagentLifecycleFrame {
+	if (!isRecord(value)) return false;
+	return value.type === "subagent_lifecycle" && isRecord(value.payload);
+}
+
+function isRpcSubagentProgressFrame(value: unknown): value is RpcSubagentProgressFrame {
+	if (!isRecord(value)) return false;
+	return value.type === "subagent_progress" && isRecord(value.payload);
+}
+
+function isRpcSubagentEventFrame(value: unknown): value is RpcSubagentEventFrame {
+	if (!isRecord(value)) return false;
+	return value.type === "subagent_event" && isRecord(value.payload);
 }
 
 function isRpcHostToolCallRequest(value: unknown): value is RpcHostToolCallRequest {
@@ -148,6 +198,10 @@ function normalizeToolResult<TDetails>(result: RpcClientToolResult<TDetails>): A
 export class RpcClient {
 	#process: ptree.ChildProcess | null = null;
 	#eventListeners: RpcEventListener[] = [];
+	#sessionEventListeners: RpcSessionEventListener[] = [];
+	#subagentLifecycleListeners = new Set<RpcSubagentLifecycleListener>();
+	#subagentProgressListeners = new Set<RpcSubagentProgressListener>();
+	#subagentEventListeners = new Set<RpcSubagentEventListener>();
 	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	#customTools: RpcClientCustomTool[] = [];
@@ -287,6 +341,43 @@ export class RpcClient {
 	}
 
 	/**
+	 * Subscribe to all top-level session events, including non-core session state events.
+	 */
+	onSessionEvent(listener: RpcSessionEventListener): () => void {
+		this.#sessionEventListeners.push(listener);
+		return () => {
+			const index = this.#sessionEventListeners.indexOf(listener);
+			if (index !== -1) {
+				this.#sessionEventListeners.splice(index, 1);
+			}
+		};
+	}
+
+	/**
+	 * Subscribe to subagent lifecycle frames after setSubagentSubscription("progress" | "events").
+	 */
+	onSubagentLifecycle(listener: RpcSubagentLifecycleListener): () => void {
+		this.#subagentLifecycleListeners.add(listener);
+		return () => this.#subagentLifecycleListeners.delete(listener);
+	}
+
+	/**
+	 * Subscribe to aggregated subagent progress frames after setSubagentSubscription("progress" | "events").
+	 */
+	onSubagentProgress(listener: RpcSubagentProgressListener): () => void {
+		this.#subagentProgressListeners.add(listener);
+		return () => this.#subagentProgressListeners.delete(listener);
+	}
+
+	/**
+	 * Subscribe to raw subagent session events. Call setSubagentSubscription(\"events\") to enable them server-side.
+	 */
+	onSubagentEvent(listener: RpcSubagentEventListener): () => void {
+		this.#subagentEventListeners.add(listener);
+		return () => this.#subagentEventListeners.delete(listener);
+	}
+
+	/**
 	 * Get collected stderr output (useful for debugging).
 	 */
 	getStderr(): string {
@@ -356,6 +447,40 @@ export class RpcClient {
 	async getState(): Promise<RpcSessionState> {
 		const response = await this.#send({ type: "get_state" });
 		return this.#getData(response);
+	}
+
+	/**
+	 * Configure subagent frames emitted by the RPC server. Servers default to "off".
+	 * "progress" emits lifecycle/progress frames; "events" additionally emits raw subagent session events.
+	 */
+	async setSubagentSubscription(level: RpcSubagentSubscriptionLevel): Promise<RpcSubagentSubscriptionLevel> {
+		const response = await this.#send({ type: "set_subagent_subscription", level });
+		return this.#getData<{ level: RpcSubagentSubscriptionLevel }>(response).level;
+	}
+
+	/**
+	 * Return the RPC server's current subagent snapshot.
+	 */
+	async getSubagents(): Promise<RpcSubagentSnapshot[]> {
+		const response = await this.#send({ type: "get_subagents" });
+		return this.#getData<{ subagents: RpcSubagentSnapshot[] }>(response).subagents;
+	}
+
+	/**
+	 * Read persisted transcript entries for a tracked subagent session.
+	 */
+	async getSubagentMessages(selector: {
+		subagentId?: string;
+		sessionFile?: string;
+		fromByte?: number;
+	}): Promise<RpcSubagentMessagesResult> {
+		const response = await this.#send({
+			type: "get_subagent_messages",
+			subagentId: selector.subagentId,
+			sessionFile: selector.sessionFile,
+			fromByte: selector.fromByte,
+		});
+		return this.#getData<RpcSubagentMessagesResult>(response);
 	}
 
 	/**
@@ -679,9 +804,35 @@ export class RpcClient {
 			return;
 		}
 
+		if (isRpcSubagentLifecycleFrame(data)) {
+			for (const listener of this.#subagentLifecycleListeners) {
+				listener(data.payload);
+			}
+			return;
+		}
+
+		if (isRpcSubagentProgressFrame(data)) {
+			for (const listener of this.#subagentProgressListeners) {
+				listener(data.payload);
+			}
+			return;
+		}
+
+		if (isRpcSubagentEventFrame(data)) {
+			for (const listener of this.#subagentEventListeners) {
+				listener(data.payload);
+			}
+			return;
+		}
+
+		if (!isAgentSessionEvent(data)) return;
+
+		for (const listener of this.#sessionEventListeners) {
+			listener(data);
+		}
+
 		if (!isAgentEvent(data)) return;
 
-		// Otherwise it's an event
 		for (const listener of this.#eventListeners) {
 			listener(data);
 		}
@@ -789,7 +940,7 @@ export class RpcClient {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}
-		const stdin = this.#process.stdin as import("bun").FileSink;
+		const stdin = this.#process.stdin as FileSink;
 		stdin.write(`${JSON.stringify(frame)}\n`);
 		const flushResult = stdin.flush();
 		if (isPromise(flushResult)) {

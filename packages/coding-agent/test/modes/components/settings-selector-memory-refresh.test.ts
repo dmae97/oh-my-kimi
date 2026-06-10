@@ -16,7 +16,7 @@ afterEach(() => {
 	resetSettingsForTest();
 });
 
-function createSelector(): SettingsSelectorComponent {
+function createSelector(onCancel: () => void = () => {}): SettingsSelectorComponent {
 	return new SettingsSelectorComponent(
 		{
 			availableThinkingLevels: [],
@@ -26,7 +26,7 @@ function createSelector(): SettingsSelectorComponent {
 		},
 		{
 			onChange: () => {},
-			onCancel: () => {},
+			onCancel,
 		},
 	);
 }
@@ -81,5 +81,22 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(after).toContain("Memory Backend");
 		expect(after).not.toContain("Hindsight API URL");
 		expect(after).not.toContain("Hindsight Auto Recall");
+	});
+
+	it("clears settings search on Escape before closing the selector", () => {
+		let cancelCount = 0;
+		const comp = createSelector(() => {
+			cancelCount++;
+		});
+
+		comp.handleInput("b");
+		expect(comp.render(120).join("\n")).toContain("Search: b");
+
+		comp.handleInput("\x1b");
+		expect(cancelCount).toBe(0);
+		expect(comp.render(120).join("\n")).not.toContain("Search: b");
+
+		comp.handleInput("\x1b");
+		expect(cancelCount).toBe(1);
 	});
 });

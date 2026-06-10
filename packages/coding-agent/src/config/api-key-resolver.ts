@@ -5,6 +5,8 @@ export interface ApiKeyResolverOptions {
 	sessionId?: string;
 	/** Provider base URL hint forwarded to the auth-storage cascade. */
 	baseUrl?: string;
+	/** Provider model id forwarded to model-scoped usage ranking/backoff. */
+	modelId?: string;
 }
 
 /**
@@ -16,7 +18,7 @@ export interface ApiKeyResolverRegistry {
 	getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
-		options?: { baseUrl?: string; forceRefresh?: boolean; signal?: AbortSignal },
+		options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
 	): Promise<string | undefined>;
 	authStorage: Pick<AuthStorage, "rotateSessionCredential">;
 	/**
@@ -39,10 +41,10 @@ export function createApiKeyResolver(
 	provider: string,
 	options: ApiKeyResolverOptions = {},
 ): ApiKeyResolver {
-	const { sessionId, baseUrl } = options;
+	const { sessionId, baseUrl, modelId } = options;
 	return async ({ lastChance, error, signal }) => {
 		if (error === undefined) {
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
 		}
 		if (lastChance) {
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
@@ -50,9 +52,9 @@ export function createApiKeyResolver(
 			// sibling exists we switch immediately; the precise no-sibling backoff
 			// is owned by `markUsageLimitReached` (default + server usage-report
 			// reset) and the outer whole-turn retry layer.
-			await registry.authStorage.rotateSessionCredential(provider, sessionId, { error, signal });
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl });
+			await registry.authStorage.rotateSessionCredential(provider, sessionId, { error, modelId, signal });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
 		}
-		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, forceRefresh: true, signal });
+		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
 	};
 }

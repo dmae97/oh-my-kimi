@@ -1,0 +1,502 @@
+#!/usr/bin/env bun
+
+// Copilot model premium request multipliers by model identifier.
+const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
+	"github-copilot/claude-haiku-4.5": 0.33,
+	"github-copilot/claude-opus-4.6": 3,
+	"github-copilot/gpt-4o": 0,
+	"github-copilot/gpt-5.4-mini": 0.33,
+	"github-copilot/grok-code-fast-1": 0.25,
+};
+
+import * as path from "node:path";
+import { AuthStorage, type OAuthAccess, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
+import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
+import { $env } from "@oh-my-pi/pi-utils";
+import { fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
+import { fetchCodexModels } from "../src/discovery/codex";
+import { createModelManager } from "../src/model-manager";
+import prevModelsJson from "../src/models.json" with { type: "json" };
+import { toModelSpec } from "../src/provider-models/bundled-references";
+import {
+	allowsUnauthenticatedCatalogDiscovery,
+	type CatalogDiscoveryConfig,
+	type CatalogProviderDescriptor,
+	isCatalogDescriptor,
+} from "../src/provider-models/descriptor-types";
+import { PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
+import {
+	ANTHROPIC_CURATED_FALLBACK_MODELS,
+	buildXaiOAuthStaticSeed,
+	clampFireworksKimiMaxTokens,
+	isFireworksKimiK2ModelId,
+	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	mapModelsDevToModels,
+	stripFireworksDeepSeekThinkingToggle,
+	UNK_CONTEXT_WINDOW,
+	UNK_MAX_TOKENS,
+} from "../src/provider-models/openai-compat";
+import type { ModelSpec } from "../src/types";
+import { JWT_CLAIM_PATH } from "../src/wire/codex";
+import {
+	applyGeneratedModelPolicies,
+	CLOUDFLARE_FALLBACK_MODEL,
+	linkOpenAIPromotionTargets,
+} from "./generated-policies";
+
+const packageRoot = path.join(import.meta.dir, "..");
+
+/**
+ * Local/self-hosted providers (Ollama, vLLM, LM Studio, LiteLLM). Their model
+ * catalogs are whatever happens to be running on the machine that invokes the
+ * generator — bundling them would leak machine-specific endpoints (e.g.
+ * `http://localhost:4000/v1`) into the committed snapshot. They are discovered
+ * dynamically at runtime instead, so they are never fetched during generation
+ * and never written to models.json.
+ */
+const DISCOVERY_ONLY_PROVIDERS = new Set(["ollama", "vllm", "lm-studio", "litellm"]);
+
+async function resolveProviderApiKey(providerId: string, catalog: CatalogDiscoveryConfig): Promise<string | undefined> {
+	for (const envVar of catalog.envVars ?? []) {
+		const value = $env[envVar as keyof typeof $env];
+		if (typeof value === "string" && value.length > 0) {
+			return value;
+		}
+	}
+
+	try {
+		const store = await SqliteAuthCredentialStore.open();
+		const authStorage = new AuthStorage(store);
+		try {
+			await authStorage.reload();
+			const storedApiKey = await authStorage.getApiKey(providerId);
+			if (storedApiKey) {
+				return storedApiKey;
+			}
+			if (catalog.oauthProvider) {
+				// AuthStorage.getApiKey refreshes through the broker-aware
+				// single-flighted machinery, so a build-time invocation no
+				// longer silently falls back to bundled models when an
+				// expired-but-refreshable OAuth credential is on disk.
+				const oauthKey = await authStorage.getApiKey(catalog.oauthProvider);
+				if (oauthKey) {
+					return oauthKey;
+				}
+			}
+		} finally {
+			store.close();
+		}
+	} catch {
+		// Ignore missing/unreadable auth storage.
+	}
+
+	return undefined;
+}
+
+async function fetchProviderModelsFromCatalog(descriptor: CatalogProviderDescriptor): Promise<ModelSpec[]> {
+	const apiKey = await resolveProviderApiKey(descriptor.providerId, descriptor.catalogDiscovery);
+
+	if (!apiKey && !allowsUnauthenticatedCatalogDiscovery(descriptor)) {
+		console.log(`No ${descriptor.catalogDiscovery.label} credentials found (env or agent.db), using fallback models`);
+		return [];
+	}
+
+	try {
+		console.log(`Fetching models from ${descriptor.catalogDiscovery.label} model manager...`);
+		const manager = createModelManager(descriptor.createModelManagerOptions({ apiKey }));
+		const result = await manager.refresh("online");
+		const models = result.models.filter(model => model.provider === descriptor.providerId);
+		if (models.length === 0) {
+			console.warn(`${descriptor.catalogDiscovery.label} discovery returned no models, using fallback models`);
+			return [];
+		}
+		console.log(`Fetched ${models.length} models from ${descriptor.catalogDiscovery.label} model manager`);
+		// The manager returns built models; models.json stores specs (sparse compat).
+		return models.map(model => toModelSpec(model));
+	} catch (error) {
+		console.error(`Failed to fetch ${descriptor.catalogDiscovery.label} models:`, error);
+		return [];
+	}
+}
+
+async function loadModelsDevData(): Promise<ModelSpec[]> {
+	try {
+		console.log("Fetching models from models.dev API...");
+		const response = await fetch("https://models.dev/api.json");
+		const data = await response.json();
+		const models = mapModelsDevToModels(data as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS);
+		models.sort((a, b) => a.id.localeCompare(b.id));
+		console.log(`Loaded ${models.length} tool-capable models from models.dev`);
+		return models;
+	} catch (error) {
+		console.error("Failed to load models.dev data:", error);
+		return [];
+	}
+}
+
+function createGlobalModelsDevReferenceMap(modelsDevModels: readonly ModelSpec[]): Map<string, ModelSpec> {
+	const references = new Map<string, ModelSpec>();
+	for (const model of modelsDevModels) {
+		const existing = references.get(model.id);
+		if (!existing) {
+			references.set(model.id, model);
+			continue;
+		}
+		if (model.contextWindow > existing.contextWindow) {
+			references.set(model.id, model);
+			continue;
+		}
+		if (model.contextWindow === existing.contextWindow && model.maxTokens > existing.maxTokens) {
+			references.set(model.id, model);
+		}
+	}
+	return references;
+}
+
+function inheritModelsDevLimit(value: number, referenceValue: number, unspecifiedValue: number): number {
+	return value === unspecifiedValue ? referenceValue : value;
+}
+
+function applyGlobalModelsDevFallback(
+	models: readonly ModelSpec[],
+	modelsDevModels: readonly ModelSpec[],
+): ModelSpec[] {
+	const providerScopedKeys = new Set(modelsDevModels.map(model => `${model.provider}/${model.id}`));
+	const globalReferences = createGlobalModelsDevReferenceMap(modelsDevModels);
+	return models.map(model => {
+		if (providerScopedKeys.has(`${model.provider}/${model.id}`)) {
+			return model;
+		}
+		const reference = globalReferences.get(model.id);
+		if (!reference) {
+			return model;
+		}
+		return {
+			...model,
+			name: reference.name,
+			reasoning: reference.reasoning,
+			input: reference.input,
+			// Fill unknown endpoint limits from same-id models.dev references, but keep
+			// provider-specific values when discovery returned them explicitly.
+			contextWindow: inheritModelsDevLimit(model.contextWindow, reference.contextWindow, UNK_CONTEXT_WINDOW),
+			maxTokens: inheritModelsDevLimit(model.maxTokens, reference.maxTokens, UNK_MAX_TOKENS),
+		};
+	});
+}
+
+function applyPremiumMultiplierOverrides(models: readonly ModelSpec[]): ModelSpec[] {
+	return models.map(model => {
+		const premiumMultiplier = COPILOT_PREMIUM_MULTIPLIERS[`${model.provider}/${model.id}`];
+		if (premiumMultiplier === undefined) {
+			return model;
+		}
+		if (model.premiumMultiplier === premiumMultiplier) {
+			return model;
+		}
+		return {
+			...model,
+			premiumMultiplier,
+		};
+	});
+}
+function hasBillableCost(cost: ModelSpec["cost"]): boolean {
+	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+}
+
+function applyCodexPricingFallback(models: readonly ModelSpec[]): ModelSpec[] {
+	const openAIModels = new Map(
+		models
+			.filter(model => model.provider === "openai" && hasBillableCost(model.cost))
+			.map(model => [model.id, model.cost]),
+	);
+
+	return models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+			return model;
+		}
+		if (hasBillableCost(model.cost)) {
+			return model;
+		}
+
+		const openAICost = openAIModels.get(model.id);
+		if (!openAICost) {
+			return model;
+		}
+
+		return {
+			...model,
+			cost: { ...openAICost },
+		};
+	});
+}
+
+/**
+ * Fireworks-backed Kimi K2.x deployments report `max_completion_tokens: 65536`
+ * over `/v1/models`, but Kimi's documented output budget on Fireworks is
+ * lower (#1849). Cap them here so the post-processing pass — which also folds
+ * in the `prevModelsJson` static fallback used by `firepass` — never lets a
+ * stale or inflated upstream value through. The resolver applies the same
+ * cap when discovery runs at runtime; this is the bundle-time safety net.
+ */
+function applyFireworksKimiMaxTokensCap(models: readonly ModelSpec[]): ModelSpec[] {
+	const FIREWORKS_KIMI_PROVIDERS = new Set(["fireworks", "firepass"]);
+	return models.map(model => {
+		if (!FIREWORKS_KIMI_PROVIDERS.has(model.provider)) return model;
+		if (!isFireworksKimiK2ModelId(model.id)) return model;
+		const capped = clampFireworksKimiMaxTokens(model.id, model.maxTokens);
+		if (capped === model.maxTokens) return model;
+		return { ...model, maxTokens: capped };
+	});
+}
+
+/**
+ * Fireworks' DeepSeek V4 endpoint accepts the user's effort through
+ * `reasoning_effort` and rejects the DeepSeek-native binary `thinking` toggle
+ * when both are present. Strip stale reference metadata from generated fallbacks.
+ */
+function applyFireworksDeepSeekReasoningShape(models: readonly ModelSpec[]): ModelSpec[] {
+	return models.map(model => {
+		if (model.provider !== "fireworks" || model.api !== "openai-completions") return model;
+		// `.api` equality doesn't narrow the generic; the guard makes this cast sound.
+		return stripFireworksDeepSeekThinkingToggle(model as ModelSpec<"openai-completions">, model.id);
+	});
+}
+
+const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+
+async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
+	try {
+		const store = await SqliteAuthCredentialStore.open();
+		const authStorage = new AuthStorage(store);
+		try {
+			await authStorage.reload();
+			// `getOAuthAccess` runs the full AuthStorage refresh pipeline so an
+			// expired-but-refreshable credential gets rotated before discovery,
+			// and identity metadata (accountId/projectId/email) flows through
+			// for Codex/Antigravity downstream calls.
+			return (await authStorage.getOAuthAccess(provider)) ?? null;
+		} finally {
+			store.close();
+		}
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Fetch available Antigravity models from the API using the discovery module.
+ * Returns empty array if no auth is available (previous models used as fallback).
+ */
+async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[]> {
+	const access = await getOAuthAccessFromStorage("google-antigravity");
+	if (!access) {
+		console.log("No Antigravity credentials found, will use previous models");
+		return [];
+	}
+	try {
+		console.log("Fetching models from Antigravity API...");
+		const discovered = await fetchAntigravityDiscoveryModels({
+			token: access.accessToken,
+			endpoint: ANTIGRAVITY_ENDPOINT,
+		});
+		if (discovered === null) {
+			console.warn("Antigravity API fetch failed, will use previous models");
+			return [];
+		}
+		if (discovered.length > 0) {
+			console.log(`Fetched ${discovered.length} models from Antigravity API`);
+			return discovered;
+		}
+		console.warn("Antigravity API returned no models, will use previous models");
+		return [];
+	} catch (error) {
+		console.error("Failed to fetch Antigravity models:", error);
+		return [];
+	}
+}
+
+/**
+ * Extract accountId from a Codex JWT access token.
+ */
+function extractCodexAccountId(accessToken: string): string | null {
+	try {
+		const parts = accessToken.split(".");
+		if (parts.length !== 3) return null;
+		const payload = parts[1] ?? "";
+		const decoded = JSON.parse(Buffer.from(payload, "base64").toString("utf-8"));
+		const accountId = decoded?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
+		return typeof accountId === "string" && accountId.length > 0 ? accountId : null;
+	} catch {
+		return null;
+	}
+}
+
+async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-responses">[]> {
+	const access = await getOAuthAccessFromStorage("openai-codex");
+	if (!access) {
+		return [];
+	}
+	try {
+		console.log("Fetching models from Codex API...");
+		const accessToken = access.accessToken;
+		const accountId = access.accountId ?? extractCodexAccountId(accessToken);
+		const codexDiscovery = await fetchCodexModels({
+			accessToken,
+			accountId: accountId ?? undefined,
+		});
+		if (codexDiscovery === null) {
+			console.warn("Codex API fetch failed");
+			return [];
+		}
+		if (codexDiscovery.models.length > 0) {
+			console.log(`Fetched ${codexDiscovery.models.length} models from Codex API`);
+			return codexDiscovery.models;
+		}
+		return [];
+	} catch (error) {
+		console.error("Failed to fetch Codex models:", error);
+		return [];
+	}
+}
+
+async function generateModels() {
+	// Fetch models from dynamic sources
+	const modelsDevModels = await loadModelsDevData();
+	const catalogProviderModels = (
+		await Promise.all(
+			PROVIDER_DESCRIPTORS.filter(
+				descriptor => isCatalogDescriptor(descriptor) && !DISCOVERY_ONLY_PROVIDERS.has(descriptor.providerId),
+			).map(descriptor => fetchProviderModelsFromCatalog(descriptor as CatalogProviderDescriptor)),
+		)
+	).flat();
+	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
+	const gitLabDuoModels = getGitLabDuoModels().map(model => toModelSpec(model));
+	// Combine models (models.dev has priority)
+	let allModels = applyGlobalModelsDevFallback(
+		[...modelsDevModels, ...catalogProviderModels, ...gitLabDuoModels],
+		modelsDevModels,
+	);
+
+	if (!allModels.some(model => model.provider === "cloudflare-ai-gateway")) {
+		allModels.push(CLOUDFLARE_FALLBACK_MODEL as ModelSpec<"anthropic-messages">);
+	}
+
+	// xai-oauth has no upstream catalog source (not in models.dev or
+	// MODELS_DEV_PROVIDER_DESCRIPTORS). The curated chat models live in
+	// XAI_OAUTH_CURATED_MODELS and reach the runtime via
+	// xaiOAuthModelManagerOptions().staticModels. Bundling them here too lets
+	// ModelRegistry.#loadModels() pick them up synchronously at boot, so a
+	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
+	// async refresh fires (interactive boot does not await refresh).
+	allModels.push(...buildXaiOAuthStaticSeed());
+	// Seed Anthropic models that are live on the first-party API or in limited
+	// release but that models.dev has not catalogued yet (e.g. Claude Fable 5 /
+	// Mythos 5). Deduped behind upstream entries; metadata is pinned in
+	// applyAnthropicCatalogPolicy.
+	allModels.push(...ANTHROPIC_CURATED_FALLBACK_MODELS);
+
+	const specialDiscoverySources = [
+		{ label: "Antigravity", fetch: fetchAntigravityModels },
+		{ label: "Codex", fetch: fetchCodexDiscoveryModels },
+	] as const;
+	const specialDiscoveries = await Promise.all(
+		specialDiscoverySources.map(async source => ({
+			label: source.label,
+			models: await source.fetch(),
+		})),
+	);
+	for (const discovery of specialDiscoveries) {
+		if (discovery.models.length > 0) {
+			console.log(`Added ${discovery.models.length} models from ${discovery.label} discovery`);
+			allModels.push(...discovery.models);
+		}
+	}
+
+	const modelsDevAuthoritativeProviders = new Set<string>();
+	for (const model of modelsDevModels) {
+		if (model.provider === "google-vertex") {
+			modelsDevAuthoritativeProviders.add(model.provider);
+		}
+	}
+	if (catalogProviderModels.some(model => model.provider === "aimlapi")) {
+		modelsDevAuthoritativeProviders.add("aimlapi");
+	}
+	// Merge previous models.json entries as fallback for provider/model pairs not
+	// fetched dynamically. Providers that models.dev covers authoritatively keep
+	// the upstream list exactly, so retired entries from the previous snapshot do
+	// not reappear during regeneration.
+	// Discovery-only providers (local inference servers) — never bundle static models.
+	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
+
+	// Previous-snapshot entries may carry an older ThinkingConfig vocabulary;
+	// applyGeneratedModelPolicies re-bakes `thinking` for every model, so the
+	// inbound shape is irrelevant beyond identity/pricing/compat fields.
+	for (const models of Object.values(prevModelsJson as unknown as Record<string, Record<string, ModelSpec>>)) {
+		for (const model of Object.values(models)) {
+			if (
+				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
+				!DISCOVERY_ONLY_PROVIDERS.has(model.provider) &&
+				!modelsDevAuthoritativeProviders.has(model.provider)
+			) {
+				allModels.push(model);
+			}
+		}
+	}
+
+	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
+	allModels = applyPremiumMultiplierOverrides(allModels);
+	allModels = applyCodexPricingFallback(allModels);
+	allModels = applyFireworksKimiMaxTokensCap(allModels);
+	allModels = applyFireworksDeepSeekReasoningShape(allModels);
+	applyGeneratedModelPolicies(allModels);
+	linkOpenAIPromotionTargets(allModels);
+
+	// Group by provider and sort each provider's models
+	const providers: Record<string, Record<string, ModelSpec>> = {};
+	for (const model of allModels) {
+		if (DISCOVERY_ONLY_PROVIDERS.has(model.provider)) continue;
+		if (!providers[model.provider]) {
+			providers[model.provider] = {};
+		}
+		// Use model ID as key to automatically deduplicate
+		// Only add if not already present (models.dev takes priority over endpoint discovery)
+		if (!providers[model.provider][model.id]) {
+			providers[model.provider][model.id] = model;
+		}
+	}
+
+	// Sort providers alphabetically and models within each provider by ID
+	const sortObj = <V>(o: Record<string, V>): Record<string, V> => {
+		return Object.fromEntries(
+			Object.entries(o)
+				.sort(([a], [b]) => a.localeCompare(b))
+				.map(([id, model]) => [id, model]),
+		);
+	};
+
+	const MODELS: Record<string, Record<string, ModelSpec>> = sortObj(providers);
+	for (const key in MODELS) {
+		MODELS[key] = sortObj(MODELS[key]);
+	}
+
+	// Generate JSON file
+	await Bun.write(path.join(packageRoot, "src/models.json"), JSON.stringify(MODELS, null, "	"));
+	console.log("Generated src/models.json");
+
+	// Print statistics
+	const totalModels = allModels.length;
+	const reasoningModels = allModels.filter(m => m.reasoning).length;
+
+	console.log(`
+Model Statistics:`);
+	console.log(`  Total tool-capable models: ${totalModels}`);
+	console.log(`  Reasoning-capable models: ${reasoningModels}`);
+
+	for (const [provider, models] of Object.entries(MODELS)) {
+		console.log(`  ${provider}: ${Object.keys(models).length} models`);
+	}
+}
+
+// Run the generator
+generateModels().catch(console.error);

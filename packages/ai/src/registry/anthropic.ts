@@ -1,14 +1,11 @@
 import { $pickenv } from "@oh-my-pi/pi-utils";
-import { anthropicModelManagerOptions } from "../provider-models/openai-compat";
 import { isFoundryEnabled } from "../utils/foundry";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 export const anthropicProvider = {
 	id: "anthropic",
 	name: "Anthropic (Claude Pro/Max)",
-	defaultModel: "claude-opus-4-6",
-	createModelManagerOptions: (config: ModelManagerConfig) => anthropicModelManagerOptions(config),
 	// Foundry mode optionally switches Anthropic auth to enterprise gateway credentials.
 	envKeys: () =>
 		isFoundryEnabled()

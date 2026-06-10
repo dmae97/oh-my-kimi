@@ -105,7 +105,7 @@ export const LSP_READONLY_ACTIONS: ReadonlySet<string> = new Set([
 
 export interface LspStartupServerInfo {
 	name: string;
-	status: "connecting" | "ready" | "error";
+	status: "connecting" | "ready" | "error" | "available";
 	fileTypes: string[];
 	error?: string;
 }
@@ -121,11 +121,14 @@ export interface LspWarmupOptions {
 	onConnecting?: (serverNames: string[]) => void;
 }
 
-export function discoverStartupLspServers(cwd: string): LspStartupServerInfo[] {
+export function discoverStartupLspServers(
+	cwd: string,
+	status: LspStartupServerInfo["status"] = "connecting",
+): LspStartupServerInfo[] {
 	const config = loadConfig(cwd);
 	return getLspServers(config).map(([name, serverConfig]) => ({
 		name,
-		status: "connecting",
+		status,
 		fileTypes: serverConfig.fileTypes,
 	}));
 }

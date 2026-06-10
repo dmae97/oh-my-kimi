@@ -414,6 +414,26 @@ export class EventController {
 				this.#resetReadGroup();
 				this.#lastVisibleBlockCount = visibleBlockCount;
 			}
+
+			// Content blocks stream sequentially: a toolCall block can only begin
+			// after every preceding thinking/text block has closed, and the
+			// reveal's setTarget above force-completes the visible text for
+			// toolCall messages. Finalize the assistant block now instead of at
+			// message_end so the transcript's commit-safe run can extend through
+			// it into the streaming tool preview below — otherwise a long args
+			// stream (a big write/edit/eval) sits below a still-live block and
+			// can never reach native scrollback: the head of the preview is
+			// neither committed nor on screen and the transcript reads as cut.
+			// Skipped when the per-turn usage row is enabled: that row is only
+			// known at message_end and appends to this block, which would shift
+			// committed tool rows below it every turn (audit recommit →
+			// duplicated preview copies in scrollback).
+			if (
+				this.ctx.streamingMessage.content.some(content => content.type === "toolCall") &&
+				!settings.get("display.showTokenUsage")
+			) {
+				this.ctx.streamingComponent.markTranscriptBlockFinalized();
+			}
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
 				if (content.name === "read") {

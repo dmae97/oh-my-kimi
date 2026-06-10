@@ -16,9 +16,10 @@
  * requires when tool history is present.
  */
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { AssistantMessage, Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
 
 function abortedSignal(): AbortSignal {
@@ -28,14 +29,16 @@ function abortedSignal(): AbortSignal {
 }
 
 function bedrockModel(): Model<"openai-completions"> {
-	return {
-		...getBundledModel("openai", "gpt-4o-mini"),
+	const base = getBundledModel("openai", "gpt-4o-mini");
+	return buildModel({
+		...base,
 		api: "openai-completions",
 		id: "bedrock-claude-sonnet-4-6",
 		name: "Bedrock Claude Sonnet 4.6 (LiteLLM)",
 		provider: "litellm-bedrock",
 		baseUrl: "https://example.test/v1",
-	};
+		compat: base.compatConfig,
+	} as ModelSpec<"openai-completions">);
 }
 
 async function capturePayload(

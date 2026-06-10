@@ -1516,10 +1516,10 @@ class NdjsonFileWriter {
 	}
 }
 
-/** Get recent sessions for display in welcome screen */
+/** Get recent sessions for display in welcome screen (which reserves WELCOME_SESSION_SLOTS rows) */
 export async function getRecentSessions(
 	sessionDir: string,
-	limit = 3,
+	limit = 4,
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<RecentSessionInfo[]> {
 	const sessions = await getSortedSessions(sessionDir, storage);

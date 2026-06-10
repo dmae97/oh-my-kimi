@@ -24,14 +24,12 @@ import {
 	type CredentialCompletionResult,
 	completeSimple,
 	DEFAULT_AUTH_GATEWAY_BIND,
-	type GeneratedProvider,
-	getBundledModels,
-	getBundledProviders,
 	type Model,
 	RemoteAuthCredentialStore,
 	type SnapshotResponse,
 	startAuthGateway,
 } from "@oh-my-pi/pi-ai";
+import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AuthBrokerClientConfig, resolveAuthBrokerConfig } from "../session/auth-broker-config";

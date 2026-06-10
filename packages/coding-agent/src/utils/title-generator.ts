@@ -33,7 +33,7 @@ const setTitleTool: Tool = {
 			title: {
 				type: "string",
 				description:
-					'A concise, sentence-case 3-7 word title for the session (capitalize only the first word and proper nouns), or exactly "none" when the message carries no concrete task yet (greeting, small talk, vague).',
+					'The generated session title, or exactly "none" when the message carries no concrete task yet.',
 			},
 		},
 		required: ["title"],
@@ -137,6 +137,7 @@ export async function raceFirstNonNull<T>(
  *   to produce request metadata (e.g. user_id for session attribution). Using a
  *   resolver instead of a pre-evaluated value ensures the metadata's account_uuid
  *   reflects the credential actually selected for this request.
+ * @param customSystemPrompt Optional title-specific system prompt override
  */
 export async function generateSessionTitle(
 	firstMessage: string,
@@ -145,6 +146,7 @@ export async function generateSessionTitle(
 	sessionId?: string,
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
+	customSystemPrompt?: string,
 ): Promise<string | null> {
 	// Defer titling for greetings / acknowledgements / empty input. The default
 	// tiny title model can't reliably decline trivial input, so this happens
@@ -155,13 +157,26 @@ export async function generateSessionTitle(
 		return null;
 	}
 
+	const titleSystemPrompt = customSystemPrompt?.trim() || undefined;
 	const tinyModel = settings.get("providers.tinyModel");
 	if (tinyModel === ONLINE_TINY_TITLE_MODEL_KEY) {
-		return generateTitleOnline(firstMessage, registry, settings, sessionId, currentModel, metadataResolver);
+		return generateTitleOnline(
+			firstMessage,
+			registry,
+			settings,
+			sessionId,
+			currentModel,
+			metadataResolver,
+			undefined,
+			titleSystemPrompt,
+		);
 	}
 
 	const onlineAbortController = new AbortController();
-	const localTitle = tinyTitleClient.generate(tinyModel, firstMessage).then(
+	const localTitlePromise = titleSystemPrompt
+		? tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt })
+		: tinyTitleClient.generate(tinyModel, firstMessage);
+	const localTitle = localTitlePromise.then(
 		title => title || null,
 		err => {
 			logger.warn("title-generator: local model error", {
@@ -181,6 +196,7 @@ export async function generateSessionTitle(
 			currentModel,
 			metadataResolver,
 			onlineAbortController.signal,
+			titleSystemPrompt,
 		);
 
 	return raceFirstNonNull(localTitle, startOnline, TITLE_LOCAL_FALLBACK_DELAY_MS, () => {
@@ -196,6 +212,7 @@ export async function generateTitleOnline(
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 	signal?: AbortSignal,
+	customSystemPrompt?: string,
 ): Promise<string | null> {
 	const model = getTitleModel(registry, settings, currentModel);
 	if (!model) {
@@ -203,6 +220,8 @@ export async function generateTitleOnline(
 		return null;
 	}
 
+	const titleSystemPrompt = customSystemPrompt?.trim() || undefined;
+	const systemPrompt = titleSystemPrompt ?? TITLE_SYSTEM_PROMPT;
 	const userMessage = formatTitleUserMessage(firstMessage);
 	const modelName = `${model.provider}/${model.id}`;
 	const modelContext = {
@@ -234,12 +253,12 @@ export async function generateTitleOnline(
 		const response = await completeSimple(
 			model,
 			{
-				systemPrompt: [TITLE_SYSTEM_PROMPT],
+				systemPrompt: [systemPrompt],
 				messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				tools: [setTitleTool],
 			},
 			{
-				apiKey: registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl }),
+				apiKey: registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id }),
 				maxTokens,
 				disableReasoning: true,
 				toolChoice: { type: "tool", name: SET_TITLE_TOOL_NAME },

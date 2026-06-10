@@ -147,7 +147,7 @@ export class RawSseViewerComponent implements Component {
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		this.#lastRenderWidth = Math.max(MIN_VIEWER_WIDTH, width);
 		this.#followIfNeeded();
 

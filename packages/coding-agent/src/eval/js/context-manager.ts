@@ -1,13 +1,10 @@
-import { isCompiledBinary, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "../../tools";
 import { ToolAbortError, ToolError } from "../../tools/tool-errors";
 import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
 import { WorkerCore } from "./worker-core";
-// Worker entry. See `tab-supervisor.ts` for the rationale behind the
-// literal-string + `new URL(import.meta.url)` hybrid: the literal is what
-// Bun's `--compile` bundler discovers, the `new URL` form is what makes dev
-// runs portable across cwds. The worker is registered as an additional
-// `--compile` entrypoint in `scripts/build-binary.ts`.
+// Coding-agent binary/bundle workers route through the CLI entrypoint with a
+// hidden argv mode, so compiled/npm builds only need one JavaScript entry.
 import type {
 	JsDisplayOutput,
 	RunErrorPayload,
@@ -384,8 +381,9 @@ async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, reason
 
 async function spawnJsWorker(): Promise<WorkerHandle> {
 	try {
-		const worker = isCompiledBinary()
-			? new Worker("./packages/coding-agent/src/eval/js/worker-entry.ts", { type: "module" })
+		const hostEntry = workerHostEntry();
+		const worker = hostEntry
+			? new Worker(hostEntry, { type: "module", argv: ["__omp_js_eval_worker"] })
 			: new Worker(new URL("./worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {

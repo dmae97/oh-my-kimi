@@ -20,11 +20,12 @@
  * the strategy goes with them).
  */
 import { describe, expect, it } from "bun:test";
-import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
-const OPUS_46_OAUTH: Model<"anthropic-messages"> = {
+const OPUS_46_OAUTH: Model<"anthropic-messages"> = buildModel({
 	id: "claude-opus-4-6",
 	name: "Claude Opus 4.6",
 	api: "anthropic-messages",
@@ -35,8 +36,11 @@ const OPUS_46_OAUTH: Model<"anthropic-messages"> = {
 	cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 	contextWindow: 1_000_000,
 	maxTokens: 128_000,
-	thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
-};
+	thinking: {
+		mode: "anthropic-adaptive",
+		efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+	},
+});
 
 const todoTool: Tool = {
 	name: "todo",

@@ -1,8 +1,6 @@
-import { $pickenv } from "@oh-my-pi/pi-utils";
-import { huggingfaceModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL =
 	"https://huggingface.co/settings/tokens/new?ownUserPermissions=inference.serverless.write&tokenType=fineGrained";
@@ -49,9 +47,5 @@ export async function loginHuggingface(options: OAuthController): Promise<string
 export const huggingfaceProvider = {
 	id: "huggingface",
 	name: "Hugging Face Inference",
-	defaultModel: "deepseek-ai/DeepSeek-R1",
-	createModelManagerOptions: (config: ModelManagerConfig) => huggingfaceModelManagerOptions(config),
-	catalogDiscovery: { label: "Hugging Face", envVars: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"] },
-	envKeys: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),
 	login: (cb: OAuthLoginCallbacks) => loginHuggingface(cb),
 } as const satisfies ProviderDefinition;

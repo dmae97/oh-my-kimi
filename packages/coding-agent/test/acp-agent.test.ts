@@ -18,6 +18,7 @@ import {
 	zSessionNotification,
 } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	ACP_BOOTSTRAP_RACE_GUARD_MS,
@@ -32,7 +33,7 @@ import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
 const TEST_MODELS: Model[] = [
-	{
+	buildModel({
 		id: "claude-sonnet-4-20250514",
 		name: "Claude Sonnet",
 		api: "anthropic-messages",
@@ -43,8 +44,8 @@ const TEST_MODELS: Model[] = [
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 8_192,
-	},
-	{
+	}),
+	buildModel({
 		id: "gpt-5.4",
 		name: "GPT-5.4",
 		api: "openai-responses",
@@ -55,7 +56,7 @@ const TEST_MODELS: Model[] = [
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 8_192,
-	},
+	}),
 ];
 
 function makeAssistantMessage(text: string, thinking?: string) {
@@ -178,7 +179,7 @@ class FakeAgentSession {
 		return [...this.#listeners];
 	}
 
-	async prompt(text: string): Promise<void> {
+	async prompt(text: string): Promise<boolean> {
 		this.promptCalls.push(text);
 		this.isStreaming = true;
 		this.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
@@ -198,6 +199,7 @@ class FakeAgentSession {
 			} as AgentSessionEvent);
 		}
 		this.isStreaming = false;
+		return true;
 	}
 
 	async waitForIdle(): Promise<void> {
@@ -346,7 +348,7 @@ class FakeAgentSession {
 
 function holdPromptStreaming(session: FakeAgentSession): () => void {
 	let finishPrompt!: () => void;
-	session.prompt = async (text: string): Promise<void> => {
+	session.prompt = async (text: string): Promise<boolean> => {
 		session.promptCalls.push(text);
 		session.isStreaming = true;
 		const blocker = Promise.withResolvers<void>();
@@ -368,6 +370,7 @@ function holdPromptStreaming(session: FakeAgentSession): () => void {
 			} as AgentSessionEvent);
 		}
 		session.isStreaming = false;
+		return true;
 	};
 	return () => finishPrompt();
 }
@@ -1126,7 +1129,7 @@ describe("ACP agent", () => {
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 
-		session.prompt = async (text: string): Promise<void> => {
+		session.prompt = async (text: string): Promise<boolean> => {
 			session.promptCalls.push(text);
 			session.isStreaming = true;
 			for (const listener of session.listeners()) {
@@ -1163,6 +1166,7 @@ describe("ACP agent", () => {
 				listener({ type: "agent_end", messages: [] } as AgentSessionEvent);
 			}
 			session.isStreaming = false;
+			return true;
 		};
 
 		await harness.agent.prompt({
@@ -1273,6 +1277,55 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("includes extension-registered commands in available_commands_update and excludes ACP-builtin collisions", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		// Extension command colliding with a custom TS command; extension wins (dispatch order).
+		(session as unknown as { customCommands: unknown[] }).customCommands = [
+			{ command: { name: "my-ext-cmd", description: "Custom TS version" } },
+		];
+		// Extension runner: unique command + one colliding with an ACP builtin
+		// ("fast") + a colon-namespaced one whose prefix is a builtin
+		// ("model:foo" parses as builtin `/model` with args `foo` at dispatch).
+		(session as unknown as { extensionRunner: unknown }).extensionRunner = {
+			getRegisteredCommands(reserved?: Set<string>) {
+				return [
+					{ name: "my-ext-cmd", description: "Extension command", handler: async () => {} },
+					{ name: "fast", description: "Would shadow builtin", handler: async () => {} },
+					{ name: "model:foo", description: "Colon-shadowed by /model", handler: async () => {} },
+				].filter(cmd => !reserved?.has(cmd.name));
+			},
+		};
+
+		await waitForBootstrapGuard();
+
+		const commandUpdates = harness.updates.filter(
+			update =>
+				update.sessionId === created.sessionId && update.update.sessionUpdate === "available_commands_update",
+		);
+		// Flatten all advertised commands from all updates for this session.
+		const allCommands = commandUpdates.flatMap(update =>
+			update.update.sessionUpdate === "available_commands_update" ? update.update.availableCommands : [],
+		);
+		const names = allCommands.map(c => c.name);
+
+		// Extension command must surface.
+		expect(names).toContain("my-ext-cmd");
+		// Extension wins the name collision: advertised description is the extension's, not the custom TS one.
+		const extCmdEntry = allCommands.find(c => c.name === "my-ext-cmd");
+		expect(extCmdEntry?.description).toBe("Extension command");
+		// ACP builtin "fast" appears exactly once (reserved-set exclusion, no duplicate from extension).
+		expect(names.filter(n => n === "fast").length).toBe(1);
+		// Colon-namespaced collision with a builtin prefix is not advertised:
+		// ACP would dispatch `/model:foo` to the `/model` builtin, not the extension.
+		expect(names).not.toContain("model:foo");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("executes skill commands through custom skill messages", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
@@ -1308,11 +1361,38 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("rejects overlapping prompts while AgentSession is still streaming", async () => {
+	it("auto-cancels an in-progress turn and queues a new prompt when called mid-flight", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
-		const finishPrompt = holdPromptStreaming(session);
+
+		// Block abort() until released so we can assert the second prompt waits
+		let releaseAbort!: () => void;
+		const abortStarted = Promise.withResolvers<void>();
+		const abortRelease = new Promise<void>(resolve => {
+			releaseAbort = resolve;
+		});
+		session.abort = async () => {
+			session.isStreaming = false;
+			abortStarted.resolve();
+			await abortRelease;
+		};
+
+		const blockers: Array<() => void> = [];
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			const { promise, resolve } = Promise.withResolvers<void>();
+			blockers.push(resolve);
+			await promise;
+			const assistantMessage = makeAssistantMessage("pong");
+			session.sessionManager.appendMessage(assistantMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [assistantMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
 
 		const firstPrompt = harness.agent.prompt({
 			sessionId: created.sessionId,
@@ -1320,22 +1400,89 @@ describe("ACP agent", () => {
 			prompt: [{ type: "text", text: "long running" }],
 		} as PromptRequest);
 		await Bun.sleep(0);
+		expect(session.promptCalls).toEqual(["long running"]);
 
-		try {
-			await expect(
-				harness.agent.prompt({
-					sessionId: created.sessionId,
-					messageId: "00000000-0000-4000-8000-000000000036",
-					prompt: [{ type: "text", text: "overlap" }],
-				} as PromptRequest),
-			).rejects.toThrow("ACP prompt already in progress for this session");
-			expect(session.promptCalls).toEqual(["long running"]);
-		} finally {
-			finishPrompt();
-			await firstPrompt;
-			harness.abortController.abort();
+		// Second prompt arrives mid-flight — must auto-cancel first, then queue
+		const secondPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000036",
+			prompt: [{ type: "text", text: "overlap" }],
+		} as PromptRequest);
+
+		// First resolves immediately as cancelled
+		const firstResponse = await firstPrompt;
+		expect(firstResponse.stopReason).toBe("cancelled");
+
+		// abort() must have been called as part of cancel cleanup
+		await abortStarted.promise;
+
+		// Second prompt must NOT start until abort cleanup completes
+		await Bun.sleep(0);
+		expect(session.promptCalls).toEqual(["long running"]);
+
+		// Release abort — second session.prompt should now start
+		releaseAbort();
+		await Bun.sleep(0);
+		expect(session.promptCalls).toEqual(["long running", "overlap"]);
+
+		// Unblock both session.prompt calls (first is fire-and-forget, second drives the response)
+		for (const resolve of blockers) resolve();
+		const secondResponse = await secondPrompt;
+		expect(secondResponse.stopReason).toBe("end_turn");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("closes the ACP session when implicit cancel cleanup times out", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		harness.agent.setCancelCleanupTimeoutForTesting(10);
+		session.abort = async () => new Promise<void>(() => undefined);
+		const finishPrompt = holdPromptStreaming(session);
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000045",
+			prompt: [{ type: "text", text: "long running" }],
+		} as PromptRequest);
+		await Bun.sleep(0);
+
+		// Overlapping prompt triggers the implicit cancel; abort() never resolves,
+		// so cleanup times out, the queued prompt fails, and the session is closed.
+		const secondPrompt = harness.agent
+			.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-000000000046",
+				prompt: [{ type: "text", text: "overlap" }],
+			} as PromptRequest)
+			.catch(error => error);
+
+		const firstResponse = await firstPrompt;
+		expect(firstResponse.stopReason).toBe("cancelled");
+
+		const queuedError = await secondPrompt;
+		expect(queuedError).toBeInstanceOf(Error);
+		expect((queuedError as Error).message).toBe("ACP cancel cleanup timed out");
+
+		// The fire-and-forget close runs off the same cleanup rejection; give it a
+		// few ticks to settle before asserting.
+		for (let i = 0; i < 20 && !session.disposed; i++) {
 			await Bun.sleep(0);
 		}
+		expect(session.disposed).toBe(true);
+		await expect(
+			harness.agent.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-000000000047",
+				prompt: [{ type: "text", text: "after stuck implicit cancel" }],
+			} as PromptRequest),
+		).rejects.toThrow("Unsupported ACP session");
+
+		finishPrompt();
+		harness.abortController.abort();
+		await Bun.sleep(0);
 	});
 
 	it("waits for AgentSession idle cleanup after agent_end before returning", async () => {

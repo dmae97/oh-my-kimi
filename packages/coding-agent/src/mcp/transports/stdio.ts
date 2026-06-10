@@ -133,6 +133,12 @@ function resolveComSpec(env: Record<string, string | undefined>): string {
 	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
 }
 
+/** `cmd /s /c` strips one outer quote pair; keep inner argv quotes intact. */
+function buildCmdExeCommand(command: string, args: readonly string[]): string {
+	const quotedCommand = [command, ...args].map(quoteCmdArg).join(" ");
+	return `"${quotedCommand}"`;
+}
+
 /** Resolve the subprocess argv used to launch an MCP stdio server. */
 export async function resolveStdioSpawnCommand(
 	config: MCPStdioServerConfig,
@@ -146,7 +152,7 @@ export async function resolveStdioSpawnCommand(
 	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
 
 	return {
-		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", [resolvedCommand, ...args].map(quoteCmdArg).join(" ")],
+		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
 	};
 }
 

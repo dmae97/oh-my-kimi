@@ -829,6 +829,9 @@ async function streamAssistantResponse(
 			tools: normalizeTools(context.tools, !!config.intentTracing),
 		};
 	}
+	if (config.transformProviderContext) {
+		llmContext = config.transformProviderContext(llmContext);
+	}
 
 	const streamFunction = streamFn || streamSimple;
 
@@ -845,6 +848,7 @@ async function streamAssistantResponse(
 
 	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
+	const dynamicDisableReasoning = config.getDisableReasoning?.();
 	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
 	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
 	const requestSignal = harmonyAbortController
@@ -856,6 +860,7 @@ async function streamAssistantResponse(
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	const effectiveToolChoice = dynamicToolChoice ?? config.toolChoice;
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
+	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
 
 	const chatStepNumber = stepCounter.count;
 	stepCounter.count += 1;
@@ -916,6 +921,7 @@ async function streamAssistantResponse(
 				metadata: resolvedMetadata,
 				toolChoice: effectiveToolChoice,
 				reasoning: effectiveReasoning,
+				disableReasoning: effectiveDisableReasoning,
 				temperature: effectiveTemperature,
 				signal: requestSignal,
 				onResponse: captureOnResponse,

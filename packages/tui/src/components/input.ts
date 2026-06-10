@@ -397,7 +397,7 @@ export class Input implements Component, Focusable {
 		// No cached state to invalidate currently
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		// Calculate visible window
 		const prompt = "> ";
 		const availableWidth = width - prompt.length;

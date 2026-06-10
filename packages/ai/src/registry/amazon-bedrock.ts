@@ -4,7 +4,6 @@ import type { ProviderDefinition } from "./types";
 export const amazonBedrockProvider = {
 	id: "amazon-bedrock",
 	name: "Amazon Bedrock",
-	defaultModel: "us.anthropic.claude-opus-4-6-v1",
 	// Amazon Bedrock accepts bearer tokens, IAM keys, profiles, ECS/IRSA credential chains.
 	envKeys: () => {
 		const hasEcsCredentials =
