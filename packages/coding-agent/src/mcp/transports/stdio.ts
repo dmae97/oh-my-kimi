@@ -35,7 +35,6 @@ export interface ResolveStdioSpawnOptions {
 }
 
 const DEFAULT_WINDOWS_PATHEXT = [".COM", ".EXE", ".BAT", ".CMD"];
-const WINDOWS_BATCH_EXTENSIONS = new Set([".bat", ".cmd"]);
 
 function getCaseInsensitiveEnv(env: Record<string, string | undefined>, name: string): string | undefined {
 	const direct = env[name];
@@ -107,32 +106,6 @@ async function resolveWindowsCommandPath(
 	return null;
 }
 
-function quoteCmdArg(value: string): string {
-	if (value.length === 0) return '""';
-	let result = '"';
-	for (const char of value) {
-		if (char === '"') {
-			result += '^"';
-		} else if (char === "^") {
-			result += "^^";
-		} else if (char === "%") {
-			result += "^%";
-		} else {
-			result += char;
-		}
-	}
-	return `${result}"`;
-}
-
-function isWindowsBatchCommand(command: string): boolean {
-	return WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
-}
-
-function resolveComSpec(env: Record<string, string | undefined>): string {
-	const comspec = getCaseInsensitiveEnv(env, "COMSPEC");
-	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
-}
-
 /** Resolve the subprocess argv used to launch an MCP stdio server. */
 export async function resolveStdioSpawnCommand(
 	config: MCPStdioServerConfig,
@@ -143,11 +116,7 @@ export async function resolveStdioSpawnCommand(
 
 	const resolvedCommand =
 		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
-	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
-
-	return {
-		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", [resolvedCommand, ...args].map(quoteCmdArg).join(" ")],
-	};
+	return { cmd: [resolvedCommand, ...args] };
 }
 
 /** Minimal write surface of `Subprocess.stdin` we need for framed sends. */
