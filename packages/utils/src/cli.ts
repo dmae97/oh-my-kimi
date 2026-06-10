@@ -9,7 +9,24 @@
  *   - Lazy command imports (only the invoked command is loaded)
  *   - Typed `this.parse()` output matching oclif's API shape
  */
+import * as fs from "node:fs";
 import { parseArgs as nodeParseArgs } from "node:util";
+
+/**
+ * Streaming startup marker, enabled by `PI_DEBUG_STARTUP`. Local copy of
+ * `logger.startupMarker` so the minimal `--version`/bootstrap import graph
+ * stays free of the winston-backed logger module. Synchronous on purpose:
+ * a command module whose import hangs (dlopen, fs on a dead mount) must
+ * still leave its `:start` marker behind.
+ */
+function startupMarker(text: string): void {
+	if (!process.env.PI_DEBUG_STARTUP) return;
+	try {
+		fs.writeSync(2, `[startup] ${text}\n`);
+	} catch {
+		// stderr unavailable; markers are best-effort
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Flag & Arg descriptors
@@ -392,14 +409,14 @@ export async function run(opts: RunOptions): Promise<void> {
 		return;
 	}
 
-	// Per-command help
+	// Per-command help: load only the requested command. Loading the full
+	// command table here would make `omp <cmd> --help` hang or crash whenever
+	// any *unrelated* command module misbehaves at import time.
 	if (commandArgv.includes("--help") || commandArgv.includes("-h")) {
-		const config = await loadAllCommands(opts);
-		// Resolve aliases for help too
 		const entry = findEntry(opts.commands, commandId);
-		const Cmd = entry ? config.commands.get(entry.name) : undefined;
-		if (Cmd) {
-			renderCommandHelp(bin, entry!.name, Cmd);
+		if (entry) {
+			const Cmd = await loadEntry(entry);
+			renderCommandHelp(bin, entry.name, Cmd);
 		} else {
 			process.stderr.write(`Unknown command: ${commandId}\n`);
 		}
@@ -415,16 +432,24 @@ export async function run(opts: RunOptions): Promise<void> {
 		return;
 	}
 
-	const Cmd = await entry.load();
+	const Cmd = await loadEntry(entry);
 	const config: CliConfig = { bin, version, commands: new Map([[entry.name, Cmd]]) };
 	const instance = new Cmd(commandArgv, config);
 	await instance.run();
 }
 
+/** Load one command module, leaving streaming markers around the import. */
+async function loadEntry(entry: CommandEntry): Promise<CommandCtor> {
+	startupMarker(`cli:load:${entry.name}:start`);
+	const Cmd = await entry.load();
+	startupMarker(`cli:load:${entry.name}:done`);
+	return Cmd;
+}
+
 /** Resolve all command loaders for help/alias display. */
 async function loadAllCommands(opts: RunOptions): Promise<CliConfig> {
 	const commands = new Map<string, CommandCtor>();
-	const loaded = await Promise.all(opts.commands.map(async e => [e.name, await e.load()] as const));
+	const loaded = await Promise.all(opts.commands.map(async e => [e.name, await loadEntry(e)] as const));
 	for (const [name, Cmd] of loaded) {
 		commands.set(name, Cmd);
 	}

@@ -774,8 +774,19 @@ function buildCustomReferenceSuffixAliasMap(exactReferences: ReadonlyMap<string,
 	return aliases;
 }
 
-const customReferenceMap = buildCustomReferenceMap();
-const customReferenceSuffixAliasMap = buildCustomReferenceSuffixAliasMap(customReferenceMap);
+// Lazy: building these maps walks every bundled model (~12K) and triggers
+// model enrichment in pi-ai; defer off module load until the first
+// custom-model reference lookup actually needs them.
+let customReferenceMap: Map<string, Model<Api>> | undefined;
+let customReferenceSuffixAliasMap: Map<string, Model<Api>> | undefined;
+
+function getCustomReferenceMaps(): { exact: Map<string, Model<Api>>; suffixAlias: Map<string, Model<Api>> } {
+	if (customReferenceMap === undefined || customReferenceSuffixAliasMap === undefined) {
+		customReferenceMap = buildCustomReferenceMap();
+		customReferenceSuffixAliasMap = buildCustomReferenceSuffixAliasMap(customReferenceMap);
+	}
+	return { exact: customReferenceMap, suffixAlias: customReferenceSuffixAliasMap };
+}
 
 const CUSTOM_REFERENCE_TRAILING_MARKER_PATTERN =
 	/[-:](?:thinking|customtools|high|low|medium|minimal|xhigh|free|cloud|exacto|nitro|original|optimized|nvfp4|fp8|fp4|bf16|int8|int4|search)$/i;
@@ -830,9 +841,10 @@ function getCustomReferenceCandidateIds(modelId: string): string[] {
 }
 
 function resolveCustomModelReference(modelId: string): Model<Api> | undefined {
+	const { exact, suffixAlias } = getCustomReferenceMaps();
 	for (const candidate of getCustomReferenceCandidateIds(modelId)) {
 		const key = normalizeCustomReferenceKey(candidate);
-		const reference = customReferenceMap.get(key) ?? customReferenceSuffixAliasMap.get(key);
+		const reference = exact.get(key) ?? suffixAlias.get(key);
 		if (reference) return reference;
 	}
 	return undefined;

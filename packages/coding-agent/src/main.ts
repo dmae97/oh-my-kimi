@@ -11,6 +11,7 @@ import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	$env,
+	getLogPath,
 	getProjectDir,
 	logger,
 	normalizePathForComparison,
@@ -143,13 +144,77 @@ function applyAcpDefaultSettingOverrides(targetSettings: Settings = settings): v
 
 async function readPipedInput(): Promise<string | undefined> {
 	if (process.stdin.isTTY !== false) return undefined;
+	// stdin is a pipe: a producer that never writes nor closes would block
+	// startup forever with zero output. Say what we're blocked on after 1s.
+	const notice = setTimeout(() => {
+		process.stderr.write(`${chalk.dim("Reading prompt from piped stdin (waiting for EOF; ctrl+c to abort)…")}\n`);
+	}, 1000);
+	notice.unref?.();
 	try {
 		const text = await Bun.stdin.text();
 		if (text.trim().length === 0) return undefined;
 		return text;
 	} catch {
 		return undefined;
+	} finally {
+		clearTimeout(notice);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Startup watchdog
+// ---------------------------------------------------------------------------
+// Speculative-hang reporter: until startup hands off to a mode runner, print a
+// stderr line every 10s naming the deepest in-flight startup phase. Turns
+// zero-output indefinite hangs (stuck discovery read, network wait, stdin
+// pipe) into self-diagnosing reports instead of "it just hangs" (see the
+// PI_DEBUG_STARTUP markers for the synchronous-hang counterpart).
+
+const STARTUP_WATCHDOG_INTERVAL_MS = 10_000;
+let startupWatchdogTimer: NodeJS.Timeout | undefined;
+let startupWatchdogActive = false;
+let startupWatchdogStartedAt = 0;
+
+function armStartupWatchdog(): void {
+	if (startupWatchdogTimer) return;
+	startupWatchdogTimer = setInterval(() => {
+		const elapsed = Math.round((Date.now() - startupWatchdogStartedAt) / 1000);
+		const phase = logger.openSpanPath().join(" > ") || "module load / pre-phase work";
+		process.stderr.write(
+			`${chalk.yellow(`Still starting after ${elapsed}s`)}${chalk.dim(` — phase: ${phase}`)}\n` +
+				`${chalk.dim(`  logs: ${getLogPath()} · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers`)}\n`,
+		);
+	}, STARTUP_WATCHDOG_INTERVAL_MS);
+	startupWatchdogTimer.unref?.();
+}
+
+function disarmStartupWatchdog(): void {
+	if (!startupWatchdogTimer) return;
+	clearInterval(startupWatchdogTimer);
+	startupWatchdogTimer = undefined;
+}
+
+/** Begin watching startup (idempotent). */
+function startStartupWatchdog(): void {
+	startupWatchdogActive = true;
+	startupWatchdogStartedAt = Date.now();
+	armStartupWatchdog();
+}
+
+/** Permanently stop watching: a mode runner now owns the terminal. */
+function stopStartupWatchdog(): void {
+	startupWatchdogActive = false;
+	disarmStartupWatchdog();
+}
+
+/** Pause while an interactive prompt legitimately waits on the user. */
+function pauseStartupWatchdog(): void {
+	disarmStartupWatchdog();
+}
+
+/** Resume after an interactive prompt, if startup is still being watched. */
+function resumeStartupWatchdog(): void {
+	if (startupWatchdogActive) armStartupWatchdog();
 }
 
 export interface InteractiveModeNotify {
@@ -361,12 +426,14 @@ async function promptForkSession(session: SessionInfo): Promise<SessionPromptRes
 		return "unavailable";
 	}
 	const message = `Session found in different project: ${session.cwd}. Fork into current directory? [y/N] `;
+	pauseStartupWatchdog();
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const answer = (await rl.question(message)).trim().toLowerCase();
 		return answer === "y" || answer === "yes" ? "accepted" : "declined";
 	} finally {
 		rl.close();
+		resumeStartupWatchdog();
 	}
 }
 
@@ -375,12 +442,14 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 		return "unavailable";
 	}
 	const message = `Session's directory no longer exists (${session.cwd}). Move (re-root) it into the current directory? [Y/n] `;
+	pauseStartupWatchdog();
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const answer = (await rl.question(message)).trim().toLowerCase();
 		return answer === "" || answer === "y" || answer === "yes" ? "accepted" : "declined";
 	} finally {
 		rl.close();
+		resumeStartupWatchdog();
 	}
 }
 
@@ -792,6 +861,7 @@ export async function runRootCommand(
 	deps: RunRootCommandDependencies = {},
 ): Promise<void> {
 	logger.startTiming();
+	startStartupWatchdog();
 
 	// Initialize theme early with defaults (CLI commands need symbols)
 	// Will be re-initialized with user preferences later
@@ -803,7 +873,7 @@ export async function runRootCommand(
 	const notifs: (InteractiveModeNotify | null)[] = [];
 
 	// Create AuthStorage and ModelRegistry upfront
-	const authStorage = await logger.time("discoverModels", deps.discoverAuthStorage ?? discoverAuthStorage);
+	const authStorage = await logger.time("discoverAuthStorage", deps.discoverAuthStorage ?? discoverAuthStorage);
 	const modelRegistry = new ModelRegistry(authStorage);
 
 	if (parsedArgs.version) {
@@ -991,10 +1061,12 @@ export async function runRootCommand(
 			}
 			startInAllScope = true;
 		}
+		pauseStartupWatchdog();
 		const selected = await logger.time("selectSession", selectSession, folderSessions, {
 			allSessions: preloadedAllSessions,
 			startInAllScope,
 		});
+		resumeStartupWatchdog();
 		if (!selected) {
 			process.stdout.write(`${chalk.dim("No session selected")}\n`);
 			return;
@@ -1086,6 +1158,7 @@ export async function runRootCommand(
 		});
 		// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 		const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
+		stopStartupWatchdog();
 		await runAcpMode(createAcpSession);
 	} else {
 		// Resolve extension-registered CLI flags before creating the session so a
@@ -1152,6 +1225,7 @@ export async function runRootCommand(
 		if (mode === "rpc" || mode === "rpc-ui") {
 			// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
 			const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
+			stopStartupWatchdog();
 			await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined);
 		} else if (isInteractive) {
 			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
@@ -1175,6 +1249,7 @@ export async function runRootCommand(
 				}
 			}
 
+			stopStartupWatchdog();
 			logger.endTiming();
 			await runInteractiveMode(
 				session,
@@ -1194,6 +1269,7 @@ export async function runRootCommand(
 			);
 		} else {
 			// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.
+			stopStartupWatchdog();
 			const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 			await runPrintMode(session, {
 				mode,

@@ -43,7 +43,7 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
-import { discoverAgents, getAgent } from "./discovery";
+import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
@@ -293,6 +293,37 @@ function validateTaskIds(tasks: TaskParams["tasks"]): string | undefined {
 	return `Invalid tasks: ${problems.join(". ")}`;
 }
 
+/**
+ * Process-level memo for create-time agent discovery, keyed by resolved cwd.
+ *
+ * `TaskTool.create` runs for every (sub)agent session in this process and the
+ * walk-up + plugin-registry scan in `discoverAgents` is identical for a given
+ * cwd, so repeat creations reuse the first scan. Execution-time discovery
+ * (`#executeSync`) intentionally stays fresh. The memo also tracks the live
+ * `discoverAgents` binding: test spies swap that binding, which invalidates
+ * the memo automatically.
+ */
+const discoveryMemo = new Map<string, Promise<DiscoveryResult>>();
+let discoveryMemoFn: typeof discoverAgents | undefined;
+
+function discoverAgentsForCreate(cwd: string): Promise<DiscoveryResult> {
+	const fn = discoverAgents;
+	if (discoveryMemoFn !== fn) {
+		discoveryMemoFn = fn;
+		discoveryMemo.clear();
+	}
+	const key = path.resolve(cwd);
+	let pending = discoveryMemo.get(key);
+	if (!pending) {
+		pending = fn(cwd);
+		discoveryMemo.set(key, pending);
+		pending.catch(() => {
+			if (discoveryMemo.get(key) === pending) discoveryMemo.delete(key);
+		});
+	}
+	return pending;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -376,7 +407,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	 * Create a TaskTool instance with async agent discovery.
 	 */
 	static async create(session: ToolSession): Promise<TaskTool> {
-		const { agents } = await discoverAgents(session.cwd);
+		const { agents } = await discoverAgentsForCreate(session.cwd);
 		return new TaskTool(session, agents);
 	}
 

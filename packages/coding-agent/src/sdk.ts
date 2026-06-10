@@ -531,11 +531,18 @@ function resolveSnapshotTtlMs(): number {
  * override to re-mint access tokens when needed.
  */
 export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir()): Promise<AuthStorage> {
-	const brokerConfig = await resolveAuthBrokerConfig();
+	const brokerConfigPromise = resolveAuthBrokerConfig();
+	const cachePath = getAuthBrokerSnapshotCachePath();
+	// Warm the encrypted snapshot cache into the page cache while the broker
+	// config resolves (it may shell out for a `!command` token). Decryption
+	// needs the resolved token, so the real cache read cannot start earlier.
+	void Bun.file(cachePath)
+		.arrayBuffer()
+		.catch(() => undefined);
+	const brokerConfig = await brokerConfigPromise;
 	if (brokerConfig) {
 		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 		const ttlMs = resolveSnapshotTtlMs();
-		const cachePath = getAuthBrokerSnapshotCachePath();
 		const persist =
 			ttlMs > 0
 				? (snapshot: SnapshotResponse): void => {
