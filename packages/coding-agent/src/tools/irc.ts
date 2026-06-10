@@ -414,6 +414,47 @@ function callMeta(args: IrcRenderArgs | undefined): string[] {
 	return meta;
 }
 
+/**
+ * Display-only transcript card for live IRC traffic: `irc:incoming` DMs
+ * delivered to this session and `irc:relay` observations of agent↔agent
+ * traffic. Shares the tool renderer's glyph + quote-border conventions so
+ * cards and `irc` tool output look identical in the transcript.
+ */
+export function createIrcMessageCard(
+	card: {
+		kind: "incoming" | "relay";
+		from?: string;
+		to?: string;
+		body?: string;
+		replyTo?: string;
+		timestamp?: number;
+	},
+	getExpanded: () => boolean,
+	uiTheme: Theme,
+): Component {
+	const from = card.from?.trim() || "?";
+	const title =
+		card.kind === "incoming"
+			? `IRC ${uiTheme.nav.back} ${from}`
+			: `IRC ${from} ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`;
+	const body = card.body ?? "";
+	const meta: string[] = [];
+	if (card.replyTo) meta.push("reply");
+	const age = messageAge(card.timestamp);
+	if (age) meta.push(age);
+	return createCachedComponent(
+		getExpanded,
+		(width, expanded) => {
+			const lines = [renderStatusLine({ iconOverride: ircGlyph(uiTheme), title, meta }, uiTheme)];
+			if (body.trim()) {
+				lines.push(...bodyLines(body, expanded, uiTheme, { indent: "  ", collapsedLines: 3 }));
+			}
+			return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+		},
+		{ paddingX: 1 },
+	);
+}
+
 function renderSendResult(
 	result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
 	details: Partial<IrcDetails>,

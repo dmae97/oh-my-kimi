@@ -35,6 +35,7 @@ import {
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
+import { createIrcMessageCard } from "../../tools/irc";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 
 type TextBlock = { type: "text"; text: string };
@@ -197,32 +198,24 @@ export class UiHelpers {
 								to?: string;
 								message?: string;
 								body?: string;
+								replyTo?: string;
 							}>
 						).details;
-						let arrow: string;
-						let body: string;
-						if (message.customType === "irc:incoming") {
-							const peer = details?.from ?? "?";
-							body = details?.message ?? "";
-							arrow = `⇦ ${peer}`;
-						} else {
-							const from = details?.from ?? "?";
-							const to = details?.to ?? "?";
-							body = details?.body ?? "";
-							arrow = `${from} ⇨ ${to}`;
-						}
-						const block = new TranscriptBlock();
-						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
-						const headerComponent = new Text(header, 1, 0);
-						block.addChild(headerComponent);
-						if (body) {
-							for (const line of body.split("\n")) {
-								const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
-								block.addChild(lineComponent);
-							}
-						}
-						this.ctx.chatContainer.addChild(block);
-						return [block];
+						const incoming = message.customType === "irc:incoming";
+						const card = createIrcMessageCard(
+							{
+								kind: incoming ? "incoming" : "relay",
+								from: details?.from,
+								to: details?.to,
+								body: incoming ? details?.message : details?.body,
+								replyTo: details?.replyTo,
+								timestamp: message.timestamp,
+							},
+							() => this.ctx.toolOutputExpanded,
+							theme,
+						);
+						this.ctx.chatContainer.addChild(card);
+						return [card];
 					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
