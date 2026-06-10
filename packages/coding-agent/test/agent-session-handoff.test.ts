@@ -169,7 +169,7 @@ describe("AgentSession handoff", () => {
 		expect(result?.document).not.toContain(placeholder);
 	});
 
-	it("obfuscates previous compaction summary before forwarding to compact()", async () => {
+	it("obfuscates previous compaction summary and preserve data before forwarding to compact()", async () => {
 		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
 		const entries = sessionManager.getBranch();
 		const lastEntryId = entries[entries.length - 1]?.id;
@@ -182,7 +182,11 @@ describe("AgentSession handoff", () => {
 			isSplitTurn: false,
 			tokensBefore: 100,
 			previousSummary: `summary ${HANDOFF_SECRET}`,
-			previousPreserveData: undefined,
+			previousPreserveData: {
+				openaiRemoteCompaction: {
+					replacementHistory: [{ role: "user", content: `history ${HANDOFF_SECRET}` }],
+				},
+			},
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
 			settings: compactionModule.DEFAULT_COMPACTION_SETTINGS,
 		};
@@ -202,6 +206,9 @@ describe("AgentSession handoff", () => {
 		if (!call) throw new Error("Expected compact call");
 		expect(call[0].previousSummary).toBe(`summary ${placeholder}`);
 		expect(call[0].previousSummary).not.toContain(HANDOFF_SECRET);
+		const preserveData = JSON.stringify(call[0].previousPreserveData);
+		expect(preserveData).toContain(placeholder);
+		expect(preserveData).not.toContain(HANDOFF_SECRET);
 	});
 
 	it("runs context maintenance before sending an oversized pending prompt", async () => {

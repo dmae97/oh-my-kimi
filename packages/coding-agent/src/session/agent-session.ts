@@ -184,7 +184,12 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { deobfuscateSessionContext, obfuscateProviderTools, type SecretObfuscator } from "../secrets/obfuscator";
+import {
+	deobfuscateSessionContext,
+	obfuscateProviderContext,
+	obfuscateProviderTools,
+	type SecretObfuscator,
+} from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
 import {
 	AUTO_THINKING,
@@ -4010,8 +4015,17 @@ export class AgentSession {
 	}
 
 	#obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation {
-		if (!preparation.previousSummary || !this.#obfuscator?.hasSecrets()) return preparation;
-		return { ...preparation, previousSummary: this.#obfuscator.obfuscate(preparation.previousSummary) };
+		if (!this.#obfuscator?.hasSecrets()) return preparation;
+		if (!preparation.previousSummary && !preparation.previousPreserveData) return preparation;
+		return {
+			...preparation,
+			previousSummary: preparation.previousSummary
+				? this.#obfuscator.obfuscate(preparation.previousSummary)
+				: preparation.previousSummary,
+			previousPreserveData: preparation.previousPreserveData
+				? this.#obfuscator.obfuscateObject(preparation.previousPreserveData)
+				: preparation.previousPreserveData,
+		};
 	}
 
 	#deobfuscateFromProvider(text: string): string {
@@ -9031,7 +9045,7 @@ export class AgentSession {
 
 		let replyText = "";
 		let assistantMessage: AssistantMessage | undefined;
-		const stream = streamSimple(model, context, options);
+		const stream = streamSimple(model, obfuscateProviderContext(this.#obfuscator, context), options);
 		for await (const event of stream) {
 			if (event.type === "text_delta") {
 				replyText += event.delta;
