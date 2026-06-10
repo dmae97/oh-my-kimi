@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-manager";
 import { parseSessionEntries } from "../../session/session-manager";
 import {
@@ -44,7 +45,20 @@ function isTerminalLifecycleStatus(status: SubagentLifecyclePayload["status"]): 
 export async function readRpcSubagentTranscript(sessionFile: string, fromByte = 0): Promise<RpcSubagentMessagesResult> {
 	let startByte = Number.isFinite(fromByte) ? Math.max(0, Math.trunc(fromByte)) : 0;
 	const file = Bun.file(sessionFile);
-	const { size } = await fs.stat(sessionFile);
+	let size: number;
+	try {
+		({ size } = await fs.stat(sessionFile));
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+		return {
+			sessionFile,
+			fromByte: startByte,
+			nextByte: startByte,
+			reset: false,
+			entries: [],
+			messages: [],
+		};
+	}
 	let reset = false;
 	if (startByte > size) {
 		startByte = 0;

@@ -336,6 +336,23 @@ describe("readRpcSubagentTranscript", () => {
 		expect(result.nextByte).toBe(Buffer.byteLength(`${headerLine}${messageLine}`, "utf8"));
 		expect(result.reset).toBe(false);
 	});
+
+	test("returns empty cursor result for missing transcript files", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-rpc-subagent-transcript-missing-"));
+		tempPaths.push(dir);
+		const sessionFile = path.join(dir, "missing.jsonl");
+
+		const result = await readRpcSubagentTranscript(sessionFile, 42);
+
+		expect(result).toEqual({
+			sessionFile,
+			fromByte: 42,
+			nextByte: 42,
+			reset: false,
+			entries: [],
+			messages: [],
+		});
+	});
 });
 
 describe("RpcClient subagent frames", () => {
