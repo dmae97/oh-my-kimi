@@ -141,6 +141,10 @@
 
 - Fixed MCP OAuth flows accepting pasted redirect URLs or authorization codes through `/login` in headless environments ([#2122](https://github.com/can1357/oh-my-pi/issues/2122)).
 
+### Added
+
+- Documented the oMLX setup path through existing OpenAI-compatible local discovery ([#1957](https://github.com/can1357/oh-my-pi/issues/1957)).
+
 ## [15.10.8] - 2026-06-09
 
 ### Added
