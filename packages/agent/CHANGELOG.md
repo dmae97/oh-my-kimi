@@ -10,6 +10,10 @@
 
 - Fixed `Agent` runs so explicit reasoning disablement is forwarded to provider stream options and re-resolved per continuation, keeping mid-run thinking-off changes in sync with the next provider request.
 
+### Added
+
+- Added `transformProviderContext` to `AgentOptions`/`AgentLoopConfig`: an optional hook applied to the assembled provider context after conversion, normalization, and append-only handling, but before telemetry capture and provider send.
+
 ## [15.10.11] - 2026-06-10
 
 ### Changed

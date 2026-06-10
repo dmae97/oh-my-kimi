@@ -829,6 +829,9 @@ async function streamAssistantResponse(
 			tools: normalizeTools(context.tools, !!config.intentTracing),
 		};
 	}
+	if (config.transformProviderContext) {
+		llmContext = config.transformProviderContext(llmContext);
+	}
 
 	const streamFunction = streamFn || streamSimple;
 

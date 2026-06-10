@@ -3,6 +3,7 @@ import type {
 	AssistantMessage,
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
+	Context,
 	Effort,
 	ImageContent,
 	Message,
@@ -106,6 +107,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * ```
 	 */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+
+	/**
+	 * Optional transform applied to the final provider context after conversion,
+	 * normalization, and append-only context handling, but before telemetry capture
+	 * and provider send.
+	 */
+	transformProviderContext?: (context: Context) => Context;
 
 	/**
 	 * Resolves an API key dynamically for each LLM call.
