@@ -12,6 +12,7 @@
 - Plain interactive TTY launches render the full welcome box (logo held on the intro's first frame, model, tips, LSP servers, recent-sessions loading placeholder) before session construction, clearing the screen so the TUI's first paint replaces it in place; the welcome box now reserves fixed slot counts (4 recent sessions, 4 LSP servers) so its height no longer shifts between the splash, loading, and loaded states. First-run launches keep the dim two-line splash (`omp <version>` / `Initializing session…`); resume/fork/continue flows, quiet mode, `PI_TIMING`, and non-TTY stdio still skip it
 - Added `/stats` to launch the local stats dashboard from an active session, syncing session files first and opening the same browser dashboard as `omp stats`.
 - `/settings` now supports type-to-search filtering on setting labels, paths, descriptions, and values; Escape clears an active search before closing the panel.
+- Added a read-only `view` op to the `todo` tool that echoes the current list without mutating state, so the agent can recover exact task text instead of guessing it from memory.
 
 ### Changed
 
@@ -44,6 +45,7 @@
 - Resolver cleanup: five duplicated trailing-`:level` suffix parses collapsed into `splitThinkingSuffix`, the matching engine is now the documented `matchModel` core with the selector grammar and entry points layered on top, and `resolveCliModel`'s hand-rolled decomposed provider/id lookup reuses `findExactModelReferenceMatch`; runtime discovery tests split out of `test/model-registry.test.ts` into `test/model-discovery.test.ts`
 - `TranscriptContainer` assembles the transcript incrementally: each block's render is reference-compared and its stripped contribution, separator, and row placement are reused when unchanged, with the persistent row array truncated and re-pushed only from the first divergent block; the leading byte-identical row count is reported to the renderer through pi-tui's new `RenderStablePrefix` seam so off-screen transcript rows are no longer re-rendered, re-prepared, or re-audited every frame. Block components became reference-stable to make this effective: `UserMessageComponent` memoizes its OSC 133 zone wrapping, `WelcomeComponent` and `DynamicBorder` cache their renders, and dashboards copy before padding (render results are `readonly` under the new pi-tui contract)
 - A live block whose trailing row grows in place as a visible prefix (token streaming into the cursor line) is now commit-safe through its full body instead of being held back by the volatile-tail margin — the growing row itself is the block's last and can never commit while it remains last, so a streaming reply's scrolled-off head reaches native scrollback (tmux pane history) mid-stream
+- Rewrote the bash tool's coreutils guidance (tool prompt and system prompt) around an explicit litmus: pipelines that compute a new fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`) are legitimate bash, while commands that merely move, page, or trim bytes a dedicated tool can fetch remain banned — output trimming destroys data the `artifact://` capture would have saved.
 
 ### Fixed
 
@@ -100,19 +102,6 @@
 - Fixed reopening the sole browser tab with a different `dialogs` policy disposing Chromium and then using the dead handle, a stale tab release evicting a live replacement browser from the registry (spawning duplicate Chromium processes), and concurrent same-name `open` calls leaking a worker + refcount via a check-then-set race (acquisitions are now single-flight per name); queued opens honor an abort at dequeue, and an init-payload failure releases the temporary browser hold instead of pinning the refcount forever.
 - Fixed fetch decoding every response as UTF-8 regardless of declared charset (Shift_JIS/EUC-KR/GBK pages rendered as mojibake through the whole reader pipeline; `Content-Type` and `<meta charset>` are now honored via `TextDecoder`), binary URLs being downloaded twice (body skipped on the first pass for convertible types), >50MB truncation being silent (now flagged in notes), all transport error detail being swallowed into a bare "Failed to fetch URL" (the cause is surfaced and 429s get one `Retry-After`-honoring, abort-aware retry), MCP SSE keep-alive lines escaping as raw `SyntaxError`s, MCP calls having no default timeout (now 60s), and a YouTube fetch budget expiry being misreported as a user abort that also skipped temp-file cleanup.
 - Fixed archive directory listings silently ignoring the selector offset — `a.zip:dir:50` now starts the listing at the 50th entry instead of relisting from the top.
-
-## [15.10.10] - 2026-06-09
-
-### Added
-
-- Added a read-only `view` op to the `todo` tool that echoes the current list without mutating state, so the agent can recover exact task text instead of guessing it from memory.
-
-### Changed
-
-- Rewrote the bash tool's coreutils guidance (tool prompt and system prompt) around an explicit litmus: pipelines that compute a new fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`) are legitimate bash, while commands that merely move, page, or trim bytes a dedicated tool can fetch remain banned — output trimming destroys data the `artifact://` capture would have saved.
-
-### Fixed
-
 - Fixed the model selector dropping an immediate Enter when cached models were available but the selector's offline refresh was still pending.
 - Fixed dynamic `import(...)` inside functions passed to the browser tool's `tab.evaluate`/`page.evaluate` failing with `__omp_import__ is not defined`. The eval/browser JS runtime rewrites dynamic-import callees to the worker-injected `__omp_import__` helper, but puppeteer serializes evaluate callbacks with `Function.prototype.toString()` and re-runs them inside the page, where the helper does not exist. The rewriter now substitutes a guarded shim that falls back to native dynamic import when the helper is absent, so serialized code works in the page realm while in-worker imports keep resolving against the session cwd.
 - Transcript block freezing is now unconditional instead of gated on ED3-risk terminal detection: every finalized block replays its frozen snapshot once it crosses out of the live region, on all terminals including Windows, because the rewritten renderer's committed scrollback is immutable everywhere. Still-mutating blocks (pending tools, streaming messages, async thinking renderers) anchor the live region and keep repainting until they finalize, which structurally fixes stale/duplicated output from late async expansions ([#1823](https://github.com/can1357/oh-my-pi/issues/1823)).
@@ -126,6 +115,8 @@
 
 - Removed the `clearOnShrink` setting and its `PI_CLEAR_ON_SHRINK` environment variable: the rewritten renderer always clears shrunken rows exactly, so the flicker/perf tradeoff the setting controlled no longer exists. Existing config entries are ignored.
 - Removed the prompt-submit native-scrollback reconciliation checkpoint and the eager streaming render mode from the interactive controllers — the renderer's append-only contract made both obsolete.
+
+## [15.10.10] - 2026-06-09
 
 ## [15.10.9] - 2026-06-09
 
