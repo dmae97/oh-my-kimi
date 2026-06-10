@@ -631,8 +631,12 @@ export class SettingsSelectorComponent extends Container {
 			return;
 		}
 
-		// Escape at top level cancels
+		// Escape clears an active settings search before closing the panel.
 		if (matchesAppInterrupt(data) && !this.#currentSubmenu) {
+			if (this.#currentList?.hasSearchQuery()) {
+				this.#currentList.clearSearch();
+				return;
+			}
 			this.callbacks.onCancel();
 			return;
 		}

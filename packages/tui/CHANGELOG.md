@@ -1,9 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- `SettingsList` now supports type-to-search filtering with Escape clearing an active query before canceling.
 
 ### Changed
 
+- Preserved list selection by item ID when replacing settings so focus stays on the same setting
+- Displayed a no matching settings message and search-editing hint when filtering returns no matches
+- Expanded settings search matching to include IDs, current values, descriptions, and option values as well as labels
 - Raised the stdin split-escape flush window from 10ms to 50ms: over laggy links (ssh, slow multiplexers) a CSI sequence split across reads was flushed as literal data, leaking `[` + `A` style fragments into the editor as typed text
 - Lengthened the OSC 11 appearance poll on terminals without Mode 2031 from 2s to 30s — each poll's query write cleared the user's active text selection, breaking copy every two seconds on Alacritty/Warp/older WezTerm
 - Rewrote `StdinBuffer.extractCompleteSequences` to index-based scanning: the previous per-iteration `slice` + `Array.from(remaining)[0]` made plain-text bursts O(n²), turning a 100KB non-bracketed paste into a multi-second freeze
