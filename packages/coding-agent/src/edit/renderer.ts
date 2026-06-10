@@ -346,8 +346,11 @@ function formatStreamingDiff(
 	// pins the native-scrollback commit boundary at the top of the block, so a
 	// tall expanded preview could never scroll-append mid-stream.
 	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
-	if (spinner || !expanded || label !== "preview") {
-		text += `\n${spinner}${uiTheme.fg("dim", `(${label})`)}`;
+	// Expanded approval previews hide the "(preview)" label (#1992) but keep
+	// the animated glyph when one is active so the volatile tail stays live.
+	const hideLabel = expanded && label === "preview";
+	if (spinner || !hideLabel) {
+		text += `\n${hideLabel ? spinner.trimEnd() : `${spinner}${uiTheme.fg("dim", `(${label})`)}`}`;
 	}
 	return text;
 }
