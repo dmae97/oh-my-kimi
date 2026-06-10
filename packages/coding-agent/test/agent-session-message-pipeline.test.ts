@@ -1,14 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
+	type Api,
 	clearCustomApis,
 	type Message,
 	type Model,
+	type ModelSpec,
 	registerCustomApi,
 	type SimpleStreamOptions,
 	type TextContent,
 } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -179,7 +182,7 @@ describe("AgentSession message pipeline", () => {
 			return stream;
 		});
 
-		const model = {
+		const model = buildModel({
 			id: "side-model",
 			name: "Side Model",
 			api,
@@ -190,7 +193,7 @@ describe("AgentSession message pipeline", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 4096,
 			maxTokens: 1024,
-		} satisfies Model;
+		} as ModelSpec<Api>) as Model<Api>;
 		const session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -232,7 +235,7 @@ describe("AgentSession message pipeline", () => {
 			return stream;
 		});
 
-		const model = {
+		const model = buildModel({
 			id: "anthropic/claude-sonnet-4",
 			name: "OpenRouter Model",
 			api,
@@ -243,7 +246,7 @@ describe("AgentSession message pipeline", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 4096,
 			maxTokens: 1024,
-		} satisfies Model;
+		} as ModelSpec<Api>) as Model<Api>;
 		const session = new AgentSession({
 			agent: new Agent({
 				initialState: {

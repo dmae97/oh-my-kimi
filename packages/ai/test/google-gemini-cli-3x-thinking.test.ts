@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
-import { enrichModelThinking } from "@oh-my-pi/pi-catalog/model-thinking";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 interface GeminiCliThinkingConfig {
 	thinkingLevel?: string;
@@ -18,7 +18,7 @@ interface CapturedRequestBody {
 }
 
 function createModel(id: string): Model<"google-gemini-cli"> {
-	return enrichModelThinking({
+	return buildModel({
 		id,
 		name: id,
 		api: "google-gemini-cli",

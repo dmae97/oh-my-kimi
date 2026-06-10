@@ -22,6 +22,7 @@ import type {
 	Context,
 	ImageContent,
 	Model,
+	ModelSpec,
 	ProviderResponseMetadata,
 	SimpleStreamOptions,
 	Static,
@@ -1168,7 +1169,7 @@ export interface ProviderModelConfig {
 	/** Custom headers for this model. */
 	headers?: Record<string, string>;
 	/** OpenAI compatibility settings. */
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 }
 
 /** Extension factory function type. Supports both sync and async initialization. */

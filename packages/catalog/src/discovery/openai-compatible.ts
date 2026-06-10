@@ -1,6 +1,6 @@
 import * as z from "zod/v4";
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../provider-models/discovery-constants";
-import type { Api, FetchImpl, Model, Provider } from "../types";
+import type { Api, FetchImpl, ModelSpec, Provider } from "../types";
 
 const MODELS_PATH = "/models";
 
@@ -86,16 +86,16 @@ export interface FetchOpenAICompatibleModelsOptions<TApi extends Api> {
 	 * Optional post-normalization filter.
 	 * Return false to skip a model.
 	 */
-	filterModel?: (entry: OpenAICompatibleModelRecord, model: Model<TApi>) => boolean;
+	filterModel?: (entry: OpenAICompatibleModelRecord, model: ModelSpec<TApi>) => boolean;
 	/**
 	 * Optional mapper override for provider-specific quirks.
 	 * Return null to skip a model.
 	 */
 	mapModel?: (
 		entry: OpenAICompatibleModelRecord,
-		defaults: Model<TApi>,
+		defaults: ModelSpec<TApi>,
 		context: OpenAICompatibleModelMapperContext<TApi>,
-	) => Model<TApi> | null;
+	) => ModelSpec<TApi> | null;
 }
 
 /**
@@ -106,7 +106,7 @@ export interface FetchOpenAICompatibleModelsOptions<TApi extends Api> {
  */
 export async function fetchOpenAICompatibleModels<TApi extends Api>(
 	options: FetchOpenAICompatibleModelsOptions<TApi>,
-): Promise<Model<TApi>[] | null> {
+): Promise<ModelSpec<TApi>[] | null> {
 	const baseUrl = normalizeBaseUrl(options.baseUrl);
 	if (!baseUrl) {
 		return null;
@@ -154,9 +154,9 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 		baseUrl,
 	};
 
-	const deduped = new Map<string, Model<TApi>>();
+	const deduped = new Map<string, ModelSpec<TApi>>();
 	for (const entry of entries) {
-		const defaults: Model<TApi> = {
+		const defaults: ModelSpec<TApi> = {
 			id: entry.id,
 			name: typeof entry.name === "string" && entry.name.length > 0 ? entry.name : entry.id,
 			api: options.api,

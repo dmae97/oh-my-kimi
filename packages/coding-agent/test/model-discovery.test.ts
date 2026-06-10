@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -283,7 +284,7 @@ describe("ModelRegistry runtime discovery", () => {
 			},
 		});
 		writeCachedOllamaModels([
-			{
+			buildModel({
 				id: "phi4-mini",
 				name: "phi4-mini",
 				api: "openai-completions",
@@ -294,7 +295,7 @@ describe("ModelRegistry runtime discovery", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 128000,
 				maxTokens: 8192,
-			},
+			}),
 		]);
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);

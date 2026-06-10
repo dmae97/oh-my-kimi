@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { stream } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function makeCopilotResponsesModel(baseUrl: string): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		id: "gpt-5-mini",
 		name: "GPT-5 Mini",
 		api: "openai-responses",
@@ -15,7 +16,7 @@ function makeCopilotResponsesModel(baseUrl: string): Model<"openai-responses"> {
 		contextWindow: 128000,
 		maxTokens: 64000,
 		headers: { "User-Agent": "opencode/1.3.15" },
-	};
+	});
 }
 
 function makeContext(): Context {

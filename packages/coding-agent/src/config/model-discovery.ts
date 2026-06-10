@@ -7,12 +7,13 @@
  */
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	getBundledModelReferenceIndex,
 	resolveModelReference,
 	stripBracketedModelIdAffixes,
 } from "@oh-my-pi/pi-catalog/identity";
-import { enrichModelThinking } from "@oh-my-pi/pi-catalog/model-thinking";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
@@ -86,7 +87,7 @@ export interface DiscoveryProviderConfig {
 	api: Api;
 	baseUrl?: string;
 	headers?: Record<string, string>;
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 	discovery: ProviderDiscovery;
 	optional?: boolean;
 }
@@ -263,7 +264,7 @@ export async function discoverOllamaModels(
 	);
 	return entries.map(entry => {
 		const metadata = metadataById.get(entry.id);
-		return enrichModelThinking({
+		return buildModel({
 			id: entry.id,
 			name: entry.name,
 			api: providerConfig.api,
@@ -275,7 +276,7 @@ export async function discoverOllamaModels(
 			contextWindow: metadata?.contextWindow ?? 128000,
 			maxTokens: Math.min(metadata?.contextWindow ?? Number.POSITIVE_INFINITY, DISCOVERY_DEFAULT_MAX_TOKENS),
 			headers: providerConfig.headers,
-		});
+		} as ModelSpec<Api>);
 	});
 }
 
@@ -336,7 +337,7 @@ export async function discoverLlamaCppModels(
 		const id = item.id;
 		if (!id) continue;
 		discovered.push(
-			enrichModelThinking({
+			buildModel({
 				id,
 				name: id,
 				api: providerConfig.api,
@@ -356,7 +357,7 @@ export async function discoverLlamaCppModels(
 					supportsDeveloperRole: false,
 					supportsReasoningEffort: false,
 				},
-			}),
+			} as ModelSpec<Api>),
 		);
 	}
 	return discovered;
@@ -389,7 +390,7 @@ export async function discoverOpenAIModelsList(
 		const id = item.id;
 		if (!id) continue;
 		discovered.push(
-			enrichModelThinking({
+			buildModel({
 				id,
 				name: id,
 				api: providerConfig.api,
@@ -406,7 +407,7 @@ export async function discoverOpenAIModelsList(
 					supportsDeveloperRole: false,
 					supportsReasoningEffort: false,
 				},
-			}),
+			} as ModelSpec<Api>),
 		);
 	}
 	return discovered;
@@ -471,7 +472,7 @@ export async function discoverProxyModels(
 			stripBracketedModelIdAffixes(id) ??
 			id;
 		discovered.push(
-			enrichModelThinking({
+			buildModel({
 				id,
 				name: displayName,
 				api,
@@ -499,7 +500,7 @@ export async function discoverProxyModels(
 							supportsDeveloperRole: false,
 							supportsReasoningEffort: false,
 						},
-			}),
+			} as ModelSpec<Api>),
 		);
 	}
 	return discovered;

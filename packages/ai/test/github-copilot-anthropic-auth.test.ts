@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { buildAnthropicClientOptions, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { buildAnthropicUrl } from "@oh-my-pi/pi-ai/utils/anthropic-auth";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { OPENCODE_HEADERS } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 
 afterEach(() => {
@@ -9,7 +10,7 @@ afterEach(() => {
 });
 
 function makeCopilotClaudeModel(): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		id: "claude-sonnet-4",
 		name: "Claude Sonnet 4",
 		api: "anthropic-messages",
@@ -21,10 +22,10 @@ function makeCopilotClaudeModel(): Model<"anthropic-messages"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128000,
 		maxTokens: 16000,
-	};
+	});
 }
 function makeOpenCodeGoQwen37Model(): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		id: "qwen3.7-max",
 		name: "Qwen3.7 Max",
 		api: "anthropic-messages",
@@ -35,7 +36,7 @@ function makeOpenCodeGoQwen37Model(): Model<"anthropic-messages"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 1_000_000,
 		maxTokens: 65_536,
-	};
+	});
 }
 
 const testContext: Context = {

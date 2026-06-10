@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicApiError, type AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { waitForDelayOrAbort } from "./helpers";
 
-const model: Model<"anthropic-messages"> = {
+const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-sonnet-4-5",
 	name: "Claude Sonnet 4.5",
 	api: "anthropic-messages",
@@ -15,7 +16,7 @@ const model: Model<"anthropic-messages"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 const context: Context = {
 	messages: [{ role: "user", content: "Say hi", timestamp: Date.now() }],

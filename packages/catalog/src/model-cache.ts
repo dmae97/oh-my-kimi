@@ -4,8 +4,11 @@
  */
 import { Database } from "bun:sqlite";
 import { getModelDbPath } from "@oh-my-pi/pi-utils";
-import type { Api, Model } from "./types";
+import type { Api, Model, ModelSpec } from "./types";
 
+// Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
+// the model manager rebuilds via `buildModel` on load. v3 rows predating the
+// resolved-compat redesign already carried sparse compat, so they stay valid.
 const CACHE_SCHEMA_VERSION = 3;
 
 interface CacheRow {
@@ -22,7 +25,7 @@ interface TableInfoRow {
 }
 
 interface CacheEntry<TApi extends Api = Api> {
-	models: Model<TApi>[];
+	models: ModelSpec<TApi>[];
 	fresh: boolean;
 	authoritative: boolean;
 	updatedAt: number;
@@ -86,7 +89,7 @@ export function readModelCache<TApi extends Api>(
 		if (!row || row.version !== CACHE_SCHEMA_VERSION) {
 			return null;
 		}
-		const models = JSON.parse(row.models) as Model<TApi>[];
+		const models = JSON.parse(row.models) as ModelSpec<TApi>[];
 		const ageMs = now() - row.updated_at;
 		const fresh = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= ttlMs;
 		return {
@@ -120,7 +123,7 @@ export function writeModelCache<TApi extends Api>(
 				updatedAt,
 				authoritative ? 1 : 0,
 				staticFingerprint,
-				JSON.stringify(models),
+				JSON.stringify(models.map(model => ({ ...model, compat: model.compatConfig, compatConfig: undefined }))),
 			],
 		);
 	} catch {

@@ -7,6 +7,7 @@ import { Effort } from "@oh-my-pi/pi-ai";
 import { __resetVertexTokenCache } from "@oh-my-pi/pi-ai/providers/google-auth";
 import { complete, getEnvApiKey, stream } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { $which } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
@@ -566,7 +567,7 @@ describe("Generate E2E Tests", () => {
 			const homedirSpy = spyOn(os, "homedir").mockReturnValue(
 				path.join(os.tmpdir(), `vertex-adc-absent-${Date.now()}`),
 			);
-			const model: Model<"anthropic-messages"> = {
+			const model: Model<"anthropic-messages"> = buildModel({
 				id: "claude-sonnet-4@20250514",
 				name: "Claude Sonnet 4",
 				api: "anthropic-messages",
@@ -578,7 +579,7 @@ describe("Generate E2E Tests", () => {
 				cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 				contextWindow: 200_000,
 				maxTokens: 64_000,
-			};
+			});
 			const captured = Promise.withResolvers<{ url: string; authorization: string | null; body: unknown }>();
 
 			try {
@@ -679,7 +680,7 @@ describe("Generate E2E Tests", () => {
 					delegates: ["projects/-/serviceAccounts/delegate@project.iam.gserviceaccount.com"],
 				}),
 			);
-			const model: Model<"anthropic-messages"> = {
+			const model: Model<"anthropic-messages"> = buildModel({
 				id: "claude-sonnet-4@20250514",
 				name: "Claude Sonnet 4",
 				api: "anthropic-messages",
@@ -691,7 +692,7 @@ describe("Generate E2E Tests", () => {
 				cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 				contextWindow: 200_000,
 				maxTokens: 64_000,
-			};
+			});
 			const callOrder: string[] = [];
 			let iamRequest: { url: string; authorization: string | null; body: unknown } | undefined;
 			const captured = Promise.withResolvers<{ url: string; authorization: string | null }>();
@@ -1824,7 +1825,7 @@ describe("Generate E2E Tests", () => {
 				setTimeout(checkServer, 1000); // Initial delay
 			});
 
-			llm = {
+			llm = buildModel({
 				id: "gpt-oss:20b",
 				api: "openai-completions",
 				provider: "ollama",
@@ -1840,7 +1841,7 @@ describe("Generate E2E Tests", () => {
 					cacheWrite: 0,
 				},
 				name: "Ollama GPT-OSS 20B",
-			};
+			});
 		}, 30000); // 30 second timeout for setup
 
 		afterAll(() => {

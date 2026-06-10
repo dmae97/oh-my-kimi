@@ -19,20 +19,25 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessage, Context } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { moonshotModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { Model } from "@oh-my-pi/pi-catalog/types";
+import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 function moonshotKimiModel(id: string, reasoning: boolean): Model<"openai-completions"> {
-	return {
-		...getBundledModel("openai", "gpt-4o-mini"),
+	const reference = getBundledModel("openai", "gpt-4o-mini");
+	// Derive a variant from the built bundled model: sparse compat comes from
+	// `compatConfig`; `buildModel` re-resolves it for the Moonshot host.
+	return buildModel({
+		...reference,
 		api: "openai-completions",
 		provider: "moonshot",
 		baseUrl: "https://api.moonshot.ai/v1",
 		id,
 		reasoning,
-	};
+		compat: reference.compatConfig,
+	} as ModelSpec<"openai-completions">);
 }
 
 function basicContext(): Context {

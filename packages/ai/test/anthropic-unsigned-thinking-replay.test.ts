@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Message,
+	Model,
+	ModelSpec,
+	ToolResultMessage,
+	UserMessage,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 /**
  * Regression: Anthropic-compatible reasoning endpoints often emit `thinking`
@@ -13,8 +21,8 @@ import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage }
  * Official Anthropic remains conservative: unsigned thinking is demoted to text
  * there because the first-party API enforces signature-based integrity.
  */
-function makeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
-	return {
+function makeModel(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+	return buildModel({
 		api: "anthropic-messages",
 		provider: "custom-anthropic",
 		id: "reasoning-model",
@@ -26,7 +34,7 @@ function makeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<
 		contextWindow: 200_000,
 		reasoning: true,
 		...overrides,
-	};
+	} as ModelSpec<"anthropic-messages">);
 }
 
 function makeUser(text = "continue"): UserMessage {
@@ -165,7 +173,7 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		// dispatch falls back to https://api.anthropic.com. Same-id custom
 		// overrides that only tweak model metadata (no baseUrl override) must
 		// not regress to native-thinking replay against the first-party API.
-		const model = { ...makeModel(), provider: "anthropic", baseUrl: "" };
+		const model = makeModel({ provider: "anthropic", baseUrl: "" });
 		const blocks = assistantWireBlocks([makeUser(), makeAssistantThinking("internal scratch")], model);
 		expect(blocks[0]?.type).toBe("text");
 		expect((blocks[0] as WireTextBlock).text).toBe("internal scratch");

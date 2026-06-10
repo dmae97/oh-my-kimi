@@ -1,5 +1,3 @@
-import { resolveOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
-import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
@@ -229,7 +227,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
-			const params = buildParams(model, context, options, providerSessionState, baseUrl);
+			const params = buildParams(model, context, options, providerSessionState);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
@@ -382,7 +380,7 @@ function createClient(
 		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
-	if (sessionId && model.provider === "openai" && (baseUrl ?? "").toLowerCase().includes("api.openai.com")) {
+	if (sessionId && model.provider === "openai") {
 		headers.session_id ??= sessionId;
 		headers["x-client-request-id"] ??= sessionId;
 	}
@@ -425,18 +423,14 @@ function buildParams(
 	context: Context,
 	options: OpenAIResponsesOptions | undefined,
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
-	resolvedBaseUrl?: string,
 ): OpenAIResponsesSamplingParams {
-	const strictResponsesPairing =
-		options?.strictResponsesPairing ??
-		(hostMatchesUrl(model.baseUrl ?? "", "azureOpenAI") || model.provider === "github-copilot");
+	const strictResponsesPairing = options?.strictResponsesPairing ?? model.compat.strictResponsesPairing;
 	const messages = convertConversationMessages(model, context, strictResponsesPairing, providerSessionState, options);
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	let systemInstructions: string | undefined;
 	if (systemPrompts.length > 0) {
-		const needsDeveloperRole =
-			model.reasoning && resolveOpenAIResponsesCompat(model, resolvedBaseUrl).supportsDeveloperRole;
+		const needsDeveloperRole = model.reasoning && model.compat.supportsDeveloperRole;
 		if (needsDeveloperRole) {
 			// Reasoning models on known OpenAI-compatible endpoints require the
 			// `developer` role. Send all system prompts inline in `input`.
@@ -460,8 +454,7 @@ function buildParams(
 		stream: true,
 		prompt_cache_key: promptCacheKey,
 		prompt_cache_retention: promptCacheKey
-			? cacheRetention === "long" &&
-				resolveOpenAIResponsesCompat(model, resolvedBaseUrl).supportsLongPromptCacheRetention
+			? cacheRetention === "long" && model.compat.supportsLongPromptCacheRetention
 				? "24h"
 				: undefined
 			: undefined,
@@ -476,11 +469,7 @@ function buildParams(
 	// `StreamOptions.frequencyPenalty` is intentionally dropped for this provider.
 
 	if (context.tools) {
-		params.tools = convertTools(
-			context.tools,
-			resolveOpenAIResponsesCompat(model, resolvedBaseUrl).supportsStrictMode,
-			model,
-		);
+		params.tools = convertTools(context.tools, model.compat.supportsStrictMode, model);
 		if (options?.toolChoice) {
 			params.tool_choice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, context.tools, model);
 		}
@@ -503,7 +492,7 @@ function buildParams(
 		effort =>
 			mapReasoningEffort(
 				effort as NonNullable<OpenAIResponsesOptions["reasoning"]>,
-				model.compat?.reasoningEffortMap,
+				model.compat.reasoningEffortMap,
 			),
 		options?.includeEncryptedReasoning ?? true,
 		options?.omitReasoningEffort ?? false,

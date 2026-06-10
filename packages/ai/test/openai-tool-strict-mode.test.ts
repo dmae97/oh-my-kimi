@@ -1,7 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, FetchImpl, Model, OpenAICompat, ProviderSessionState, Tool } from "@oh-my-pi/pi-ai/types";
+import type {
+	Context,
+	FetchImpl,
+	Model,
+	ModelSpec,
+	OpenAICompat,
+	ProviderSessionState,
+	Tool,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
 
@@ -118,11 +127,11 @@ describe("OpenAI tool strict mode", () => {
 	});
 
 	it("omits strict for openai-completions when compatibility disables strict mode", async () => {
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { supportsStrictMode: false } satisfies OpenAICompat,
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const payload = (await captureCompletionsPayload(model)) as {
 			tools?: Array<{ function?: { strict?: boolean } }>;
@@ -175,11 +184,11 @@ describe("OpenAI tool strict mode", () => {
 	});
 
 	it("uses uniformly non-strict tool schemas when provider requires all-or-none strictness", async () => {
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
-		};
+		} as ModelSpec<"openai-completions">);
 		const context: Context = {
 			...testContext,
 			tools: [
@@ -234,11 +243,11 @@ describe("OpenAI tool strict mode", () => {
 	});
 
 	it("retries with non-strict tool schemas after strict-mode request errors", async () => {
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
-		};
+		} as ModelSpec<"openai-completions">);
 		const strictFlags: boolean[][] = [];
 		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {

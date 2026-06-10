@@ -9,14 +9,14 @@ import {
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
 } from "@oh-my-pi/pi-catalog/model-thinking";
-import type { Api, Model, Provider } from "@oh-my-pi/pi-catalog/types";
+import type { Api, ModelSpec, Provider } from "@oh-my-pi/pi-catalog/types";
 
 function createModel<TApi extends Api>(overrides: {
 	id: string;
 	api: TApi;
 	provider: Provider;
 	reasoning?: boolean;
-}): Model<TApi> {
+}): ModelSpec<TApi> {
 	return enrichModelThinking({
 		id: overrides.id,
 		name: overrides.id,
@@ -158,7 +158,7 @@ describe("model thinking metadata", () => {
 
 describe("generated model policies", () => {
 	it("refreshes thinking metadata and applies parsed catalog corrections", () => {
-		const models: Model<Api>[] = [
+		const models: ModelSpec<Api>[] = [
 			{
 				id: "claude-opus-4-5",
 				name: "Claude Opus 4.5",
@@ -238,7 +238,7 @@ describe("generated model policies", () => {
 	});
 
 	it("pins Claude Mythos 5 first-party Anthropic catalog metadata", () => {
-		const models: Model<Api>[] = [
+		const models: ModelSpec<Api>[] = [
 			{
 				id: "claude-mythos-5",
 				name: "Claude Mythos 5",
@@ -266,7 +266,7 @@ describe("generated model policies", () => {
 	});
 
 	it("normalizes Copilot generated fallback limits", () => {
-		const models: Model<Api>[] = [
+		const models: ModelSpec<Api>[] = [
 			{
 				...createModel({
 					id: "claude-opus-4.6",
@@ -332,7 +332,7 @@ describe("generated model policies", () => {
 	});
 
 	it("sets freeform apply_patch metadata for first-party GPT-5 Responses models", () => {
-		const models: Model<Api>[] = [
+		const models: ModelSpec<Api>[] = [
 			createModel({
 				id: "gpt-5.4",
 				api: "openai-responses",
@@ -372,7 +372,7 @@ describe("generated model policies", () => {
 
 describe("model thinking runtime helpers", () => {
 	it("clamps from explicit metadata instead of inferring from model id", () => {
-		const model: Model<"openai-codex-responses"> = {
+		const model: ModelSpec<"openai-codex-responses"> = {
 			id: "custom-reasoner",
 			name: "Custom Reasoner",
 			api: "openai-codex-responses",
@@ -433,7 +433,7 @@ describe("model thinking runtime helpers", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 32000,
-		} satisfies Model<"openai-completions">);
+		} satisfies ModelSpec<"openai-completions">);
 
 		expect(model.thinking).toEqual({
 			mode: "effort",
@@ -461,7 +461,7 @@ describe("model thinking runtime helpers", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
 			maxTokens: 32000,
-		} satisfies Model<"openai-completions">);
+		} satisfies ModelSpec<"openai-completions">);
 
 		expect(model.thinking).toEqual({
 			mode: "effort",
@@ -529,7 +529,7 @@ describe("model thinking runtime helpers", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 200000,
 			maxTokens: 32000,
-		} as Model<"openai-responses">;
+		} as ModelSpec<"openai-responses">;
 
 		expect(() => requireSupportedEffort(model, Effort.High)).toThrow(/missing thinking metadata/);
 	});
@@ -551,7 +551,7 @@ describe("model thinking runtime helpers", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 200000,
 			maxTokens: 32000,
-		} satisfies Model<"openai-responses">);
+		} satisfies ModelSpec<"openai-responses">);
 
 		expect(model.thinking).toBeUndefined();
 	});

@@ -1,17 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import { detectOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
+import { buildOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { zhipuCodingPlanModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
+import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 /**
  * Resolver-branch coverage for the `isZhipu` path added by the
  * `zhipu-coding-plan` provider. Mirrors the shape of existing zai/cerebras
  * tests: assert the contract the provider relies on (zai thinking format,
  * disabled `reasoning_effort`, no `developer` role) so future refactors of
- * `detectOpenAICompat` cannot silently regress the BigModel SKU.
+ * `buildOpenAICompat` cannot silently regress the BigModel SKU.
  */
 
-const baseModel: Omit<Model<"openai-completions">, "provider" | "baseUrl"> = {
+const baseModel: Omit<ModelSpec<"openai-completions">, "provider" | "baseUrl"> = {
 	api: "openai-completions",
 	id: "glm-4.7",
 	name: "GLM-4.7",
@@ -22,7 +22,7 @@ const baseModel: Omit<Model<"openai-completions">, "provider" | "baseUrl"> = {
 	reasoning: true,
 };
 
-function zhipuByProvider(): Model<"openai-completions"> {
+function zhipuByProvider(): ModelSpec<"openai-completions"> {
 	return {
 		...baseModel,
 		provider: "zhipu-coding-plan",
@@ -30,7 +30,7 @@ function zhipuByProvider(): Model<"openai-completions"> {
 	};
 }
 
-function zhipuByBaseUrl(): Model<"openai-completions"> {
+function zhipuByBaseUrl(): ModelSpec<"openai-completions"> {
 	return {
 		...baseModel,
 		// Provider intentionally not "zhipu-coding-plan" — exercises the
@@ -42,7 +42,7 @@ function zhipuByBaseUrl(): Model<"openai-completions"> {
 
 describe("openai-completions compat — zhipu-coding-plan branch", () => {
 	it("forces zai thinking format and disables reasoning_effort / developer role", () => {
-		const compat = detectOpenAICompat(zhipuByProvider());
+		const compat = buildOpenAICompat(zhipuByProvider());
 
 		expect(compat.thinkingFormat).toBe("zai");
 		expect(compat.supportsReasoningEffort).toBe(false);
@@ -55,14 +55,14 @@ describe("openai-completions compat — zhipu-coding-plan branch", () => {
 	});
 
 	it("detects zhipu by baseUrl when provider id is custom", () => {
-		const compat = detectOpenAICompat(zhipuByBaseUrl());
+		const compat = buildOpenAICompat(zhipuByBaseUrl());
 
 		expect(compat.thinkingFormat).toBe("zai");
 		expect(compat.supportsReasoningEffort).toBe(false);
 	});
 
 	it("lets explicit model.compat overrides win at the resolver layer", () => {
-		const model: Model<"openai-completions"> = {
+		const model: ModelSpec<"openai-completions"> = {
 			...zhipuByProvider(),
 			compat: {
 				supportsDeveloperRole: true,
@@ -70,7 +70,7 @@ describe("openai-completions compat — zhipu-coding-plan branch", () => {
 				thinkingFormat: "openai",
 			},
 		};
-		const resolved = resolveOpenAICompat(model);
+		const resolved = buildOpenAICompat(model);
 
 		expect(resolved.supportsDeveloperRole).toBe(true);
 		expect(resolved.supportsReasoningEffort).toBe(true);

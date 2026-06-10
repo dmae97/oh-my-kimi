@@ -7,10 +7,10 @@ import { Effort } from "../effort";
 import { toFireworksPublicModelId } from "../fireworks-model-id";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
-import type { Api, FetchImpl, Model, Provider, ThinkingConfig } from "../types";
+import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import { getGitHubCopilotBaseUrl, OPENCODE_HEADERS, parseGitHubCopilotApiKey } from "../wire/github-copilot";
-import { createBundledReferenceMap, createReferenceResolver } from "./bundled-references";
+import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -67,7 +67,7 @@ async function fetchModelsDevPayload(fetchImpl: FetchImpl = fetch): Promise<unkn
 	return response.json();
 }
 
-function mapAnthropicModelsDev(payload: unknown, baseUrl: string): Model<"anthropic-messages">[] {
+function mapAnthropicModelsDev(payload: unknown, baseUrl: string): ModelSpec<"anthropic-messages">[] {
 	if (!isRecord(payload)) {
 		return [];
 	}
@@ -80,7 +80,7 @@ function mapAnthropicModelsDev(payload: unknown, baseUrl: string): Model<"anthro
 		return [];
 	}
 
-	const models: Model<"anthropic-messages">[] = [];
+	const models: ModelSpec<"anthropic-messages">[] = [];
 	for (const [modelId, rawModel] of Object.entries(modelsValue)) {
 		if (!isRecord(rawModel)) {
 			continue;
@@ -128,9 +128,9 @@ function buildAnthropicDiscoveryHeaders(apiKey: string): Record<string, string> 
 }
 
 function buildAnthropicReferenceMap(
-	modelsDevModels: readonly Model<"anthropic-messages">[],
-): Map<string, Model<"anthropic-messages">> {
-	const merged = new Map<string, Model<"anthropic-messages">>();
+	modelsDevModels: readonly ModelSpec<"anthropic-messages">[],
+): Map<string, ModelSpec<"anthropic-messages">> {
+	const merged = new Map<string, ModelSpec<"anthropic-messages">>();
 	for (const model of modelsDevModels) {
 		merged.set(model.id, model);
 	}
@@ -140,7 +140,7 @@ function buildAnthropicReferenceMap(
 		(model): model is Model<"anthropic-messages"> => model.api === "anthropic-messages",
 	);
 	for (const model of bundledModels) {
-		merged.set(model.id, model);
+		merged.set(model.id, toModelSpec(model));
 	}
 	return merged;
 }
@@ -155,7 +155,7 @@ function buildAnthropicReferenceMap(
  * `applyAnthropicCatalogPolicy`, and `thinking` is derived by
  * `refreshModelThinking` during generation.
  */
-export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly Model<"anthropic-messages">[] = [
+export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-messages">[] = [
 	{
 		id: "claude-fable-5",
 		name: "Claude Fable 5",
@@ -184,9 +184,9 @@ export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly Model<"anthropic-messag
 
 function mapWithBundledReference<TApi extends Api>(
 	entry: OpenAICompatibleModelRecord,
-	defaults: Model<TApi>,
-	reference: Model<TApi> | undefined,
-): Model<TApi> {
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
 	const name = toModelName(entry.name, reference?.name ?? defaults.name);
 	if (!reference) {
 		return {
@@ -233,7 +233,7 @@ async function fetchOllamaNativeModels(
 	baseUrl: string,
 	resolveMetadata: (modelId: string) => Promise<OllamaResolvedMetadata>,
 	fetchImpl: FetchImpl = fetch,
-): Promise<Model<"openai-responses">[] | null> {
+): Promise<ModelSpec<"openai-responses">[] | null> {
 	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
 	let response: Response;
 	try {
@@ -250,7 +250,7 @@ async function fetchOllamaNativeModels(
 	const payload = (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
 	const entries = payload.models ?? [];
 	const resolved = await Promise.all(
-		entries.map(async (entry): Promise<Model<"openai-responses"> | null> => {
+		entries.map(async (entry): Promise<ModelSpec<"openai-responses"> | null> => {
 			const id = entry.model ?? entry.name;
 			if (!id) return null;
 			const metadata = await resolveMetadata(id);
@@ -269,7 +269,9 @@ async function fetchOllamaNativeModels(
 			};
 		}),
 	);
-	const models: Model<"openai-responses">[] = resolved.filter((m): m is Model<"openai-responses"> => m !== null);
+	const models: ModelSpec<"openai-responses">[] = resolved.filter(
+		(m): m is ModelSpec<"openai-responses"> => m !== null,
+	);
 	return models.sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -290,7 +292,7 @@ const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_REASONING_EFFORT_MAP = { minimal: "low", xhigh: "max" } as const;
 
 /** Stamp the Ollama reasoning-effort map onto a reasoning-capable model. */
-function applyOllamaReasoningCompat(model: Model<"openai-responses">): void {
+function applyOllamaReasoningCompat(model: ModelSpec<"openai-responses">): void {
 	if (!model.reasoning) return;
 	model.compat = {
 		...model.compat,
@@ -431,7 +433,7 @@ const OPENAI_NON_RESPONSES_PREFIXES = [
 	"gpt-realtime",
 ] as const;
 
-function isLikelyOpenAIResponsesModelId(id: string, references: Map<string, Model<"openai-responses">>): boolean {
+function isLikelyOpenAIResponsesModelId(id: string, references: Map<string, ModelSpec<"openai-responses">>): boolean {
 	const trimmed = id.trim();
 	if (!trimmed) {
 		return false;
@@ -766,7 +768,10 @@ const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 // The `minimal -> low` effort clamp (XAI_REASONING_EFFORT_MAP) is always
 // merged in so dynamic-fetched models — which arrive without curated
 // compat keys — still get the clamp applyResponsesReasoningParams expects.
-function mergeCuratedIntoModel(base: Model<"openai-responses">, curated: XAICuratedModel): Model<"openai-responses"> {
+function mergeCuratedIntoModel(
+	base: ModelSpec<"openai-responses">,
+	curated: XAICuratedModel,
+): ModelSpec<"openai-responses"> {
 	const effort = curated.supportsReasoningEffort;
 	const compat = {
 		...(base.compat ?? {}),
@@ -805,10 +810,10 @@ function mergeCuratedIntoModel(base: Model<"openai-responses">, curated: XAICura
  * Order: curated models first in declaration order; then dynamic remainder
  * in original order.
  */
-function applyXAIOAuthCuration(dynamic: readonly Model<"openai-responses">[]): Model<"openai-responses">[] {
+function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]): ModelSpec<"openai-responses">[] {
 	const filtered = dynamic.filter(e => !XAI_NON_CHAT_PREFIXES.some(p => e.id.startsWith(p)));
 
-	const byId = new Map<string, Model<"openai-responses">>(filtered.map(e => [e.id, e]));
+	const byId = new Map<string, ModelSpec<"openai-responses">>(filtered.map(e => [e.id, e]));
 	for (const curated of XAI_OAUTH_CURATED_MODELS) {
 		const existing = byId.get(curated.id);
 		if (existing) {
@@ -823,7 +828,7 @@ function applyXAIOAuthCuration(dynamic: readonly Model<"openai-responses">[]): M
 				// Reset id/name on the template before merging so the helper's
 				// `curated.name ?? base.name` clause falls back to curated.id
 				// (the inject contract), not to the unrelated template's label.
-				const base: Model<"openai-responses"> = { ...template, id: curated.id, name: curated.id };
+				const base: ModelSpec<"openai-responses"> = { ...template, id: curated.id, name: curated.id };
 				byId.set(curated.id, mergeCuratedIntoModel(base, curated));
 			}
 		}
@@ -831,14 +836,14 @@ function applyXAIOAuthCuration(dynamic: readonly Model<"openai-responses">[]): M
 
 	const curatedIds = new Set(XAI_OAUTH_CURATED_MODELS.map(c => c.id));
 	const curatedFirst = XAI_OAUTH_CURATED_MODELS.map(c => byId.get(c.id)).filter(
-		(e): e is Model<"openai-responses"> => e !== undefined,
+		(e): e is ModelSpec<"openai-responses"> => e !== undefined,
 	);
 	const rest = filtered.filter(e => !curatedIds.has(e.id));
 	return [...curatedFirst, ...rest];
 }
 
 /**
- * Render `XAI_OAUTH_CURATED_MODELS` as full `Model<"openai-responses">` entries.
+ * Render `XAI_OAUTH_CURATED_MODELS` as full `ModelSpec<"openai-responses">` entries.
  *
  * Single source of truth for the curated to Model fan-in, consumed by both
  * - {@link xaiOAuthModelManagerOptions} (runtime static seed handed to the model
@@ -854,14 +859,14 @@ function applyXAIOAuthCuration(dynamic: readonly Model<"openai-responses">[]): M
  * dynamic fetch merge cleanly. Mirrors
  * `hermes-agent/hermes_cli/models.py:_XAI_STATIC_FALLBACK`.
  */
-export function buildXaiOAuthStaticSeed(baseUrl?: string): Model<"openai-responses">[] {
+export function buildXaiOAuthStaticSeed(baseUrl?: string): ModelSpec<"openai-responses">[] {
 	const resolvedBaseUrl = baseUrl ?? "https://api.x.ai/v1";
 	return XAI_OAUTH_CURATED_MODELS.map(curated => {
 		// Synthesise a bare base then layer curated metadata via the same helper
 		// the dynamic overlay/inject paths use. `name: curated.id` is a sentinel
 		// the helper rewrites to `curated.name ?? base.name`, so curated.name
 		// wins when set.
-		const base: Model<"openai-responses"> = {
+		const base: ModelSpec<"openai-responses"> = {
 			id: curated.id,
 			name: curated.id,
 			api: "openai-responses",
@@ -1005,9 +1010,9 @@ export function zhipuCodingPlanModelManagerOptions(
 					apiKey,
 					mapModel: (
 						_entry: OpenAICompatibleModelRecord,
-						defaults: Model<"openai-completions">,
+						defaults: ModelSpec<"openai-completions">,
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
-					): Model<"openai-completions"> => {
+					): ModelSpec<"openai-completions"> => {
 						const id = defaults.id;
 						return {
 							...defaults,
@@ -1084,9 +1089,9 @@ export function clampFireworksKimiMaxTokens(modelId: string, candidate: number):
  * DeepSeek-native binary `thinking` toggle when both are present.
  */
 export function stripFireworksDeepSeekThinkingToggle(
-	model: Model<"openai-completions">,
+	model: ModelSpec<"openai-completions">,
 	publicModelId: string,
-): Model<"openai-completions"> {
+): ModelSpec<"openai-completions"> {
 	if (!publicModelId.startsWith("deepseek-v4")) return model;
 	const compat = model.compat;
 	if (!compat?.extraBody || !("thinking" in compat.extraBody)) return model;
@@ -1121,10 +1126,12 @@ function toFireworksModelName(entry: OpenAICompatibleModelRecord, fallback: stri
 		.join(" ");
 }
 
-function createModelsDevReferenceMap<TApi extends Api>(models: readonly Model<Api>[]): Map<string, Model<TApi>> {
-	const references = new Map<string, Model<TApi>>();
+function createModelsDevReferenceMap<TApi extends Api>(
+	models: readonly ModelSpec<Api>[],
+): Map<string, ModelSpec<TApi>> {
+	const references = new Map<string, ModelSpec<TApi>>();
 	for (const model of models) {
-		const candidate = model as Model<TApi>;
+		const candidate = model as ModelSpec<TApi>;
 		const existing = references.get(candidate.id);
 		if (!existing) {
 			references.set(candidate.id, candidate);
@@ -1141,14 +1148,14 @@ function createModelsDevReferenceMap<TApi extends Api>(models: readonly Model<Ap
 	return references;
 }
 
-async function loadModelsDevReferences<TApi extends Api>(fetchImpl?: FetchImpl): Promise<Map<string, Model<TApi>>> {
+async function loadModelsDevReferences<TApi extends Api>(fetchImpl?: FetchImpl): Promise<Map<string, ModelSpec<TApi>>> {
 	try {
 		const payload = await fetchModelsDevPayload(fetchImpl);
 		return createModelsDevReferenceMap<TApi>(
 			mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
 		);
 	} catch {
-		return new Map<string, Model<TApi>>();
+		return new Map<string, ModelSpec<TApi>>();
 	}
 }
 export function fireworksModelManagerOptions(
@@ -1241,7 +1248,7 @@ const WAFER_MAX_TOKENS_CAP = 65536;
  *
  * Wafer wraps each entry with a `wafer` envelope describing tier, capabilities,
  * and cents-per-million pricing. The mapper folds that metadata into the
- * canonical `Model<"openai-completions">` shape and applies zai-family thinking
+ * canonical `ModelSpec<"openai-completions">` shape and applies zai-family thinking
  * compat when the entry advertises reasoning support (GLM-family on the Pass
  * SKU). Cents-per-million → dollars-per-million via /100.
  */
@@ -1267,8 +1274,8 @@ function mapWaferModel(
 	providerId: "wafer-pass" | "wafer-serverless",
 	baseUrl: string,
 	entry: OpenAICompatibleModelRecord,
-	defaults: Model<"openai-completions">,
-): Model<"openai-completions"> {
+	defaults: ModelSpec<"openai-completions">,
+): ModelSpec<"openai-completions"> {
 	const wafer = readWaferRecord(entry);
 	const capabilities = wafer?.capabilities ?? {};
 	const reasoning = capabilities.reasoning === true;
@@ -1299,7 +1306,7 @@ function mapWaferModel(
 				cacheWrite: 0,
 			};
 	const name = toModelName(wafer?.display_name, defaults.name);
-	const base: Model<"openai-completions"> = {
+	const base: ModelSpec<"openai-completions"> = {
 		...defaults,
 		id: defaults.id,
 		name,
@@ -1561,9 +1568,9 @@ export function openrouterModelManagerOptions(
 				},
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
-					defaults: Model<"openai-completions">,
+					defaults: ModelSpec<"openai-completions">,
 					_context: OpenAICompatibleModelMapperContext<"openai-completions">,
-				): Model<"openai-completions"> => {
+				): ModelSpec<"openai-completions"> => {
 					const pricing = entry.pricing as Record<string, unknown> | undefined;
 					const params = Array.isArray(entry.supported_parameters) ? (entry.supported_parameters as string[]) : [];
 					const modality = String((entry.architecture as Record<string, unknown> | undefined)?.modality ?? "");
@@ -1805,9 +1812,9 @@ export function vercelAiGatewayModelManagerOptions(
 				},
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
-					defaults: Model<"anthropic-messages">,
+					defaults: ModelSpec<"anthropic-messages">,
 					_context: OpenAICompatibleModelMapperContext<"anthropic-messages">,
-				): Model<"anthropic-messages"> => {
+				): ModelSpec<"anthropic-messages"> => {
 					const pricing = entry.pricing as Record<string, unknown> | undefined;
 					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
 
@@ -1862,9 +1869,9 @@ export function kimiCodeModelManagerOptions(
 					},
 					mapModel: (
 						entry: OpenAICompatibleModelRecord,
-						defaults: Model<"openai-completions">,
+						defaults: ModelSpec<"openai-completions">,
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
-					): Model<"openai-completions"> => {
+					): ModelSpec<"openai-completions"> => {
 						const id = defaults.id;
 						return {
 							...defaults,
@@ -1935,7 +1942,7 @@ export function syntheticModelManagerOptions(
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "https://api.synthetic.new/openai/v1";
 	const references = new Map(
-		(getBundledModels("synthetic") as Model<"openai-completions">[]).map(model => [model.id, model]),
+		(getBundledModels("synthetic") as Model<"openai-completions">[]).map(model => [model.id, toModelSpec(model)]),
 	);
 	return {
 		providerId: "synthetic",
@@ -1949,9 +1956,9 @@ export function syntheticModelManagerOptions(
 					apiKey,
 					mapModel: (
 						entry: OpenAICompatibleModelRecord,
-						defaults: Model<"openai-completions">,
+						defaults: ModelSpec<"openai-completions">,
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
-					): Model<"openai-completions"> => {
+					): ModelSpec<"openai-completions"> => {
 						const reference = references.get(defaults.id);
 						const referenceSupportsImage = reference?.input.includes("image") ?? false;
 						return {
@@ -2407,9 +2414,9 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 					headers: OPENCODE_HEADERS,
 					mapModel: (
 						entry: OpenAICompatibleModelRecord,
-						defaults: Model<Api>,
+						defaults: ModelSpec<Api>,
 						_context: OpenAICompatibleModelMapperContext<Api>,
-					): Model<Api> => {
+					): ModelSpec<Api> => {
 						const reference = resolveReference(defaults.id);
 						const copilotLimits = extractCopilotLimits(entry);
 						// Copilot exposes token limits under capabilities.limits.*.
@@ -2522,9 +2529,9 @@ export function anthropicModelManagerOptions(
 						headers: buildAnthropicDiscoveryHeaders(apiKey),
 						mapModel: (
 							entry: OpenAICompatibleModelRecord,
-							defaults: Model<"anthropic-messages">,
+							defaults: ModelSpec<"anthropic-messages">,
 							_context: OpenAICompatibleModelMapperContext<"anthropic-messages">,
-						): Model<"anthropic-messages"> => {
+						): ModelSpec<"anthropic-messages"> => {
 							const discoveredName = typeof entry.display_name === "string" ? entry.display_name : defaults.name;
 							const reference = references.get(defaults.id);
 							if (!reference) {
@@ -2571,7 +2578,7 @@ export interface ModelsDevProviderDescriptor {
 	/** Default max tokens fallback (default: UNKNNOWN_MAX_TOKENS) */
 	defaultMaxTokens?: number;
 	/** Optional compat overrides applied to every model from this provider */
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 	/** Optional static headers applied to every model */
 	headers?: Record<string, string>;
 	/**
@@ -2583,7 +2590,11 @@ export interface ModelsDevProviderDescriptor {
 	 * Optional transform: modify the mapped model before it's added.
 	 * Can return null to skip the model, or an array to emit multiple models.
 	 */
-	transformModel?: (model: Model<Api>, modelId: string, raw: ModelsDevModel) => Model<Api> | Model<Api>[] | null;
+	transformModel?: (
+		model: ModelSpec<Api>,
+		modelId: string,
+		raw: ModelsDevModel,
+	) => ModelSpec<Api> | ModelSpec<Api>[] | null;
 	/**
 	 * Optional: override the API type per-model.
 	 * Called with (modelId, raw). Return the API type to use.
@@ -2596,8 +2607,8 @@ export interface ModelsDevProviderDescriptor {
 export function mapModelsDevToModels(
 	data: Record<string, unknown>,
 	descriptors: readonly ModelsDevProviderDescriptor[],
-): Model<Api>[] {
-	const models: Model<Api>[] = [];
+): ModelSpec<Api>[] {
+	const models: ModelSpec<Api>[] = [];
 	for (const desc of descriptors) {
 		const providerData = (data as Record<string, Record<string, unknown>>)[desc.modelsDevKey];
 		if (!isRecord(providerData) || !isRecord(providerData.models)) continue;
@@ -2617,11 +2628,11 @@ export function mapModelsDevToModels(
 			const resolved = desc.resolveApi?.(modelId, m) ?? { api: desc.api, baseUrl: desc.baseUrl };
 			if (!resolved) continue;
 
-			const mapped: Model<Api> = {
+			const mapped: ModelSpec<Api> = {
 				id: modelId,
 				name: toModelName(m.name, modelId),
 				api: resolved.api,
-				provider: desc.providerId as Model<Api>["provider"],
+				provider: desc.providerId as ModelSpec<Api>["provider"],
 				baseUrl: resolved.baseUrl,
 				reasoning: m.reasoning === true,
 				input: toInputCapabilities(m.modalities?.input),
@@ -2858,7 +2869,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_BEDROCK: readonly ModelsDevProviderDescrip
 		},
 		transformModel: (model, modelId, m) => {
 			const crossRegionId = bedrockCrossRegionId(modelId);
-			const bedrockModel: Model<Api> = {
+			const bedrockModel: ModelSpec<Api> = {
 				...model,
 				id: crossRegionId,
 				name: toModelName(m.name, crossRegionId),

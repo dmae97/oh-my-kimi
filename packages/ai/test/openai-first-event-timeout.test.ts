@@ -4,6 +4,7 @@ import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-comple
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, FetchImpl, Model, TextContent } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { waitForDelayOrAbort } from "./helpers";
 
@@ -12,7 +13,7 @@ const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
-const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = {
+const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = buildModel({
 	id: "gpt-5-mini",
 	name: "GPT-5 Mini",
 	api: "azure-openai-responses",
@@ -23,8 +24,8 @@ const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 400000,
 	maxTokens: 128000,
-};
-const ollamaChatModel: Model<"ollama-chat"> = {
+});
+const ollamaChatModel: Model<"ollama-chat"> = buildModel({
 	id: "llama-local",
 	name: "llama-local",
 	api: "ollama-chat",
@@ -35,7 +36,7 @@ const ollamaChatModel: Model<"ollama-chat"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 128000,
 	maxTokens: 8192,
-};
+});
 
 function baseContext(): Context {
 	return {

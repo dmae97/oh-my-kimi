@@ -1,4 +1,4 @@
-import { resolveOpenAICompat } from "./compat/openai";
+import { buildOpenAICompat } from "./compat/openai";
 import { Effort, THINKING_EFFORTS } from "./effort";
 import { modelMatchesHost } from "./hosts";
 import {
@@ -14,7 +14,13 @@ import {
 	semverEqual,
 	semverGte,
 } from "./identity/classify";
-import type { Api, Model as ApiModel, ThinkingConfig } from "./types";
+import type { Api, Model, ModelSpec, ThinkingConfig } from "./types";
+
+/**
+ * Thinking inference reads identity fields plus sparse compat intent, so it
+ * accepts both pre-build specs and built models.
+ */
+type ApiModel<TApi extends Api = Api> = ModelSpec<TApi> | Model<TApi>;
 
 const DEFAULT_REASONING_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
 const DEFAULT_REASONING_EFFORTS_WITH_XHIGH: readonly Effort[] = [
@@ -76,6 +82,8 @@ type ModelWithEnriched = ApiModel<Api> & { [kEnrichedModel]?: ApiModel<Api> };
  * This helper belongs to catalog enrichment only. Runtime consumers should
  * trust `model.thinking` and avoid inferring capabilities on demand.
  */
+export function enrichModelThinking<TApi extends Api>(model: ModelSpec<TApi>): ModelSpec<TApi>;
+export function enrichModelThinking<TApi extends Api>(model: Model<TApi>): Model<TApi>;
 export function enrichModelThinking<TApi extends Api>(model: ApiModel<TApi>): ApiModel<TApi> {
 	const tagged = model as ModelWithEnriched;
 	const cached = tagged[kEnrichedModel];
@@ -592,7 +600,7 @@ function inferFallbackEfforts<TApi extends Api>(model: ApiModel<TApi>): readonly
 		return DEFAULT_REASONING_EFFORTS;
 	}
 	if (model.api === "openai-completions") {
-		const compat = resolveOpenAICompat(model as ApiModel<"openai-completions">);
+		const compat = buildOpenAICompat(model as ModelSpec<"openai-completions">);
 		if (compat.thinkingFormat === "openai" && compat.supportsReasoningEffort) {
 			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 		}

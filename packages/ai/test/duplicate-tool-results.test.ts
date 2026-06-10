@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { convertMessages, detectCompat } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type {
 	Api,
@@ -12,6 +12,7 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionMessageParam,
@@ -26,7 +27,7 @@ import type {
  * transformMessages should NOT add duplicate synthetic tool results.
  */
 describe("Duplicate Tool Results Regression", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -37,7 +38,7 @@ describe("Duplicate Tool Results Regression", () => {
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 
 	const makeEvalAssistantMessage = (id: string, timestamp: number): AssistantMessage => ({
 		role: "assistant",
@@ -516,7 +517,7 @@ describe("Duplicate Tool Results Regression", () => {
 			expectedDuplicateId: string;
 		}> = [
 			{
-				model: {
+				model: buildModel({
 					api: "openai-completions",
 					provider: "openai",
 					id: "gpt-4o-mini",
@@ -527,12 +528,12 @@ describe("Duplicate Tool Results Regression", () => {
 					maxTokens: 8192,
 					contextWindow: 128000,
 					reasoning: false,
-				},
+				}),
 				duplicateId: `call_${"a".repeat(35)}`,
 				expectedDuplicateId: `${`call_${"a".repeat(35)}`.slice(0, 35)}_dup1`,
 			},
 			{
-				model: {
+				model: buildModel({
 					api: "openai-completions",
 					provider: "mistral",
 					id: "mistral-large-latest",
@@ -543,7 +544,7 @@ describe("Duplicate Tool Results Regression", () => {
 					maxTokens: 8192,
 					contextWindow: 128000,
 					reasoning: false,
-				},
+				}),
 				duplicateId: "ABCDEF123",
 				expectedDuplicateId: "ABCDEdup1",
 			},
@@ -557,7 +558,7 @@ describe("Duplicate Tool Results Regression", () => {
 				makeEvalToolResult(duplicateId, "second", 4),
 			];
 			const context: Context = { messages };
-			const wireMessages = convertMessages(providerModel, context, detectCompat(providerModel));
+			const wireMessages = convertMessages(providerModel, context, providerModel.compat);
 			const assistantIds = assistantWireMessages(wireMessages).flatMap(
 				message => message.tool_calls?.map(toolCall => toolCall.id) ?? [],
 			);
@@ -581,7 +582,7 @@ describe("Duplicate Tool Results Regression", () => {
  * request is rejected.
  */
 describe("Orphan Tool Result (handoff/compaction) Regression", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -592,7 +593,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 
 	const makeAssistantWithToolCall = (
 		id: string,
@@ -1021,7 +1022,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 			{ role: "user", content: "Resume work.", timestamp: 4 },
 		];
 
-		const openaiModel: Model<"openai-responses"> = {
+		const openaiModel: Model<"openai-responses"> = buildModel({
 			api: "openai-responses",
 			provider: "openai",
 			id: "gpt-5",
@@ -1032,7 +1033,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 			maxTokens: 8192,
 			contextWindow: 200000,
 			reasoning: true,
-		};
+		});
 
 		for (const m of [model, openaiModel] as Model<Api>[]) {
 			const transformed = transformMessages(buildMessages(), m);
@@ -1079,7 +1080,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
  * - Synthetic "aborted" tool results are injected
  */
 describe("Codex-style Abort Handling", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-3-5-sonnet-20241022",
@@ -1090,7 +1091,7 @@ describe("Codex-style Abort Handling", () => {
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 
 	it("should preserve tool call structure in aborted messages", () => {
 		const toolCallId = "toolu_preserve_test";

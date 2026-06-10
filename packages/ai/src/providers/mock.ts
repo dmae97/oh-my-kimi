@@ -168,6 +168,7 @@ export class MockModel implements Model<MockApi> {
 	readonly cost: Model["cost"];
 	readonly contextWindow: number;
 	readonly maxTokens: number;
+	readonly compat = undefined;
 
 	/** Recorded calls in invocation order. */
 	readonly calls: MockCall[] = [];

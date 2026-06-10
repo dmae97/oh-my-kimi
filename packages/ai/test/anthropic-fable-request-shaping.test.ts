@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 function makeAnthropicModel(id: string): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		id,
 		name: id,
 		api: "anthropic-messages",
@@ -15,15 +16,17 @@ function makeAnthropicModel(id: string): Model<"anthropic-messages"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 1_000_000,
 		maxTokens: 128_000,
-	};
+	});
 }
 
 /** Adaptive-thinking model (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5). */
 function adaptiveModel(id: string): Model<"anthropic-messages"> {
-	return {
-		...makeAnthropicModel(id),
+	const base = makeAnthropicModel(id);
+	return buildModel({
+		...base,
 		thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
-	};
+		compat: base.compatConfig,
+	} as ModelSpec<"anthropic-messages">);
 }
 
 const CONTEXT: Context = {

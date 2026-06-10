@@ -18,6 +18,7 @@ import {
 	zSessionNotification,
 } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	ACP_BOOTSTRAP_RACE_GUARD_MS,
@@ -32,7 +33,7 @@ import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { expectAcpStructure } from "./helpers/acp-schema";
 
 const TEST_MODELS: Model[] = [
-	{
+	buildModel({
 		id: "claude-sonnet-4-20250514",
 		name: "Claude Sonnet",
 		api: "anthropic-messages",
@@ -43,8 +44,8 @@ const TEST_MODELS: Model[] = [
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 8_192,
-	},
-	{
+	}),
+	buildModel({
 		id: "gpt-5.4",
 		name: "GPT-5.4",
 		api: "openai-responses",
@@ -55,7 +56,7 @@ const TEST_MODELS: Model[] = [
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 8_192,
-	},
+	}),
 ];
 
 function makeAssistantMessage(text: string, thinking?: string) {

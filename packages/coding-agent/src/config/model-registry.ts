@@ -1,7 +1,8 @@
 import * as path from "node:path";
 import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
-import type { Api, Context, Model, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { Api, Context, Model, ModelSpec, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isVertexExpressOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import {
@@ -9,7 +10,6 @@ import {
 	type ModelManagerOptions,
 	type ModelRefreshStrategy,
 } from "@oh-my-pi/pi-catalog/model-manager";
-import { enrichModelThinking } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import {
 	googleAntigravityModelManagerOptions,
@@ -84,7 +84,7 @@ interface ProviderOverride {
 	headers?: Record<string, string>;
 	apiKey?: string;
 	authHeader?: boolean;
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 	transport?: Model<Api>["transport"];
 }
 
@@ -110,19 +110,21 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	providerOverride?: Pick<ProviderOverride, "baseUrl" | "headers" | "transport">,
 ): Model<TApi> {
 	if (existing) {
-		return {
+		return buildModel({
 			...model,
 			baseUrl: providerOverride?.baseUrl ?? model.baseUrl ?? existing.baseUrl,
 			headers: existing.headers ? { ...existing.headers, ...model.headers } : model.headers,
-		};
+			compat: model.compatConfig,
+		} as ModelSpec<TApi>);
 	}
 	if (providerOverride) {
-		return {
+		return buildModel({
 			...model,
 			baseUrl: providerOverride.baseUrl ?? model.baseUrl,
 			headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
 			...(providerOverride.transport !== undefined ? { transport: providerOverride.transport } : {}),
-		};
+			compat: model.compatConfig,
+		} as ModelSpec<TApi>);
 	}
 	return model;
 }
@@ -293,6 +295,15 @@ function mergeCompat<TBase extends object, TOverride extends object>(
 }
 
 /**
+ * Project a built model back to spec shape for the model-manager/cache
+ * boundary: sparse compat comes from `compatConfig`, never from the resolved
+ * record.
+ */
+function toModelSpec<TApi extends Api>(model: Model<TApi>): ModelSpec<TApi> {
+	return { ...model, compat: model.compatConfig } as ModelSpec<TApi>;
+}
+
+/**
  * The patchable subset of `Model` fields shared by `modelOverrides` entries,
  * custom model definitions, and parsed custom-model overlays. `undefined`
  * always means "leave the base value alone".
@@ -307,7 +318,7 @@ interface ModelPatch {
 	maxTokens?: number;
 	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 	contextPromotionTarget?: string;
 	premiumMultiplier?: number;
 }
@@ -340,16 +351,17 @@ function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: ModelTr
 			cacheWrite: patch.cost.cacheWrite ?? base.cost.cacheWrite,
 		};
 	}
+	let compat: ModelSpec<Api>["compat"];
 	if (transport === "merge") {
 		if (patch.headers) {
 			result.headers = { ...base.headers, ...patch.headers };
 		}
-		result.compat = mergeCompat(base.compat, patch.compat);
+		compat = mergeCompat(base.compatConfig, patch.compat);
 	} else {
 		result.headers = patch.headers;
-		result.compat = patch.compat;
+		compat = patch.compat;
 	}
-	return enrichModelThinking(result);
+	return buildModel({ ...result, compat } as ModelSpec<Api>);
 }
 
 function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {
@@ -421,7 +433,7 @@ function buildCustomModelOverlay(
 	providerHeaders: Record<string, string> | undefined,
 	providerApiKey: string | undefined,
 	authHeader: boolean | undefined,
-	providerCompat: Model<Api>["compat"] | undefined,
+	providerCompat: ModelSpec<Api>["compat"] | undefined,
 	providerAuth: ProviderAuthMode | undefined,
 	modelDef: CustomModelDefinitionLike,
 ): CustomModelOverlay | undefined {
@@ -465,7 +477,7 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		reference?.cost ??
 		(options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
 	const input = resolvedModel.input ?? reference?.input ?? (options.useDefaults ? ["text"] : undefined);
-	return enrichModelThinking({
+	return buildModel({
 		id: resolvedModel.id,
 		name: resolvedModel.name ?? (options.useDefaults ? resolvedModel.id : undefined),
 		api: resolvedModel.api,
@@ -480,11 +492,11 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : undefined),
 		headers: resolvedModel.headers,
 		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
-		compat: mergeCompat(reference?.compat, resolvedModel.compat),
+		compat: mergeCompat(reference?.compatConfig, resolvedModel.compat),
 		contextPromotionTarget: resolvedModel.contextPromotionTarget,
 		premiumMultiplier: resolvedModel.premiumMultiplier,
 		isOAuth: resolvedModel.isOAuth,
-	} as Model<Api>);
+	} as ModelSpec<Api>);
 }
 
 function normalizeSuppressedSelector(selector: string): string {
@@ -745,10 +757,10 @@ export class ModelRegistry {
 			return models.map(m => {
 				if (!providerOverride) return m;
 				const withTransportOverride = this.#applyProviderTransportOverride(m, providerOverride);
-				return {
+				return buildModel({
 					...withTransportOverride,
-					compat: mergeCompat(m.compat, providerOverride.compat),
-				};
+					compat: mergeCompat(m.compatConfig, providerOverride.compat),
+				} as ModelSpec<Api>);
 			});
 		});
 	}
@@ -810,8 +822,13 @@ export class ModelRegistry {
 				? models.map(model => this.#applyProviderTransportOverride(model, providerOverride))
 				: models;
 			const withCompat = providerOverride?.compat
-				? withTransport.map(model => ({ ...model, compat: mergeCompat(model.compat, providerOverride.compat) }))
-				: withTransport;
+				? withTransport.map(model =>
+						buildModel({
+							...model,
+							compat: mergeCompat(model.compat, providerOverride.compat),
+						} as ModelSpec<Api>),
+					)
+				: withTransport.map(model => buildModel(model));
 			cachedModels.push(...this.#applyProviderModelOverrides(providerId, withCompat));
 		}
 		return { models: cachedModels, authoritativeFreshProviders };
@@ -835,7 +852,10 @@ export class ModelRegistry {
 				providerConfig.provider,
 				this.#normalizeDiscoverableModels(
 					providerConfig,
-					this.#applyProviderCompat(providerConfig.compat, cache.models),
+					this.#applyProviderCompat(
+						providerConfig.compat,
+						cache.models.map(model => buildModel(model)),
+					),
 				),
 			);
 			cachedModels.push(...models);
@@ -851,9 +871,11 @@ export class ModelRegistry {
 		return cachedModels;
 	}
 
-	#applyProviderCompat(compat: Model<Api>["compat"] | undefined, models: Model<Api>[]): Model<Api>[] {
+	#applyProviderCompat(compat: ModelSpec<Api>["compat"] | undefined, models: Model<Api>[]): Model<Api>[] {
 		if (!compat) return models;
-		return models.map(model => ({ ...model, compat: mergeCompat(model.compat, compat) }));
+		return models.map(model =>
+			buildModel({ ...model, compat: mergeCompat(model.compatConfig, compat) } as ModelSpec<Api>),
+		);
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
@@ -863,7 +885,14 @@ export class ModelRegistry {
 
 		const contextLengthOverride = getOllamaContextLengthOverride();
 		return models.map(model => {
-			const normalized = model.api === "openai-completions" ? { ...model, api: "openai-responses" as const } : model;
+			const normalized =
+				model.api === "openai-completions"
+					? buildModel({
+							...model,
+							api: "openai-responses" as const,
+							compat: model.compatConfig,
+						} as ModelSpec<Api>)
+					: model;
 			if (contextLengthOverride === undefined) {
 				return normalized;
 			}
@@ -1086,20 +1115,20 @@ export class ModelRegistry {
 					models: cached?.models.map(model => model.id) ?? [],
 				});
 				this.#lastDiscoveryWarnings.delete(providerConfig.provider);
-				return cached?.models ?? [];
+				return cached ? cached.models.map(model => buildModel(model)) : [];
 			}
 		}
 
 		const providerId = providerConfig.provider;
 		let discoveryError: string | undefined;
-		const fetchDynamicModels = async (): Promise<readonly Model<Api>[] | null> => {
+		const fetchDynamicModels = async (): Promise<readonly ModelSpec<Api>[] | null> => {
 			try {
 				const models = this.#applyProviderModelOverrides(
 					providerId,
 					await discoverModelsByProviderType(providerConfig, this.#discoveryContext()),
 				);
 				this.#lastDiscoveryWarnings.delete(providerId);
-				return models;
+				return models.map(toModelSpec);
 			} catch (error) {
 				discoveryError = error instanceof Error ? error.message : String(error);
 				return null;
@@ -1881,7 +1910,7 @@ export class ModelRegistry {
 						);
 						if (overlay) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
 					}
-					return results;
+					return results.map(toModelSpec);
 				},
 			};
 			this.#runtimeModelManagers.set(providerName, { options: managerOptions, sourceId: sourceId ?? "" });
@@ -1955,7 +1984,7 @@ export interface ProviderConfigInput {
 	api?: Api;
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	headers?: Record<string, string>;
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 	authHeader?: boolean;
 	/** Streaming transport override — see {@link Model.transport}. */
 	transport?: Model<Api>["transport"];
@@ -1987,7 +2016,7 @@ export interface ProviderConfigInput {
 		contextWindow: number;
 		maxTokens: number;
 		headers?: Record<string, string>;
-		compat?: Model<Api>["compat"];
+		compat?: ModelSpec<Api>["compat"];
 		contextPromotionTarget?: string;
 		premiumMultiplier?: number;
 	}>;

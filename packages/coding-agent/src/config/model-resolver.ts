@@ -15,7 +15,8 @@
  */
 
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Effort, KnownProvider, Model } from "@oh-my-pi/pi-ai";
+import type { Api, Effort, KnownProvider, Model, ModelSpec } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -177,10 +178,12 @@ function supportsUpstreamRouting(model: Model<Api>): boolean {
 function applyUpstreamRouting(model: Model<Api>, upstream: string): Model<Api> {
 	const aggregatorModel = model as Model<"openai-completions">;
 	const routing = { only: [upstream] };
-	const compat = modelMatchesHost(model, "vercelAIGateway")
-		? { ...aggregatorModel.compat, vercelGatewayRouting: routing }
-		: { ...aggregatorModel.compat, openRouterRouting: routing };
-	return { ...model, compat } as Model<Api>;
+	return buildModel({
+		...model,
+		compat: modelMatchesHost(model, "vercelAIGateway")
+			? { ...aggregatorModel.compatConfig, vercelGatewayRouting: routing }
+			: { ...aggregatorModel.compatConfig, openRouterRouting: routing },
+	} as ModelSpec<Api>);
 }
 
 const kProviderModelIndex = Symbol("model-resolver.providerIndex");

@@ -1,6 +1,6 @@
-import { enrichModelThinking } from "./model-thinking";
+import { buildModel } from "./build";
 import MODELS from "./models.json" with { type: "json" };
-import type { Api, KnownProvider, Model, Usage } from "./types";
+import type { Api, KnownProvider, Model, ModelSpec, Usage } from "./types";
 
 /**
  * Static bundled model registry loaded from `models.json`.
@@ -19,7 +19,7 @@ function getModelRegistry(): Map<string, Map<string, Model<Api>>> {
 		for (const [provider, models] of Object.entries(MODELS)) {
 			const providerModels = new Map<string, Model<Api>>();
 			for (const [id, model] of Object.entries(models)) {
-				providerModels.set(id, enrichModelThinking(model as Model<Api>));
+				providerModels.set(id, buildModel(model as ModelSpec<Api>));
 			}
 			modelRegistry.set(provider, providerModels);
 		}

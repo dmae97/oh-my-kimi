@@ -2,7 +2,7 @@ import * as nodeCrypto from "node:crypto";
 import * as fs from "node:fs";
 import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
-import { isOfficialAnthropicApiUrl, resolveAnthropicCompat } from "@oh-my-pi/pi-catalog/compat/anthropic";
+import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import { supportsAdaptiveThinkingDisplay } from "@oh-my-pi/pi-catalog/identity";
 import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
@@ -412,7 +412,6 @@ function dropAnthropicStrictTools(params: MessageCreateParamsStreaming): void {
 
 function getCacheControl(
 	model: Model<"anthropic-messages">,
-	baseUrl: string,
 	cacheRetention: CacheRetention | undefined,
 	isOAuthToken: boolean,
 ): { retention: CacheRetention; cacheControl?: AnthropicCacheControl } {
@@ -420,12 +419,7 @@ function getCacheControl(
 	if (retention === "none") {
 		return { retention };
 	}
-	const ttl =
-		retention === "long" &&
-		isOfficialAnthropicApiUrl(baseUrl) &&
-		resolveAnthropicCompat(model).supportsLongCacheRetention
-			? "1h"
-			: undefined;
+	const ttl = retention === "long" && model.compat.supportsLongCacheRetention ? "1h" : undefined;
 	return {
 		retention,
 		cacheControl: { type: "ephemeral", ...(ttl && { ttl }) },
@@ -1581,7 +1575,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
-					!resolveAnthropicCompat(model).disableAdaptiveThinking;
+					!model.compat.disableAdaptiveThinking;
 				if (
 					model.reasoning &&
 					(options?.thinkingEnabled || sendsAdaptiveEffortPin) &&
@@ -1589,10 +1583,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				) {
 					extraBetas.push(effortBeta);
 				}
-				if (
-					resolveAnthropicCompat(model).supportsMidConversationSystem &&
-					!extraBetas.includes(midConversationSystemBeta)
-				) {
+				if (model.compat.supportsMidConversationSystem && !extraBetas.includes(midConversationSystemBeta)) {
 					// convertAnthropicMessages may upgrade developer turns to the
 					// mid-conversation `system` role on these models; API-key requests
 					// need the beta alongside the role (OAuth agent requests already
@@ -1620,7 +1611,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			}
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(model, baseUrl, preparedContext, isOAuthToken, options, disableStrictTools);
+				let nextParams = buildParams(model, preparedContext, isOAuthToken, options, disableStrictTools);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
@@ -2287,7 +2278,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		isOAuth,
 		claudeCodeSessionId,
 	} = args;
-	const compat = resolveAnthropicCompat(model);
+	const compat = model.compat;
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinkingDisplay(model.id);
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
@@ -2398,7 +2389,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const authorizationHeader = getHeaderCaseInsensitive(defaultHeaders, "Authorization");
 	const shouldSuppressClientApiKey =
 		!oauthToken &&
-		!isOfficialAnthropicApiUrl(baseUrl) &&
+		!model.compat.officialEndpoint &&
 		typeof authorizationHeader === "string" &&
 		/^Bearer\s+/i.test(authorizationHeader);
 
@@ -2707,13 +2698,12 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 
 function buildParams(
 	model: Model<"anthropic-messages">,
-	baseUrl: string,
 	context: Context,
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 	disableStrictTools = false,
 ): MessageCreateParamsStreaming {
-	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention, isOAuthToken);
+	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
 	// Pre-compute system blocks so they occupy the right slot in the serialized body.
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
@@ -2732,7 +2722,7 @@ function buildParams(
 			context.tools,
 			isOAuthToken,
 			disableStrictTools || model.provider === "github-copilot",
-			resolveAnthropicCompat(model).supportsEagerToolInputStreaming,
+			model.compat.supportsEagerToolInputStreaming,
 		);
 	} else if (isOAuthToken) {
 		tools = [];
@@ -2755,7 +2745,7 @@ function buildParams(
 		if (options?.thinkingEnabled) {
 			const mode = model.thinking?.mode;
 			const effort = resolveAnthropicAdaptiveEffort(model, options);
-			const compat = resolveAnthropicCompat(model);
+			const compat = model.compat;
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
 				// Starting with Claude Opus 4.7 and Claude Fable/Mythos 5, adaptive thinking
@@ -2778,7 +2768,7 @@ function buildParams(
 				if (mode === "anthropic-budget-effort" && effort) outputConfigEffort = effort;
 			}
 		} else if (options?.thinkingEnabled === false) {
-			const compat = resolveAnthropicCompat(model);
+			const compat = model.compat;
 			if (model.thinking?.mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 				// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
@@ -2813,7 +2803,7 @@ function buildParams(
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken, baseUrl),
+		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
 		...(metadata && { metadata }),
@@ -2867,7 +2857,7 @@ function buildParams(
 		// request succeeds; the tool stays available and the caller's prompt steers
 		// the model toward it.
 		const choiceType = params.tool_choice?.type;
-		if ((choiceType === "any" || choiceType === "tool") && !resolveAnthropicCompat(model).supportsForcedToolChoice) {
+		if ((choiceType === "any" || choiceType === "tool") && !model.compat.supportsForcedToolChoice) {
 			params.tool_choice = { type: "auto" };
 		}
 	}
@@ -2888,7 +2878,7 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 		content: convertContentBlocks(msg.content, model.input.includes("image")),
 		is_error: msg.isError,
 	};
-	if (resolveAnthropicCompat(model).requiresToolResultId) {
+	if (model.compat.requiresToolResultId) {
 		// Z.AI workaround (issue #814): include `id` aliased to `tool_use_id`.
 		(block as unknown as Record<string, unknown>).id = msg.toolCallId;
 	}
@@ -2936,7 +2926,6 @@ export function convertAnthropicMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
-	baseUrl = resolveAnthropicBaseUrl(model),
 ): AnthropicMessageParam[] {
 	// Indices of params emitted from `developer` messages. After the main pass,
 	// the ones whose placement satisfies Anthropic's mid-conversation rules are
@@ -3001,7 +2990,7 @@ export function convertAnthropicMessages(
 					}
 					if (block.thinking.trim().length === 0) continue;
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						if (resolveAnthropicCompat(model, baseUrl).replayUnsignedThinking) {
+						if (model.compat.replayUnsignedThinking) {
 							blocks.push({
 								type: "thinking",
 								thinking: block.thinking.toWellFormed(),
@@ -3079,7 +3068,7 @@ export function convertAnthropicMessages(
 	// never consecutive. Requiring the next param to be `assistant` (or absent)
 	// covers both the "followed by assistant / last" and "no consecutive system"
 	// constraints. Anything that does not qualify stays a `user` message.
-	if (developerParamIndices.length > 0 && resolveAnthropicCompat(model).supportsMidConversationSystem) {
+	if (developerParamIndices.length > 0 && model.compat.supportsMidConversationSystem) {
 		for (const idx of developerParamIndices) {
 			const followsUser = idx > 0 && params[idx - 1]?.role === "user";
 			const next = params[idx + 1];

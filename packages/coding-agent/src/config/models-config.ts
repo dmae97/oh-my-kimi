@@ -2,7 +2,7 @@
  * models.json config file handle and provider configuration validation.
  */
 
-import type { Api, Model } from "@oh-my-pi/pi-ai/types";
+import type { Api, ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { ConfigFile } from "./config-file";
 import {
 	type ModelsConfig,
@@ -28,7 +28,7 @@ export interface ProviderValidationConfig {
 	auth?: ProviderAuthMode;
 	oauthConfigured?: boolean;
 	discovery?: ProviderDiscovery;
-	compat?: Model<Api>["compat"];
+	compat?: ModelSpec<Api>["compat"];
 	disableStrictTools?: boolean;
 	modelOverrides?: Record<string, unknown>;
 	models: ProviderValidationModel[];

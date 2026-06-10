@@ -2,9 +2,10 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
-import { convertMessages, detectCompat } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import type { AssistantMessage, ThinkingContent, ToolCall } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { xiaomiModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
 
@@ -16,7 +17,7 @@ afterEach(() => {
 });
 
 function mimoModel(): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "mimo-v2.5-pro",
 		name: "MiMo V2.5 Pro",
 		api: "openai-completions",
@@ -27,7 +28,7 @@ function mimoModel(): Model<"openai-completions"> {
 		cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
 		contextWindow: 1_048_576,
 		maxTokens: 131_072,
-	};
+	});
 }
 
 function assistantToolCall(model: Model<"openai-completions">, content: AssistantMessage["content"]): AssistantMessage {
@@ -109,7 +110,7 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 
 	it("replays MiMo reasoning_content on Token Plan tool-call turns", () => {
 		const model = mimoModel();
-		const compat = detectCompat(model);
+		const compat = model.compat;
 		const thinking: ThinkingContent = {
 			type: "thinking",
 			thinking: "I need to inspect the file before answering.",

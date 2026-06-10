@@ -1,4 +1,3 @@
-import { resolveOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { AzureOpenAI, APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
@@ -137,7 +136,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const client = createClient(model, apiKey, options);
 			const { baseUrl } = resolveAzureConfig(model, options);
-			const params = buildParams(model, context, options, deploymentName, baseUrl);
+			const params = buildParams(model, context, options, deploymentName);
 			options?.onPayload?.(params);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
@@ -297,9 +296,8 @@ function buildParams(
 	context: Context,
 	options: AzureOpenAIResponsesOptions | undefined,
 	deploymentName: string,
-	resolvedBaseUrl?: string,
 ) {
-	const messages = convertMessages(model, context, true, resolvedBaseUrl);
+	const messages = convertMessages(model, context, true);
 
 	const params: AzureOpenAIResponsesSamplingParams = {
 		model: deploymentName,
@@ -329,7 +327,6 @@ function convertMessages(
 	model: Model<"azure-openai-responses">,
 	context: Context,
 	strictResponsesPairing: boolean,
-	resolvedBaseUrl?: string,
 ): ResponseInput {
 	const messages: ResponseInput = [];
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
@@ -338,10 +335,7 @@ function convertMessages(
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	if (systemPrompts.length > 0) {
-		const role =
-			model.reasoning && resolveOpenAIResponsesCompat(model, resolvedBaseUrl).supportsDeveloperRole
-				? "developer"
-				: "system";
+		const role = model.reasoning && model.compat.supportsDeveloperRole ? "developer" : "system";
 		for (const systemPrompt of systemPrompts) {
 			messages.push({ role, content: systemPrompt });
 		}

@@ -1,9 +1,10 @@
 import { describe, expect, test, vi } from "bun:test";
 import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
 import type { Context, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { ollamaModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
+import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 interface OllamaRequestBody {
 	tools?: Array<{ function: { name: string } }>;
@@ -102,7 +103,7 @@ describe("ollama tool forcing", () => {
 			});
 		});
 
-		const model = {
+		const model = buildModel({
 			id: "ggml-org/gemma-3-1b-it/GGUF",
 			name: "Gemma 3 1B",
 			api: "ollama-chat",
@@ -113,7 +114,7 @@ describe("ollama tool forcing", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 32_768,
 			maxTokens: 8_192,
-		} satisfies Model<"ollama-chat">;
+		} satisfies ModelSpec<"ollama-chat">);
 		const readTool = {
 			name: "read",
 			description: "Read a file",

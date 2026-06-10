@@ -191,6 +191,20 @@ export interface OpenAICompat {
 	supportsLongPromptCacheRetention?: boolean;
 	/** Whether tool schemas must be sent either all strict or all non-strict. Undefined keeps the existing per-tool mixed behavior. */
 	toolStrictMode?: "all_strict" | "none";
+	/** Whether request shaping may send reasoning params at all. Default: auto-detected (disabled for GitHub Copilot chat-completions). */
+	supportsReasoningParams?: boolean;
+	/** Always send a max-token field when the caller did not provide one. Default: auto-detected (Kimi-family models derive TPM limits from max_tokens). */
+	alwaysSendMaxTokens?: boolean;
+	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
+	strictResponsesPairing?: boolean;
+	/**
+	 * Compat deltas applied when a request actually engages thinking mode
+	 * (reasoning requested and not disabled, model reasoning-capable, and not
+	 * suppressed by a forced tool choice). `buildModel` materializes the full
+	 * alternate view as `compat.whenThinking`; handlers pointer-swap, never
+	 * spread. Default: auto-detected (OpenCode gateways, #1071/#1484).
+	 */
+	whenThinking?: Partial<Omit<OpenAICompat, "whenThinking">>;
 }
 
 /**
@@ -274,6 +288,85 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
+type ResolvedToolStrictMode = NonNullable<OpenAICompat["toolStrictMode"]> | "mixed";
+
+/**
+ * Fully-resolved chat-completions compat view: every detected default
+ * materialized and user overrides applied. Built once per model by
+ * `buildModel`; request handlers read fields and never detect, resolve, or
+ * allocate.
+ */
+export type ResolvedOpenAICompat = Required<
+	Omit<
+		OpenAICompat,
+		| "openRouterRouting"
+		| "vercelGatewayRouting"
+		| "extraBody"
+		| "toolStrictMode"
+		| "streamIdleTimeoutMs"
+		| "supportsLongPromptCacheRetention"
+		| "cacheControlFormat"
+		| "thinkingKeep"
+		| "strictResponsesPairing"
+		| "whenThinking"
+	>
+> & {
+	openRouterRouting?: OpenAICompat["openRouterRouting"];
+	vercelGatewayRouting?: OpenAICompat["vercelGatewayRouting"];
+	extraBody?: OpenAICompat["extraBody"];
+	cacheControlFormat?: OpenAICompat["cacheControlFormat"];
+	thinkingKeep?: OpenAICompat["thinkingKeep"];
+	streamIdleTimeoutMs?: number;
+	toolStrictMode: ResolvedToolStrictMode;
+	/** The model sits behind OpenRouter (routing prefs and max-token omission apply). */
+	isOpenRouterHost: boolean;
+	/** The model sits behind Vercel AI Gateway. */
+	isVercelGatewayHost: boolean;
+	/** Complete alternate view for thinking-engaged requests; swap pointers, never spread. */
+	whenThinking?: ResolvedOpenAICompat;
+};
+
+/** Fully-resolved Responses-API compat view (same contract as `ResolvedOpenAICompat`). */
+export interface ResolvedOpenAIResponsesCompat {
+	supportsDeveloperRole: boolean;
+	supportsStrictMode: boolean;
+	supportsReasoningEffort: boolean;
+	supportsLongPromptCacheRetention: boolean;
+	strictResponsesPairing: boolean;
+	reasoningEffortMap: Partial<Record<Effort, string>>;
+}
+
+/** Fully-resolved anthropic-messages compat view (same contract as `ResolvedOpenAICompat`). */
+export type ResolvedAnthropicCompat = Required<AnthropicCompat> & {
+	/**
+	 * The configured endpoint is the official first-party Anthropic API
+	 * (https + exact `api.anthropic.com` host; a missing baseUrl counts as
+	 * official because dispatch defaults there). Gates OAuth framing, custom
+	 * env headers, and cache-TTL shaping without per-request URL parsing.
+	 */
+	officialEndpoint: boolean;
+};
+
+/** Sparse, user-authored compat overrides for a given API (models.json / config vocabulary). */
+export type CompatConfigOf<TApi extends Api> = TApi extends
+	| "openai-completions"
+	| "openai-responses"
+	| "azure-openai-responses"
+	| "openai-codex-responses"
+	? OpenAICompat
+	: TApi extends "anthropic-messages"
+		? AnthropicCompat
+		: undefined;
+
+/** Resolved compat for a given API: complete record, materialized once by `buildModel`. */
+export type CompatOf<TApi extends Api> = TApi extends "openai-completions"
+	? ResolvedOpenAICompat
+	: TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
+		? ResolvedOpenAIResponsesCompat
+		: TApi extends "anthropic-messages"
+			? ResolvedAnthropicCompat
+			: undefined;
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
@@ -329,12 +422,13 @@ export interface Model<TApi extends Api = Api> {
 	priority?: number;
 	/** Canonical thinking capability metadata for this model. */
 	thinking?: ThinkingConfig;
-	/** Compatibility overrides per API. If not set, auto-detected from baseUrl. */
-	compat?: TApi extends "openai-completions" | "openai-responses"
-		? OpenAICompat
-		: TApi extends "anthropic-messages"
-			? AnthropicCompat
-			: never;
+	/**
+	 * Fully-resolved compatibility record, materialized once by `buildModel`.
+	 * Protocol handlers read fields; they never detect, resolve, or allocate.
+	 */
+	compat: CompatOf<TApi>;
+	/** Verbatim sparse compat from the spec (user/config intent), for introspection only. */
+	compatConfig?: CompatConfigOf<TApi>;
 	/**
 	 * Which shape to use when exposing the Codex `apply_patch` tool to this model.
 	 * Generated catalog policy sets `"freeform"` for first-party GPT-5 Responses
@@ -350,4 +444,14 @@ export interface Model<TApi extends Api = Api> {
 	 * `options.isOAuth = true` for the underlying provider call.
 	 */
 	isOAuth?: boolean;
+}
+
+/**
+ * A model as authored by configs, bundled catalogs, and discovery — the input
+ * vocabulary of `buildModel`. Identical to `Model` except `compat` carries the
+ * sparse override shape and nothing is resolved yet.
+ */
+export interface ModelSpec<TApi extends Api = Api> extends Omit<Model<TApi>, "compat" | "compatConfig"> {
+	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
+	compat?: CompatConfigOf<TApi>;
 }

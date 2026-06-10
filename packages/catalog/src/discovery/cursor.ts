@@ -2,7 +2,8 @@ import * as http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import * as z from "zod/v4";
 import { getBundledModels } from "../models";
-import type { Model } from "../types";
+import { toModelSpec } from "../provider-models/bundled-references";
+import type { Model, ModelSpec } from "../types";
 import { GetUsableModelsRequestSchema, GetUsableModelsResponseSchema } from "./cursor-gen/agent_pb";
 
 const CURSOR_DEFAULT_BASE_URL = "https://api2.cursor.sh";
@@ -58,7 +59,7 @@ export interface CursorModelDiscoveryOptions {
  */
 export async function fetchCursorUsableModels(
 	options: CursorModelDiscoveryOptions,
-): Promise<Model<"cursor-agent">[] | null> {
+): Promise<ModelSpec<"cursor-agent">[] | null> {
 	const timeoutMs = options.timeoutMs ?? 5_000;
 	try {
 		const requestPayload = create(GetUsableModelsRequestSchema, {
@@ -169,10 +170,10 @@ function normalizeCustomModelIds(customModelIds: readonly string[] | undefined):
 	return [...normalized];
 }
 
-function createCursorReferenceMap(): Map<string, Model<"cursor-agent">> {
-	const references = new Map<string, Model<"cursor-agent">>();
-	for (const model of getBundledModels("cursor") as Model<"cursor-agent">[]) {
-		references.set(model.id, model);
+function createCursorReferenceMap(): Map<string, ModelSpec<"cursor-agent">> {
+	const references = new Map<string, ModelSpec<"cursor-agent">>();
+	for (const model of getBundledModels("cursor")) {
+		references.set(model.id, toModelSpec(model as Model<"cursor-agent">));
 	}
 	return references;
 }
@@ -230,13 +231,13 @@ function decodeConnectUnaryBody(payload: Uint8Array): Uint8Array | null {
 function normalizeCursorModels(
 	models: readonly unknown[] | undefined,
 	baseUrlOverride: string | undefined,
-	references: Map<string, Model<"cursor-agent">>,
-): Model<"cursor-agent">[] {
+	references: Map<string, ModelSpec<"cursor-agent">>,
+): ModelSpec<"cursor-agent">[] {
 	if (!models || models.length === 0) {
 		return [];
 	}
 
-	const byId = new Map<string, Model<"cursor-agent">>();
+	const byId = new Map<string, ModelSpec<"cursor-agent">>();
 	for (const model of models) {
 		const normalized = normalizeCursorModel(model, baseUrlOverride, references);
 		if (!normalized) {
@@ -251,8 +252,8 @@ function normalizeCursorModels(
 function normalizeCursorModel(
 	model: unknown,
 	baseUrlOverride: string | undefined,
-	references: Map<string, Model<"cursor-agent">>,
-): Model<"cursor-agent"> | null {
+	references: Map<string, ModelSpec<"cursor-agent">>,
+): ModelSpec<"cursor-agent"> | null {
 	const parsedModel = CursorModelDetailsSchema.safeParse(model);
 	if (!parsedModel.success) {
 		return null;

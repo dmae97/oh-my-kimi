@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 // Non-reasoning model on api.openai.com (canonical path)
@@ -96,10 +97,12 @@ describe("openai-responses system prompt routing", () => {
 		});
 
 		it("uses instructions for custom proxy base URL (third-party /v1/responses compatibility)", async () => {
-			const proxyModel: Model<"openai-responses"> = {
+			const proxyModel: Model<"openai-responses"> = buildModel({
 				...gpt4oMiniModel,
+				api: "openai-responses",
 				baseUrl: "https://proxy.example.com/v1",
-			};
+				compat: gpt4oMiniModel.compatConfig,
+			} as ModelSpec<"openai-responses">);
 			const context: Context = {
 				systemPrompt: ["You are a proxy assistant."],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
@@ -145,10 +148,12 @@ describe("openai-responses system prompt routing", () => {
 
 	describe("reasoning model on custom proxy (instructions path)", () => {
 		it("uses instructions for reasoning model on non-official endpoint", async () => {
-			const proxyModel: Model<"openai-responses"> = {
+			const proxyModel: Model<"openai-responses"> = buildModel({
 				...o4MiniModel,
+				api: "openai-responses",
 				baseUrl: "https://proxy.example.com/v1",
-			};
+				compat: o4MiniModel.compatConfig,
+			} as ModelSpec<"openai-responses">);
 			const context: Context = {
 				systemPrompt: ["Proxy reasoning prompt."],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],

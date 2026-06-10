@@ -1,19 +1,30 @@
 import { getBundledModels, getBundledProviders } from "../models";
-import type { Api, Model } from "../types";
+import type { Api, Model, ModelSpec } from "../types";
+
+/**
+ * Project a built `Model` back to spec stage: `compat` becomes the verbatim
+ * sparse override record (`compatConfig`), never the resolved view. Discovery
+ * mappers spread these references into the specs they hand to the model
+ * manager, which rebuilds via `buildModel`.
+ */
+export function toModelSpec<TApi extends Api>(model: Model<TApi>): ModelSpec<TApi> {
+	const { compat: _compat, compatConfig, ...rest } = model;
+	return { ...rest, compat: compatConfig } as ModelSpec<TApi>;
+}
 
 export function createBundledReferenceMap<TApi extends Api>(
 	provider: Parameters<typeof getBundledModels>[0],
-): Map<string, Model<TApi>> {
-	const references = new Map<string, Model<TApi>>();
+): Map<string, ModelSpec<TApi>> {
+	const references = new Map<string, ModelSpec<TApi>>();
 	for (const model of getBundledModels(provider)) {
-		references.set(model.id, model as Model<TApi>);
+		references.set(model.id, toModelSpec(model as Model<TApi>));
 	}
 	return references;
 }
 
 export function createReferenceResolver<TApi extends Api>(
-	providerRefs: Map<string, Model<TApi>>,
-): (modelId: string) => Model<TApi> | undefined {
+	providerRefs: Map<string, ModelSpec<TApi>>,
+): (modelId: string) => ModelSpec<TApi> | undefined {
 	const globalRefs = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
 		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
@@ -34,5 +45,10 @@ export function createReferenceResolver<TApi extends Api>(
 			}
 		}
 	}
-	return (modelId: string) => providerRefs.get(modelId) ?? (globalRefs.get(modelId) as Model<TApi> | undefined);
+	return (modelId: string) => {
+		const providerRef = providerRefs.get(modelId);
+		if (providerRef) return providerRef;
+		const globalRef = globalRefs.get(modelId);
+		return globalRef ? toModelSpec(globalRef as Model<TApi>) : undefined;
+	};
 }

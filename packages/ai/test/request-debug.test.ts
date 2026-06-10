@@ -4,9 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { clearCustomApis, registerCustomApi } from "@oh-my-pi/pi-ai/api-registry";
 import { stream } from "@oh-my-pi/pi-ai/stream";
-import type { AssistantMessage, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { wrapFetchForRequestDebug } from "@oh-my-pi/pi-ai/utils/request-debug";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const enc = new TextEncoder();
 
@@ -179,7 +180,7 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 			return events;
 		});
 
-		const model: Model = {
+		const model: Model = buildModel({
 			id: "debug-model",
 			name: "Debug Model",
 			api: "req-debug-test",
@@ -190,7 +191,7 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 4096,
 			maxTokens: 1024,
-		};
+		} as ModelSpec);
 		const events = stream(
 			model,
 			{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },

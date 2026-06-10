@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 
@@ -17,7 +18,7 @@ function createSseResponse(events: unknown[]): Response {
 }
 
 function customOpenAICompatModel(): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "gpt-5.1",
 		name: "GPT-5.1 proxy",
 		api: "openai-completions",
@@ -33,7 +34,7 @@ function customOpenAICompatModel(): Model<"openai-completions"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,
 		maxTokens: 16_384,
-	};
+	});
 }
 
 describe("issue #969 — custom thinking metadata must preserve explicit xhigh", () => {

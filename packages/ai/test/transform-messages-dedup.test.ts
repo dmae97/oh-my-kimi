@@ -8,9 +8,10 @@ import { describe, expect, it } from "bun:test";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { normalizeResponsesToolCallId } from "@oh-my-pi/pi-ai/utils";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function makeModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		api: "openai-responses",
 		name: "GPT Test",
 		id: "gpt-test",
@@ -21,7 +22,7 @@ function makeModel(): Model<"openai-responses"> {
 		input: ["text"],
 		reasoning: false,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	};
+	});
 }
 
 function assistantWithCall(id: string): AssistantMessage {

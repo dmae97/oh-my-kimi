@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { AuthStorage, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -29,7 +30,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 }
 
 function createReasoningModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		id: "mock-reasoning",
 		name: "mock-reasoning",
 		api: "openai-responses",
@@ -41,7 +42,7 @@ function createReasoningModel(): Model<"openai-responses"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8192,
 		maxTokens: 2048,
-	};
+	});
 }
 
 const oldSessionMtime = new Date("2000-01-01T00:00:00.000Z");

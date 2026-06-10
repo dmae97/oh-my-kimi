@@ -1,7 +1,7 @@
+import { buildModel } from "./build";
 import { readModelCache, writeModelCache } from "./model-cache";
-import { enrichModelThinking } from "./model-thinking";
 import { type GeneratedProvider, getBundledModels } from "./models";
-import type { Api, Model, Provider } from "./types";
+import type { Api, Model, ModelSpec, Provider } from "./types";
 import { isRecord } from "./utils";
 
 const DEFAULT_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -19,7 +19,7 @@ export interface ModelsDevFallback<TApi extends Api = Api, TPayload = unknown> {
 	/** Fetches raw fallback payload (for example from models.dev). */
 	fetch(): Promise<TPayload>;
 	/** Maps payload into provider models. */
-	map(payload: TPayload, providerId: Provider): readonly Model<TApi>[];
+	map(payload: TPayload, providerId: Provider): readonly ModelSpec<TApi>[];
 }
 
 /**
@@ -29,7 +29,7 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	/** Provider id used for static lookup and cache namespacing. */
 	providerId: Provider;
 	/** Optional static list override. When omitted, bundled models.json is used. */
-	staticModels?: readonly Model<TApi>[];
+	staticModels?: readonly ModelSpec<TApi>[];
 	/** Optional override for the cache database path. Default: <agent-dir>/models.db. */
 	cacheDbPath?: string;
 	/** Maximum cache age in milliseconds before considered stale. Default: 24h. */
@@ -37,7 +37,7 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
 	dynamicModelsAuthoritative?: boolean;
 	/** Optional dynamic endpoint fetcher. */
-	fetchDynamicModels?: () => Promise<readonly Model<TApi>[] | null>;
+	fetchDynamicModels?: () => Promise<readonly ModelSpec<TApi>[] | null>;
 	/** Optional models.dev fallback hook. */
 	modelsDev?: ModelsDevFallback<TApi, TModelsDevPayload>;
 	/** Clock override for deterministic tests. */
@@ -78,8 +78,9 @@ export function createModelManager<TApi extends Api = Api, TModelsDevPayload = u
 }
 
 /**
- * Cheap fast path for trusted model sources (bundled literals, our own cache rows).
- * Skips per-field validation; only guards against catastrophically corrupt rows.
+ * Cheap fast path for trusted spec sources (caller-provided literals, our own
+ * cache rows). Skips per-field validation; only guards against
+ * catastrophically corrupt rows. Builds each spec into a runtime model.
  */
 function passModelList<TApi extends Api>(value: unknown): Model<TApi>[] {
 	if (!Array.isArray(value)) {
@@ -90,7 +91,7 @@ function passModelList<TApi extends Api>(value: unknown): Model<TApi>[] {
 		if (item === null || typeof item !== "object" || typeof (item as { id: unknown }).id !== "string") {
 			continue;
 		}
-		out.push(enrichModelThinking(item as Model<TApi>));
+		out.push(buildModel(item as ModelSpec<TApi>));
 	}
 	return out;
 }
@@ -108,9 +109,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const now = options.now ?? Date.now;
 	const ttlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 	const dbPath = options.cacheDbPath;
-	const staticModels = passModelList<TApi>(
-		options.staticModels ?? getBundledModels(options.providerId as GeneratedProvider),
-	);
+	const staticModels = options.staticModels
+		? passModelList<TApi>(options.staticModels)
+		: (getBundledModels(options.providerId as GeneratedProvider) as Model<TApi>[]);
 	const cache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
 	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
 	const staticFingerprint = fingerprintStatic(staticModels, dynamicModelsAuthoritative);
@@ -196,7 +197,7 @@ async function fetchModelsDev<TApi extends Api, TModelsDevPayload>(
 }
 
 async function fetchDynamicModels<TApi extends Api>(
-	fetcher: () => Promise<readonly Model<TApi>[] | null>,
+	fetcher: () => Promise<readonly ModelSpec<TApi>[] | null>,
 ): Promise<Model<TApi>[] | null> {
 	try {
 		const models = await fetcher();
@@ -311,7 +312,9 @@ function fingerprintStatic<TApi extends Api>(
 
 function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamicModel: Model<TApi>): Model<TApi> {
 	const supportsImage = existingModel.input.includes("image") || dynamicModel.input.includes("image");
-	return enrichModelThinking({
+	// Re-build from spec stage: sparse compat comes from `compatConfig` (the
+	// verbatim override vocabulary), never the resolved `compat` record.
+	return buildModel({
 		...existingModel,
 		...dynamicModel,
 		name: preferDiscoveryName(dynamicModel.name, existingModel.name, dynamicModel.id),
@@ -326,9 +329,9 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 		contextWindow: preferDiscoveryLimit(dynamicModel.contextWindow, existingModel.contextWindow),
 		maxTokens: preferDiscoveryLimit(dynamicModel.maxTokens, existingModel.maxTokens),
 		headers: dynamicModel.headers ? { ...existingModel.headers, ...dynamicModel.headers } : existingModel.headers,
-		compat: dynamicModel.compat ?? existingModel.compat,
+		compat: dynamicModel.compatConfig ?? existingModel.compatConfig,
 		contextPromotionTarget: dynamicModel.contextPromotionTarget ?? existingModel.contextPromotionTarget,
-	});
+	} as ModelSpec<TApi>);
 }
 
 function preferDiscoveryCost(discoveryCost: number, fallbackCost: number): number {
@@ -366,13 +369,13 @@ function normalizeModelList<TApi extends Api>(value: unknown): Model<TApi>[] {
 	const models: Model<TApi>[] = [];
 	for (const item of value) {
 		if (isModelLike(item)) {
-			models.push(enrichModelThinking(item as Model<TApi>));
+			models.push(buildModel(item as ModelSpec<TApi>));
 		}
 	}
 	return models;
 }
 
-function isModelLike(value: unknown): value is Model<Api> {
+function isModelLike(value: unknown): value is ModelSpec<Api> {
 	if (!isRecord(value)) {
 		return false;
 	}

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@oh-my-pi/pi-agent-core/compaction/openai";
 import type { AssistantMessage, FetchImpl, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
-function makeOpenAiModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"openai-responses"> {
-	return {
+function makeOpenAiModel(overrides: Partial<ModelSpec<"openai-responses">> = {}): Model<"openai-responses"> {
+	return buildModel({
 		id: "gpt-5",
 		name: "GPT-5",
 		api: "openai-responses",
@@ -15,7 +17,7 @@ function makeOpenAiModel(overrides: Partial<Model<"openai-responses">> = {}): Mo
 		contextWindow: 400000,
 		maxTokens: 128000,
 		...overrides,
-	};
+	});
 }
 
 describe("buildOpenAiNativeHistory custom tool calls", () => {

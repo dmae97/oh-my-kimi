@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort, type FetchImpl, type Model, type OpenAICompat, type ThinkingConfig } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -115,8 +116,8 @@ describe("ModelRegistry", () => {
 	function getOpenAICompat(model: Model | undefined): OpenAICompat | undefined {
 		// All custom-model compat overrides flow through OpenAICompatSchema regardless of
 		// the underlying api ("openai-completions" vs "openai-responses"), so we can read
-		// the field for any model in this fixture.
-		return model?.compat as OpenAICompat | undefined;
+		// the configured (sparse) compat for any model in this fixture.
+		return model?.compatConfig as OpenAICompat | undefined;
 	}
 
 	/** Create a baseUrl-only override (no custom models) */
@@ -1676,7 +1677,9 @@ describe("ModelRegistry", () => {
 
 			expect(models.length).toBeGreaterThan(0);
 			for (const model of models) {
-				expect((model.compat as { disableStrictTools?: boolean } | undefined)?.disableStrictTools).toBeUndefined();
+				expect(
+					(model.compatConfig as { disableStrictTools?: boolean } | undefined)?.disableStrictTools,
+				).toBeUndefined();
 			}
 		});
 
@@ -1846,7 +1849,7 @@ describe("ModelRegistry", () => {
 			"openai",
 			Date.now(),
 			[
-				{
+				buildModel({
 					id: "gpt-4o",
 					name: "GPT-4o",
 					api: "openai-completions",
@@ -1857,7 +1860,7 @@ describe("ModelRegistry", () => {
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 222_222, // UNK_CONTEXT_WINDOW
 					maxTokens: 8_888, // UNK_MAX_TOKENS
-				},
+				}),
 			],
 			true,
 			cacheDbPath,
@@ -1874,7 +1877,7 @@ describe("ModelRegistry", () => {
 	});
 
 	test("loads cached standard provider discovery models on startup", () => {
-		const cachedModel: Model<"ollama-chat"> = {
+		const cachedModel: Model<"ollama-chat"> = buildModel({
 			id: "deepseek-v4-pro",
 			name: "DeepSeek V4 Pro",
 			api: "ollama-chat",
@@ -1885,7 +1888,7 @@ describe("ModelRegistry", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 1_000_000,
 			maxTokens: 384_000,
-		};
+		});
 		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, "", cacheDbPath);
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
@@ -1895,7 +1898,7 @@ describe("ModelRegistry", () => {
 
 	test("loads cached special provider discovery models on startup", () => {
 		const cachedModels: Model[] = [
-			{
+			buildModel({
 				id: "gemini-3.5-flash-low",
 				name: "Gemini 3.5 Flash Low",
 				api: "google-gemini-cli",
@@ -1906,8 +1909,8 @@ describe("ModelRegistry", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1_000_000,
 				maxTokens: 8_192,
-			},
-			{
+			}),
+			buildModel({
 				id: "gemini-3.5-flash",
 				name: "Gemini 3.5 Flash",
 				api: "google-gemini-cli",
@@ -1918,8 +1921,8 @@ describe("ModelRegistry", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1_000_000,
 				maxTokens: 16_384,
-			},
-			{
+			}),
+			buildModel({
 				id: "gpt-5.4-codex-pro",
 				name: "GPT-5.4 Codex Pro",
 				api: "openai-codex-responses",
@@ -1930,7 +1933,7 @@ describe("ModelRegistry", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 400_000,
 				maxTokens: 128_000,
-			},
+			}),
 		];
 		for (const cachedModel of cachedModels) {
 			writeModelCache(cachedModel.provider, Date.now(), [cachedModel], true, "", cacheDbPath);
@@ -1944,7 +1947,7 @@ describe("ModelRegistry", () => {
 	});
 
 	test("replaces bundled google-vertex models with authoritative Vertex project discovery", () => {
-		const cachedModel: Model<"openai-completions"> = {
+		const cachedModel: Model<"openai-completions"> = buildModel({
 			id: "zai-org/glm-4.7-maas",
 			name: "GLM-4.7",
 			api: "openai-completions",
@@ -1955,7 +1958,7 @@ describe("ModelRegistry", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 222_222,
 			maxTokens: 8_888,
-		};
+		});
 		writeModelCache("google-vertex", Date.now(), [cachedModel], true, "", cacheDbPath);
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
@@ -1966,7 +1969,7 @@ describe("ModelRegistry", () => {
 	});
 
 	test("does not re-add bundled synthetic models after authoritative cache load", () => {
-		const cachedModel: Model<"openai-completions"> = {
+		const cachedModel: Model<"openai-completions"> = buildModel({
 			id: "hf:zai-org/GLM-5.1",
 			name: "GLM 5.1",
 			api: "openai-completions",
@@ -1977,7 +1980,7 @@ describe("ModelRegistry", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128_000,
 			maxTokens: 8_192,
-		};
+		});
 		writeModelCache("synthetic", Date.now(), [cachedModel], true, "authoritative:test", cacheDbPath);
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
@@ -2002,7 +2005,7 @@ describe("ModelRegistry", () => {
 	});
 
 	test("keeps bundled google-vertex fallback when cached project catalog is non-authoritative", () => {
-		const cachedModel: Model<"openai-completions"> = {
+		const cachedModel: Model<"openai-completions"> = buildModel({
 			id: "zai-org/glm-4.7-maas",
 			name: "GLM-4.7",
 			api: "openai-completions",
@@ -2013,7 +2016,7 @@ describe("ModelRegistry", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 222_222,
 			maxTokens: 8_888,
-		};
+		});
 		writeModelCache("google-vertex", Date.now(), [cachedModel], false, "", cacheDbPath);
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
@@ -2024,7 +2027,7 @@ describe("ModelRegistry", () => {
 	});
 
 	test("keeps bundled google-vertex fallback when cached project catalog is stale", () => {
-		const cachedModel: Model<"openai-completions"> = {
+		const cachedModel: Model<"openai-completions"> = buildModel({
 			id: "zai-org/glm-4.7-maas",
 			name: "GLM-4.7",
 			api: "openai-completions",
@@ -2035,7 +2038,7 @@ describe("ModelRegistry", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 222_222,
 			maxTokens: 8_888,
-		};
+		});
 		// 25h old > 24h TTL → cache.fresh === false even though authoritative === true.
 		const staleTimestamp = Date.now() - 25 * 60 * 60 * 1000;
 		writeModelCache("google-vertex", staleTimestamp, [cachedModel], true, "", cacheDbPath);

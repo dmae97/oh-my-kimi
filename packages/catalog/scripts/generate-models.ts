@@ -23,6 +23,7 @@ import {
 	linkOpenAIPromotionTargets,
 } from "../src/model-thinking";
 import prevModelsJson from "../src/models.json" with { type: "json" };
+import { toModelSpec } from "../src/provider-models/bundled-references";
 import {
 	allowsUnauthenticatedCatalogDiscovery,
 	type CatalogDiscoveryConfig,
@@ -41,7 +42,7 @@ import {
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
 } from "../src/provider-models/openai-compat";
-import type { Model } from "../src/types";
+import type { ModelSpec } from "../src/types";
 import { JWT_CLAIM_PATH } from "../src/wire/codex";
 
 const packageRoot = path.join(import.meta.dir, "..");
@@ -93,7 +94,7 @@ async function resolveProviderApiKey(providerId: string, catalog: CatalogDiscove
 	return undefined;
 }
 
-async function fetchProviderModelsFromCatalog(descriptor: CatalogProviderDescriptor): Promise<Model[]> {
+async function fetchProviderModelsFromCatalog(descriptor: CatalogProviderDescriptor): Promise<ModelSpec[]> {
 	const apiKey = await resolveProviderApiKey(descriptor.providerId, descriptor.catalogDiscovery);
 
 	if (!apiKey && !allowsUnauthenticatedCatalogDiscovery(descriptor)) {
@@ -111,14 +112,15 @@ async function fetchProviderModelsFromCatalog(descriptor: CatalogProviderDescrip
 			return [];
 		}
 		console.log(`Fetched ${models.length} models from ${descriptor.catalogDiscovery.label} model manager`);
-		return models;
+		// The manager returns built models; models.json stores specs (sparse compat).
+		return models.map(model => toModelSpec(model));
 	} catch (error) {
 		console.error(`Failed to fetch ${descriptor.catalogDiscovery.label} models:`, error);
 		return [];
 	}
 }
 
-async function loadModelsDevData(): Promise<Model[]> {
+async function loadModelsDevData(): Promise<ModelSpec[]> {
 	try {
 		console.log("Fetching models from models.dev API...");
 		const response = await fetch("https://models.dev/api.json");
@@ -133,8 +135,8 @@ async function loadModelsDevData(): Promise<Model[]> {
 	}
 }
 
-function createGlobalModelsDevReferenceMap(modelsDevModels: readonly Model[]): Map<string, Model> {
-	const references = new Map<string, Model>();
+function createGlobalModelsDevReferenceMap(modelsDevModels: readonly ModelSpec[]): Map<string, ModelSpec> {
+	const references = new Map<string, ModelSpec>();
 	for (const model of modelsDevModels) {
 		const existing = references.get(model.id);
 		if (!existing) {
@@ -156,7 +158,10 @@ function inheritModelsDevLimit(value: number, referenceValue: number, unspecifie
 	return value === unspecifiedValue ? referenceValue : value;
 }
 
-function applyGlobalModelsDevFallback(models: readonly Model[], modelsDevModels: readonly Model[]): Model[] {
+function applyGlobalModelsDevFallback(
+	models: readonly ModelSpec[],
+	modelsDevModels: readonly ModelSpec[],
+): ModelSpec[] {
 	const providerScopedKeys = new Set(modelsDevModels.map(model => `${model.provider}/${model.id}`));
 	const globalReferences = createGlobalModelsDevReferenceMap(modelsDevModels);
 	return models.map(model => {
@@ -180,7 +185,7 @@ function applyGlobalModelsDevFallback(models: readonly Model[], modelsDevModels:
 	});
 }
 
-function applyPremiumMultiplierOverrides(models: readonly Model[]): Model[] {
+function applyPremiumMultiplierOverrides(models: readonly ModelSpec[]): ModelSpec[] {
 	return models.map(model => {
 		const premiumMultiplier = COPILOT_PREMIUM_MULTIPLIERS[`${model.provider}/${model.id}`];
 		if (premiumMultiplier === undefined) {
@@ -195,11 +200,11 @@ function applyPremiumMultiplierOverrides(models: readonly Model[]): Model[] {
 		};
 	});
 }
-function hasBillableCost(cost: Model["cost"]): boolean {
+function hasBillableCost(cost: ModelSpec["cost"]): boolean {
 	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
 }
 
-function applyCodexPricingFallback(models: readonly Model[]): Model[] {
+function applyCodexPricingFallback(models: readonly ModelSpec[]): ModelSpec[] {
 	const openAIModels = new Map(
 		models
 			.filter(model => model.provider === "openai" && hasBillableCost(model.cost))
@@ -234,7 +239,7 @@ function applyCodexPricingFallback(models: readonly Model[]): Model[] {
  * stale or inflated upstream value through. The resolver applies the same
  * cap when discovery runs at runtime; this is the bundle-time safety net.
  */
-function applyFireworksKimiMaxTokensCap(models: readonly Model[]): Model[] {
+function applyFireworksKimiMaxTokensCap(models: readonly ModelSpec[]): ModelSpec[] {
 	const FIREWORKS_KIMI_PROVIDERS = new Set(["fireworks", "firepass"]);
 	return models.map(model => {
 		if (!FIREWORKS_KIMI_PROVIDERS.has(model.provider)) return model;
@@ -250,11 +255,11 @@ function applyFireworksKimiMaxTokensCap(models: readonly Model[]): Model[] {
  * `reasoning_effort` and rejects the DeepSeek-native binary `thinking` toggle
  * when both are present. Strip stale reference metadata from generated fallbacks.
  */
-function applyFireworksDeepSeekReasoningShape(models: readonly Model[]): Model[] {
+function applyFireworksDeepSeekReasoningShape(models: readonly ModelSpec[]): ModelSpec[] {
 	return models.map(model => {
 		if (model.provider !== "fireworks" || model.api !== "openai-completions") return model;
 		// `.api` equality doesn't narrow the generic; the guard makes this cast sound.
-		return stripFireworksDeepSeekThinkingToggle(model as Model<"openai-completions">, model.id);
+		return stripFireworksDeepSeekThinkingToggle(model as ModelSpec<"openai-completions">, model.id);
 	});
 }
 
@@ -283,7 +288,7 @@ async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuth
  * Fetch available Antigravity models from the API using the discovery module.
  * Returns empty array if no auth is available (previous models used as fallback).
  */
-async function fetchAntigravityModels(): Promise<Model<"google-gemini-cli">[]> {
+async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[]> {
 	const access = await getOAuthAccessFromStorage("google-antigravity");
 	if (!access) {
 		console.log("No Antigravity credentials found, will use previous models");
@@ -327,7 +332,7 @@ function extractCodexAccountId(accessToken: string): string | null {
 	}
 }
 
-async function fetchCodexDiscoveryModels(): Promise<Model<"openai-codex-responses">[]> {
+async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-responses">[]> {
 	const access = await getOAuthAccessFromStorage("openai-codex");
 	if (!access) {
 		return [];
@@ -365,7 +370,8 @@ async function generateModels() {
 			).map(descriptor => fetchProviderModelsFromCatalog(descriptor as CatalogProviderDescriptor)),
 		)
 	).flat();
-	const gitLabDuoModels = getGitLabDuoModels();
+	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
+	const gitLabDuoModels = getGitLabDuoModels().map(model => toModelSpec(model));
 	// Combine models (models.dev has priority)
 	let allModels = applyGlobalModelsDevFallback(
 		[...modelsDevModels, ...catalogProviderModels, ...gitLabDuoModels],
@@ -373,7 +379,7 @@ async function generateModels() {
 	);
 
 	if (!allModels.some(model => model.provider === "cloudflare-ai-gateway")) {
-		allModels.push(CLOUDFLARE_FALLBACK_MODEL);
+		allModels.push(CLOUDFLARE_FALLBACK_MODEL as ModelSpec<"anthropic-messages">);
 	}
 
 	// xai-oauth has no upstream catalog source (not in models.dev or
@@ -423,7 +429,7 @@ async function generateModels() {
 	// Discovery-only providers (local inference servers) — never bundle static models.
 	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
 
-	for (const models of Object.values(prevModelsJson as Record<string, Record<string, Model>>)) {
+	for (const models of Object.values(prevModelsJson as Record<string, Record<string, ModelSpec>>)) {
 		for (const model of Object.values(models)) {
 			if (
 				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
@@ -444,7 +450,7 @@ async function generateModels() {
 	linkOpenAIPromotionTargets(allModels);
 
 	// Group by provider and sort each provider's models
-	const providers: Record<string, Record<string, Model>> = {};
+	const providers: Record<string, Record<string, ModelSpec>> = {};
 	for (const model of allModels) {
 		if (DISCOVERY_ONLY_PROVIDERS.has(model.provider)) continue;
 		if (!providers[model.provider]) {
@@ -466,7 +472,7 @@ async function generateModels() {
 		);
 	};
 
-	const MODELS: Record<string, Record<string, Model>> = sortObj(providers);
+	const MODELS: Record<string, Record<string, ModelSpec>> = sortObj(providers);
 	for (const key in MODELS) {
 		MODELS[key] = sortObj(MODELS[key]);
 	}

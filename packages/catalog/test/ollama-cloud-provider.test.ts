@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { completeSimple, getEnvApiKey, stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ollamaCloudModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/ollama";
 import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
 
 const originalApiKey = Bun.env.OLLAMA_CLOUD_API_KEY;
 
-const cloudModel: Model<"ollama-chat"> = {
+const cloudModel: Model<"ollama-chat"> = buildModel({
 	id: "gpt-oss:120b",
 	name: "GPT OSS 120B",
 	api: "ollama-chat",
@@ -17,7 +18,7 @@ const cloudModel: Model<"ollama-chat"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 262_144,
 	maxTokens: 8_192,
-};
+});
 
 const readFileTool = {
 	name: "read_file",

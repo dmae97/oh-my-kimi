@@ -1,5 +1,5 @@
 import * as z from "zod/v4";
-import type { Model } from "../types";
+import type { ModelSpec } from "../types";
 import { isRecord } from "../utils";
 import { CODEX_BASE_URL, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 
@@ -40,7 +40,7 @@ const codexModelsResponseSchema = z
 type CodexModelEntry = z.infer<typeof codexModelEntrySchema>;
 
 interface NormalizedCodexModel {
-	model: Model<"openai-codex-responses">;
+	model: ModelSpec<"openai-codex-responses">;
 	priority: number;
 }
 
@@ -72,7 +72,7 @@ export interface CodexModelDiscoveryOptions {
  * Normalized Codex discovery response.
  */
 export interface CodexModelDiscoveryResult {
-	models: Model<"openai-codex-responses">[];
+	models: ModelSpec<"openai-codex-responses">[];
 	etag?: string;
 }
 
@@ -215,7 +215,7 @@ function isAbortError(error: unknown): error is Error {
 	return error instanceof Error && error.name === "AbortError";
 }
 
-function normalizeCodexModels(payload: unknown, baseUrl: string): Model<"openai-codex-responses">[] | null {
+function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"openai-codex-responses">[] | null {
 	const parsedResponse = codexModelsResponseSchema.safeParse(payload);
 	if (!parsedResponse.success) {
 		return null;

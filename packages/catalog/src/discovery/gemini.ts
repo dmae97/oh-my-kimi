@@ -1,7 +1,8 @@
 import * as z from "zod/v4";
 import { getBundledModels } from "../models";
+import { toModelSpec } from "../provider-models/bundled-references";
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../provider-models/discovery-constants";
-import type { FetchImpl, Model } from "../types";
+import type { FetchImpl, Model, ModelSpec } from "../types";
 
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_PAGE_SIZE = 100;
@@ -63,7 +64,7 @@ export interface GeminiDiscoveryOptions {
  */
 export async function fetchGeminiModels(
 	options: GeminiDiscoveryOptions,
-): Promise<Model<"google-generative-ai">[] | null> {
+): Promise<ModelSpec<"google-generative-ai">[] | null> {
 	if (!options.apiKey.trim()) {
 		return null;
 	}
@@ -74,9 +75,9 @@ export async function fetchGeminiModels(
 	const maxPages = normalizePositiveInt(options.maxPages, DEFAULT_MAX_PAGES);
 
 	const bundledById = new Map(
-		getBundledModels("google").map(model => [model.id, model as Model<"google-generative-ai">]),
+		getBundledModels("google").map(model => [model.id, toModelSpec(model as Model<"google-generative-ai">)]),
 	);
-	const modelsById = new Map<string, Model<"google-generative-ai">>();
+	const modelsById = new Map<string, ModelSpec<"google-generative-ai">>();
 	const seenTokens = new Set<string>();
 	let nextPageToken: string | undefined;
 
@@ -166,8 +167,8 @@ function normalizePageToken(value: unknown): string | undefined {
 function normalizeModel(
 	item: GeminiModelListItem,
 	baseUrl: string,
-	bundledById: Map<string, Model<"google-generative-ai">>,
-): Model<"google-generative-ai"> | null {
+	bundledById: Map<string, ModelSpec<"google-generative-ai">>,
+): ModelSpec<"google-generative-ai"> | null {
 	const id = normalizeModelId(item.name);
 	if (!id) {
 		return null;

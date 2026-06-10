@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { streamBedrock } from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 const originalSkipAuth = process.env.AWS_BEDROCK_SKIP_AUTH;
@@ -15,7 +16,7 @@ afterAll(() => {
 });
 
 function adaptiveModel(id: string): Model<"bedrock-converse-stream"> {
-	return {
+	return buildModel({
 		id,
 		name: id,
 		api: "bedrock-converse-stream",
@@ -27,11 +28,11 @@ function adaptiveModel(id: string): Model<"bedrock-converse-stream"> {
 		contextWindow: 1_000_000,
 		maxTokens: 128_000,
 		thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
-	};
+	});
 }
 
 function budgetModel(id: string): Model<"bedrock-converse-stream"> {
-	return {
+	return buildModel({
 		id,
 		name: id,
 		api: "bedrock-converse-stream",
@@ -43,7 +44,7 @@ function budgetModel(id: string): Model<"bedrock-converse-stream"> {
 		contextWindow: 200_000,
 		maxTokens: 64_000,
 		thinking: { mode: "budget", minLevel: Effort.Minimal, maxLevel: Effort.High },
-	};
+	});
 }
 
 const baseContext: Context = {

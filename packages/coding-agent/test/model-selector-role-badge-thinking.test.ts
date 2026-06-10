@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -34,7 +35,7 @@ function createSelector(model: Model, settings: Settings): ModelSelectorComponen
 }
 
 function createOllamaCloudModel(id: string): Model {
-	return {
+	return buildModel({
 		id,
 		name: "DeepSeek V4 Pro",
 		api: "ollama-chat",
@@ -45,10 +46,10 @@ function createOllamaCloudModel(id: string): Model {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 1_000_000,
 		maxTokens: 8192,
-	};
+	});
 }
 function createContextTestModel(id: string, contextWindow: number): Model {
-	return {
+	return buildModel({
 		id,
 		name: id,
 		api: "ollama-chat",
@@ -59,7 +60,7 @@ function createContextTestModel(id: string, contextWindow: number): Model {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow,
 		maxTokens: 1024,
-	};
+	});
 }
 
 function createScopedSelector(

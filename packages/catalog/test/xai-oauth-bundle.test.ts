@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import MODELS_JSON from "@oh-my-pi/pi-catalog/models.json" with { type: "json" };
 import { buildXaiOAuthStaticSeed } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { Model } from "@oh-my-pi/pi-catalog/types";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 // Pins the invariant: bundled `models.json` carries every entry the runtime
 // curated catalog (XAI_OAUTH_CURATED_MODELS, surfaced via
@@ -14,7 +14,7 @@ import type { Model } from "@oh-my-pi/pi-catalog/types";
 // Failure here means: run `bun run generate-models` and commit the diff.
 describe("xai-oauth bundled catalog (regression)", () => {
 	const bundled =
-		(MODELS_JSON as unknown as Record<string, Record<string, Model<"openai-responses">>>)["xai-oauth"] ?? {};
+		(MODELS_JSON as unknown as Record<string, Record<string, ModelSpec<"openai-responses">>>)["xai-oauth"] ?? {};
 	const seed = buildXaiOAuthStaticSeed();
 
 	it("bundles every curated id", () => {

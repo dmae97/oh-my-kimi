@@ -6,8 +6,9 @@
  * Markers are case-insensitive substrings matched against the base URL, NOT
  * parsed hostnames: proxies regularly embed the upstream host in a path
  * segment, and the historical call sites all used substring semantics.
- * Callers needing strict hostname matching (e.g. guards before request-body
- * mutation) should keep their own `new URL().hostname` checks.
+ * Callers that need strict hostname matching — where a substring false
+ * positive is dangerous, e.g. the Anthropic official-endpoint OAuth gate —
+ * parse the URL and compare the hostname themselves.
  */
 
 interface HostClassSpec {
@@ -17,6 +18,9 @@ interface HostClassSpec {
 	readonly providerPrefixes?: readonly string[];
 	/** Case-insensitive substrings matched against the base URL. */
 	readonly urlMarkers: readonly string[];
+	// Strict hostname matching is intentionally not modeled here: the one
+	// auth-sensitive consumer (Anthropic official-endpoint) parses the URL
+	// itself; every other call site is benign and uses substring matching.
 }
 
 export const KNOWN_HOSTS = {

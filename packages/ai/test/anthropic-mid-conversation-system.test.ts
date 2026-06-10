@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, DeveloperMessage, Message, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, DeveloperMessage, Message, Model, ModelSpec, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 /**
  * Claude Opus 4.8 and the Fable/Mythos 5 generation support mid-conversation
@@ -11,8 +12,8 @@ import type { AssistantMessage, DeveloperMessage, Message, Model, UserMessage } 
  * @see https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
  */
 
-function makeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
-	return {
+function makeModel(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+	return buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-opus-4-8-20260528",
@@ -24,7 +25,7 @@ function makeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<
 		contextWindow: 1000000,
 		reasoning: true,
 		...overrides,
-	};
+	} as ModelSpec<"anthropic-messages">);
 }
 
 function user(text: string): UserMessage {

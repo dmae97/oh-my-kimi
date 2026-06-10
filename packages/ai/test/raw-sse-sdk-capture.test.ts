@@ -6,6 +6,7 @@ import { streamAzureOpenAIResponses } from "@oh-my-pi/pi-ai/providers/azure-open
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { Context, FetchImpl, Model, RawSseEvent } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const context: Context = {
@@ -17,7 +18,7 @@ const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
-const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = {
+const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = buildModel({
 	id: "gpt-5-mini",
 	name: "GPT-5 Mini",
 	api: "azure-openai-responses",
@@ -28,8 +29,8 @@ const azureOpenAIResponsesModel: Model<"azure-openai-responses"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 400_000,
 	maxTokens: 128_000,
-};
-const anthropicModel: Model<"anthropic-messages"> = {
+});
+const anthropicModel: Model<"anthropic-messages"> = buildModel({
 	id: "claude-sonnet-4-5",
 	name: "Claude Sonnet 4.5",
 	api: "anthropic-messages",
@@ -40,7 +41,7 @@ const anthropicModel: Model<"anthropic-messages"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 const openAIResponsesEvents = [
 	{ type: "response.created", response: { id: "resp_raw_sse", status: "in_progress" } },

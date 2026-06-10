@@ -3,9 +3,10 @@ import {
 	type AzureOpenAIResponsesOptions,
 	streamAzureOpenAIResponses,
 } from "@oh-my-pi/pi-ai/providers/azure-openai-responses";
-import type { Context, FetchImpl, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const azureModel: Model<"azure-openai-responses"> = {
+const azureModel: Model<"azure-openai-responses"> = buildModel({
 	id: "gpt-5-mini",
 	name: "GPT-5 Mini",
 	api: "azure-openai-responses",
@@ -16,7 +17,7 @@ const azureModel: Model<"azure-openai-responses"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 400000,
 	maxTokens: 128000,
-};
+});
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -95,10 +96,11 @@ describe("azure openai responses streaming", () => {
 	});
 
 	it("uses developer role for Azure Responses reasoning model system prompts", async () => {
-		const reasoningModel: Model<"azure-openai-responses"> = {
+		const reasoningModel: Model<"azure-openai-responses"> = buildModel({
 			...azureModel,
 			reasoning: true,
-		};
+			compat: azureModel.compatConfig,
+		} as ModelSpec<"azure-openai-responses">);
 		const payload = await captureAzurePayload(
 			{
 				systemPrompt: ["Reasoning instruction", "Second instruction"],

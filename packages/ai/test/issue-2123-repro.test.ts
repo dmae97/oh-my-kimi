@@ -22,9 +22,10 @@
 import { describe, expect, it } from "bun:test";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
-const OPUS_46_OAUTH: Model<"anthropic-messages"> = {
+const OPUS_46_OAUTH: Model<"anthropic-messages"> = buildModel({
 	id: "claude-opus-4-6",
 	name: "Claude Opus 4.6",
 	api: "anthropic-messages",
@@ -36,7 +37,7 @@ const OPUS_46_OAUTH: Model<"anthropic-messages"> = {
 	contextWindow: 1_000_000,
 	maxTokens: 128_000,
 	thinking: { mode: "anthropic-adaptive", minLevel: Effort.Minimal, maxLevel: Effort.XHigh },
-};
+});
 
 const todoTool: Tool = {
 	name: "todo",

@@ -1,5 +1,5 @@
 import * as z from "zod/v4";
-import type { Model } from "../types";
+import type { ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
 import { getAntigravityUserAgent } from "../wire/gemini-headers";
 
@@ -172,7 +172,7 @@ export interface FetchAntigravityDiscoveryModelsOptions {
  */
 export async function fetchAntigravityDiscoveryModels(
 	options: FetchAntigravityDiscoveryModelsOptions,
-): Promise<Model<"google-gemini-cli">[] | null> {
+): Promise<ModelSpec<"google-gemini-cli">[] | null> {
 	const fetcher = options.fetcher ?? fetch;
 	const endpoints = options.endpoint
 		? [trimTrailingSlashes(options.endpoint)]
@@ -211,7 +211,7 @@ export async function fetchAntigravityDiscoveryModels(
 			continue;
 		}
 
-		const models: Model<"google-gemini-cli">[] = [];
+		const models: ModelSpec<"google-gemini-cli">[] = [];
 
 		for (const [modelId, model] of Object.entries(parsed.models ?? {})) {
 			if (ANTIGRAVITY_DISCOVERY_DENYLIST.has(modelId)) {
