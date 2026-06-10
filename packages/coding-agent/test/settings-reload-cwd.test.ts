@@ -68,6 +68,39 @@ describe("Settings.reloadForCwd", () => {
 		}
 	});
 
+	it("rejects a missing --config overlay instead of silently ignoring it", async () => {
+		const testDir = path.join(os.tmpdir(), "test-config-overlay-missing", Snowflake.next());
+		try {
+			resetSettingsForTest();
+			fs.mkdirSync(testDir, { recursive: true });
+
+			const missingPath = path.join(testDir, "nope.yml");
+			expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [missingPath] })).rejects.toThrow(
+				`Config overlay not found: ${missingPath}`,
+			);
+		} finally {
+			resetSettingsForTest();
+			if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a malformed --config overlay", async () => {
+		const testDir = path.join(os.tmpdir(), "test-config-overlay-bad", Snowflake.next());
+		const overlayPath = path.join(testDir, "bad.yml");
+		try {
+			resetSettingsForTest();
+			fs.mkdirSync(testDir, { recursive: true });
+			fs.writeFileSync(overlayPath, "compaction: [unclosed\n");
+
+			expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [overlayPath] })).rejects.toThrow(
+				"Failed to parse config overlay",
+			);
+		} finally {
+			resetSettingsForTest();
+			if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
 	describe("project layer (on disk)", () => {
 		let testDir: string;
 		let agentDir: string;
