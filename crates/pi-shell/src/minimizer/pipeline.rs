@@ -11,7 +11,9 @@
 //! 2. `replace`              — ordered regex substitutions, line-by-line
 //! 3. `match_output`         — short-circuit to a one-line summary when the
 //!    full output blob matches, honoring an optional `unless` anti-pattern
-//! 4. `strip_lines_matching` / `keep_lines_matching` (mutually exclusive)
+//! 4. `strip_lines_matching` / `keep_lines_matching` — a line survives iff it
+//!    matches the keep set (when present) and does not match the strip set
+//!    (when present)
 //! 5. `truncate_lines_at`    — per-line Unicode-safe char cap
 //! 6. `head_lines` / `tail_lines` — keep first/last N lines with a marker
 //! 7. `max_lines`            — hard cap after head/tail
@@ -119,13 +121,6 @@ pub struct CompiledMatchOutput {
 	unless:  Option<Regex>,
 }
 
-#[derive(Debug)]
-pub enum CompiledLineFilter {
-	None,
-	Strip(RegexSet),
-	Keep(RegexSet),
-}
-
 /// A pipeline with every regex pre-compiled.
 #[derive(Debug)]
 pub struct CompiledPipeline {
@@ -138,7 +133,8 @@ pub struct CompiledPipeline {
 	pub strip_ansi:        bool,
 	pub replace:           Vec<CompiledReplace>,
 	pub match_output:      Vec<CompiledMatchOutput>,
-	pub line_filter:       CompiledLineFilter,
+	pub strip_lines:       Option<RegexSet>,
+	pub keep_lines:        Option<RegexSet>,
 	pub truncate_lines_at: Option<usize>,
 	pub head_lines:        Option<usize>,
 	pub tail_lines:        Option<usize>,
@@ -149,12 +145,8 @@ pub struct CompiledPipeline {
 }
 
 /// Compile a raw TOML definition. Returns a descriptive error on regex
-/// issues or mutually-exclusive-field conflicts.
+/// issues.
 pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, String> {
-	if !def.strip_lines_matching.is_empty() && !def.keep_lines_matching.is_empty() {
-		return Err("strip_lines_matching and keep_lines_matching are mutually exclusive".into());
-	}
-
 	let match_command =
 		Regex::new(&def.match_command).map_err(|e| format!("invalid match_command: {e}"))?;
 	let match_subcommand = def
@@ -188,16 +180,21 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		})
 		.collect::<Result<Vec<_>, String>>()?;
 
-	let line_filter = if !def.strip_lines_matching.is_empty() {
-		let set = RegexSet::new(&def.strip_lines_matching)
-			.map_err(|e| format!("invalid strip_lines_matching: {e}"))?;
-		CompiledLineFilter::Strip(set)
-	} else if !def.keep_lines_matching.is_empty() {
-		let set = RegexSet::new(&def.keep_lines_matching)
-			.map_err(|e| format!("invalid keep_lines_matching: {e}"))?;
-		CompiledLineFilter::Keep(set)
+	let strip_lines = if def.strip_lines_matching.is_empty() {
+		None
 	} else {
-		CompiledLineFilter::None
+		Some(
+			RegexSet::new(&def.strip_lines_matching)
+				.map_err(|e| format!("invalid strip_lines_matching: {e}"))?,
+		)
+	};
+	let keep_lines = if def.keep_lines_matching.is_empty() {
+		None
+	} else {
+		Some(
+			RegexSet::new(&def.keep_lines_matching)
+				.map_err(|e| format!("invalid keep_lines_matching: {e}"))?,
+		)
 	};
 
 	Ok(CompiledPipeline {
@@ -208,7 +205,8 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		strip_ansi: def.strip_ansi,
 		replace,
 		match_output,
-		line_filter,
+		strip_lines,
+		keep_lines,
 		truncate_lines_at: def.truncate_lines_at,
 		head_lines: def.head_lines,
 		tail_lines: def.tail_lines,
@@ -290,11 +288,16 @@ impl CompiledPipeline {
 			}
 		}
 
-		// Stage 4: strip/keep lines
-		let stage4: Cow<'_, str> = match &self.line_filter {
-			CompiledLineFilter::None => stage2,
-			CompiledLineFilter::Strip(set) => Cow::Owned(primitives::strip_lines_regex(&stage2, set)),
-			CompiledLineFilter::Keep(set) => Cow::Owned(primitives::keep_lines_regex(&stage2, set)),
+		// Stage 4: strip/keep lines (keep AND NOT strip; absent set = no
+		// constraint)
+		let stage4: Cow<'_, str> = if self.strip_lines.is_some() || self.keep_lines.is_some() {
+			Cow::Owned(primitives::filter_lines_regex(
+				&stage2,
+				self.strip_lines.as_ref(),
+				self.keep_lines.as_ref(),
+			))
+		} else {
+			stage2
 		};
 
 		// Stage 5: truncate each line
@@ -509,6 +512,21 @@ unless = "(?i)error|fail"
 		let pipeline = compile_one(src);
 		let out = pipeline.apply("BUILD SUCCESSFUL but later ERROR: oops\n");
 		assert!(out.as_ref().contains("ERROR"));
+	}
+
+	#[test]
+	fn strip_and_keep_combine_as_keep_and_not_strip() {
+		let src = r#"
+schema_version = 1
+[filters.combo]
+match_command = "^combo$"
+keep_lines_matching = ["^> Task "]
+strip_lines_matching = ["UP-TO-DATE$"]
+"#;
+		let pipeline = compile_one(src);
+		let out = pipeline.apply("> Task :a UP-TO-DATE\n> Task :b\nDownloading dep\n");
+		// Only lines matching the keep set AND not the strip set survive.
+		assert_eq!(out.as_ref(), "> Task :b\n");
 	}
 
 	#[test]

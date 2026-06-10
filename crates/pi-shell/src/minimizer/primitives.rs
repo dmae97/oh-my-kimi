@@ -280,28 +280,23 @@ pub fn max_lines(input: &str, max: usize) -> String {
 	out
 }
 
-/// Drop every line matched by any regex in `set`.
-pub fn strip_lines_regex(input: &str, set: &regex::RegexSet) -> String {
+/// Line filter combining an optional keep set and an optional strip set.
+///
+/// A line survives iff it matches the keep set (when present) AND does not
+/// match the strip set (when present) — i.e. keep is `K AND NOT S`. An
+/// absent set imposes no constraint, so pure strip and pure keep filtering
+/// are the degenerate single-set cases.
+pub fn filter_lines_regex(
+	input: &str,
+	strip: Option<&regex::RegexSet>,
+	keep: Option<&regex::RegexSet>,
+) -> String {
 	let mut out = String::new();
 	for line in input.lines() {
-		if set.is_match(line) {
-			continue;
+		if keep.is_none_or(|set| set.is_match(line)) && !strip.is_some_and(|set| set.is_match(line)) {
+			out.push_str(line);
+			out.push('\n');
 		}
-		out.push_str(line);
-		out.push('\n');
-	}
-	out
-}
-
-/// Keep only lines matching any regex in `set`.
-pub fn keep_lines_regex(input: &str, set: &regex::RegexSet) -> String {
-	let mut out = String::new();
-	for line in input.lines() {
-		if !set.is_match(line) {
-			continue;
-		}
-		out.push_str(line);
-		out.push('\n');
 	}
 	out
 }
@@ -380,5 +375,21 @@ mod tests {
 	#[test]
 	fn truncate_line_max_zero_yields_empty() {
 		assert_eq!(truncate_line("anything", 0), "");
+	}
+
+	#[test]
+	fn filter_lines_regex_combines_keep_and_strip() {
+		let strip = regex::RegexSet::new(["noise"]).unwrap();
+		let keep = regex::RegexSet::new(["^task"]).unwrap();
+		let input = "task ok\ntask noise\nnoise only\nunrelated\n";
+
+		// Combined: survives iff matches keep AND NOT strip.
+		assert_eq!(filter_lines_regex(input, Some(&strip), Some(&keep)), "task ok\n");
+		// Strip only: absent keep set imposes no constraint.
+		assert_eq!(filter_lines_regex(input, Some(&strip), None), "task ok\nunrelated\n");
+		// Keep only: absent strip set imposes no constraint.
+		assert_eq!(filter_lines_regex(input, None, Some(&keep)), "task ok\ntask noise\n");
+		// Neither: identity modulo trailing-newline normalization.
+		assert_eq!(filter_lines_regex(input, None, None), input);
 	}
 }
