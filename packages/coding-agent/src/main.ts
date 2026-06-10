@@ -920,6 +920,7 @@ export async function runRootCommand(
 	if (parsedArgs.listModels !== undefined) {
 		const settingsInstance = await logger.time("settings:init:list-models", Settings.init, {
 			cwd: getProjectDir(),
+			configFiles: parsedArgs.config,
 		});
 		await modelRegistry.refresh("online");
 		const cliExtensionPaths = parsedArgs.noExtensions
@@ -983,7 +984,8 @@ export async function runRootCommand(
 	}
 
 	let cwd = getProjectDir();
-	const settingsInstance = deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd }));
+	const settingsInstance =
+		deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config }));
 	if (parsedArgs.approvalMode) {
 		// Runtime override (not persisted): every settings.get("tools.approvalMode") downstream
 		// sees this value. The wrapper still honours --auto-approve / --yolo on top of it.

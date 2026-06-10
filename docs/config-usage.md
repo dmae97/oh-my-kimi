@@ -138,12 +138,13 @@ The runtime settings model is layered:
 
 1. Global settings: `~/.omp/agent/config.yml`
 2. Project settings: discovered via settings capability (`settings.json` and `config.yml` from providers)
-3. Runtime overrides: in-memory, non-persistent
-4. Schema defaults: from `SETTINGS_SCHEMA`
+3. CLI config overlays: `omp --config <path>` / repeated `--config` files, loaded as `config.yml`-style YAML for this process only
+4. Runtime overrides: in-memory, non-persistent
+5. Schema defaults: from `SETTINGS_SCHEMA`
 
-Effective read path:
+Effective precedence:
 
-`defaults <- global <- project <- overrides`
+`defaults <- global <- project <- CLI config overlays <- overrides`
 
 Write behavior:
 
