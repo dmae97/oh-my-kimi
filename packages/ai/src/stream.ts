@@ -976,6 +976,7 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"ollama-chat">({
 				...base,
 				reasoning: resolveOpenAiReasoningEffort(model, options),
+				disableReasoning: options?.disableReasoning,
 				toolChoice: options?.toolChoice,
 			});
 

@@ -91,7 +91,8 @@ export function ollamaCloudModelManagerOptions(
 ): ModelManagerOptions<"ollama-chat"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = normalizeOllamaCloudBaseUrl(config?.baseUrl);
-	const resolveReference = createReferenceResolver(createBundledReferenceMap<"ollama-chat">("ollama-cloud"));
+	const providerReferences = createBundledReferenceMap<"ollama-chat">("ollama-cloud");
+	const resolveReference = createReferenceResolver(providerReferences);
 	return {
 		providerId: "ollama-cloud",
 		fetchDynamicModels: async () => {
@@ -115,6 +116,7 @@ export function ollamaCloudModelManagerOptions(
 					if (!id) {
 						return undefined;
 					}
+					const providerReference = providerReferences.get(id);
 					const reference = resolveReference(id);
 					let metadata: OllamaShowResponse | undefined;
 					try {
@@ -123,7 +125,7 @@ export function ollamaCloudModelManagerOptions(
 						metadata = undefined;
 					}
 					const capabilities = metadata?.capabilities;
-					const contextWindow = getContextWindow(metadata?.model_info) ?? reference?.contextWindow ?? 128000;
+					const contextWindow = getContextWindow(metadata?.model_info) ?? providerReference?.contextWindow ?? 128000;
 					const reasoning = capabilities ? capabilities.includes("thinking") : (reference?.reasoning ?? false);
 					const thinking = capabilities ? getThinkingConfig(capabilities) : reference?.thinking;
 					const input = capabilities
@@ -143,7 +145,7 @@ export function ollamaCloudModelManagerOptions(
 						input,
 						cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 						contextWindow,
-						maxTokens: reference?.maxTokens ?? Math.min(contextWindow, 8192),
+						maxTokens: providerReference?.maxTokens ?? Math.min(contextWindow, 8192),
 					};
 				}),
 			);
