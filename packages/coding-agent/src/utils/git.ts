@@ -1462,6 +1462,19 @@ export const repo = {
 		return repoRoot;
 	},
 
+	/**
+	 * Sync sibling of {@link primaryRoot}. Resolves only via on-disk `.git`/
+	 * `commondir` walking — no subprocess fallback — so it stays usable from
+	 * paths where async I/O is impractical (e.g. `computeBankScope`). Returns
+	 * `null` when `cwd` is outside a repository.
+	 */
+	primaryRootSync(cwd: string): string | null {
+		const repository = resolveRepositorySync(cwd);
+		if (!repository) return null;
+		if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
+		return repository.repoRoot;
+	},
+
 	/** Full GitRepository metadata (sync). */
 	resolveSync(cwd: string): GitRepository | null {
 		return resolveRepositorySync(cwd);
