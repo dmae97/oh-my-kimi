@@ -184,6 +184,29 @@ describe("model thinking derivation", () => {
 		expect(pinned.thinking?.supportsDisplay).toBe(false);
 	});
 
+	it("infers thinking when explicit metadata omits efforts", () => {
+		const model = buildModel(
+			JSON.parse(`{
+				"id": "gpt-5",
+				"name": "gpt-5",
+				"api": "openai-completions",
+				"provider": "openai",
+				"baseUrl": "",
+				"reasoning": true,
+				"thinking": { "mode": "effort" },
+				"input": ["text"],
+				"cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+				"contextWindow": 200000,
+				"maxTokens": 32000
+			}`),
+		);
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+		});
+	});
+
 	it("bakes sampling-param rejection into anthropic compat", () => {
 		const sonnet45 = createModel({ id: "claude-sonnet-4-5", api: "anthropic-messages", provider: "anthropic" });
 		const opus47 = createModel({ id: "claude-opus-4.7", api: "anthropic-messages", provider: "anthropic" });
