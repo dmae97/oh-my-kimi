@@ -1,7 +1,6 @@
-import { zhipuCodingPlanModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://bigmodel.cn/coding-plan/personal/overview";
 const API_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
@@ -45,9 +44,5 @@ export async function loginZhipuCodingPlan(options: OAuthController): Promise<st
 export const zhipuCodingPlanProvider = {
 	id: "zhipu-coding-plan",
 	name: "Zhipu Coding Plan (智谱)",
-	defaultModel: "glm-5.1",
-	createModelManagerOptions: (config: ModelManagerConfig) => zhipuCodingPlanModelManagerOptions(config),
-	catalogDiscovery: { label: "Zhipu Coding Plan", envVars: ["ZHIPU_API_KEY"] },
-	envKeys: "ZHIPU_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginZhipuCodingPlan(cb),
 } as const satisfies ProviderDefinition;

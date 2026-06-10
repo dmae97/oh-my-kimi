@@ -94,7 +94,7 @@ cp "$natives_pkg_backup" "$ROOT_DIR/packages/natives/package.json"
 [ "$core_rc" -eq 0 ] || exit "$core_rc"
 
 # 3. Pack the remaining workspace packages (natives core handled above).
-for pkg in utils hashline ai mnemopi agent tui stats coding-agent; do
+for pkg in utils hashline catalog ai mnemopi agent tui stats coding-agent; do
    (
       cd "$ROOT_DIR/packages/$pkg"
       bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null
@@ -105,6 +105,7 @@ utils_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-utils-*.tgz)"
 natives_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-[0-9]*.tgz)"
 natives_leaf_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-"$host_tag"-*.tgz)"
 hashline_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-hashline-*.tgz)"
+catalog_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-catalog-*.tgz)"
 ai_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-ai-*.tgz)"
 mnemopi_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-mnemopi-*.tgz)"
 agent_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-agent-core-*.tgz)"
@@ -128,6 +129,7 @@ mkdir -p "$TARBALL_APP_DIR"
 			'@oh-my-pi/pi-natives-$host_tag': '$natives_leaf_tgz',
 			'@oh-my-pi/hashline': '$hashline_tgz',
 			'@oh-my-pi/pi-ai': '$ai_tgz',
+			'@oh-my-pi/pi-catalog': '$catalog_tgz',
 			'@oh-my-pi/pi-mnemopi': '$mnemopi_tgz',
 			'@oh-my-pi/pi-agent-core': '$agent_tgz',
 			'@oh-my-pi/pi-tui': '$tui_tgz',
@@ -137,7 +139,7 @@ mkdir -p "$TARBALL_APP_DIR"
 		require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
 	"
 
-   bun add "$utils_tgz" "$natives_tgz" "$hashline_tgz" "$ai_tgz" "$mnemopi_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz"
+   bun add "$utils_tgz" "$natives_tgz" "$hashline_tgz" "$catalog_tgz" "$ai_tgz" "$mnemopi_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz"
    # The platform leaf must arrive through the core's optionalDependencies +
    # override, not as a direct dependency — assert it landed before smoking so a
    # resolution regression is distinguishable from a runtime loader bug.

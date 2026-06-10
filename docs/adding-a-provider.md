@@ -1,26 +1,42 @@
 # Adding a provider
 
-Providers in `packages/ai` are described by a single declarative
-`ProviderDefinition` and collected in one registry. Every scattered structure —
-the `KnownProvider` / `OAuthProvider` type unions, `PROVIDER_DESCRIPTORS`,
-`DEFAULT_MODEL_PER_PROVIDER`, the `serviceProviderMap` env-key fallbacks, the
-`/login` provider list, the `refreshOAuthToken` / `AuthStorage.login` dispatch,
-and the coding-agent callback maps — is **derived** from that registry.
+A provider is described in two halves:
+
+- **Catalog half** (`packages/catalog`): one entry in the `CATALOG_PROVIDERS`
+  table (`packages/catalog/src/provider-models/descriptors.ts`) carrying the
+  `id`, `defaultModel`, runtime model-discovery factory, and catalog-generation
+  wiring. `KnownProvider`, `PROVIDER_DESCRIPTORS`, and
+  `DEFAULT_MODEL_PER_PROVIDER` are derived from this table.
+- **Auth half** (`packages/ai`): one declarative `ProviderDefinition` in the
+  registry carrying env-key fallbacks and login/refresh flows. The
+  `OAuthProvider` union, the env-key map, the `/login` provider list, the
+  `refreshOAuthToken` / `AuthStorage.login` dispatch, and the coding-agent
+  callback maps are derived from the registry.
 
 **Scope.** This is for a provider that reuses an existing wire API
 (`openai-completions`, `anthropic-messages`, `google-generative-ai`, …) — the
 common case for gateways and API-key providers, since stream dispatch keys on
 `model.api`, not `model.provider`. Adding a *new wire protocol* (a new
 `KnownApi`) is a separate task that also touches `stream.ts` dispatch,
-`api-registry.ts`, and `types.ts`.
+`api-registry.ts`, and the catalog `types.ts`.
 
 ## Shape
 
-For the common case, a provider is still **one new def file + one registry line**:
+For the common case, a provider is **one catalog entry + one def file + one registry line**:
 
-1. **Create `packages/ai/src/registry/<id>.ts`** exporting one
-   `export const <camelId>Provider = { … } as const satisfies ProviderDefinition;`.
-2. **Add it to the `ALL` array** in `packages/ai/src/registry/registry.ts`
+1. **Add an entry to `CATALOG_PROVIDERS`** in
+   `packages/catalog/src/provider-models/descriptors.ts` with the `id`,
+   `defaultModel`, the plain API-key env var(s) as `envVars`, and (usually) a
+   `createModelManagerOptions` factory. For a
+   simple OpenAI-compatible gateway, build the factory in
+   `packages/catalog/src/provider-models/openai-compat.ts` or inline with the
+   exported `createSimpleOpenAICompletionsOptions(providerId, baseUrl, config)`.
+2. **Create `packages/ai/src/registry/<id>.ts`** exporting one
+   `export const <camelId>Provider = { … } as const satisfies ProviderDefinition;`
+   with the auth fields (`login`, …). Plain env-var names live in the catalog
+   entry's `envVars`; set `envKeys` only for computed resolvers (Foundry/ADC/
+   Bedrock-style probes).
+3. **Add it to the `ALL` array** in `packages/ai/src/registry/registry.ts`
    (one import + one array entry). `ALL` order is the `/login` list order for
    loginable providers.
 
@@ -34,26 +50,33 @@ For a **non-trivial provider-local OAuth flow**, put the implementation in
 file. The shared OAuth flow infrastructure it builds on lives in the same
 `registry/oauth/` directory.
 
-Either way, descriptors, default-model map, env-key map, login list, and refresh
-dispatch all update automatically, and the `KnownProvider` / `OAuthProvider`
-unions gain the new id by derivation.
+Descriptors, the default-model map, env-key map, login list, and refresh
+dispatch all update automatically; the `KnownProvider` union gains the new id
+from the catalog table and `OAuthProvider` from the registry.
 
-## `ProviderDefinition` fields
+## Field reference
 
-See `packages/ai/src/registry/types.ts` for the authoritative,
-JSDoc-annotated interface. Presence of a field opts the provider into a derived
-structure:
+**Catalog table entry** (`ProviderCatalogEntry`, see
+`packages/catalog/src/provider-models/descriptor-types.ts` for JSDoc):
+
+| Field | Effect |
+|---|---|
+| `id` | Required. Member of `KnownProvider`. |
+| `defaultModel` | Required. Preferred model when no explicit selection is made. |
+| `envVars` | Env var name(s), in order, for the runtime API-key fallback (`getEnvApiKey`). |
+| `createModelManagerOptions` | Runtime model-discovery factory. Present (and not `specialModelManager`) ⇒ appears in `PROVIDER_DESCRIPTORS`. |
+| `allowUnauthenticated` | Runtime creates a model manager even without a key. |
+| `dynamicModelsAuthoritative` | Successful discovery replaces bundled models. |
+| `catalogDiscovery` | `{ label, envVars?, oauthProvider?, allowUnauthenticated? }` for offline catalog generation (`generate-models.ts`). `envVars` here overrides the entry-level list when generation uses different credentials (e.g. `cursor`). |
+| `specialModelManager` | Bespoke runtime factory (`google-antigravity` / `google-gemini-cli` / `openai-codex`); excluded from `PROVIDER_DESCRIPTORS`. |
+
+**Registry definition** (`ProviderDefinition`, see
+`packages/ai/src/registry/types.ts`):
 
 | Field | Effect |
 |---|---|
 | `id`, `name` | Required. `name` shows in the `/login` list. |
-| `defaultModel` | Present ⇒ member of `KnownProvider` (a chat-model provider). |
-| `createModelManagerOptions` | Runtime model-discovery factory. Present (and not `specialModelManager`) ⇒ appears in `PROVIDER_DESCRIPTORS`. |
-| `allowUnauthenticated` | Runtime creates a model manager even without a key. |
-| `dynamicModelsAuthoritative` | Successful discovery replaces bundled models. |
-| `catalogDiscovery` | `{ label, envVars, oauthProvider?, allowUnauthenticated? }` for offline catalog generation (`generate-models.ts`). |
-| `specialModelManager` | Bespoke runtime factory (`google-antigravity` / `google-gemini-cli` / `openai-codex`); excluded from `PROVIDER_DESCRIPTORS`. |
-| `envKeys` | Env-var fallback for `getEnvApiKey`: a var name string or a `() => string \| undefined` resolver. |
+| `envKeys` | Computed env fallback for `getEnvApiKey`, overriding the catalog entry's `envVars`: a var name string or a `() => string \| undefined` resolver. Omit when `envVars` covers it. |
 | `login` | Interactive login. Present ⇒ member of `OAuthProvider`, shown in `/login`, dispatchable via `AuthStorage.login`. Returns an api-key `string` or `OAuthCredentials`. |
 | `refreshToken` | OAuth refresher; omit for static-token providers (the dispatch returns credentials unchanged). |
 | `storeCredentialsAs` | Store credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`). |

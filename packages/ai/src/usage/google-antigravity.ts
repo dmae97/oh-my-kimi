@@ -1,4 +1,4 @@
-import { getAntigravityUserAgent } from "../providers/google-gemini-headers";
+import { getAntigravityUserAgent } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import type {
 	CredentialRankingStrategy,
 	UsageAmount,

@@ -2,8 +2,8 @@
  * Shared utilities for Google Generative AI and Google Cloud Code Assist providers.
  */
 
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { extractHttpStatusFromError, readSseJson } from "@oh-my-pi/pi-utils";
-import { calculateCost } from "../models";
 import type {
 	Api,
 	AssistantMessage,

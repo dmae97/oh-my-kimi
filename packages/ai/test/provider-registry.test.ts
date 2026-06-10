@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
-import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-ai/provider-models/descriptors";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai/registry";
 import {
 	getOAuthProviders,
@@ -14,7 +13,7 @@ import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/registry/o
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
-const ENV_KEYS = ["ZENMUX_API_KEY", "EXA_API_KEY"] as const;
+const ENV_KEYS = ["ZENMUX_API_KEY", "EXA_API_KEY", "XAI_OAUTH_TOKEN"] as const;
 const originalEnv = new Map(ENV_KEYS.map(key => [key, Bun.env[key]]));
 
 afterEach(() => {
@@ -30,28 +29,19 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("provider registry derivation", () => {
-	test("descriptors are derived for standard model providers, excluding special-managed ones", () => {
-		const zenmux = PROVIDER_DESCRIPTORS.find(descriptor => descriptor.providerId === "zenmux");
-		expect(zenmux).toBeDefined();
-		expect(zenmux?.defaultModel).toBe("anthropic/claude-opus-4.6");
-		// The derived factory carries the provider identity through.
-		expect(zenmux?.createModelManagerOptions({ apiKey: "k" }).providerId).toBe("zenmux");
-
-		// openai-codex is special-managed (bespoke runtime factory) → excluded from descriptors,
-		// but still a known model provider with a default.
-		expect(PROVIDER_DESCRIPTORS.some(descriptor => descriptor.providerId === "openai-codex")).toBe(false);
-		expect(DEFAULT_MODEL_PER_PROVIDER["openai-codex"]).toBe("gpt-5.4");
-		// Login-only tools have no default model.
-		expect(DEFAULT_MODEL_PER_PROVIDER).not.toHaveProperty("kagi");
-	});
-
-	test("env-key map merges registry defs with legacy non-provider keys", () => {
+describe("provider registry auth surface", () => {
+	test("env-key map merges catalog names, registry defs, and legacy keys", () => {
 		Bun.env.ZENMUX_API_KEY = "zenmux-env";
 		Bun.env.EXA_API_KEY = "exa-env";
+		// Plain name derived from the catalog table's `envVars`.
 		expect(getEnvApiKey("zenmux")).toBe("zenmux-env");
 		// Legacy search-tool key preserved (not a registry provider def).
 		expect(getEnvApiKey("exa")).toBe("exa-env");
+	});
+
+	test("multi-var catalog env fallback picks names in order", () => {
+		Bun.env.XAI_OAUTH_TOKEN = "xai-oauth-env";
+		expect(getEnvApiKey("xai-oauth")).toBe("xai-oauth-env");
 	});
 
 	test("login list contains loginable providers and excludes env-only model providers", () => {

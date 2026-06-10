@@ -13,8 +13,8 @@ import {
 	type StopReason,
 	type ToolCall,
 } from "@oh-my-pi/pi-ai";
-import { calculateCost } from "@oh-my-pi/pi-ai/models";
 import { parseStreamingJson } from "@oh-my-pi/pi-ai/utils/json-parse";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { readSseJson } from "@oh-my-pi/pi-utils";
 
 // Event stream adapter for proxy SSE events

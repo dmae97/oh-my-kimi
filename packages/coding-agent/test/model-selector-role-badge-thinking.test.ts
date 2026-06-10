@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ModelSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/model-selector";

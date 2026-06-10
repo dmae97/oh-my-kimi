@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readModelCache } from "@oh-my-pi/pi-ai/model-cache";
-import { resolveProviderModels } from "@oh-my-pi/pi-ai/model-manager";
 import type { Model } from "@oh-my-pi/pi-ai/types";
+import { readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 

@@ -1,7 +1,6 @@
-import { fireworksModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 export const loginFireworks = createApiKeyLogin({
 	providerLabel: "Fireworks",
@@ -19,9 +18,5 @@ export const loginFireworks = createApiKeyLogin({
 export const fireworksProvider = {
 	id: "fireworks",
 	name: "Fireworks",
-	defaultModel: "kimi-k2.6",
-	createModelManagerOptions: (config: ModelManagerConfig) => fireworksModelManagerOptions(config),
-	catalogDiscovery: { label: "Fireworks", envVars: ["FIREWORKS_API_KEY"] },
-	envKeys: "FIREWORKS_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginFireworks(cb),
 } as const satisfies ProviderDefinition;

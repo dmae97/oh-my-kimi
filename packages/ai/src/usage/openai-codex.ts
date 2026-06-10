@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { CODEX_BASE_URL } from "../providers/openai-codex/constants";
+import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
 import type {
 	CredentialRankingStrategy,
 	UsageAmount,

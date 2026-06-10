@@ -1,7 +1,6 @@
-import { moonshotModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 export const loginMoonshot = createApiKeyLogin({
 	providerLabel: "Moonshot",
@@ -19,9 +18,5 @@ export const loginMoonshot = createApiKeyLogin({
 export const moonshotProvider = {
 	id: "moonshot",
 	name: "Moonshot (Kimi API)",
-	defaultModel: "kimi-k2.5",
-	createModelManagerOptions: (config: ModelManagerConfig) => moonshotModelManagerOptions(config),
-	catalogDiscovery: { label: "Moonshot", envVars: ["MOONSHOT_API_KEY"] },
-	envKeys: "MOONSHOT_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginMoonshot(cb),
 } as const satisfies ProviderDefinition;

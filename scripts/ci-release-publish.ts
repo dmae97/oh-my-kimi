@@ -77,6 +77,7 @@ function nativeLeafTagFromArgs(argv: readonly string[]): string | null {
 const nativeLeafTag = nativeLeafTagFromArgs(process.argv.slice(2));
 export const packages: PublishPackage[] = [
 	{ dir: "packages/utils", kind: "typescript" },
+	{ dir: "packages/catalog", kind: "typescript" },
 	{ dir: "packages/ai", kind: "typescript" },
 	{ dir: "packages/natives", kind: "native" },
 	{ dir: "packages/tui", kind: "typescript" },

@@ -1,7 +1,6 @@
-import { veniceModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://venice.ai/settings/api";
 const API_BASE_URL = "https://api.venice.ai/api/v1";
@@ -52,9 +51,5 @@ export async function loginVenice(options: OAuthController): Promise<string> {
 export const veniceProvider = {
 	id: "venice",
 	name: "Venice",
-	defaultModel: "llama-3.3-70b",
-	createModelManagerOptions: (config: ModelManagerConfig) => veniceModelManagerOptions(config),
-	catalogDiscovery: { label: "Venice", envVars: ["VENICE_API_KEY"], allowUnauthenticated: true },
-	envKeys: "VENICE_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginVenice(cb),
 } as const satisfies ProviderDefinition;

@@ -18,6 +18,7 @@
       "version": "15.10.10",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
+        "@oh-my-pi/pi-catalog": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
         "@opentelemetry/api": "catalog:",
@@ -33,6 +34,7 @@
       "version": "15.10.10",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
+        "@oh-my-pi/pi-catalog": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
         "openai": "catalog:",
         "partial-json": "catalog:",
@@ -42,11 +44,24 @@
         "@types/bun": "catalog:",
       },
     },
+    "packages/catalog": {
+      "name": "@oh-my-pi/pi-catalog",
+      "version": "15.10.10",
+      "dependencies": {
+        "@bufbuild/protobuf": "catalog:",
+        "@oh-my-pi/pi-utils": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@oh-my-pi/pi-ai": "catalog:",
+        "@types/bun": "catalog:",
+      },
+    },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
       "version": "15.10.10",
       "bin": {
-        "omp": "src/cli.ts",
+        "omp": "dist/cli.js",
       },
       "dependencies": {
         "@agentclientprotocol/sdk": "catalog:",
@@ -56,6 +71,7 @@
         "@oh-my-pi/omp-stats": "catalog:",
         "@oh-my-pi/pi-agent-core": "catalog:",
         "@oh-my-pi/pi-ai": "catalog:",
+        "@oh-my-pi/pi-catalog": "catalog:",
         "@oh-my-pi/pi-mnemopi": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-tui": "catalog:",
@@ -132,6 +148,7 @@
       },
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
+        "@oh-my-pi/pi-catalog": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
         "@tailwindcss/node": "catalog:",
         "chart.js": "catalog:",
@@ -252,6 +269,7 @@
     "@oh-my-pi/omp-stats": "15.10.10",
     "@oh-my-pi/pi-agent-core": "15.10.10",
     "@oh-my-pi/pi-ai": "15.10.10",
+    "@oh-my-pi/pi-catalog": "15.10.10",
     "@oh-my-pi/pi-coding-agent": "15.10.10",
     "@oh-my-pi/pi-mnemopi": "15.10.10",
     "@oh-my-pi/pi-natives": "15.10.10",
@@ -640,6 +658,8 @@
     "@oh-my-pi/pi-agent-core": ["@oh-my-pi/pi-agent-core@workspace:packages/agent"],
 
     "@oh-my-pi/pi-ai": ["@oh-my-pi/pi-ai@workspace:packages/ai"],
+
+    "@oh-my-pi/pi-catalog": ["@oh-my-pi/pi-catalog@workspace:packages/catalog"],
 
     "@oh-my-pi/pi-coding-agent": ["@oh-my-pi/pi-coding-agent@workspace:packages/coding-agent"],
 

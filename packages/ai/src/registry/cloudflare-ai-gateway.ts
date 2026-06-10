@@ -1,6 +1,5 @@
-import { cloudflareAiGatewayModelManagerOptions } from "../provider-models/openai-compat";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://developers.cloudflare.com/ai-gateway/configuration/authentication/";
 
@@ -41,9 +40,5 @@ export async function loginCloudflareAiGateway(options: OAuthController): Promis
 export const cloudflareAiGatewayProvider = {
 	id: "cloudflare-ai-gateway",
 	name: "Cloudflare AI Gateway",
-	defaultModel: "claude-sonnet-4-5",
-	createModelManagerOptions: (config: ModelManagerConfig) => cloudflareAiGatewayModelManagerOptions(config),
-	catalogDiscovery: { label: "Cloudflare AI Gateway", envVars: ["CLOUDFLARE_AI_GATEWAY_API_KEY"] },
-	envKeys: "CLOUDFLARE_AI_GATEWAY_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginCloudflareAiGateway(cb),
 } as const satisfies ProviderDefinition;

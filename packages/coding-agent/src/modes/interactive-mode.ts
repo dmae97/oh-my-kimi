@@ -12,14 +12,8 @@ import {
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import {
-	type AssistantMessage,
-	type ImageContent,
-	type Message,
-	type Model,
-	modelsAreEqual,
-	type UsageReport,
-} from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { Component, EditorTheme, LoaderMessageColorFn, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -49,7 +43,7 @@ import {
 import chalk from "chalk";
 import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
-import { MODEL_ROLES, type ModelRole } from "../config/model-registry";
+import { MODEL_ROLES, type ModelRole } from "../config/model-roles";
 import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {

@@ -34,11 +34,11 @@
 		"lint": "biome lint .",
 		"test": "bun test --parallel",
 		"fix": "biome check --write --unsafe .",
-		"fmt": "biome format --write .",
-		"generate-models": "bun scripts/generate-models.ts"
+		"fmt": "biome format --write ."
 	},
 	"dependencies": {
 		"@bufbuild/protobuf": "catalog:",
+		"@oh-my-pi/pi-catalog": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
 		"openai": "catalog:",
 		"partial-json": "catalog:",
@@ -80,25 +80,9 @@
 			"types": "./src/auth-gateway/*.ts",
 			"import": "./src/auth-gateway/*.ts"
 		},
-		"./models.json": {
-			"types": "./src/models.json.d.ts",
-			"import": "./src/models.json"
-		},
-		"./provider-models": {
-			"types": "./src/provider-models/index.ts",
-			"import": "./src/provider-models/index.ts"
-		},
-		"./provider-models/*": {
-			"types": "./src/provider-models/*.ts",
-			"import": "./src/provider-models/*.ts"
-		},
 		"./providers/*": {
 			"types": "./src/providers/*.ts",
 			"import": "./src/providers/*.ts"
-		},
-		"./providers/cursor/gen/*": {
-			"types": "./src/providers/cursor/gen/*.ts",
-			"import": "./src/providers/cursor/gen/*.ts"
 		},
 		"./providers/openai-codex/*": {
 			"types": "./src/providers/openai-codex/*.ts",
@@ -111,14 +95,6 @@
 		"./utils/*": {
 			"types": "./src/utils/*.ts",
 			"import": "./src/utils/*.ts"
-		},
-		"./utils/discovery": {
-			"types": "./src/utils/discovery/index.ts",
-			"import": "./src/utils/discovery/index.ts"
-		},
-		"./utils/discovery/*": {
-			"types": "./src/utils/discovery/*.ts",
-			"import": "./src/utils/discovery/*.ts"
 		},
 		"./oauth": {
 			"types": "./src/registry/oauth/index.ts",

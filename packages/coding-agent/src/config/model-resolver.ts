@@ -1,33 +1,67 @@
 /**
- * Model resolution, scoping, and initial selection
+ * Model resolution, scoping, and initial selection.
+ *
+ * Layering:
+ * - `matchModel` is the single matching engine. Order: exact `provider/id`
+ *   reference (with OpenRouter routed/date fallbacks) → exact canonical id →
+ *   exact bare id → provider-scoped fuzzy → substring with alias-vs-dated pick.
+ * - `parseModelPatternWithContext`/`parseModelPattern` layer the selector
+ *   grammar on top: trailing `:level` thinking suffixes (`splitThinkingSuffix`)
+ *   and `@upstream` provider routing (`splitUpstreamRouting`).
+ * - Everything else (`resolveModelFromString`, `resolveModelOverride*`,
+ *   `resolveRoleSelection`, `resolveModelScope`, `resolveCliModel`,
+ *   `findSmolModel`/`findSlowModel`) adapts inputs — roles, settings patterns,
+ *   CLI flags, scope globs — onto that pipeline.
  */
 
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import {
-	type Api,
-	clampThinkingLevelForModel,
-	DEFAULT_MODEL_PER_PROVIDER,
-	type Effort,
-	type KnownProvider,
-	type Model,
-	modelsAreEqual,
-} from "@oh-my-pi/pi-ai";
+import type { Api, Effort, KnownProvider, Model } from "@oh-my-pi/pi-ai";
+import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { parseThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
-import { buildModelProviderPriorityRank } from "./model-provider-priority";
-import { isAuthenticated, kNoAuth, MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "./model-registry";
+import { isAuthenticated, kNoAuth, type ModelRegistry } from "./model-registry";
+import { MODEL_ROLE_IDS, type ModelRole } from "./model-roles";
 import type { Settings } from "./settings";
 
-/** Default model IDs for each known provider */
-export const defaultModelPerProvider: Record<KnownProvider, string> = DEFAULT_MODEL_PER_PROVIDER;
+/**
+ * Pick the first available model matching a known provider's default id
+ * (catalog table order), falling back to the first available model.
+ */
+function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
+	for (const provider of Object.keys(DEFAULT_MODEL_PER_PROVIDER) as KnownProvider[]) {
+		const defaultId = DEFAULT_MODEL_PER_PROVIDER[provider];
+		const match = availableModels.find(m => m.provider === provider && m.id === defaultId);
+		if (match) return match;
+	}
+	return availableModels[0];
+}
 
 export interface ScopedModel {
 	model: Model<Api>;
 	thinkingLevel?: ThinkingLevel;
 	explicitThinkingLevel: boolean;
+}
+
+/**
+ * Split a trailing `:<level>` thinking selector off a model pattern.
+ *
+ * `level` is set only when the suffix parses as a valid thinking level, in
+ * which case `base` has the suffix stripped; otherwise `base` is the input.
+ * `minColonIndex` requires the colon to appear strictly after that index —
+ * role-alias callers pass `PREFIX_MODEL_ROLE.length` so the base is at least
+ * as long as the `pi/` prefix.
+ */
+function splitThinkingSuffix(pattern: string, minColonIndex = -1): { base: string; level?: ThinkingLevel } {
+	const colonIdx = pattern.lastIndexOf(":");
+	if (colonIdx <= minColonIndex) return { base: pattern };
+	const level = parseThinkingLevel(pattern.slice(colonIdx + 1));
+	return level ? { base: pattern.slice(0, colonIdx), level } : { base: pattern };
 }
 
 /**
@@ -42,15 +76,8 @@ export function parseModelString(
 	const id = modelStr.slice(slashIdx + 1);
 	const provider = modelStr.slice(0, slashIdx);
 	// Strip valid thinking level suffix (e.g., "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high")
-	const colonIdx = id.lastIndexOf(":");
-	if (colonIdx !== -1) {
-		const suffix = id.slice(colonIdx + 1);
-		const thinkingLevel = parseThinkingLevel(suffix);
-		if (thinkingLevel) {
-			return { provider, id: id.slice(0, colonIdx), thinkingLevel };
-		}
-	}
-	return { provider, id };
+	const { base, level } = splitThinkingSuffix(id);
+	return level ? { provider, id: base, thinkingLevel: level } : { provider, id };
 }
 
 /**
@@ -339,10 +366,7 @@ function isAlias(id: string): boolean {
  * Find an exact explicit provider/model match.
  * Bare model ids are handled separately so canonical ids can coalesce variants.
  */
-export function findExactModelReferenceMatch(
-	modelReference: string,
-	availableModels: Model<Api>[],
-): Model<Api> | undefined {
+function findExactModelReferenceMatch(modelReference: string, availableModels: Model<Api>[]): Model<Api> | undefined {
 	const trimmedReference = modelReference.trim();
 	if (!trimmedReference) {
 		return undefined;
@@ -378,10 +402,15 @@ function findExactCanonicalModelMatch(
 }
 
 /**
- * Try to match a pattern to a model from the available models list.
+ * The single model-matching engine. Tries, in order:
+ * 1. exact `provider/id` reference (OpenRouter routed/date fallbacks included),
+ * 2. exact canonical id (coalesces provider variants),
+ * 3. exact bare id (preference-ranked),
+ * 4. provider-scoped fuzzy match,
+ * 5. substring match with the alias-vs-dated pick.
  * Returns the matched model or undefined if no match found.
  */
-function tryMatchModel(
+function matchModel(
 	modelPattern: string,
 	availableModels: Model<Api>[],
 	context: ModelPreferenceContext,
@@ -505,37 +534,35 @@ function parseModelPatternWithContext(
 	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
 ): ParsedModelResult {
 	// Try exact match first
-	const exactMatch = tryMatchModel(pattern, availableModels, context, options);
+	const exactMatch = matchModel(pattern, availableModels, context, options);
 	if (exactMatch) {
 		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
 
-	// No match - try splitting on last colon if present
-	const lastColonIndex = pattern.lastIndexOf(":");
-	if (lastColonIndex === -1) {
-		// No colons, pattern simply doesn't match any model
-		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
-	}
-
-	const prefix = pattern.substring(0, lastColonIndex);
-	const suffix = pattern.substring(lastColonIndex + 1);
-
-	const parsedThinkingLevel = parseThinkingLevel(suffix);
-	if (parsedThinkingLevel) {
-		// Valid thinking level - recurse on prefix and use this level
-		const result = parseModelPatternWithContext(prefix, availableModels, context, options);
+	// No match - try stripping a valid thinking suffix and recursing
+	const { base, level } = splitThinkingSuffix(pattern);
+	if (level) {
+		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
 			// Only use this thinking level if no warning from inner recursion
 			const explicitThinkingLevel = !result.warning;
 			return {
 				model: result.model,
-				thinkingLevel: explicitThinkingLevel ? parsedThinkingLevel : undefined,
+				thinkingLevel: explicitThinkingLevel ? level : undefined,
 				warning: result.warning,
 				explicitThinkingLevel,
 			};
 		}
 		return result;
 	}
+
+	const lastColonIndex = pattern.lastIndexOf(":");
+	if (lastColonIndex === -1) {
+		// No colons, pattern simply doesn't match any model
+		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+	}
+	const prefix = pattern.substring(0, lastColonIndex);
+	const suffix = pattern.substring(lastColonIndex + 1);
 
 	const allowFallback = options?.allowInvalidThinkingSelectorFallback ?? true;
 	if (!allowFallback) {
@@ -606,10 +633,7 @@ function resolveConfiguredRolePattern(value: string, settings?: Settings): strin
 	const normalized = value.trim();
 	if (!normalized) return undefined;
 
-	const lastColonIndex = normalized.lastIndexOf(":");
-	const thinkingLevel =
-		lastColonIndex > PREFIX_MODEL_ROLE.length ? parseThinkingLevel(normalized.slice(lastColonIndex + 1)) : undefined;
-	const aliasCandidate = thinkingLevel ? normalized.slice(0, lastColonIndex) : normalized;
+	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(normalized, PREFIX_MODEL_ROLE.length);
 	const role = getModelRoleAlias(aliasCandidate);
 	if (!role) return [normalized];
 
@@ -736,9 +760,7 @@ export function extractExplicitThinkingSelector(
 	let current = normalized;
 	while (!visited.has(current)) {
 		visited.add(current);
-		const lastColonIndex = current.lastIndexOf(":");
-		const thinkingSelector =
-			lastColonIndex > PREFIX_MODEL_ROLE.length ? parseThinkingLevel(current.slice(lastColonIndex + 1)) : undefined;
+		const thinkingSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length).level;
 		if (thinkingSelector) {
 			return thinkingSelector;
 		}
@@ -903,20 +925,8 @@ function resolveExactCanonicalScopePattern(
 	modelRegistry: Pick<ModelRegistry, "getCanonicalVariants">,
 	availableModels: Model<Api>[],
 ): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } | undefined {
-	const lastColonIndex = pattern.lastIndexOf(":");
-	let canonicalId = pattern;
-	let thinkingLevel: ThinkingLevel | undefined;
-	let explicitThinkingLevel = false;
-
-	if (lastColonIndex !== -1) {
-		const suffix = pattern.substring(lastColonIndex + 1);
-		const parsedThinkingLevel = parseThinkingLevel(suffix);
-		if (parsedThinkingLevel) {
-			canonicalId = pattern.substring(0, lastColonIndex);
-			thinkingLevel = parsedThinkingLevel;
-			explicitThinkingLevel = true;
-		}
-	}
+	const { base: canonicalId, level: thinkingLevel } = splitThinkingSuffix(pattern);
+	const explicitThinkingLevel = thinkingLevel !== undefined;
 
 	const variants = modelRegistry
 		.getCanonicalVariants(canonicalId, { availableOnly: true, candidates: availableModels })
@@ -947,25 +957,23 @@ export async function resolveModelScope(
 	const availableModels = modelRegistry.getAvailable();
 	const context = buildPreferenceContext(availableModels, preferences);
 	const scopedModels: ScopedModel[] = [];
+	const addScopedModel = (model: Model<Api>, thinkingLevel: ThinkingLevel | undefined, explicit: boolean) => {
+		if (scopedModels.some(sm => modelsAreEqual(sm.model, model))) return;
+		scopedModels.push({
+			model,
+			thinkingLevel: explicit
+				? (resolveThinkingLevelForModel(model, thinkingLevel) ?? thinkingLevel)
+				: thinkingLevel,
+			explicitThinkingLevel: explicit,
+		});
+	};
 
 	for (const pattern of patterns) {
 		// Check if pattern contains glob characters
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
 			// Extract optional thinking level suffix (e.g., "provider/*:high")
-			const colonIdx = pattern.lastIndexOf(":");
-			let globPattern = pattern;
-			let thinkingLevel: ThinkingLevel | undefined;
-			let explicitThinkingLevel = false;
-
-			if (colonIdx !== -1) {
-				const suffix = pattern.substring(colonIdx + 1);
-				const parsedThinkingLevel = parseThinkingLevel(suffix);
-				if (parsedThinkingLevel) {
-					thinkingLevel = parsedThinkingLevel;
-					explicitThinkingLevel = true;
-					globPattern = pattern.substring(0, colonIdx);
-				}
-			}
+			const { base: globPattern, level: thinkingLevel } = splitThinkingSuffix(pattern);
+			const explicitThinkingLevel = thinkingLevel !== undefined;
 
 			// Match against "provider/modelId" format OR just model ID
 			// This allows "*sonnet*" to match without requiring "anthropic/*sonnet*"
@@ -981,15 +989,7 @@ export async function resolveModelScope(
 			}
 
 			for (const model of matchingModels) {
-				if (!scopedModels.find(sm => modelsAreEqual(sm.model, model))) {
-					scopedModels.push({
-						model,
-						thinkingLevel: explicitThinkingLevel
-							? (resolveThinkingLevelForModel(model, thinkingLevel) ?? thinkingLevel)
-							: thinkingLevel,
-						explicitThinkingLevel,
-					});
-				}
+				addScopedModel(model, thinkingLevel, explicitThinkingLevel);
 			}
 			continue;
 		}
@@ -997,16 +997,7 @@ export async function resolveModelScope(
 		const exactCanonical = resolveExactCanonicalScopePattern(pattern, modelRegistry, availableModels);
 		if (exactCanonical) {
 			for (const model of exactCanonical.models) {
-				if (!scopedModels.find(sm => modelsAreEqual(sm.model, model))) {
-					scopedModels.push({
-						model,
-						thinkingLevel: exactCanonical.explicitThinkingLevel
-							? (resolveThinkingLevelForModel(model, exactCanonical.thinkingLevel) ??
-								exactCanonical.thinkingLevel)
-							: exactCanonical.thinkingLevel,
-						explicitThinkingLevel: exactCanonical.explicitThinkingLevel,
-					});
-				}
+				addScopedModel(model, exactCanonical.thinkingLevel, exactCanonical.explicitThinkingLevel);
 			}
 			continue;
 		}
@@ -1027,16 +1018,7 @@ export async function resolveModelScope(
 			continue;
 		}
 
-		// Avoid duplicates
-		if (!scopedModels.find(sm => modelsAreEqual(sm.model, model))) {
-			scopedModels.push({
-				model,
-				thinkingLevel: explicitThinkingLevel
-					? (resolveThinkingLevelForModel(model, thinkingLevel) ?? thinkingLevel)
-					: thinkingLevel,
-				explicitThinkingLevel,
-			});
-		}
+		addScopedModel(model, thinkingLevel, explicitThinkingLevel);
 	}
 
 	return scopedModels;
@@ -1127,14 +1109,11 @@ export function resolveCliModel(options: {
 		// provider+id match over flat id match. Without this, a model with id
 		// "zai/glm-5" on provider "vercel-ai-gateway" wins over provider "zai"
 		// with id "glm-5", because Array.find returns the first catalog hit.
-		const slashIdx = lower.indexOf("/");
-		let exact: (typeof availableModels)[number] | undefined;
-		if (slashIdx !== -1) {
-			const prefix = lower.substring(0, slashIdx);
-			const suffix = trimmedModel.substring(slashIdx + 1);
-			exact = resolveProviderModelReference(prefix, suffix, availableModels);
-		}
+		let exact = findExactModelReferenceMatch(trimmedModel, availableModels);
 		if (!exact && !trimmedModel.includes(":")) {
+			// CLI flags address the full catalog, so unlike the engine's canonical
+			// step this lookup is unrestricted; the `:`-guard defers suffixed
+			// selectors (thinking levels, ollama-style ids) to the grammar below.
 			const canonicalMatch = modelRegistry.resolveCanonicalModel?.(trimmedModel, { availableOnly: false });
 			if (canonicalMatch) {
 				return {
@@ -1147,6 +1126,8 @@ export function resolveCliModel(options: {
 			}
 		}
 		if (!exact) {
+			// Flat exact id (or full selector) by catalog order: CLI resolution
+			// stays deterministic across runs regardless of usage-based ranking.
 			exact = availableModels.find(
 				model => model.id.toLowerCase() === lower || `${model.provider}/${model.id}`.toLowerCase() === lower,
 			);
@@ -1213,11 +1194,7 @@ export function resolveCliModel(options: {
 
 	let selector = provider ? formatModelString(model) : undefined;
 	if (!provider) {
-		const lastColonIndex = pattern.lastIndexOf(":");
-		const canonicalCandidate =
-			lastColonIndex !== -1 && parseThinkingLevel(pattern.substring(lastColonIndex + 1))
-				? pattern.substring(0, lastColonIndex)
-				: pattern;
+		const canonicalCandidate = splitThinkingSuffix(pattern).base;
 		if (!canonicalCandidate.includes("/")) {
 			const canonicalResolved = modelRegistry.resolveCanonicalModel?.(canonicalCandidate, { availableOnly: false });
 			if (canonicalResolved && canonicalResolved.provider === model.provider && canonicalResolved.id === model.id) {
@@ -1316,18 +1293,9 @@ export async function findInitialModel(options: {
 	// 4. Try first available model with valid API key
 	const availableModels = modelRegistry.getAvailable();
 
-	if (availableModels.length > 0) {
-		// Try to find a default model from known providers
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
-			const match = availableModels.find(m => m.provider === provider && m.id === defaultId);
-			if (match) {
-				return { model: match, thinkingLevel: undefined, fallbackMessage: undefined };
-			}
-		}
-
-		// If no default found, use first available
-		return { model: availableModels[0], thinkingLevel: undefined, fallbackMessage: undefined };
+	const fallback = pickDefaultAvailableModel(availableModels);
+	if (fallback) {
+		return { model: fallback, thinkingLevel: undefined, fallbackMessage: undefined };
 	}
 
 	// 5. No model found
@@ -1377,23 +1345,8 @@ export async function restoreModelFromSession(
 	// Try to find any available model
 	const availableModels = modelRegistry.getAvailable();
 
-	if (availableModels.length > 0) {
-		// Try to find a default model from known providers
-		let fallbackModel: Model<Api> | undefined;
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
-			const match = availableModels.find(m => m.provider === provider && m.id === defaultId);
-			if (match) {
-				fallbackModel = match;
-				break;
-			}
-		}
-
-		// If no default found, use first available
-		if (!fallbackModel) {
-			fallbackModel = availableModels[0];
-		}
-
+	const fallbackModel = pickDefaultAvailableModel(availableModels);
+	if (fallbackModel) {
 		if (shouldPrintMessages) {
 			console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
 		}

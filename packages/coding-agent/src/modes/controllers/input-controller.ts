@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import { getRoleInfo } from "../../config/model-registry";
+import { getRoleInfo } from "../../config/model-roles";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";

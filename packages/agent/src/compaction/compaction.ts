@@ -7,7 +7,6 @@
 
 import {
 	type AssistantMessage,
-	clampThinkingLevelForModel,
 	Effort,
 	type FetchImpl,
 	type Message,
@@ -15,6 +14,7 @@ import {
 	type Model,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";

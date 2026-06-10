@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { detectOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import { detectOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
 
 const echoTool: Tool = {

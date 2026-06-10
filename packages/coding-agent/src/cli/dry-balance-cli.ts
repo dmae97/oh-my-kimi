@@ -12,10 +12,10 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import type { CanonicalModelVariant } from "@oh-my-pi/pi-catalog/identity";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import type { CanonicalModelVariant } from "../config/model-equivalence";
 import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,

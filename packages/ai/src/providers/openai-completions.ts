@@ -1,3 +1,9 @@
+import { detectOpenAICompat, type ResolvedOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
@@ -10,10 +16,6 @@ import type {
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
 import packageJson from "../../package.json" with { type: "json" };
-import type { Effort } from "../effort";
-import { getSupportedEfforts } from "../model-thinking";
-import { calculateCost } from "../models";
-import { parseGitHubCopilotApiKey } from "../registry/oauth/github-copilot";
 import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import { getEnvApiKey } from "../stream";
 import {
@@ -43,7 +45,6 @@ import {
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { toFirepassWireModelId, toFireworksWireModelId } from "../utils/fireworks-model-id";
 import {
 	type CapturedHttpErrorResponse,
 	finalizeErrorMessage,
@@ -73,7 +74,6 @@ import {
 	hasCopilotVisionInput,
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
-import { detectOpenAICompat, type ResolvedOpenAICompat, resolveOpenAICompat } from "./openai-completions-compat";
 import { createInitialResponsesAssistantMessage } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
 import {

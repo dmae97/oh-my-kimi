@@ -1,7 +1,6 @@
-import { alibabaCodingPlanModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://modelstudio.console.alibabacloud.com/";
 const API_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
@@ -46,9 +45,5 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 export const alibabaCodingPlanProvider = {
 	id: "alibaba-coding-plan",
 	name: "Alibaba Coding Plan",
-	defaultModel: "qwen3.5-plus",
-	createModelManagerOptions: (config: ModelManagerConfig) => alibabaCodingPlanModelManagerOptions(config),
-	catalogDiscovery: { label: "Alibaba Coding Plan", envVars: ["ALIBABA_CODING_PLAN_API_KEY"] },
-	envKeys: "ALIBABA_CODING_PLAN_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginAlibabaCodingPlan(cb),
 } as const satisfies ProviderDefinition;

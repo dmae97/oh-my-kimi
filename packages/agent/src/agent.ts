@@ -9,7 +9,6 @@ import {
 	type CursorExecHandlers,
 	type CursorToolResultHandler,
 	type Effort,
-	getBundledModel,
 	type ImageContent,
 	type Message,
 	type Model,
@@ -22,6 +21,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";

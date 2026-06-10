@@ -16,9 +16,9 @@
  * requires when tool history is present.
  */
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessage, Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
 
 function abortedSignal(): AbortSignal {

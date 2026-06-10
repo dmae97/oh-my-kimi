@@ -1,3 +1,4 @@
+import type { KnownProvider } from "@oh-my-pi/pi-catalog";
 import { aimlApiProvider } from "./aimlapi";
 import { alibabaCodingPlanProvider } from "./alibaba-coding-plan";
 import { amazonBedrockProvider } from "./amazon-bedrock";
@@ -137,7 +138,12 @@ export function getProviderDefinition(id: string): ProviderDefinition | undefine
 	return BY_ID.get(id);
 }
 
-/** Chat-model providers (those carrying a `defaultModel`). */
-export type KnownProviderId = Extract<RegistryDef, { defaultModel: string }>["id"];
+/** Compile-time completeness: every catalog chat-model provider must have a registry definition. */
+type _MissingCatalogProviders = Exclude<KnownProvider, RegistryDef["id"]>;
+type _CheckRegistryComplete = _MissingCatalogProviders extends never
+	? true
+	: ["registry is missing catalog providers", _MissingCatalogProviders];
+true satisfies _CheckRegistryComplete;
+
 /** Loginable providers (those carrying a `login` flow). */
 export type OAuthProviderUnion = Extract<RegistryDef, { login: object }>["id"];

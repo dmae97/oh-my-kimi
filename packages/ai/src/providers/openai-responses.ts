@@ -1,3 +1,4 @@
+import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
@@ -6,7 +7,6 @@ import type {
 	ResponseInput,
 	ResponseStreamEvent,
 } from "openai/resources/responses/responses";
-import { parseGitHubCopilotApiKey } from "../registry/oauth/github-copilot";
 import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,

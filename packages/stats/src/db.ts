@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
-import { type GeneratedProvider, getBundledModel, type Usage } from "@oh-my-pi/pi-ai";
+import type { Usage } from "@oh-my-pi/pi-ai";
+import type { GeneratedProvider } from "@oh-my-pi/pi-catalog/models";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import type {
 	AggregatedStats,

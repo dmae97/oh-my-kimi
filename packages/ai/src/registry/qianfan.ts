@@ -1,7 +1,6 @@
-import { qianfanModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://console.bce.baidu.com/qianfan/ais/console/apiKey";
 const API_BASE_URL = "https://qianfan.baidubce.com/v2";
@@ -46,9 +45,5 @@ export async function loginQianfan(options: OAuthController): Promise<string> {
 export const qianfanProvider = {
 	id: "qianfan",
 	name: "Qianfan",
-	defaultModel: "deepseek-v3.2",
-	createModelManagerOptions: (config: ModelManagerConfig) => qianfanModelManagerOptions(config),
-	catalogDiscovery: { label: "Qianfan", envVars: ["QIANFAN_API_KEY"] },
-	envKeys: "QIANFAN_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginQianfan(cb),
 } as const satisfies ProviderDefinition;

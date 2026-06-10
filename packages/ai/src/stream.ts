@@ -1,13 +1,14 @@
-import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { getCustomApi } from "./api-registry";
-import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
-import type { Effort } from "./effort";
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	modelOmitsReasoningEffort,
 	requireSupportedEffort,
-} from "./model-thinking";
+} from "@oh-my-pi/pi-catalog/model-thinking";
+import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
+import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
+import { getCustomApi } from "./api-registry";
+import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -166,7 +167,20 @@ const LEGACY_ENV_KEYS: Record<string, KeyResolver> = {
 	brave: "BRAVE_API_KEY",
 };
 
+/**
+ * Env fallbacks derived from the catalog table — the single source for plain
+ * provider env-var names. Registry defs override with computed resolvers
+ * (Foundry/ADC/Bedrock probes); legacy non-provider keys merge last.
+ */
+const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEntry[]).flatMap(provider => {
+	const envVars = provider.envVars;
+	if (!envVars || envVars.length === 0) return [];
+	const resolver: KeyResolver = envVars.length === 1 ? envVars[0] : () => $pickenv(...envVars);
+	return [[provider.id, resolver] as [string, KeyResolver]];
+});
+
 const serviceProviderMap: Record<string, KeyResolver> = {
+	...Object.fromEntries(CATALOG_ENTRY_ENV_KEYS),
 	...Object.fromEntries(
 		PROVIDER_REGISTRY.flatMap(provider =>
 			provider.envKeys != null ? [[provider.id, provider.envKeys] as [string, KeyResolver]] : [],

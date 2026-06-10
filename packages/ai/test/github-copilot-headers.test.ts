@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import {
 	buildCopilotDynamicHeaders,
 	getCopilotInitiatorOverride,
@@ -8,6 +7,7 @@ import {
 	inferCopilotInitiator,
 } from "@oh-my-pi/pi-ai/providers/github-copilot-headers";
 import type { Message } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 describe("inferCopilotInitiator", () => {
 	it("returns 'user' when there are no messages", () => {

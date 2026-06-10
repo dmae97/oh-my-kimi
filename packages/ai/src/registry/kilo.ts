@@ -1,6 +1,5 @@
-import { kiloModelManagerOptions } from "../provider-models/openai-compat";
 import type { OAuthController, OAuthCredentials } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const KILO_DEVICE_AUTH_BASE_URL = "https://api.kilo.ai/api/device-auth";
 const POLL_INTERVAL_MS = 5000;
@@ -89,9 +88,5 @@ export async function loginKilo(callbacks: OAuthController): Promise<OAuthCreden
 export const kiloProvider = {
 	id: "kilo",
 	name: "Kilo Gateway",
-	defaultModel: "anthropic/claude-sonnet-4.5",
-	createModelManagerOptions: (config: ModelManagerConfig) => kiloModelManagerOptions(config),
-	catalogDiscovery: { label: "Kilo Gateway", envVars: ["KILO_API_KEY"], allowUnauthenticated: true },
-	envKeys: "KILO_API_KEY",
 	login: loginKilo,
 } as const satisfies ProviderDefinition;

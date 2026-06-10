@@ -12,12 +12,6 @@
  *   with `{ summary, shortSummary? }`.
  */
 
-import {
-	CODEX_BASE_URL,
-	getCodexAccountId,
-	OPENAI_HEADER_VALUES,
-	OPENAI_HEADERS,
-} from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
 import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
@@ -26,6 +20,12 @@ import {
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
 } from "@oh-my-pi/pi-ai/utils";
+import {
+	CODEX_BASE_URL,
+	getCodexAccountId,
+	OPENAI_HEADER_VALUES,
+	OPENAI_HEADERS,
+} from "@oh-my-pi/pi-catalog/wire/codex";
 import { logger } from "@oh-my-pi/pi-utils";
 
 // ============================================================================

@@ -7,9 +7,9 @@
  */
 import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModelOptions } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";

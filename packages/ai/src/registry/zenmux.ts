@@ -1,7 +1,6 @@
-import { zenmuxModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 export const loginZenMux = createApiKeyLogin({
 	providerLabel: "ZenMux",
@@ -19,9 +18,5 @@ export const loginZenMux = createApiKeyLogin({
 export const zenmuxProvider = {
 	id: "zenmux",
 	name: "ZenMux",
-	defaultModel: "anthropic/claude-opus-4.6",
-	createModelManagerOptions: (config: ModelManagerConfig) => zenmuxModelManagerOptions(config),
-	catalogDiscovery: { label: "ZenMux", envVars: ["ZENMUX_API_KEY"] },
-	envKeys: "ZENMUX_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginZenMux(cb),
 } as const satisfies ProviderDefinition;

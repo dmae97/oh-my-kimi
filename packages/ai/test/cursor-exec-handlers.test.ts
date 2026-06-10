@@ -5,8 +5,8 @@ import {
 	resolveExecHandler,
 	streamCursor,
 } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { AgentRunRequest } from "@oh-my-pi/pi-ai/providers/cursor/gen/agent_pb";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { AgentRunRequest } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 
 const cursorModel: Model<"cursor-agent"> = {
 	id: "cursor-composer-2.5",

@@ -3,35 +3,7 @@ import * as fs from "node:fs/promises";
 import http2 from "node:http2";
 import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
-import { $env, extractHttpStatusFromError, sanitizeText } from "@oh-my-pi/pi-utils";
-import { calculateCost } from "../models";
-import type {
-	Api,
-	AssistantMessage,
-	Context,
-	CursorExecHandlerResult,
-	CursorExecHandlers,
-	CursorMcpCall,
-	CursorShellStreamCallbacks,
-	CursorToolResultHandler,
-	ImageContent,
-	Message,
-	Model,
-	StreamFunction,
-	StreamOptions,
-	TextContent,
-	ThinkingContent,
-	Tool,
-	ToolCall,
-	ToolResultMessage,
-} from "../types";
-import { normalizeSystemPrompts } from "../utils";
-import { AssistantMessageEventStream } from "../utils/event-stream";
-import { parseStreamingJson } from "../utils/json-parse";
-import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
-import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
-import { toolWireSchema } from "../utils/schema/wire";
-import type { McpToolDefinition } from "./cursor/gen/agent_pb";
+import type { McpToolDefinition } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import {
 	AgentClientMessageSchema,
 	AgentConversationTurnStructureSchema,
@@ -128,7 +100,35 @@ import {
 	WriteShellStdinErrorSchema,
 	WriteShellStdinResultSchema,
 	WriteSuccessSchema,
-} from "./cursor/gen/agent_pb";
+} from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import { $env, extractHttpStatusFromError, sanitizeText } from "@oh-my-pi/pi-utils";
+import type {
+	Api,
+	AssistantMessage,
+	Context,
+	CursorExecHandlerResult,
+	CursorExecHandlers,
+	CursorMcpCall,
+	CursorShellStreamCallbacks,
+	CursorToolResultHandler,
+	ImageContent,
+	Message,
+	Model,
+	StreamFunction,
+	StreamOptions,
+	TextContent,
+	ThinkingContent,
+	Tool,
+	ToolCall,
+	ToolResultMessage,
+} from "../types";
+import { normalizeSystemPrompts } from "../utils";
+import { AssistantMessageEventStream } from "../utils/event-stream";
+import { parseStreamingJson } from "../utils/json-parse";
+import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
+import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
+import { toolWireSchema } from "../utils/schema/wire";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";

@@ -3,6 +3,15 @@ import * as fs from "node:fs";
 import { scheduler } from "node:timers/promises";
 import * as tls from "node:tls";
 import {
+	hasOpus47ApiRestrictions,
+	isAnthropicFableOrMythosModel,
+	mapEffortToAnthropicAdaptiveEffort,
+	supportsMidConversationSystemMessages,
+} from "@oh-my-pi/pi-catalog/model-thinking";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
+import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import {
 	$env,
 	extractHttpStatusFromError,
 	getInstallId,
@@ -12,15 +21,7 @@ import {
 	logger,
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
-import {
-	hasOpus47ApiRestrictions,
-	isAnthropicFableOrMythosModel,
-	mapEffortToAnthropicAdaptiveEffort,
-	supportsMidConversationSystemMessages,
-} from "../model-thinking";
-import { calculateCost } from "../models";
 import { isUsageLimitError } from "../rate-limit-utils";
-import { parseGitHubCopilotApiKey } from "../registry/oauth/github-copilot";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
 	Api,
@@ -47,13 +48,7 @@ import type {
 	Usage,
 } from "../types";
 import { resolveServiceTier } from "../types";
-import {
-	isAnthropicOAuthToken,
-	isRecord,
-	normalizeSystemPrompts,
-	normalizeToolCallId,
-	resolveCacheRetention,
-} from "../utils";
+import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";

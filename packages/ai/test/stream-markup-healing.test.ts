@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { stream } from "@oh-my-pi/pi-ai/stream";
 import type { Context, FetchImpl, Model, Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 interface SseToolCallDelta {
 	index: number;

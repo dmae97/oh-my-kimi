@@ -24,6 +24,7 @@
       "@oh-my-pi/omp-stats": "15.10.10",
       "@oh-my-pi/pi-agent-core": "15.10.10",
       "@oh-my-pi/pi-ai": "15.10.10",
+      "@oh-my-pi/pi-catalog": "15.10.10",
       "@oh-my-pi/pi-coding-agent": "15.10.10",
       "@oh-my-pi/pi-mnemopi": "15.10.10",
       "@oh-my-pi/pi-natives": "15.10.10",
@@ -152,7 +153,7 @@
     "publish": "bun run prepublishOnly && npm publish -ws --access public",
     "publish:dry": "bun run prepublishOnly && npm publish -ws --access public --dry-run",
     "release": "bun scripts/release.ts",
-    "generate-models": "bun --cwd=packages/ai run generate-models",
+    "generate-models": "bun --cwd=packages/catalog run generate-models",
     "generate-docs-index": "bun --cwd=packages/coding-agent run generate-docs-index",
     "generate-template": "bun --cwd=packages/coding-agent run generate-template",
     "check-spoofed-versions": "bun scripts/check-spoofed-versions.ts"

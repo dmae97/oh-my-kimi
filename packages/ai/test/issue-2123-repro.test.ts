@@ -20,9 +20,9 @@
  * the strategy goes with them).
  */
 import { describe, expect, it } from "bun:test";
-import { Effort } from "@oh-my-pi/pi-ai/effort";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 const OPUS_46_OAUTH: Model<"anthropic-messages"> = {
 	id: "claude-opus-4-6",

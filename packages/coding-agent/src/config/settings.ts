@@ -26,7 +26,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
-import type { ModelRole } from "../config/model-registry";
+import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";

@@ -4,8 +4,6 @@ import type { ProviderDefinition } from "./types";
 export const googleGeminiCliProvider = {
 	id: "google-gemini-cli",
 	name: "Google Cloud Code Assist (Gemini CLI)",
-	defaultModel: "gemini-2.5-pro",
-	specialModelManager: true,
 	login: async (cb: OAuthLoginCallbacks) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { loginGeminiCli } = await import("./oauth/google-gemini-cli");

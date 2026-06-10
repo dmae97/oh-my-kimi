@@ -1,3 +1,4 @@
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import type OpenAI from "openai";
 import type {
@@ -11,7 +12,6 @@ import type {
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
-import { calculateCost } from "../models";
 import {
 	type Api,
 	type AssistantMessage,

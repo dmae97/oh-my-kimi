@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";

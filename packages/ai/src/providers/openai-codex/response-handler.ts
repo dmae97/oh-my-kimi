@@ -1,4 +1,4 @@
-import { toNumber } from "../../utils";
+import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 
 export type CodexRateLimit = {
 	used_percent?: number;

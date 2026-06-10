@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const model = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),

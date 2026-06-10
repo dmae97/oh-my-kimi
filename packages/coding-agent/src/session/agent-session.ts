@@ -79,14 +79,14 @@ import {
 	clearAnthropicFastModeFallback,
 	deriveClaudeDeviceId,
 	Effort,
-	getSupportedEfforts,
 	isContextOverflow,
 	isUsageLimitError,
-	modelsAreEqual,
 	parseRateLimitReason,
 	resolveServiceTier,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { countTokens, MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	extractRetryHint,
@@ -105,7 +105,7 @@ import { classifyDifficulty } from "../auto-thinking/classifier";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
-import { MODEL_ROLE_IDS, type ModelRegistry } from "../config/model-registry";
+import type { ModelRegistry } from "../config/model-registry";
 import {
 	extractExplicitThinkingSelector,
 	formatModelSelectorValue,
@@ -115,6 +115,7 @@ import {
 	type ResolvedModelRoleValue,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
+import { MODEL_ROLE_IDS } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { onAppendOnlyModeChanged } from "../config/settings";

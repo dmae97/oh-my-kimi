@@ -3,7 +3,8 @@ import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type ApiKey, clampThinkingLevelForModel, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type ApiKey, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";

@@ -9,7 +9,7 @@ import {
 	signalListLabel,
 } from "@oh-my-pi/pi-agent-core/harmony-leak";
 import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import corpus from "./fixtures/harmony-leak-corpus.json" with { type: "json" };
 import { createAssistantMessage } from "./helpers";
 

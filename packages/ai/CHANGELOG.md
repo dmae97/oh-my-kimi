@@ -2,11 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- The model catalog moved to the new `@oh-my-pi/pi-catalog` package. Deep subpath exports `@oh-my-pi/pi-ai/models.json`, `/models`, `/model-cache`, `/model-manager`, `/model-thinking`, `/effort`, `/provider-models*`, `/utils/discovery*`, `/providers/openai-codex/constants`, `/providers/google-gemini-headers`, and `/providers/openai-completions-compat` are gone — import the `@oh-my-pi/pi-catalog` equivalents (`/models.json`, `/models`, `/model-cache`, `/model-manager`, `/model-thinking`, `/effort`, `/provider-models*`, `/discovery*`, `/wire/codex`, `/wire/gemini-headers`, `/compat/openai`). The pi-ai root barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, `Usage`, compat interfaces) — catalog *values* (`getBundledModel(s)`, `calculateCost`, `modelsAreEqual`, `clampThinkingLevelForModel`, `DEFAULT_MODEL_PER_PROVIDER`, …) must be imported from `@oh-my-pi/pi-catalog`.
+- `ProviderDefinition` is now auth-only: `defaultModel`, `createModelManagerOptions`, `catalogDiscovery`, `dynamicModelsAuthoritative`, `allowUnauthenticated`, and `specialModelManager` moved to pi-catalog's `CATALOG_PROVIDERS` table, and `KnownProviderId` was replaced by pi-catalog's `KnownProvider` (registry completeness is enforced by a compile-time check against that union). The pure GitHub Copilot key/endpoint helpers moved from `registry/oauth/github-copilot` to `@oh-my-pi/pi-catalog/wire/github-copilot`.
+
 ### Changed
 
 - Reduced idle-watchdog churn on the token hot path: the abort promise/listener is created once per stream instead of per yielded item, the deadline uses a persistent re-armed timer instead of a `setTimeout` create/destroy pair per delta, and the persistent race promises are re-minted every 1024 items so per-race reaction records cannot accumulate for the stream's whole life.
 - Memoized Anthropic many-image downscaling by content-block identity, so long sessions with stable message objects no longer re-decode and re-encode every oversized image on each request and retry.
 - Tool-argument validation errors now truncate embedded argument strings at 256 chars per field — a failed `write`-class call no longer echoes hundreds of KB of payload back to the model as the error message.
+- Auth storage no longer issues per-boot no-op writes: the schema-version row is only rewritten when the recorded version actually changes, and the credential identity-key backfill skips rows whose derived identity is null — reopening a current-schema database now performs zero write transactions
+- Plain provider env-var names moved to the catalog table: registry defs dropped their 48 `envKeys` literals (including the pure `$pickenv` pickers for `huggingface`/`qwen-portal`/`xai-oauth`), `getEnvApiKey` now derives those fallbacks from `CATALOG_PROVIDERS[].envVars`, and `envKeys` remains only for computed resolvers (Anthropic Foundry, Vertex ADC, Bedrock credential chains) and non-catalog providers (`kagi`, `tavily`, `parallel`, `perplexity`)
 
 ### Fixed
 

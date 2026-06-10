@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import type { Model } from "@oh-my-pi/pi-ai/types";
+import { enrichModelThinking } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
 export async function withEnv(

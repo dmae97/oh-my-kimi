@@ -19,6 +19,7 @@ import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
@@ -41,7 +42,6 @@ import { createApiKeyResolver } from "./config/api-key-resolver";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
-	defaultModelPerProvider,
 	formatModelString,
 	getModelMatchPreferences,
 	parseModelPattern,
@@ -1737,7 +1737,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
 			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
 			// findInitialModel's precedence.
-			for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
+			for (const [provider, defaultId] of Object.entries(DEFAULT_MODEL_PER_PROVIDER)) {
 				const preferred = fallbackCandidates.find(
 					candidate => candidate.provider === provider && candidate.id === defaultId,
 				);
@@ -2349,7 +2349,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		if (model?.api === "openai-codex-responses") {
-			const codexModel = model;
+			// `.api` equality doesn't narrow the generic; the guard makes this cast sound.
+			const codexModel = model as Model<"openai-codex-responses">;
 			const codexTransport = getOpenAICodexTransportDetails(codexModel, {
 				sessionId: providerSessionId,
 				baseUrl: codexModel.baseUrl,

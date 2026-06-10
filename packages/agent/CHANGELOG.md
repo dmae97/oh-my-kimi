@@ -5,6 +5,7 @@
 ### Changed
 
 - Editorial pass over the compaction prompts: fixed garbled grammar and missing articles, RFC-keyed prohibitions, deduped restated instructions; parsed markers (`<read-files>`/`<modified-files>`/`<previous-summary>`) and all output-format headings left byte-identical
+- Catalog imports moved to the new `@oh-my-pi/pi-catalog` package: subpath imports (`calculateCost`, Codex wire constants) plus catalog values previously taken from the `@oh-my-pi/pi-ai` root (`getBundledModel`, `clampThinkingLevelForModel`), which pi-ai no longer re-exports; type-only `Model`/`Api`/`Effort` imports from pi-ai are unchanged
 
 ## [15.10.8] - 2026-06-09
 ### Added

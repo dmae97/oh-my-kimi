@@ -1,20 +1,14 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	type ApiKey,
-	type FetchImpl,
-	getAntigravityUserAgent,
-	getEnvApiKey,
-	type Model,
-	withAuth,
-} from "@oh-my-pi/pi-ai";
+import { type ApiKey, type FetchImpl, getEnvApiKey, type Model, withAuth } from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 	URL_PATHS,
-} from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
+} from "@oh-my-pi/pi-catalog/wire/codex";
+import { getAntigravityUserAgent } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import {
 	$env,
 	isEnoent,

@@ -1,12 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import {
 	applyOpenRouterRoutingVariant,
 	convertMessages,
 	detectCompat,
 	streamOpenAICompletions,
 } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { type ResolvedOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-ai/providers/openai-completions-compat";
 import type {
 	AssistantMessage,
 	Context,
@@ -15,6 +13,8 @@ import type {
 	OpenAICompat,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai/types";
+import { type ResolvedOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();

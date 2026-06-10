@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { type Context, type Model, OPENAI_MAX_OUTPUT_TOKENS } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 // Output-token wire policy for OpenAI-family providers:
 //   - Non-aggregator completions + all responses: clamp to OPENAI_MAX_OUTPUT_TOKENS

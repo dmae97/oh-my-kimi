@@ -29,7 +29,7 @@ import { runListModelsCommand } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
-import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
+import { ModelRegistry } from "./config/model-registry";
 import {
 	getModelMatchPreferences,
 	resolveCliModel,
@@ -37,6 +37,7 @@ import {
 	resolveModelScope,
 	type ScopedModel,
 } from "./config/model-resolver";
+import { ModelsConfigFile } from "./config/models-config";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import {

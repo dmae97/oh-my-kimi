@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { enrichModelThinking } from "@oh-my-pi/pi-ai/model-thinking";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
@@ -7,6 +6,7 @@ import {
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Context, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { enrichModelThinking } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 const originalAgentDir = getAgentDir();

@@ -1,7 +1,6 @@
-import { nvidiaModelManagerOptions } from "../provider-models/openai-compat";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://org.ngc.nvidia.com/setup/personal-keys";
 const API_BASE_URL = "https://integrate.api.nvidia.com/v1";
@@ -57,9 +56,5 @@ export async function loginNvidia(options: OAuthController): Promise<string> {
 export const nvidiaProvider = {
 	id: "nvidia",
 	name: "NVIDIA",
-	defaultModel: "nvidia/llama-3.1-nemotron-70b-instruct",
-	createModelManagerOptions: (config: ModelManagerConfig) => nvidiaModelManagerOptions(config),
-	catalogDiscovery: { label: "NVIDIA", envVars: ["NVIDIA_API_KEY"] },
-	envKeys: "NVIDIA_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginNvidia(cb),
 } as const satisfies ProviderDefinition;

@@ -1,5 +1,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getSupportedEfforts, type Model, modelsAreEqual } from "@oh-my-pi/pi-ai";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	Container,
 	fuzzyFilter,
@@ -16,8 +18,8 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
+import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";

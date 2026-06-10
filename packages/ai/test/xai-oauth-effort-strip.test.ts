@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { modelOmitsReasoningEffort } from "@oh-my-pi/pi-ai/model-thinking";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { modelOmitsReasoningEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 // Pins fix #2 of the compaction effort-override bug. Before this fix,
 // `resolveOpenAiReasoningEffort` called `requireSupportedEffort` which threw

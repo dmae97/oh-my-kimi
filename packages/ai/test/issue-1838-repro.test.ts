@@ -33,9 +33,9 @@
  * own native format and would reject the extra key.
  */
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessage, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function abortedSignal(): AbortSignal {
 	const controller = new AbortController();

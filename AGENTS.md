@@ -11,6 +11,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 | Package                 | Description                                          |
 | ----------------------- | ---------------------------------------------------- |
 | `packages/ai`           | Multi-provider LLM client with streaming support     |
+| `packages/catalog`      | Model catalog: bundled models.json, provider descriptors, model identity/classification |
 | `packages/agent`        | Agent runtime with tool calling and state management |
 | `packages/coding-agent` | Main CLI application (primary focus)                 |
 | `packages/tui`          | Terminal UI library with differential rendering      |
@@ -18,6 +19,8 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 | `packages/stats`        | Local observability dashboard (`omp stats`)          |
 | `packages/utils`        | Shared utilities (logger, streams, temp files)       |
 | `crates/pi-natives`     | Rust crate for performance-critical text/grep ops    |
+
+**Catalog import convention**: code in this repo imports catalog *values* (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
 ## Code Quality
 
@@ -147,15 +150,15 @@ Manual reader loops only when the protocol requires it (SSE, streaming JSON-RPC)
 
 ## Generated Files
 
-**NEVER edit `packages/ai/src/models.json` directly.** It is generated from upstream sources (models.dev, provider catalog discovery, OpenCode docs) by `packages/ai/scripts/generate-models.ts` and the descriptors/resolvers in `packages/ai/src/provider-models/`. Hand-edits get overwritten on the next regen.
+**NEVER edit `packages/catalog/src/models.json` directly.** It is generated from upstream sources (models.dev, provider catalog discovery, OpenCode docs) by `packages/catalog/scripts/generate-models.ts` and the descriptors/resolvers in `packages/catalog/src/provider-models/`. Hand-edits get overwritten on the next regen.
 
 To change an entry, fix the source:
-- **Resolution rules / per-id overrides** → relevant resolver in `packages/ai/src/provider-models/openai-compat.ts` (e.g. `createOpenCodeApiResolution`'s id-override map).
-- **Provider descriptors** (filtering, transforms, defaults, headers, compat overrides) → `packages/ai/src/provider-models/descriptors.ts` or the provider-specific descriptor.
-- **Generator-level fixups** (premium multipliers, codex pricing fallback, fallback models, post-processing) → `packages/ai/scripts/generate-models.ts`.
-- **Thinking metadata / generated policies** → `packages/ai/src/model-thinking.ts` (`applyGeneratedModelPolicies`).
+- **Resolution rules / per-id overrides** → relevant resolver in `packages/catalog/src/provider-models/openai-compat.ts` (e.g. `createOpenCodeApiResolution`'s id-override map).
+- **Provider catalog entries** (default model, discovery factory/flags) → the `CATALOG_PROVIDERS` table in `packages/catalog/src/provider-models/descriptors.ts`.
+- **Generator-level fixups** (premium multipliers, codex pricing fallback, fallback models, post-processing) → `packages/catalog/scripts/generate-models.ts`.
+- **Thinking metadata / generated policies** → `packages/catalog/src/model-thinking.ts` (`applyGeneratedModelPolicies`); model-id classification (family/version parsing) lives in `packages/catalog/src/identity/classify.ts`.
 
-Regenerate with `bun --cwd=packages/ai run generate-models` and commit `models.json` alongside the source change. Add a regression test against the **resolver/descriptor**, not the bundled JSON, so it survives upstream metadata shifts.
+Regenerate with `bun --cwd=packages/catalog run generate-models` and commit `models.json` alongside the source change. Add a regression test against the **resolver/descriptor**, not the bundled JSON, so it survives upstream metadata shifts.
 
 ## Logging
 

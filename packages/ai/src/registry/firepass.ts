@@ -1,7 +1,6 @@
-import { firepassModelManagerOptions } from "../provider-models/openai-compat";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
-import type { ModelManagerConfig, ProviderDefinition } from "./types";
+import type { ProviderDefinition } from "./types";
 
 /**
  * Fire Pass login flow.
@@ -29,8 +28,5 @@ export const loginFirepass = createApiKeyLogin({
 export const firepassProvider = {
 	id: "firepass",
 	name: "Fire Pass (Fireworks Kimi K2.6 Turbo subscription)",
-	defaultModel: "kimi-k2.6-turbo",
-	createModelManagerOptions: (config: ModelManagerConfig) => firepassModelManagerOptions(config),
-	envKeys: "FIREPASS_API_KEY",
 	login: (cb: OAuthLoginCallbacks) => loginFirepass(cb),
 } as const satisfies ProviderDefinition;

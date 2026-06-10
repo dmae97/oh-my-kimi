@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { type Api, type AssistantMessage, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { isSubcommand } from "@oh-my-pi/pi-coding-agent/cli-commands";
 import { getDefault, getEnumValues, getUi } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { TinyTitleDownloadProgressComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tiny-title-download-progress";
