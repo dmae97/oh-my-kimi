@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `Snowflake.formatParts` packs the id as a single 64-bit BigInt hex format instead of stitching four 16-bit segments (simpler and ~1.7x faster), and `getTimestamp` extracts via exact double arithmetic instead of a BigInt round-trip. Output is bit-identical.
+
+
 ## [15.10.8] - 2026-06-09
 ### Removed
 
