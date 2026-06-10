@@ -72,4 +72,36 @@ describe("HookInputComponent timeout", () => {
 
 		component.dispose();
 	});
+
+	it("absorbs enhanced-paste payloads via pasteText and resets the timeout", () => {
+		// Regression: enhanced-paste (kitty OSC 5522) focus routing only targets
+		// components exposing a `pasteText` hook; without one the payload landed
+		// in the hidden main prompt behind the dialog (#2127 contract).
+		vi.useFakeTimers();
+
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const onTimeout = vi.fn();
+		const tui = { requestRender: vi.fn() } as unknown as TUI;
+
+		const component = new HookInputComponent("Prompt", undefined, onSubmit, onCancel, {
+			timeout: 1_000,
+			tui,
+			onTimeout,
+		});
+
+		vi.advanceTimersByTime(900);
+		component.pasteText("sk-line1\nsk-line2");
+
+		vi.advanceTimersByTime(900);
+		expect(onTimeout).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+
+		component.handleInput("\n");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith("sk-line1sk-line2");
+
+		component.dispose();
+	});
 });

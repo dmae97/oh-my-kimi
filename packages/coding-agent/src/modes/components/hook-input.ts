@@ -73,6 +73,14 @@ export class HookInputComponent extends Container {
 		}
 	}
 
+	/** Route non-bracketed paste transports (e.g. kitty's OSC 5522 enhanced clipboard)
+	 *  into the inner input, mirroring bracketed-paste semantics. Pasting counts as
+	 *  interaction, so the timeout countdown resets like any keystroke. */
+	pasteText(text: string): void {
+		this.#countdown?.reset();
+		this.#input.pasteText(text);
+	}
+
 	dispose(): void {
 		this.#countdown?.dispose();
 	}

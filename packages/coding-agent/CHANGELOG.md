@@ -9,6 +9,7 @@
 - npm installs now execute a prebundled single-file entry: `bin.omp` points at `dist/cli.js` (built by `scripts/bundle-dist.ts` during `prepack`, ~18MB minified, natives/transformers/mupdf external), cutting npm-install cold start by roughly 3x versus transpiling the raw TypeScript graph per launch; `src/**` stays published for SDK consumers and worker fallbacks
 - Plain interactive TTY launches print a dim two-line startup splash (`omp <version>` / `Initializing session…`) before session construction so first pixels appear immediately; suppressed for resume/fork/continue flows, quiet mode, `PI_TIMING`, and non-TTY stdio
 - Added `/stats` to launch the local stats dashboard from an active session, syncing session files first and opening the same browser dashboard as `omp stats`.
+- `/settings` now supports type-to-search filtering on setting labels, paths, descriptions, and values; Escape clears an active search before closing the panel.
 
 ### Changed
 
@@ -42,6 +43,7 @@
 
 ### Fixed
 
+- Fixed pasting into the ask tool's "Other (type your own)" text box (and hook input/editor dialogs) on terminals with OSC 5522 enhanced paste (kitty protocol): the enhanced-paste focus routing only targets components exposing a `pasteText` hook, and the dialog wrappers had none, so the payload was stuffed into the main prompt editor hidden behind the dialog. `HookEditorComponent` and `HookInputComponent` now forward `pasteText` to their inner editor/input (pasting also resets the input dialog's timeout countdown like any keystroke).
 - Fixed auto-retry giving up after one attempt ("Provider requested Xms wait, exceeds retry.maxDelayMs") on a usage-limit 429 when every sibling account was only momentarily blocked: the retry delay now waits for the earliest sibling unblock when that comes sooner than the provider's multi-hour retry-after, so the next attempt picks up the recovered account instead of failing fast.
 - Fixed Hindsight `per-project-tagged` mental-model seeding so each project gets its own conventions/decisions models and session context only injects active-project or untagged models ([#2218](https://github.com/can1357/oh-my-pi/issues/2218)).
 

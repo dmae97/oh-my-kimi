@@ -218,6 +218,29 @@ describe("HookEditorComponent prompt-style mode", () => {
 		expect(onCancel).not.toHaveBeenCalled();
 	});
 
+	it("absorbs enhanced-paste payloads delivered via pasteText (kitty OSC 5522 routing)", () => {
+		// Regression: pasting into the ask tool's "Other" editor on OSC 5522
+		// terminals routed the payload to the hidden main prompt, because the
+		// enhanced-paste focus routing only targets components exposing a
+		// `pasteText` hook and the dialog wrapper had none (#2127 contract).
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookEditorComponent(createTui(), "Prompt", undefined, onSubmit, onCancel, {
+			promptStyle: true,
+		});
+		const pasted = largePasteText();
+
+		component.pasteText(pasted);
+
+		expect(renderText(component)).toContain("[Paste #1, +11 lines]");
+
+		component.handleInput("\r");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith(pasted);
+		expect(onCancel).not.toHaveBeenCalled();
+	});
+
 	it("expands large paste markers when submitting on Enter", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();

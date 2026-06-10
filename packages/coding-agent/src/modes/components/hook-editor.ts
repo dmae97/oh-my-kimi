@@ -86,6 +86,14 @@ export class HookEditorComponent extends Container {
 		this.#onSubmitCallback(this.#editor.getExpandedText());
 	}
 
+	/** Route non-bracketed paste transports (e.g. kitty's OSC 5522 enhanced clipboard)
+	 *  into the inner editor, mirroring bracketed-paste semantics. Without this hook,
+	 *  enhanced-paste routing falls back to the main prompt editor hidden behind the
+	 *  dialog (#2127 routing contract). */
+	pasteText(text: string): void {
+		this.#editor.pasteText(text);
+	}
+
 	/** Prompt-style: raw Enter submits; Editor owns newline-producing sequences. */
 	#handlePromptStyleInput(keyData: string): void {
 		// Prompt-style keeps Escape as an explicit cancel key and also honors app.interrupt remaps.
