@@ -420,7 +420,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
-	job: JobTool.createIf,
+	job: s => new JobTool(s),
 	irc: IrcTool.createIf,
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),

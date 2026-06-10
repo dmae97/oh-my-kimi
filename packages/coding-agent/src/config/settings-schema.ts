@@ -2512,7 +2512,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "Async Execution",
-			description: "Enable async bash commands and background task execution",
+			description: "Enable async bash commands",
 		},
 	},
 
