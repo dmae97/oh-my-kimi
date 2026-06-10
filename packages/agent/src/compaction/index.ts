@@ -10,5 +10,4 @@ export * from "./messages";
 export * from "./openai";
 export * from "./pruning";
 export * from "./shake";
-export * from "./snapcompact";
 export * from "./utils";

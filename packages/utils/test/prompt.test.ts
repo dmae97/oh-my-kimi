@@ -96,7 +96,7 @@ describe("compile cache", () => {
 });
 
 describe("helpers: join", () => {
-	it('unescapes \\n and \\t in the separator (Handlebars string literals carry no escapes)', () => {
+	it("unescapes \\n and \\t in the separator (Handlebars string literals carry no escapes)", () => {
 		// Regression: `{{join files "\n"}}` used to emit the literal two-char `\n`
 		// between entries (visible in compaction <read-files> lists).
 		expect(prompt.render('{{join files "\\n"}}', { files: ["a.ts", "b.ts"] })).toBe("a.ts\nb.ts");

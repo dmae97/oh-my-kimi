@@ -97,7 +97,10 @@ describe("job waiting-poll block lifecycle", () => {
 	});
 
 	it("never marks non-job tools displaceable", () => {
-		const component = trackComponent(created, new ToolExecutionComponent("bash", { command: "ls" }, {}, undefined, uiStub));
+		const component = trackComponent(
+			created,
+			new ToolExecutionComponent("bash", { command: "ls" }, {}, undefined, uiStub),
+		);
 		component.updateResult(pollResult(["running"]), false);
 		expect(component.isDisplaceableBlock()).toBe(false);
 	});
@@ -145,7 +148,12 @@ describe("EventController displaces consecutive waiting polls", () => {
 	}
 
 	async function runPoll(controller: EventController, children: Component[], toolCallId: string) {
-		await controller.handleEvent({ type: "tool_execution_start", toolCallId, toolName: "job", args: { poll: ["j0"] } });
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId,
+			toolName: "job",
+			args: { poll: ["j0"] },
+		});
 		const component = children[children.length - 1] as ToolExecutionComponent;
 		trackComponent(created, component);
 		await controller.handleEvent({

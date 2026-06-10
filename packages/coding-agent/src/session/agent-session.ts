@@ -55,7 +55,6 @@ import {
 	type ShakeRegion,
 	type SummaryOptions,
 	shouldCompact,
-	snapcompactCompact,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	DEFAULT_PRUNE_CONFIG,
@@ -107,6 +106,7 @@ import {
 	relativePathWithinRoot,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
+import { snapcompactCompact } from "@oh-my-pi/snapcompact";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import { reset as resetCapabilities } from "../capability";
@@ -6323,7 +6323,7 @@ export class AgentSession {
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
 			} else if (snapcompactReady) {
-				const snapcompactResult = await snapcompactCompact(preparation, { convertToLlm });
+				const snapcompactResult = await snapcompactCompact(preparation, { convertToLlm, model: this.model });
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
@@ -7825,7 +7825,7 @@ export class AgentSession {
 			} else if (action === "snapcompact") {
 				// Local, deterministic: render discarded history onto PNG frames.
 				// No model candidates, no API key, no retry loop.
-				const snapcompactResult = await snapcompactCompact(preparation, { convertToLlm });
+				const snapcompactResult = await snapcompactCompact(preparation, { convertToLlm, model: this.model });
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;

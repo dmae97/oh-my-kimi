@@ -12,6 +12,7 @@
 ### Added
 
 - Added pre-TUI startup input capture so users could type while interactive sessions initialize and keep their draft while the application loads
+- Snapcompact compaction now passes the session model so frames render in the provider-optimal shape (unscii `8x8r-bw` for Anthropic-family/unknown APIs, `8x8r-sent` for Google, Lanczos-stretched `6x6u-sent` with `detail: "original"` for OpenAI), per the snapcompact 200k-token evals
 - Added queued submission replay so Enter presses made before startup completion are submitted automatically once interactive mode begins
 - Added per-turn supersede pruning of stale `read` results: when a file is re-read, older copies of the same path/selector are pruned from context at cache-favorable moments (small suffix, idle gap, or alongside overflow pruning). Gated by the new `compaction.supersedeReads` setting (default on)
 - Added soft request budgets for task subagents (explore/quick_task 40, others 90, configurable via `task.softRequestBudget`, 0 disables): crossing the budget injects a one-time wrap-up steer into the child; crossing 1.5× aborts the run gracefully

@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { getPreservedSnapcompactArchive, snapcompactImages } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	ImageContent,
 	Message,
@@ -28,6 +27,7 @@ import {
 	Snowflake,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import { getPreservedSnapcompactArchive, snapcompactImages } from "@oh-my-pi/snapcompact";
 import { ArtifactManager } from "./artifacts";
 import {
 	type BlobPutOptions,

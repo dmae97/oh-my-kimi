@@ -18,6 +18,7 @@ import {
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
 import type { AgentMessage } from "../types";
@@ -37,7 +38,6 @@ import compactionSummaryPrompt from "./prompts/compaction-summary.md" with { typ
 import compactionTurnPrefixPrompt from "./prompts/compaction-turn-prefix.md" with { type: "text" };
 import compactionUpdateSummaryPrompt from "./prompts/compaction-update-summary.md" with { type: "text" };
 import handoffDocumentPrompt from "./prompts/handoff-document.md" with { type: "text" };
-import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "./snapcompact";
 
 import {
 	computeFileLists,

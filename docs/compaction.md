@@ -10,7 +10,7 @@ Both are persisted as session entries and converted back into user-context messa
 ## Key implementation files
 
 - `packages/agent/src/compaction/compaction.ts` (context-full summarization and handoff generation)
-- `packages/agent/src/compaction/snapcompact.ts` (snapcompact strategy: history archived as dense bitmap images)
+- `packages/snapcompact/src/snapcompact.ts` (snapcompact strategy: history archived as dense bitmap images)
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
 - `packages/agent/src/compaction/utils.ts`
@@ -129,13 +129,13 @@ The automatic paths are intentionally different:
 
 ### Snapcompact strategy
 
-`compaction.strategy: "snapcompact"` replaces the LLM summarization call with a local, deterministic archival pass (`snapcompactCompact` in `packages/agent/src/compaction/snapcompact.ts`):
+`compaction.strategy: "snapcompact"` replaces the LLM summarization call with a local, deterministic archival pass (`snapcompactCompact` from `@oh-my-pi/snapcompact`):
 
-- The discarded history is serialized (same `serializeConversation` path the summarizer uses), whitespace-collapsed, and printed onto square PNG frames using the bundled public-domain X.org `5x8` pixel font — 2576px frames carrying ~165k characters each. Glyph ink cycles through six hues at sentence boundaries to help the model keep its place.
+- The discarded history is serialized, whitespace-collapsed, and printed onto provider-aware square PNG frames using bundled public-domain pixel fonts. Anthropic-family and unknown APIs use repeated black `8x8` cells, Google uses repeated sentence-colored `8x8` cells, and OpenAI uses dense stretched `6x6` cells with `detail: "original"`.
 - Frames persist under `CompactionEntry.preserveData.snapcompact` and are re-attached to the `compactionSummary` message as image blocks on every context rebuild; the entry's `summary` is a deterministic reading guide (grid geometry, role tags, truncation notes) plus the usual file-operation lists.
 - Later compactions carry earlier frames forward. Beyond an 8-frame budget the archive fades from the middle out: the earliest frame (session head — the original request, or the filmed summary of older history) is pinned, and the oldest *unpinned* frames are evicted, so head and tail both survive. If the previous compaction was text-based, its summary is printed at the head of the frame archive as `[Summary of earlier history]`.
 - No model, API key, or network is involved, so snapcompact is also safe for overflow recovery. It requires a vision-capable current model (`model.input` includes `"image"`); otherwise the run falls back to context-full and emits a warning notice (auto and manual paths). Manual `/compact` honors the strategy unless custom instructions are given (those imply a directed LLM summary).
-- Rationale: a vision model reads ~50 chars per image token after provider downscaling, ~7x cheaper than raw text at near-parity recall (SQuAD eval: F1 0.878 vs 0.899).
+- Rationale: the shape table comes from the snapcompact 200k-token evals in `packages/snapcompact`, where bitmap frames preserved QA recall at lower billed-token cost than raw text for vision-capable models.
 
 ### Display transcript
 
