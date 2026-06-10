@@ -1,7 +1,42 @@
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { computeBankScope, deriveBankId, ensureBankExists } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
+
+// Isolate `git` invocations in this file from the host's global config —
+// `~/.gitconfig` commit signing or template hooks would otherwise turn the
+// worktree fixture's `git init`/`git commit`/`git worktree add` into a flaky
+// dance. Mirrors the isolation in `test/tools/gh.test.ts`.
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+process.env.GIT_TERMINAL_PROMPT = "0";
+process.env.GIT_ASKPASS = "true";
+delete process.env.XDG_CONFIG_HOME;
+
+function runGit(cwd: string, args: string[]): string {
+	const result = Bun.spawnSync(["git", ...args], {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+		env: {
+			...process.env,
+			GIT_AUTHOR_NAME: "Test User",
+			GIT_AUTHOR_EMAIL: "test@example.com",
+			GIT_COMMITTER_NAME: "Test User",
+			GIT_COMMITTER_EMAIL: "test@example.com",
+		},
+	});
+	if (result.exitCode !== 0) {
+		const stderr = new TextDecoder().decode(result.stderr).trim();
+		const stdout = new TextDecoder().decode(result.stdout).trim();
+		throw new Error(`git ${args.join(" ")} failed: ${stderr || stdout || `exit ${result.exitCode}`}`);
+	}
+	return new TextDecoder().decode(result.stdout).trim();
+}
 
 const baseConfig = (overrides: Partial<HindsightConfig> = {}): HindsightConfig => ({
 	hindsightApiUrl: "http://localhost:8888",
@@ -105,6 +140,76 @@ describe("computeBankScope", () => {
 			const scope = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), "");
 			expect(scope.retainTags).toEqual(["project:unknown"]);
 			expect(scope.recallTags).toEqual(["project:unknown"]);
+		});
+	});
+
+	// Regression for #2232: linked git worktrees used to silo memory into
+	// distinct `project:<basename>` tags. The fix resolves the primary
+	// checkout root via `git.repo.primaryRootSync`, so every worktree of one
+	// repo collapses to the same tag (and the same per-project bank id).
+	describe("git worktree handling", () => {
+		let baseDir: string;
+		let primaryRoot: string;
+		let worktreeRoot: string;
+		let bareRepoRoot: string;
+		let bareWorktreeA: string;
+		let bareWorktreeB: string;
+
+		beforeAll(async () => {
+			baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "hindsight-bank-worktree-"));
+			primaryRoot = path.join(baseDir, "myrepo");
+			worktreeRoot = path.join(baseDir, "myrepo-feature-x");
+			await fs.mkdir(primaryRoot, { recursive: true });
+			runGit(primaryRoot, ["-c", "init.defaultBranch=main", "init"]);
+			runGit(primaryRoot, ["config", "user.email", "tester@example.com"]);
+			runGit(primaryRoot, ["config", "user.name", "Tester"]);
+			await fs.writeFile(path.join(primaryRoot, "README.md"), "hi\n");
+			runGit(primaryRoot, ["add", "-A"]);
+			runGit(primaryRoot, ["commit", "-m", "base"]);
+			runGit(primaryRoot, ["worktree", "add", worktreeRoot, "-b", "feature-x"]);
+			bareRepoRoot = path.join(baseDir, "bare-repo.git");
+			bareWorktreeA = path.join(baseDir, "bare-a");
+			bareWorktreeB = path.join(baseDir, "bare-b");
+			runGit(baseDir, ["init", "--bare", bareRepoRoot]);
+			runGit(primaryRoot, ["remote", "add", "bare", bareRepoRoot]);
+			runGit(primaryRoot, ["push", "bare", "main"]);
+			runGit(baseDir, ["--git-dir", bareRepoRoot, "worktree", "add", bareWorktreeA, "-b", "bare-a", "main"]);
+			runGit(baseDir, ["--git-dir", bareRepoRoot, "worktree", "add", bareWorktreeB, "-b", "bare-b", "main"]);
+		});
+
+		afterAll(async () => {
+			if (baseDir) await fs.rm(baseDir, { recursive: true, force: true });
+		});
+
+		it("emits the same project tag from the primary checkout and a linked worktree", () => {
+			const fromPrimary = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), primaryRoot);
+			const fromWorktree = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), worktreeRoot);
+			expect(fromPrimary.retainTags).toEqual(["project:myrepo"]);
+			expect(fromWorktree.retainTags).toEqual(["project:myrepo"]);
+			expect(fromWorktree).toEqual(fromPrimary);
+		});
+
+		it("uses the primary root basename for the per-project bank id from a worktree", () => {
+			expect(computeBankScope(baseConfig({ scoping: "per-project" }), worktreeRoot)).toEqual({
+				bankId: "omp-myrepo",
+			});
+		});
+
+		it("emits one shared project label across worktrees attached to a bare repository", () => {
+			const fromA = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), bareWorktreeA);
+			const fromB = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), bareWorktreeB);
+			expect(fromA.retainTags).toEqual(["project:bare-repo.git"]);
+			expect(fromB).toEqual(fromA);
+			expect(computeBankScope(baseConfig({ scoping: "per-project" }), bareWorktreeB)).toEqual({
+				bankId: "omp-bare-repo.git",
+			});
+		});
+
+		it("falls back to the cwd basename outside any repository", () => {
+			// The temp parent dir is not itself a repo — it just contains one.
+			expect(computeBankScope(baseConfig({ scoping: "per-project-tagged" }), baseDir).retainTags).toEqual([
+				`project:${path.basename(baseDir)}`,
+			]);
 		});
 	});
 });
