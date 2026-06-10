@@ -61,6 +61,21 @@ fn is_compiling_noise(line: &str) -> bool {
 		|| trimmed.starts_with("Downloaded ")
 		|| trimmed.starts_with("Locking ")
 		|| trimmed.starts_with("Updating ")
+		// `Blocking waiting for file lock on ...` is pure progress noise when a
+		// concurrent cargo holds the lock (snip strips it in cargo-build/clippy).
+		|| trimmed.starts_with("Blocking ")
+		|| is_generated_warnings_rollup(trimmed)
+}
+
+/// The per-crate rollup line `warning: \`crate\` (lib) generated N warnings`.
+/// The individual `warning: ...` diagnostic blocks are kept; this redundant
+/// tally is dropped.  Clippy/install paths already skip it explicitly, so
+/// stripping it here only affects build/check/doc/run condensing.
+fn is_generated_warnings_rollup(trimmed: &str) -> bool {
+	let Some(rest) = trimmed.strip_prefix("warning: ") else {
+		return false;
+	};
+	rest.contains(" generated ") && (rest.ends_with(" warnings") || rest.ends_with(" warning"))
 }
 
 fn failures_only(input: &str, exit_code: i32) -> String {
@@ -493,6 +508,46 @@ mod tests {
 		let out = filter(&ctx, "   Compiling foo v0.1.0\nerror: nope\nsrc/lib.rs:1:1 bad\n", 1);
 		assert!(!out.text.contains("Compiling"));
 		assert!(out.text.contains("error: nope"));
+	}
+
+	#[test]
+	fn build_strips_blocking_lock_and_warning_rollup() {
+		// `Blocking waiting for file lock` is concurrent-cargo progress noise;
+		// the `warning: \`crate\` (lib) generated N warnings` rollup is a
+		// redundant tally of the per-warning blocks, which are kept.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "cargo",
+			subcommand: Some("build"),
+			command:    "cargo build",
+			config:     &cfg,
+		};
+		let input = concat!(
+			"    Blocking waiting for file lock on build directory\n",
+			"   Compiling foo v0.1.0\n",
+			"warning: unused variable: `x`\n",
+			" --> src/lib.rs:2:9\n",
+			"warning: `foo` (lib) generated 1 warning\n",
+			"    Finished dev [unoptimized + debuginfo] target(s) in 1.2s\n",
+		);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			!out.text.contains("Blocking"),
+			"blocking lock noise must be stripped: {:?}",
+			out.text
+		);
+		assert!(
+			!out.text.contains("generated 1 warning"),
+			"warning rollup must be stripped: {:?}",
+			out.text
+		);
+		// Per-warning diagnostic block is kept.
+		assert!(
+			out.text.contains("unused variable: `x`"),
+			"warning block must survive: {:?}",
+			out.text
+		);
+		assert!(out.text.contains("src/lib.rs:2:9"), "warning location must survive: {:?}", out.text);
 	}
 
 	#[test]
