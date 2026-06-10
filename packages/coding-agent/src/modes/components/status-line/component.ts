@@ -142,6 +142,7 @@ export class StatusLineComponent implements Component {
 	#effectiveSettings: EffectiveStatusLineSettings | undefined;
 	#cachedBranch: string | null | undefined = undefined;
 	#cachedBranchRepoId: string | null | undefined = undefined;
+	#cachedBranchCwd: string | undefined = undefined;
 	#gitWatcher: fs.FSWatcher | null = null;
 	#onBranchChange: (() => void) | null = null;
 	#autoCompactEnabled: boolean = true;
@@ -283,15 +284,18 @@ export class StatusLineComponent implements Component {
 	#invalidateGitCaches(): void {
 		this.#cachedBranch = undefined;
 		this.#cachedBranchRepoId = undefined;
+		this.#cachedBranchCwd = undefined;
 		this.#cachedPrContext = undefined;
 	}
 	#getCurrentBranch(): string | null {
-		const head = git.head.resolveSync(getProjectDir());
-		const gitHeadPath = head?.headPath ?? null;
-		if (this.#cachedBranch !== undefined && this.#cachedBranchRepoId === gitHeadPath) {
+		const cwd = getProjectDir();
+		if (this.#cachedBranch !== undefined && this.#cachedBranchCwd === cwd) {
 			return this.#cachedBranch;
 		}
 
+		const head = git.head.resolveSync(cwd);
+		const gitHeadPath = head?.headPath ?? null;
+		this.#cachedBranchCwd = cwd;
 		this.#cachedBranchRepoId = gitHeadPath;
 		if (!head) {
 			this.#cachedBranch = null;
