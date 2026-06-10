@@ -13,10 +13,10 @@ import { estimateTokens } from "./compaction";
 import type { ReadonlySessionManager, SessionEntry } from "./entries";
 import {
 	type ConvertToLlm,
-	convertToLlm,
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
+	defaultConvertToLlm,
 } from "./messages";
 import branchSummaryPrompt from "./prompts/branch-summary.md" with { type: "text" };
 import branchSummaryPreamble from "./prompts/branch-summary-preamble.md" with { type: "text" };
@@ -288,7 +288,7 @@ export async function generateBranchSummary(
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
-	const llmMessages = (options.convertToLlm ?? convertToLlm)(messages);
+	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
 	const conversationText = serializeConversation(llmMessages);
 
 	// Build prompt
