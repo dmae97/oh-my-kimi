@@ -18,6 +18,10 @@
 
 - Fixed `enabledModels` being ignored by the ACP model picker (Zed and other ACP clients) — `AgentSession.getAvailableModels()` now applies the configured allow-list, so only the models listed in `enabledModels` appear in the UI. Also applies consistently to the RPC `get_available_models` endpoint and the `/model` slash command.
 
+### Fixed
+
+- ACP sessions now skip the client permission gate for bash/edit/delete/move when the user explicitly opts into yolo approval mode (`--yolo`/`--auto-approve` or a configured `tools.approvalMode: yolo`) and the effective per-tool policy is "allow"; default-config sessions keep the gate ([#2097](https://github.com/can1357/oh-my-pi/pull/2097) by [@Mokto](https://github.com/Mokto))
+
 ## [15.10.11] - 2026-06-10
 
 ### Added
