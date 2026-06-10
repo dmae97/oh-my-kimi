@@ -840,7 +840,11 @@ export class InputController {
 					this.ctx.showStatus("Clipboard is empty");
 					return false;
 				}
-				this.ctx.editor.pasteText(text);
+				// Route to the focused component when it accepts pastes (modal
+				// Input prompts), matching the enhanced-paste text path (#2127).
+				const focused = this.ctx.ui.getFocused();
+				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+				target.pasteText(text);
 				this.ctx.ui.requestRender();
 				return true;
 			}

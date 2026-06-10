@@ -10,14 +10,14 @@ import { describe, expect, it, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
-function createContext() {
+function createContext(options?: { focused?: { pasteText(text: string): void } }) {
 	const pasteText = vi.fn();
 	const insertText = vi.fn();
 	const requestRender = vi.fn();
 	const showStatus = vi.fn();
 	const ctx = {
 		editor: { pasteText, insertText } as unknown as InteractiveModeContext["editor"],
-		ui: { requestRender } as unknown as InteractiveModeContext["ui"],
+		ui: { requestRender, getFocused: () => options?.focused ?? null } as unknown as InteractiveModeContext["ui"],
 		showStatus,
 	} as unknown as InteractiveModeContext;
 	return { ctx, spies: { pasteText, insertText, requestRender, showStatus } };
@@ -56,6 +56,21 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 		expect(spies.pasteText).toHaveBeenCalledWith("copied text\nsecond line");
 		expect(spies.requestRender).toHaveBeenCalled();
 		expect(spies.showStatus).not.toHaveBeenCalled();
+	});
+
+	it("routes the text fallback to a focused paste-capable component (#2127 contract)", async () => {
+		const focusedPasteText = vi.fn();
+		const { ctx, spies } = createContext({ focused: { pasteText: focusedPasteText } });
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => "api-key-123",
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(focusedPasteText).toHaveBeenCalledWith("api-key-123");
+		expect(spies.pasteText).not.toHaveBeenCalled();
 	});
 
 	it("reports an empty clipboard when neither image nor text is available", async () => {

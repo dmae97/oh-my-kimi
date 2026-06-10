@@ -125,6 +125,53 @@ async function readImageViaPowerShell(): Promise<ClipboardImage | null> {
 	}
 }
 
+// PowerShell one-liner that emits the clipboard text verbatim on stdout, or
+// nothing when the clipboard holds no text. `[Console]::Out.Write` avoids the
+// trailing newline Write-Output would add; output encoding is forced to UTF-8
+// so non-ASCII text survives the interop boundary regardless of console
+// codepage.
+const POWERSHELL_TEXT_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+[Console]::Out.Write([string](Get-Clipboard -Raw))
+`;
+
+/**
+ * Read clipboard text through the Windows host's PowerShell.
+ *
+ * Same rationale as `readImageViaPowerShell`: WSLg's Wayland clipboard only
+ * works when `wl-clipboard` happens to be installed in the distro, while
+ * `powershell.exe` is always reachable over WSL interop. Spawned async so a
+ * cold PowerShell start cannot block the TUI event loop.
+ *
+ * Returns null when the bridge fails (caller falls through to wl-paste/xclip);
+ * an empty string is a successful "no text on the clipboard" read.
+ */
+async function readTextViaPowerShell(): Promise<string | null> {
+	try {
+		const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_TEXT_SCRIPT], {
+			stdout: "pipe",
+			stderr: "ignore",
+			stdin: "ignore",
+		});
+		const timer = setTimeout(() => proc.kill(), POWERSHELL_TIMEOUT_MS);
+		let stdout = "";
+		try {
+			stdout = await new Response(proc.stdout).text();
+			await proc.exited;
+		} catch (err) {
+			logger.warn("clipboard: powershell text read failed", { error: String(err) });
+			return null;
+		} finally {
+			clearTimeout(timer);
+		}
+		if (proc.exitCode !== 0) return null;
+		return stdout.replaceAll("\r\n", "\n");
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Read an image from the system clipboard.
  *
@@ -174,20 +221,9 @@ export async function readTextFromClipboard(): Promise<string> {
 			return execSync("termux-clipboard-get", { encoding: "utf8", timeout: 2000 }).toString();
 		}
 		if (isWsl()) {
-			try {
-				// Reach the Windows clipboard through host PowerShell, mirroring
-				// readImageFromClipboard: WSLg's wl-paste only works when
-				// wl-clipboard happens to be installed in the distro, while
-				// powershell.exe is always reachable over WSL interop.
-				return execSync(
-					'powershell.exe -NoProfile -NonInteractive -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::Out.Write([string](Get-Clipboard -Raw))"',
-					{ encoding: "utf8", timeout: 5000 },
-				)
-					.toString()
-					.replaceAll("\r\n", "\n");
-			} catch {
-				// Fall through to the wl-paste/xclip paths below.
-			}
+			const text = await readTextViaPowerShell();
+			if (text !== null) return text;
+			// Bridge failed — fall through to the wl-paste/xclip paths below.
 		}
 		const hasWaylandDisplay = Boolean(process.env.WAYLAND_DISPLAY);
 		const hasX11Display = Boolean(process.env.DISPLAY);
