@@ -21,12 +21,9 @@ smoke_cli() {
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --version
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --help >/dev/null
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" stats --summary >/dev/null
-   # Spawns the stats sync worker via `new Worker(...)` and waits for a pong.
-   # Regression probe for #1011 (browser tab worker) and #1027 (stats sync
-   # worker) — both broke silently in compiled binaries because the `with
-   # { type: "file" }` import pattern only copies the worker as a raw asset
-   # without bundling its imports. `stats --summary` doesn't catch this on a
-   # fresh install (no session files = no Worker spawn).
+   # Spawns bundled workers and serves the stats dashboard once. Regression
+   # probe for #1011/#1027 worker loading and for npm/compiled distributions
+   # missing the dashboard assets that `stats --summary` never touches.
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --smoke-test
 }
 

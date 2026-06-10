@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
+- Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions
+- Added verification of a `<div id="root"></div>` and `index.js` in smoke-test dashboard responses
 
 ## [15.10.12] - 2026-06-10
 
