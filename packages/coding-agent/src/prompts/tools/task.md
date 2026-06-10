@@ -1,4 +1,4 @@
-Spawns ONE subagent per call to work in the background, or resumes an existing one.
+Spawns ONE subagent per call to work in the background.
 
 - Spawning is non-blocking: the call returns immediately with the agent id and a job id; the result is delivered automatically when the agent yields.
 - Parallelism = multiple `task` calls in one assistant message. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
@@ -8,19 +8,17 @@ Spawns ONE subagent per call to work in the background, or resumes an existing o
 {{/if}}
 
 <lifecycle>
-- Finished agents stay alive: `idle` first, then `parked` after a TTL — both remain addressable and revivable.
-- `resume: "<id>"` revives an idle/parked agent and runs a follow-up assignment in its existing session. **Prefer resuming an agent that already holds the relevant context over spawning fresh**{{#if ircEnabled}} — check `irc` op:"list" for candidates{{/if}}.
+- Finished agents stay alive: `idle` first, then `parked` after a TTL.{{#if ircEnabled}} Both remain addressable and revivable: messaging one via `irc` wakes it and runs your message as a follow-up turn. **Prefer messaging an agent that already holds the relevant context over spawning fresh** — check `irc` op:"list" for candidates.{{/if}}
 - `history://<id>` is the agent's transcript; `agent://<id>` its latest output artifact.
 </lifecycle>
 
 <parameters>
-- `agent`: agent type to spawn; omit when `resume` is set
-- `resume`: existing agent id — continue that agent instead of spawning (cannot combine with `agent` or `isolated`)
+- `agent`: agent type to spawn
 - `id`: stable agent id, CamelCase, ≤32 chars; generated when omitted
 - `description`: UI label only — subagent never sees it
 - `assignment`: complete self-contained instructions; one-liners and missing acceptance criteria are PROHIBITED
 {{#if customSchemaEnabled}}- `schema`: JTD schema for expected structured output (do not put format rules in assignments){{/if}}
-{{#if isolationEnabled}}- `isolated`: run in isolated env; returns patches. Isolated agents are NOT resumable{{/if}}
+{{#if isolationEnabled}}- `isolated`: run in isolated env; returns patches. Isolated agents are torn down at completion — not addressable afterwards{{/if}}
 </parameters>
 
 <rules>
@@ -45,7 +43,7 @@ Test: can task B run correctly without seeing A's output? If no, sequence A → 
 Sequential when one task produces a contract (types, API, schema, core module) the other consumes.
 Parallel when tasks touch disjoint files or are independent refactors/tests.
 {{/if}}
-Sequenced follow-ups SHOULD `resume` the agent that produced the prerequisite — it already holds the context.
+{{#if ircEnabled}}Sequenced follow-ups SHOULD message the agent that produced the prerequisite — it already holds the context.{{/if}}
 </parallelization>
 
 <assignment-fmt>

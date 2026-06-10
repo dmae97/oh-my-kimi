@@ -82,7 +82,7 @@ Spawn paths that produce jobs:
   - `async: true` always registers a `type: "bash"` job with `AsyncJobManager.register(...)` and returns a start message.
   - auto-background mode (`bash.autoBackground.enabled`) starts the same managed job path for non-PTY commands, waits up to `min(bash.autoBackground.thresholdMs, timeoutMs - 1000)`, and if the command is still running returns a background-job start result instead of inline command output.
 - `packages/coding-agent/src/task/index.ts`
-  - every `task` call (spawn or resume) registers one `type: "task"` job, unless the session has no job manager or the agent definition declares `blocking: true` (sync fallback).
+  - every `task` call registers one `type: "task"` job, unless the session has no job manager or the agent definition declares `blocking: true` (sync fallback).
 
 Lifecycle and exact state names:
 - Conceptual scheduling path: `pending` (only task-progress bookkeeping before work starts) → `running` → `completed` / `failed`; cancellation changes a running async job to `cancelled`.

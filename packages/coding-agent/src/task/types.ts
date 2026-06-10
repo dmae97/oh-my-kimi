@@ -68,11 +68,10 @@ export interface SubagentLifecyclePayload {
 
 const createTaskSchema = (options: { isolationEnabled: boolean; customSchemaEnabled: boolean }) => {
 	let schema = z.object({
-		agent: z.string().optional().describe("agent type; omit when resume is set"),
+		agent: z.string().describe("agent type to spawn"),
 		id: z.string().max(48).optional().describe("stable agent id; default generated"),
 		description: z.string().optional().describe("ui label, not seen by subagent"),
 		assignment: z.string().describe("the work; self-contained instructions"),
-		resume: z.string().optional().describe("existing agent id: revive and continue instead of spawning"),
 	});
 
 	if (options.customSchemaEnabled) {
@@ -115,7 +114,7 @@ export function getTaskSchema(options: { isolationEnabled: boolean; simpleMode: 
 }
 
 export interface TaskParams {
-	/** Agent type; required unless `resume` is set. */
+	/** Agent type; required. */
 	agent?: string;
 	/** Stable agent id; default = generated AdjectiveNoun. */
 	id?: string;
@@ -125,10 +124,8 @@ export interface TaskParams {
 	assignment?: string;
 	/** JTD schema for the expected yield shape; unchanged semantics. */
 	schema?: string;
-	/** Run in an isolated worktree; isolated agents are NOT resumable. */
+	/** Run in an isolated worktree; isolated agents are torn down at completion. */
 	isolated?: boolean;
-	/** Existing agent id: revive + follow-up instead of spawn. */
-	resume?: string;
 }
 
 /** A code review finding reported by the reviewer agent */

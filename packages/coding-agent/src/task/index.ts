@@ -27,6 +27,7 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { truncateForPrompt } from "../tools/approval";
+import { isIrcEnabled } from "../tools/irc";
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	type AgentDefinition,
@@ -41,14 +42,11 @@ import {
 import "../tools/review";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
-import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
-import type { AgentSession } from "../session/agent-session";
-import { ToolError } from "../tools/tool-errors";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
-import { resumeSubprocess, runSubprocess } from "./executor";
+import { runSubprocess } from "./executor";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { Semaphore } from "./parallel";
@@ -203,21 +201,13 @@ function validateTaskModeParams(simpleMode: TaskSimpleMode, params: TaskParams):
 }
 
 /**
- * Validate the spawn/resume parameter contract: `agent` XOR `resume`,
- * `resume` excludes `isolated`, and `assignment` is always required.
- * Returns a problem description, or undefined when valid.
+ * Validate the spawn parameter contract: `agent` and `assignment` are both
+ * required. Returns a problem description, or undefined when valid.
  */
 function validateSpawnParams(params: TaskParams): string | undefined {
-	const resume = typeof params.resume === "string" ? params.resume.trim() : "";
 	const agent = typeof params.agent === "string" ? params.agent.trim() : "";
-	if (resume && agent) {
-		return "Provide either `agent` (spawn a new subagent) or `resume` (continue an existing one), not both.";
-	}
-	if (!resume && !agent) {
-		return "Missing `agent`. Provide `agent` to spawn a subagent, or `resume` with an existing agent id.";
-	}
-	if (resume && params.isolated === true) {
-		return "`resume` cannot be combined with `isolated` — isolated agents are not resumable.";
+	if (!agent) {
+		return "Missing `agent`. Provide an agent type to spawn.";
 	}
 	if (typeof params.assignment !== "string" || params.assignment.trim() === "") {
 		return "Missing `assignment`. Provide complete, self-contained instructions for the agent.";
@@ -276,9 +266,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<TaskParams>;
 		const lines: string[] = [];
-		if (typeof params.resume === "string" && params.resume.trim()) {
-			lines.push(`Resume: ${truncateForPrompt(params.resume)}`);
-		} else if (typeof params.agent === "string") {
+		if (typeof params.agent === "string") {
 			lines.push(`Agent: ${truncateForPrompt(params.agent)}`);
 		}
 		if (typeof params.id === "string" && params.id.trim()) {
@@ -327,7 +315,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			isolationMode !== "none",
 			disabledAgents,
 			this.#getTaskSimpleMode(),
-			this.session.settings.get("irc.enabled") === true,
+			isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
 			this.session.getSessionSpawns() ?? "*",
 		);
 	}
@@ -369,8 +357,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(validationError);
 		}
 
-		const isResume = typeof params.resume === "string" && params.resume.trim().length > 0;
-		const selectedAgent = isResume ? undefined : this.#discoveredAgents.find(agent => agent.name === params.agent);
+		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		const manager = this.session.asyncJobManager;
 		if (!manager || selectedAgent?.blocking === true) {
 			// Sync fallback: orphaned host that never wired a job manager, or an
@@ -389,24 +376,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 
 		// Resolve the agent id up front so the immediate result can name it.
-		let agentId: string;
-		if (isResume) {
-			agentId = params.resume!.trim();
-			if (!AgentRegistry.global().get(agentId)) {
-				throw new ToolError(
-					`Unknown agent "${agentId}" — nothing to resume. Use \`irc\` op:"list" to see live agent ids; past transcripts are readable at history://${agentId}.`,
-				);
-			}
-		} else {
-			const outputManager =
-				this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
-			agentId = await outputManager.allocate(params.id?.trim() || generateTaskName());
-		}
+		const outputManager =
+			this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
+		const agentId = await outputManager.allocate(params.id?.trim() || generateTaskName());
 
 		const assignment = (params.assignment ?? "").trim();
-		const agentLabel = isResume
-			? (AgentRegistry.global().get(agentId)?.displayName ?? "task")
-			: (params.agent ?? "task");
+		const agentLabel = params.agent ?? "task";
 		const progress: AgentProgress = {
 			index: 0,
 			id: agentId,
@@ -433,11 +408,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			async: { state, jobId, type: "task" },
 		});
 
-		const buildResumeHint = (aborted: boolean): string => {
+		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
+		const buildFollowUpHint = (aborted: boolean): string => {
 			if (aborted) {
 				return `\n\n${agentId} was aborted — transcript at history://${agentId}`;
 			}
-			return `\n\n${agentId} is now idle — task(resume:"${agentId}") to continue it, transcript at history://${agentId}`;
+			const followUp = ircEnabled ? "message it via `irc` to follow up; " : "";
+			return `\n\n${agentId} is now idle — ${followUp}transcript at history://${agentId}`;
 		};
 
 		let jobId: string;
@@ -491,7 +468,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 							content: [{ type: "text", text: statusText }],
 							details: buildAsyncDetails(resultFailed ? "failed" : "completed", ownJobId),
 						});
-						const deliveryText = `${finalText}${buildResumeHint(singleResult?.aborted === true)}`;
+						const deliveryText = `${finalText}${buildFollowUpHint(singleResult?.aborted === true)}`;
 						if (resultFailed) {
 							// Mark the job itself failed; the failed agent stays interrogable.
 							throw new TaskJobError(deliveryText);
@@ -513,7 +490,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 							details: buildAsyncDetails("failed", ownJobId),
 						});
 						const message = error instanceof Error ? error.message : String(error);
-						const hint = AgentRegistry.global().get(agentId) ? buildResumeHint(false) : "";
+						const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(false) : "";
 						throw new TaskJobError(`${message}${hint}`);
 					} finally {
 						semaphore.release();
@@ -538,15 +515,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			};
 		}
 
-		const ircEnabled = this.session.settings.get("irc.enabled") === true;
 		const coordinationHint = ircEnabled
 			? `DM \`${agentId}\` via \`irc\` to coordinate while it runs; use \`job\` only to inspect (\`list\`), wait (\`poll\`), or cancel a stuck task.`
 			: `Use \`job\` to inspect (\`list\`), wait (\`poll\`), or cancel a stuck task.`;
-		const verb = isResume ? "Resumed" : "Spawned";
 		const descriptionSuffix = params.description ? ` — ${params.description}` : "";
 
 		onUpdate?.({
-			content: [{ type: "text", text: `${verb} agent \`${agentId}\`...` }],
+			content: [{ type: "text", text: `Spawned agent \`${agentId}\`...` }],
 			details: buildAsyncDetails("running", jobId),
 		});
 
@@ -554,7 +529,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			content: [
 				{
 					type: "text",
-					text: `${verb} agent \`${agentId}\` (job \`${jobId}\`)${descriptionSuffix}. The result will be delivered when it yields. ${coordinationHint}`,
+					text: `Spawned agent \`${agentId}\` (job \`${jobId}\`)${descriptionSuffix}. The result will be delivered when it yields. ${coordinationHint}`,
 				},
 			],
 			details: {
@@ -568,7 +543,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	/**
-	 * Synchronous execution of one spawn or resume. Used as the body of every
+	 * Synchronous execution of one spawn. Used as the body of every
 	 * async job and directly by the sync fallback (no job manager / blocking
 	 * agent) and by in-process callers that need the result inline (e.g. the
 	 * commit flow's analyze_files tool).
@@ -580,81 +555,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 		preAllocatedId?: string,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		if (typeof params.resume === "string" && params.resume.trim().length > 0) {
-			return this.#executeResume(toolCallId, params, signal, onUpdate);
-		}
 		return this.#runSpawn(toolCallId, params, signal, onUpdate, preAllocatedId);
-	}
-
-	/**
-	 * Resume an existing agent: revive it if parked, inject the follow-up
-	 * assignment through the session's normal prompt path, and run it through
-	 * the same yield/finalize pipeline as a spawn. The session stays alive
-	 * (idle, TTL re-armed) afterwards.
-	 */
-	async #executeResume(
-		toolCallId: string,
-		params: TaskParams,
-		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
-	): Promise<AgentToolResult<TaskToolDetails>> {
-		const startTime = Date.now();
-		const resumeId = params.resume!.trim();
-		const simpleMode = this.#getTaskSimpleMode();
-		const { customSchemaEnabled } = getTaskSimpleModeCapabilities(simpleMode);
-		const assignment = (params.assignment ?? "").trim();
-
-		let session: AgentSession;
-		try {
-			session = await AgentLifecycleManager.global().ensureLive(resumeId);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			throw new ToolError(
-				`Cannot resume "${resumeId}": ${message} Use \`irc\` op:"list" to see live agent ids; transcripts are readable at history://${resumeId}.`,
-			);
-		}
-
-		const agentName = AgentRegistry.global().get(resumeId)?.displayName ?? "task";
-		const agentDef: AgentDefinition = getAgent(this.#discoveredAgents, agentName) ?? {
-			name: agentName,
-			description: "",
-			systemPrompt: "",
-			source: "bundled",
-		};
-
-		// Resumed output artifacts overwrite agent://<id> in the parent's
-		// artifacts dir; the transcript accretes in the session JSONL.
-		const sessionFile = this.session.getSessionFile();
-		const artifactsDir = sessionFile ? sessionFile.slice(0, -6) : undefined;
-
-		const result = await resumeSubprocess({
-			session,
-			id: resumeId,
-			agent: agentDef,
-			task: renderSubagentUserPrompt(assignment, simpleMode),
-			assignment,
-			description: params.description,
-			index: 0,
-			parentToolCallId: toolCallId,
-			outputSchema: customSchemaEnabled ? params.schema : undefined,
-			signal,
-			onProgress: progress => {
-				onUpdate?.({
-					content: [{ type: "text", text: `Resuming ${resumeId}...` }],
-					details: {
-						projectAgentsDir: null,
-						results: [],
-						totalDurationMs: Date.now() - startTime,
-						progress: [{ ...progress, recentTools: progress.recentTools.slice() }],
-					},
-				});
-			},
-			eventBus: this.session.eventBus,
-			settings: this.session.settings,
-			artifactsDir,
-		});
-
-		return this.#buildResultPayload(result, null, Date.now() - startTime, "");
 	}
 
 	/** Spawn a fresh subagent and run it to completion. */

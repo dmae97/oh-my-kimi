@@ -2305,16 +2305,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"irc.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "IRC",
-			description: "Enable agent-to-agent IRC messaging via the irc tool",
-		},
-	},
-
 	"irc.timeoutMs": {
 		type: "number",
 		default: 120_000,

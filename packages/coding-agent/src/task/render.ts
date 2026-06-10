@@ -509,7 +509,7 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 }
 
 /**
- * Render the call preview lines for the single spawned/resumed agent. The
+ * Render the call preview lines for the single spawned agent. The
  * args stream in token by token, so every field access is defensive.
  */
 function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme): string[] {
@@ -517,9 +517,8 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 	const bullet = theme.fg("dim", "•");
 	const lines: string[] = [];
 
-	const resume = typeof args.resume === "string" ? args.resume.trim() : "";
 	const rawId = typeof args.id === "string" ? args.id.trim() : "";
-	const idLabel = resume ? formatTaskId(resume) : rawId ? formatTaskId(rawId) : "";
+	const idLabel = rawId ? formatTaskId(rawId) : "";
 	const desc = typeof args.description === "string" ? args.description.trim() : "";
 	if (idLabel || desc) {
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
@@ -571,9 +570,7 @@ export function renderCall(
 	theme: Theme,
 ): Component {
 	const showIsolated = "isolated" in args && args.isolated === true;
-	const resume = typeof args.resume === "string" && args.resume.trim() ? args.resume.trim() : undefined;
-	const headerDescription = resume ? `resume ${formatTaskId(resume)}` : args.agent;
-	const header = renderStatusLine({ icon: "pending", title: "Task", description: headerDescription }, theme);
+	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
 	return framedBlock(theme, width => {
 		const sections: Array<{ label?: string; lines: readonly string[]; separator?: boolean }> = [];
@@ -1111,20 +1108,19 @@ export function renderResult(
 ): Component {
 	const fallbackText = result.content.find(c => c.type === "text")?.text ?? "";
 	const details = result.details;
-	const resumeLabel =
-		typeof args?.resume === "string" && args.resume.trim() ? `resume ${formatTaskId(args.resume.trim())}` : undefined;
+	const agentLabel = args?.agent?.trim() || undefined;
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
 		const errored = result.isError === true;
 		const header = errored
-			? renderStatusLine({ icon: "error", title: "Task", description: resumeLabel ?? args?.agent }, theme)
+			? renderStatusLine({ icon: "error", title: "Task", description: agentLabel }, theme)
 			: renderStatusLine(
 					{
 						iconOverride: theme.styledSymbol("status.done", "accent"),
 						title: "Task",
-						description: resumeLabel ?? args?.agent,
+						description: agentLabel,
 					},
 					theme,
 				);
@@ -1147,11 +1143,10 @@ export function renderResult(
 	const isError = aborted || failed;
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
-	// Surface the dispatched agent type (e.g. `Reviewer`) or the resumed agent
-	// id alongside the count so the header reads `Task 1 agent: Reviewer`.
-	const agentName = resumeLabel ?? args?.agent?.trim();
+	// Surface the dispatched agent type (e.g. `Reviewer`) alongside the count
+	// so the header reads `Task 1 agent: Reviewer`.
 	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
-	const metaLabel = countLabel ? (agentName ? `${countLabel}: ${agentName}` : countLabel) : agentName;
+	const metaLabel = countLabel ? (agentLabel ? `${countLabel}: ${agentLabel}` : countLabel) : agentLabel;
 	const header = renderStatusLine(
 		{
 			icon: icon === "success" ? undefined : icon,

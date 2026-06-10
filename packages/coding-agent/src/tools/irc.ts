@@ -13,6 +13,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { formatAge, formatDuration, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../irc/bus";
 import type { Theme } from "../modes/theme/theme";
@@ -31,6 +32,19 @@ import {
 } from "./render-utils";
 
 const DEFAULT_IRC_TIMEOUT_MS = 120_000;
+
+/**
+ * IRC availability: there must be someone to chat with. True for every
+ * subagent (it always has a parent, and possibly siblings) and for any
+ * session that can still spawn subagents through the task tool. Only a
+ * top-level session with task spawning unavailable has no peers — no irc.
+ */
+export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
+	if (taskDepth > 0) return true;
+	const maxDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	return maxDepth < 0 || taskDepth < maxDepth;
+}
+
 const ircSchema = z.object({
 	op: z.enum(["send", "wait", "inbox", "list"]).describe("irc operation"),
 	to: z.string().optional().describe('send: recipient agent id or "all"'),
@@ -84,7 +98,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	}
 
 	static createIf(session: ToolSession): IrcTool | null {
-		if (!session.settings.get("irc.enabled")) return null;
+		if (!isIrcEnabled(session.settings, session.taskDepth ?? 0)) return null;
 		if (!session.agentRegistry || !session.getAgentId) return null;
 		return new IrcTool(session);
 	}

@@ -319,7 +319,7 @@ describe("IRC", () => {
 	});
 
 	describe("IrcTool", () => {
-		it("createIf returns null when irc is disabled", () => {
+		it("createIf returns null for a top-level session that cannot spawn tasks", () => {
 			const session: ToolSession = {
 				cwd: "/tmp",
 				hasUI: false,
@@ -329,8 +329,40 @@ describe("IRC", () => {
 				agentRegistry: registry,
 				getAgentId: () => "0-Main",
 			};
-			session.settings.set("irc.enabled", false);
+			// Depth 0 with spawning gated off: no peers exist or can be created.
+			session.settings.set("task.maxRecursionDepth", 0);
 			expect(IrcTool.createIf(session)).toBeNull();
+		});
+
+		it("createIf enables irc while the task tool is available", () => {
+			const session: ToolSession = {
+				cwd: "/tmp",
+				hasUI: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				settings: Settings.isolated(),
+				agentRegistry: registry,
+				getAgentId: () => "0-Main",
+			};
+			// Default task.maxRecursionDepth (2) at depth 0: task can spawn, and a
+			// finished subagent must stay reachable.
+			expect(IrcTool.createIf(session)).toBeInstanceOf(IrcTool);
+		});
+
+		it("createIf enables irc for a subagent even at the recursion-depth cap", () => {
+			const session: ToolSession = {
+				cwd: "/tmp",
+				hasUI: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				settings: Settings.isolated(),
+				agentRegistry: registry,
+				getAgentId: () => "0-Leaf",
+				taskDepth: 2,
+			};
+			// A leaf subagent cannot spawn, but its parent (and siblings) exist.
+			session.settings.set("task.maxRecursionDepth", 2);
+			expect(IrcTool.createIf(session)).toBeInstanceOf(IrcTool);
 		});
 
 		it("createIf returns null without registry/agentId", () => {

@@ -37,6 +37,7 @@ import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
+import { isIrcEnabled } from "../tools/irc";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import {
 	buildOutputValidator,
@@ -640,7 +641,7 @@ export function createSubagentSettings(
 
 type AbortReason = "signal" | "terminate" | "timeout" | "budget";
 
-/** Inputs for the shared run monitor used by both fresh spawns and resumes. */
+/** Inputs for the run monitor driving one subagent assignment. */
 interface RunMonitorArgs {
 	index: number;
 	id: string;
@@ -661,9 +662,9 @@ interface RunMonitorArgs {
 }
 
 /**
- * The run-monitoring core shared by {@link runSubprocess} and
- * {@link resumeSubprocess}: progress tracking, event processing, abort/budget
- * machinery, usage accumulation, and output capture for one assignment run.
+ * The run-monitoring core of {@link runSubprocess}: progress tracking, event
+ * processing, abort/budget machinery, usage accumulation, and output capture
+ * for one assignment run.
  */
 interface SubagentRunMonitor {
 	readonly progress: AgentProgress;
@@ -1270,7 +1271,7 @@ const MAX_YIELD_RETRIES = 3;
 /**
  * Drive one assignment through a live session: send the prompt, wait for idle,
  * remind the agent to `yield` (up to {@link MAX_YIELD_RETRIES} times), then
- * classify the terminal assistant state. Shared by spawn and resume paths.
+ * classify the terminal assistant state.
  */
 async function driveSessionToYield(
 	session: AgentSession,
@@ -1418,7 +1419,7 @@ interface FinalizeRunArgs {
  * Turn a settled run into a {@link SingleResult}: resolve the yield payload via
  * {@link finalizeSubprocessOutput}, salvage cancelled-run output, write the
  * `<id>.md` output artifact, flush final progress, and emit the lifecycle end
- * event. Shared by spawn and resume paths.
+ * event.
  */
 async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	const { monitor, done, index, id, agent, task, assignment, signal, modelOverride } = args;
@@ -1659,7 +1660,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const ircEnabled = subagentSettings.get("irc.enabled") === true;
+	const ircEnabled = isIrcEnabled(subagentSettings, childDepth);
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
 	const monitor = createSubagentRunMonitor({
@@ -2124,154 +2125,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
 		sessionFile: subtaskSessionFile,
-		startTime,
-	});
-}
-
-/** Options for resuming an existing live subagent session with a follow-up assignment. */
-export interface ResumeExecutorOptions {
-	/** Live session, e.g. from `AgentLifecycleManager.global().ensureLive(id)`. */
-	session: AgentSession;
-	/** Registry agent id being resumed. */
-	id: string;
-	/** Agent definition for progress labels and soft budgets; a minimal stub is acceptable. */
-	agent: AgentDefinition;
-	/** Rendered follow-up prompt, injected via the session's normal prompt path. */
-	task: string;
-	assignment?: string;
-	description?: string;
-	index: number;
-	parentToolCallId?: string;
-	/** Optional schema validating this follow-up's yield payload. */
-	outputSchema?: unknown;
-	signal?: AbortSignal;
-	onProgress?: (progress: AgentProgress) => void;
-	eventBus?: EventBus;
-	settings?: Settings;
-	/** Where the `<id>.md` output artifact is (over)written for this assignment. */
-	artifactsDir?: string;
-}
-
-/**
- * Run a follow-up assignment on an EXISTING live agent session through the same
- * monitoring/finalize pipeline as a fresh spawn. The session is never created
- * or disposed here: it stays alive (and adopted by the lifecycle manager from
- * its original spawn) afterwards — registry status flips via the session's
- * registry status sync, and the idle TTL re-arms via the lifecycle manager's
- * registry subscription. Each resume overwrites the `agent://<id>` output
- * artifact; the transcript accretes in the session JSONL.
- */
-export async function resumeSubprocess(options: ResumeExecutorOptions): Promise<SingleResult> {
-	const { session, id, agent, task, assignment, index, signal } = options;
-	const startTime = Date.now();
-
-	if (signal?.aborted) {
-		return {
-			index,
-			id,
-			agent: agent.name,
-			agentSource: agent.source,
-			task,
-			assignment,
-			description: options.description,
-			exitCode: 1,
-			output: "",
-			stderr: "Cancelled before start",
-			truncated: false,
-			durationMs: 0,
-			tokens: 0,
-			requests: 0,
-			error: "Cancelled before start",
-			aborted: true,
-			abortReason: "Cancelled before start",
-		};
-	}
-
-	const settings = options.settings ?? Settings.isolated();
-	const maxRuntimeMs = Math.max(0, Math.trunc(Number(settings.get("task.maxRuntimeMs") ?? 0) || 0));
-	const configuredDefaultBudget = Math.max(
-		0,
-		Math.trunc(Number(settings.get("task.softRequestBudget") ?? SOFT_REQUEST_BUDGET.default) || 0),
-	);
-	const softRequestBudget =
-		configuredDefaultBudget === 0 ? 0 : (SOFT_REQUEST_BUDGET[agent.name] ?? configuredDefaultBudget);
-	const sessionFile = AgentRegistry.global().get(id)?.sessionFile ?? undefined;
-
-	const monitor = createSubagentRunMonitor({
-		index,
-		id,
-		agent,
-		task,
-		assignment,
-		description: options.description,
-		signal,
-		onProgress: options.onProgress,
-		eventBus: options.eventBus,
-		parentToolCallId: options.parentToolCallId,
-		sessionFile,
-		softRequestBudget,
-		maxRuntimeMs,
-	});
-	monitor.setActiveSession(session);
-	const unsubscribe = monitor.attach(session);
-
-	if (options.eventBus) {
-		options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
-			id,
-			agent: agent.name,
-			parentToolCallId: options.parentToolCallId,
-			agentSource: agent.source,
-			description: options.description,
-			status: "started",
-			sessionFile,
-			index,
-		});
-	}
-
-	let outcome: DriveOutcome = { exitCode: 1, aborted: false };
-	try {
-		outcome = await driveSessionToYield(session, monitor, task);
-	} finally {
-		try {
-			unsubscribe();
-		} catch {
-			// Ignore unsubscribe errors
-		}
-		const live = monitor.takeActiveSession();
-		if (live) {
-			monitor.captureSalvage(live);
-		}
-		// The resumed session stays alive and adopted: the registry status sync
-		// installed at spawn/revive flips running/idle from session events, and
-		// the lifecycle manager re-arms the idle TTL on the registry's
-		// status_changed → idle event. Abort paths may skip agent_end, so settle
-		// the status explicitly — a resumed agent is never torn down here, even
-		// on failure/abort; it stays interrogable.
-		AgentRegistry.global().setStatus(id, "idle");
-	}
-	monitor.finish();
-
-	return finalizeRunResult({
-		monitor,
-		done: {
-			exitCode: outcome.exitCode,
-			error: outcome.error,
-			aborted: outcome.aborted,
-			abortReason: outcome.aborted ? outcome.abortReasonText : undefined,
-			durationMs: Date.now() - startTime,
-		},
-		index,
-		id,
-		agent,
-		task,
-		assignment,
-		description: options.description,
-		outputSchema: options.outputSchema,
-		signal,
-		artifactsDir: options.artifactsDir,
-		eventBus: options.eventBus,
-		parentToolCallId: options.parentToolCallId,
-		sessionFile,
 		startTime,
 	});
 }

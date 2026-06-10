@@ -5,7 +5,7 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 // Contract (rework-contracts.md §3): the task tool spawns ONE agent per call.
-// `tasks[]` and `context` are gone; `resume` continues an existing agent.
+// `tasks[]` and `context` are gone; follow-ups go through `irc` messaging.
 
 describe("task schema (single-spawn)", () => {
 	it("accepts {agent, assignment}", () => {
@@ -13,9 +13,9 @@ describe("task schema (single-spawn)", () => {
 		expect(parsed.success).toBe(true);
 	});
 
-	it("accepts {resume, assignment}", () => {
-		const parsed = taskSchema.safeParse({ resume: "AuthLoader", assignment: "Also check refresh tokens." });
-		expect(parsed.success).toBe(true);
+	it("requires agent", () => {
+		const parsed = taskSchema.safeParse({ assignment: "Map the auth module." });
+		expect(parsed.success).toBe(false);
 	});
 
 	it("requires assignment", () => {
@@ -39,7 +39,7 @@ describe("task schema (single-spawn)", () => {
 	});
 });
 
-describe("task spawn/resume validation", () => {
+describe("task spawn validation", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -61,19 +61,9 @@ describe("task spawn/resume validation", () => {
 		return result.content.find(part => part.type === "text")?.text ?? "";
 	}
 
-	it("rejects resume + agent together", async () => {
-		const text = await executeText({ agent: "explore", resume: "AuthLoader", assignment: "..." });
-		expect(text).toContain("not both");
-	});
-
-	it("rejects neither resume nor agent", async () => {
+	it("rejects a missing agent", async () => {
 		const text = await executeText({ assignment: "..." });
 		expect(text).toContain("Missing `agent`");
-	});
-
-	it("rejects resume + isolated", async () => {
-		const text = await executeText({ resume: "AuthLoader", isolated: true, assignment: "..." });
-		expect(text).toContain("not resumable");
 	});
 
 	it("rejects a missing assignment", async () => {

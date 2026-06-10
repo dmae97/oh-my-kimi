@@ -986,12 +986,7 @@ export class AgentHubOverlayComponent extends Container {
 			case "ast_edit":
 				return args.path ? `path: ${args.path}` : "";
 			case "task": {
-				const target =
-					typeof args.resume === "string" && args.resume
-						? `resume ${args.resume}`
-						: typeof args.agent === "string"
-							? args.agent
-							: "";
+				const target = typeof args.agent === "string" ? args.agent : "";
 				const id = typeof args.id === "string" && args.id ? ` ${args.id}` : "";
 				return `${target}${id}`.trim();
 			}

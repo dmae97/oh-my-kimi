@@ -91,18 +91,6 @@ describe("task renderer: streaming call preview", () => {
 		expect(lines[0]).toContain("isolated");
 	});
 
-	it("labels resume calls with the resumed agent id", () => {
-		const args: TaskParams = {
-			resume: "AuthLoader",
-			assignment: "Also check the refresh-token path.",
-		};
-		const out = render(args);
-		const lines = out.split("\n");
-
-		expect(lines[0]).toContain("resume AuthLoader");
-		expect(out).toContain("Also check the refresh-token path.");
-	});
-
 	// Once the tool produces a result, the container suppresses the call entirely
 	// via `mergeCallAndResult` and `renderResult` draws the agent. As a safety
 	// net, `renderCall` also drops its preview when a result snapshot is present,

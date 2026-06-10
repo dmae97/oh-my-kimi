@@ -142,64 +142,6 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
-	// Resume: follow-up assignment into an existing (idle or parked) agent.
-	task_resume: {
-		label: "Task (resume)",
-		customRendered: true,
-		renderer: "task",
-		// Streaming: resume target known; the follow-up assignment still landing.
-		streamingArgs: {
-			resume: "AuthLoader",
-			assignment: "Follow up: does the sliding-expiration TODO affect",
-		},
-		args: {
-			resume: "AuthLoader",
-			assignment:
-				"Follow up: does the sliding-expiration TODO at session.ts:88 affect the refresh-token path? Document the answer.",
-		},
-		result: {
-			content: [{ type: "text", text: "Agent AuthLoader completed." }],
-			details: {
-				projectAgentsDir: null,
-				totalDurationMs: 22_400,
-				usage: fixtureUsage({ input: 30_200, output: 4_100 }, 0.07),
-				results: [
-					{
-						index: 0,
-						id: "AuthLoader",
-						agent: "task",
-						agentSource: "bundled",
-						task: "Follow up: does the sliding-expiration TODO at session.ts:88 affect the refresh-token path?",
-						assignment:
-							"Follow up: does the sliding-expiration TODO at session.ts:88 affect the refresh-token path? Document the answer.",
-						exitCode: 0,
-						output:
-							"No — refresh tokens bypass the sliding window: refreshSession() re-issues the cookie unconditionally (session.ts:131).",
-						stderr: "",
-						truncated: false,
-						durationMs: 19_700,
-						tokens: 34_300,
-						requests: 4,
-						contextTokens: 31_800,
-						contextWindow: 200_000,
-						resolvedModel: "anthropic/claude-sonnet",
-						usage: fixtureUsage({ input: 30_200, output: 4_100 }, 0.07),
-						outputMeta: { lineCount: 1, charCount: 118 },
-					},
-				],
-			} satisfies TaskToolDetails,
-		},
-		errorResult: {
-			isError: true,
-			content: [
-				{
-					type: "text",
-					text: 'No agent "AuthLoader" to resume — it ran isolated and is not revivable. See history:// for the agent index.',
-				},
-			],
-		},
-	},
-
 	irc: {
 		label: "IRC",
 		// Streaming: recipient known; the message body still arriving.

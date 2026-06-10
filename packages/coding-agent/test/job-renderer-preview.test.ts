@@ -57,7 +57,7 @@ describe("job renderer task-result preview", () => {
 			meta: { lineCount: 3, charSize: "120 B" },
 			mergeSummary: "",
 		});
-		const deliveryText = `${summary}\n\nSpawnProbe is now idle — task(resume:"SpawnProbe")`;
+		const deliveryText = `${summary}\n\nSpawnProbe is now idle — message it via \`irc\` to follow up; transcript at history://SpawnProbe`;
 
 		const output = renderLines(deliveryText);
 		expect(output).toContain("Probe finished: spawned worker, ping ok.");
