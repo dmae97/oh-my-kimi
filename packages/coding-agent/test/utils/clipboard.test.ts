@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { readImageFromClipboard } from "@oh-my-pi/pi-coding-agent/utils/clipboard";
+import { copyToClipboard, readImageFromClipboard } from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import * as native from "@oh-my-pi/pi-natives";
 import type { Subprocess } from "bun";
 
@@ -50,7 +50,14 @@ function restorePlatform(): void {
 	if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 }
 
-const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "DISPLAY", "WAYLAND_DISPLAY", "TERMUX_VERSION"] as const;
+const ENV_KEYS = [
+	"WSL_DISTRO_NAME",
+	"WSL_INTEROP",
+	"DISPLAY",
+	"WAYLAND_DISPLAY",
+	"TERMUX_VERSION",
+	"OMP_CLIPBOARD_COMMAND",
+] as const;
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
 beforeEach(() => {
@@ -167,6 +174,131 @@ describe("readImageFromClipboard dispatch", () => {
 
 		expect(await readImageFromClipboard()).toBeNull();
 		expect(spawnSpy).not.toHaveBeenCalled();
+		expect(nativeSpy).not.toHaveBeenCalled();
+	});
+});
+
+type ExitMap = Record<string, number>;
+
+/**
+ * Mock `Bun.spawn` to record every invocation and resolve each child with the exit code mapped
+ * from the first argv element. Unmapped commands default to `1` (failure) so a test that forgets
+ * to whitelist a backend fails loudly instead of silently passing through.
+ */
+function spyCopySpawns(calls: SpawnCall[], exits: ExitMap) {
+	function mockSpawn(opts: SpawnOptions & { cmd: string[] }): Subprocess;
+	function mockSpawn(cmd: string[], opts?: SpawnOptions): Subprocess;
+	function mockSpawn(first: string[] | (SpawnOptions & { cmd: string[] }), second?: SpawnOptions): Subprocess {
+		const cmd = Array.isArray(first) ? first : first.cmd;
+		const options = Array.isArray(first) ? (second ?? ({} as SpawnOptions)) : (first as SpawnOptions);
+		calls.push({ cmd, options });
+		const exit = exits[cmd[0] ?? ""] ?? 1;
+		return fakeProcess("", exit);
+	}
+	return vi.spyOn(Bun, "spawn").mockImplementation(mockSpawn);
+}
+
+describe("copyToClipboard dispatch", () => {
+	it("uses xclip before the native backend on Linux+X11", async () => {
+		setPlatform("linux");
+		process.env.DISPLAY = ":0";
+
+		const calls: SpawnCall[] = [];
+		spyCopySpawns(calls, { xclip: 0 });
+		const nativeSpy = vi.spyOn(native, "copyToClipboard");
+
+		await copyToClipboard("hello");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cmd).toEqual(["xclip", "-selection", "clipboard", "-in"]);
+		expect(nativeSpy).not.toHaveBeenCalled();
+	});
+
+	it("prefers wl-copy when a Wayland display is present", async () => {
+		setPlatform("linux");
+		process.env.WAYLAND_DISPLAY = "wayland-0";
+		process.env.DISPLAY = ":0";
+
+		const calls: SpawnCall[] = [];
+		spyCopySpawns(calls, { "wl-copy": 0, xclip: 0 });
+		const nativeSpy = vi.spyOn(native, "copyToClipboard");
+
+		await copyToClipboard("hi");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cmd).toEqual(["wl-copy"]);
+		expect(nativeSpy).not.toHaveBeenCalled();
+	});
+
+	it("falls through to xsel when xclip exits non-zero", async () => {
+		setPlatform("linux");
+		process.env.DISPLAY = ":0";
+
+		const calls: SpawnCall[] = [];
+		spyCopySpawns(calls, { xclip: 1, xsel: 0 });
+		const nativeSpy = vi.spyOn(native, "copyToClipboard");
+
+		await copyToClipboard("hi");
+
+		expect(calls.map(c => c.cmd[0])).toEqual(["xclip", "xsel"]);
+		expect(nativeSpy).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the native backend when every Linux CLI fails", async () => {
+		setPlatform("linux");
+		process.env.DISPLAY = ":0";
+
+		const calls: SpawnCall[] = [];
+		spyCopySpawns(calls, {});
+		const nativeSpy = vi.spyOn(native, "copyToClipboard").mockReturnValue();
+
+		await copyToClipboard("hi");
+
+		expect(calls.map(c => c.cmd[0])).toEqual(["xclip", "xsel"]);
+		expect(nativeSpy).toHaveBeenCalledTimes(1);
+		expect(nativeSpy).toHaveBeenCalledWith("hi");
+	});
+
+	it("delegates straight to the native backend on macOS without spawning CLI helpers", async () => {
+		setPlatform("darwin");
+
+		const spawnSpy = vi.spyOn(Bun, "spawn");
+		const nativeSpy = vi.spyOn(native, "copyToClipboard").mockReturnValue();
+
+		await copyToClipboard("hello");
+
+		expect(spawnSpy).not.toHaveBeenCalled();
+		expect(nativeSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("honors OMP_CLIPBOARD_COMMAND before any other backend", async () => {
+		setPlatform("linux");
+		process.env.DISPLAY = ":0";
+		process.env.OMP_CLIPBOARD_COMMAND = "xclip -selection clipboard -in -silent";
+
+		const calls: SpawnCall[] = [];
+		spyCopySpawns(calls, { "/bin/sh": 0, xclip: 0 });
+		const nativeSpy = vi.spyOn(native, "copyToClipboard");
+
+		await copyToClipboard("hi");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cmd).toEqual(["/bin/sh", "-c", "xclip -selection clipboard -in -silent"]);
+		expect(nativeSpy).not.toHaveBeenCalled();
+	});
+
+	it("falls through past a failing OMP_CLIPBOARD_COMMAND so the request still reaches a backend", async () => {
+		setPlatform("linux");
+		process.env.DISPLAY = ":0";
+		process.env.OMP_CLIPBOARD_COMMAND = "false";
+
+		const calls: SpawnCall[] = [];
+		spyCopySpawns(calls, { "/bin/sh": 2, xclip: 0 });
+		const nativeSpy = vi.spyOn(native, "copyToClipboard");
+
+		await copyToClipboard("hi");
+
+		expect(calls.map(c => c.cmd[0])).toEqual(["/bin/sh", "xclip"]);
 		expect(nativeSpy).not.toHaveBeenCalled();
 	});
 });
