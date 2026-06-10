@@ -313,7 +313,6 @@ const RETRY_BACKOFF_JITTER_RATIO = 0.25;
  */
 const SHAKE_RECOVERY_BAND = 0.8;
 
-
 function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
 	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
 	const jitter = 1 - Math.random() * RETRY_BACKOFF_JITTER_RATIO;
