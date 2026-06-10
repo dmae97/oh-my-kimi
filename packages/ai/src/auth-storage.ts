@@ -3551,7 +3551,10 @@ export class AuthStorage {
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		if (message && isUsageLimitError(message)) {
 			return (
-				await this.markUsageLimitReached(provider, sessionId, { modelId: options?.modelId, signal: options?.signal })
+				await this.markUsageLimitReached(provider, sessionId, {
+					modelId: options?.modelId,
+					signal: options?.signal,
+				})
 			).switched;
 		}
 
