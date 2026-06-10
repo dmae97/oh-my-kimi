@@ -1177,13 +1177,13 @@ export const SETTINGS_SCHEMA = {
 
 	"compaction.strategy": {
 		type: "enum",
-		values: ["context-full", "handoff", "shake", "off"] as const,
+		values: ["context-full", "handoff", "shake", "snapcompact", "off"] as const,
 		default: "context-full",
 		ui: {
 			tab: "context",
 			label: "Compaction Strategy",
 			description:
-				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), or disable auto maintenance (off)",
+				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), snapcompact (archive history as dense images), or disable auto maintenance (off)",
 			options: [
 				{
 					value: "context-full",
@@ -1195,6 +1195,11 @@ export const SETTINGS_SCHEMA = {
 					value: "shake",
 					label: "Shake",
 					description: "Drop heavy content (tool results + large blocks) in place; recover via artifact",
+				},
+				{
+					value: "snapcompact",
+					label: "Snapcompact",
+					description: "Archive history onto dense bitmap images the model reads back; no LLM call",
 				},
 				{
 					value: "off",
@@ -3363,7 +3368,7 @@ export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy: "context-full" | "handoff" | "shake" | "off";
+	strategy: "context-full" | "handoff" | "shake" | "snapcompact" | "off";
 	thresholdPercent: number;
 	thresholdTokens: number;
 	reserveTokens: number;

@@ -55,8 +55,14 @@ import {
 	type ShakeRegion,
 	type SummaryOptions,
 	shouldCompact,
+	snapcompactCompact,
 } from "@oh-my-pi/pi-agent-core/compaction";
-import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@oh-my-pi/pi-agent-core/compaction/pruning";
+import {
+	DEFAULT_PRUNE_CONFIG,
+	pruneSupersededToolResults,
+	pruneToolOutputs,
+	readToolSupersedeKey,
+} from "@oh-my-pi/pi-agent-core/compaction/pruning";
 import type { ProtectedToolMatcher } from "@oh-my-pi/pi-agent-core/compaction/tool-protection";
 import type {
 	AssistantMessage,
@@ -258,11 +264,11 @@ export type AgentSessionEvent =
 	| {
 			type: "auto_compaction_start";
 			reason: "threshold" | "overflow" | "idle" | "incomplete";
-			action: "context-full" | "handoff" | "shake";
+			action: "context-full" | "handoff" | "shake" | "snapcompact";
 	  }
 	| {
 			type: "auto_compaction_end";
-			action: "context-full" | "handoff" | "shake";
+			action: "context-full" | "handoff" | "shake" | "snapcompact";
 			result: CompactionResult | undefined;
 			aborted: boolean;
 			willRetry: boolean;
@@ -6072,6 +6078,35 @@ export class AgentSession {
 	}
 
 	/**
+	 * Per-turn supersede pass: prune older `read` results that a newer read of
+	 * the same file has made stale. Cache-aware (only fires when the suffix
+	 * after a candidate is small or the session has been idle long enough that
+	 * the provider prompt cache is cold), so it is cheap to run every turn.
+	 * Gated on the `compaction.supersedeReads` setting.
+	 */
+	async #pruneSupersededReads(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
+		if (!this.settings.getGroup("compaction").supersedeReads) return undefined;
+		const branchEntries = this.sessionManager.getBranch();
+		const result = pruneSupersededToolResults(
+			branchEntries,
+			this.#withPlanProtection({
+				supersedeKey: readToolSupersedeKey,
+				protectedTools: [...DEFAULT_PRUNE_CONFIG.protectedTools],
+			}),
+		);
+		if (result.prunedCount === 0) {
+			return undefined;
+		}
+
+		await this.sessionManager.rewriteEntries();
+		const sessionContext = this.buildDisplaySessionContext();
+		this.agent.replaceMessages(sessionContext.messages);
+		this.#syncTodoPhasesFromBranch();
+		this.#closeCodexProviderSessionsForHistoryRewrite();
+		return result;
+	}
+
+	/**
 	 * Strip image content blocks from every message on the current branch and
 	 * persist the rewrite. Walks `SessionManager.getBranch()` in place — both
 	 * `SessionMessageEntry.message` and `CustomMessageEntry.content` arrays
@@ -6260,6 +6295,20 @@ export class AgentSession {
 
 			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
+			// Strategy honored on manual /compact too. Custom instructions imply a
+			// directed LLM summary; a text-only model cannot read the frames back —
+			// both take the summarizer path (the latter loudly).
+			const wantsSnapcompact =
+				compactionPrep.kind !== "fromHook" && compactionSettings.strategy === "snapcompact" && !customInstructions;
+			const snapcompactReady = wantsSnapcompact && this.model.input.includes("image");
+			if (wantsSnapcompact && !snapcompactReady) {
+				this.emitNotice(
+					"warning",
+					`snapcompact needs a vision-capable model (${this.model.id} is text-only) — using an LLM summary instead`,
+					"compaction",
+				);
+			}
+
 			let summary: string;
 			let shortSummary: string | undefined;
 			let firstKeptEntryId: string;
@@ -6273,6 +6322,14 @@ export class AgentSession {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
+			} else if (snapcompactReady) {
+				const snapcompactResult = await snapcompactCompact(preparation, { convertToLlm });
+				summary = snapcompactResult.summary;
+				shortSummary = snapcompactResult.shortSummary;
+				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
+				tokensBefore = snapcompactResult.tokensBefore;
+				details = snapcompactResult.details;
+				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(snapcompactResult.preserveData ?? {}) };
 			} else {
 				// Generate compaction result. Only convert known abort-shaped
 				// rejections (AbortError raised while the abort signal is set,
@@ -6703,6 +6760,10 @@ export class AgentSession {
 			return false;
 		}
 
+		// Supersede pass runs every turn, before any threshold gating: it is cheap
+		// (bails when no candidate) and independent of the compaction setting.
+		const supersedeResult = await this.#pruneSupersededReads();
+
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return false;
 
@@ -6711,6 +6772,9 @@ export class AgentSession {
 		if (assistantMessage.stopReason === "error") return false;
 		const pruneResult = await this.#pruneToolOutputs();
 		let contextTokens = calculateContextTokens(assistantMessage.usage);
+		if (supersedeResult) {
+			contextTokens = Math.max(0, contextTokens - supersedeResult.tokensSaved);
+		}
 		if (pruneResult) {
 			contextTokens = Math.max(0, contextTokens - pruneResult.tokensSaved);
 		}
@@ -7601,9 +7665,25 @@ export class AgentSession {
 
 		// "overflow" forces context-full because the input itself is broken — a handoff
 		// LLM call would hit the same overflow. "incomplete" is an output-side problem,
-		// so a handoff request on the existing context is still viable.
-		let action: "context-full" | "handoff" =
+		// so a handoff request on the existing context is still viable. Snapcompact is
+		// safe for every reason (it makes no LLM call at all) but requires a vision
+		// model to be worth anything — fall back to context-full otherwise.
+		let action: "context-full" | "handoff" | "snapcompact" =
 			compactionSettings.strategy === "handoff" && reason !== "overflow" ? "handoff" : "context-full";
+		if (compactionSettings.strategy === "snapcompact") {
+			if (this.model?.input.includes("image")) {
+				action = "snapcompact";
+			} else {
+				logger.warn("Snapcompact compaction requires a vision-capable model; falling back to context-full", {
+					model: this.model?.id,
+				});
+				this.emitNotice(
+					"warning",
+					`snapcompact needs a vision-capable model (${this.model?.id ?? "unknown"} is text-only) — using an LLM summary instead`,
+					"compaction",
+				);
+			}
+		}
 		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 		// Abort any older auto-compaction before installing this run's controller.
 		this.#autoCompactionAbortController?.abort();
@@ -7742,6 +7822,16 @@ export class AgentSession {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
+			} else if (action === "snapcompact") {
+				// Local, deterministic: render discarded history onto PNG frames.
+				// No model candidates, no API key, no retry loop.
+				const snapcompactResult = await snapcompactCompact(preparation, { convertToLlm });
+				summary = snapcompactResult.summary;
+				shortSummary = snapcompactResult.shortSummary;
+				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
+				tokensBefore = snapcompactResult.tokensBefore;
+				details = snapcompactResult.details;
+				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(snapcompactResult.preserveData ?? {}) };
 			} else {
 				const candidates = this.#getCompactionModelCandidates(availableModels);
 				const retrySettings = this.settings.getGroup("retry");
