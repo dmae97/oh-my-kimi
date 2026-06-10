@@ -5,14 +5,11 @@
 ### Added
 
 - Added `AgentLoopConfig.getDisableReasoning` so callers can override `disableReasoning` per LLM call, mirroring `getReasoning`.
+- Added `transformProviderContext` to `AgentOptions`/`AgentLoopConfig`: an optional hook applied to the assembled provider context after conversion, normalization, and append-only handling, but before telemetry capture and provider send.
 
 ### Fixed
 
 - Fixed `Agent` runs so explicit reasoning disablement is forwarded to provider stream options and re-resolved per continuation, keeping mid-run thinking-off changes in sync with the next provider request.
-
-### Added
-
-- Added `transformProviderContext` to `AgentOptions`/`AgentLoopConfig`: an optional hook applied to the assembled provider context after conversion, normalization, and append-only handling, but before telemetry capture and provider send.
 
 ## [15.10.11] - 2026-06-10
 
@@ -22,6 +19,7 @@
 - Catalog imports moved to the new `@oh-my-pi/pi-catalog` package: subpath imports (`calculateCost`, Codex wire constants) plus catalog values previously taken from the `@oh-my-pi/pi-ai` root (`getBundledModel`, `clampThinkingLevelForModel`), which pi-ai no longer re-exports; type-only `Model`/`Api`/`Effort` imports from pi-ai are unchanged
 
 ## [15.10.8] - 2026-06-09
+
 ### Added
 
 - Added optional `fetch` overrides to `SummaryOptions` and `compact`/`generateSummary` so remote compaction can use custom HTTP clients
@@ -30,6 +28,7 @@
 - Added the upstream provider that served a request (`AssistantMessage.upstreamProvider`, e.g. OpenRouter's routed provider) as a `pi.gen_ai.response.upstream_provider` chat-span telemetry attribute, alongside the existing response id and time-to-first-chunk.
 
 ## [15.10.5] - 2026-06-08
+
 ### Removed
 
 - Removed the `maxToolCallsPerTurn` option from `AgentOptions` and `AgentLoopConfig`, so assistant turns are no longer capped after a configured number of completed tool calls
@@ -67,7 +66,6 @@
 - Removed stale synthetic user-message tag filters from OpenAI remote compaction output preservation; developer messages are now dropped by role instead.
 - Tool executions now receive the active turn `AbortSignal` unconditionally.
 
-
 ## [15.10.2] - 2026-06-08
 
 ### Fixed
@@ -99,6 +97,7 @@
 - Surfaced Anthropic stream failures whose message starts with `Output blocked by conten` as normal assistant error lifecycle events, so interactive clients render content-filter blocks instead of silently dropping the streaming bubble at `agent_end`.
 
 ## [15.8.3] - 2026-06-03
+
 ### Added
 
 - Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection` to extract a paired `read` tool call's `path` for embedders building read-targeted protection matchers

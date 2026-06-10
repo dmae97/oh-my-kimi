@@ -42,6 +42,7 @@
 - Fixed the bash result renderer recomputing styled output (`split` / `replaceTabs` / `truncateToVisualLines`) on every TUI repaint, which scaled with both transcript length and per-row output size. With a long captured session every keystroke walked hundreds of bash rows; the reporter on issue #2081 observed Ctrl+X/Ctrl+C feeling unresponsive because the main thread was pinned re-styling scrollback. The result renderer now caches its produced lines keyed by `(width, previewLines, expanded, rawOutput, isPartial)`, mirroring the existing eval-renderer cache; `invalidate()` clears the cache as before. Hot-path repaints with unchanged inputs are now O(1) ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
 - Fixed ACP `available_commands_update` to include extension-registered slash commands so clients like Zed surface them in the slash-command palette.
 - Fixed ACP cancel button leaving the session in a stuck state — a new prompt sent while a turn is still in-flight (e.g. immediately after pressing Stop in Zed before `session/cancel` is processed) now implicitly cancels the running turn and queues the new message, instead of throwing an error that blocks further interaction.
+- Fixed interactive `!`/`!!` shell shortcuts to run non-bash commands through the configured user shell, including interactive startup for zsh/fish aliases and functions ([#1816](https://github.com/can1357/oh-my-pi/issues/1816)).
 
 ## [15.10.11] - 2026-06-10
 
@@ -637,9 +638,6 @@
 - Fixed inline images rendering as a wall of empty PUA box glyphs with laggy scrolling on Kitty-protocol terminals that do not honor Unicode placeholders (most notably WezTerm and tmux/screen passthrough to a non-Kitty outer terminal). The 15.9 placeholder rollout enabled the `U=1`/U+10EEEE grid for every Kitty-protocol path; it now defaults on only for `kitty` and `ghostty`, with `PI_NO_KITTY_PLACEHOLDERS=1` as a hard opt-out and `PI_KITTY_PLACEHOLDERS=1` as opt-in for terminals (e.g. wezterm nightlies) that have since added support ([#1877](https://github.com/can1357/oh-my-pi/issues/1877)).
 - Fixed auto session-title generation failures being swallowed without an actionable diagnostic. Title generation now logs structured start, missing-model/API-key, provider-error, empty-result, and exception outcomes with the session id and resolved title model; the interactive auto-title caller also logs uncaught persistence/generation errors instead of dropping them. ([#1892](https://github.com/can1357/oh-my-pi/issues/1892))
 - Fixed `TranscriptContainer` reporting the live block boundary to the TUI again, so ED3-risk foreground streaming can append newly sealed transcript blocks to native scrollback once while deferring only the active live block.
-### Fixed
-
-- Fixed interactive `!`/`!!` shell shortcuts to run non-bash commands through the configured user shell, including interactive startup for zsh/fish aliases and functions ([#1816](https://github.com/can1357/oh-my-pi/issues/1816)).
 
 ## [15.9.1] - 2026-06-04
 
