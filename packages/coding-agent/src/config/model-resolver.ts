@@ -1061,19 +1061,14 @@ export async function resolveAllowedModels(
 /**
  * Synchronous subset of {@link resolveAllowedModels} for contexts where async is unavailable
  * (e.g. `getAvailableModels()` which is called from the ACP model-list advertisement, RPC
- * `get_available_models`, and the `/model` slash command). Handles the patterns that cover
- * real-world configs:
+ * `get_available_models`, and the `/model` slash command). Uses the same effective
+ * `enabledModels` scope semantics as startup resolution:
  *
- * - Exact `provider/modelId` selectors
- * - Canonical ids (expanded via `getCanonicalVariants`)
- * - Bare model ids (matched across all available providers)
- * - Optional `:thinkingLevel` suffix validated via `parseThinkingLevel` before stripping,
- *   so colon-bearing OpenRouter ids (e.g. `openrouter/qwen/qwen3-coder:exacto`) are preserved
- *
- * Glob patterns (`*`, `?`, `[`) require the async `resolveModelScope` path; they are skipped
- * here with a warning. When ALL patterns are globs (none can be evaluated synchronously) the
- * full available list is returned so the UI is never accidentally empty. Mixed glob + exact
- * patterns apply only the exact ones.
+ * - Glob selectors match `provider/modelId` and bare model id
+ * - Exact canonical ids expand to all available concrete variants
+ * - Exact `provider/modelId`, bare ids, provider-scoped fuzzy, and substring selectors
+ *   resolve through the shared model-pattern matcher
+ * - Optional `:thinkingLevel` suffixes are stripped only when valid
  *
  * When no pattern resolves to any model (misconfiguration / typo) an empty list is returned,
  * consistent with the empty-list contract of {@link resolveAllowedModels}. Callers that render
@@ -1087,66 +1082,40 @@ export function filterAvailableModelsByEnabledPatterns(
 ): Model<Api>[] {
 	if (patterns.length === 0) return available;
 
+	const context = buildPreferenceContext(available, undefined);
 	const allowed = new Set<string>();
-	let allGlobs = true;
+	const addAllowed = (model: Model<Api>) => {
+		allowed.add(`${model.provider}/${model.id}`);
+	};
+
 	for (const pattern of patterns) {
-		// Glob patterns need the async resolveModelScope path; skip them here and warn.
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
-			logger.warn(
-				"filterAvailableModelsByEnabledPatterns: glob pattern skipped in sync context (use exact provider/modelId or canonical ids in enabledModels for ACP model filtering)",
-				{ pattern },
-			);
-			continue;
-		}
-		allGlobs = false;
-
-		// Strip a `:thinkingLevel` suffix only when the part after the last colon is a
-		// recognised thinking level. This preserves colon-bearing OpenRouter ids such as
-		// `openrouter/qwen/qwen3-coder:exacto` where the suffix is NOT a thinking level.
-		const colonIdx = pattern.lastIndexOf(":");
-		const basePattern =
-			colonIdx !== -1 && parseThinkingLevel(pattern.slice(colonIdx + 1)) ? pattern.slice(0, colonIdx) : pattern;
-
-		// Explicit provider/modelId — resolve directly via the existing reference matcher.
-		if (basePattern.includes("/")) {
-			const match = findExactModelReferenceMatch(basePattern, available);
-			if (match) {
-				allowed.add(`${match.provider}/${match.id}`);
-				continue;
-			}
-			// Fallback: treat the whole pattern as a model ID (handles OpenRouter-style bare IDs
-			// like "qwen/qwen3-coder:exacto" where the "/" is part of the id, not a provider separator).
-			for (const m of available) {
-				if (m.id === basePattern) {
-					allowed.add(`${m.provider}/${m.id}`);
+			const { base: globPattern } = splitThinkingSuffix(pattern);
+			const glob = new Bun.Glob(globPattern.toLowerCase());
+			for (const model of available) {
+				const fullId = `${model.provider}/${model.id}`.toLowerCase();
+				if (glob.match(fullId) || glob.match(model.id.toLowerCase())) {
+					addAllowed(model);
 				}
 			}
 			continue;
 		}
 
-		// Canonical id — expand to all available concrete variants.
-		const variants = registry.getCanonicalVariants(basePattern, { availableOnly: true, candidates: available });
-		if (variants.length > 0) {
-			for (const { model } of variants) {
-				allowed.add(`${model.provider}/${model.id}`);
+		const exactCanonical = resolveExactCanonicalScopePattern(pattern, registry, available);
+		if (exactCanonical) {
+			for (const model of exactCanonical.models) {
+				addAllowed(model);
 			}
 			continue;
 		}
 
-		// Bare model id — match across all available providers.
-		for (const m of available) {
-			if (m.id === basePattern) {
-				allowed.add(`${m.provider}/${m.id}`);
-			}
+		const { model } = parseModelPatternWithContext(pattern, available, context, { modelRegistry: registry });
+		if (model) {
+			addAllowed(model);
 		}
 	}
 
-	// All patterns were globs — fall back to the full list since we cannot evaluate them.
-	if (allGlobs) return available;
-
-	// Empty allowed set means every non-glob pattern failed to resolve (misconfiguration).
-	// Return [] consistent with resolveAllowedModels so callers can surface the problem.
-	return allowed.size === 0 ? [] : available.filter(m => allowed.has(`${m.provider}/${m.id}`));
+	return allowed.size === 0 ? [] : available.filter(model => allowed.has(`${model.provider}/${model.id}`));
 }
 
 export interface ResolveCliModelResult {
