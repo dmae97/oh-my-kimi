@@ -149,6 +149,10 @@
 
 - Documented the oMLX setup path through existing OpenAI-compatible local discovery ([#1957](https://github.com/can1357/oh-my-pi/issues/1957)).
 
+### Fixed
+
+- Forwarded model ids through `ModelRegistry` API-key resolvers and Antigravity usage-limit rotation so `pi-ai` can apply model-family-scoped OAuth quota backoff instead of treating all `google-antigravity` counters as credential-wide. ([#2198](https://github.com/can1357/oh-my-pi/issues/2198))
+
 ## [15.10.8] - 2026-06-09
 
 ### Added

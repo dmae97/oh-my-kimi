@@ -48,7 +48,7 @@ export async function resolvePrimaryModel(
 	}
 	return {
 		model,
-		apiKey: modelRegistry.resolver(model.provider, { baseUrl: model.baseUrl }),
+		apiKey: modelRegistry.resolver(model.provider, { baseUrl: model.baseUrl, modelId: model.id }),
 		thinkingLevel: resolved?.thinkingLevel,
 	};
 }
@@ -68,6 +68,7 @@ export async function resolveSmolModel(
 				model: resolvedSmol.model,
 				apiKey: modelRegistry.resolver(resolvedSmol.model.provider, {
 					baseUrl: resolvedSmol.model.baseUrl,
+					modelId: resolvedSmol.model.id,
 				}),
 				thinkingLevel: resolvedSmol.thinkingLevel,
 			};
@@ -82,7 +83,7 @@ export async function resolveSmolModel(
 		if (apiKey) {
 			return {
 				model: candidate,
-				apiKey: modelRegistry.resolver(candidate.provider, { baseUrl: candidate.baseUrl }),
+				apiKey: modelRegistry.resolver(candidate.provider, { baseUrl: candidate.baseUrl, modelId: candidate.id }),
 			};
 		}
 	}

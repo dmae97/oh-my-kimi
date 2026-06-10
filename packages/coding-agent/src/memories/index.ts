@@ -276,6 +276,7 @@ async function runPhase1(options: {
 				apiKey: modelRegistry.resolver(phase1Model.provider, {
 					sessionId: session.sessionId,
 					baseUrl: phase1Model.baseUrl,
+					modelId: phase1Model.id,
 				}),
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
@@ -436,6 +437,7 @@ async function runPhase2(options: {
 				apiKey: modelRegistry.resolver(phase2Model.provider, {
 					sessionId: session.sessionId,
 					baseUrl: phase2Model.baseUrl,
+					modelId: phase2Model.id,
 				}),
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});
