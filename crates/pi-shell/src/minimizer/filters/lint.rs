@@ -750,6 +750,93 @@ mod tests {
 	}
 
 	// -----------------------------------------------------------------
+	// CONCERN 3: biome / oxlint split-brain alignment
+	// (synthetic inline fixtures; × is U+00D7 — biome/oxlint emit U+00D7,
+	// NOT snip's ✖/✔ keep-pattern codepoints)
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn biome_ci_keeps_diagnostics_strips_code_frames() {
+		assert!(supports_program("biome", Some("ci")));
+		// biome ci default output: grouped header line + `× message` rows +
+		// numbered code-frame + caret underline. (× == U+00D7.)
+		let input = "Checked 42 files in 0.5s\n\nsrc/app.tsx:5:3 lint/suspicious/noExplicitAny \
+		             \u{2501}\u{2501}\u{2501}\n  \u{00d7} Unexpected any. Specify a different \
+		             type.\n  3 \u{2502} interface Props {\n  4 \u{2502}   data: any;\n  5 \u{2502} \
+		             \u{0020}        ^^^\n\nsrc/utils.ts:12:1 lint/complexity/noForEach \
+		             \u{2501}\u{2501}\u{2501}\n  \u{00d7} Prefer for...of instead of forEach.\n 12 \
+		             \u{2502} items.forEach(item => process(item));\n\nFound 2 errors.\n";
+		let out = condense_lint_output("biome", input, 1);
+		// Grouped header lines survive (file:line:col …), × rows survive.
+		assert!(out.contains("src/app.tsx"), "got: {out}");
+		assert!(out.contains("src/utils.ts"));
+		assert!(out.contains('\u{00d7}'), "× diagnostic rows must survive: {out}");
+		assert!(out.contains("Unexpected any"));
+		assert!(out.contains("Prefer for...of"));
+		// Code-frame body rows (`N │ …`) are stripped; success chatter gone.
+		assert!(!out.contains("interface Props"), "code-frame body must be stripped: {out}");
+		assert!(!out.contains("Checked 42 files"), "checked chatter must be stripped: {out}");
+		assert!(!out.contains('^'), "caret underline must be stripped: {out}");
+	}
+
+	#[test]
+	fn biome_strips_fixed_files_success() {
+		// `Fixed N files` post-fix summary is chatter; stripped at success.
+		let out = condense_lint_output("biome", "Fixed 3 files in 0.1s\n", 0);
+		assert_eq!(out, "");
+	}
+
+	#[test]
+	fn oxlint_keeps_rule_and_location_strips_frames() {
+		assert!(supports_program("oxlint", Some("src/")));
+		// oxlint default output: `× rule: message`, `╭─[file:line]` location,
+		// numbered code-frame, `╰────` closer, Finished/Found chatter.
+		let input = "  \u{00d7} eslint(no-console): Unexpected console statement.\n   \
+		             \u{256d}\u{2500}[src/app.ts:5:3]\n 5 \u{2502}   console.log(\"debug\");\n   \
+		             \u{2502}   ^^^^^^^^^^^\n   \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\n\n  \
+		             \u{00d7} eslint(no-unused-vars): 'x' is defined but never used.\n   \
+		             \u{256d}\u{2500}[src/utils.ts:2:7]\n 2 \u{2502}   let x = 42;\n   \u{2502}       \
+		             ^\n   \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\n\nFound 2 warnings on 2 \
+		             files.\nFinished in 12ms on 100 files.\n";
+		let out = condense_lint_output("oxlint", input, 1);
+		// Diagnostic rows and location markers survive.
+		assert!(out.contains('\u{00d7}'), "× diagnostic rows must survive: {out}");
+		assert!(out.contains("no-console"));
+		assert!(out.contains("no-unused-vars"));
+		assert!(
+			out.contains("\u{256d}\u{2500}[src/app.ts:5:3]"),
+			"location marker must survive: {out}"
+		);
+		// Code-frame rows, closers, and progress chatter are stripped.
+		assert!(!out.contains("console.log"), "code-frame body must be stripped: {out}");
+		assert!(!out.contains('\u{2570}'), "box closer must be stripped: {out}");
+		assert!(!out.contains("Finished in"), "Finished chatter must be stripped: {out}");
+		assert!(!out.contains("Found 2 warnings"), "Found chatter must be stripped: {out}");
+	}
+
+	#[test]
+	fn oxlint_clean_run_condenses_to_clean() {
+		// Only progress chatter, no diagnostics -> empty.
+		let out = condense_lint_output("oxlint", "Finished in 5ms on 100 files.\n", 0);
+		assert_eq!(out, "");
+	}
+
+	#[test]
+	fn shared_python_ruby_paths_unaffected_by_js_strips() {
+		// Regression pin for the SHARED renderer: ruff (file:line) and mypy
+		// (bracketed code) diagnostics still group, and a leading-number gutter
+		// line in their output is NOT mistaken for a JS code-frame (the strip is
+		// gated to tsc/eslint/biome/oxlint only).
+		let ruff = "src/app.py:1:1: F401 imported but unused\nFound 1 error.\n";
+		let out = condense_lint_output("ruff", ruff, 1);
+		assert!(out.contains("F401"), "got: {out}");
+
+		let mypy = "lib/b.py:4: error: no attr [attr-defined]\n";
+		let out = condense_lint_output("mypy", mypy, 1);
+		assert!(out.contains("attr-defined") || out.contains("b.py"), "got: {out}");
+	}
+
+	// -----------------------------------------------------------------
 	// Regression: blocking-issue fixes
 	// -----------------------------------------------------------------
 
