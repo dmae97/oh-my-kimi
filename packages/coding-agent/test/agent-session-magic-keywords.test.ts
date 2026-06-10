@@ -69,9 +69,37 @@ describe("AgentSession magic keyword settings", () => {
 
 		await session.prompt("please workflowz this and ultrathink through it");
 
-		expect(promptSpy).toHaveBeenCalledTimes(1);
-		const promptOptions = promptSpy.mock.calls[0]![1] as { appendMessages?: unknown[] } | undefined;
-		expect(promptOptions?.appendMessages ?? []).toEqual([]);
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
+		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+	});
+
+	it("honors non-ultrathink per-keyword notice toggles", async () => {
+		const created = await createMagicKeywordSession(root);
+		session = created.session;
+		authStorage = created.authStorage;
+		created.settings.set("magicKeywords.orchestrate", false);
+		created.settings.set("magicKeywords.workflow", false);
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("please orchestrate and workflowz this");
+
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
+		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+	});
+
+	it("still appends enabled non-ultrathink notices", async () => {
+		const created = await createMagicKeywordSession(root);
+		session = created.session;
+		authStorage = created.authStorage;
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("please orchestrate and workflowz this");
+
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
+		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([
+			"orchestrate-notice",
+			"workflow-notice",
+		]);
 	});
 
 	it("does not use a disabled ultrathink keyword to force auto thinking", async () => {
