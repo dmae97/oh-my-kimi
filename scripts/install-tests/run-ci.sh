@@ -93,13 +93,30 @@ core_rc=0
 cp "$natives_pkg_backup" "$ROOT_DIR/packages/natives/package.json"
 [ "$core_rc" -eq 0 ] || exit "$core_rc"
 
-# 3. Pack the remaining workspace packages (natives core handled above).
-for pkg in utils hashline catalog ai mnemopi agent tui stats coding-agent; do
+# 3. Pack the remaining workspace packages (natives core and coding-agent
+#    handled separately).
+for pkg in utils hashline catalog ai mnemopi agent tui stats; do
    (
       cd "$ROOT_DIR/packages/$pkg"
       bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null
    )
 done
+
+# 4. Pack the coding agent with its *published* manifest: release swaps
+#    `bin.omp` from `src/cli.ts` to the prepack bundle `dist/cli.js`. The repo
+#    manifest keeps pointing at source so `bun link`/`install.sh --source`
+#    work without a build, so the swap must be reproduced here for the smoke
+#    to exercise the bundled worker-host entry the published package ships.
+#    Always restore the working-tree manifest.
+agent_pkg_backup="$WORK_DIR/coding-agent-package.json.orig"
+cp "$ROOT_DIR/packages/coding-agent/package.json" "$agent_pkg_backup"
+agent_rc=0
+{
+   bun -e 'import { applyPublishBin } from "./scripts/ci-release-publish.ts"; await applyPublishBin("packages/coding-agent", true);' &&
+      (cd "$ROOT_DIR/packages/coding-agent" && bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null)
+} || agent_rc=$?
+cp "$agent_pkg_backup" "$ROOT_DIR/packages/coding-agent/package.json"
+[ "$agent_rc" -eq 0 ] || exit "$agent_rc"
 
 utils_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-utils-*.tgz)"
 natives_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-[0-9]*.tgz)"

@@ -28,7 +28,7 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"bin": {
-		"omp": "dist/cli.js"
+		"omp": "src/cli.ts"
 	},
 	"scripts": {
 		"build": "bun scripts/build-binary.ts",
