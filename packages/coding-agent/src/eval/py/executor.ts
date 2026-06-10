@@ -42,6 +42,11 @@ export interface PythonExecutorOptions {
 	kernelOwnerId?: string;
 	/** Kernel mode (session reuse vs per-call) */
 	kernelMode?: PythonKernelMode;
+	/**
+	 * Explicit interpreter path (`python.interpreter` resolved from the
+	 * session's settings). Skips automatic runtime discovery when set.
+	 */
+	interpreter?: string;
 	/** Restart the kernel before executing */
 	reset?: boolean;
 	/** Session file path for accessing task outputs */
@@ -326,6 +331,7 @@ async function startKernel(cwd: string, options: PythonExecutorOptions): Promise
 		env: buildKernelEnv(options),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
+		interpreter: options.interpreter,
 	});
 }
 
@@ -587,7 +593,10 @@ async function executeWithKernel(
 }
 
 async function ensureKernelAvailable(cwd: string, options: PythonExecutorOptions): Promise<void> {
-	const availability = await waitForPromiseWithCancellation(checkPythonKernelAvailability(cwd), options);
+	const availability = await waitForPromiseWithCancellation(
+		checkPythonKernelAvailability(cwd, options.interpreter),
+		options,
+	);
 	if (!availability.ok) {
 		throw new Error(availability.reason ?? "Python kernel unavailable");
 	}

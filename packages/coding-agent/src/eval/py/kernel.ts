@@ -102,6 +102,11 @@ interface KernelLifecycleOptions {
 interface KernelStartOptions extends KernelLifecycleOptions {
 	cwd: string;
 	env?: Record<string, string | undefined>;
+	/**
+	 * Explicit interpreter path (`python.interpreter` from the session's
+	 * settings). When set, runtime discovery is skipped entirely.
+	 */
+	interpreter?: string;
 }
 
 interface KernelShutdownOptions {
@@ -135,20 +140,24 @@ function throwIfAborted(signal: AbortSignal | undefined, fallbackReason: string)
 	throw createAbortError("AbortError", typeof reason === "string" ? reason : fallbackReason);
 }
 
-// Cache successful probes per resolved cwd: every cell otherwise pays one (or
-// two — backend.isAvailable + ensureKernelAvailable) interpreter spawns even
-// when the kernel is already hot. Failures are not cached so installing a
-// Python mid-session is picked up on the next attempt.
+// Cache successful probes per resolved cwd + explicit interpreter: every cell
+// otherwise pays one (or two — backend.isAvailable + ensureKernelAvailable)
+// interpreter spawns even when the kernel is already hot. Failures are not
+// cached so installing a Python mid-session is picked up on the next attempt.
 const availabilityCache = new Map<string, Promise<PythonKernelAvailability>>();
 
-export async function checkPythonKernelAvailability(cwd: string): Promise<PythonKernelAvailability> {
+export async function checkPythonKernelAvailability(
+	cwd: string,
+	interpreter?: string,
+): Promise<PythonKernelAvailability> {
 	if (isBunTestRuntime() || $flag("PI_PYTHON_SKIP_CHECK")) {
 		return { ok: true };
 	}
-	const key = path.resolve(cwd);
+	const resolvedCwd = path.resolve(cwd);
+	const key = `${resolvedCwd}\0${interpreter ?? ""}`;
 	const cached = availabilityCache.get(key);
 	if (cached) return await cached;
-	const probe = probePythonKernelAvailability(key);
+	const probe = probePythonKernelAvailability(resolvedCwd, interpreter);
 	availabilityCache.set(key, probe);
 	const result = await probe;
 	if (!result.ok && availabilityCache.get(key) === probe) {
@@ -157,14 +166,13 @@ export async function checkPythonKernelAvailability(cwd: string): Promise<Python
 	return result;
 }
 
-async function probePythonKernelAvailability(cwd: string): Promise<PythonKernelAvailability> {
+async function probePythonKernelAvailability(cwd: string, interpreter?: string): Promise<PythonKernelAvailability> {
 	try {
 		const settings = await Settings.init();
 		const { env } = settings.getShellConfig();
 		const baseEnv = filterEnv(env);
-		const explicitInterpreter = settings.get("python.interpreter")?.trim();
-		const runtimes = explicitInterpreter
-			? [resolveExplicitPythonRuntime(explicitInterpreter, cwd, baseEnv)]
+		const runtimes = interpreter
+			? [resolveExplicitPythonRuntime(interpreter, cwd, baseEnv)]
 			: enumeratePythonRuntimes(cwd, baseEnv);
 		if (runtimes.length === 0) {
 			return { ok: false, reason: "Python executable not found on PATH" };
@@ -248,6 +256,7 @@ export class PythonKernel {
 			"PythonKernel.start:availabilityCheck",
 			checkPythonKernelAvailability,
 			options.cwd,
+			options.interpreter,
 		);
 		if (!availability.ok) {
 			throw new Error(availability.reason ?? "Python kernel unavailable");
@@ -259,11 +268,9 @@ export class PythonKernel {
 		// PI_PYTHON_SKIP_CHECK), where no candidate was probed.
 		let runtime = availability.runtime;
 		if (!runtime) {
-			const settings = await Settings.init();
-			const { env: shellEnv } = settings.getShellConfig();
-			const explicitInterpreter = settings.get("python.interpreter")?.trim();
-			runtime = explicitInterpreter
-				? resolveExplicitPythonRuntime(explicitInterpreter, options.cwd, filterEnv(shellEnv))
+			const { env: shellEnv } = (await Settings.init()).getShellConfig();
+			runtime = options.interpreter
+				? resolveExplicitPythonRuntime(options.interpreter, options.cwd, filterEnv(shellEnv))
 				: resolvePythonRuntime(options.cwd, filterEnv(shellEnv));
 		}
 		const spawnEnv: Record<string, string> = {};

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
 	enumeratePythonRuntimes,
@@ -126,6 +127,29 @@ describe("enumeratePythonRuntimes", () => {
 		expect(runtime.env.VIRTUAL_ENV).toBe(venvDir);
 		expect(runtime.env.PATH).toBe(`${binDir}${path.delimiter}${path.join(path.sep, "usr", "bin")}`);
 	});
+
+	it("expands a home-relative explicit interpreter instead of resolving against cwd", () => {
+		const home = path.join(path.sep, "home", "tester");
+		vi.spyOn(os, "homedir").mockReturnValue(home);
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+		const runtime = resolveExplicitPythonRuntime("~/venvs/py/bin/python", path.join(path.sep, "work"), {});
+
+		expect(runtime.pythonPath).toBe(path.join(home, "venvs", "py", "bin", "python"));
+	});
+
+	it("resolves a relative explicit interpreter against cwd", () => {
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+		const runtime = resolveExplicitPythonRuntime(
+			path.join(".venv", "bin", "python"),
+			path.join(path.sep, "work"),
+			{},
+		);
+
+		expect(runtime.pythonPath).toBe(path.join(path.sep, "work", ".venv", "bin", "python"));
+	});
+
 	it("throws from resolvePythonRuntime when no interpreter can be found", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
 		vi.spyOn(piUtils, "$which").mockReturnValue(null);

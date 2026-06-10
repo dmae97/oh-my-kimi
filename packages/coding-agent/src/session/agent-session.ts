@@ -8690,6 +8690,7 @@ export class AgentSession {
 				sessionId: namespacePythonSessionId(sessionId),
 				kernelOwnerId: this.#evalKernelOwnerId,
 				kernelMode: this.settings.get("python.kernelMode"),
+				interpreter: this.settings.get("python.interpreter")?.trim() || undefined,
 				onChunk,
 				signal: abortController.signal,
 			});

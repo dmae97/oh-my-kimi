@@ -463,7 +463,12 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		!allowJs &&
 		(requestedTools === undefined || requestedTools.includes("eval"))
 	) {
-		const availability = await logger.time("createTools:pythonCheck", checkPythonKernelAvailability, session.cwd);
+		const availability = await logger.time(
+			"createTools:pythonCheck",
+			checkPythonKernelAvailability,
+			session.cwd,
+			session.settings.get("python.interpreter")?.trim() || undefined,
+		);
 		pythonAvailable = availability.ok;
 		if (!availability.ok) {
 			logger.warn("Python kernel unavailable and JS backend disabled; eval will be unavailable", {
