@@ -75,6 +75,7 @@ import {
 	ACP_BUILTIN_RESERVED_NAMES,
 	ACP_BUILTIN_SLASH_COMMANDS,
 	executeAcpBuiltinSlashCommand,
+	isAcpBuiltinShadowedName,
 } from "../../slash-commands/acp-builtins";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
@@ -1613,6 +1614,12 @@ export class AcpAgent implements Agent {
 		}
 
 		for (const command of session.extensionRunner?.getRegisteredCommands(ACP_BUILTIN_RESERVED_NAMES) ?? []) {
+			// Reserved-set filtering in getRegisteredCommands only covers exact
+			// names; colon-namespaced names whose prefix is a builtin (e.g.
+			// `model:foo`) would still dispatch to the builtin in ACP.
+			if (isAcpBuiltinShadowedName(command.name)) {
+				continue;
+			}
 			appendCommand({
 				name: command.name,
 				description: command.description ?? "(extension command)",

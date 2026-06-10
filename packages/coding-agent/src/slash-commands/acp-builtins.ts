@@ -12,11 +12,22 @@ export type { AcpBuiltinSlashCommandResult } from "./types";
  * registering `models` would appear in the palette but execute the builtin).
  */
 export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
-	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [
-		c.name,
-		...(c.aliases ?? []),
-	]),
+	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
 );
+
+/**
+ * Whether an extension command named `name` would be captured by ACP builtin
+ * dispatch before reaching the extension handler. Beyond exact name/alias
+ * collisions, `parseSlashCommand` treats `:` as a name/args separator, so a
+ * colon-namespaced name whose prefix is a handled builtin (e.g. `model:foo`)
+ * executes the `/model` builtin with `foo` as args. Such names must not be
+ * advertised to ACP clients.
+ */
+export function isAcpBuiltinShadowedName(name: string): boolean {
+	if (ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
+	const colon = name.indexOf(":");
+	return colon !== -1 && ACP_BUILTIN_RESERVED_NAMES.has(name.slice(0, colon));
+}
 
 /**
  * Commands advertised to ACP clients. Entries without a text-mode `handle`
