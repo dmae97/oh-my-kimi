@@ -10,6 +10,10 @@
 
 - Fixed exiting plan mode without confirmation only when neither the default plan file nor slug-named local plan files contain draft content ([#2024](https://github.com/can1357/oh-my-pi/issues/2024)).
 
+### Added
+
+- Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.
+
 ## [15.10.11] - 2026-06-10
 
 ### Added
