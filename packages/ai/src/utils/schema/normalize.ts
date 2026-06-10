@@ -1437,6 +1437,13 @@ export function sanitizeSchemaForStrictMode(
 	return sanitized;
 }
 
+function canAppendNullVariantToAnyOf(schema: Record<string, unknown>): boolean {
+	for (const key in schema) {
+		if (key !== "anyOf" && key !== "description") return false;
+	}
+	return true;
+}
+
 /**
  * Recursively enforces JSON Schema constraints required by OpenAI/Codex strict mode:
  *   - `additionalProperties: false` on every object node
@@ -1505,7 +1512,7 @@ function enforceStrictSchemaBody(
 					strictProperties[key] = processed;
 					continue;
 				}
-				if (isJsonObject(processed) && Array.isArray(processed.anyOf)) {
+				if (isJsonObject(processed) && Array.isArray(processed.anyOf) && canAppendNullVariantToAnyOf(processed)) {
 					strictProperties[key] = { ...processed, anyOf: [...processed.anyOf, { type: "null" }] };
 					continue;
 				}
