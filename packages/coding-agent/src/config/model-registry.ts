@@ -1010,7 +1010,7 @@ export class ModelRegistry {
 			if (
 				providerConfig.baseUrl ||
 				resolvedProviderHeaders ||
-				resolvedProviderApiKey ||
+				providerConfig.apiKey ||
 				providerConfig.authHeader !== undefined ||
 				providerConfig.compat ||
 				providerConfig.disableStrictTools ||
@@ -1020,7 +1020,7 @@ export class ModelRegistry {
 				overrides.set(providerName, {
 					baseUrl: providerConfig.baseUrl,
 					headers: resolvedProviderHeaders,
-					apiKey: resolvedProviderApiKey,
+					apiKey: providerConfig.apiKey,
 					authHeader: providerConfig.authHeader,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 					transport: providerConfig.transport,
@@ -1478,9 +1478,9 @@ export class ModelRegistry {
 			if (modelDefs.length === 0) continue; // Override-only, no custom models
 			const resolvedProviderHeaders = resolveConfigHeaders(providerConfig.headers);
 			const resolvedProviderApiKey = providerConfig.apiKey ? resolveConfigValue(providerConfig.apiKey) : undefined;
-			if (resolvedProviderApiKey) {
-				this.#customProviderApiKeys.set(providerName, resolvedProviderApiKey);
-				this.authStorage.setConfigApiKey(providerName, resolvedProviderApiKey);
+			if (providerConfig.apiKey) {
+				this.#customProviderApiKeys.set(providerName, providerConfig.apiKey);
+				if (resolvedProviderApiKey) this.authStorage.setConfigApiKey(providerName, resolvedProviderApiKey);
 			}
 			for (const modelDef of modelDefs) {
 				const providerCompat = providerConfig.disableStrictTools
@@ -1491,7 +1491,7 @@ export class ModelRegistry {
 					providerConfig.baseUrl!,
 					providerConfig.api as Api | undefined,
 					resolvedProviderHeaders,
-					resolvedProviderApiKey,
+					providerConfig.apiKey,
 					providerConfig.authHeader,
 					providerCompat,
 					(providerConfig.auth as ProviderAuthMode | undefined) ?? undefined,
