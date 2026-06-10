@@ -3,12 +3,6 @@ import type { ClipboardImage } from "@oh-my-pi/pi-natives";
 import * as native from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
 
-/** Env var users can set to override clipboard copy (e.g. `xclip -selection clipboard -in -silent`). */
-const CUSTOM_COPY_COMMAND_ENV = "OMP_CLIPBOARD_COMMAND";
-
-/** Timeout for any external clipboard helper. xclip / wl-copy fork after reading stdin in well under this budget. */
-const COPY_TIMEOUT_MS = 5_000;
-
 function hasDisplay(): boolean {
 	return process.platform !== "linux" || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
@@ -18,153 +12,57 @@ function isWsl(): boolean {
 }
 
 /**
- * Linux clipboard CLI fallbacks, listed in attempt order.
- *
- * The native `arboard` backend cannot retain X11 / Wayland selection ownership after the calling
- * process exits, and for short-lived napi calls it can drop ownership before any consumer sees the
- * selection — leaving the clipboard empty even though `set_text` returned success (see #2075 on
- * QTerminal + tmux). `wl-copy` / `xclip` / `xsel` all fork after reading stdin and serve the
- * selection until another app claims it, so the payload survives.
- *
- * `requiresEnv` skips backends whose display socket is absent.
- */
-interface LinuxCliBackend {
-	readonly cmd: readonly string[];
-	readonly requiresEnv: "WAYLAND_DISPLAY" | "DISPLAY";
-}
-
-const LINUX_CLI_BACKENDS: readonly LinuxCliBackend[] = [
-	{ cmd: ["wl-copy"], requiresEnv: "WAYLAND_DISPLAY" },
-	{ cmd: ["xclip", "-selection", "clipboard", "-in"], requiresEnv: "DISPLAY" },
-	{ cmd: ["xsel", "--clipboard", "--input"], requiresEnv: "DISPLAY" },
-];
-
-/**
- * Spawn a clipboard CLI with `text` on stdin. Returns `true` only on a clean exit. A missing binary,
- * non-zero exit, or any spawn error is treated as a fall-through signal so the caller can try the
- * next backend.
- */
-async function spawnClipboardCli(cmd: readonly string[], text: string): Promise<boolean> {
-	try {
-		const proc = Bun.spawn({
-			cmd: cmd as string[],
-			stdin: new TextEncoder().encode(text),
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		const timer = setTimeout(() => proc.kill(), COPY_TIMEOUT_MS);
-		try {
-			const exitCode = await proc.exited;
-			return exitCode === 0;
-		} finally {
-			clearTimeout(timer);
-		}
-	} catch {
-		return false;
-	}
-}
-
-async function tryCustomCommand(text: string): Promise<boolean> {
-	const command = process.env[CUSTOM_COPY_COMMAND_ENV];
-	if (!command) return false;
-	const shell = process.platform === "win32" ? ["cmd.exe", "/c", command] : ["/bin/sh", "-c", command];
-	try {
-		const proc = Bun.spawn({
-			cmd: shell,
-			stdin: new TextEncoder().encode(text),
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		const timer = setTimeout(() => proc.kill(), COPY_TIMEOUT_MS);
-		try {
-			const exitCode = await proc.exited;
-			if (exitCode === 0) return true;
-			logger.warn(`clipboard: ${CUSTOM_COPY_COMMAND_ENV} exited ${exitCode}`, { command });
-			return false;
-		} finally {
-			clearTimeout(timer);
-		}
-	} catch (err) {
-		logger.warn(`clipboard: ${CUSTOM_COPY_COMMAND_ENV} failed`, { command, error: String(err) });
-		return false;
-	}
-}
-
-async function tryLinuxCliCopy(text: string): Promise<boolean> {
-	for (const backend of LINUX_CLI_BACKENDS) {
-		if (!process.env[backend.requiresEnv]) continue;
-		if (await spawnClipboardCli(backend.cmd, text)) return true;
-	}
-	return false;
-}
-
-function emitOsc52(text: string): void {
-	if (!process.stdout.isTTY) return;
-	const onError = (err: unknown) => {
-		process.stdout.off("error", onError);
-		// Prevent unhandled 'error' from crashing the process when stdout is a closed pipe.
-		if ((err as NodeJS.ErrnoException | null | undefined)?.code === "EPIPE") return;
-	};
-	try {
-		const encoded = Buffer.from(text).toString("base64");
-		const osc52 = `\x1b]52;c;${encoded}\x07`;
-		process.stdout.on("error", onError);
-		process.stdout.write(osc52, err => {
-			process.stdout.off("error", onError);
-			// OSC 52 is best-effort; swallow EPIPE on broken pipes.
-			if ((err as NodeJS.ErrnoException | null | undefined)?.code === "EPIPE") return;
-		});
-	} catch (err) {
-		process.stdout.off("error", onError);
-		if ((err as NodeJS.ErrnoException | null | undefined)?.code !== "EPIPE") {
-			// All write failures are ignored — OSC 52 is best-effort.
-		}
-	}
-}
-
-/**
  * Copy text to the system clipboard.
  *
- * Order of attempts:
- *
- * 1. **OSC 52** — emitted on a real TTY so remote terminals (SSH/mosh) that support the sequence
- *    can capture the clipboard. Harmless on terminals that don't.
- * 2. **`OMP_CLIPBOARD_COMMAND`** — user-supplied shell command receiving the text on stdin.
- *    Escape hatch for unusual setups (e.g. `xclip -selection clipboard -in -silent`).
- * 3. **Termux**: `termux-clipboard-set`.
- * 4. **Linux**: `wl-copy` / `xclip` / `xsel`. These commands daemonize so the clipboard payload
- *    survives our process exit; the native `arboard` backend cannot retain X11/Wayland selection
- *    ownership across exit and leaves the clipboard empty in QTerminal + tmux and similar
- *    short-lived CLI scenarios (#2075).
- * 5. **Native `arboard`** — required on macOS/Windows and the final fallback when no Linux CLI tool
- *    is installed. When this last step fails too, a single warning is logged so the silent-success
- *    UX from #2075 cannot recur unnoticed.
+ * Emits OSC 52 first when running in a real terminal (works over SSH/mosh),
+ * then attempts native clipboard copy as best-effort for local sessions.
+ * On Termux, tries `termux-clipboard-set` before native.
  *
  * @param text - UTF-8 text to place on the clipboard.
  */
 export async function copyToClipboard(text: string): Promise<void> {
-	emitOsc52(text);
-
-	if (await tryCustomCommand(text)) return;
-
-	if (process.env.TERMUX_VERSION) {
+	if (process.stdout.isTTY) {
+		const onError = (err: unknown) => {
+			process.stdout.off("error", onError);
+			// Prevent unhandled 'error' from crashing the process when stdout is a closed pipe.
+			if ((err as NodeJS.ErrnoException | null | undefined)?.code === "EPIPE") {
+				return;
+			}
+		};
 		try {
-			execSync("termux-clipboard-set", { input: text, timeout: COPY_TIMEOUT_MS });
-			return;
-		} catch {
-			// Fall through to native.
+			const encoded = Buffer.from(text).toString("base64");
+			const osc52 = `\x1b]52;c;${encoded}\x07`;
+			process.stdout.on("error", onError);
+			process.stdout.write(osc52, err => {
+				process.stdout.off("error", onError);
+				// If stdout is closed (e.g. piped to a process that exits early),
+				// ignore EPIPE and proceed with native clipboard best-effort.
+				if ((err as NodeJS.ErrnoException | null | undefined)?.code === "EPIPE") {
+					return;
+				}
+			});
+		} catch (err) {
+			process.stdout.off("error", onError);
+			if ((err as NodeJS.ErrnoException | null | undefined)?.code !== "EPIPE") {
+				// Ignore all write failures (OSC 52 is best-effort).
+			}
 		}
 	}
 
-	if (process.platform === "linux" && (await tryLinuxCliCopy(text))) return;
-
+	// Also try native tools (best effort for local sessions)
 	try {
+		if (process.env.TERMUX_VERSION) {
+			try {
+				execSync("termux-clipboard-set", { input: text, timeout: 5000 });
+				return;
+			} catch {
+				// Fall through to native
+			}
+		}
+
 		await native.copyToClipboard(text);
-	} catch (err) {
-		logger.warn(
-			"clipboard: native copy failed and no CLI fallback succeeded. On Linux install xclip or wl-clipboard, or set OMP_CLIPBOARD_COMMAND.",
-			{ error: String(err) },
-		);
+	} catch {
+		// Ignore — clipboard copy is best-effort
 	}
 }
 
