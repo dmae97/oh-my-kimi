@@ -49,6 +49,13 @@ fn is_go_tool_golangci_lint(ctx: &MinimizerCtx<'_>) -> bool {
 }
 
 fn filter_go_test(input: &str, exit_code: i32) -> String {
+	// On success, no per-test/per-package detail carries signal: re-derive rtk's
+	// aggregation against DEFAULT text (and opportunistic JSON), counting package
+	// and test markers into a single summary line instead of echoing every PASS/ok.
+	if exit_code == 0 {
+		return aggregate_go_test_success(input);
+	}
+
 	let mut out = String::new();
 	let mut kept = 0usize;
 	let mut keep_next_after_location = false;
@@ -85,6 +92,48 @@ fn filter_go_test(input: &str, exit_code: i32) -> String {
 	}
 
 	primitives::head_tail_lines(&primitives::dedup_consecutive_lines(&out), 140, 80)
+}
+
+/// Success-path aggregation: count package and test markers (re-derived for
+/// DEFAULT text, with opportunistic JSON rendering) and emit one summary line.
+fn aggregate_go_test_success(input: &str) -> String {
+	let mut packages_ok = 0usize;
+	let mut no_tests = 0usize;
+	let mut tests_skipped = 0usize;
+
+	for line in input.lines() {
+		let trimmed = line.trim();
+		if trimmed.is_empty() {
+			continue;
+		}
+
+		// Opportunistic JSON: render to the same text shape, then count.
+		let candidate = render_go_test_json_line(trimmed);
+		let line_to_count = candidate.as_deref().unwrap_or(trimmed);
+		let lower = line_to_count.trim().to_ascii_lowercase();
+
+		if lower.starts_with("ok\t") || lower.starts_with("ok  ") {
+			packages_ok += 1;
+		} else if lower.starts_with("?\t") || lower.starts_with("?   ") {
+			no_tests += 1;
+		} else if lower.starts_with("--- skip") {
+			tests_skipped += 1;
+		}
+	}
+
+	if packages_ok == 0 && no_tests == 0 && tests_skipped == 0 {
+		return compact_general(input);
+	}
+
+	let mut summary = format!("go test: {packages_ok} packages ok");
+	if no_tests > 0 {
+		summary.push_str(&format!(", {no_tests} no tests"));
+	}
+	if tests_skipped > 0 {
+		summary.push_str(&format!(", {tests_skipped} tests skipped"));
+	}
+	summary.push('\n');
+	summary
 }
 
 fn render_go_test_json_line(line: &str) -> Option<String> {
@@ -373,7 +422,7 @@ mod tests {
 	}
 
 	#[test]
-	fn go_test_verbose_success_drops_run_and_ginkgo_success_noise() {
+	fn go_test_verbose_success_aggregates_to_summary() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = MinimizerCtx {
 			program:    "go",
@@ -386,11 +435,28 @@ mod tests {
 		             kubecraft.ai/.../controller  6.610s\n=== RUN   TestNewClient\n--- PASS: \
 		             TestNewClient (0.00s)\nPASS\nok  kubecraft.ai/.../llm  0.776s\n";
 		let out = filter(&ctx, input, 0);
-		assert!(out.text.contains("--- PASS: TestControllers (6.04s)"));
-		assert!(out.text.contains("ok  kubecraft.ai/.../controller  6.610s"));
-		assert!(out.text.contains("--- PASS: TestNewClient (0.00s)"));
+		// On success the two `ok` packages collapse to one summary line; the per-test
+		// PASS lines and `=== RUN`/ginkgo banner noise disappear.
+		assert!(out.text.contains("go test: 2 packages ok"));
+		assert!(!out.text.contains("--- PASS"));
 		assert!(!out.text.contains("=== RUN"));
 		assert!(!out.text.contains("SUCCESS!"));
+	}
+
+	#[test]
+	fn go_test_success_default_text_counts_no_tests_and_skips() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "go",
+			subcommand: Some("test"),
+			command:    "go test ./...",
+			config:     &cfg,
+		};
+		let input = "ok  \texample.com/a\t0.10s\n?   \texample.com/b\t[no test files]\nok  \
+		             \texample.com/c\t0.20s\n--- SKIP: TestSkipped (0.00s)\nok  \
+		             \texample.com/d\t0.30s\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text.trim(), "go test: 3 packages ok, 1 no tests, 1 tests skipped");
 	}
 
 	#[test]
