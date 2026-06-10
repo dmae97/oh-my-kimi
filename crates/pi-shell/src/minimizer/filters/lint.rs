@@ -109,6 +109,14 @@ fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
 	if is_js_lint_program(program) && is_js_frame_noise(program, line) {
 		return true;
 	}
+	// pyright/basedpyright emit a version banner plus source-discovery progress
+	// before the diagnostics. None of these rows carry a diagnostic, so strip them
+	// even at exit!=0. Scoped to pyright/basedpyright so the other linters'
+	// equivalent-looking lines (e.g. an oxlint `Found N warnings` summary) are not
+	// caught here. (Ported from rtk/src/filters/basedpyright.toml strip patterns.)
+	if matches!(program, "pyright" | "basedpyright") && is_pyright_banner_noise(line) {
+		return true;
+	}
 	if exit_code != 0 && contains_diagnostic_signal(line) {
 		return false;
 	}
@@ -126,6 +134,59 @@ fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
 			&& (lower.starts_with("inspecting ")
 				|| lower == "offenses:"
 				|| lower.ends_with(" files inspected, no offenses detected"))
+}
+
+/// pyright/basedpyright banner/progress noise: the version banner and the
+/// source-file-discovery progress lines that precede the diagnostics. `line`
+/// arrives already trimmed (see `strip_lint_noise`). Re-derived from
+/// rtk/src/filters/basedpyright.toml's `strip_lines_matching` patterns:
+///   `^Searching for source files`, `^Found \d+ source file`,
+///   `^Pyright \d+\.\d+`, `^basedpyright \d+\.\d+`.
+/// The blank-line pattern (`^\s*$`) is already handled by `strip_lint_noise`.
+fn is_pyright_banner_noise(line: &str) -> bool {
+	if line.starts_with("Searching for source files") {
+		return true;
+	}
+	// `Pyright 1.1.0` / `basedpyright 1.22.0`: program token then a `MAJOR.MINOR`
+	// version. Matched by a literal prefix plus a dotted-digit check on the rest so
+	// a stray diagnostic message beginning with the word is not swept up.
+	if let Some(rest) = line
+		.strip_prefix("Pyright ")
+		.or_else(|| line.strip_prefix("basedpyright "))
+		&& starts_with_dotted_version(rest)
+	{
+		return true;
+	}
+	// `Found 42 source files`: literal prefix, then a count, then `source file`.
+	if let Some(rest) = line.strip_prefix("Found ") {
+		let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+		if !digits.is_empty() {
+			let after = rest[digits.len()..].trim_start();
+			if after.starts_with("source file") {
+				return true;
+			}
+		}
+	}
+	false
+}
+
+/// True when `s` begins with `MAJOR.MINOR` (e.g. `1.22.0`, `1.1`): one or more
+/// digits, a `.`, then one or more digits.
+fn starts_with_dotted_version(s: &str) -> bool {
+	let mut chars = s.chars().peekable();
+	let mut saw_major = false;
+	while let Some(&c) = chars.peek() {
+		if c.is_ascii_digit() {
+			saw_major = true;
+			chars.next();
+		} else {
+			break;
+		}
+	}
+	if !saw_major || chars.next() != Some('.') {
+		return false;
+	}
+	matches!(chars.next(), Some(c) if c.is_ascii_digit())
 }
 
 /// Reshape eslint "stylish" output and render it through the shared grouped
@@ -636,6 +697,43 @@ mod tests {
 		assert!(supports_program("basedpyright", None));
 		let out = condense_lint_output("basedpyright", "0 errors, 0 warnings, 0 notes\n", 0);
 		assert_eq!(out, "");
+	}
+
+	#[test]
+	fn basedpyright_banner_and_progress_noise_is_stripped() {
+		// Re-derived from rtk/src/filters/basedpyright.toml's first inline test,
+		// rendered through the minimizer's grouped per-file output. The version
+		// banner, `Searching for source files`, and `Found N source files`
+		// progress lines are dropped; the diagnostics survive and group by file.
+		let input = "basedpyright 1.22.0\nSearching for source files\nFound 42 source \
+		             files\n\n/home/user/app/main.py:10:5 - error: \"foo\" is not defined \
+		             (reportUndefinedVariable)\n/home/user/app/main.py:25:1 - error: Type \"str\" \
+		             is not assignable to type \"int\" \
+		             (reportAssignmentType)\n/home/user/app/utils.py:8:9 - warning: Variable \"x\" \
+		             is not accessed (reportUnusedVariable)\n";
+		let out = condense_lint_output("basedpyright", input, 1);
+		assert!(!out.contains("basedpyright 1.22.0"), "version banner must be stripped: {out}");
+		assert!(!out.contains("Searching for source files"), "progress must be stripped: {out}");
+		assert!(!out.contains("Found 42 source files"), "progress must be stripped: {out}");
+		assert!(out.contains("3 diagnostics in 2 files"), "got: {out}");
+		assert!(out.contains("reportUndefinedVariable"));
+	}
+
+	#[test]
+	fn pyright_banner_strips_are_scoped_off_other_linters() {
+		// The pyright banner/progress strips must not touch other linters: an
+		// oxlint diagnostic that legitimately mentions `Found`/`source files`-style
+		// text, or a version-like token, stays put.
+		assert!(is_pyright_banner_noise("Found 3 source files")); // sanity: helper itself
+		// Helper is scoped at the call site to pyright/basedpyright; confirm a
+		// non-pyright program never reaches it via is_lint_noise.
+		assert!(!is_lint_noise("oxlint", "Found 3 source files referenced", 1));
+		assert!(!is_lint_noise("tsc", "Pyright 1.1 is mentioned here", 2));
+		// And confirm the helper fires for pyright/basedpyright through is_lint_noise.
+		assert!(is_lint_noise("pyright", "Searching for source files", 1));
+		assert!(is_lint_noise("basedpyright", "Found 42 source files", 1));
+		assert!(is_lint_noise("basedpyright", "basedpyright 1.22.0", 1));
+		assert!(is_lint_noise("pyright", "Pyright 1.1.0", 1));
 	}
 
 	// -----------------------------------------------------------------
