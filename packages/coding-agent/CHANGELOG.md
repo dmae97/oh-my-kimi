@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Fixed the read tool's provider-visible `path` schema and docs so web URLs and internal URI targets (`omp://`, `issue://`, `pr://`, etc.) are advertised alongside local files ([#2215](https://github.com/can1357/oh-my-pi/issues/2215)).
 - Kept IRC cards from being removed after their TTL once everything above them finalized: their rows may already be committed to native scrollback, and removing them was an interior deletion of the committed prefix that the engine could only repair by recommitting everything below the gap (duplicated blocks). Such cards now stay in the transcript as durable history.
 - Fixed the recommit storm that sprayed stale snapshots of a running task's progress tree into native scrollback. The stable-prefix ratchet promoted any row quiet for one 30-frame window, so slowly ticking rows (per-agent tool/cost counters updating every few seconds) were repeatedly promoted, committed, rewritten, and recommitted by the engine audit for the whole run. The ratchet now floors itself permanently at the first row that mutates after being promoted — settled heads (a task's prompt/context) still reach scrollback, genuine tickers never re-promote.
 - **Fixed the artifact spill dropping the first ~20KB of output**: head-retained bytes were never written to the artifact file, so for every bash/eval/ssh command exceeding the 50KB spill threshold, the `artifact://` advertised as the "full capture" was permanently missing its head — the agent re-reading it got truncated data presented as lossless.
