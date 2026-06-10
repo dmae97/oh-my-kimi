@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added deterministic shell-output minimization to the native shell pipeline, including opt-in per-command rewrite telemetry surfaced through `executeShell().minimized` for callers that want compact inline output plus a separately persisted original capture.
+
 ## [15.10.11] - 2026-06-10
 
 ### Added
@@ -17,10 +21,6 @@
 ### Fixed
 
 - Fixed cross-line grep being a silent no-op on real files: `multiline` set the `(?m)` flag on the regex matcher but never enabled `multi_line` on the `Searcher`, which stayed line-oriented, so any pattern spanning a `\n` returned zero matches with no error.
-
-### Added
-
-- Added deterministic shell-output minimization to the native shell pipeline, including opt-in per-command rewrite telemetry surfaced through `executeShell().minimized` for callers that want compact inline output plus a separately persisted original capture.
 
 ## [15.10.5] - 2026-06-08
 

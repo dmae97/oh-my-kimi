@@ -74,15 +74,15 @@ fn is_s3_ls(command: &str) -> bool {
 	false
 }
 
-/// Returns `true` when an AWS CLI invocation streams object content to
-/// stdout (`-` as the destination), e.g. `aws s3 cp s3://bucket/key -`.
-/// In that mode the captured text is the object body, not CLI progress,
-/// so `strip_transfer_progress` must not run.
+/// Returns `true` when an AWS CLI invocation streams object content via a
+/// `-` positional (stdout download `aws s3 cp s3://bucket/key -`, or stdin
+/// upload `aws s3 cp - s3://bucket/key`). In that mode the captured text is
+/// the object body, not CLI progress, so `strip_transfer_progress` must not
+/// run. Any bare `-` token triggers passthrough — even when trailing options
+/// follow the positional (`aws s3 cp s3://bucket/key - --request-payer
+/// requester`); a false positive only skips minimization, which is safe.
 fn is_aws_stdout_pipe(command: &str) -> bool {
-	command
-		.split_whitespace()
-		.rfind(|token| *token == "-" || !token.starts_with('-'))
-		.is_some_and(|token| token == "-")
+	command.split_whitespace().any(|token| token == "-")
 }
 
 fn filter_aws(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
@@ -1371,6 +1371,15 @@ mod tests {
 	fn aws_s3_cp_to_stdout_preserves_body() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = aws_ctx("s3", "aws s3 cp s3://bucket/file.json -", &cfg);
+		let input = "{\"key\": \"value\", \"% Total\": 100}\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "stdout pipe body must not be rewritten: {:?}", out.text);
+	}
+
+	#[test]
+	fn aws_s3_cp_to_stdout_with_trailing_options_preserves_body() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = aws_ctx("s3", "aws s3 cp s3://bucket/file.json - --request-payer requester", &cfg);
 		let input = "{\"key\": \"value\", \"% Total\": 100}\n";
 		let out = filter(&ctx, input, 0);
 		assert!(!out.changed, "stdout pipe body must not be rewritten: {:?}", out.text);
