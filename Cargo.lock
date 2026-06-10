@@ -2436,6 +2436,7 @@ dependencies = [
  "pi-ast",
  "pi-iso",
  "pi-shell",
+ "png",
  "portable-pty",
  "rayon",
  "regex",

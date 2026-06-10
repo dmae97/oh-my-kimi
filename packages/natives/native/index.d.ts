@@ -1285,6 +1285,16 @@ export interface PtyStartOptions {
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
 
 /**
+ * Render one snapcompact frame: print pre-normalized text onto a
+ * `size` x `size` 4-bit indexed bitmap and encode it as a PNG.
+ *
+ * The glyph grid holds `floor(size/5) * floor(size/8)` characters; input
+ * beyond that is ignored (the caller chunks text to capacity). Returns the
+ * PNG bytes.
+ */
+export declare function renderSnapcompactPng(text: string, size: number): Uint8Array
+
+/**
  * Search content for a pattern (one-shot, compiles pattern each time).
  * For repeated searches with the same pattern, use [`grep`] with file filters.
  *

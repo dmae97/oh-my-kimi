@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `renderSnapcompactPng(text, size)`: rasterizes pre-normalized text onto a square 4-bit indexed PNG using the bundled public-domain X.org `5x8` BDF font, with glyph ink cycling through six hues at sentence boundaries. Replaces the JS rasterizer/PNG writer previously in `@oh-my-pi/pi-agent-core`; the font ships inside the crate (`crates/pi-natives/src/fonts/5x8.bdf`).
+
 ## [15.10.12] - 2026-06-10
 
 ### Added

@@ -36,6 +36,7 @@ pi-ast.workspace = true
 pi-iso.workspace = true
 pi-shell.workspace = true
 portable-pty.workspace = true
+png.workspace = true
 rayon.workspace = true
 regex.workspace = true
 serde.workspace = true
