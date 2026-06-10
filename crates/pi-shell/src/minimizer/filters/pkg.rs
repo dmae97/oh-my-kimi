@@ -82,6 +82,12 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 fn strip_package_noise(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
 	let mut out = String::new();
 	let mut previous_blank = false;
+	// snip keeps exactly one JS install-summary line ('added N packages…',
+	// 'up to date', pnpm 'Done in Xs'/'Packages: +N', yarn 'Done in Xs'): the
+	// count confirms lockfile/node_modules state. Keep the first such line and
+	// treat later duplicates as noise. This check precedes is_noise_line so the
+	// 'audited N packages' strip cannot eat the combined 'added…audited' summary.
+	let mut kept_install_summary = false;
 	for line in input.lines() {
 		let trimmed = line.trim();
 		if trimmed.is_empty() {
@@ -92,6 +98,16 @@ fn strip_package_noise(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> S
 			continue;
 		}
 		previous_blank = false;
+
+		if is_js_program(ctx.program) && is_js_install_summary(&trimmed.to_ascii_lowercase()) {
+			if kept_install_summary {
+				continue;
+			}
+			kept_install_summary = true;
+			out.push_str(line.trim_end());
+			out.push('\n');
+			continue;
+		}
 
 		if is_noise_line(ctx, trimmed, exit_code) {
 			continue;
@@ -287,6 +303,12 @@ fn is_noise_line(ctx: &MinimizerCtx<'_>, line: &str, exit_code: i32) -> bool {
 	if lower.contains("found 0 vulnerabilities") {
 		return true;
 	}
+	// Strip: npm funding nags ("N packages are looking for funding" / "run `npm
+	// fund` for details"). snip drops both; removing 'funding' from
+	// is_audit_or_security_summary keeps real audit findings protected.
+	if lower.contains("looking for funding") || lower.contains("npm fund") {
+		return true;
+	}
 	// Strip: "audited X packages" timing summaries (non-actionable)
 	if lower.contains("audited") && lower.contains("package") {
 		return true;
@@ -360,14 +382,65 @@ fn is_generic_progress(line: &str, lower: &str) -> bool {
 			.all(|ch| matches!(ch, '⠁' | '⠂' | '⠄' | '⡀' | '⢀' | '⠠' | '⠐' | '⠈' | ' '))
 }
 
+fn is_js_program(program: &str) -> bool {
+	matches!(program, "npm" | "pnpm" | "yarn" | "bun")
+}
+
+/// JS package-manager success-summary lines worth keeping exactly once. snip
+/// retains these so the count confirms lockfile/node_modules state. Callers
+/// must gate on is_js_program first.
+fn is_js_install_summary(lower: &str) -> bool {
+	lower.starts_with("added ") && lower.contains("package")
+		|| lower.starts_with("removed ") && lower.contains("package")
+		|| lower.starts_with("changed ") && lower.contains("package")
+		|| lower.starts_with("up to date")
+		|| lower.contains("already up-to-date")
+		|| lower.starts_with("done in ")
+		|| lower.starts_with("packages:")
+		|| lower.starts_with("dependencies:")
+}
+
+/// Classic yarn step markers: `[N/4] Resolving|Fetching|Linking|Building …`.
+fn is_yarn_step_marker(line: &str) -> bool {
+	let Some(rest) = line.strip_prefix('[') else {
+		return false;
+	};
+	let Some((counter, tail)) = rest.split_once(']') else {
+		return false;
+	};
+	let Some((num, denom)) = counter.split_once('/') else {
+		return false;
+	};
+	if num.is_empty()
+		|| denom.is_empty()
+		|| !num.bytes().all(|b| b.is_ascii_digit())
+		|| !denom.bytes().all(|b| b.is_ascii_digit())
+	{
+		return false;
+	}
+	let step = tail.trim_start();
+	step.starts_with("Resolving")
+		|| step.starts_with("Fetching")
+		|| step.starts_with("Linking")
+		|| step.starts_with("Building")
+}
+
 fn is_js_package_noise(program: &str, line: &str, lower: &str) -> bool {
-	if !matches!(program, "npm" | "pnpm" | "yarn" | "bun") {
+	if !is_js_program(program) {
 		return false;
 	}
 	line.starts_with('>') && line.contains('@')
 		|| lower.starts_with("npm notice")
 		|| lower.starts_with("npm http fetch")
 		|| lower.starts_with("pnpm: progress")
+		// pnpm progress bars are runs of plus signs; anchor on 3+ so a bare '+'
+		// diff line (a real change) still passes through.
+		|| line.starts_with("+++")
+		// yarn classic step markers and berry's structural YN0000 info lines
+		// (box-drawing, section headers). Actionable codes (YN0002 peer warnings,
+		// YN0060 incompatibilities) carry other YNxxxx codes and are kept.
+		|| is_yarn_step_marker(line)
+		|| lower.contains("yn0000")
 		|| lower.starts_with("packages:")
 		|| lower.starts_with("resolved ")
 		|| lower.starts_with("reused ")
@@ -422,11 +495,13 @@ fn contains_audit_or_security_summary(input: &str) -> bool {
 
 fn is_audit_or_security_summary(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
+	// 'funding' deliberately excluded: funding nags are stripped as noise and
+	// must NOT bypass head_tail_cap. Real audit findings ('audit'/'vulnerab'/
+	// 'security') still trip the bypass.
 	lower.contains("audit")
 		|| lower.contains("audited")
 		|| lower.contains("vulnerab")
 		|| lower.contains("security")
-		|| lower.contains("funding")
 }
 
 fn is_error_or_summary(line: &str) -> bool {
@@ -460,14 +535,19 @@ mod tests {
 	}
 
 	#[test]
-	fn strips_success_noise_audited_and_zero_vulnerabilities() {
+	fn keeps_one_success_summary_strips_funding_and_zero_vulnerabilities() {
+		// snip keeps the install summary (the count confirms node_modules state)
+		// while dropping progress, funding nags, and 'found 0 vulnerabilities'.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("npm", Some("install"), "npm install", &cfg);
 		let input = "Resolving: total 10\nadded 3 packages, and audited 4 packages in 1s\n2 \
-		             packages are looking for funding\nfound 0 vulnerabilities\n";
+		             packages are looking for funding\n  run `npm fund` for details\nfound 0 \
+		             vulnerabilities\n";
 		let out = strip_package_noise(&ctx, input, 0);
 		assert!(!out.contains("Resolving:"));
-		assert!(!out.contains("audited 4 packages"));
+		assert!(out.contains("added 3 packages, and audited 4 packages in 1s"));
+		assert!(!out.contains("looking for funding"));
+		assert!(!out.contains("npm fund"));
 		assert!(!out.contains("found 0 vulnerabilities"));
 	}
 
@@ -502,6 +582,67 @@ mod tests {
 		assert!(!out.contains("Resolving dependencies"));
 		assert!(!out.contains("Downloaded foo"));
 		assert!(out.contains("error: failed"));
+	}
+
+	#[test]
+	fn npm_ci_keeps_one_added_summary_and_strips_funding() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("npm", Some("ci"), "npm ci", &cfg);
+		let input = "npm warn deprecated glob@7.2.3: no longer supported\nadded 245 packages, and \
+		             audited 246 packages in 12s\n\n29 packages are looking for funding\n  run `npm \
+		             fund` for details\n\nfound 0 vulnerabilities\n";
+		let out = filter(&context, input, 0);
+		assert!(
+			out.text
+				.contains("added 245 packages, and audited 246 packages in 12s")
+		);
+		assert_eq!(out.text.matches("added 245 packages").count(), 1);
+		assert!(!out.text.contains("looking for funding"));
+		assert!(!out.text.contains("npm fund"));
+		assert!(!out.text.contains("found 0 vulnerabilities"));
+	}
+
+	#[test]
+	fn npm_audit_surfaces_real_vulnerabilities() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("npm", Some("install"), "npm install", &cfg);
+		let input = "added 10 packages, and audited 11 packages in 2s\n3 packages are looking for \
+		             funding\n  run `npm fund` for details\n\n2 vulnerabilities (1 moderate, 1 \
+		             high)\n\nTo address all issues, run:\n  npm audit fix\n\nfound 2 \
+		             vulnerabilities\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("2 vulnerabilities (1 moderate, 1 high)"));
+		assert!(out.text.contains("found 2 vulnerabilities"));
+		assert!(out.text.contains("npm audit fix"));
+		assert!(!out.text.contains("looking for funding"));
+	}
+
+	#[test]
+	fn pnpm_install_strips_plus_bars_keeps_packages_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("pnpm", Some("install"), "pnpm install", &cfg);
+		let input = "Progress: resolved 120, reused 120, downloaded 0, added \
+		             0\n+++++++++++++++++\nPackages: +183\n+ left-pad 1.3.0\nDone in 4.2s\n";
+		let out = filter(&context, input, 0);
+		assert!(!out.text.contains("+++"));
+		assert!(out.text.contains("Packages: +183"));
+		// A bare '+' diff line (a real change) survives the 3+ plus anchor.
+		assert!(out.text.contains("+ left-pad 1.3.0"));
+	}
+
+	#[test]
+	fn yarn_berry_keeps_actionable_codes_strips_yn0000() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("yarn", Some("install"), "yarn install", &cfg);
+		let input = "➤ YN0000: ┌ Resolution step\n➤ YN0002: │ react is listed by your project but \
+		             missing peer dependency\n➤ YN0060: │ incompatible peer dependency\n➤ YN0000: └ \
+		             Completed\n[2/4] Fetching packages...\nDone in 5.31s\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("YN0002"));
+		assert!(out.text.contains("YN0060"));
+		assert!(!out.text.contains("YN0000"));
+		assert!(!out.text.contains("[2/4] Fetching"));
+		assert!(out.text.contains("Done in 5.31s"));
 	}
 
 	fn ctx<'a>(
