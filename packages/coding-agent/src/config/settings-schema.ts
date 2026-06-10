@@ -1977,6 +1977,17 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "editing", label: "LSP", description: "Enable the lsp tool for language server protocol" },
 	},
 
+	"lsp.lazy": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "editing",
+			label: "Lazy LSP Startup",
+			description:
+				"Start language servers on first use (lsp tool or editing a matching file type) instead of at session startup",
+		},
+	},
+
 	"lsp.formatOnWrite": {
 		type: "boolean",
 		default: false,
