@@ -83,6 +83,23 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "setup",
+		aliases: ["providers"],
+		description: "Open provider setup",
+		allowArgs: true,
+		subcommands: [{ name: "providers", description: "Configure sign-in and web search providers" }],
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim().toLowerCase();
+			const opensProviders = args === "" || args === "providers";
+			if (opensProviders) {
+				await runtime.ctx.showProviderSetup();
+			} else {
+				runtime.ctx.showWarning(`Usage: /${command.name} [providers]`);
+			}
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "plan",
 		description: "Toggle plan mode (agent plans before executing)",
 		inlineHint: "[prompt]",
@@ -1701,6 +1718,7 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BUILTIN_SLASH_COMMAND_REGISTRY.map(
 	command => ({
 		name: command.name,
+		aliases: command.aliases,
 		description: command.description,
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,

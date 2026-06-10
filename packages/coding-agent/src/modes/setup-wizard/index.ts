@@ -65,9 +65,15 @@ export async function markSetupWizardComplete(
 	await settings.flush();
 }
 
+export interface RunSetupWizardOptions {
+	markComplete?: boolean;
+	playWelcomeIntro?: boolean;
+}
+
 export async function runSetupWizard(
 	ctx: InteractiveModeContext,
 	scenes: readonly SetupScene[] = ALL_SCENES,
+	options: RunSetupWizardOptions = {},
 ): Promise<void> {
 	if (scenes.length === 0) return;
 	const component = new SetupWizardComponent(ctx, scenes);
@@ -79,11 +85,15 @@ export async function runSetupWizard(
 	});
 	try {
 		await component.run();
-		await markSetupWizardComplete(ctx.settings);
+		if (options.markComplete !== false) {
+			await markSetupWizardComplete(ctx.settings);
+		}
 	} finally {
 		component.dispose();
 		ctx.ui.setFocus(component);
 		overlay.hide();
 	}
-	ctx.playWelcomeIntro();
+	if (options.playWelcomeIntro !== false) {
+		ctx.playWelcomeIntro();
+	}
 }
