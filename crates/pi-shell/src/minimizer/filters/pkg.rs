@@ -106,7 +106,39 @@ fn success_up_to_date_short_circuit(ctx: &MinimizerCtx<'_>, cleaned: &str) -> Op
 		}) {
 		return Some("ok (up to date)");
 	}
+	// uv sync/add/remove no-op: 'Audited N packages in Xms' with no installs.
+	// Scoped to those subcommands so npm/brew/composer 'Audited' is unaffected.
+	// Only collapse when the run is a CLEAN no-op: uv co-prints actionable
+	// diagnostics (e.g. 'warning: VIRTUAL_ENV=… does not match the project
+	// environment path …') alongside the Audited line on exit 0, and eagerly
+	// collapsing to 'ok (up to date)' would destroy them. On HEAD the global
+	// is_noise_line stripped the Audited line but the surviving warning kept the
+	// output non-empty, so it was reported; preserve that by short-circuiting only
+	// when no warning/error line co-occurs. (poetry's branch above deliberately
+	// collapses warnings too — its deleted overlay did the same, so it stays.)
+	if ctx.program == "uv"
+		&& matches!(ctx.subcommand, Some("sync" | "add" | "remove"))
+		&& !uv_has_actionable_diagnostic(cleaned)
+		&& cleaned.lines().any(|line| {
+			let lower = line.trim().to_ascii_lowercase();
+			lower.starts_with("audited ") && lower.contains("package")
+		}) {
+		return Some("ok (up to date)");
+	}
 	None
+}
+
+/// True when any line carries an actionable diagnostic ('warning'/'error'/
+/// 'failed') that must survive a uv no-op short-circuit. Kept deliberately
+/// narrow: the no-op summary lines themselves ('Resolved …', 'Audited …') carry
+/// none of these tokens, so a clean no-op still collapses to 'ok (up to date)'.
+/// Do NOT reuse is_error_or_summary here — it also matches 'audited'/'found'/
+/// 'success'/'complete', which would suppress the short-circuit on every no-op.
+fn uv_has_actionable_diagnostic(cleaned: &str) -> bool {
+	cleaned.lines().any(|line| {
+		let lower = line.to_ascii_lowercase();
+		lower.contains("warning") || lower.contains("error") || lower.contains("failed")
+	})
 }
 
 fn strip_package_noise(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
@@ -344,7 +376,10 @@ fn is_noise_line(ctx: &MinimizerCtx<'_>, line: &str, exit_code: i32) -> bool {
 	if lower.contains("looking for funding") || lower.contains("npm fund") {
 		return true;
 	}
-	// Strip: "audited X packages" timing summaries (non-actionable)
+	// Strip: "audited X packages" timing summaries (non-actionable). This global
+	// rule still governs npm/brew/composer. uv sync/add/remove never reach here
+	// for an 'Audited' no-op — success_up_to_date_short_circuit() in filter()
+	// consumes that line into 'ok (up to date)' on the raw output first.
 	if lower.contains("audited") && lower.contains("package") {
 		return true;
 	}
@@ -361,7 +396,7 @@ fn is_noise_line(ctx: &MinimizerCtx<'_>, line: &str, exit_code: i32) -> bool {
 	}
 	is_generic_progress(line, &lower)
 		|| is_js_package_noise(ctx.program, line, &lower)
-		|| is_python_package_noise(ctx.program, line, &lower)
+		|| is_python_package_noise(ctx, line, &lower)
 		|| is_ruby_php_brew_noise(ctx.program, line, &lower)
 }
 
@@ -379,7 +414,7 @@ fn compact_package_lock_output(ctx: &MinimizerCtx<'_>, input: &str) -> String {
 			continue;
 		}
 		if is_generic_progress(trimmed, &lower)
-			|| is_python_package_noise(ctx.program, trimmed, &lower)
+			|| is_python_package_noise(ctx, trimmed, &lower)
 			|| is_js_package_noise(ctx.program, trimmed, &lower)
 		{
 			continue;
@@ -485,7 +520,8 @@ fn is_js_package_noise(program: &str, line: &str, lower: &str) -> bool {
 		|| lower.contains("up to date")
 }
 
-fn is_python_package_noise(program: &str, _line: &str, lower: &str) -> bool {
+fn is_python_package_noise(ctx: &MinimizerCtx<'_>, _line: &str, lower: &str) -> bool {
+	let program = ctx.program;
 	if !matches!(program, "pip" | "pip3" | "uv" | "poetry") {
 		return false;
 	}
@@ -501,7 +537,7 @@ fn is_python_package_noise(program: &str, _line: &str, lower: &str) -> bool {
 		// available' plus a '[notice] To update, run: …' follow-up — non-actionable
 		// for the wrapped command. Scoped to pip/uv/poetry by the gate above.
 		|| lower.starts_with("[notice]")
-		|| program == "uv" && is_uv_progress_noise(lower)
+		|| program == "uv" && is_uv_progress_noise(lower, uv_keeps_install_summary(ctx))
 		|| program == "poetry" && is_poetry_bullet_progress(lower)
 }
 
@@ -523,7 +559,18 @@ fn is_poetry_bullet_progress(lower: &str) -> bool {
 	lower.starts_with("creating virtualenv") || lower.starts_with("using virtualenv")
 }
 
-fn is_uv_progress_noise(lower: &str) -> bool {
+/// uv sync/add/remove keep the one-line 'Installed/Uninstalled N packages in
+/// Xms' summary alongside the +/- delta rows (the count is the install signal).
+/// uv lock/tree and every other subcommand still strip those rows as progress.
+fn uv_keeps_install_summary(ctx: &MinimizerCtx<'_>) -> bool {
+	ctx.program == "uv" && matches!(ctx.subcommand, Some("sync" | "add" | "remove"))
+}
+
+fn is_uv_progress_noise(lower: &str, keep_install_summary: bool) -> bool {
+	if keep_install_summary && (lower.starts_with("installed ") || lower.starts_with("uninstalled "))
+	{
+		return false;
+	}
 	lower.starts_with("resolved ")
 		|| lower.starts_with("prepared ")
 		|| lower.starts_with("installed ")
@@ -1008,5 +1055,76 @@ mod tests {
 				.contains("Warning: the lock file is not up to date")
 		);
 		assert!(!out.text.contains("Downloading"));
+	}
+
+	#[test]
+	fn uv_sync_audited_no_op_short_circuits_to_up_to_date() {
+		// Replaces defs/uv-sync.toml's 'Audited' overlay; lands as 'ok (up to
+		// date)' (not bare 'OK'). Scoped to uv sync/add/remove.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("uv", Some("sync"), "uv sync", &cfg);
+		let input = "Resolved 42 packages in 123ms\nAudited 42 packages in 0.05ms\n";
+		let out = filter(&context, input, 0);
+		assert_eq!(out.text, "ok (up to date)");
+	}
+
+	#[test]
+	fn uv_sync_audited_no_op_with_warning_keeps_warning() {
+		// Regression: the 'Audited' no-op short-circuit must NOT swallow a
+		// co-printed actionable diagnostic. uv on exit 0 can print
+		// 'warning: VIRTUAL_ENV=… does not match the project environment path …'
+		// before the Resolved/Audited summary; collapsing to 'ok (up to date)'
+		// would hide that the sync may have targeted the wrong environment. On HEAD
+		// the global is_noise_line stripped 'Audited' but the surviving warning
+		// kept the output, so it was reported — preserve that.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("uv", Some("sync"), "uv sync", &cfg);
+		let input = "warning: VIRTUAL_ENV=.venv does not match the project environment path \
+		             .venv-other\nResolved 42 packages in 123ms\nAudited 42 packages in 0.05ms\n";
+		let out = filter(&context, input, 0);
+		assert_ne!(out.text, "ok (up to date)");
+		assert!(
+			out.text
+				.contains("warning: VIRTUAL_ENV=.venv does not match the project environment path")
+		);
+		assert!(!out.text.contains("Audited 42 packages"));
+	}
+
+	#[test]
+	fn uv_sync_keeps_installed_summary_and_delta_rows() {
+		// uv sync/add/remove keep the one-line 'Installed N packages' summary
+		// alongside the +/- delta rows; Resolved/Prepared progress is stripped.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("uv", Some("sync"), "uv sync", &cfg);
+		let input = "Resolved 5 packages in 12ms\nPrepared 5 packages in 100ms\nInstalled 5 \
+		             packages in 23ms\n + certifi==2023.11.17\n + idna==3.6\n + requests==2.31.0\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("Installed 5 packages in 23ms"));
+		assert!(out.text.contains("+ certifi==2023.11.17"));
+		assert!(out.text.contains("+ requests==2.31.0"));
+		assert!(!out.text.contains("Resolved 5 packages"));
+		assert!(!out.text.contains("Prepared 5 packages"));
+	}
+
+	#[test]
+	fn uv_add_keeps_installed_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("uv", Some("add"), "uv add requests", &cfg);
+		let input = "Resolved 5 packages in 9ms\nInstalled 1 package in 4ms\n + requests==2.31.0\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("Installed 1 package in 4ms"));
+		assert!(out.text.contains("+ requests==2.31.0"));
+		assert!(!out.text.contains("Resolved 5 packages"));
+	}
+
+	#[test]
+	fn uv_remove_keeps_uninstalled_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("uv", Some("remove"), "uv remove requests", &cfg);
+		let input = "Resolved 4 packages in 6ms\nUninstalled 1 package in 2ms\n - requests==2.31.0\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("Uninstalled 1 package in 2ms"));
+		assert!(out.text.contains("- requests==2.31.0"));
+		assert!(!out.text.contains("Resolved 4 packages"));
 	}
 }
