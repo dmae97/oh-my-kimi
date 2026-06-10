@@ -350,10 +350,16 @@ fn looks_like_go_error(line: &str) -> bool {
 		|| lower.starts_with("no required module provides package ")
 		|| lower.starts_with("missing go.sum entry")
 		|| lower.starts_with("found packages ")
+		|| lower.starts_with("pattern ")
+		|| lower.starts_with("no go files in ")
+		|| lower.starts_with("go: cannot load module ")
+		|| lower.starts_with("go: updates to go.mod needed")
+		|| lower.starts_with("go: inconsistent vendoring")
 		|| lower.starts_with("go: ")
 			&& (lower.contains("error") || lower.contains("failed") || lower.contains("not found"))
 		|| lower.contains("import cycle not allowed")
 		|| lower.contains("build constraints exclude all go files")
+		|| lower.contains("function main is undeclared in the main package")
 }
 
 fn is_go_noise(line: &str) -> bool {
@@ -480,6 +486,69 @@ mod tests {
 		let out = filter(&ctx, input, 1);
 		assert!(out.changed);
 		assert!(out.text.contains("main.go:7:2: bad (govet)"));
+	}
+
+	#[test]
+	fn looks_like_go_error_recognizes_non_location_error_shapes() {
+		// Ported from rtk go_cmd inline inputs: module/compiler failures that carry
+		// no file.go:line:col location must still register as errors.
+		assert!(looks_like_go_error("undefined: missingFunc"));
+		assert!(looks_like_go_error("cannot find package \"foo/bar\""));
+		assert!(looks_like_go_error(
+			"found packages a (a.go) and b (b.go) in /tmp/rtk-go-build-probe-mix"
+		));
+		assert!(looks_like_go_error("imports example.com/cycle/a: import cycle not allowed"));
+		assert!(looks_like_go_error(
+			"package example.com/buildtag: build constraints exclude all Go files in /tmp/x"
+		));
+		assert!(looks_like_go_error("no Go files in /tmp/example"));
+		assert!(looks_like_go_error(
+			"go: cannot load module missing listed in go.work file: open missing/go.mod: no such \
+			 file or directory"
+		));
+		assert!(looks_like_go_error("go: updates to go.mod needed; to update it: go mod tidy"));
+		assert!(looks_like_go_error(
+			"go: inconsistent vendoring in /tmp/example: run 'go mod vendor' to sync"
+		));
+		assert!(looks_like_go_error(
+			"runtime.main_main·f: function main is undeclared in the main package"
+		));
+		assert!(looks_like_go_error(
+			"pattern ./...: directory prefix . does not contain main module or its selected \
+			 dependencies"
+		));
+		// go.mod-not-found is already covered via the `go: ... not found` arm.
+		assert!(looks_like_go_error(
+			"go: go.mod file not found in current directory or any parent directory; see 'go help \
+			 modules'"
+		));
+		// NOTE: `go: downloading …/errors …` trips the broad `go: …error…` arm,
+		// but `is_go_noise` strips those lines upstream in filter_go_build
+		// before this helper runs, so the build-level test below is the real
+		// guard.
+	}
+
+	#[test]
+	fn go_build_failure_preserves_non_location_error_shapes() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "go",
+			subcommand: Some("build"),
+			command:    "go build ./...",
+			config:     &cfg,
+		};
+		let input = "pattern ./...: directory prefix . does not contain main module or its selected \
+		             dependencies\nno Go files in /tmp/example\ngo: inconsistent vendoring in \
+		             /tmp/x: run 'go mod vendor'\nruntime.main_main·f: function main is undeclared \
+		             in the main package\n";
+		let out = filter(&ctx, input, 1);
+		assert!(out.text.contains("does not contain main module"));
+		assert!(out.text.contains("no Go files in /tmp/example"));
+		assert!(out.text.contains("inconsistent vendoring"));
+		assert!(
+			out.text
+				.contains("function main is undeclared in the main package")
+		);
 	}
 
 	#[test]
