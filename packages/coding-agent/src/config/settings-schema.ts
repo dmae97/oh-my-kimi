@@ -1326,6 +1326,17 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+
+	"compaction.supersedeReads": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			label: "Supersede Stale Reads",
+			description: "Prune older read results when the same file is read again (cache-aware, runs every turn)",
+		},
+	},
+
 	// Branch summaries
 	"branchSummary.enabled": {
 		type: "boolean",
@@ -3365,6 +3376,7 @@ export interface CompactionSettings {
 	idleEnabled: boolean;
 	idleThresholdTokens: number;
 	idleTimeoutSeconds: number;
+	supersedeReads: boolean;
 }
 
 export interface ContextPromotionSettings {
