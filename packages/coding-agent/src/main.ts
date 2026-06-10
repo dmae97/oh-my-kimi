@@ -67,7 +67,7 @@ import {
 import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
-import { resolvePromptInput } from "./system-prompt";
+import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
 import { discoverStartupLspServers, type LspStartupServerInfo } from "./tools";
@@ -715,19 +715,6 @@ function discoverAppendSystemPromptFile(): string | undefined {
 		return projectPath;
 	}
 	const globalPath = findConfigFile("APPEND_SYSTEM.md", { user: true });
-	if (globalPath) {
-		return globalPath;
-	}
-	return undefined;
-}
-
-/** Discover TITLE_SYSTEM.md file for automatic session-title prompt overrides */
-export function discoverTitleSystemPromptFile(cwd?: string): string | undefined {
-	const projectPath = findConfigFile("TITLE_SYSTEM.md", { user: false, cwd });
-	if (projectPath) {
-		return projectPath;
-	}
-	const globalPath = findConfigFile("TITLE_SYSTEM.md", { user: true, cwd });
 	if (globalPath) {
 		return globalPath;
 	}
