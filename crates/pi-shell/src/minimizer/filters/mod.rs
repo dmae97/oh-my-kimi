@@ -23,6 +23,8 @@ pub mod git;
 
 pub mod js_tools;
 
+pub mod jvm;
+
 pub mod lint;
 pub mod listing;
 pub mod node_tests;
@@ -45,6 +47,13 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 		},
 		program if cpp::is_gtest_binary_name(program) => cpp::supports(program, subcommand),
 		"dotnet" => dotnet::supports(program, subcommand),
+		// JVM build tools: phase is decided inside jvm::filter (never by
+		// ctx.subcommand, which mis-reports `mvn clean install` as `clean`), so
+		// supports() claims every subcommand. Defensive `.cmd`/`.bat` arms cover
+		// the case where normalize_program is bypassed.
+		"mvn" | "mvnw" | "mvnw.cmd" | "gradle" | "gradlew" | "gradlew.bat" => {
+			jvm::supports(program, subcommand)
+		},
 		"ls" | "tree" | "find" | "grep" | "rg" | "wc" | "cat" | "read" | "stat" | "du" | "df"
 		| "jq" | "json" => true,
 		"aws" | "curl" | "wget" | "psql" => cloud::supports(program, subcommand),
@@ -140,6 +149,9 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"cargo" => cargo::filter(ctx, input, exit_code),
 		"go" | "golangci-lint" => go::filter(ctx, input, exit_code),
 		"dotnet" => dotnet::filter(ctx, input, exit_code),
+		"mvn" | "mvnw" | "mvnw.cmd" | "gradle" | "gradlew" | "gradlew.bat" => {
+			jvm::filter(ctx, input, exit_code)
+		},
 		"cmake" | "ctest" | "ninja" | "gtest" | "gtest-parallel" => {
 			cpp::filter(ctx, input, exit_code)
 		},

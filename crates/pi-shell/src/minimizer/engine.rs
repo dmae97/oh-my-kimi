@@ -370,6 +370,8 @@ fn program_label(program: &str) -> &'static str {
 		program if filters::cpp::is_gtest_binary_name(program) => "gtest",
 		"golangci-lint" => "golangci-lint",
 		"dotnet" => "dotnet",
+		"mvn" | "mvnw" | "mvnw.cmd" => "mvn",
+		"gradle" | "gradlew" | "gradlew.bat" => "gradle",
 		"docker" => "docker",
 		"kubectl" => "kubectl",
 		"helm" => "helm",
@@ -979,7 +981,7 @@ mod pipeline_integration_tests {
 	}
 
 	#[test]
-	fn pipeline_matches_gradle_via_apply() {
+	fn gradle_routes_to_jvm_filter_via_apply() {
 		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
 			enabled: Some(true),
 			..Default::default()
@@ -990,11 +992,14 @@ mod pipeline_integration_tests {
 			0,
 			&cfg,
 		);
-		assert!(out.changed, "gradle pipeline should transform");
-		assert!(!out.text.contains("UP-TO-DATE"));
+		// gradle.toml is deleted; gradle now dispatches to the Rust jvm Build
+		// filter, which strips `> Task :…UP-TO-DATE` task-progress noise (the
+		// carried-over defs/gradle.toml behaviour, now as a Rust filter — NOT a
+		// TOML pipeline) and keeps the BUILD status.
+		assert!(out.changed, "gradle build filter strips task-progress noise");
 		assert!(out.text.contains("BUILD SUCCESSFUL"));
-		assert_eq!(out.filter, "pipeline");
-		assert!(out.bytes_saved() > 0);
+		assert!(!out.text.contains("> Task :"), "task lines stripped; got:\n{}", out.text);
+		assert_eq!(out.filter, "gradle", "telemetry label routes through jvm program_label");
 	}
 
 	#[test]
