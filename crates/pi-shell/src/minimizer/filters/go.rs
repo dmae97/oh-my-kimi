@@ -578,8 +578,8 @@ mod tests {
 		// (incl. a warn-level linters_context line) is stripped.
 		let input = "level=info Active 5 linters\nlevel=warning The linter 'deadcode' is \
 		             deprecated\nlevel=warning msg=\"[linters_context] stale cache\"\nlevel=error \
-		             msg=\"[linters_context] typechecking error: cannot find package\"\nmain.go:10:2: \
-		             undefined: Foo (typecheck)\n";
+		             msg=\"[linters_context] typechecking error: cannot find \
+		             package\"\nmain.go:10:2: undefined: Foo (typecheck)\n";
 		let out = filter(&ctx, input, 1);
 		assert!(out.text.contains("level=error"));
 		assert!(out.text.contains("typechecking error"));
