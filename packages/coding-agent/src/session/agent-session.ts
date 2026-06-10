@@ -4310,6 +4310,11 @@ export class AgentSession {
 		return [...this.#customCommands, ...this.#mcpPromptCommands];
 	}
 
+	/** MCP prompt commands only, for command-list metadata. */
+	get mcpPromptCommands(): ReadonlyArray<LoadedCustomCommand> {
+		return this.#mcpPromptCommands;
+	}
+
 	/** Update the MCP prompt commands list. Called when server prompts are (re)loaded. */
 	setMCPPromptCommands(commands: LoadedCustomCommand[]): void {
 		this.#mcpPromptCommands = commands;

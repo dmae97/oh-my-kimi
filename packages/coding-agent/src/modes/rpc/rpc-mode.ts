@@ -21,6 +21,8 @@ import {
 } from "../../extensibility/extensions";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import type { EventBus } from "../../utils/event-bus";
 import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
@@ -511,6 +513,12 @@ export async function runRpcMode(
 		output(event);
 	});
 
+	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
+	const emitAvailableCommandsUpdate = async () => {
+		output({ type: "available_commands_update", commands: await getAvailableCommands() });
+	};
+	await emitAvailableCommandsUpdate();
+
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
@@ -521,6 +529,26 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
+				const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
+					session,
+					sessionManager: session.sessionManager,
+					settings: session.settings,
+					cwd: session.sessionManager.getCwd(),
+					output: text => output({ type: "command_output", text }),
+					refreshCommands: emitAvailableCommandsUpdate,
+					reloadPlugins: async () => {},
+					notifyTitleChanged: async () => {},
+					notifyConfigChanged: async () => {},
+				});
+				if (builtinResult !== false) {
+					if ("prompt" in builtinResult) {
+						session
+							.prompt(builtinResult.prompt, { images: command.images })
+							.catch(e => output(error(id, "prompt", e.message)));
+					}
+					return success(id, "prompt");
+				}
+
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
@@ -590,6 +618,10 @@ export async function runRpcMode(
 					contextUsage: session.getContextUsage(),
 				};
 				return success(id, "get_state", state);
+			}
+
+			case "get_available_commands": {
+				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
 			}
 
 			case "set_todos": {

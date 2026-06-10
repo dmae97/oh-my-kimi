@@ -13,6 +13,7 @@ import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
+	RpcAvailableSlashCommand,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcHandoffResult,
@@ -509,6 +510,14 @@ export class RpcClient {
 	async getAvailableModels(): Promise<ModelInfo[]> {
 		const response = await this.#send({ type: "get_available_models" });
 		return this.#getData<{ models: ModelInfo[] }>(response).models;
+	}
+
+	/**
+	 * Get list of available slash commands.
+	 */
+	async getAvailableCommands(): Promise<RpcAvailableSlashCommand[]> {
+		const response = await this.#send({ type: "get_available_commands" });
+		return this.#getData<{ commands: RpcAvailableSlashCommand[] }>(response).commands;
 	}
 
 	/**
