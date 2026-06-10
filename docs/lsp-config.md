@@ -211,6 +211,7 @@ The following servers ship in `defaults.json` and are eligible for auto-detectio
 | `hls`                         | Haskell                       | `haskell-language-server-wrapper` |
 | `ocamllsp`                    | OCaml                         | `ocamllsp`                        |
 | `elixirls`                    | Elixir                        | `elixir-ls`                       |
+| `expert`                      | Elixir                        | `expert`                          |
 | `erlangls`                    | Erlang                        | `erlang_ls`                       |
 | `gleam`                       | Gleam                         | `gleam`                           |
 | `solargraph`                  | Ruby                          | `solargraph`                      |
