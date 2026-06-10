@@ -1105,9 +1105,7 @@ export function filterAvailableModelsByEnabledPatterns(
 		// `openrouter/qwen/qwen3-coder:exacto` where the suffix is NOT a thinking level.
 		const colonIdx = pattern.lastIndexOf(":");
 		const basePattern =
-			colonIdx !== -1 && parseThinkingLevel(pattern.slice(colonIdx + 1))
-				? pattern.slice(0, colonIdx)
-				: pattern;
+			colonIdx !== -1 && parseThinkingLevel(pattern.slice(colonIdx + 1)) ? pattern.slice(0, colonIdx) : pattern;
 
 		// Explicit provider/modelId — resolve directly via the existing reference matcher.
 		if (basePattern.includes("/")) {

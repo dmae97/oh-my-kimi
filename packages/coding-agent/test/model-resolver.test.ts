@@ -13,6 +13,7 @@ import {
 	resolveModelRoleValue,
 	resolveModelScope,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 // Mock models for testing
@@ -1020,7 +1021,7 @@ describe("provider routing selector (@upstream)", () => {
 describe("filterAvailableModelsByEnabledPatterns", () => {
 	const models = mockModels as Model[];
 	const registry = {
-		getCanonicalVariants: (_id: string, _opts?: unknown) => [] as { model: Model }[],
+		getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
 	};
 
 	test("returns all models when patterns is empty", () => {
@@ -1041,8 +1042,17 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 
 	test("expands canonical id via registry", () => {
 		const canonicalRegistry = {
-			getCanonicalVariants: (id: string, _opts?: unknown) =>
-				id === "claude-sonnet-4-5" ? [{ model: models[0] }] : [],
+			getCanonicalVariants: (id: string, _opts?: unknown): CanonicalModelVariant[] =>
+				id === "claude-sonnet-4-5"
+					? [
+							{
+								canonicalId: "claude-sonnet-4-5",
+								selector: "anthropic/claude-sonnet-4-5",
+								model: models[0],
+								source: "bundled",
+							},
+						]
+					: [],
 		};
 		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-sonnet-4-5"], canonicalRegistry);
 		expect(result).toHaveLength(1);
@@ -1068,11 +1078,7 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 
 	test("matches bare OpenRouter-style model id with slash but no provider prefix", () => {
 		const openRouterModels = mockOpenRouterModels as Model[];
-		const result = filterAvailableModelsByEnabledPatterns(
-			openRouterModels,
-			["qwen/qwen3-coder:exacto"],
-			registry,
-		);
+		const result = filterAvailableModelsByEnabledPatterns(openRouterModels, ["qwen/qwen3-coder:exacto"], registry);
 		expect(result).toHaveLength(1);
 		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
 		expect(result[0].provider).toBe("openrouter");
@@ -1084,11 +1090,7 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 	});
 
 	test("applies exact patterns when mixed with globs", () => {
-		const result = filterAvailableModelsByEnabledPatterns(
-			models,
-			["anthropic/*", "openai/gpt-4o"],
-			registry,
-		);
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*", "openai/gpt-4o"], registry);
 		expect(result).toHaveLength(1);
 		expect(result[0].id).toBe("gpt-4o");
 	});
