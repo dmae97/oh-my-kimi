@@ -22,12 +22,18 @@ function normalize(text: string | null | undefined): string | undefined {
 
 let readabilityModule: typeof ReadabilityNs | undefined;
 async function loadReadability(): Promise<typeof ReadabilityNs> {
-	return (readabilityModule ??= await import("@mozilla/readability"));
+	if (!readabilityModule) {
+		readabilityModule = await import("@mozilla/readability");
+	}
+	return readabilityModule;
 }
 
 let linkedomModule: typeof LinkedomNs | undefined;
 async function loadLinkedom(): Promise<typeof LinkedomNs> {
-	return (linkedomModule ??= await import("linkedom"));
+	if (!linkedomModule) {
+		linkedomModule = await import("linkedom");
+	}
+	return linkedomModule;
 }
 
 /**

@@ -20,6 +20,8 @@ import { loadMnemopiConfig, type MnemopiBackendConfig } from "@oh-my-pi/pi-codin
 import {
 	getMnemopiScopedDbPaths,
 	getMnemopiSessionState,
+	loadMnemopi,
+	loadMnemopiCore,
 	MnemopiSessionState,
 	setMnemopiSessionState,
 } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
@@ -28,6 +30,10 @@ import { MemoryEditTool } from "@oh-my-pi/pi-coding-agent/tools/memory-edit";
 import { MemoryRecallTool } from "@oh-my-pi/pi-coding-agent/tools/memory-recall";
 import { MemoryReflectTool } from "@oh-my-pi/pi-coding-agent/tools/memory-reflect";
 import { MemoryRetainTool } from "@oh-my-pi/pi-coding-agent/tools/memory-retain";
+
+// Mnemopi is lazy-loaded at runtime; preload it so the sync construction in
+// registerMnemopiState() and getMnemopiScopedDbPaths() can resolve the module.
+await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 
 const TEST_SESSION_ID = "test-session-id";
 let registeredState: HindsightSessionState | undefined;

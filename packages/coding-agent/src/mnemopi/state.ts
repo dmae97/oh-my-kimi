@@ -21,12 +21,18 @@ let mnemopiCoreMod: typeof MnemopiCoreNs | undefined;
 
 /** Lazily load `@oh-my-pi/pi-mnemopi` (memoized). */
 export async function loadMnemopi(): Promise<typeof MnemopiNs> {
-	return (mnemopiMod ??= await import("@oh-my-pi/pi-mnemopi"));
+	if (!mnemopiMod) {
+		mnemopiMod = await import("@oh-my-pi/pi-mnemopi");
+	}
+	return mnemopiMod;
 }
 
 /** Lazily load `@oh-my-pi/pi-mnemopi/core` (memoized). */
 export async function loadMnemopiCore(): Promise<typeof MnemopiCoreNs> {
-	return (mnemopiCoreMod ??= await import("@oh-my-pi/pi-mnemopi/core"));
+	if (!mnemopiCoreMod) {
+		mnemopiCoreMod = await import("@oh-my-pi/pi-mnemopi/core");
+	}
+	return mnemopiCoreMod;
 }
 
 /** Sync access for code below an async boundary that already awaited {@link loadMnemopi}. */

@@ -38,7 +38,10 @@ import {
 let mnemopiDiagnoseMod: typeof MnemopiDiagnoseNs | undefined;
 
 async function loadMnemopiDiagnose(): Promise<typeof MnemopiDiagnoseNs> {
-	return (mnemopiDiagnoseMod ??= await import("@oh-my-pi/pi-mnemopi/diagnose"));
+	if (!mnemopiDiagnoseMod) {
+		mnemopiDiagnoseMod = await import("@oh-my-pi/pi-mnemopi/diagnose");
+	}
+	return mnemopiDiagnoseMod;
 }
 
 const STATIC_INSTRUCTIONS = [

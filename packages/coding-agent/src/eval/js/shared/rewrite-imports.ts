@@ -70,7 +70,10 @@ type BabelNode = { type: string; start: number; end: number; [key: string]: unkn
 let babelParser: typeof BabelParser | undefined;
 
 async function loadBabelParser(): Promise<typeof BabelParser> {
-	return (babelParser ??= await import("@babel/parser"));
+	if (!babelParser) {
+		babelParser = await import("@babel/parser");
+	}
+	return babelParser;
 }
 
 async function parseProgram(code: string): Promise<{ program: { body: ReadonlyArray<BabelProgramNode> } } | null> {

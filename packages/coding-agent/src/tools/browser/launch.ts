@@ -79,7 +79,10 @@ export async function loadPuppeteerInWorker(safeDir: string): Promise<typeof Pup
 
 let browsersModule: typeof BrowsersNs | undefined;
 async function loadBrowsers(): Promise<typeof BrowsersNs> {
-	return (browsersModule ??= await import("@puppeteer/browsers"));
+	if (!browsersModule) {
+		browsersModule = await import("@puppeteer/browsers");
+	}
+	return browsersModule;
 }
 
 /**

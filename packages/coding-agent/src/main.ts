@@ -85,6 +85,19 @@ type RunRpcMode = (
 	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 ) => Promise<never>;
 
+function maybeShowStartupSplash(options: {
+	isInteractive: boolean;
+	resuming: boolean;
+	quiet: boolean;
+	version: string;
+}): void {
+	if (!options.isInteractive) return;
+	if (options.resuming || options.quiet) return;
+	if ($env.PI_TIMING) return;
+	if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+	process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
+}
+
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
 		return;
@@ -1186,6 +1199,13 @@ export async function runRootCommand(
 			fileText: processedFiles?.text,
 			fileImages: processedFiles?.images,
 			stdinContent: pipedInput,
+		});
+
+		maybeShowStartupSplash({
+			isInteractive,
+			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
+			quiet: settingsInstance.get("startup.quiet"),
+			version: VERSION,
 		});
 
 		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
