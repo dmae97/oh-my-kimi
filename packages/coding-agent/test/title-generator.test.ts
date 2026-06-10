@@ -82,7 +82,7 @@ describe("title generator", () => {
 
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] } | undefined;
 		expect(request?.systemPrompt).toHaveLength(1);
-		expect(request?.systemPrompt?.[0]).toContain("Generate a concise, sentence-case title");
+		expect(request?.systemPrompt?.[0]).toContain("set_title");
 	});
 
 	it("uses the resolved TITLE_SYSTEM.md prompt for online title generation", async () => {
