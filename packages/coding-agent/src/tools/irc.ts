@@ -198,58 +198,99 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		}
 
 		const bus = IrcBus.global();
-		// Broadcasts fan out to live peers only (running | idle); reviving every
-		// parked agent on a broadcast would be a stampede. Direct sends go
-		// through the bus unfiltered so parked recipients are revived.
-		const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
-		const receipts = await Promise.all(
-			targets.map(target => bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo })),
-		);
-
-		const lines: string[] = [];
-		const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
-		if (targets.length === 0) {
-			lines.push("No live peers to broadcast to.");
-		} else if (delivered.length === 0) {
-			lines.push("No recipients received the message.");
-		} else {
-			lines.push(`Delivered to ${delivered.length} peer(s):`);
-		}
-		for (const receipt of receipts) {
-			lines.push(
-				receipt.outcome === "failed"
-					? `- ${receipt.to}: failed — ${receipt.error ?? "unknown error"}`
-					: `- ${receipt.to}: ${receipt.outcome}`,
-			);
-		}
-
 		let waited: IrcMessage | null | undefined;
-		if (params.await && delivered.length > 0) {
-			const timeoutMs = this.#resolveTimeoutMs(params);
-			waited = await bus.wait(senderId, { from: to }, timeoutMs, signal);
-			lines.push("");
-			if (waited) {
-				lines.push(`Reply from ${waited.from}:`);
-				lines.push(waited.body);
+		const timeoutMs = params.await ? this.#resolveTimeoutMs(params) : undefined;
+		const awaitAbort = params.await ? new AbortController() : undefined;
+		const awaitCancelled = new Error("IRC await cancelled");
+		let removeAwaitAbortListener: (() => void) | undefined;
+		const waiting = params.await
+			? bus
+					.wait(senderId, { from: to }, timeoutMs ?? DEFAULT_IRC_TIMEOUT_MS, awaitAbort?.signal, {
+						drainPending: false,
+					})
+					.then(
+						message => ({ message, error: null as Error | null }),
+						error => ({
+							message: null,
+							error: error === awaitCancelled ? null : error instanceof Error ? error : new Error(String(error)),
+						}),
+					)
+			: undefined;
+		if (params.await && signal && awaitAbort) {
+			if (signal.aborted) {
+				awaitAbort.abort(signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted"));
 			} else {
-				lines.push(
-					`No reply from ${to} within ${formatDuration(timeoutMs)}. ` +
-						"They may answer later — check `inbox` or `wait` again.",
-				);
+				const onAbort = (): void => {
+					awaitAbort.abort(signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted"));
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				removeAwaitAbortListener = () => signal.removeEventListener("abort", onAbort);
 			}
 		}
 
-		return {
-			content: [{ type: "text", text: lines.join("\n") }],
-			details: {
-				op: "send",
-				from: senderId,
-				to,
-				receipts,
-				...(waited !== undefined ? { waited } : {}),
-			},
-			isError: delivered.length === 0 && targets.length > 0,
-		};
+		try {
+			// Broadcasts fan out to live peers only (running | idle); reviving every
+			// parked agent on a broadcast would be a stampede. Direct sends go
+			// through the bus unfiltered so parked recipients are revived.
+			const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
+			const receipts = await Promise.all(
+				targets.map(target => bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo })),
+			);
+
+			const lines: string[] = [];
+			const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
+			if (targets.length === 0) {
+				lines.push("No live peers to broadcast to.");
+			} else if (delivered.length === 0) {
+				lines.push("No recipients received the message.");
+			} else {
+				lines.push(`Delivered to ${delivered.length} peer(s):`);
+			}
+			for (const receipt of receipts) {
+				lines.push(
+					receipt.outcome === "failed"
+						? `- ${receipt.to}: failed — ${receipt.error ?? "unknown error"}`
+						: `- ${receipt.to}: ${receipt.outcome}`,
+				);
+			}
+
+			if (params.await && waiting && timeoutMs !== undefined) {
+				lines.push("");
+				if (delivered.length > 0) {
+					const reply = await waiting;
+					if (reply.error) throw reply.error;
+					waited = reply.message;
+					if (waited) {
+						lines.push(`Reply from ${waited.from}:`);
+						lines.push(waited.body);
+					} else {
+						lines.push(
+							`No reply from ${to} within ${formatDuration(timeoutMs)}. ` +
+								"They may answer later — check `inbox` or `wait` again.",
+						);
+					}
+				} else {
+					awaitAbort?.abort(awaitCancelled);
+					const reply = await waiting;
+					if (reply.error) throw reply.error;
+				}
+			}
+
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: {
+					op: "send",
+					from: senderId,
+					to,
+					receipts,
+					...(waited !== undefined ? { waited } : {}),
+				},
+				isError: delivered.length === 0 && targets.length > 0,
+			};
+		} finally {
+			awaitAbort?.abort(awaitCancelled);
+			removeAwaitAbortListener?.();
+		}
 	}
 
 	async #executeWait(senderId: string, params: IrcParams, signal?: AbortSignal): Promise<AgentToolResult<IrcDetails>> {

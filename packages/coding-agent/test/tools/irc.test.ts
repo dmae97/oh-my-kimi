@@ -14,6 +14,8 @@ interface FakeSession {
 	session: AgentSession;
 	/** Messages delivered into this session via deliverIrcMessage. */
 	delivered: IrcMessage[];
+	/** Display-only relay observations emitted on this session. */
+	relayed: CustomMessage[];
 	/** Outcome the fake reports (busy vs idle recipient). */
 	setOutcome: (outcome: "injected" | "woken") => void;
 	/** Cause the next deliverIrcMessage call to throw. */
@@ -27,6 +29,7 @@ function makeFakeSession(): FakeSession {
 	let nextError: Error | null = null;
 	let deliverHook: ((msg: IrcMessage) => void) | undefined;
 	const delivered: IrcMessage[] = [];
+	const relayed: CustomMessage[] = [];
 	const session = {
 		deliverIrcMessage: async (msg: IrcMessage) => {
 			if (nextError) {
@@ -38,11 +41,14 @@ function makeFakeSession(): FakeSession {
 			deliverHook?.(msg);
 			return outcome;
 		},
-		emitIrcRelayObservation: () => {},
+		emitIrcRelayObservation: (record: CustomMessage) => {
+			relayed.push(record);
+		},
 	};
 	return {
 		session: session as unknown as AgentSession,
 		delivered,
+		relayed,
 		setOutcome: value => {
 			outcome = value;
 		},
@@ -119,6 +125,23 @@ describe("IRC", () => {
 			expect(sub.delivered.map(msg => msg.body)).toEqual(["ping", "ping again"]);
 			expect(sub.delivered[0]?.from).toBe("0-Main");
 			expect(sub.delivered[0]?.id).toBeTruthy();
+			expect(bus.unreadCount("0-Sub")).toBe(0);
+		});
+
+		it("relays only subagent-to-subagent traffic to the main UI", async () => {
+			const main = makeFakeSession();
+			registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });
+			const a = makeFakeSession();
+			registry.register({ id: "0-A", displayName: "task", kind: "sub", session: a.session });
+			const b = makeFakeSession();
+			registry.register({ id: "0-B", displayName: "task", kind: "sub", session: b.session });
+
+			await bus.send({ from: "Main", to: "0-A", body: "outbound from main" });
+			await bus.send({ from: "0-A", to: "Main", body: "inbound to main" });
+			await bus.send({ from: "0-A", to: "0-B", body: "sibling note" });
+
+			expect(main.relayed).toHaveLength(1);
+			expect(main.relayed[0]?.details).toEqual({ from: "0-A", to: "0-B", body: "sibling note" });
 		});
 
 		it("send to an unknown or aborted agent fails", async () => {
@@ -138,6 +161,7 @@ describe("IRC", () => {
 			sub.setError(new Error("boom"));
 			const receipt = await bus.send({ from: "0-Main", to: "0-Sub", body: "ping" });
 			expect(receipt).toEqual({ to: "0-Sub", outcome: "failed", error: "boom" });
+			expect(bus.unreadCount("0-Sub")).toBe(1);
 		});
 
 		it("send revives a parked recipient through the lifecycle manager", async () => {
@@ -216,7 +240,9 @@ describe("IRC", () => {
 			const sub = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
 
-			await bus.send({ from: "0-Sub", to: "0-Main", body: "earlier" });
+			main.setError(new Error("temporarily unavailable"));
+			const receipt = await bus.send({ from: "0-Sub", to: "0-Main", body: "earlier" });
+			expect(receipt.outcome).toBe("failed");
 			expect(bus.unreadCount("0-Main")).toBe(1);
 
 			// Resolves from the mailbox synchronously; the timeout never fires.
@@ -231,7 +257,9 @@ describe("IRC", () => {
 			const sub = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
 
+			main.setError(new Error("down one"));
 			await bus.send({ from: "0-Sub", to: "0-Main", body: "one" });
+			main.setError(new Error("down two"));
 			await bus.send({ from: "0-Sub", to: "0-Main", body: "two" });
 
 			const peeked = bus.inbox("0-Main", { peek: true });
@@ -255,8 +283,7 @@ describe("IRC", () => {
 			const afterTimeout = await bus.send({ from: "0-Sub", to: "0-Main", body: "after timeout" });
 			expect(afterTimeout.outcome).toBe("injected");
 			expect(main.delivered.map(msg => msg.body)).toEqual(["after timeout"]);
-			expect(bus.unreadCount("0-Main")).toBe(1);
-			bus.inbox("0-Main");
+			expect(bus.unreadCount("0-Main")).toBe(0);
 
 			// Aborted waiter is removed too: the dead waiter never consumes mail.
 			const controller = new AbortController();
@@ -265,7 +292,7 @@ describe("IRC", () => {
 			await expect(waiting).rejects.toThrow("cancelled");
 			await bus.send({ from: "0-Sub", to: "0-Main", body: "after abort" });
 			expect(main.delivered.map(msg => msg.body)).toEqual(["after timeout", "after abort"]);
-			expect(bus.unreadCount("0-Main")).toBe(1);
+			expect(bus.unreadCount("0-Main")).toBe(0);
 		});
 
 		it("resolves waiters in FIFO order", async () => {
@@ -293,6 +320,7 @@ describe("IRC", () => {
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
 
 			for (let i = 0; i <= 100; i++) {
+				main.setError(new Error(`down ${i}`));
 				await bus.send({ from: "0-Sub", to: "0-Main", body: `msg-${i}` });
 			}
 
@@ -388,6 +416,7 @@ describe("IRC", () => {
 			registry.register({ id: "0-Parked", displayName: "task", kind: "sub", session: null, status: "parked" });
 			const main = makeFakeSession();
 			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
+			sub.setError(new Error("temporarily unavailable"));
 			await bus.send({ from: "0-Main", to: "0-AuthLoader", body: "unread one" });
 
 			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
@@ -437,8 +466,9 @@ describe("IRC", () => {
 			const sub = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
 			sub.onDeliver(msg => {
-				// Reply synchronously during delivery: it lands in the sender's
-				// mailbox, which the tool's await-wait drains deterministically.
+				// Reply synchronously during delivery: the tool has already parked
+				// a future-only waiter, so the immediate reply is handed directly
+				// to await:true instead of being double-buffered as unread mail.
 				void bus.send({ from: "0-Sub", to: msg.from, body: "pong", replyTo: msg.id });
 			});
 
@@ -447,6 +477,24 @@ describe("IRC", () => {
 			expect(result.details?.waited?.body).toBe("pong");
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			expect(text).toContain("pong");
+		});
+
+		it("op=send await=true ignores buffered stale mail and waits for a future reply", async () => {
+			const main = makeFakeSession();
+			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			main.setError(new Error("temporarily unavailable"));
+			await bus.send({ from: "0-Sub", to: "0-Main", body: "old buffered reply" });
+			sub.onDeliver(msg => {
+				void bus.send({ from: "0-Sub", to: msg.from, body: "fresh reply", replyTo: msg.id });
+			});
+
+			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
+			const result = await tool.execute("call-1", { op: "send", to: "0-Sub", message: "ping", await: true });
+
+			expect(result.details?.waited?.body).toBe("fresh reply");
+			expect(bus.inbox("0-Main").map(msg => msg.body)).toEqual(["old buffered reply"]);
 		});
 
 		it("op=send await=true reports a clean timeout when no reply arrives", async () => {
@@ -497,6 +545,7 @@ describe("IRC", () => {
 			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
 			const sub = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			main.setError(new Error("temporarily unavailable"));
 			await bus.send({ from: "0-Sub", to: "0-Main", body: "fyi" });
 
 			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
