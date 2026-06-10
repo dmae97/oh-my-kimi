@@ -1445,12 +1445,12 @@ export const repo = {
 		return result.stdout.trim() || null;
 	},
 
-	/** Resolve the primary repository root (not a worktree — the main checkout). */
+	/** Resolve the primary checkout root, or the shared common dir for bare-repo worktrees. */
 	async primaryRoot(cwd: string, signal?: AbortSignal): Promise<string | null> {
 		const repository = await resolveRepository(cwd);
 		if (repository) {
 			if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
-			return repository.repoRoot;
+			return repository.commonDir;
 		}
 		const repoRoot = await repo.root(cwd, signal);
 		if (!repoRoot) return null;
@@ -1459,20 +1459,21 @@ export const repo = {
 			signal,
 		});
 		if (path.basename(commonDir.trim()) === ".git") return path.dirname(commonDir.trim());
-		return repoRoot;
+		return commonDir.trim();
 	},
 
 	/**
 	 * Sync sibling of {@link primaryRoot}. Resolves only via on-disk `.git`/
 	 * `commondir` walking — no subprocess fallback — so it stays usable from
 	 * paths where async I/O is impractical (e.g. `computeBankScope`). Returns
-	 * `null` when `cwd` is outside a repository.
+	 * `null` when `cwd` is outside a repository. Bare-repo worktrees resolve to
+	 * the shared common dir (`foo.git`) because they have no primary checkout.
 	 */
 	primaryRootSync(cwd: string): string | null {
 		const repository = resolveRepositorySync(cwd);
 		if (!repository) return null;
 		if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
-		return repository.repoRoot;
+		return repository.commonDir;
 	},
 
 	/** Full GitRepository metadata (sync). */

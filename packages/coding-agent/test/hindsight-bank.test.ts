@@ -151,6 +151,9 @@ describe("computeBankScope", () => {
 		let baseDir: string;
 		let primaryRoot: string;
 		let worktreeRoot: string;
+		let bareRepoRoot: string;
+		let bareWorktreeA: string;
+		let bareWorktreeB: string;
 
 		beforeAll(async () => {
 			baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "hindsight-bank-worktree-"));
@@ -164,6 +167,14 @@ describe("computeBankScope", () => {
 			runGit(primaryRoot, ["add", "-A"]);
 			runGit(primaryRoot, ["commit", "-m", "base"]);
 			runGit(primaryRoot, ["worktree", "add", worktreeRoot, "-b", "feature-x"]);
+			bareRepoRoot = path.join(baseDir, "bare-repo.git");
+			bareWorktreeA = path.join(baseDir, "bare-a");
+			bareWorktreeB = path.join(baseDir, "bare-b");
+			runGit(baseDir, ["init", "--bare", bareRepoRoot]);
+			runGit(primaryRoot, ["remote", "add", "bare", bareRepoRoot]);
+			runGit(primaryRoot, ["push", "bare", "main"]);
+			runGit(baseDir, ["--git-dir", bareRepoRoot, "worktree", "add", bareWorktreeA, "-b", "bare-a", "main"]);
+			runGit(baseDir, ["--git-dir", bareRepoRoot, "worktree", "add", bareWorktreeB, "-b", "bare-b", "main"]);
 		});
 
 		afterAll(async () => {
@@ -181,6 +192,16 @@ describe("computeBankScope", () => {
 		it("uses the primary root basename for the per-project bank id from a worktree", () => {
 			expect(computeBankScope(baseConfig({ scoping: "per-project" }), worktreeRoot)).toEqual({
 				bankId: "omp-myrepo",
+			});
+		});
+
+		it("emits one shared project label across worktrees attached to a bare repository", () => {
+			const fromA = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), bareWorktreeA);
+			const fromB = computeBankScope(baseConfig({ scoping: "per-project-tagged" }), bareWorktreeB);
+			expect(fromA.retainTags).toEqual(["project:bare-repo.git"]);
+			expect(fromB).toEqual(fromA);
+			expect(computeBankScope(baseConfig({ scoping: "per-project" }), bareWorktreeB)).toEqual({
+				bankId: "omp-bare-repo.git",
 			});
 		});
 
