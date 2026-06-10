@@ -3,7 +3,6 @@ import { copyToClipboard, readImageFromClipboard } from "@oh-my-pi/pi-coding-age
 import * as native from "@oh-my-pi/pi-natives";
 import type { Subprocess } from "bun";
 
-
 type SpawnOptions = Bun.SpawnOptions.SpawnOptions<
 	Bun.SpawnOptions.Writable,
 	Bun.SpawnOptions.Readable,
