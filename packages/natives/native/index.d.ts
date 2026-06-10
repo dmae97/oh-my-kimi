@@ -1139,6 +1139,18 @@ export interface MinimizerOptions {
    * the raw, un-minimized output. Default 4 MiB.
    */
   maxCaptureBytes?: number
+  /**
+   * Source-outline level for `cat <source-file>` minimization. Accepts
+   * `"default"` (current behavior) or `"aggressive"` (strip function bodies).
+   */
+  sourceOutlineLevel?: string
+  /**
+   * Kill-switch to fall back to the pre-PR (legacy) filter behavior for
+   * grep / find / pytest. When `Some(true)`, filters that opted into the
+   * always-shrink Tier 1 / Tier 2 behavior skip the new code path. When
+   * `None`, defers to the `OMP_MINIMIZER_LEGACY_FILTERS` env var.
+   */
+  legacyFilters?: boolean
 }
 
 /**

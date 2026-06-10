@@ -168,6 +168,71 @@ fn skip_time_options(tokens: &[String], mut index: usize) -> Option<usize> {
 	Some(index)
 }
 
+fn skip_aws_global_options(args: &[String]) -> Option<usize> {
+	const VALUE_FLAGS: &[&str] = &[
+		"--profile",
+		"--region",
+		"--endpoint-url",
+		"--cli-binary-format",
+		"--output",
+		"--cli-read-timeout",
+		"--cli-connect-timeout",
+		"--ca-bundle",
+		"--color",
+		"--query",
+		"--cli-input-json",
+		"--cli-input-yaml",
+	];
+	const BOOL_FLAGS: &[&str] = &[
+		"--no-cli-pager",
+		"--debug",
+		"--no-verify-ssl",
+		"--no-paginate",
+		"--no-sign-request",
+		"--cli-auto-prompt",
+		"--no-cli-auto-prompt",
+	];
+
+	let mut index = 0;
+	while let Some(arg) = args.get(index) {
+		if arg == "--" {
+			return args.get(index + 1).map(|_| index + 1);
+		}
+		if BOOL_FLAGS.contains(&arg.as_str()) {
+			index += 1;
+			continue;
+		}
+		if arg == "--generate-cli-skeleton" {
+			index += 1;
+			if args
+				.get(index)
+				.is_some_and(|value| matches!(value.as_str(), "input" | "output" | "yaml-input"))
+			{
+				index += 1;
+			}
+			continue;
+		}
+		if arg.starts_with("--generate-cli-skeleton=") {
+			index += 1;
+			continue;
+		}
+		if option_consumes_value(arg, VALUE_FLAGS) {
+			index = if option_has_inline_value(arg, VALUE_FLAGS) {
+				index + 1
+			} else {
+				index + 2
+			};
+			continue;
+		}
+		break;
+	}
+	if index > args.len() {
+		None
+	} else {
+		Some(index)
+	}
+}
+
 fn skip_option_value(tokens: &[String], index: usize) -> Option<usize> {
 	let token = tokens.get(index)?;
 	if token.starts_with("--") && token.contains('=') {
@@ -254,6 +319,24 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 			],
 			&[],
 		),
+		"npx" => first_non_global_arg(
+			args,
+			&[
+				"--workspace",
+				"-w",
+				"--package",
+				"-p",
+				"--prefix",
+				"--cache",
+				"--registry",
+				"--userconfig",
+				"--call",
+				"--shell",
+				"--node-arg",
+			],
+			&["--yes", "--no", "--no-install", "--quiet", "--silent", "--verbose"],
+			&[],
+		),
 		"pnpm" => first_non_global_arg(
 			args,
 			&["--dir", "-C", "--filter", "-F", "--workspace", "--config", "--store-dir"],
@@ -290,6 +373,48 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 			args,
 			&["--gemfile", "--path", "--jobs", "--retry"],
 			&["--verbose", "--quiet", "--no-color"],
+			&[],
+		),
+		"aws" => skip_aws_global_options(args)
+			.and_then(|index| args.get(index))
+			.map(|arg| arg.to_lowercase()),
+		"uv" | "uvx" => first_non_global_arg(
+			args,
+			&[
+				"--directory",
+				"-C",
+				"--project",
+				"-p",
+				"--cache-dir",
+				"--config-file",
+				"--config-setting",
+				"--python",
+				"--python-preference",
+				"--exclude-newer",
+				"--color",
+				"--allow-insecure-host",
+				"--no-binary",
+				"--only-binary",
+			],
+			&[
+				"--offline",
+				"--no-cache",
+				"--no-cache-dir",
+				"--no-progress",
+				"--native-tls",
+				"--no-native-tls",
+				"--quiet",
+				"-q",
+				"--verbose",
+				"-v",
+				"--upgrade",
+				"--no-upgrade",
+				"--require-hashes",
+				"--verify-hashes",
+				"--no-verify-hashes",
+				"--no-build",
+				"--reinstall",
+			],
 			&[],
 		),
 		"jest" | "vitest" => first_non_global_arg(args, &[], &[], &[]),
@@ -463,6 +588,17 @@ mod tests {
 	}
 
 	#[test]
+	fn detects_direct_lint_tools() {
+		let command = detect("eslint src/foo.ts").expect("eslint command is detected");
+		assert_eq!(command.program, "eslint");
+		assert_eq!(command.subcommand.as_deref(), Some("src/foo.ts"));
+
+		let command = detect("tsc --project tsconfig.json").expect("tsc command is detected");
+		assert_eq!(command.program, "tsc");
+		assert_eq!(command.subcommand.as_deref(), Some("tsconfig.json"));
+	}
+
+	#[test]
 	fn detects_gt_through_wrappers_and_globals() {
 		let command = detect("env GRAPHITE_TOKEN=x command gt --repo owner/repo submit --stack")
 			.expect("gt command is detected");
@@ -476,6 +612,63 @@ mod tests {
 		assert_eq!(command.program, "gt");
 		assert_eq!(command.subcommand.as_deref(), Some("sync"));
 	}
+
+	#[test]
+	fn skips_aws_global_options() {
+		let command = detect(
+			"aws --profile foo --region=us-east-1 --endpoint-url http://localhost:4566 \
+			 --no-cli-pager --generate-cli-skeleton output s3 ls",
+		)
+		.expect("aws command is detected");
+		assert_eq!(command.program, "aws");
+		assert_eq!(command.subcommand.as_deref(), Some("s3"));
+	}
+
+	#[test]
+	fn aws_double_dash_terminates_global_options() {
+		let command = detect("aws -- --literal-service op").expect("aws command is detected");
+		assert_eq!(command.program, "aws");
+		assert_eq!(command.subcommand.as_deref(), Some("--literal-service"));
+	}
+
+	#[test]
+	fn aws_global_option_permutations_keep_service_subcommand() {
+		let flags = [
+			"--profile dev",
+			"--region us-east-1",
+			"--endpoint-url=http://localhost:4566",
+			"--cli-binary-format raw-in-base64-out",
+			"--output json",
+			"--cli-read-timeout=5",
+			"--cli-connect-timeout 5",
+			"--ca-bundle /tmp/ca.pem",
+			"--color off",
+			"--query Buckets[].Name",
+			"--cli-input-json file://input.json",
+			"--cli-input-yaml file://input.yaml",
+			"--no-cli-pager",
+			"--debug",
+			"--no-verify-ssl",
+			"--no-paginate",
+			"--no-sign-request",
+			"--cli-auto-prompt",
+			"--no-cli-auto-prompt",
+			"--generate-cli-skeleton",
+			"--generate-cli-skeleton=output",
+		];
+		for idx in 0..128 {
+			let mut command = String::from("aws");
+			for (bit, flag) in flags.iter().enumerate() {
+				if idx & (1 << (bit % 7)) != 0 && (idx + bit) % 3 == 0 {
+					command.push(' ');
+					command.push_str(flag);
+				}
+			}
+			command.push_str(" lambda list-functions");
+			let detected = detect(&command).expect("aws command is detected");
+			assert_eq!(detected.subcommand.as_deref(), Some("lambda"), "{command}");
+		}
+	}
 }
 
 #[test]
@@ -487,4 +680,25 @@ fn detects_bun_globals_and_subcommands() {
 	let command = detect("env CI=1 /usr/local/bin/bun test").expect("bun test is detected");
 	assert_eq!(command.program, "bun");
 	assert_eq!(command.subcommand.as_deref(), Some("test"));
+}
+
+#[test]
+fn npx_workspace_value_is_skipped_in_subcommand_detection() {
+	// `npx -w <workspace>` is a value-taking option; the workspace name must
+	// not be returned as the subcommand. The actual tool name follows after
+	// the option value.
+	let command = detect("npx -w vitest echo PASS").expect("npx command is detected");
+	assert_eq!(command.program, "npx");
+	assert_eq!(command.subcommand.as_deref(), Some("echo"));
+
+	// plain npx invocation with an actual tool still resolves correctly
+	let command = detect("npx vitest").expect("npx vitest is detected");
+	assert_eq!(command.program, "npx");
+	assert_eq!(command.subcommand.as_deref(), Some("vitest"));
+
+	// workspace value that happens to be a tool name is skipped; the next
+	// token is the actual tool
+	let command = detect("npx -w my-workspace vitest").expect("npx with workspace is detected");
+	assert_eq!(command.program, "npx");
+	assert_eq!(command.subcommand.as_deref(), Some("vitest"));
 }

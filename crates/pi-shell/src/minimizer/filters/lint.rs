@@ -9,7 +9,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 }
 
 pub fn supports_program(program: &str, subcommand: Option<&str>) -> bool {
-	matches!(program, "ruff" | "mypy" | "rubocop")
+	matches!(program, "ruff" | "mypy" | "rubocop" | "pyright" | "basedpyright")
 		|| matches!(
 			subcommand,
 			None | Some("check" | "lint" | "run" | "format" | "fmt" | "typecheck")
@@ -58,6 +58,7 @@ fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
 		|| matches!(program, "eslint" | "biome") && lower.starts_with("warning: react version")
 		|| matches!(program, "ruff") && lower.starts_with("all checks passed")
 		|| matches!(program, "mypy") && lower.starts_with("success: no issues found")
+		|| matches!(program, "pyright" | "basedpyright") && lower.starts_with("0 errors, 0 warnings")
 		|| matches!(program, "rubocop")
 			&& (lower.starts_with("inspecting ")
 				|| lower == "offenses:"
@@ -250,5 +251,25 @@ mod tests {
 		let out = group_diagnostics(&input);
 		assert!(out.contains("src/main.rs (20 diagnostics)"));
 		assert!(out.contains("… 8 more"));
+	}
+
+	#[test]
+	fn direct_pyright_support_and_grouping_work() {
+		assert!(supports_program("pyright", None));
+		let input = "0 errors, 0 warnings, 0 informations\nsrc/app.ts:4:7 - error TS2322: Type \
+		             'string' is not assignable to type 'number'.\nsrc/app.ts:9:3 - error TS7006: \
+		             Parameter 'x' implicitly has an 'any' type.\n";
+		let out = condense_lint_output("pyright", input, 1);
+		assert!(out.contains("2 diagnostics in 1 files"));
+		assert!(out.contains("src/app.ts (2 diagnostics)"));
+		assert!(out.contains("TS2322"));
+		assert!(out.contains("TS7006"));
+	}
+
+	#[test]
+	fn direct_basedpyright_success_noise_is_stripped() {
+		assert!(supports_program("basedpyright", None));
+		let out = condense_lint_output("basedpyright", "0 errors, 0 warnings, 0 notes\n", 0);
+		assert_eq!(out, "");
 	}
 }

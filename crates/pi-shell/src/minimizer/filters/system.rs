@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use super::git;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
 pub fn supports(program: &str) -> bool {
@@ -26,13 +27,23 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	let cleaned = primitives::strip_ansi(input);
 	let command = ctx.program;
 	let text = match command {
-		"env" => compact_env(&cleaned),
+		"env" => {
+			if ctx
+				.command
+				.split_whitespace()
+				.any(|t| t == "-0" || t == "--null")
+			{
+				cleaned
+			} else {
+				compact_env(&cleaned)
+			}
+		},
 		"log" => compact_log(&cleaned),
 		"deps" => compact_dependency_output(&cleaned),
 		"summary" => compact_summary_output(&cleaned, exit_code),
-		"err" => cleaned,
+		"err" => compact_err_output(&cleaned),
 		"test" => compact_test_output(&cleaned),
-		"diff" => cleaned,
+		"diff" => git::compact_diff_output(&cleaned),
 		"format" => compact_format_output(&cleaned),
 		"pipe" => compact_pipe_like_output(&cleaned, exit_code),
 		"ps" => compact_ps_output(&cleaned),
@@ -215,17 +226,13 @@ struct LogLine {
 fn normalize_log_line(line: &str) -> String {
 	let without_timestamp = strip_leading_timestamp(line.trim());
 	let mut out = String::new();
-	let mut digits = String::new();
-	for ch in without_timestamp.chars() {
-		if ch.is_ascii_digit() {
-			digits.push(ch);
-			continue;
+	for token in without_timestamp.split_whitespace() {
+		if !out.is_empty() {
+			out.push(' ');
 		}
-		flush_digits(&mut out, &mut digits);
-		out.push(ch);
+		push_normalized_token(&mut out, token);
 	}
-	flush_digits(&mut out, &mut digits);
-	out.split_whitespace().collect::<Vec<_>>().join(" ")
+	out
 }
 
 fn strip_leading_timestamp(line: &str) -> &str {
@@ -241,6 +248,54 @@ fn strip_leading_timestamp(line: &str) -> &str {
 		return "";
 	}
 	line
+}
+
+fn push_normalized_token(out: &mut String, token: &str) {
+	let core = token.trim_matches(|ch: char| ch.is_ascii_punctuation() && ch != '/' && ch != '.');
+	if is_uuid_like(core) {
+		out.push_str("<uuid>");
+		return;
+	}
+	if is_hex_like(core) {
+		out.push_str("<hex>");
+		return;
+	}
+	if is_path_like(core) {
+		out.push_str("<path>");
+		return;
+	}
+
+	let mut digits = String::new();
+	for ch in token.chars() {
+		if ch.is_ascii_digit() {
+			digits.push(ch);
+			continue;
+		}
+		flush_digits(out, &mut digits);
+		out.push(ch);
+	}
+	flush_digits(out, &mut digits);
+}
+
+fn is_uuid_like(token: &str) -> bool {
+	token.len() == 36
+		&& token.bytes().enumerate().all(|(idx, byte)| {
+			if matches!(idx, 8 | 13 | 18 | 23) {
+				byte == b'-'
+			} else {
+				byte.is_ascii_hexdigit()
+			}
+		})
+}
+
+fn is_hex_like(token: &str) -> bool {
+	let token = token.strip_prefix("0x").unwrap_or(token);
+	token.len() >= 8 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_path_like(token: &str) -> bool {
+	(token.starts_with('/') || token.starts_with("./") || token.starts_with("../"))
+		&& token.len() > 1
 }
 
 fn flush_digits(out: &mut String, digits: &mut String) {
@@ -324,15 +379,265 @@ fn compact_summary_output(input: &str, exit_code: i32) -> String {
 	out
 }
 
+fn compact_err_output(input: &str) -> String {
+	compact_failure_output(
+		input,
+		2,
+		12,
+		is_err_signal_line,
+		is_err_summary_line,
+		is_err_noise,
+		is_err_relevant_line,
+	)
+}
+
 fn compact_test_output(input: &str) -> String {
+	compact_failure_output(
+		input,
+		1,
+		12,
+		is_test_signal_line,
+		is_test_summary_line,
+		is_test_noise,
+		is_test_relevant_line,
+	)
+}
+
+fn compact_failure_output(
+	input: &str,
+	keep_before: usize,
+	keep_after: usize,
+	is_signal_line: fn(&str) -> bool,
+	is_summary_line: fn(&str) -> bool,
+	is_noise_line: fn(&str) -> bool,
+	is_relevant_line: fn(&str) -> bool,
+) -> String {
 	let lines: Vec<&str> = input.lines().collect();
-	if lines.len() <= 120 {
-		return primitives::dedup_consecutive_lines(input);
+	if lines.is_empty() {
+		return input.to_string();
 	}
-	let mut out = format!("test output: {} lines\n", lines.len());
-	push_important_lines(&mut out, input, 80);
-	out.push_str(&primitives::head_tail_lines(input, 35, 35));
-	out
+
+	let mut keep = vec![false; lines.len()];
+	let mut saw_relevant = false;
+
+	for (idx, line) in lines.iter().enumerate() {
+		let trimmed = line.trim_start();
+		if is_relevant_line(trimmed) {
+			saw_relevant = true;
+		}
+		if is_summary_line(trimmed) {
+			keep[idx] = true;
+			continue;
+		}
+		if is_signal_line(trimmed) {
+			let start = idx.saturating_sub(keep_before);
+			let end = idx
+				.saturating_add(keep_after)
+				.min(lines.len().saturating_sub(1));
+			for slot in keep.iter_mut().take(end + 1).skip(start) {
+				*slot = true;
+			}
+		}
+	}
+
+	if !saw_relevant {
+		return input.to_string();
+	}
+
+	let mut out = String::new();
+	for (idx, line) in lines.iter().enumerate() {
+		if !keep[idx] {
+			continue;
+		}
+		let trimmed = line.trim_start();
+		if is_noise_line(trimmed) {
+			continue;
+		}
+		out.push_str(line);
+		out.push('\n');
+	}
+
+	primitives::dedup_consecutive_lines(&out)
+}
+
+fn is_err_signal_line(trimmed: &str) -> bool {
+	let lower = trimmed.to_ascii_lowercase();
+	lower.starts_with("error:")
+		|| lower.starts_with("fatal:")
+		|| lower.starts_with("failed:")
+		|| lower.starts_with("panic:")
+		|| lower.starts_with("exception:")
+		|| lower.starts_with("traceback ")
+		|| lower.starts_with("assertionerror")
+		|| lower.starts_with("timeouterror")
+		|| lower.starts_with("caused by:")
+		|| lower.starts_with("warning:")
+		|| lower.starts_with("warn:")
+		|| lower.contains(": error:")
+		|| lower.contains(": warning:")
+		|| lower.contains(" fatal error")
+		|| lower.contains(" failed")
+		|| lower.contains(" panic")
+		|| lower.contains(" exception")
+}
+
+fn is_err_summary_line(trimmed: &str) -> bool {
+	let lower = trimmed.to_ascii_lowercase();
+	lower.starts_with("build failed")
+		|| lower.starts_with("failures!")
+		|| lower.starts_with("failed")
+		|| lower.starts_with("errors:")
+		|| lower.starts_with("warnings:")
+		|| lower.starts_with("play recap")
+		|| lower.starts_with("summary")
+		|| lower.starts_with("test result")
+		|| lower.starts_with("test files")
+		|| lower.starts_with("tests:")
+		|| is_count_summary(trimmed)
+}
+
+fn is_err_noise(trimmed: &str) -> bool {
+	let lower = trimmed.to_ascii_lowercase();
+	lower.starts_with("compiling ")
+		|| lower.starts_with("building ")
+		|| lower.starts_with("checking ")
+		|| lower.starts_with("running ")
+		|| lower.starts_with("executing ")
+		|| lower.starts_with("fetching ")
+		|| lower.starts_with("resolving ")
+		|| lower.starts_with("downloading ")
+		|| lower.starts_with("installing ")
+		|| lower.starts_with("finished ")
+		|| lower.starts_with("done ")
+		|| lower.starts_with("pass ")
+		|| lower.starts_with("✓")
+		|| lower.starts_with("✔")
+		|| lower.starts_with("√")
+		|| lower.starts_with("○")
+		|| lower.starts_with("ok ")
+		|| lower.contains(" ... ok")
+}
+
+fn is_test_signal_line(trimmed: &str) -> bool {
+	let lower = trimmed.to_ascii_lowercase();
+	trimmed.starts_with("FAIL ")
+		|| trimmed.starts_with("FAILURES")
+		|| trimmed.starts_with("Failed Tests")
+		|| trimmed.starts_with("● ")
+		|| trimmed.starts_with("✕")
+		|| trimmed.starts_with("×")
+		|| trimmed.starts_with("✗")
+		|| trimmed.starts_with("❯")
+		|| lower.starts_with("error:")
+		|| lower.starts_with("assertionerror")
+		|| lower.starts_with("timeouterror")
+		|| lower.starts_with("panic:")
+		|| lower.starts_with("failed ")
+}
+
+fn is_test_summary_line(trimmed: &str) -> bool {
+	let lower = trimmed.to_ascii_lowercase();
+	trimmed.starts_with("Test Suites:")
+		|| trimmed.starts_with("Test Suites")
+		|| trimmed.starts_with("Tests:")
+		|| trimmed.starts_with("Tests")
+		|| trimmed.starts_with("Test Files")
+		|| trimmed.starts_with("Snapshots:")
+		|| trimmed.starts_with("Snapshots")
+		|| trimmed.starts_with("Time:")
+		|| trimmed.starts_with("Duration")
+		|| trimmed.starts_with("Start at")
+		|| trimmed.starts_with("Ran all test suites")
+		|| trimmed.starts_with("Ran ")
+		|| trimmed.starts_with("Failed Tests")
+		|| trimmed.starts_with("FAILURES")
+		|| trimmed.starts_with("Summary")
+		|| lower.starts_with("build failed")
+		|| lower.starts_with("test run failed")
+		|| lower.starts_with("test result")
+		|| is_count_summary(trimmed)
+}
+
+fn is_test_noise(trimmed: &str) -> bool {
+	let lower = trimmed.to_ascii_lowercase();
+	lower.starts_with("pass ")
+		|| trimmed.starts_with("✓")
+		|| trimmed.starts_with("✔")
+		|| trimmed.starts_with("√")
+		|| trimmed.starts_with("○")
+		|| lower.starts_with("running ")
+		|| lower.starts_with("run ")
+		|| lower.starts_with("dev ")
+		|| lower.starts_with("ok ")
+		|| lower.contains(" ... ok")
+}
+
+fn is_err_relevant_line(trimmed: &str) -> bool {
+	is_err_signal_line(trimmed) || is_err_summary_line(trimmed)
+}
+
+fn is_test_relevant_line(trimmed: &str) -> bool {
+	is_test_signal_line(trimmed) || is_test_summary_line(trimmed) || is_test_noise(trimmed)
+}
+
+fn is_count_summary(trimmed: &str) -> bool {
+	let mut parts = trimmed.split_whitespace();
+	let Some(count) = parts.next() else {
+		return false;
+	};
+	if !count.chars().all(|ch| ch.is_ascii_digit()) {
+		return false;
+	}
+
+	let Some(kind) = parts
+		.next()
+		.map(|word| word.trim_matches(|ch: char| ch.is_ascii_punctuation()))
+	else {
+		return false;
+	};
+	if matches!(
+		kind,
+		"failed"
+			| "passed"
+			| "skipped"
+			| "flaky"
+			| "pass"
+			| "fail"
+			| "error"
+			| "errors"
+			| "warning"
+			| "warnings"
+			| "information"
+			| "informations"
+	) {
+		return true;
+	}
+
+	if kind == "of" {
+		let Some(total) = parts.next() else {
+			return false;
+		};
+		if !total.chars().all(|ch| ch.is_ascii_digit()) {
+			return false;
+		}
+		return parts
+			.next()
+			.map(|word| word.trim_matches(|ch: char| ch.is_ascii_punctuation()))
+			.is_some_and(|kind| {
+				matches!(
+					kind,
+					"failed"
+						| "passed" | "skipped"
+						| "flaky" | "pass"
+						| "fail" | "error"
+						| "errors" | "warning"
+						| "warnings" | "information"
+						| "informations"
+				)
+			});
+	}
+
+	false
 }
 
 fn push_important_lines(out: &mut String, input: &str, max: usize) {
@@ -614,6 +919,18 @@ mod tests {
 	}
 
 	#[test]
+	fn log_dedups_normalized_uuid_hex_and_paths() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("log", &cfg);
+		let input = "2026-01-01T10:00:00 ERROR request 550e8400-e29b-41d4-a716-446655440000 file \
+		             /tmp/a.rs hash deadbeef failed\n2026-01-01T10:00:01 ERROR request \
+		             123e4567-e89b-12d3-a456-426614174000 file /tmp/b.rs hash cafebabe failed\n";
+		let out = filter(&ctx, input, 1);
+		assert!(out.text.contains("2 lines, 1 unique"));
+		assert!(out.text.contains("(×2)"));
+	}
+
+	#[test]
 	fn env_masks_secrets_and_compacts_long_values() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("env", &cfg);
@@ -625,11 +942,39 @@ mod tests {
 	}
 
 	#[test]
-	fn diff_output_passthrough_is_lossless() {
+	fn err_output_keeps_diagnostics_and_context() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("err", &cfg);
+		let input = "\
+Compiling app v0.1.0
+running 1 test
+test pass ... ok
+src/main.rs:10:5: error: cannot find value `foo` in this scope
+   |
+10 |     foo();
+   |     ^^^
+note: required by a bound in `bar`
+warning: unused import: `baz`
+";
+		let out = filter(&ctx, input, 1);
+		assert!(out.changed);
+		assert!(!out.text.contains("Compiling app v0.1.0"));
+		assert!(!out.text.contains("running 1 test"));
+		assert!(!out.text.contains("test pass ... ok"));
+		assert!(
+			out.text
+				.contains("src/main.rs:10:5: error: cannot find value `foo` in this scope")
+		);
+		assert!(out.text.contains("10 |     foo();"));
+		assert!(out.text.contains("note: required by a bound in `bar`"));
+		assert!(out.text.contains("warning: unused import: `baz`"));
+	}
+
+	#[test]
+	fn diff_output_reuses_unified_diff_compaction() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("diff", &cfg);
-		let mut input =
-			String::from("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,140 +1,140 @@\n");
+		let mut input = String::from("--- a/a.rs\n+++ b/a.rs\n@@ -1,140 +1,140 @@\n");
 		for idx in 0..140 {
 			input.push_str("-old ");
 			input.push_str(&idx.to_string());
@@ -638,7 +983,43 @@ mod tests {
 			input.push('\n');
 		}
 		let out = filter(&ctx, &input, 0);
-		assert_eq!(out.text, input);
+		assert!(out.changed);
+		assert!(out.text.contains("a.rs | 280"));
+		assert!(
+			out.text
+				.contains("1 file changed, 140 insertions(+), 140 deletions(-)")
+		);
+		assert!(out.text.contains("--- Changes ---"));
+		assert!(out.text.contains("-old 0"));
+		assert!(out.text.contains("+new 0"));
+		assert_ne!(out.text, input);
+	}
+
+	#[test]
+	fn test_output_drops_pass_chatter_and_keeps_failure_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("test", &cfg);
+		let input = "\
+PASS src/pass.test.ts
+✓ src/ok.test.ts (3ms)
+FAIL src/fail.test.ts
+  suite > breaks
+    Error: expected 1 to equal 2
+      at src/fail.test.ts:12:3
+
+Test Files  1 failed | 1 passed (2)
+Tests       1 failed | 3 passed (4)
+Time        0.42s
+";
+		let out = filter(&ctx, input, 1);
+		assert!(out.changed);
+		assert!(!out.text.contains("PASS src/pass.test.ts"));
+		assert!(!out.text.contains("✓ src/ok.test.ts"));
+		assert!(out.text.contains("FAIL src/fail.test.ts"));
+		assert!(out.text.contains("Error: expected 1 to equal 2"));
+		assert!(out.text.contains("Test Files  1 failed | 1 passed (2)"));
+		assert!(out.text.contains("Tests       1 failed | 3 passed (4)"));
+		assert!(out.text.contains("Time        0.42s"));
 	}
 
 	#[test]

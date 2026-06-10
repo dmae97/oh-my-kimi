@@ -95,6 +95,8 @@ export function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerO
 		only: group.only.length > 0 ? group.only : undefined,
 		except: group.except.length > 0 ? group.except : undefined,
 		maxCaptureBytes: group.maxCaptureBytes,
+		sourceOutlineLevel: group.sourceOutlineLevel === "default" ? undefined : group.sourceOutlineLevel,
+		legacyFilters: group.legacyFilters,
 	};
 }
 

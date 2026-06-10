@@ -2,18 +2,70 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
+use crate::minimizer::{MinimizerCtx, MinimizerOutput, config::OutlineLevel, primitives};
+
+/// For `grep`: `-z` / `--null-data` (NUL line terminators) and `-Z` /
+/// `--null` (NUL after file names).
+/// For `rg`: `-0` / `--null` and `--null-data`.
+fn context_has_nul_output(command: &str, program: &str) -> bool {
+	command.split_whitespace().any(|tok| match program {
+		// -z may be clustered with other short flags (e.g. -zHn); --null-data is long.
+		"grep" => {
+			tok == "--null-data"
+				|| tok == "--null"
+				|| (tok.starts_with('-')
+					&& !tok.starts_with("--")
+					&& tok.chars().skip(1).any(|ch| matches!(ch, 'z' | 'Z')))
+		},
+		"rg" => matches!(tok, "-0" | "--null" | "--null-data"),
+		_ => matches!(tok, "-print0" | "-fprint0"),
+	})
+}
+
+fn find_outputs_paths_only(command: &str) -> bool {
+	!command.split_whitespace().any(|word| {
+		matches!(
+			word,
+			"-print0"
+				| "-printf"
+				| "-fprintf"
+				| "-ls" | "-fls"
+				| "-exec"
+				| "-execdir"
+				| "-ok" | "-okdir"
+		)
+	})
+}
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
+	let legacy = ctx.config.legacy_filters_active();
 	let text = if exit_code != 0 {
 		cleaned
 	} else {
 		match ctx.program {
-			"grep" | "rg" => compact_grep_output(&cleaned),
+			"grep" | "rg" => {
+				if context_has_nul_output(ctx.command, ctx.program) {
+					cleaned
+				} else if legacy {
+					compact_grep_output_legacy(&cleaned)
+				} else {
+					compact_grep_output(&cleaned)
+				}
+			},
 			"ls" => compact_ls_output(&cleaned).unwrap_or_else(|| compact_listing_output(&cleaned)),
 			"tree" => compact_listing_output(&cleaned),
-			"find" => compact_find_output(&cleaned),
+			"find" => {
+				if context_has_nul_output(ctx.command, ctx.program)
+					|| !find_outputs_paths_only(ctx.command)
+				{
+					cleaned
+				} else if legacy {
+					compact_find_output_legacy(&cleaned)
+				} else {
+					compact_find_output(&cleaned)
+				}
+			},
 			"cat" | "read" => compact_cat_output(ctx, &cleaned),
 			"stat" | "du" | "df" | "wc" => compact_summary_output(&cleaned),
 			"jq" | "json" => cleaned,
@@ -36,7 +88,10 @@ struct GrepMatch {
 	text:    String,
 }
 
-fn compact_grep_output(input: &str) -> String {
+/// Legacy pre-PR behavior for grep/rg output: passthrough when
+/// `match_count <= 12 && grouped.len() <= 3` (or no recognized matches).
+/// Retained for the `legacy_filters_active` kill-switch.
+fn compact_grep_output_legacy(input: &str) -> String {
 	let mut grouped: BTreeMap<String, Vec<GrepMatch>> = BTreeMap::new();
 	let mut ungrouped = Vec::new();
 
@@ -56,10 +111,41 @@ fn compact_grep_output(input: &str) -> String {
 		return primitives::group_by_file(input, 12);
 	}
 
+	compact_grep_grouped(&grouped, &ungrouped, match_count)
+}
+
+fn compact_grep_output(input: &str) -> String {
+	let mut grouped: BTreeMap<String, Vec<GrepMatch>> = BTreeMap::new();
+	let mut ungrouped = Vec::new();
+
+	for line in input.lines() {
+		if let Some((file, line_no, text)) = split_grep_line(line) {
+			grouped
+				.entry(file.to_string())
+				.or_default()
+				.push(GrepMatch { line_no: line_no.to_string(), text: collapse_match_text(text) });
+		} else if !line.trim().is_empty() {
+			ungrouped.push(line.to_string());
+		}
+	}
+
+	let match_count: usize = grouped.values().map(Vec::len).sum();
+	if grouped.is_empty() {
+		return primitives::group_by_file(input, 12);
+	}
+
+	compact_grep_grouped(&grouped, &ungrouped, match_count)
+}
+
+fn compact_grep_grouped(
+	grouped: &BTreeMap<String, Vec<GrepMatch>>,
+	ungrouped: &[String],
+	match_count: usize,
+) -> String {
 	let mut out = format!("grep: {match_count} matches in {} files\n", grouped.len());
 	let mut shown_matches = 0usize;
 	let mut shown_files = 0usize;
-	for (file, matches) in &grouped {
+	for (file, matches) in grouped {
 		if shown_files >= 12 {
 			break;
 		}
@@ -96,7 +182,7 @@ fn compact_grep_output(input: &str) -> String {
 		out.push_str(" omitted\n");
 	}
 	for line in ungrouped {
-		out.push_str(&line);
+		out.push_str(line);
 		out.push('\n');
 	}
 	out
@@ -116,7 +202,77 @@ fn split_grep_line(line: &str) -> Option<(&str, &str, &str)> {
 
 fn collapse_match_text(text: &str) -> String {
 	let collapsed = collapse_parenthesized_segment(text, 48);
-	primitives::truncate_line(&collapsed, 140)
+	center_truncate_match(&collapsed, 140)
+}
+
+/// Center-truncate grep/ripgrep match text so the match region stays visible.
+///
+/// Instead of truncating from the front (which loses matches deep in long
+/// lines), this centers the visible window. The heuristic biases toward
+/// non-whitespace content when the line has significant leading whitespace.
+fn center_truncate_match(text: &str, max_chars: usize) -> String {
+	if max_chars == 0 {
+		return String::new();
+	}
+	let char_count = text.chars().count();
+	if char_count <= max_chars {
+		return text.to_string();
+	}
+
+	// Heuristic:
+	// - If the line has significant leading whitespace, bias toward the code region
+	//   shortly after indentation (common for grep hits inside indented code).
+	// - If the line is effectively one long token, bias earlier so identifiers that
+	//   appear before a long suffix still remain visible.
+	// - Otherwise center in the middle of the full line.
+	// Count leading whitespace in CHARS, not bytes: this value is compared and
+	// combined with char-based quantities (`char_count`, `max_chars`) and used as
+	// a char-stepping floor below. `str::find` returns a byte offset, which would
+	// overstate the index for any multibyte leading whitespace (NBSP, U+3000).
+	let first_non_ws = text.chars().take_while(|c| c.is_whitespace()).count();
+	let has_whitespace = text.chars().any(char::is_whitespace);
+	let anchor = if first_non_ws > 0 && first_non_ws < char_count / 3 {
+		first_non_ws + max_chars / 4
+	} else if !has_whitespace {
+		char_count / 3
+	} else {
+		char_count / 2
+	};
+
+	let window_size = max_chars;
+	let half = window_size / 2;
+	let mut window_start = anchor.saturating_sub(half);
+	if first_non_ws > 0 {
+		window_start = window_start.max(first_non_ws);
+	}
+	// Clamp so the window doesn't overshoot the end.
+	window_start = window_start.min(char_count.saturating_sub(window_size));
+
+	let mut out = String::with_capacity(max_chars + 12);
+	let mut chars = text.chars();
+	for _ in 0..window_start {
+		chars.next();
+	}
+	let dropped_before = window_start;
+	if dropped_before > 0 {
+		out.push('\u{2026}');
+	}
+	let mut shown = 0usize;
+	for _ in 0..window_size {
+		match chars.next() {
+			Some(ch) => {
+				out.push(ch);
+				shown += 1;
+			},
+			None => break,
+		}
+	}
+	let total_dropped = char_count.saturating_sub(shown);
+	if total_dropped > 0 {
+		use std::fmt::Write as _;
+		let _ = write!(out, "\u{2026}[+{total_dropped}]");
+	}
+	out
 }
 
 fn collapse_parenthesized_segment(text: &str, min_len: usize) -> String {
@@ -137,7 +293,9 @@ fn collapse_parenthesized_segment(text: &str, min_len: usize) -> String {
 	out
 }
 
-fn compact_find_output(input: &str) -> String {
+/// Legacy pre-PR behavior for find output: passthrough when `paths.len() <=
+/// 20`. Retained for the `legacy_filters_active` kill-switch.
+fn compact_find_output_legacy(input: &str) -> String {
 	let paths: Vec<&str> = input
 		.lines()
 		.filter(|line| !line.trim().is_empty())
@@ -145,10 +303,24 @@ fn compact_find_output(input: &str) -> String {
 	if paths.len() <= 20 {
 		return input.to_string();
 	}
+	compact_find_output_inner(input, &paths)
+}
 
+fn compact_find_output(input: &str) -> String {
+	let paths: Vec<&str> = input
+		.lines()
+		.filter(|line| !line.trim().is_empty())
+		.collect();
+	if paths.is_empty() {
+		return input.to_string();
+	}
+	compact_find_output_inner(input, &paths)
+}
+
+fn compact_find_output_inner(input: &str, paths: &[&str]) -> String {
 	let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
 	let mut skipped_noise = 0usize;
-	for raw in &paths {
+	for raw in paths {
 		let normalized = normalize_listing_path(raw);
 		if normalized.is_empty() {
 			continue;
@@ -345,11 +517,12 @@ fn compact_cat_output(ctx: &MinimizerCtx<'_>, input: &str) -> String {
 	if !is_source_path(&path) {
 		return input.to_string();
 	}
-	compact_source_outline(input)
+	compact_source_outline(input, &path, ctx.config.source_outline_level)
 }
 
 fn extract_single_path_arg(command: &str, program: &str) -> Option<String> {
 	let mut saw_program = false;
+	let mut path: Option<String> = None;
 	for raw in command.split_whitespace() {
 		let token = raw.trim_matches(|ch| ch == '\'' || ch == '"');
 		let normalized = token.rsplit('/').next().unwrap_or(token);
@@ -359,12 +532,18 @@ fn extract_single_path_arg(command: &str, program: &str) -> Option<String> {
 			}
 			continue;
 		}
-		if token.starts_with('-') {
+		if token == "--" {
 			continue;
 		}
-		return Some(token.to_string());
+		if token.starts_with('-') {
+			return None;
+		}
+		if path.is_some() {
+			return None;
+		}
+		path = Some(token.to_string());
 	}
-	None
+	path
 }
 
 fn summarize_manifest(path: &str, input: &str) -> Option<String> {
@@ -590,7 +769,12 @@ fn is_source_path(path: &str) -> bool {
 	)
 }
 
-fn compact_source_outline(input: &str) -> String {
+fn compact_source_outline(input: &str, path: &str, level: OutlineLevel) -> String {
+	if level == OutlineLevel::Aggressive
+		&& let Some(stripped) = aggressive_strip_bodies(input, path)
+	{
+		return stripped;
+	}
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() < 160 && input.len() < 12_000 {
 		return input.to_string();
@@ -686,6 +870,259 @@ fn render_source_declaration(trimmed: &str) -> String {
 	line
 }
 
+/// Aggressive source-outline body stripping for brace-based and indent-based
+/// languages. Returns `None` for languages we don't have a strip path for so
+/// the caller falls back to default outline rendering.
+fn aggressive_strip_bodies(input: &str, path: &str) -> Option<String> {
+	let ext = Path::new(path)
+		.extension()
+		.and_then(|e| e.to_str())
+		.unwrap_or("");
+	match ext {
+		"rs" if contains_rust_raw_string_literal(input) => None,
+		"rs" | "ts" | "tsx" | "js" | "jsx" | "go" => Some(strip_brace_bodies(input)),
+		"py" => Some(strip_python_bodies(input)),
+		_ => None,
+	}
+}
+
+/// Replace the body of every function/method declaration with `{ ... }`,
+/// keeping signatures, doc comments, attributes, imports, and container
+/// declarations (`class`/`struct`/`enum`/`trait`/`impl`/`interface`/
+/// `namespace`/`module`) intact. We descend into container bodies so inner
+/// method signatures stay visible.
+///
+/// Brace depth tracking handles nested braces inside string/macro content
+/// imperfectly but conservatively — when in doubt we re-emit the original
+/// line.
+fn strip_brace_bodies(input: &str) -> String {
+	let mut out = String::with_capacity(input.len() / 2);
+	let mut skip_depth: i32 = 0;
+	for line in input.lines() {
+		if skip_depth > 0 {
+			skip_depth += brace_delta(line);
+			if skip_depth <= 0 {
+				skip_depth = 0;
+			}
+			continue;
+		}
+		let trimmed = line.trim_start();
+		let delta = brace_delta(line);
+		if delta > 0 && is_function_body_starter(trimmed) {
+			let Some(cut) = line.find('{') else {
+				out.push_str(line);
+				out.push('\n');
+				continue;
+			};
+			out.push_str(line[..cut].trim_end());
+			out.push_str(" { ... }\n");
+			if delta > 0 {
+				skip_depth = delta;
+			}
+			continue;
+		}
+		out.push_str(line);
+		out.push('\n');
+	}
+	out
+}
+
+fn contains_rust_raw_string_literal(input: &str) -> bool {
+	input.contains("r#") || input.contains("r\"") || input.contains("br#") || input.contains("br\"")
+}
+
+fn brace_delta(line: &str) -> i32 {
+	let mut delta: i32 = 0;
+	let mut in_str: Option<char> = None;
+	let mut chars = line.chars().peekable();
+	let mut prev = '\0';
+	while let Some(ch) = chars.next() {
+		match in_str {
+			Some(q) => {
+				if ch == q && prev != '\\' {
+					in_str = None;
+				}
+			},
+			None => match ch {
+				'/' if chars.peek() == Some(&'/') => break,
+				'"' | '\'' | '`' => in_str = Some(ch),
+				'{' => delta += 1,
+				'}' => delta -= 1,
+				_ => {},
+			},
+		}
+		prev = ch;
+	}
+	delta
+}
+
+/// Only function-like declarations whose body we want to strip. Container
+/// declarations (`class`/`struct`/`enum`/`trait`/`impl`/`interface`/
+/// `namespace`/`module`) are intentionally NOT in this set so we keep
+/// descending and strip the methods inside them.
+fn is_function_body_starter(trimmed: &str) -> bool {
+	let without_attr = trimmed.trim_start_matches(['#', '[', ']']);
+	let without_vis = strip_leading_keywords(without_attr.trim_start());
+	if without_vis.starts_with("fn ")
+		|| without_vis.starts_with("function ")
+		|| without_vis.starts_with("function(")
+		|| without_vis.starts_with("function*")
+		|| without_vis.starts_with("func ")
+		|| without_vis.starts_with("method ")
+		|| without_vis.starts_with("constructor(")
+		|| without_vis.starts_with("constructor ")
+	{
+		return true;
+	}
+	// Reject container keywords explicitly so the TS-method fallback below
+	// can't mistakenly latch onto `class Foo(...)`/`type Foo = (...) => …`.
+	for kw in [
+		"class ",
+		"struct ",
+		"enum ",
+		"trait ",
+		"impl ",
+		"impl<",
+		"interface ",
+		"type ",
+		"namespace ",
+		"module ",
+	] {
+		if without_vis.starts_with(kw) {
+			return false;
+		}
+	}
+	starts_with_ts_method(without_vis)
+}
+
+fn strip_leading_keywords(s: &str) -> &str {
+	let mut current = s;
+	loop {
+		let next = current
+			.strip_prefix("pub ")
+			.or_else(|| current.strip_prefix("pub(crate) "))
+			.or_else(|| current.strip_prefix("export "))
+			.or_else(|| current.strip_prefix("export default "))
+			.or_else(|| current.strip_prefix("async "))
+			.or_else(|| current.strip_prefix("default "))
+			.or_else(|| current.strip_prefix("static "))
+			.or_else(|| current.strip_prefix("private "))
+			.or_else(|| current.strip_prefix("protected "))
+			.or_else(|| current.strip_prefix("public "))
+			.or_else(|| current.strip_prefix("readonly "))
+			.or_else(|| current.strip_prefix("abstract "))
+			.or_else(|| current.strip_prefix("override "))
+			.or_else(|| current.strip_prefix("const "));
+		match next {
+			Some(rest) => current = rest,
+			None => break,
+		}
+	}
+	current
+}
+
+/// Heuristic for TypeScript-style class methods: `name(args): Ret {` or
+/// `name(args) {`. We accept any identifier-like token followed by `(`.
+fn starts_with_ts_method(s: &str) -> bool {
+	let mut chars = s.char_indices();
+	let Some((_, first)) = chars.next() else {
+		return false;
+	};
+	if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
+		return false;
+	}
+	let mut paren_idx = None;
+	for (idx, ch) in chars {
+		if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' {
+			continue;
+		}
+		if ch == '(' {
+			paren_idx = Some(idx);
+		}
+		break;
+	}
+	paren_idx.is_some()
+}
+
+/// Strip Python function bodies while preserving class members. Function and
+/// method declarations keep their signatures with a single placeholder body;
+/// class bodies are recursively outlined so method signatures and class
+/// attributes stay visible.
+fn strip_python_bodies(input: &str) -> String {
+	let lines: Vec<&str> = input.lines().collect();
+	let mut out = String::with_capacity(input.len() / 2);
+	let mut i = 0;
+	while i < lines.len() {
+		let line = lines[i];
+		let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+		let trimmed = line.trim_start();
+		let is_def = trimmed.starts_with("def ") || trimmed.starts_with("async def ");
+		let is_class = trimmed.starts_with("class ");
+		let ends_with_colon = trimmed.trim_end().ends_with(':');
+		if is_class && ends_with_colon {
+			out.push_str(line);
+			out.push('\n');
+			i += 1;
+			let body_start = i;
+			while i < lines.len() {
+				let body_line = lines[i];
+				if body_line.trim().is_empty() {
+					i += 1;
+					continue;
+				}
+				let body_indent = body_line
+					.chars()
+					.take_while(|c| *c == ' ' || *c == '\t')
+					.count();
+				if body_indent <= indent {
+					break;
+				}
+				i += 1;
+			}
+			if body_start < i {
+				out.push_str(&strip_python_bodies(&lines[body_start..i].join("\n")));
+			}
+			continue;
+		}
+		if is_def && ends_with_colon {
+			out.push_str(line);
+			out.push('\n');
+			i += 1;
+			let mut stripped_any = false;
+			while i < lines.len() {
+				let body_line = lines[i];
+				let body_indent = body_line
+					.chars()
+					.take_while(|c| *c == ' ' || *c == '\t')
+					.count();
+				if body_line.trim().is_empty() {
+					if !stripped_any {
+						out.push_str(body_line);
+						out.push('\n');
+					}
+					i += 1;
+					continue;
+				}
+				if body_indent <= indent {
+					break;
+				}
+				stripped_any = true;
+				i += 1;
+			}
+			if stripped_any {
+				let pad: String = " ".repeat(indent + 4);
+				out.push_str(&pad);
+				out.push_str("...\n");
+			}
+			continue;
+		}
+		out.push_str(line);
+		out.push('\n');
+		i += 1;
+	}
+	out
+}
+
 fn compact_summary_output(input: &str) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= 30 {
@@ -739,11 +1176,27 @@ mod tests {
 	}
 
 	#[test]
+	fn find_printf_output_stays_opaque() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx_command("find", "find . -printf '%p %s\\n'", &cfg);
+		let input = "./a 10\n./b 20\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, input);
+	}
+
+	// migrated for always-group: see T1a (minimizer-filter-remediation).
+	// Previously asserted passthrough-style `group_by_file` output. The
+	// Tier 1 unconditional grouping path now produces the `grep: N matches
+	// in M files` header even for small inputs.
+	#[test]
 	fn groups_grep_by_file() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = ctx("rg", &cfg);
 		let out = filter(&ctx, "a.rs:1:foo\na.rs:2:bar\n", 0);
-		assert_eq!(out.text, "a.rs:\n  1:foo\n  2:bar\n");
+		assert!(out.text.starts_with("grep: 2 matches in 1 files"), "{:?}", out.text);
+		assert!(out.text.contains("a.rs:"));
+		assert!(out.text.contains("1: foo"));
+		assert!(out.text.contains("2: bar"));
 	}
 
 	#[test]
@@ -762,6 +1215,87 @@ mod tests {
 		assert!(out.text.starts_with("grep: 20 matches in 20 files"));
 		assert!(out.text.contains("17: pub fn run(...) -> Result<()> {"));
 		assert!(out.text.contains("matches in 8 files omitted"));
+	}
+
+	#[test]
+	fn center_truncate_short_line_passes_through() {
+		assert_eq!(center_truncate_match("fn foo() {}", 140), "fn foo() {}");
+	}
+
+	#[test]
+	fn center_truncate_long_line_with_leading_whitespace_centers_in_code() {
+		// Match is in the code region after significant indentation.
+		let indent = "                              ";
+		let body = "let result = deeply_nested_function(arg1, arg2, arg3, arg4, arg5, arg6, arg7, \
+		            arg8, arg9, arg10, arg11, arg12, arg13, extra, more, stuff, padding, fill, end);";
+		let line = format!("{indent}{body}");
+		assert!(line.chars().count() > 140, "test line must exceed max_chars");
+		let out = center_truncate_match(&line, 140);
+		// Should show leading … (indentation was skipped), centered code, and …[+N]
+		// tally.
+		assert!(out.starts_with('\u{2026}'), "should start with …: {out}");
+		assert!(out.ends_with(']'), "should end with tally: {out}");
+		assert!(out.contains("result"), "match region 'result' should be visible: {out}");
+		assert!(out.contains("arg5"), "middle args should be visible: {out}");
+		// Should NOT show the raw "let result" from the very front (since indentation
+		// was dropped). But it might appear inside the window. The key assertion:
+		// leading indent chars are dropped.
+		let after_ellipsis = &out['\u{2026}'.len_utf8()..];
+		assert!(
+			!after_ellipsis.starts_with(' '),
+			"window should not start with leading spaces: {out}"
+		);
+	}
+
+	#[test]
+	fn center_truncate_long_line_no_whitespace_centers_in_middle() {
+		let mut line = String::from("use std::collections::{");
+		for i in 0..30 {
+			line.push_str("Module");
+			line.push_str(&i.to_string());
+			line.push_str(", ");
+		}
+		line.push_str("ExtraLongModuleName};");
+		assert!(line.chars().count() > 140, "test line must exceed max_chars");
+		let out = center_truncate_match(&line, 140);
+		assert!(out.starts_with('\u{2026}'), "should start with …: {out}");
+		assert!(out.ends_with(']'), "should end with tally: {out}");
+		// Middle modules like Module14, Module15 should be visible.
+		assert!(out.contains("Module14"), "middle modules should be visible: {out}");
+		assert!(!out.starts_with("use std"), "front content should be dropped: {out}");
+	}
+
+	#[test]
+	fn center_truncate_match_near_end_visible() {
+		let prefix = "x".repeat(40);
+		let marker = "MATCH_NEAR_END_HERE";
+		let suffix = "y".repeat(200);
+		let line = format!("{prefix}{marker}{suffix}");
+		assert!(line.chars().count() > 140, "test line must exceed max_chars");
+		let out = center_truncate_match(&line, 140);
+		// marker starts at char 40, window is centered, should include the marker.
+		assert!(out.contains(marker), "match should be visible: {out}");
+	}
+
+	#[test]
+	fn center_truncate_max_zero_returns_empty() {
+		assert_eq!(center_truncate_match("anything", 0), "");
+	}
+
+	#[test]
+	fn center_truncate_exact_length_returns_unchanged() {
+		let line = "a".repeat(140);
+		assert_eq!(center_truncate_match(&line, 140), line);
+	}
+
+	#[test]
+	fn center_truncate_one_over_shows_tally() {
+		let line = "a".repeat(141);
+		let out = center_truncate_match(&line, 140);
+		assert!(out.contains("\u{2026}[+"), "should have tally: {out}");
+		// With 141 chars, centering produces window_start=0, shows 140 a's, drops 1.
+		let content_chars: String = out.chars().filter(|c| *c == 'a').collect();
+		assert_eq!(content_chars.len(), 140);
 	}
 
 	#[test]
@@ -784,6 +1318,38 @@ mod tests {
 			out.text,
 			"Cargo.toml: rtk\ndependencies: 3\n  clap 4\n  anyhow 1.0\n  serde_json 1\n"
 		);
+	}
+
+	#[test]
+	fn aggressive_python_outline_preserves_class_members() {
+		let cfg = MinimizerConfig {
+			enabled: true,
+			source_outline_level: OutlineLevel::Aggressive,
+			..Default::default()
+		};
+		let ctx = ctx_command("cat", "cat src/example.py", &cfg);
+		let input = concat!(
+			"class Example:\n",
+			"    kind = \"demo\"\n",
+			"\n",
+			"    def one(self):\n",
+			"        print('hidden')\n",
+			"\n",
+			"    async def two(self):\n",
+			"        return 2\n",
+			"\n",
+			"def outside():\n",
+			"    return 3\n",
+		);
+		let out = filter(&ctx, input, 0);
+		assert!(out.text.contains("class Example:"));
+		assert!(out.text.contains("    kind = \"demo\""));
+		assert!(out.text.contains("    def one(self):"));
+		assert!(out.text.contains("    async def two(self):"));
+		assert!(out.text.contains("def outside():"));
+		assert!(!out.text.contains("print('hidden')"));
+		assert!(!out.text.contains("return 2"));
+		assert!(!out.text.contains("return 3"));
 	}
 
 	#[test]
@@ -915,5 +1481,340 @@ mod tests {
 			out.push('\n');
 		}
 		out
+	}
+
+	fn aggressive_cfg() -> MinimizerConfig {
+		MinimizerConfig {
+			enabled: true,
+			source_outline_level: OutlineLevel::Aggressive,
+			..Default::default()
+		}
+	}
+
+	#[test]
+	fn default_level_keeps_small_source_files_intact() {
+		// Default behavior: short source files pass through unchanged so
+		// existing callers (and `default_level_keeps_small_source_files_intact`)
+		// never see surprise body stripping.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx_command("cat", "cat src/foo.rs", &cfg);
+		let body = "fn foo() {\n    let x = 1;\n    x + 1\n}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(!out.changed, "default level on tiny file must passthrough");
+	}
+
+	#[test]
+	fn aggressive_strips_rust_function_body() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.rs", &cfg);
+		let body = "use std::io;\n\npub fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    y * 2\n}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(out.changed, "aggressive must rewrite");
+		assert!(out.text.contains("use std::io;"));
+		assert!(out.text.contains("pub fn foo(x: i32) -> i32 { ... }"));
+		assert!(!out.text.contains("y * 2"));
+	}
+
+	#[test]
+	fn aggressive_rust_outline_bails_on_raw_strings() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.rs", &cfg);
+		let body =
+			"pub fn shader() -> &'static str {\n    r#\"fn main() { println!(\\\"hi\\\"); }\"#\n}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(!out.changed, "raw-string Rust source should fall back to default outline");
+		assert_eq!(out.text, body);
+	}
+
+	#[test]
+	fn brace_in_line_comment_not_counted() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/lib.rs", &cfg);
+		let input = concat!(
+			"fn outer() {\n",
+			"    // This comment has { braces } in it\n",
+			"    let x = 1;\n",
+			"}\n",
+			"fn preserved() {\n",
+			"    let y = 2;\n",
+			"}\n",
+		);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			out.text.contains("fn preserved()"),
+			"fn after comment-brace must survive: {:?}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn aggressive_multi_file_cat_preserves_combined_output() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/a.rs src/b.rs", &cfg);
+		let body = concat!(
+			"pub fn a() -> i32 {\n",
+			"    1\n",
+			"}\n",
+			"pub fn b() -> i32 {\n",
+			"    2\n",
+			"}\n",
+		);
+		let out = filter(&ctx, body, 0);
+		assert!(!out.changed, "multi-file cat output must remain verbatim");
+		assert_eq!(out.text, body);
+	}
+
+	#[test]
+	fn aggressive_cat_with_behavior_flags_preserves_output() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat -n src/foo.rs", &cfg);
+		let body = "     1\tpub fn foo() -> i32 {\n     2\t    1\n     3\t}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(!out.changed, "cat flags that alter output must remain verbatim");
+		assert_eq!(out.text, body);
+	}
+
+	#[test]
+	fn aggressive_strips_typescript_method_body() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.ts", &cfg);
+		let body = "import { z } from 'x';\n\nexport class Svc {\n    run(): number {\n        \
+		            return 1;\n    }\n}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("import { z } from 'x';"));
+		assert!(out.text.contains("run(): number { ... }"));
+		assert!(!out.text.contains("return 1;"));
+	}
+
+	#[test]
+	fn aggressive_strips_python_function_body() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.py", &cfg);
+		let body = "import os\n\ndef compute(x):\n    y = x + 1\n    return y * 2\n";
+		let out = filter(&ctx, body, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("import os"));
+		assert!(out.text.contains("def compute(x):"));
+		assert!(out.text.contains("    ..."));
+		assert!(!out.text.contains("y * 2"));
+	}
+
+	#[test]
+	fn aggressive_unknown_extension_passes_through() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.swift", &cfg);
+		let body = "func compute() {}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(!out.changed, "aggressive must not touch unsupported langs");
+	}
+
+	#[test]
+	fn aggressive_output_has_no_chain_corrupting_chars() {
+		let cfg = aggressive_cfg();
+		let ctx = ctx_command("cat", "cat src/foo.ts", &cfg);
+		let body = "export function foo() {\n  const a = `template`;\n  return a;\n}\n";
+		let out = filter(&ctx, body, 0);
+		assert!(out.changed);
+		assert!(!out.text.contains('\x1b'));
+		// signature retained without dangling backtick from template body
+		assert!(!out.text.contains("template"));
+	}
+
+	// ---------------------------------------------------------------
+	// Tier 1: always-group grep/find tests (minimizer-filter-remediation)
+	// ---------------------------------------------------------------
+
+	fn legacy_cfg() -> MinimizerConfig {
+		let mut cfg = MinimizerConfig::default();
+		cfg.enabled = true;
+		cfg.legacy_filters_active = true;
+		cfg
+	}
+
+	fn synthesize_grep(matches_per_file: usize, files: usize) -> String {
+		let mut out = String::new();
+		for f in 0..files {
+			for m in 0..matches_per_file {
+				out.push_str(&format!(
+					"src/module{f}/file{f}.rs:{ln}:    pub fn handler_{f}_{m}(req: Request) -> \
+					 Result<Response, AppError> {{ /* body */ }}\n",
+					ln = m * 7 + 1,
+					f = f,
+					m = m,
+				));
+			}
+		}
+		out
+	}
+
+	fn synthesize_find_paths(per_dir: usize, dirs: usize) -> String {
+		let mut out = String::new();
+		for d in 0..dirs {
+			for f in 0..per_dir {
+				out.push_str(&format!(
+					"./crates/pi-shell/src/minimizer/filters/category{d}/\
+					 handler_{f}_with_descriptive_name.rs\n",
+				));
+			}
+		}
+		out
+	}
+
+	fn ratio(input: &str, output: &str) -> f64 {
+		1.0 - (output.len() as f64 / input.len() as f64)
+	}
+
+	#[test]
+	fn grep_small_1m1f_always_groups() {
+		// 1 match in 1 file. Pre-PR: passthrough. Post: grouped header.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("grep", &cfg);
+		let input = synthesize_grep(1, 1);
+		let out = filter(&ctx, &input, 0);
+		assert!(out.text.contains("grep: 1 matches in 1 files"));
+	}
+
+	#[test]
+	fn grep_medium_3m1f_always_groups() {
+		// 3 matches in 1 file. Pre-PR: passthrough (was within thresholds).
+		// Post: grouped header.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("grep", &cfg);
+		let input = synthesize_grep(3, 1);
+		let out = filter(&ctx, &input, 0);
+		assert!(
+			out.text.contains("grep: 3 matches in 1 files"),
+			"expected always-group header, got: {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn grep_large_100m10f_savedratio_threshold() {
+		// 100 matches × 10 files: pre-existing grouping path. SavedRatio
+		// must be substantial (≥0.50 from m3 acceptance; we assert ≥0.50).
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("grep", &cfg);
+		let input = synthesize_grep(10, 10);
+		let out = filter(&ctx, &input, 0);
+		assert!(out.text.starts_with("grep: 100 matches in 10 files"));
+		let r = ratio(&input, &out.text);
+		assert!(r >= 0.50, "savedRatio={r}");
+	}
+
+	#[test]
+	fn grep_null_filename_output_is_passthrough() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx_command("grep", "grep -ZHn pattern src/*.rs", &cfg);
+		let input = concat!("src/a.rs\0", "10:pattern\nsrc/b.rs\0", "20:pattern\n");
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn rg_null_data_output_is_passthrough() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx_command("rg", "rg --null-data pattern src", &cfg);
+		let input = "src/a.rs:10:pattern\0src/b.rs:20:pattern\0";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn find_shallow_5p1d_always_groups() {
+		// 5 paths in 1 dir. Pre-PR: passthrough. Post: grouped.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("find", &cfg);
+		let input = synthesize_find_paths(5, 1);
+		let out = filter(&ctx, &input, 0);
+		assert!(
+			out.text.contains("find: 5 paths in 1 dirs"),
+			"expected always-group header, got: {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn find_deep_50p8d_savedratio_threshold() {
+		// 50 paths × 8 dirs. Was already grouped pre-PR; regression guard
+		// + savedRatio threshold per m3 (≥0.60 deep fixture).
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("find", &cfg);
+		let input = synthesize_find_paths(50, 8);
+		let out = filter(&ctx, &input, 0);
+		assert!(out.text.starts_with("find: 400 paths in 8 dirs"));
+		let r = ratio(&input, &out.text);
+		assert!(r >= 0.60, "savedRatio={r}");
+	}
+
+	#[test]
+	fn find_wide_200p1d_grouped() {
+		// 200 paths in 1 dir. Was already grouped pre-PR.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("find", &cfg);
+		let input = synthesize_find_paths(200, 1);
+		let out = filter(&ctx, &input, 0);
+		assert!(out.text.starts_with("find: 200 paths in 1 dirs"));
+	}
+
+	#[test]
+	fn grep_legacy_filters_active_passes_through_small_input() {
+		// Kill-switch parity (M2): with legacy_filters_active=true, the
+		// pre-PR "small input passthrough" path is preserved byte-for-byte.
+		let cfg = legacy_cfg();
+		let ctx = ctx("grep", &cfg);
+		let input = synthesize_grep(2, 1);
+		let out = filter(&ctx, &input, 0);
+		// Legacy path: group_by_file primitive style for inputs at/below
+		// 12 matches × 3 files. Compare against direct invocation.
+		let expected = compact_grep_output_legacy(&primitives::strip_ansi(&input));
+		assert_eq!(out.text, expected);
+		assert!(
+			!out.text.starts_with("grep: 2 matches"),
+			"legacy path must NOT emit always-group header"
+		);
+	}
+
+	#[test]
+	fn grep_null_data_flag_bypasses_compaction() {
+		// grep -z / --null-data produces NUL-delimited records; the compactor
+		// splits on newlines and would corrupt the output. Passthrough instead.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = synthesize_grep(5, 2);
+		for cmd in &["grep -zHn pattern file", "grep --null-data pattern file"] {
+			let ctx = ctx_command("grep", cmd, &cfg);
+			let out = filter(&ctx, &input, 0);
+			assert!(!out.changed, "grep NUL-output flag must passthrough: {cmd}");
+			assert_eq!(out.text, input, "grep NUL-output flag must passthrough: {cmd}");
+		}
+	}
+
+	#[test]
+	fn rg_null_flag_bypasses_compaction() {
+		// rg -0 / --null appends a NUL after each path; same concern.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = synthesize_grep(5, 2);
+		for cmd in &["rg -0 pattern", "rg --null pattern"] {
+			let ctx = ctx_command("rg", cmd, &cfg);
+			let out = filter(&ctx, &input, 0);
+			assert!(!out.changed, "rg NUL-output flag must passthrough: {cmd}");
+			assert_eq!(out.text, input, "rg NUL-output flag must passthrough: {cmd}");
+		}
+	}
+
+	#[test]
+	fn find_legacy_filters_active_passes_through_under_threshold() {
+		// Kill-switch parity (M2): legacy_filters_active=true reverts to
+		// the pre-PR `paths.len() <= 20` passthrough.
+		let cfg = legacy_cfg();
+		let ctx = ctx("find", &cfg);
+		let input = synthesize_find_paths(5, 1);
+		let out = filter(&ctx, &input, 0);
+		// Legacy: small input passes through unchanged.
+		assert_eq!(out.text, input);
+		assert!(!out.changed);
 	}
 }
