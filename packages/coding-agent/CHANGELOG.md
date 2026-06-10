@@ -180,6 +180,10 @@
 
 - Added a structured memory runtime surface for extensions and UI integrations to query backend status, search memories, and save explicit memories across the configured memory backend.
 
+### Fixed
+
+- Fixed bare `omp extensions` being treated as a chat prompt instead of returning an actionable plugin-command error ([#2089](https://github.com/can1357/oh-my-pi/issues/2089)).
+
 ## [15.10.8] - 2026-06-09
 
 ### Added
