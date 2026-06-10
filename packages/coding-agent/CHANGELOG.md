@@ -12,6 +12,63 @@
 - Fixed MCP OAuth reauthorization silently re-approving the browser's current account, making it impossible to authorize a different account or workspace per profile: the authorization request now sends `prompt=consent` by default so the provider always shows its consent/account screen. Override per server via `oauth.prompt` in `mcp.json` (`""` omits the parameter).
 - Fixed `/mcp reauth` on stdio servers spawning the child for an "unauthenticated" preflight and reporting "reauthorization is not required" when the child reused its own cached tokens. Stdio servers now fail fast with an actionable message, including a dedicated hint for `mcp-remote`'s machine-wide `~/.mcp-auth` token cache (which is shared across all OMP profiles and silently reuses whatever account first authorized).
 
+## [15.11.0] - 2026-06-10
+
+### Breaking Changes
+
+- Removed the `resume` option from the `task` tool API and its resume execution path; continue work on finished subagents by sending follow-up messages via `irc` instead
+- Removed the `irc.enabled` setting: irc availability is now derived — the tool exists exactly when there is someone to message (the session can spawn subagents through `task`, or it is a subagent itself). A stale `irc.enabled` key in config is ignored
+- The `task` tool was reworked to always run spawns in the background as independent, persistent agents: results arrive as async job deliveries (block with `job poll` only when genuinely needed). The wire schema is now shape-swapped by the new `task.batch` setting (default on): `{ agent, context, tasks[] }` — one subagent per task item, per-item `isolated`, and a required shared `context` — or, when disabled, a flat single-spawn shape `{ agent, id?, description?, assignment, isolated? }` with shared background passed via `local://` files instead
+- Removed the `task.simple` setting and the task tool's per-call `schema` parameter outright: structured subagent output now comes only from the agent definition's `output` frontmatter or the inherited session schema, and ad-hoc structured workflows use eval `agent(prompt, schema)`. A stale `task.simple` key in config is migrated away
+- Reworked `irc` to `send`/`wait`/`inbox`/`list` ops over a per-agent mailbox bus: the blocking `awaitReply` auto-reply turn is removed — `send` is fire-and-forget with delivery receipts, and replies are real turns by the recipient observed via `wait` (or the `send` `await: true` sugar)
+- Removed the `context` argument from eval `agent()` in both the JS and Python preludes: pass shared background via a `local://` file referenced in the prompt
+- Replaced the standalone session-observer overlay with the Agent Hub: `app.session.observe` (`ctrl+s`) now opens the hub, whose chat view absorbed the observer's transcript renderer
+
+### Added
+
+- Snapcompact compaction now passes the session model so frames render in the provider-optimal shape (unscii `8x8r-bw` for Anthropic-family/unknown APIs, `8x8r-sent` for Google, Lanczos-stretched `6x6u-sent` with `detail: "original"` for OpenAI), per the snapcompact 200k-token evals
+- Added per-turn supersede pruning of stale `read` results: when a file is re-read, older copies of the same path/selector are pruned from context at cache-favorable moments (small suffix, idle gap, or alongside overflow pruning). Gated by the new `compaction.supersedeReads` setting (default on)
+- Added soft request budgets for task subagents (explore/quick_task 40, others 90, configurable via `task.softRequestBudget`, 0 disables): crossing the budget injects a one-time wrap-up steer into the child; crossing 1.5× aborts the run gracefully
+- Added cancelled/aborted subagent salvage: instead of `(no output)`, merged task results now carry the child's last activity snippet plus request/token stats, and per-child stats lines include request counts
+- Added a repeat-read notice to the `read` tool: the third and later reads of the same file in a session append a one-line note suggesting range re-reads or the context echoed in edit results
+- Added a hard inline byte cap (~50KB) at the bash and browser tool-result boundaries with head/tail elision and an `artifact://` footer for the full output, closing paths that previously let 100KB+ results land inline
+- Added the Agent Hub overlay (`ctrl+s`, `alt+a`, or double-tap left arrow on an empty editor): a live table of registered subagents (status, unread IRC count, current task, last activity) with per-agent chat — Enter opens a transcript + input line that steers a running agent, prompts an idle one, and revives a parked one; `r` revives and `x` aborts/releases the selected agent
+- Added the `snapcompact` compaction strategy (`compaction.strategy: "snapcompact"`): history is archived onto dense bitmap "snapcompact" frames a vision model reads back directly, instead of an LLM-generated summary — instant, free, and verbatim. Auto compaction (including overflow recovery) and manual `/compact` both honor it; falls back to context-full with a visible warning notice when the current model is text-only (e.g. Codex API surfaces) or when `/compact` is given custom instructions. Frames survive context rebuilds and later compactions (budget eviction is middle-out: the session-head frame is pinned); the expanded compaction message notes the attached frame count
+- Added a persistent subagent lifecycle: finished subagents stay live as `idle`, are parked to disk after `task.agentIdleTtlMs` (default 7 minutes; `0` keeps them live until exit), and are revived automatically when messaged or prompted from the Agent Hub
+- Added the `history://` protocol: `history://` lists every registered agent and `history://<agentId>` renders a concise markdown transcript (tool calls collapsed to one line each, thinking elided) for live and parked agents alike
+- Added an IRC mailbox bus with bounded per-agent inboxes: `irc` `wait` blocks until a matching message arrives, `inbox` drains or peeks pending messages, and sending to an idle or parked agent wakes or revives it for a real turn
+- Added a dedicated TUI renderer for the `irc` tool: directional send/receive headers with delivery-outcome coloring, quoted message bodies with expand-aware truncation, per-recipient receipt trees for broadcasts and failures, and status-badged peer listings with unread counts
+- Added the `task.batch` setting (default on): the task tool's batch shape `{ agent, context, tasks[] }` spawns one subagent per item — each its own independent background job with the normal idle/parked lifecycle and optional per-item isolation — and prepends the required shared `context` to every spawned subagent's system prompt; disabling it restores the flat single-spawn schema
+
+### Changed
+
+- Changed task-tool sync execution to fan out multiple `tasks[]` items in parallel and return a merged result payload when no async job manager is available
+- Changed the compaction UX so the conversation no longer visually restarts: the TUI renders the full-history display transcript (`buildSessionContext({ transcript: true })`), with each compaction shown as a slim inline divider — `── 📷 compacted · ctrl+o ──` — at the point it fired; expanding (ctrl+o) reveals the summary and snapcompact frame count. Applies to live compaction, `/compact`, `/tree` navigation, and session resume
+- Changed `async.enabled` to gate async bash commands only — the `task` tool now runs asynchronously regardless of the setting
+- Changed `irc.timeoutMs` to be the default timeout for `irc` `wait` and `send` with `await: true`
+- Moved the grouped path-tree helpers (`buildPathTree`, `walkPathTree`, find's grouped output formatter — now `formatGroupedPaths`) to `@oh-my-pi/pi-utils` so compaction summaries can render file lists with the same prefix-folded tree as find/search; `tools/find` no longer exports `formatFindGroupedOutput`
+- Changed TTSR rule notifications to combine rules into one block: a multi-rule match renders `name: description` rows (collapsed view caps at 4 rules with a `+N more` hint, ctrl+o expands), and consecutive notifications merge into the previous block while it is still the live transcript tail
+
+### Removed
+
+- Removed the pre-initialization startup splash and input buffer, so commands typed during launch are no longer queued and are handled only after the interactive TUI initializes
+
+### Fixed
+
+- Fixed `irc` live message delivery so successfully handed-off messages are no longer enqueued as mailbox mail, so they do not inflate unread `irc` counts
+- Fixed `irc send` with `await: true` to wait for a fresh reply to the current call instead of consuming previously buffered messages
+- Fixed main-session chat output to stop duplicating outbound `irc` sends from the main agent as relay cards
+- Fixed task-tool runtime compatibility so legacy flat `task` calls (`agent`, `assignment`) still execute under `task.batch` even though the wire schema is batch-first
+- Fixed the `job` tool's TUI preview leaking the model-facing `<task-result>` envelope for settled task jobs — the preview now shows the inner output body, and pretty-printed JSON bodies are flattened onto one line instead of previewing a lone `{`
+- Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
+- Fixed the `resolve` tool's result block turning white after the leading icon: the accent-styled symbol embedded a foreground reset inside the inverse-rendered line, dropping the block color for the rest of the row
+- Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions
+- Added verification of a `<div id="root"></div>` and `index.js` in smoke-test dashboard responses
+- Restored the checkmark glyph on ask-tool custom answers and the multi-select "Done selecting" option, which a status-glyph sweep had swapped for the ask tool icon
+- Fixed the `thinking.autoPending` statusbar indicator using question-mark glyphs (`▣?`, nf-md-help_box, `[?]`) in every symbol preset, which made the auto-thinking pending state indistinguishable from a terminal missing-glyph fallback. Replaced with clear loading indicators (`⟳`, fa-circle-o-notch, `[~]`) ([#2267](https://github.com/can1357/oh-my-pi/issues/2267)).
+- Fixed `tab.screenshot({ save })` ignoring the save path's extension: an explicit `.webp`/`.jpg` destination received hardcoded PNG bytes behind a mismatched name. The full-res capture format is now derived from the save path (`png`/`jpeg`/`webp`, puppeteer-native), and the reported mime type follows the bytes actually written; unknown or missing extensions still capture PNG
+- Fixed an infinite `compaction.strategy: shake` auto-continue loop in thinking-heavy sessions: the post-shake check now uses the provider-anchored trigger metric (instead of a local estimate that undercounts `thinkingSignature` payloads) and only treats pressure as resolved when residual context lands inside an 80% recovery band, so shake reliably falls back to context-full compaction when it cannot create real headroom ([#2275](https://github.com/can1357/oh-my-pi/issues/2275)).
+
 ## [15.10.12] - 2026-06-10
 
 ### Added
@@ -30,7 +87,7 @@
 ### Changed
 
 - Bash execution now preserves minimized shell output inline while saving the untouched capture as an `artifact://…` footer when shell minimization rewrites a command's output.
-- Task tool live progress now renders finished subagents first and keeps unfinished (pending/running) ones pinned at the bottom of the list.
+- Task tool agent lists now render in runtime-ascending order in both the live progress view (finished agents, sorted by runtime, above pending/running ones) and the finalized result view, so rows no longer reshuffle when the call finalizes.
 - `OutputSink` artifact files (`~/.omp/agent/artifacts/<id>.<tool>.log`) are unbounded by default again, so `artifact://<id>` references preserve the complete raw stream. The head + rolling-tail capping machinery from [#2081](https://github.com/can1357/oh-my-pi/issues/2081) (with its `[ARTIFACT TRUNCATED: …]` close notice) remains available as an opt-in via `artifactMaxBytes`, and the head window now closes permanently on first overflow so later small chunks cannot be written out of order before the tail replay.
 
 ### Fixed
@@ -65,7 +122,7 @@
 - New `omp usage` command: a detailed per-account breakdown of provider usage limits (bars, windows, reset times, plan metadata) covering every stored credential — accounts with no usage endpoint are listed as "no usage data" rows. Each provider section ends with per-window capacity stats ("capacity: 5h → 2.40/5 accounts used (2.60× quota left)"). Flags: `--provider` to filter, `--json` for the broker-shaped report payload, and `--redact` to mask account emails/ids down to a two-char anchor plus a minimal middle-out differentiator (`ca*9*`) for screenshot-safe sharing.
 - Startup hangs are now self-diagnosing (speculative fix for the "zero output, hangs even on `omp -h`" report class): a watchdog prints a stderr line every 10s naming the deepest in-flight startup phase (via `logger.openSpanPath()`) until a mode runner takes over, pausing around legitimate interactive waits (fork/move prompts, the `--resume` session picker); `PI_DEBUG_STARTUP` is restored as streaming synchronous `[startup]` phase markers covering command-module imports and the native addon load, which the post-startup `PI_TIMING` tree structurally cannot show for a hang; and waiting on piped-stdin EOF announces itself after 1s instead of blocking silently.
 - npm installs now execute a prebundled single-file entry: the published `bin.omp` points at `dist/cli.js` (built by `scripts/bundle-dist.ts` during `prepack`, ~18MB minified, natives/transformers/mupdf external), cutting npm-install cold start by roughly 3x versus transpiling the raw TypeScript graph per launch; `src/**` stays published for SDK consumers and worker fallbacks. The on-repo manifest keeps `bin.omp` at `src/cli.ts` — release rewrites it via the `publishBin` override in `scripts/ci-release-publish.ts` — so source installs (`bun link`, `install.sh --source`) keep working without a build step
-- Plain interactive TTY launches render the full welcome box (logo held on the intro's first frame, model, tips, LSP servers, recent-sessions loading placeholder) before session construction, clearing the screen so the TUI's first paint replaces it in place; the welcome box now reserves fixed slot counts (4 recent sessions, 4 LSP servers) so its height no longer shifts between the splash, loading, and loaded states. First-run launches keep the dim two-line splash (`omp <version>` / `Initializing session…`); resume/fork/continue flows, quiet mode, `PI_TIMING`, and non-TTY stdio still skip it
+- Plain interactive TTY launches print a dim two-line startup splash (`omp <version>` / `Initializing session…`) before session construction so first pixels appear immediately; suppressed for resume/fork/continue flows, quiet mode, `PI_TIMING`, and non-TTY stdio
 - Added `/stats` to launch the local stats dashboard from an active session, syncing session files first and opening the same browser dashboard as `omp stats`.
 - `/settings` now supports type-to-search filtering on setting labels, paths, descriptions, and values; Escape clears an active search before closing the panel.
 - Added a read-only `view` op to the `todo` tool that echoes the current list without mutating state, so the agent can recover exact task text instead of guessing it from memory.

@@ -3,7 +3,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { type AsyncJob, type AsyncJobManager, isBackgroundJobSupportEnabled } from "../async";
+import type { AsyncJob, AsyncJobManager } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import jobDescription from "../prompts/tools/job.md" with { type: "text" };
@@ -65,6 +65,19 @@ export interface JobToolDetails {
 	cancelled?: { id: string; status: CancelStatus }[];
 }
 
+/**
+ * A poll snapshot where every watched job is still running and nothing was
+ * cancelled — pure "still waiting" noise once a newer poll exists. The TUI
+ * keeps such a block un-finalized (displaceable) so a follow-up `job` call
+ * replaces it instead of stacking another waiting frame in the transcript.
+ */
+export function isWaitingPollDetails(details: unknown): boolean {
+	const d = details as JobToolDetails | undefined;
+	if (!d || !Array.isArray(d.jobs) || d.jobs.length === 0) return false;
+	if (d.cancelled?.length) return false;
+	return d.jobs.every(job => job?.status === "running");
+}
+
 export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly name = "job";
 	readonly approval = "read" as const;
@@ -76,11 +89,6 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(jobDescription);
-	}
-
-	static createIf(session: ToolSession): JobTool | null {
-		if (!isBackgroundJobSupportEnabled(session.settings)) return null;
-		return new JobTool(session);
 	}
 
 	async execute(
@@ -378,6 +386,30 @@ function statusToColor(status: JobSnapshot["status"]): ToolUIColor {
 	}
 }
 
+/**
+ * Task job results are delivered in the model-facing `<task-result>` envelope
+ * (prompts/tools/task-summary.md) so the parent agent can parse status and the
+ * `agent://` pointer. The wrapper markup is noise to a human — preview the
+ * inner <output>/<preview> body instead.
+ */
+function stripTaskResultEnvelope(text: string): string {
+	if (!text.startsWith("<task-result")) return text;
+	const body = /<(output|preview)(?:\s[^>]*)?>\n?([\s\S]*?)\n?<\/\1>/.exec(text)?.[2];
+	return body?.trim() || text;
+}
+
+/**
+ * Pretty-printed JSON output wastes the collapsed one-line preview on a lone
+ * "{" — flatten structured-looking bodies onto a single line. Slice first:
+ * downstream truncation keeps at most a few hundred columns, so collapsing
+ * whitespace across a multi-KB body would be pure waste.
+ */
+function flattenStructuredPreview(text: string): string {
+	const first = text[0];
+	if (first !== "{" && first !== "[") return text;
+	return text.slice(0, PREVIEW_LINES_EXPANDED * PREVIEW_LINE_WIDTH * 2).replace(/\s+/g, " ");
+}
+
 function describeTarget(args: JobRenderArgs | undefined): string {
 	const poll = args?.poll ?? [];
 	const cancel = args?.cancel ?? [];
@@ -494,7 +526,9 @@ export const jobToolRenderer = {
 								lines.push(`  ${uiTheme.fg("toolOutput", visibleLabelLines[i]!)}`);
 							}
 
-							const preview = job.errorText?.trim() || job.resultText?.trim();
+							const preview = flattenStructuredPreview(
+								stripTaskResultEnvelope(job.errorText?.trim() || job.resultText?.trim() || ""),
+							);
 							if (preview) {
 								const maxLines = expanded ? PREVIEW_LINES_EXPANDED : PREVIEW_LINES_COLLAPSED;
 								const previewLines = getPreviewLines(preview, maxLines, PREVIEW_LINE_WIDTH, Ellipsis.Unicode);

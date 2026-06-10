@@ -136,7 +136,7 @@ export declare class Shell {
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV15_10_12(): void
+export declare function __piNativesV15_11_0(): void
 
 /**
  * Apply conservative pre-execution rewrites to a bash command.
@@ -1285,6 +1285,22 @@ export interface PtyStartOptions {
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
 
 /**
+ * Render one snapcompact frame: print pre-normalized text onto a square
+ * bitmap and encode it as PNG.
+ *
+ * The glyph grid holds `floor(size/cellWidth) *
+ * floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
+ * (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
+ * indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
+ * `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
+ * cell.
+ * Returns the PNG encoded as base64, created as a one-byte (Latin-1) JS
+ * string straight from native code — no `Uint8Array` hop or JS-side
+ * re-encode.
+ */
+export declare function renderSnapcompactPng(text: string, options: SnapcompactRenderOptions): string
+
+/**
  * Search content for a pattern (one-shot, compiles pattern each time).
  * For repeated searches with the same pattern, use [`grep`] with file filters.
  *
@@ -1412,6 +1428,31 @@ export interface SliceResult {
  * width.
  */
 export declare function sliceWithWidth(line: string, startCol: number, length: number, strict: boolean | undefined | null, tabWidth: number): SliceResult
+
+/** Shape options for one snapcompact frame. */
+export interface SnapcompactRenderOptions {
+  /** Frame edge in pixels. */
+  size: number
+  /** Bundled font: `"5x8"` (X.org BDF) or `"8x8"` (unscii-8). Default `"5x8"`. */
+  font?: string
+  /**
+   * Target cell advance in pixels. Differing from the font's natural cell
+   * triggers the Lanczos stretch path. Default: font natural width.
+   */
+  cellWidth?: number
+  /** Target cell pitch in pixels. Default: font natural height. */
+  cellHeight?: number
+  /**
+   * Ink variant: `"sent"` (six-hue sentence cycling) or `"bw"` (black).
+   * Default `"sent"`.
+   */
+  variant?: string
+  /**
+   * Print each text line this many times; copies after the first sit on a
+   * pale highlight band. Default 1.
+   */
+  lineRepeat?: number
+}
 
 export declare function summarizeCode(options: SummaryOptions): SummaryResult
 

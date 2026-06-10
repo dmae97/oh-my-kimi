@@ -51,19 +51,33 @@ async function showHelp(config: CliConfig): Promise<void> {
 	}
 }
 /**
- * Smoke-test entry. Spawns bundled workers, pings them, exits.
+ * Smoke-test entry. Spawns bundled workers, serves the stats dashboard once,
+ * pings everything, then exits.
  *
- * Purpose: catch the silent worker-load regressions that hit compiled
- * binaries (issues #1011 and #1027). Version/help paths do not spawn worker
- * modules on a fresh install, so this probe is the minimal end-to-end test
- * that proves `new Worker(...)` resolves and bundled worker modules evaluate.
+ * Purpose: catch the silent worker-load and bundled-asset regressions that hit
+ * compiled binaries and the npm CLI bundle. Version/help paths do not spawn
+ * worker modules or serve dashboard assets on a fresh install, so this probe is
+ * the minimal end-to-end test that proves those distribution-only paths work.
  * Wired into `scripts/install-tests/run-ci.sh` so binary / source-link /
  * tarball installs all exercise it on every CI run.
  */
 async function runSmokeTest(): Promise<void> {
-	const { smokeTestSyncWorker } = await import("@oh-my-pi/omp-stats");
+	const { smokeTestSyncWorker, startServer } = await import("@oh-my-pi/omp-stats");
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
 	await smokeTestSyncWorker();
+
+	const statsServer = await startServer(0);
+	try {
+		const response = await fetch(`http://127.0.0.1:${statsServer.port}/`);
+		if (!response.ok) throw new Error(`stats dashboard smoke failed: HTTP ${response.status}`);
+		const html = await response.text();
+		if (!html.includes('<div id="root"></div>') || !html.includes("index.js")) {
+			throw new Error("stats dashboard smoke failed: dashboard HTML was not served");
+		}
+	} finally {
+		statsServer.stop();
+	}
+
 	await smokeTestTinyTitleWorker();
 	process.stdout.write("smoke-test: ok\n");
 }

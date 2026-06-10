@@ -4,7 +4,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -13,7 +13,6 @@ import findDescription from "../prompts/tools/find.md" with { type: "text" };
 import { type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, fileHyperlink, renderFileList, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
-import { buildPathTree, walkPathTree } from "./grouped-file-output";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
@@ -53,30 +52,6 @@ const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
 const MIN_GLOB_TIMEOUT_MS = 500;
 const MAX_GLOB_TIMEOUT_MS = 60_000;
-
-/**
- * Group find matches into a multi-level directory tree so the model doesn't pay
- * repeated tokens for shared path prefixes. Single-child directory chains fold
- * into one header (`# a/b/c/`), so a common prefix — including an absolute root
- * for out-of-cwd results — collapses to a single line. Each level adds one `#`;
- * files are listed bare under the deepest directory header that owns them.
- *
- * Order follows the input (mtime-desc for native glob): a directory appears when
- * its first member is emitted, and a node's own files precede its subdirectories.
- */
-export function formatFindGroupedOutput(paths: readonly string[]): string {
-	if (paths.length === 0) return "";
-	const tree = buildPathTree(paths.map(entry => ({ path: entry, isDir: entry.endsWith("/") })));
-	const lines: string[] = [];
-	for (const event of walkPathTree(tree)) {
-		if (event.kind === "dir") {
-			lines.push(`${"#".repeat(event.depth + 1)} ${event.name}/`);
-		} else {
-			lines.push(event.name);
-		}
-	}
-	return lines.join("\n");
-}
 
 export interface FindToolDetails {
 	truncation?: TruncationResult;
@@ -270,7 +245,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const listLimit = applyListLimit(files, { limit: effectiveLimit });
 				const limited = listLimit.items;
 				const limitMeta = listLimit.meta;
-				const baseOutput = formatFindGroupedOutput(limited);
+				const baseOutput = formatGroupedPaths(limited);
 				const trailingNotes: string[] = [];
 				if (notice) trailingNotes.push(notice);
 				if (missingPathsNote) trailingNotes.push(missingPathsNote);

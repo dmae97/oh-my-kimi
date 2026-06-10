@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+
+### Added
+
+- Added optional `ImageContent.detail` (`"auto" | "low" | "high" | "original"`): an OpenAI resolution hint forwarded by the `openai-responses` serializers (default stays `auto`) and by `openai-completions` for the values Chat Completions supports. `"original"` preserves native resolution — required for snapcompact frames, whose pixel-font glyphs do not survive the default downscale. Providers without a detail knob ignore the field.
+
+### Fixed
+
+- Fixed OpenRouter DeepSeek V4 strict tool schemas nesting `anyOf` inside the nullable wrapper for optional unions, which produced a branch without `type` and triggered OpenRouter's `Invalid tool parameters schema : field anyOf: missing field type` 400. ([#2270](https://github.com/can1357/oh-my-pi/issues/2270))
+- Hardened strict tool-schema handling beyond the optional-union case: `enforceStrictSchema` now splices natively nested pure unions into the parent `anyOf` (only when the inner node carries no constraining siblings, since sibling keywords are conjunctive with `anyOf`), so source schemas with nested unions no longer produce type-less `anyOf` branches that strict upstream validators reject. ([#2270](https://github.com/can1357/oh-my-pi/issues/2270))
+- Made the openai-completions non-strict retry reachable for `"mixed"` strict mode (previously gated to `all_strict`, i.e. Cerebras only) and taught it to recognize upstream tool-schema validation 400s (`Invalid tool parameters schema …`, `Invalid schema for function …`). A matching rejection now retries the request with base (non-strict) schemas and persists `strictToolsDisabled` on the provider session, so later requests skip the doomed strict attempt instead of paying a 400 + retry round-trip each turn. ([#2270](https://github.com/can1357/oh-my-pi/issues/2270))
+- Cross-model `anthropic-messages → anthropic-messages` continuations now preserve prior assistant turns' reasoning chains end-to-end: every prior `thinking`/`redactedThinking` block survives (not just the latest surviving assistant), and third-party ↔ third-party replays keep their signatures intact so the reasoning chain stays signed for the next turn. Signatures are stripped (and any `redacted_thinking` sibling without a native landing spot is dropped) only when an official Anthropic endpoint is on either end of the replay — official Anthropic cryptographically binds reasoning signatures to its key+session+model, while compatible reasoning endpoints (Z.AI, DeepSeek, custom anthropic-messages providers configured via `models.yaml`) treat them as opaque continuation hints. Source-side official detection uses the canonical catalog provider id `"anthropic"` (assistant messages carry no `baseUrl`); target-side detection reuses the baked `compat.officialEndpoint` flag. Latest-turn byte-for-byte behavior (Anthropic's "thinking blocks in the latest assistant message cannot be modified" rule) and existing aborted/errored last-block sanitization are unchanged. ([#2257](https://github.com/can1357/oh-my-pi/issues/2257), [#2265](https://github.com/can1357/oh-my-pi/issues/2265))
+
 ## [15.10.12] - 2026-06-10
 
 ### Added

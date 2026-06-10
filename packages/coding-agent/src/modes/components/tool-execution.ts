@@ -19,6 +19,7 @@ import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
 import { EVAL_DEFAULT_PREVIEW_LINES } from "../../tools/eval";
+import { isWaitingPollDetails } from "../../tools/job";
 import {
 	formatArgsInline,
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
@@ -194,6 +195,11 @@ export class ToolExecutionComponent extends Container {
 	// sealed the block stays in the transcript's repaintable live region so a
 	// late result still repaints instead of stranding the streaming preview.
 	#sealed = false;
+	// A `job` poll result whose watched jobs are all still running. Such a
+	// block never finalizes (stays in the transcript live region) so a
+	// follow-up `job` call can displace it instead of stacking another
+	// "waiting on N jobs" frame. Cleared by `seal()`.
+	#displaceable = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -359,6 +365,11 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.#result = result;
 		this.#isPartial = isPartial;
+		// A `job` poll that found every watched job still running is transient
+		// "still waiting" chrome; keep the block displaceable so the next `job`
+		// call replaces it instead of stacking another waiting frame (see the
+		// event controller's displaceable-poll bookkeeping).
+		this.#displaceable = this.#toolName === "job" && result.isError !== true && isWaitingPollDetails(result.details);
 		// When tool is complete, ensure args are marked complete so spinner stops
 		if (!isPartial) {
 			this.#argsComplete = true;
@@ -425,7 +436,11 @@ export class ToolExecutionComponent extends Container {
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		const needsSpinner = isStreamingArgs || isPartialTask;
+		// A displaceable waiting poll keeps its spinner ticking: it reads as one
+		// persistent live poll, and the changing leading glyph keeps the
+		// transcript's stable-prefix ratchet from committing rows of a block
+		// that a follow-up `job` call may remove.
+		const needsSpinner = isStreamingArgs || isPartialTask || this.isDisplaceableBlock();
 		if (needsSpinner && !this.#spinnerInterval) {
 			const now = performance.now();
 			const frameCount = theme.spinnerFrames.length;
@@ -513,6 +528,9 @@ export class ToolExecutionComponent extends Container {
 	isTranscriptBlockFinalized(): boolean {
 		if (this.#sealed) return true;
 		if (this.#result === undefined) return false;
+		// A displaceable waiting poll stays live: its rows are kept out of
+		// native scrollback so a follow-up `job` call can remove the block.
+		if (this.#displaceable) return false;
 		if (!this.#isPartial) return true;
 		// Partial result: a background async tool is accepted to freeze (the agent
 		// continues while it runs and would otherwise pin an unbounded live region);
@@ -528,9 +546,21 @@ export class ToolExecutionComponent extends Container {
 	seal(): void {
 		if (this.#sealed) return;
 		this.#sealed = true;
+		this.#displaceable = false;
 		this.stopAnimation();
 		this.#updateDisplay();
 		this.#ui.requestRender();
+	}
+
+	/**
+	 * Whether this block is a waiting `job` poll (every watched job still
+	 * running) that has not been sealed. Such a block never finalized, so none
+	 * of its rows entered native scrollback (the ticking spinner keeps the
+	 * stable-prefix ratchet at zero) and the whole block can be removed when a
+	 * follow-up `job` call supersedes it.
+	 */
+	isDisplaceableBlock(): boolean {
+		return this.#displaceable && !this.#sealed;
 	}
 
 	/**

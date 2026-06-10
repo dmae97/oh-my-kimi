@@ -7,7 +7,6 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/job.md`
 - Key collaborators:
   - `packages/coding-agent/src/async/job-manager.ts` — job registry, cancellation, delivery suppression.
-  - `packages/coding-agent/src/async/support.ts` — feature gating for background jobs.
   - `packages/coding-agent/src/tools/bash.ts` — explicit async bash and auto-backgrounded bash jobs.
   - `packages/coding-agent/src/task/index.ts` — async task-job scheduling.
   - `packages/coding-agent/src/sdk.ts` — automatic follow-up delivery for unsuppressed completions.
@@ -45,7 +44,7 @@ Read-only snapshot path:
 - Calling `job` with `list: true` returns a markdown summary of every job spawned by the calling agent (running + completed within retention) without waiting.
 
 ## Flow
-1. `JobTool.createIf(...)` in `packages/coding-agent/src/tools/job.ts` only exposes the tool when `isBackgroundJobSupportEnabled(...)` returns true for either `async.enabled` or `bash.autoBackground.enabled`.
+1. `JobTool` is registered unconditionally in `packages/coding-agent/src/tools/index.ts`; there is no `async.enabled` gate (the `task` tool always schedules background jobs).
 2. `execute(...)` fetches `session.asyncJobManager`. If absent, it returns `Async execution is disabled; no background jobs are available.`
 3. `cancel` ids are processed first:
    - `manager.getJob(id)` missing → `not_found`.
@@ -83,7 +82,7 @@ Spawn paths that produce jobs:
   - `async: true` always registers a `type: "bash"` job with `AsyncJobManager.register(...)` and returns a start message.
   - auto-background mode (`bash.autoBackground.enabled`) starts the same managed job path for non-PTY commands, waits up to `min(bash.autoBackground.thresholdMs, timeoutMs - 1000)`, and if the command is still running returns a background-job start result instead of inline command output.
 - `packages/coding-agent/src/task/index.ts`
-  - when `async.enabled` is on, the chosen agent is not blocking, and `tasks.length > 0`, each task item is registered as a `type: "task"` job.
+  - every `task` call registers one `type: "task"` job, unless the session has no job manager or the agent definition declares `blocking: true` (sync fallback).
 
 Lifecycle and exact state names:
 - Conceptual scheduling path: `pending` (only task-progress bookkeeping before work starts) → `running` → `completed` / `failed`; cancellation changes a running async job to `cancelled`.

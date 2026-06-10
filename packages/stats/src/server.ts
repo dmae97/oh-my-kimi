@@ -1,6 +1,8 @@
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import {
 	getBehaviorDashboardStats,
@@ -14,24 +16,27 @@ import {
 	getTotalMessageCount,
 	syncAllSessions,
 } from "./aggregator";
+import { decodeEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
 
-const getEmbeddedClientArchive = (() => {
-	const txt = embeddedClientArchiveTxt.replaceAll(/[\s\r\n]/g, "").trim();
-	if (!txt) return null;
-	return () => Buffer.from(txt, "base64");
-})();
+const EMBEDDED_CLIENT_ARCHIVE = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
 
 const CLIENT_DIR = path.join(import.meta.dir, "client");
 const STATIC_DIR = path.join(import.meta.dir, "..", "dist", "client");
 const IS_BUN_COMPILED =
-	Bun.env.PI_COMPILED ||
+	Boolean(process.env.PI_COMPILED || Bun.env.PI_COMPILED) ||
 	import.meta.url.includes("$bunfs") ||
 	import.meta.url.includes("~BUN") ||
 	import.meta.url.includes("%7EBUN");
+// The prepacked npm bundle (coding-agent dist/cli.js) constant-folds
+// process.env.PI_BUNDLED at build time. Like compiled binaries, it ships no
+// dashboard sources or prebuilt dist/client next to the bundle, so the
+// embedded archive is the only viable asset source.
+const IS_PREBUILT = IS_BUN_COMPILED || Boolean(process.env.PI_BUNDLED || Bun.env.PI_BUNDLED);
+const USE_EMBEDDED_CLIENT = EMBEDDED_CLIENT_ARCHIVE !== null || IS_PREBUILT;
 
-const COMPILED_CLIENT_DIR_ROOT = path.join(os.tmpdir(), "omp-stats-client");
-let compiledClientDirPromise: Promise<string> | null = null;
+const EMBEDDED_CLIENT_DIR_ROOT = path.join(os.tmpdir(), "omp-stats-client");
+let embeddedClientDirPromise: Promise<string> | null = null;
 
 function sanitizeArchivePath(archivePath: string): string | null {
 	const normalized = archivePath.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -56,18 +61,19 @@ async function extractEmbeddedClientArchive(archiveBytes: Buffer, outputDir: str
 	}
 }
 
-async function getCompiledClientDir(): Promise<string> {
-	if (!IS_BUN_COMPILED) return STATIC_DIR;
-	if (compiledClientDirPromise) return compiledClientDirPromise;
+async function getEmbeddedClientDir(): Promise<string> {
+	if (!USE_EMBEDDED_CLIENT) return STATIC_DIR;
+	if (embeddedClientDirPromise) return embeddedClientDirPromise;
 
-	const archiveBytes = getEmbeddedClientArchive?.();
-	if (!archiveBytes) {
-		throw new Error("Compiled stats client bundle missing. Rebuild binary with embedded stats assets.");
+	if (!EMBEDDED_CLIENT_ARCHIVE) {
+		throw new Error(
+			"Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets.",
+		);
 	}
 
-	compiledClientDirPromise = (async () => {
-		const bundleHash = Bun.hash(archiveBytes).toString(16);
-		const outputDir = path.join(COMPILED_CLIENT_DIR_ROOT, bundleHash);
+	embeddedClientDirPromise = (async () => {
+		const bundleHash = Bun.hash(EMBEDDED_CLIENT_ARCHIVE).toString(16);
+		const outputDir = path.join(EMBEDDED_CLIENT_DIR_ROOT, bundleHash);
 		const markerPath = path.join(outputDir, "index.html");
 		try {
 			const marker = await fs.stat(markerPath);
@@ -76,15 +82,24 @@ async function getCompiledClientDir(): Promise<string> {
 
 		await fs.rm(outputDir, { recursive: true, force: true });
 		await fs.mkdir(outputDir, { recursive: true });
-		await extractEmbeddedClientArchive(archiveBytes, outputDir);
+		await extractEmbeddedClientArchive(EMBEDDED_CLIENT_ARCHIVE, outputDir);
 		return outputDir;
 	})();
 
-	return compiledClientDirPromise;
+	return embeddedClientDirPromise;
 }
 
 async function getLatestMtime(dir: string): Promise<number> {
-	const entries = await fs.readdir(dir, { withFileTypes: true });
+	let entries: Dirent[];
+	try {
+		entries = await fs.readdir(dir, { withFileTypes: true });
+	} catch (err) {
+		// Tolerate missing source trees (e.g. installs without the dashboard
+		// sources); the caller falls back to prebuilt assets or a clear build
+		// failure instead of crashing on the scan.
+		if (isEnoent(err)) return 0;
+		throw err;
+	}
 
 	const promises = [];
 	for (const entry of entries) {
@@ -108,7 +123,7 @@ async function getLatestMtime(dir: string): Promise<number> {
 }
 
 const ensureClientBuild = async () => {
-	if (IS_BUN_COMPILED) return;
+	if (USE_EMBEDDED_CLIENT) return;
 	const indexPath = path.join(STATIC_DIR, "index.html");
 	const cssPath = path.join(STATIC_DIR, "styles.css");
 	const clientSourceMtime = await getLatestMtime(CLIENT_DIR);
@@ -247,7 +262,7 @@ async function handleApi(req: Request): Promise<Response> {
  * Handle static file requests.
  */
 async function handleStatic(requestPath: string): Promise<Response> {
-	const staticDir = IS_BUN_COMPILED ? await getCompiledClientDir() : STATIC_DIR;
+	const staticDir = await getEmbeddedClientDir();
 	const filePath = requestPath === "/" ? "/index.html" : requestPath;
 	const fullPath = path.join(staticDir, filePath);
 

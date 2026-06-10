@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+### Added
+
+- Added support for asynchronous `onSubmit` handlers by allowing the callback to return a `Promise<void>`
+
 ## [15.10.11] - 2026-06-10
 
 ### Added

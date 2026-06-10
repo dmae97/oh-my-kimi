@@ -1,62 +1,76 @@
-// Gallery fixtures for the agentic orchestration tools (task, goal, job).
+// Gallery fixtures for the agentic orchestration tools (task, irc, goal, job).
+import type { Usage } from "@oh-my-pi/pi-ai";
+import type { TaskToolDetails } from "../../task/types";
+import type { IrcDetails } from "../../tools/irc";
 import type { GalleryFixture } from "./types";
+
+/** Message/activity timestamps are offsets from load time so gallery ages stay plausible. */
+const FIXTURE_NOW = Date.now();
+
+/** Plausible cumulative usage for a fixture subagent run. */
+const fixtureUsage = (tokens: { input: number; output: number }, costTotal: number): Usage => ({
+	input: tokens.input,
+	output: tokens.output,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: tokens.input + tokens.output,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costTotal },
+});
 
 export const agenticFixtures: Record<string, GalleryFixture> = {
 	task: {
 		label: "Task",
 		customRendered: true,
-		// Streaming: agent chosen, first task fully arrived, second still landing.
+		// Streaming: agent chosen, assignment still landing.
 		streamingArgs: {
 			agent: "task",
-			tasks: [
-				{
-					id: "AuthLoader",
-					description: "Load auth middleware",
-					assignment: "Read packages/server/src/auth/*.ts and summarize the session-cookie flow.",
-				},
-				{ id: "RateLimiter", description: "Audit rate limiter" },
-			],
+			id: "AuthLoader",
+			description: "Load auth middleware",
+			assignment: "Read packages/server/src/auth/*.ts and summarize the session-cookie",
 		},
 		args: {
 			agent: "task",
-			context: [
-				"# Goal",
-				"Harden the HTTP auth stack before the release cut.",
-				"# Constraints",
-				"Touch only files under packages/server/src/auth/. Do not run gates.",
-			].join("\n"),
-			tasks: [
-				{
-					id: "AuthLoader",
-					description: "Load auth middleware",
-					assignment:
-						"Read packages/server/src/auth/session.ts and middleware.ts, then document the session-cookie validation flow and any TODOs.",
-				},
-				{
-					id: "RateLimiter",
-					description: "Audit rate limiter",
-					assignment:
-						"Inspect packages/server/src/auth/rate-limit.ts. Confirm the 429 path sets Retry-After and report gaps.",
-				},
-				{
-					id: "TokenRotation",
-					description: "Check token rotation",
-					assignment:
-						"Trace refresh-token rotation in packages/server/src/auth/tokens.ts and flag any reuse window.",
-				},
-			],
+			id: "AuthLoader",
+			description: "Load auth middleware",
+			assignment:
+				"Read packages/server/src/auth/session.ts and middleware.ts, then document the session-cookie validation flow and any TODOs.",
 		},
 		result: {
 			content: [
 				{
 					type: "text",
-					text: "3 agents completed: AuthLoader, RateLimiter, TokenRotation.",
+					text: "Agent AuthLoader completed.",
 				},
 			],
 			details: {
 				projectAgentsDir: null,
 				totalDurationMs: 48_200,
-				usage: { cost: { total: 0.34 } },
+				usage: fixtureUsage({ input: 52_600, output: 8_800 }, 0.12),
+				progress: [
+					{
+						index: 0,
+						id: "AuthLoader",
+						agent: "task",
+						agentSource: "bundled",
+						status: "completed",
+						task: "Read packages/server/src/auth/session.ts and middleware.ts",
+						description: "Load auth middleware",
+						lastIntent: "Documenting session-cookie flow",
+						recentTools: [
+							{ tool: "read", args: "packages/server/src/auth/session.ts", endMs: 1_749_200_040_000 },
+							{ tool: "read", args: "packages/server/src/auth/middleware.ts", endMs: 1_749_200_052_000 },
+						],
+						recentOutput: ["Session validation runs in middleware.ts:42 via verifySessionCookie()."],
+						toolCount: 9,
+						requests: 6,
+						tokens: 61_400,
+						contextTokens: 23_100,
+						contextWindow: 200_000,
+						cost: 0.12,
+						durationMs: 41_900,
+						resolvedModel: "anthropic/claude-sonnet",
+					},
+				],
 				results: [
 					{
 						index: 0,
@@ -77,100 +91,31 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 						truncated: false,
 						durationMs: 41_900,
 						tokens: 61_400,
+						requests: 6,
 						contextTokens: 23_100,
 						contextWindow: 200_000,
 						resolvedModel: "anthropic/claude-sonnet",
-						usage: { cost: { total: 0.12 } },
+						usage: fixtureUsage({ input: 52_600, output: 8_800 }, 0.12),
 						outputMeta: { lineCount: 3, charCount: 214 },
 					},
-					{
-						index: 1,
-						id: "RateLimiter",
-						agent: "task",
-						agentSource: "bundled",
-						description: "Audit rate limiter",
-						task: "Inspect packages/server/src/auth/rate-limit.ts",
-						assignment:
-							"Inspect packages/server/src/auth/rate-limit.ts. Confirm the 429 path sets Retry-After and report gaps.",
-						exitCode: 0,
-						output: [
-							"rate-limit.ts uses a fixed-window counter keyed by client IP.",
-							"429 responses set Retry-After (rate-limit.ts:57).",
-							"Gap: no per-account limit, so a botnet across IPs bypasses the cap.",
-						].join("\n"),
-						stderr: "",
-						truncated: false,
-						durationMs: 38_500,
-						tokens: 54_800,
-						contextTokens: 19_700,
-						contextWindow: 200_000,
-						resolvedModel: "anthropic/claude-sonnet",
-						usage: { cost: { total: 0.1 } },
-						outputMeta: { lineCount: 3, charCount: 198 },
-					},
-					{
-						index: 2,
-						id: "TokenRotation",
-						agent: "task",
-						agentSource: "bundled",
-						description: "Check token rotation",
-						task: "Trace refresh-token rotation in packages/server/src/auth/tokens.ts",
-						assignment:
-							"Trace refresh-token rotation in packages/server/src/auth/tokens.ts and flag any reuse window.",
-						exitCode: 0,
-						output: [
-							"Refresh tokens rotate on every use (tokens.ts:120) and the old jti is revoked.",
-							"Reuse of a rotated token triggers full-family revocation — no reuse window found.",
-						].join("\n"),
-						stderr: "",
-						truncated: false,
-						durationMs: 48_200,
-						tokens: 49_200,
-						contextTokens: 17_500,
-						contextWindow: 200_000,
-						resolvedModel: "anthropic/claude-sonnet",
-						usage: { cost: { total: 0.12 } },
-						outputMeta: { lineCount: 2, charCount: 160 },
-					},
 				],
-			},
+			} satisfies TaskToolDetails,
 		},
 		errorResult: {
 			isError: true,
 			content: [
 				{
 					type: "text",
-					text: "1 of 3 agents failed: RateLimiter.",
+					text: "Agent RateLimiter failed.",
 				},
 			],
 			details: {
 				projectAgentsDir: null,
-				totalDurationMs: 39_400,
-				usage: { cost: { total: 0.21 } },
+				totalDurationMs: 9_800,
+				usage: fixtureUsage({ input: 10_900, output: 1_400 }, 0.1),
 				results: [
 					{
 						index: 0,
-						id: "AuthLoader",
-						agent: "task",
-						agentSource: "bundled",
-						description: "Load auth middleware",
-						task: "Read packages/server/src/auth/session.ts and middleware.ts",
-						assignment:
-							"Read packages/server/src/auth/session.ts and middleware.ts, then document the session-cookie validation flow and any TODOs.",
-						exitCode: 0,
-						output: "Session validation runs in middleware.ts:42 via verifySessionCookie().",
-						stderr: "",
-						truncated: false,
-						durationMs: 31_200,
-						tokens: 58_100,
-						contextTokens: 21_900,
-						contextWindow: 200_000,
-						resolvedModel: "anthropic/claude-sonnet",
-						usage: { cost: { total: 0.11 } },
-						outputMeta: { lineCount: 1, charCount: 70 },
-					},
-					{
-						index: 1,
 						id: "RateLimiter",
 						agent: "task",
 						agentSource: "bundled",
@@ -184,15 +129,185 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 						truncated: false,
 						durationMs: 9_800,
 						tokens: 12_300,
+						requests: 3,
 						contextTokens: 6_400,
 						contextWindow: 200_000,
 						resolvedModel: "anthropic/claude-sonnet",
-						usage: { cost: { total: 0.1 } },
+						usage: fixtureUsage({ input: 10_900, output: 1_400 }, 0.1),
 						error: "Subagent exited 1: target file packages/server/src/auth/rate-limit.ts does not exist.",
 						outputMeta: { lineCount: 0, charCount: 0 },
 					},
 				],
-			},
+			} satisfies TaskToolDetails,
+		},
+	},
+
+	irc: {
+		label: "IRC",
+		// Streaming: recipient known; the message body still arriving.
+		streamingArgs: { op: "send", to: "AuthLoader", message: "Are you still touching" },
+		args: {
+			op: "send",
+			to: "AuthLoader",
+			message: "Are you still touching src/server/auth.ts? I need to add a 401 path.",
+			await: true,
+		},
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"Delivered to 1 peer(s):",
+						"- AuthLoader: revived",
+						"",
+						"Reply from AuthLoader:",
+						"Done with auth.ts — go ahead, just rebase past my session-store rename.",
+					].join("\n"),
+				},
+			],
+			details: {
+				op: "send",
+				from: "Main",
+				to: "AuthLoader",
+				receipts: [{ to: "AuthLoader", outcome: "revived" }],
+				waited: {
+					id: "7181122334455667789",
+					from: "AuthLoader",
+					to: "Main",
+					body: "Done with auth.ts — go ahead, just rebase past my session-store rename.",
+					ts: FIXTURE_NOW - 5_000,
+					replyTo: "7181122334455667788",
+				},
+			} satisfies IrcDetails,
+		},
+		errorResult: {
+			isError: true,
+			content: [
+				{
+					type: "text",
+					text: 'No recipients received the message.\n- RateLimiter: failed — unknown agent "RateLimiter"',
+				},
+			],
+			details: {
+				op: "send",
+				from: "Main",
+				to: "RateLimiter",
+				receipts: [{ to: "RateLimiter", outcome: "failed", error: 'unknown agent "RateLimiter"' }],
+			} satisfies IrcDetails,
+		},
+	},
+
+	irc_wait: {
+		label: "IRC (wait)",
+		customRendered: true,
+		renderer: "irc",
+		streamingArgs: { op: "wait", from: "AuthLoader" },
+		args: { op: "wait", from: "AuthLoader", timeoutMs: 60_000 },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: "[7181122334455667790] AuthLoader: session-store rename is merged; auth.ts is yours.",
+				},
+			],
+			details: {
+				op: "wait",
+				from: "Main",
+				waited: {
+					id: "7181122334455667790",
+					from: "AuthLoader",
+					to: "Main",
+					body: "session-store rename is merged; auth.ts is yours.",
+					ts: FIXTURE_NOW - 30_000,
+				},
+			} satisfies IrcDetails,
+		},
+	},
+
+	irc_inbox: {
+		label: "IRC (inbox)",
+		customRendered: true,
+		renderer: "irc",
+		streamingArgs: { op: "inbox" },
+		args: { op: "inbox", peek: true },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"2 unread message(s):",
+						"- [7181122334455667791] AuthLoader: hub table reads unreadCount — ping me when the bus lands.",
+						"- [7181122334455667792] RateLimiter (reply to 7181122334455667791): bus is in; receipts carry outcome.",
+					].join("\n"),
+				},
+			],
+			details: {
+				op: "inbox",
+				from: "Main",
+				inbox: [
+					{
+						id: "7181122334455667791",
+						from: "AuthLoader",
+						to: "Main",
+						body: "hub table reads unreadCount — ping me when the bus lands.",
+						ts: FIXTURE_NOW - 4 * 60_000,
+					},
+					{
+						id: "7181122334455667792",
+						from: "RateLimiter",
+						to: "Main",
+						body: "bus is in; receipts carry outcome.",
+						ts: FIXTURE_NOW - 60_000,
+						replyTo: "7181122334455667791",
+					},
+				],
+			} satisfies IrcDetails,
+		},
+	},
+
+	irc_list: {
+		label: "IRC (list)",
+		customRendered: true,
+		renderer: "irc",
+		streamingArgs: { op: "list" },
+		args: { op: "list" },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"2 peer(s):",
+						"- AuthLoader [task · sub · idle] — parent Main, active 2m ago",
+						"- RateLimiter [task · sub · parked] — unread 2, parent Main, active 12m ago",
+						"",
+						"Parked agents are revived automatically when you message them.",
+					].join("\n"),
+				},
+			],
+			details: {
+				op: "list",
+				from: "Main",
+				peers: [
+					{
+						id: "AuthLoader",
+						displayName: "task",
+						kind: "sub",
+						status: "idle",
+						parentId: "Main",
+						unread: 0,
+						lastActivity: FIXTURE_NOW - 2 * 60_000,
+					},
+					{
+						id: "RateLimiter",
+						displayName: "task",
+						kind: "sub",
+						status: "parked",
+						parentId: "Main",
+						unread: 2,
+						lastActivity: FIXTURE_NOW - 12 * 60_000,
+					},
+				],
+			} satisfies IrcDetails,
 		},
 	},
 

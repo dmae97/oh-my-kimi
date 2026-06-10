@@ -410,6 +410,76 @@ describe("OpenAI tool strict mode", () => {
 		expect(strictFlags).toEqual([[true]]);
 	});
 
+	it("falls back to non-strict tools when an upstream validator rejects strict schemas, and remembers it", async () => {
+		const model = getBundledModel("openrouter", "deepseek/deepseek-v4-flash") as Model<"openai-completions">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		const fetchMock: FetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				attempt += 1;
+				const bodyText = typeof init?.body === "string" ? init.body : "";
+				const payload = JSON.parse(bodyText) as {
+					tools?: Array<{ function?: { strict?: boolean } }>;
+				};
+				strictFlags.push((payload.tools ?? []).map(tool => tool.function?.strict === true));
+				if (attempt === 1) {
+					return new Response(
+						JSON.stringify({
+							error: {
+								message: "Invalid tool parameters schema : field `anyOf`: missing field `type`",
+								type: "invalid_request_error",
+							},
+						}),
+						{
+							status: 400,
+							headers: { "content-type": "application/json" },
+						},
+					);
+				}
+				return createSseResponse([
+					{
+						id: "chatcmpl-deepseek-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: { content: attempt === 2 ? "Recovered" : "Later" } }],
+					},
+					{
+						id: "chatcmpl-deepseek-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+					},
+					"[DONE]",
+				]);
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toContainEqual({ type: "text", text: "Recovered" });
+		expect(strictFlags).toEqual([[true], [false]]);
+
+		// The schema is static per session — later requests skip the doomed strict attempt.
+		const nextResult = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+			fetch: fetchMock,
+		}).result();
+
+		expect(nextResult.stopReason).toBe("stop");
+		expect(nextResult.content).toContainEqual({ type: "text", text: "Later" });
+		expect(strictFlags).toEqual([[true], [false], [false]]);
+	});
+
 	it("sends strict=true for openai-responses tool schemas on OpenAI", async () => {
 		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 

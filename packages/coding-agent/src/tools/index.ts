@@ -18,7 +18,7 @@ import { LspTool } from "../lsp";
 import type { MCPManager } from "../mcp";
 import type { MnemopiSessionState } from "../mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
-import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
@@ -43,7 +43,7 @@ import { resolveEvalBackends } from "./eval-backends";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
 import { InspectImageTool } from "./inspect-image";
-import { IrcTool } from "./irc";
+import { IrcTool, isIrcEnabled } from "./irc";
 import { JobTool } from "./job";
 import { MemoryEditTool } from "./memory-edit";
 import { MemoryRecallTool } from "./memory-recall";
@@ -261,8 +261,6 @@ export interface ToolSession {
 	recordEvalSubagentUsage?: (output: number) => void;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
-	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
-	getCompactContext?: () => string;
 	/** Get cached todo phases for this session. */
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */
@@ -421,7 +419,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
-	job: JobTool.createIf,
+	job: s => new JobTool(s),
 	irc: IrcTool.createIf,
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
@@ -540,13 +538,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "search_tool_bm25") return discoveryActive;
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
-		if (name === "irc") {
-			if (!session.settings.get("irc.enabled")) return false;
-			// Main agent only needs `irc` when subagents may run concurrently (async).
-			// In sync mode main blocks on `task`, so peer messaging from main is dead weight.
-			if (!session.settings.get("async.enabled") && session.getAgentId?.() === MAIN_AGENT_ID) return false;
-			return true;
-		}
+		if (name === "irc") return isIrcEnabled(session.settings, session.taskDepth ?? 0);
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "");
 		}

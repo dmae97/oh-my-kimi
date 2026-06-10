@@ -87,6 +87,35 @@ describe("resolveBlockEdits", () => {
 		);
 	});
 
+	it("includes a nearby-context preview in the block-unresolved error", () => {
+		const edits = parsePatch("replace block 3:\n+X").edits;
+		const text = "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot";
+		let error: Error | undefined;
+		try {
+			resolveBlockEdits(edits, text, PATH, () => null);
+		} catch (err) {
+			error = err as Error;
+		}
+		expect(error?.message).toContain("could not resolve a syntactic block beginning on line 3");
+		// ±2 lines of context around the anchor, anchor `*`-marked.
+		expect(error?.message).toContain(" 1:alpha");
+		expect(error?.message).toContain("*3:charlie");
+		expect(error?.message).toContain(" 5:echo");
+		expect(error?.message).not.toContain("foxtrot");
+	});
+
+	it("omits the context preview when the anchor line is out of range", () => {
+		const edits = parsePatch("replace block 9:\n+X").edits;
+		let error: Error | undefined;
+		try {
+			resolveBlockEdits(edits, "only\ntwo", PATH, () => null);
+		} catch (err) {
+			error = err as Error;
+		}
+		expect(error?.message).toContain("could not resolve a syntactic block beginning on line 9");
+		expect(error?.message).not.toContain("\n\n");
+	});
+
 	it("fires onResolved with the resolved span for replace and delete blocks", () => {
 		const seen: BlockResolution[] = [];
 		// stubResolver maps line N → span [N, N+1].

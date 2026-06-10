@@ -13,10 +13,10 @@ import { estimateTokens } from "./compaction";
 import type { ReadonlySessionManager, SessionEntry } from "./entries";
 import {
 	type ConvertToLlm,
-	convertToLlm,
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
+	defaultConvertToLlm,
 } from "./messages";
 import branchSummaryPrompt from "./prompts/branch-summary.md" with { type: "text" };
 import branchSummaryPreamble from "./prompts/branch-summary-preamble.md" with { type: "text" };
@@ -27,6 +27,7 @@ import {
 	type FileOperations,
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
+	stripReadSelector,
 	upsertFileOperations,
 } from "./utils";
 
@@ -214,7 +215,7 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 		if (entry.type === "branch_summary" && !entry.fromExtension && entry.details) {
 			const details = entry.details as BranchSummaryDetails;
 			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
+				for (const f of details.readFiles) fileOps.read.add(stripReadSelector(f));
 			}
 			if (Array.isArray(details.modifiedFiles)) {
 				// Modified files go into both edited and written for proper deduplication
@@ -288,7 +289,7 @@ export async function generateBranchSummary(
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
-	const llmMessages = (options.convertToLlm ?? convertToLlm)(messages);
+	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
 	const conversationText = serializeConversation(llmMessages);
 
 	// Build prompt
@@ -329,7 +330,7 @@ export async function generateBranchSummary(
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary = upsertFileOperations(summary, readFiles, modifiedFiles);
+	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
 
 	return {
 		summary: summary || "No summary generated",
