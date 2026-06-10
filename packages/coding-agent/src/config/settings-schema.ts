@@ -1082,6 +1082,46 @@ export const SETTINGS_SCHEMA = {
 		ui: { tab: "interaction", label: "Collapse Changelog", description: "Show condensed changelog after updates" },
 	},
 
+	"magicKeywords.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Magic Keywords",
+			description: "Enable hidden notices for standalone ultrathink, orchestrate, and workflowz keywords",
+		},
+	},
+
+	"magicKeywords.ultrathink": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Ultrathink Keyword",
+			description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
+		},
+	},
+
+	"magicKeywords.orchestrate": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Orchestrate Keyword",
+			description: "Let standalone orchestrate append its hidden multi-agent orchestration notice",
+		},
+	},
+
+	"magicKeywords.workflow": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			label: "Workflow Keyword",
+			description: "Let standalone workflowz append its hidden eval workflow notice",
+		},
+	},
+
 	// Notifications
 	"completion.notify": {
 		type: "enum",

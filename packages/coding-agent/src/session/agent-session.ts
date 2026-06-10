@@ -4464,12 +4464,16 @@ export class AgentSession {
 		return { ...message, content: normalized } as T;
 	}
 
+	#magicKeywordEnabled(keyword: "orchestrate" | "ultrathink" | "workflow"): boolean {
+		return this.settings.get("magicKeywords.enabled") && this.settings.get(`magicKeywords.${keyword}`);
+	}
+
 	#createMagicKeywordNotices(text: string): CustomMessage[] {
 		const timestamp = Date.now();
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
-		if (containsUltrathink(text)) {
+		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "ultrathink-notice",
@@ -4479,7 +4483,7 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (containsOrchestrate(text)) {
+		if (this.#magicKeywordEnabled("orchestrate") && containsOrchestrate(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "orchestrate-notice",
@@ -4489,7 +4493,7 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (containsWorkflow(text)) {
+		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "workflow-notice",
@@ -5920,7 +5924,7 @@ export class AgentSession {
 		if (!model?.reasoning) return;
 
 		let resolved: Effort | undefined;
-		if (containsUltrathink(promptText)) {
+		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// and jump straight to the highest auto-supported level for this model.
 			resolved = clampAutoThinkingEffort(model, Effort.XHigh);

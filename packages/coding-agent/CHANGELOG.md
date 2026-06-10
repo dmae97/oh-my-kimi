@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `magicKeywords.enabled` and per-keyword `magicKeywords.ultrathink`, `magicKeywords.orchestrate`, and `magicKeywords.workflow` settings to disable hidden magic-keyword notices and ultrathink auto-thinking escalation ([#1796](https://github.com/can1357/oh-my-pi/issues/1796)).
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes
