@@ -14,10 +14,13 @@
 //! 4. `strip_lines_matching` / `keep_lines_matching` — a line survives iff it
 //!    matches the keep set (when present) and does not match the strip set
 //!    (when present)
-//! 5. `truncate_lines_at`    — per-line Unicode-safe char cap
-//! 6. `head_lines` / `tail_lines` — keep first/last N lines with a marker
-//! 7. `max_lines`            — hard cap after head/tail
-//! 8. `on_empty`             — replace an empty result with a sentinel
+//! 5. `replace_after`        — ordered regex substitutions, line-by-line,
+//!    applied after line filtering and before truncation so substitutions that
+//!    shorten lines (e.g. path compaction) see the full, untruncated text
+//! 6. `truncate_lines_at`    — per-line Unicode-safe char cap
+//! 7. `head_lines` / `tail_lines` — keep first/last N lines with a marker
+//! 8. `max_lines`            — hard cap after head/tail
+//! 9. `on_empty`             — replace an empty result with a sentinel
 //!
 //! Pipelines never panic for the caller: regex compilation errors are
 //! surfaced when the pipeline is loaded, and runtime application is total.
@@ -53,6 +56,11 @@ pub struct PipelineDef {
 	pub strip_lines_matching: Vec<String>,
 	#[serde(default)]
 	pub keep_lines_matching:  Vec<String>,
+	/// Ordered regex substitutions applied after the strip/keep line filter
+	/// and before `truncate_lines_at`, so substitutions that shorten lines
+	/// (e.g. path compaction) see the full, untruncated text.
+	#[serde(default)]
+	pub replace_after:        Vec<ReplaceDef>,
 	pub truncate_lines_at:    Option<usize>,
 	pub head_lines:           Option<usize>,
 	pub tail_lines:           Option<usize>,
@@ -135,6 +143,7 @@ pub struct CompiledPipeline {
 	pub match_output:      Vec<CompiledMatchOutput>,
 	pub strip_lines:       Option<RegexSet>,
 	pub keep_lines:        Option<RegexSet>,
+	pub replace_after:     Vec<CompiledReplace>,
 	pub truncate_lines_at: Option<usize>,
 	pub head_lines:        Option<usize>,
 	pub tail_lines:        Option<usize>,
@@ -142,6 +151,19 @@ pub struct CompiledPipeline {
 	pub on_empty:          Option<String>,
 	pub only_on_exit:      Vec<i32>,
 	pub except_on_exit:    Vec<i32>,
+}
+
+/// Compile an ordered regex-substitution list; `label` names the TOML key
+/// (`replace` or `replace_after`) in error messages.
+fn compile_replaces(rules: Vec<ReplaceDef>, label: &str) -> Result<Vec<CompiledReplace>, String> {
+	rules
+		.into_iter()
+		.map(|rule| {
+			let pattern = Regex::new(&rule.pattern)
+				.map_err(|e| format!("invalid {label} pattern '{}': {e}", rule.pattern))?;
+			Ok(CompiledReplace { pattern, replacement: rule.replacement })
+		})
+		.collect()
 }
 
 /// Compile a raw TOML definition. Returns a descriptive error on regex
@@ -155,15 +177,8 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		.map(|p| Regex::new(p).map_err(|e| format!("invalid match_subcommand: {e}")))
 		.transpose()?;
 
-	let replace = def
-		.replace
-		.into_iter()
-		.map(|rule| {
-			let pattern = Regex::new(&rule.pattern)
-				.map_err(|e| format!("invalid replace pattern '{}': {e}", rule.pattern))?;
-			Ok(CompiledReplace { pattern, replacement: rule.replacement })
-		})
-		.collect::<Result<Vec<_>, String>>()?;
+	let replace = compile_replaces(def.replace, "replace")?;
+	let replace_after = compile_replaces(def.replace_after, "replace_after")?;
 
 	let match_output = def
 		.match_output
@@ -207,6 +222,7 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		match_output,
 		strip_lines,
 		keep_lines,
+		replace_after,
 		truncate_lines_at: def.truncate_lines_at,
 		head_lines: def.head_lines,
 		tail_lines: def.tail_lines,
@@ -243,7 +259,7 @@ impl CompiledPipeline {
 		false
 	}
 
-	/// Apply the full 8-stage pipeline to `input`.
+	/// Apply the full 9-stage pipeline to `input`.
 	pub fn apply<'a>(&self, input: &'a str) -> Cow<'a, str> {
 		// Stage 1: strip_ansi
 		let stage1: Cow<'_, str> = if self.strip_ansi {
@@ -253,25 +269,7 @@ impl CompiledPipeline {
 		};
 
 		// Stage 2: replace (ordered, line-by-line)
-		let stage2: Cow<'_, str> = if self.replace.is_empty() {
-			stage1
-		} else {
-			let mut out = String::with_capacity(stage1.len());
-			for line in stage1.lines() {
-				let mut current = Cow::Borrowed(line);
-				for rule in &self.replace {
-					let replaced = rule
-						.pattern
-						.replace_all(&current, rule.replacement.as_str());
-					if let Cow::Owned(s) = replaced {
-						current = Cow::Owned(s);
-					}
-				}
-				out.push_str(&current);
-				out.push('\n');
-			}
-			Cow::Owned(out)
-		};
+		let stage2 = apply_replaces(stage1, &self.replace);
 
 		// Stage 3: match_output short-circuit
 		if !self.match_output.is_empty() {
@@ -300,42 +298,70 @@ impl CompiledPipeline {
 			stage2
 		};
 
-		// Stage 5: truncate each line
-		let stage5: Cow<'_, str> = if let Some(n) = self.truncate_lines_at {
-			let mut out = String::with_capacity(stage4.len());
-			for line in stage4.lines() {
+		// Stage 5: replace_after (ordered, line-by-line) — post-filter so
+		// only surviving lines are substituted, pre-truncate so shortening
+		// substitutions (path compaction) see the full line.
+		let stage5 = apply_replaces(stage4, &self.replace_after);
+
+		// Stage 6: truncate each line
+		let stage6: Cow<'_, str> = if let Some(n) = self.truncate_lines_at {
+			let mut out = String::with_capacity(stage5.len());
+			for line in stage5.lines() {
 				out.push_str(&primitives::truncate_line(line, n));
 				out.push('\n');
 			}
 			Cow::Owned(out)
 		} else {
-			stage4
+			stage5
 		};
 
-		// Stage 6: head + tail
-		let stage6: Cow<'_, str> = match (self.head_lines, self.tail_lines) {
-			(Some(h), Some(t)) => Cow::Owned(primitives::head_tail_lines(&stage5, h, t)),
-			(Some(h), None) => Cow::Owned(primitives::head_lines_only(&stage5, h)),
-			(None, Some(t)) => Cow::Owned(primitives::tail_lines_only(&stage5, t)),
-			(None, None) => stage5,
+		// Stage 7: head + tail
+		let stage7: Cow<'_, str> = match (self.head_lines, self.tail_lines) {
+			(Some(h), Some(t)) => Cow::Owned(primitives::head_tail_lines(&stage6, h, t)),
+			(Some(h), None) => Cow::Owned(primitives::head_lines_only(&stage6, h)),
+			(None, Some(t)) => Cow::Owned(primitives::tail_lines_only(&stage6, t)),
+			(None, None) => stage6,
 		};
 
-		// Stage 7: max_lines
-		let stage7: Cow<'_, str> = if let Some(m) = self.max_lines {
-			Cow::Owned(primitives::max_lines(&stage6, m))
+		// Stage 8: max_lines
+		let stage8: Cow<'_, str> = if let Some(m) = self.max_lines {
+			Cow::Owned(primitives::max_lines(&stage7, m))
 		} else {
-			stage6
+			stage7
 		};
 
-		// Stage 8: on_empty
+		// Stage 9: on_empty
 		if let Some(msg) = self.on_empty.as_deref()
-			&& stage7.trim().is_empty()
+			&& stage8.trim().is_empty()
 		{
 			return Cow::Owned(msg.to_string());
 		}
 
-		stage7
+		stage8
 	}
+}
+
+/// Apply an ordered regex-substitution list line-by-line. Returns `input`
+/// untouched (no allocation) when `rules` is empty.
+fn apply_replaces<'a>(input: Cow<'a, str>, rules: &[CompiledReplace]) -> Cow<'a, str> {
+	if rules.is_empty() {
+		return input;
+	}
+	let mut out = String::with_capacity(input.len());
+	for line in input.lines() {
+		let mut current = Cow::Borrowed(line);
+		for rule in rules {
+			let replaced = rule
+				.pattern
+				.replace_all(&current, rule.replacement.as_str());
+			if let Cow::Owned(s) = replaced {
+				current = Cow::Owned(s);
+			}
+		}
+		out.push_str(&current);
+		out.push('\n');
+	}
+	Cow::Owned(out)
 }
 
 /// Return type of [`parse_file`]: the compiled pipelines alongside their
@@ -527,6 +553,44 @@ strip_lines_matching = ["UP-TO-DATE$"]
 		let out = pipeline.apply("> Task :a UP-TO-DATE\n> Task :b\nDownloading dep\n");
 		// Only lines matching the keep set AND not the strip set survive.
 		assert_eq!(out.as_ref(), "> Task :b\n");
+	}
+
+	#[test]
+	fn replace_after_substitutes_surviving_lines_post_filter() {
+		let src = r#"
+schema_version = 1
+[filters.paths]
+match_command = "^paths$"
+keep_lines_matching = ["^src/"]
+[[filters.paths.replace_after]]
+pattern = "^src/very/long/prefix/"
+replacement = ".../"
+"#;
+		let pipeline = compile_one(src);
+		// The keep filter matches the ORIGINAL line (`^src/`); if the
+		// substitution ran before filtering, the rewritten `.../main.rs`
+		// would no longer match the keep set and be dropped.
+		let out = pipeline.apply("src/very/long/prefix/main.rs\nnoise line\nsrc/lib.rs\n");
+		assert_eq!(out.as_ref(), ".../main.rs\nsrc/lib.rs\n");
+	}
+
+	#[test]
+	fn replace_after_runs_before_truncate_lines_at() {
+		let src = r#"
+schema_version = 1
+[filters.shorten]
+match_command = "^shorten$"
+truncate_lines_at = 12
+[[filters.shorten.replace_after]]
+pattern = "^/workspace/project/deep/"
+replacement = ""
+"#;
+		let pipeline = compile_one(src);
+		// The raw line exceeds the 12-char cap; the substitution shortens it
+		// below the cap first, so no truncation marker appears. If truncation
+		// ran first, the pattern would no longer match the clipped line.
+		let out = pipeline.apply("/workspace/project/deep/file.rs\n");
+		assert_eq!(out.as_ref(), "file.rs\n");
 	}
 
 	#[test]
