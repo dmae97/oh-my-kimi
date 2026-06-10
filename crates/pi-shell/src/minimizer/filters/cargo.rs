@@ -249,9 +249,16 @@ fn filter_nextest(input: &str) -> String {
 	let mut in_failure = false;
 	let mut summary = None;
 	let mut canceled = false;
+	let mut past_summary = false;
 
 	for line in input.lines() {
 		let trimmed = line.trim();
+		// Once the Summary line is seen, nextest re-lists the failing tests as a
+		// recap (duplicate `FAIL [...]` rows + trailing noise).  Drop everything
+		// after it; the captured Summary line is re-emitted verbatim at the end.
+		if past_summary {
+			continue;
+		}
 		if is_compiling_noise(trimmed)
 			|| trimmed.starts_with("PASS ")
 			|| trimmed.starts_with("────")
@@ -262,6 +269,7 @@ fn filter_nextest(input: &str) -> String {
 		if trimmed.starts_with("Summary [") {
 			summary = Some(trimmed.to_string());
 			in_failure = false;
+			past_summary = true;
 			continue;
 		}
 		if trimmed.starts_with("Cancelling") {
@@ -586,14 +594,25 @@ mod tests {
 	#[test]
 	fn supports_nextest_and_keeps_failures_with_summary() {
 		assert!(supports(Some("nextest")));
+		// nextest re-lists failing tests as a recap AFTER the Summary line.  The
+		// recap `FAIL [...]` row and `error: test run failed` trailer must be
+		// dropped (past_summary), while the in-run FAIL block + verbatim Summary
+		// line survive.
 		let out = filter_nextest(
 			"Starting 3 tests across 1 binary\nPASS crate::ok\nFAIL crate::bad\nstdout text\nSummary \
-			 [0.2s] 2 tests run: 1 passed, 1 failed\nerror: test run failed\n",
+			 [0.2s] 2 tests run: 1 passed, 1 failed\nFAIL [   0.011s] crate::bad\nerror: test run \
+			 failed\n",
 		);
 		assert!(!out.contains("PASS crate::ok"));
 		assert!(out.contains("FAIL crate::bad"));
 		assert!(out.contains("stdout text"));
 		assert!(out.contains("Summary [0.2s] 2 tests run: 1 passed, 1 failed"));
+		// Post-Summary recap row and trailing noise are dropped.
+		assert!(!out.contains("FAIL [   0.011s]"), "post-Summary recap must be dropped: {out:?}");
+		assert!(
+			!out.contains("error: test run failed"),
+			"post-Summary trailer must be dropped: {out:?}"
+		);
 	}
 	#[test]
 	fn install_strips_noise_keeps_summary() {
