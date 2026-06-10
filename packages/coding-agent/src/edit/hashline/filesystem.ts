@@ -110,6 +110,18 @@ export class HashlineFilesystem extends Filesystem {
 		await this.preflightWrite(relativePath);
 		const absolutePath = this.resolveAbsolute(relativePath);
 		const finalContent = await serializeEditFileText(absolutePath, relativePath, content);
+
+		// When an ACP client (e.g. Zed) advertises writeTextFile, route through it
+		// so the editor's open buffer is updated immediately. This keeps the editor's
+		// native diagnostics panel in sync without requiring a workspace reload.
+		const bridge = this.session.getClientBridge?.();
+		if (bridge?.capabilities.writeTextFile && bridge.writeTextFile) {
+			await bridge.writeTextFile({ path: absolutePath, content: finalContent });
+			invalidateFsScanAfterWrite(absolutePath);
+			this.#diagnosticsByPath.set(relativePath, undefined);
+			return { text: finalContent };
+		}
+
 		const diagnostics = await this.#writethrough(
 			absolutePath,
 			finalContent,

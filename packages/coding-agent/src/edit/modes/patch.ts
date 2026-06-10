@@ -1666,6 +1666,7 @@ class LspFileSystem implements FileSystem {
 	#fileCache: Record<string, Bun.BunFile> = {};
 
 	constructor(
+		private readonly session: ToolSession,
 		private readonly writethrough: WritethroughCallback,
 		private readonly signal?: AbortSignal,
 		private readonly batchRequest?: LspBatchRequest,
@@ -1695,8 +1696,19 @@ class LspFileSystem implements FileSystem {
 	}
 
 	async write(path: string, content: string): Promise<void> {
-		const file = this.#getFile(path);
 		const finalContent = await serializeEditFileText(path, path, content);
+
+		// When an ACP client (e.g. Zed) advertises writeTextFile, route through it
+		// so the editor's open buffer is updated immediately. This keeps the editor's
+		// native diagnostics panel in sync without requiring a workspace reload.
+		const bridge = this.session.getClientBridge?.();
+		if (bridge?.capabilities.writeTextFile && bridge.writeTextFile) {
+			await bridge.writeTextFile({ path, content: finalContent });
+			invalidateFsScanAfterWrite(path);
+			return;
+		}
+
+		const file = this.#getFile(path);
 		const deferredForPath = this.deferredForPath;
 		const result = await this.writethrough(
 			path,
@@ -1788,7 +1800,13 @@ export async function executePatchSingle(
 	}
 
 	const input: PatchInput = { path: resolvedPath, op, rename: resolvedRename, diff };
-	const patchFileSystem = new LspFileSystem(writethrough, signal, batchRequest, beginDeferredDiagnosticsForPath);
+	const patchFileSystem = new LspFileSystem(
+		session,
+		writethrough,
+		signal,
+		batchRequest,
+		beginDeferredDiagnosticsForPath,
+	);
 	const result = await applyPatch(input, {
 		cwd: session.cwd,
 		fs: patchFileSystem,
