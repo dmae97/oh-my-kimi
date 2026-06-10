@@ -2381,14 +2381,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Start LSP warmup in the background so startup does not block on language server initialization.
-		// With `lsp.lazy` (the default) the warmup is skipped entirely: servers cold-start on first use —
-		// the lsp tool or an edit/write touching a matching file type — through `getOrCreateClient`.
+		// With `lsp.lazy` (the default) the warmup is skipped: recognized servers are still discovered and
+		// surfaced in the UI as "available", but cold-start on first use — the lsp tool or an edit/write
+		// touching a matching file type — through `getOrCreateClient`.
 		// Print/script invocations (`hasUI=false`) skip it regardless: they don't render the warmup status
 		// indicator AND typically finish before LSP servers would have stabilized — warming them just spends
 		// CPU parsing big `initialize` responses concurrently with the LLM stream consumer, jittering
 		// perceived latency.
 		let lspServers: CreateAgentSessionResult["lspServers"];
-		if (enableLsp && options.hasUI && !settings.get("lsp.lazy")) {
+		if (enableLsp && options.hasUI && settings.get("lsp.lazy")) {
+			lspServers = discoverStartupLspServers(cwd, "available");
+		} else if (enableLsp && options.hasUI) {
 			lspServers = discoverStartupLspServers(cwd);
 			if (lspServers.length > 0) {
 				void (async () => {

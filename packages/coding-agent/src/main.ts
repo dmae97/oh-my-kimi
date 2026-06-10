@@ -51,6 +51,7 @@ import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import type { MCPManager } from "./mcp";
+import { WelcomeComponent } from "./modes/components/welcome";
 import { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
@@ -69,7 +70,7 @@ import { resolveResumableSession, type SessionInfo, SessionManager } from "./ses
 import { resolvePromptInput } from "./system-prompt";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
-import type { LspStartupServerInfo } from "./tools";
+import { discoverStartupLspServers, type LspStartupServerInfo } from "./tools";
 import {
 	getChangelogPath,
 	getNewEntries,
@@ -91,12 +92,37 @@ function maybeShowStartupSplash(options: {
 	resuming: boolean;
 	quiet: boolean;
 	version: string;
+	setupPending: boolean;
+	modelName?: string;
+	providerName?: string;
+	lspServers?: LspStartupServerInfo[];
 }): void {
 	if (!options.isInteractive) return;
 	if (options.resuming || options.quiet) return;
 	if ($env.PI_TIMING) return;
 	if (!process.stdin.isTTY || !process.stdout.isTTY) return;
-	process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
+	// First-run launches go straight into the setup wizard, which paints its own
+	// splash — keep the minimal two-line notice there.
+	if (options.setupPending) {
+		process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
+		return;
+	}
+	// Render the same welcome box the TUI paints first: recent sessions as a
+	// loading placeholder (the fixed slot count keeps the box height stable) and
+	// the logo held on the intro animation's first frame so the in-TUI intro
+	// continues from the frame shown here. Clearing the screen first puts the
+	// box at the same origin the TUI's first full paint (clearScrollback) uses,
+	// so the live welcome replaces this frame in place without shifting.
+	const welcome = new WelcomeComponent(
+		options.version,
+		options.modelName ?? "",
+		options.providerName ?? "",
+		null,
+		options.lspServers ?? [],
+	);
+	welcome.holdIntroFirstFrame();
+	const lines = welcome.render(process.stdout.columns || 80);
+	process.stdout.write(`\x1b[2J\x1b[H\x1b[3J\n${lines.join("\n")}\n`);
 }
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
@@ -1202,11 +1228,40 @@ export async function runRootCommand(
 			stdinContent: pipedInput,
 		});
 
+		// Resolve the model the session will most likely start with so the splash
+		// box matches the final welcome screen (the raw role selector, e.g.
+		// "anthropic/claude-fable-5:high", is wider than the left column and would
+		// collapse the box into the single-column layout).
+		let splashModel = sessionOptions.model;
+		if (!splashModel) {
+			const remembered = settingsInstance.getModelRole("default");
+			if (remembered) {
+				splashModel = resolveModelRoleValue(remembered, modelRegistry.getAll(), {
+					settings: settingsInstance,
+					matchPreferences: modelMatchPreferences,
+					modelRegistry,
+				}).model;
+			}
+		}
+		// Mirror createAgentSession's startup LSP discovery (sync and cheap: root
+		// markers + binary lookup) so the splash lists the same servers the live
+		// welcome screen will show.
+		const splashLspServers =
+			(sessionOptions.enableLsp ?? true)
+				? discoverStartupLspServers(
+						sessionOptions.cwd ?? cwd,
+						settingsInstance.get("lsp.lazy") ? "available" : "connecting",
+					)
+				: [];
 		maybeShowStartupSplash({
 			isInteractive,
 			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
 			quiet: settingsInstance.get("startup.quiet"),
 			version: VERSION,
+			setupPending: deps.forceSetupWizard === true || settingsInstance.get("setupVersion") < CURRENT_SETUP_VERSION,
+			modelName: splashModel?.name,
+			providerName: splashModel?.provider,
+			lspServers: splashLspServers,
 		});
 
 		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
