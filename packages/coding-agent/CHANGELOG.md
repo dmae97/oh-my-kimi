@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP OAuth authorization and token requests to include the required `resource` indicator for the target MCP server.
+
 ## [15.10.12] - 2026-06-10
 
 ### Added
