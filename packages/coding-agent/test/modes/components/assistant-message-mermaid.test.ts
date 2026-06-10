@@ -179,7 +179,7 @@ describe("AssistantMessageComponent thinking renderers", () => {
 		);
 
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
-		expect(rendered).toContain("Thinking...");
+		expect(rendered).not.toContain("Thinking...");
 		expect(rendered).not.toContain("I should inspect the input.");
 		expect(rendered).not.toContain("hidden note");
 		expect(rendererCalled).toBe(false);
