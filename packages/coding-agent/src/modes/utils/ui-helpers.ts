@@ -379,6 +379,7 @@ export class UiHelpers {
 					if (content.type !== "toolCall") {
 						continue;
 					}
+					resolveWaitingPoll(content.name);
 
 					if (
 						content.name === "read" &&
@@ -493,8 +494,17 @@ export class UiHelpers {
 				if (component) {
 					component.updateResult(message, false, message.toolCallId);
 					this.ctx.pendingTools.delete(message.toolCallId);
+					if (
+						message.toolName === "job" &&
+						component instanceof ToolExecutionComponent &&
+						component.isDisplaceableBlock()
+					) {
+						waitingPoll = component;
+					}
 				}
 			} else {
+				// A user prompt closes the displacement window, same as the live path.
+				if (message.role === "user") resolveWaitingPoll();
 				// All other messages use standard rendering
 				this.ctx.addMessageToChat(message, options);
 			}

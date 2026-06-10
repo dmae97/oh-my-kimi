@@ -65,6 +65,19 @@ export interface JobToolDetails {
 	cancelled?: { id: string; status: CancelStatus }[];
 }
 
+/**
+ * A poll snapshot where every watched job is still running and nothing was
+ * cancelled — pure "still waiting" noise once a newer poll exists. The TUI
+ * keeps such a block un-finalized (displaceable) so a follow-up `job` call
+ * replaces it instead of stacking another waiting frame in the transcript.
+ */
+export function isWaitingPollDetails(details: unknown): boolean {
+	const d = details as JobToolDetails | undefined;
+	if (!d || !Array.isArray(d.jobs) || d.jobs.length === 0) return false;
+	if (d.cancelled?.length) return false;
+	return d.jobs.every(job => job?.status === "running");
+}
+
 export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly name = "job";
 	readonly approval = "read" as const;
