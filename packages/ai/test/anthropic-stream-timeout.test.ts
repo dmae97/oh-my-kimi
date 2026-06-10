@@ -204,7 +204,7 @@ describe("anthropic first-event timeout retries", () => {
 			}) as never;
 		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
 		const client = { messages: { create } } as AnthropicMessagesClientLike;
-		const providerRetryWait = vi.fn(async () => {});
+		const providerRetryWait = vi.fn(async (_delayMs: number, _signal: AbortSignal | undefined) => {});
 
 		const resultPromise = streamAnthropic(model, context, {
 			client,
@@ -226,7 +226,13 @@ describe("anthropic first-event timeout retries", () => {
 		);
 
 		expect(attempt).toBe(2);
-		expect(providerRetryWait).toHaveBeenCalledWith(2000, undefined);
+		expect(providerRetryWait).toHaveBeenCalledTimes(1);
+		const retryDelayMs = providerRetryWait.mock.calls[0]?.[0];
+		if (typeof retryDelayMs !== "number") {
+			throw new Error("Expected provider retry wait delay");
+		}
+		expect(retryDelayMs).toBeGreaterThanOrEqual(375);
+		expect(retryDelayMs).toBeLessThanOrEqual(500);
 		expect(requestTimeouts).toEqual([1, 1]);
 		expect(requestMaxRetries).toEqual([0, 0]);
 		expect(result.stopReason).toBe("stop");
@@ -336,10 +342,10 @@ describe("anthropic first-event timeout retries", () => {
 			providerRetryWait,
 		}).result();
 
-		expect(attempt).toBe(4);
-		expect(providerRetryWait).toHaveBeenCalledTimes(3);
-		expect(requestTimeouts).toEqual([1, 1, 1, 1]);
-		expect(requestMaxRetries).toEqual([0, 0, 0, 0]);
+		expect(attempt).toBe(11);
+		expect(providerRetryWait).toHaveBeenCalledTimes(10);
+		expect(requestTimeouts).toEqual(new Array(11).fill(1));
+		expect(requestMaxRetries).toEqual(new Array(11).fill(0));
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Anthropic stream timed out while waiting for the first event");
 	});
@@ -452,5 +458,33 @@ describe("anthropic provider retry delays", () => {
 		expect(providerRetryWait).toHaveBeenCalledWith(30_000, undefined);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "after backoff" }]);
+	});
+
+	it("retries 502s ten times with Anthropic-style capped backoff", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		let attempt = 0;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			if (attempt <= 10) {
+				return createRejectedAnthropicRequest(
+					new AnthropicApiError(502, "502 Bad Gateway", new Headers()),
+				) as never;
+			}
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: createSuccessfulAnthropicEvents("recovered from 502"),
+			}) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async (_delayMs: number, _signal: AbortSignal | undefined) => {});
+
+		const result = await streamAnthropic(model, context, { client, providerRetryWait }).result();
+
+		expect(attempt).toBe(11);
+		expect(providerRetryWait.mock.calls.map(call => call[0])).toEqual([
+			500, 1000, 2000, 4000, 8000, 8000, 8000, 8000, 8000, 8000,
+		]);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "recovered from 502" }]);
 	});
 });

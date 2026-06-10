@@ -140,7 +140,7 @@ export function retryDelayFromHeaders(headers: Headers | undefined): number | un
 	return undefined;
 }
 
-function defaultRetryDelayMs(attempt: number): number {
+export function calculateAnthropicRetryDelayMs(attempt: number): number {
 	const sleepSeconds = Math.min(INITIAL_RETRY_DELAY_S * 2 ** attempt, MAX_RETRY_DELAY_S);
 	const jitter = 1 - Math.random() * 0.25;
 	return sleepSeconds * jitter * 1000;
@@ -310,7 +310,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 		responseHeaders: Headers | undefined,
 		signal: AbortSignal | undefined,
 	): Promise<void> {
-		const delayMs = retryDelayFromHeaders(responseHeaders) ?? defaultRetryDelayMs(attempt);
+		const delayMs = retryDelayFromHeaders(responseHeaders) ?? calculateAnthropicRetryDelayMs(attempt);
 		try {
 			await scheduler.wait(delayMs, { signal });
 		} catch {

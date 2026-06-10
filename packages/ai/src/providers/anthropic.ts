@@ -63,6 +63,7 @@ import {
 	type AnthropicFetchOptions,
 	AnthropicMessagesClient,
 	type AnthropicMessagesClientLike,
+	calculateAnthropicRetryDelayMs,
 	retryDelayFromHeaders,
 } from "./anthropic-client";
 import type {
@@ -1370,8 +1371,7 @@ async function* observeDecodedAnthropicSdkEvents(
 	}
 }
 
-const PROVIDER_MAX_RETRIES = 3;
-const PROVIDER_BASE_DELAY_MS = 2000;
+const PROVIDER_MAX_RETRIES = 10;
 
 /** Transient stream corruption errors where the response was truncated mid-JSON. */
 function isTransientStreamParseError(error: unknown): boolean {
@@ -1680,8 +1680,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				const { requestSignal } = activeAbortTracker;
 				// The provider loop owns retries: pin the client's internal retry loop
 				// to zero even when no watchdog timeout is configured (the helper only
-				// pins it alongside a timeout; the client default of 5 would otherwise
-				// multiply with PROVIDER_MAX_RETRIES into up to 24 wire attempts).
+				// pins it alongside a timeout; a client retry budget of 5 would otherwise
+				// multiply with PROVIDER_MAX_RETRIES into up to 66 wire attempts).
 				const requestOptions = { ...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs), maxRetries: 0 };
 				const anthropicRequest: unknown =
 					isOAuthToken && client.beta
@@ -2136,7 +2136,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						throw streamFailure;
 					}
 					providerRetryAttempt++;
-					const backoffDelayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
+					const backoffDelayMs = calculateAnthropicRetryDelayMs(providerRetryAttempt - 1);
 					// Honor the server's retry hint (`retry-after-ms`/`retry-after`) on
 					// 429/529-style failures: retrying sooner than the server asked is a
 					// guaranteed failure that just burns the retry budget.

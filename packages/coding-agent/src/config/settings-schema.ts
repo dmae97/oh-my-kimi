@@ -879,7 +879,7 @@ export const SETTINGS_SCHEMA = {
 
 	"retry.maxRetries": {
 		type: "number",
-		default: 3,
+		default: 10,
 		ui: {
 			tab: "model",
 			label: "Retry Attempts",
@@ -894,7 +894,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"retry.baseDelayMs": { type: "number", default: 2000 },
+	"retry.baseDelayMs": { type: "number", default: 500 },
 	"retry.maxDelayMs": {
 		type: "number",
 		default: 5 * 60 * 1000,

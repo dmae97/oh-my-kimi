@@ -288,6 +288,15 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
 const EMPTY_STOP_MAX_RETRIES = 3;
+const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
+const RETRY_BACKOFF_JITTER_RATIO = 0.25;
+
+function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
+	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
+	const jitter = 1 - Math.random() * RETRY_BACKOFF_JITTER_RATIO;
+	return cappedDelayMs * jitter;
+}
+
 /**
  * Slack added past a sibling credential's block expiry before retrying, so
  * the next getApiKey lands after the block has actually lapsed.
@@ -8313,7 +8322,7 @@ export class AgentSession {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
-		let delayMs = retrySettings.baseDelayMs * 2 ** (this.#retryAttempt - 1);
+		let delayMs = calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
 		let switchedCredential = false;
 		let switchedModel = false;
 		// Set when a usage-limit error pinned the wait to credential

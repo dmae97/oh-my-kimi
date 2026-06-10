@@ -479,4 +479,66 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.stopReason).toBe("stop");
 		expect(last.content).toContainEqual({ type: "text", text: "recovered after generic gateway upstream error" });
 	});
+
+	it("defaults 502 auto-retry to ten capped backoff attempts", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) {
+			throw new Error("Expected bundled Anthropic test model to exist");
+		}
+
+		const mock = createMockModel();
+		let attempts = 0;
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				attempts += 1;
+				mock.push(
+					attempts <= 10
+						? { throw: "502 Bad Gateway upstream_error" }
+						: { content: ["recovered after default 502 retry budget"] },
+				);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const retryStartEvents: AutoRetryStartEvent[] = [];
+		const retryEndEvents: AutoRetryEndEvent[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+
+		await session.prompt("Trigger repeated 502s");
+		await session.waitForIdle();
+
+		expect(attempts).toBe(11);
+		expect(retryStartEvents).toHaveLength(10);
+		expect(retryStartEvents.map(event => event.maxAttempts)).toEqual(new Array(10).fill(10));
+		expect(retryStartEvents.map(event => event.delayMs)).toEqual([
+			500, 1000, 2000, 4000, 8000, 8000, 8000, 8000, 8000, 8000,
+		]);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 10 });
+		const last = lastAssistant(session);
+		expect(last.stopReason).toBe("stop");
+		expect(last.content).toContainEqual({ type: "text", text: "recovered after default 502 retry budget" });
+	});
 });
