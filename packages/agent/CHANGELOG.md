@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `Agent` runs so explicit reasoning disablement is forwarded to provider stream options.
+
 ## [15.10.11] - 2026-06-10
 
 ### Changed

@@ -354,6 +354,22 @@ describe("Agent", () => {
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
 	});
 
+	it("forwards explicit reasoning disablement to the stream", async () => {
+		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
+		const agent = new Agent({
+			initialState: {
+				model: mock.model,
+				messages: [],
+				disableReasoning: true,
+			},
+			streamFn: mock.stream,
+		});
+
+		await agent.prompt("run");
+
+		expect(mock.calls[0]?.options?.disableReasoning).toBe(true);
+	});
+
 	it("forwards distinct provider session id and prompt cache key to the stream", async () => {
 		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
 		const agent = new Agent({

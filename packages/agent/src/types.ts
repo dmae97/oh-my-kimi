@@ -358,6 +358,7 @@ export interface AgentState {
 	systemPrompt: string[];
 	model: Model;
 	thinkingLevel?: Effort;
+	disableReasoning?: boolean;
 	tools: AgentTool<any>[];
 	messages: AgentMessage[]; // Can include attachments + custom message types
 	isStreaming: boolean;

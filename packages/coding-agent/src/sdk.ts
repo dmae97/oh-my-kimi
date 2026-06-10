@@ -135,6 +135,7 @@ import {
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
+	shouldDisableReasoning,
 	toReasoningEffort,
 } from "./thinking";
 import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "./tool-discovery/mode";
@@ -2176,6 +2177,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				systemPrompt,
 				model,
 				thinkingLevel: toReasoningEffort(effectiveThinkingLevel),
+				disableReasoning: shouldDisableReasoning(effectiveThinkingLevel),
 				tools: initialTools,
 			},
 			convertToLlm: convertToLlmFinal,

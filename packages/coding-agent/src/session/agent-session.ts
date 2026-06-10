@@ -198,6 +198,7 @@ import {
 	clampAutoThinkingEffort,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
+	shouldDisableReasoning,
 	toReasoningEffort,
 } from "../thinking";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
@@ -1139,6 +1140,7 @@ export class AgentSession {
 		} else {
 			this.#thinkingLevel = config.thinkingLevel;
 		}
+		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
@@ -5770,6 +5772,11 @@ export class AgentSession {
 	// Thinking Level Management
 	// =========================================================================
 
+	#applyThinkingLevelToAgent(level: ThinkingLevel | undefined): void {
+		this.agent.setThinkingLevel(toReasoningEffort(level));
+		this.agent.setDisableReasoning(shouldDisableReasoning(level));
+	}
+
 	/**
 	 * Set the thinking level. `auto` enables per-turn classification; the selector
 	 * itself is never written to the session log, but resolved concrete levels are
@@ -5783,7 +5790,7 @@ export class AgentSession {
 			this.#autoThinking = true;
 			this.#autoResolvedLevel = undefined;
 			this.#thinkingLevel = provisional;
-			this.agent.setThinkingLevel(toReasoningEffort(provisional));
+			this.#applyThinkingLevelToAgent(provisional);
 			if (persist) {
 				this.settings.set("defaultThinkingLevel", AUTO_THINKING);
 			}
@@ -5799,7 +5806,7 @@ export class AgentSession {
 		const isChanging = effectiveLevel !== this.#thinkingLevel;
 
 		this.#thinkingLevel = effectiveLevel;
-		this.agent.setThinkingLevel(toReasoningEffort(effectiveLevel));
+		this.#applyThinkingLevelToAgent(effectiveLevel);
 
 		if (isChanging) {
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
@@ -5889,7 +5896,7 @@ export class AgentSession {
 		const shouldPersistResolution = this.#autoResolvedLevel !== effort;
 		this.#autoResolvedLevel = effort;
 		this.#thinkingLevel = effort;
-		this.agent.setThinkingLevel(toReasoningEffort(effort));
+		this.#applyThinkingLevelToAgent(effort);
 		if (shouldPersistResolution) {
 			this.sessionManager.appendThinkingLevelChange(effort);
 		}
@@ -9065,6 +9072,7 @@ export class AgentSession {
 				promptCacheKey: cacheSessionId,
 				preferWebsockets: false,
 				reasoning: toReasoningEffort(this.thinkingLevel),
+				disableReasoning: shouldDisableReasoning(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
 				serviceTier: this.serviceTier,
 				signal: args.signal,
@@ -9353,7 +9361,7 @@ export class AgentSession {
 				this.#autoResolvedLevel = undefined;
 				this.#thinkingLevel = resolveThinkingLevelForModel(this.model, restoredThinkingLevel);
 			}
-			this.agent.setThinkingLevel(toReasoningEffort(this.#thinkingLevel));
+			this.#applyThinkingLevelToAgent(this.#thinkingLevel);
 			this.agent.serviceTier = hasServiceTierEntry
 				? sessionContext.serviceTier
 				: configuredServiceTier === "none"
@@ -9410,7 +9418,7 @@ export class AgentSession {
 			this.#thinkingLevel = previousThinkingLevel;
 			this.#autoThinking = previousAutoThinking;
 			this.#autoResolvedLevel = previousAutoResolvedLevel;
-			this.agent.setThinkingLevel(toReasoningEffort(previousThinkingLevel));
+			this.#applyThinkingLevelToAgent(previousThinkingLevel);
 			this.agent.serviceTier = previousServiceTier;
 			this.#syncTodoPhasesFromBranch();
 			this.#reconnectToAgent();
