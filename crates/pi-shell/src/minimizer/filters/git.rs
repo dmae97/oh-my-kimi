@@ -66,7 +66,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		Some("tag") if is_tag_non_listing(ctx.command) => cleaned,
 		Some("tag") => primitives::compact_listing(&cleaned, 40),
 		Some("stash") => condense_stash(ctx.command, &cleaned, exit_code),
-		Some("worktree") => cleaned,
+		Some("worktree") => condense_worktree(&cleaned),
 		Some("push") if has_token(ctx.command, "--porcelain") => cleaned,
 		Some("push") => condense_push(&cleaned, exit_code),
 		Some("pull") => condense_pull(&cleaned, exit_code),
@@ -1502,6 +1502,90 @@ fn stash_subcommand(command: &str) -> &str {
 	""
 }
 
+const WORKTREE_LIMIT: usize = 20;
+
+fn condense_worktree(input: &str) -> String {
+	// Home is re-derived from the environment (never shelled out) so a leading
+	// `$HOME` in worktree paths can be abbreviated to `~`. Falls back to no
+	// abbreviation when `HOME` is unset.
+	let home = std::env::var("HOME").unwrap_or_default();
+	condense_worktree_with_home(input, &home)
+}
+
+/// Condense `git worktree` output, shape-detected from the OUTPUT rather than
+/// the args so it covers both `worktree list` and bare confirmations.
+///
+/// Listing-shaped lines (`<abs-path> <hash> [<branch>]`, plus the `(bare)` and
+/// `(detached HEAD)` variants) get a leading `$HOME` abbreviated to `~` and are
+/// capped with an omitted-count marker. Any non-listing output (`add`'s
+/// "Preparing worktree…"/"HEAD is now at …" confirmations, errors) is left to
+/// `condense_noisy_output`/passthrough so its meaning is preserved.
+fn condense_worktree_with_home(input: &str, home: &str) -> String {
+	let mut entries = Vec::new();
+	for line in input.lines() {
+		if line.trim().is_empty() {
+			continue;
+		}
+		if !is_worktree_listing_line(line) {
+			// Not a listing: confirmation / error / progress — hand off untouched.
+			return condense_noisy_output(input);
+		}
+		entries.push(abbreviate_worktree_home(line, home));
+	}
+
+	if entries.is_empty() {
+		return input.to_string();
+	}
+
+	let mut out = String::new();
+	for entry in entries.iter().take(WORKTREE_LIMIT) {
+		out.push_str(entry);
+		out.push('\n');
+	}
+	if entries.len() > WORKTREE_LIMIT {
+		out.push_str("… ");
+		out.push_str(&(entries.len() - WORKTREE_LIMIT).to_string());
+		out.push_str(" worktrees omitted …\n");
+	}
+	out
+}
+
+/// A `git worktree list` row is `<abs-path>  <hash> [<branch>]`, with the
+/// trailing column being `(bare)` for a bare repo or `(detached HEAD)` for a
+/// detached worktree. The discriminator: an absolute first token followed by a
+/// hex hash or the literal `(bare)`.
+fn is_worktree_listing_line(line: &str) -> bool {
+	let mut parts = line.split_whitespace();
+	let Some(path) = parts.next() else {
+		return false;
+	};
+	if !path.starts_with('/') {
+		return false;
+	}
+	let Some(second) = parts.next() else {
+		return false;
+	};
+	second == "(bare)" || is_short_hex(second)
+}
+
+fn is_short_hex(token: &str) -> bool {
+	token.len() >= 7 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn abbreviate_worktree_home(line: &str, home: &str) -> String {
+	if home.is_empty() {
+		return line.to_string();
+	}
+	// Only abbreviate a leading `$HOME` path prefix; a bare `$HOME` exactly is
+	// rendered as `~`. Mid-line occurrences are left untouched.
+	if let Some(rest) = line.strip_prefix(home)
+		&& (rest.is_empty() || rest.starts_with(['/', ' ', '\t']))
+	{
+		return format!("~{rest}");
+	}
+	line.to_string()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -2658,6 +2742,44 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 	}
 
 	// --- Push porcelain passthrough ---
+
+	// --- Worktree condense ---
+
+	#[test]
+	fn worktree_list_caps_and_abbreviates_home() {
+		let home = "/home/alice";
+		let mut input = String::new();
+		// 22 listing entries under $HOME, including a bare and a detached-HEAD row.
+		input.push_str("/home/alice/repo                  abc1234 (bare)\n");
+		input.push_str("/home/alice/repo-detached         def5678 (detached HEAD)\n");
+		for idx in 0..20 {
+			input.push_str(&format!(
+				"/home/alice/wt-{idx:02}                    aaaaaaa{idx:02} [wt-{idx}]\n"
+			));
+		}
+		let out = condense_worktree_with_home(&input, home);
+
+		// Leading $HOME abbreviated to '~'.
+		assert!(out.starts_with("~/repo "), "{out:?}");
+		assert!(out.contains("~/repo-detached "));
+		assert!(out.contains("(bare)"));
+		assert!(out.contains("(detached HEAD)"));
+		assert!(!out.contains("/home/alice"), "no absolute $HOME paths should survive: {out:?}");
+		// 22 entries → capped at 20 with a 2-omitted marker.
+		assert!(out.contains("… 2 worktrees omitted …"), "{out:?}");
+		assert_eq!(out.lines().filter(|l| l.starts_with('~')).count(), 20);
+	}
+
+	#[test]
+	fn worktree_add_confirmation_passes_through() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree add ../wt feature", &cfg);
+		// `worktree add` confirmation is not listing-shaped; it must survive.
+		let input = "Preparing worktree (new branch 'feature')\nHEAD is now at abc1234 commit msg\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "{:?}", out.text);
+		assert_eq!(out.text, input);
+	}
 
 	#[test]
 	fn push_porcelain_output_is_passthrough() {
