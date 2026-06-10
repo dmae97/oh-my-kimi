@@ -405,7 +405,7 @@ function normalizePathSeparators(input: string): string {
 }
 
 export function normalizePathLikeInput(input: string): string {
-	return normalizePathSeparators(stripOuterDoubleQuotes(input.trim()));
+	return stripOuterDoubleQuotes(input.trim());
 }
 
 const GLOB_PATH_CHARS = ["*", "?", "[", "{"] as const;
