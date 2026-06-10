@@ -21,6 +21,7 @@ import {
 	loadHindsightConfig,
 	reloadMentalModelsForSession,
 	resolveSeedsForScope,
+	seedAlreadyExists,
 	summarizeMentalModel,
 } from "../../hindsight";
 import { resolveMemoryBackend } from "../../memory-backend";
@@ -712,11 +713,11 @@ export class CommandController {
 				return;
 			}
 			const list = await state.client.listMentalModels(state.bankId, { detail: "metadata" });
-			const existing = new Set((list.items ?? []).map(m => m.id));
+			const existing = list.items ?? [];
 			let created = 0;
 			let skipped = 0;
 			for (const seed of seeds) {
-				if (existing.has(seed.id)) {
+				if (seedAlreadyExists(seed, existing)) {
 					skipped++;
 					continue;
 				}

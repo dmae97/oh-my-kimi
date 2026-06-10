@@ -48,9 +48,9 @@ describe("resolveSeedsForScope", () => {
 			recallTagsMatch: "any",
 		};
 		const seeds = resolveSeedsForScope(scope, "per-project-tagged");
-		const projectConv = seeds.find(s => s.id === "project-conventions");
+		const projectConv = seeds.find(s => s.id === "project-conventions-omp");
 		const userPrefs = seeds.find(s => s.id === "user-preferences");
-		expect(projectConv).toBeDefined();
+		expect(projectConv?.legacyIds).toEqual(["project-conventions"]);
 		expect(projectConv?.tags).toEqual(["project:omp"]);
 		// user-preferences is intentionally untagged so the refresh reads the
 		// whole bank, not just the project subset.
@@ -109,6 +109,50 @@ describe("ensureMentalModels", () => {
 		expect(calls.created).toHaveLength(1);
 		expect(calls.created[0].id).toBe("project-conventions");
 		expect(calls.created[0].tags).toEqual(["project:omp"]);
+	});
+
+	it("matches legacy bare project seeds only when their tags match the active project", async () => {
+		const legacyProjectA: MentalModelSummary = {
+			id: "project-conventions",
+			bank_id: "omp",
+			name: "Project Conventions",
+			tags: ["project:a"],
+		};
+
+		const matching = makeFakeApi([legacyProjectA]);
+		await ensureMentalModels(
+			matching.api,
+			"omp",
+			[
+				{
+					id: "project-conventions-a",
+					name: "Project Conventions",
+					sourceQuery: "q",
+					tags: ["project:a"],
+					legacyIds: ["project-conventions"],
+				},
+			],
+			false,
+		);
+		expect(matching.calls.created).toHaveLength(0);
+
+		const differentProject = makeFakeApi([legacyProjectA]);
+		await ensureMentalModels(
+			differentProject.api,
+			"omp",
+			[
+				{
+					id: "project-conventions-b",
+					name: "Project Conventions",
+					sourceQuery: "q",
+					tags: ["project:b"],
+					legacyIds: ["project-conventions"],
+				},
+			],
+			false,
+		);
+		expect(differentProject.calls.created).toHaveLength(1);
+		expect(differentProject.calls.created[0].id).toBe("project-conventions-b");
 	});
 
 	it("does not modify existing models even if their fields drift from the seed list", async () => {
@@ -227,6 +271,21 @@ describe("loadMentalModelsBlock", () => {
 		const api = new HindsightApiCtor({ baseUrl: "http://localhost:8888" });
 		const block = await loadMentalModelsBlock(api, "b");
 		expect(block).toBeUndefined();
+	});
+
+	it("filters project-tagged models to the active project while keeping untagged models", async () => {
+		vi.spyOn(HindsightApiCtor.prototype, "listMentalModels").mockResolvedValue({
+			items: [
+				{ id: "u", bank_id: "b", name: "User Preferences", content: "global preference" },
+				{ id: "a", bank_id: "b", name: "Project A", tags: ["project:a"], content: "a convention" },
+				{ id: "b", bank_id: "b", name: "Project B", tags: ["project:b"], content: "b convention" },
+			],
+		});
+		const api = new HindsightApiCtor({ baseUrl: "http://localhost:8888" });
+		const block = await loadMentalModelsBlock(api, "b", MENTAL_MODEL_RENDER_BUDGET_CHARS_DEFAULT, ["project:b"]);
+		expect(block).toContain("global preference");
+		expect(block).toContain("b convention");
+		expect(block).not.toContain("a convention");
 	});
 
 	it("returns undefined on list failure rather than throwing (best-effort surface)", async () => {

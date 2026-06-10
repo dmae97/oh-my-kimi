@@ -426,7 +426,12 @@ export class HindsightSessionState {
 	}
 
 	async refreshMentalModelsSnippet(): Promise<void> {
-		const snippet = await loadMentalModelsBlock(this.client, this.bankId, this.config.mentalModelMaxRenderChars);
+		const snippet = await loadMentalModelsBlock(
+			this.client,
+			this.bankId,
+			this.config.mentalModelMaxRenderChars,
+			this.recallTags,
+		);
 		this.mentalModelsSnippet = snippet;
 		this.mentalModelsLoadedAt = Date.now();
 	}

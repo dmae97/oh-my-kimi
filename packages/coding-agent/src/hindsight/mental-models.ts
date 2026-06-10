@@ -26,8 +26,10 @@
  * retain side to emit them.
  *
  * Seed tags are baked from `seeds.json` plus, for `projectTagged: true`
- * entries, the active scope's `retainTags` (i.e. `project:<cwd>`). Untagged
- * seeds (e.g. `user-preferences`) read every memory in the bank — the
+ * entries, the active scope's `retainTags` (i.e. `project:<cwd>`). In
+ * `per-project-tagged`, those project seeds also get project-suffixed ids so
+ * each tag can own its conventions/decisions models in the shared bank.
+ * Untagged seeds (e.g. `user-preferences`) read every memory in the bank — the
  * reflect call applies no tag filter when `tags` is empty.
  *
  * Seed lifecycle is **create-only**: changes to `source_query`, `tags`,
@@ -72,31 +74,52 @@ export interface MentalModelSeed {
 	sourceQuery: string;
 	tags: string[];
 	maxTokens?: number;
+	/** Legacy unqualified seed ids accepted as already-present when tags match. */
+	legacyIds?: string[];
 	trigger?: MentalModelTrigger;
 }
 
 /**
  * Resolve the seed list that applies to the active bank scope. Per-project
  * seeds are skipped in `global` mode (where there is no project axis) and
- * `projectTagged` seeds inherit the scope's `retainTags`.
+ * `projectTagged` seeds inherit the scope's `retainTags`. In shared tagged
+ * banks, project seeds use project-suffixed ids and accept matching legacy
+ * bare ids as already present.
  */
 export function resolveSeedsForScope(scope: BankScope, scoping: HindsightScoping): MentalModelSeed[] {
 	const out: MentalModelSeed[] = [];
 	for (const seed of BUILTIN_SEEDS) {
 		if (!seed.scopes.includes(scoping)) continue;
 		const tags = collectSeedTags(seed, scope);
+		const id = resolveSeedId(seed, tags, scoping);
 		out.push({
-			id: seed.id,
+			id,
 			name: seed.name,
 			sourceQuery: seed.source_query,
 			tags,
 			maxTokens: seed.max_tokens,
 			trigger: seed.trigger,
+			legacyIds: id === seed.id ? undefined : [seed.id],
 		});
 	}
 	return out;
 }
 
+const PROJECT_TAG_PREFIX = "project:";
+
+function resolveSeedId(seed: RawSeed, tags: string[], scoping: HindsightScoping): string {
+	if (scoping !== "per-project-tagged" || !seed.projectTagged || tags.length === 0) return seed.id;
+	return `${seed.id}-${seedIdSuffixFromProjectTag(tags[0])}`;
+}
+
+function seedIdSuffixFromProjectTag(tag: string): string {
+	const raw = tag.startsWith(PROJECT_TAG_PREFIX) ? tag.slice(PROJECT_TAG_PREFIX.length) : tag;
+	const sanitized = raw
+		.trim()
+		.replace(/[^A-Za-z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return sanitized || "project";
+}
 function collectSeedTags(seed: RawSeed, scope: BankScope): string[] {
 	const collected: string[] = [];
 	if (seed.projectTagged && scope.retainTags) collected.push(...scope.retainTags);
@@ -124,17 +147,17 @@ export async function ensureMentalModels(
 ): Promise<void> {
 	if (seeds.length === 0) return;
 
-	let existing: Set<string>;
+	let existing: MentalModelSummary[];
 	try {
 		const list = await client.listMentalModels(bankId, { detail: "metadata" });
-		existing = new Set((list.items ?? []).map(m => m.id));
+		existing = list.items ?? [];
 	} catch (err) {
 		logger.debug("Hindsight: ensureMentalModels list failed", { bankId, error: String(err) });
 		return;
 	}
 
 	for (const seed of seeds) {
-		if (existing.has(seed.id)) continue;
+		if (seedAlreadyExists(seed, existing)) continue;
 		try {
 			await client.createMentalModel(bankId, seed.name, seed.sourceQuery, {
 				id: seed.id,
@@ -149,6 +172,19 @@ export async function ensureMentalModels(
 			logger.debug("Hindsight: createMentalModel failed", { bankId, id: seed.id, error: String(err) });
 		}
 	}
+}
+
+/** Return whether a seed is already represented by current bank metadata. */
+export function seedAlreadyExists(seed: MentalModelSeed, models: readonly MentalModelSummary[]): boolean {
+	for (const model of models) {
+		if (model.id === seed.id) return true;
+		if (seed.legacyIds?.includes(model.id) && sameStringSet(model.tags ?? [], seed.tags)) return true;
+	}
+	return false;
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every(item => right.includes(item));
 }
 
 /**
@@ -170,15 +206,17 @@ export const MENTAL_MODEL_RENDER_BUDGET_CHARS_DEFAULT = 16_000;
  * reflect for a freshly-seeded model hasn't completed yet).
  *
  * The rendered block is bounded by `budgetChars` (default
- * MENTAL_MODEL_RENDER_BUDGET_CHARS_DEFAULT). Per-model content is truncated
- * before assembly; if assembly still exceeds the budget, trailing models are
- * dropped. A budget overflow leaves a `…` marker so the LLM can tell the
- * snapshot is truncated.
+ * MENTAL_MODEL_RENDER_BUDGET_CHARS_DEFAULT). When `visibleTags` is supplied,
+ * tagged models must match at least one active tag; untagged models remain
+ * visible in every scope. Per-model content is truncated before assembly; if
+ * assembly still exceeds the budget, trailing models are dropped. A budget
+ * overflow leaves a `…` marker so the LLM can tell the snapshot is truncated.
  */
 export async function loadMentalModelsBlock(
 	client: HindsightApi,
 	bankId: string,
 	budgetChars: number = MENTAL_MODEL_RENDER_BUDGET_CHARS_DEFAULT,
+	visibleTags?: readonly string[],
 ): Promise<string | undefined> {
 	let response: MentalModelListResponse;
 	try {
@@ -188,12 +226,21 @@ export async function loadMentalModelsBlock(
 		return undefined;
 	}
 
-	const models = (response.items ?? []).filter(m => typeof m.content === "string" && m.content.trim().length > 0);
+	const models = (response.items ?? []).filter(
+		m => modelVisibleForTags(m, visibleTags) && typeof m.content === "string" && m.content.trim().length > 0,
+	);
 	if (models.length === 0) return undefined;
 
 	models.sort((a, b) => a.name.localeCompare(b.name));
 	const block = renderMentalModelsBlock(models, budgetChars);
 	return block || undefined;
+}
+
+function modelVisibleForTags(model: MentalModelSummary, visibleTags?: readonly string[]): boolean {
+	if (!visibleTags || visibleTags.length === 0) return true;
+	const tags = model.tags ?? [];
+	if (tags.length === 0) return true;
+	return tags.some(tag => visibleTags.includes(tag));
 }
 
 const PREAMBLE =
