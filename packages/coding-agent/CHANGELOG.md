@@ -6,6 +6,7 @@
 - Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
 - Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions
 - Added verification of a `<div id="root"></div>` and `index.js` in smoke-test dashboard responses
+- Restored the checkmark glyph on ask-tool custom answers and the multi-select "Done selecting" option, which a status-glyph sweep had swapped for the ask tool icon
 
 ## [15.10.12] - 2026-06-10
 
