@@ -204,13 +204,7 @@ fn resolve_logs_dir(
 	let config_dir = config_dir_override
 		.filter(|s| !s.is_empty())
 		.unwrap_or_else(|| OsStr::new(DEFAULT_CONFIG_DIR));
-	// Honor an absolute PI_CONFIG_DIR if the user set one; otherwise treat
-	// the value as a child of `$HOME` (matches `getConfigDirName()`).
-	let base = if Path::new(config_dir).is_absolute() {
-		PathBuf::from(config_dir)
-	} else {
-		home.join(config_dir)
-	};
+	let base = config_root_dir(home, config_dir);
 	base.join("logs")
 }
 
@@ -246,7 +240,7 @@ fn xdg_state_logs(
 	default_agent_dir: &Path,
 	omp_dir_exists: impl FnOnce(&Path) -> bool,
 ) -> Option<PathBuf> {
-	if let Some(ov) = agent_dir_override {
+	if let Some(ov) = agent_dir_override.filter(|s| !s.is_empty()) {
 		// `path.resolve(value)` on the JS side: make absolute against cwd
 		// without touching the filesystem. Anything that diverges from the
 		// default agent dir disables XDG, matching `isDefault === false`.
@@ -267,12 +261,23 @@ fn default_agent_dir(home: &Path, config_dir_override: Option<&OsStr>) -> PathBu
 	let config_dir = config_dir_override
 		.filter(|s| !s.is_empty())
 		.unwrap_or_else(|| OsStr::new(DEFAULT_CONFIG_DIR));
-	let base = if Path::new(config_dir).is_absolute() {
-		PathBuf::from(config_dir)
-	} else {
-		home.join(config_dir)
-	};
+	let base = config_root_dir(home, config_dir);
 	base.join("agent")
+}
+
+fn config_root_dir(home: &Path, config_dir: &OsStr) -> PathBuf {
+	let mut base = PathBuf::from(home);
+	for component in Path::new(config_dir).components() {
+		match component {
+			std::path::Component::Prefix(_) | std::path::Component::RootDir => {},
+			std::path::Component::CurDir => {},
+			std::path::Component::ParentDir => {
+				base.pop();
+			},
+			std::path::Component::Normal(part) => base.push(part),
+		}
+	}
+	base
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -357,13 +362,39 @@ mod tests {
 	}
 
 	#[test]
-	fn resolve_logs_dir_honors_absolute_pi_config_dir() {
+	fn resolve_logs_dir_reroots_absolute_pi_config_dir_under_home() {
+		// JS resolves the config root via `path.join(os.homedir(),
+		// getConfigDirName())`, which never honors an absolute PI_CONFIG_DIR — it is
+		// always re-rooted under `$HOME` (and `..` components are normalized away).
 		let dir = resolve_logs_dir(
 			Path::new("/tmp/pi-natives-test-home"),
 			Some(OsStr::new("/var/tmp/pi-natives-state")),
 			None,
 		);
-		assert_eq!(dir, PathBuf::from("/var/tmp/pi-natives-state/logs"));
+		assert_eq!(dir, PathBuf::from("/tmp/pi-natives-test-home/var/tmp/pi-natives-state/logs"));
+	}
+
+	#[test]
+	fn resolve_logs_dir_normalizes_parent_components_like_path_join() {
+		let dir = resolve_logs_dir(
+			Path::new("/tmp/pi-natives-test-home"),
+			Some(OsStr::new("nested/../.omp-dev")),
+			None,
+		);
+		assert_eq!(dir, PathBuf::from("/tmp/pi-natives-test-home/.omp-dev/logs"));
+	}
+
+	#[test]
+	fn xdg_state_logs_ignores_empty_agent_dir_override() {
+		// An empty PI_CODING_AGENT_DIR is "unset", not a divergent override; it
+		// must not disable XDG resolution.
+		let dir = xdg_state_logs(
+			Some(OsStr::new("/xdg/state")),
+			Some(OsStr::new("")),
+			Path::new("/tmp/pi-natives-test-home/.omp/agent"),
+			|_p| true,
+		);
+		assert_eq!(dir, Some(PathBuf::from("/xdg/state/omp/logs")));
 	}
 
 	#[test]
