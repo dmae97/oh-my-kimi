@@ -8,12 +8,19 @@
 - Fixed embedding provider detection to match `openrouter` by URL host, so custom embedding endpoints are now recognized correctly instead of being misclassified by substring matching
 - Fixed the check for OpenRouter base URLs so only true `openrouter` hosts are treated as non-custom
 
+- Reworked the in-memory fallback vector search to build a normalized exact vector index per query, matching the shape needed for future quantized or TurboVec-style backends without adding a new dependency yet.
+
 ## [15.10.8] - 2026-06-09
+
 ### Added
 
 - Added a `fetch` option to `ExtractionClient` to inject a custom fetch implementation for remote LLM requests
 - Added an optional `fetch` option to `extractFacts` to control the transport used for remote extraction calls
 - Added support for passing a custom `fetch` implementation through `complete` and `summarizeMemories` via remote LLM options
+
+### Changed
+
+- Reworked the in-memory fallback vector search to build a normalized exact vector index per query, matching the shape needed for future quantized or TurboVec-style backends without adding a new dependency yet.
 
 ## [15.9.1] - 2026-06-04
 
