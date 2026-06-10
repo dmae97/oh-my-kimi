@@ -2870,11 +2870,36 @@ function buildParams(
 	return params;
 }
 
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
+
+function isEmptyToolResultWireContent(content: ReturnType<typeof convertContentBlocks>): boolean {
+	if (typeof content === "string") {
+		return content.trim().length === 0;
+	}
+	return content.length === 0;
+}
+
+function ensureErrorToolResultWireContent(
+	content: ReturnType<typeof convertContentBlocks>,
+	isError: boolean | undefined,
+): ReturnType<typeof convertContentBlocks> {
+	if (!isError || !isEmptyToolResultWireContent(content)) {
+		return content;
+	}
+	return typeof content === "string"
+		? EMPTY_ERROR_TOOL_RESULT_TEXT
+		: [{ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT }];
+}
+
 function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
+	const content = ensureErrorToolResultWireContent(
+		convertContentBlocks(msg.content, model.input.includes("image")),
+		msg.isError,
+	);
 	const block: ContentBlockParam = {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
-		content: convertContentBlocks(msg.content, model.input.includes("image")),
+		content,
 		is_error: msg.isError,
 	};
 	if (model.compat.requiresToolResultId) {
