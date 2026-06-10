@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { resolveStdioSpawnCommand, StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
 
 describe("resolveStdioSpawnCommand", () => {
-	it("resolves bare Windows commands through PATHEXT and preserves direct .cmd argv", async () => {
+	it("resolves bare Windows commands through PATHEXT and wraps .cmd shims with cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-stdio-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -17,6 +17,7 @@ describe("resolveStdioSpawnCommand", () => {
 				{
 					cwd: tempDir,
 					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
 						PATH: tempDir,
 						PATHEXT: ".cmd",
 					},
@@ -24,13 +25,19 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual([shim, "serve", "--mcp"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--mcp""`,
+			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
 
-	it("preserves percent-delimited args when resolving .cmd shims", async () => {
+	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -41,6 +48,7 @@ describe("resolveStdioSpawnCommand", () => {
 				{
 					cwd: tempDir,
 					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
 						PATH: tempDir,
 						PATHEXT: ".cmd",
 					},
@@ -48,13 +56,19 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual([shim, "serve", "--header", "Authorization=%TOKEN%"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--header" "Authorization=^%TOKEN^%""`,
+			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
 
-	it("preserves quoted JSON args when resolving .cmd shims", async () => {
+	it("escapes quoted JSON args before routing .cmd shims through cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-quotes-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -65,6 +79,7 @@ describe("resolveStdioSpawnCommand", () => {
 				{
 					cwd: tempDir,
 					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
 						PATH: tempDir,
 						PATHEXT: ".cmd",
 					},
@@ -72,7 +87,13 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual([shim, "--config", '{"a":"b&c|d"}']);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "--config" "{^"a^":^"b&c|d^"}""`,
+			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -98,24 +119,32 @@ describe("resolveStdioSpawnCommand", () => {
 				{
 					cwd: tempDir,
 					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
 						PATHEXT: ".cmd",
 					},
 					platform: "win32",
 				},
 			);
 
-			expect(result.cmd).toEqual([shim, "serve", "--mcp"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--mcp""`,
+			]);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
 
-	it("preserves explicit Windows .cmd commands as direct argv launches", async () => {
+	it("wraps explicit Windows .cmd commands with cmd.exe while preserving quoted argv", async () => {
 		const result = await resolveStdioSpawnCommand(
 			{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
 			{
 				cwd: "C:\\project",
 				env: {
+					COMSPEC: "C:\\Windows\\System32\\cmd.exe",
 					PATH: "C:\\Users\\me\\AppData\\Roaming\\npm",
 					PATHEXT: ".COM;.EXE;.BAT;.CMD",
 				},
@@ -123,7 +152,13 @@ describe("resolveStdioSpawnCommand", () => {
 			},
 		);
 
-		expect(result.cmd).toEqual(["codegraph.cmd", "serve", "--mcp"]);
+		expect(result.cmd).toEqual([
+			"C:\\Windows\\System32\\cmd.exe",
+			"/d",
+			"/s",
+			"/c",
+			`""codegraph.cmd" "serve" "--mcp""`,
+		]);
 	});
 
 	it("leaves non-Windows commands untouched", async () => {
