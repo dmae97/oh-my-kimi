@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+
 ### Changed
 
 - Block-unresolved errors (`replace block N:` / `delete block N` / `insert after block N:` failing to resolve a syntactic block) now append a numbered preview of the file around the anchor line — same `*`-marked context rows the hash-mismatch error shows — so the offending line is visible without a re-read

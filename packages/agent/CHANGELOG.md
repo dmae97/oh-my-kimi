@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.0] - 2026-06-10
 ### Breaking Changes
 
 - Removed `compaction/index.ts` re-export of snapcompact helpers, so snapcompact utilities are no longer available from the agent compaction barrel and should be imported from `@oh-my-pi/snapcompact`

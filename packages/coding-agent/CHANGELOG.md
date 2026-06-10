@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+
 ### Breaking Changes
 
 - Removed the `resume` option from the `task` tool API and its resume execution path; continue work on finished subagents by sending follow-up messages via `irc` instead

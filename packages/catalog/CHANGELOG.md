@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+
 ### Fixed
 
 - Fixed `buildModel` so malformed explicit thinking metadata without `efforts` is treated as sparse input and inferred instead of crashing during model resolution ([#2251](https://github.com/can1357/oh-my-pi/issues/2251)).

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+
 ### Breaking Changes
 
 - Changed `renderSnapcompactFrame` output from `png: Uint8Array` to `data: string` base64, requiring consumers to read frame payloads from `frame.data`

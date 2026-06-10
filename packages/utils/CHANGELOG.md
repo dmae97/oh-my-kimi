@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+
 ### Added
 
 - Added the `path-tree` module (`buildPathTree`, `walkPathTree`, `formatGroupedPaths`, `isUrlLikePath`), moved from the coding agent's grouped file output so compaction file lists can share the same prefix-folded directory-tree rendering; `formatGroupedPaths` gains an optional `annotate` callback for per-file suffixes
