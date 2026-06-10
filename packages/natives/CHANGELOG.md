@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed `renderSnapcompactPng(text, options)` to return a base64-encoded PNG `string` instead of a `Uint8Array`
 
 ### Added
 

@@ -1288,12 +1288,17 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
  * Render one snapcompact frame: print pre-normalized text onto a square
  * bitmap and encode it as PNG.
  *
- * The glyph grid holds `floor(size/cellWidth) * floor(size/cellHeight/lineRepeat)`
- * characters; input beyond that is ignored (the caller chunks text to
- * capacity). Native-cell shapes encode as 4-bit indexed PNG; stretched
- * shapes (target cell != font cell) encode as RGB. Returns the PNG bytes.
+ * The glyph grid holds `floor(size/cellWidth) *
+ * floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
+ * (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
+ * indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
+ * `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
+ * cell.
+ * Returns the PNG encoded as base64, created as a one-byte (Latin-1) JS
+ * string straight from native code — no `Uint8Array` hop or JS-side
+ * re-encode.
  */
-export declare function renderSnapcompactPng(text: string, options: SnapcompactRenderOptions): Uint8Array
+export declare function renderSnapcompactPng(text: string, options: SnapcompactRenderOptions): string
 
 /**
  * Search content for a pattern (one-shot, compiles pattern each time).

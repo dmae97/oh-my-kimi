@@ -18,6 +18,9 @@
 //!   font's natural cell, glyphs are rasterized at native size and the canvas
 //!   is Lanczos3-resampled to the target (anisotropic stretch, e.g. the
 //!   OpenAI-optimal "6x6u" shape), producing an anti-aliased RGB frame.
+//! - **dim spans** — `U+000E`/`U+000F` in the text toggle dim gray ink on/off
+//!   without occupying a cell; the TypeScript serializer wraps tool output in
+//!   them so archived conversation reads louder than archived tool noise.
 //!
 //! Text normalization, frame chunking, provider shape selection, and archive
 //! management live in `packages/snapcompact/src/snapcompact.ts`; this module
@@ -25,6 +28,7 @@
 
 use std::{borrow::Cow, collections::HashMap, f32::consts::PI, sync::LazyLock};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -35,8 +39,8 @@ const MAX_FRAME_SIZE: u32 = 16384;
 /// Indexed palette: 0 is the white background, 1-6 are the six dark sentence
 /// hues from the eval renderer (HLS l=0.22 s=0.95, h ∈ {0, .08, .3, .5, .62,
 /// .78}), 7 is plain black ink (`bw` variant), 8 is the pale highlight band
-/// behind repeated line copies.
-const PALETTE: [[u8; 3]; 9] = [
+/// behind repeated line copies, 9 is the dim gray ink for tool-output spans.
+const PALETTE: [[u8; 3]; 10] = [
 	[255, 255, 255],
 	[109, 2, 2],     // red
 	[109, 53, 2],    // amber
@@ -46,10 +50,15 @@ const PALETTE: [[u8; 3]; 9] = [
 	[75, 2, 109],    // violet
 	[0, 0, 0],       // bw ink
 	[255, 247, 194], // repeat highlight band
+	[128, 128, 128], // dim ink (tool-output spans)
 ];
 const INK_COLORS: usize = 6;
 const INK_BLACK: u8 = 7;
 const BG_REPEAT: u8 = 8;
+const INK_DIM: u8 = 9;
+/// Zero-width ink toggles embedded in the text stream (shift-out/shift-in).
+const DIM_ON: u32 = 0x0e;
+const DIM_OFF: u32 = 0x0f;
 
 static FONT_5X8: LazyLock<Font> = LazyLock::new(|| parse_bdf(include_str!("fonts/5x8.bdf"), 5, 8));
 static FONT_8X8: LazyLock<Font> = LazyLock::new(|| parse_hex(include_str!("fonts/unscii-8.hex")));
@@ -156,9 +165,10 @@ struct Grid {
 /// font's natural cell size, row-major with no word wrap. Each text line is
 /// printed `grid.repeat` times; copies after the first sit on the highlight
 /// band. Ink cycles through six hues at sentence boundaries (terminator in
-/// `.!?` followed by a space) unless `black_ink` pins it to black. Characters
-/// beyond `cols * rows` are ignored; code points missing from the font leave
-/// their cell blank.
+/// `.!?` followed by a space) unless `black_ink` pins it to black; `U+000E`/
+/// `U+000F` toggle dim gray ink without occupying a cell, and dim wins over
+/// both variants. Characters beyond `cols * rows` are ignored; code points
+/// missing from the font leave their cell blank.
 fn render_bitmap(
 	text: &str,
 	width: usize,
@@ -183,11 +193,28 @@ fn render_bitmap(
 		}
 	}
 	let codes: Vec<u32> = text.chars().map(|ch| ch as u32).collect();
-	let count = codes.len().min(capacity);
 	let mut sentence = 0usize;
-	for i in 0..count {
+	let mut dim = false;
+	let mut cell = 0usize;
+	for i in 0..codes.len() {
+		if cell >= capacity {
+			break;
+		}
 		let code = codes[i];
-		let ink = if black_ink {
+		match code {
+			DIM_ON => {
+				dim = true;
+				continue;
+			},
+			DIM_OFF => {
+				dim = false;
+				continue;
+			},
+			_ => {},
+		}
+		let ink = if dim {
+			INK_DIM
+		} else if black_ink {
 			INK_BLACK
 		} else {
 			(1 + sentence % INK_COLORS) as u8
@@ -195,14 +222,15 @@ fn render_bitmap(
 		if matches!(code, 0x2e | 0x21 | 0x3f) && codes.get(i + 1) == Some(&0x20) {
 			sentence += 1;
 		}
+		let row = cell / grid.cols;
+		let col = cell - row * grid.cols;
+		cell += 1;
 		let Some(glyph) = font.glyphs.get(&code) else {
 			continue;
 		};
 		if glyph.rows.is_empty() {
 			continue;
 		}
-		let row = i / grid.cols;
-		let col = i - row * grid.cols;
 		let left = (col * font.cell_w) as i32 + glyph.xoff;
 		for copy in 0..grid.repeat {
 			let cell_top = ((row * grid.repeat + copy) * font.cell_h) as i32;
@@ -412,12 +440,16 @@ pub struct SnapcompactRenderOptions {
 /// floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
 /// (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
 /// indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
-/// Returns the PNG bytes.
+/// `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
+/// cell.
+/// Returns the PNG encoded as base64, created as a one-byte (Latin-1) JS
+/// string straight from native code — no `Uint8Array` hop or JS-side
+/// re-encode.
 #[napi]
 pub fn render_snapcompact_png(
 	text: String,
 	options: SnapcompactRenderOptions,
-) -> Result<Uint8Array> {
+) -> Result<Latin1String> {
 	let size = options.size;
 	if size == 0 || size > MAX_FRAME_SIZE {
 		return Err(Error::from_reason(format!(
@@ -453,7 +485,9 @@ pub fn render_snapcompact_png(
 	if (target_w, target_h) == (font.cell_w, font.cell_h) {
 		// Native cell: rasterize straight onto the frame, indexed.
 		let pixels = render_bitmap(&text, size, size, font, &grid, black_ink);
-		return Ok(encode_indexed_png(&pixels, size, png::Compression::Balanced)?.into());
+		return Ok(STANDARD
+			.encode(encode_indexed_png(&pixels, size, png::Compression::Balanced)?)
+			.into());
 	}
 
 	// Stretch shape: rasterize at the font's natural cell on a tight canvas,
@@ -479,7 +513,9 @@ pub fn render_snapcompact_png(
 			*d = s.round().clamp(0.0, 255.0) as u8;
 		}
 	}
-	Ok(encode_rgb_png(&frame, size, png::Compression::Balanced)?.into())
+	Ok(STANDARD
+		.encode(encode_rgb_png(&frame, size, png::Compression::Balanced)?)
+		.into())
 }
 
 #[cfg(test)]
@@ -526,6 +562,20 @@ mod tests {
 	}
 
 	#[test]
+	fn dim_markers_toggle_gray_without_consuming_cells() {
+		let grid = Grid { cols: 8, rows: 8, repeat: 1 };
+		let pixels = render_bitmap("\u{e}AB\u{f}CD", 64, 64, &FONT_8X8, &grid, true);
+		let inks: Vec<u8> = pixels.iter().copied().filter(|&p| p != 0).collect();
+		assert!(inks.contains(&INK_DIM), "dim span must ink gray");
+		assert!(inks.contains(&INK_BLACK), "post-span text must return to black");
+		// Markers are zero-width: glyphs land in the same cells as without them.
+		let plain = render_bitmap("ABCD", 64, 64, &FONT_8X8, &grid, true);
+		for (i, (a, b)) in pixels.iter().zip(&plain).enumerate() {
+			assert_eq!(*a != 0, *b != 0, "cell layout must ignore markers (pixel {i})");
+		}
+	}
+
+	#[test]
 	fn line_repeat_duplicates_rows_on_highlight_bands() {
 		// 64px, 8x8 font, repeat 2 -> 8 cols x 4 unique rows.
 		let grid = Grid { cols: 8, rows: 4, repeat: 2 };
@@ -543,20 +593,29 @@ mod tests {
 		}
 	}
 
+	/// Decode the base64 JS-string payload back to PNG bytes for inspection.
+	fn png_bytes(encoded: Latin1String) -> Vec<u8> {
+		STANDARD
+			.decode(&*encoded)
+			.expect("output must be valid base64")
+	}
+
 	#[test]
 	fn render_native_is_indexed_and_stretch_is_rgb() {
-		let native = render_snapcompact_png("Hello world. Again.".into(), SnapcompactRenderOptions {
-			size: 128,
-			font: Some("8x8".into()),
-			variant: Some("bw".into()),
-			line_repeat: Some(2),
-			..Default::default()
-		})
-		.unwrap();
+		let native = png_bytes(
+			render_snapcompact_png("Hello world. Again.".into(), SnapcompactRenderOptions {
+				size: 128,
+				font: Some("8x8".into()),
+				variant: Some("bw".into()),
+				line_repeat: Some(2),
+				..Default::default()
+			})
+			.unwrap(),
+		);
 		// PNG color type lives at byte 25 of the IHDR: 3 = indexed.
 		assert_eq!(native[25], 3);
 
-		let stretched =
+		let stretched = png_bytes(
 			render_snapcompact_png("Hello world. Again.".into(), SnapcompactRenderOptions {
 				size: 128,
 				font: Some("8x8".into()),
@@ -564,11 +623,11 @@ mod tests {
 				cell_height: Some(6),
 				..Default::default()
 			})
-			.unwrap();
+			.unwrap(),
+		);
 		// 2 = truecolor RGB.
 		assert_eq!(stretched[25], 2);
-		// Stretched output must contain anti-aliased (non-extreme) pixels.
-		let legacy = render_snapcompact_png("Hi. Ok.".into(), opts(40)).unwrap();
+		let legacy = png_bytes(render_snapcompact_png("Hi. Ok.".into(), opts(40)).unwrap());
 		assert_eq!(legacy[25], 3, "default shape stays the legacy 5x8 indexed path");
 	}
 

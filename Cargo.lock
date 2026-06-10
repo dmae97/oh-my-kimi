@@ -2415,6 +2415,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "ast-grep-core",
+ "base64",
  "clap",
  "dashmap",
  "globset",

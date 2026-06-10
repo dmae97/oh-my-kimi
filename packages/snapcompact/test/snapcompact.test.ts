@@ -187,7 +187,7 @@ describe("renderSnapcompactFrame", () => {
 		expect(frame.rows).toBe(40);
 		expect(frame.chars).toBe(40);
 
-		const decoded = decodePng(frame.png);
+		const decoded = decodePng(Buffer.from(frame.data, "base64"));
 		expect(decoded.width).toBe(TEST_FRAME_SIZE);
 		expect(decoded.height).toBe(TEST_FRAME_SIZE);
 		expect(decoded.colorType).toBe(3); // indexed color
@@ -204,7 +204,7 @@ describe("renderSnapcompactFrame", () => {
 		expect(geometry).toEqual({ cols: 40, rows: 20, capacity: 800 });
 
 		const frame = renderSnapcompactFrame("Hello world. Again.", SNAPCOMPACT_SHAPES.anthropic, TEST_FRAME_SIZE);
-		const decoded = decodePng(frame.png);
+		const decoded = decodePng(Buffer.from(frame.data, "base64"));
 		expect(decoded.colorType).toBe(3);
 		const used = new Set(decoded.pixels);
 		expect(used.has(7)).toBe(true); // black bw ink
@@ -215,7 +215,7 @@ describe("renderSnapcompactFrame", () => {
 	it("renders the openai stretch shape as truecolor RGB", () => {
 		const frame = renderSnapcompactFrame("Hello world.", SNAPCOMPACT_SHAPES.openaiDense, TEST_FRAME_SIZE);
 		// IHDR color type byte: 2 = truecolor RGB (anti-aliased stretch output).
-		expect(frame.png[25]).toBe(2);
+		expect(Buffer.from(frame.data, "base64")[25]).toBe(2);
 		expect(frame.cols).toBe(Math.floor(TEST_FRAME_SIZE / 6));
 	});
 

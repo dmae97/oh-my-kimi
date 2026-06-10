@@ -182,6 +182,7 @@ tokio-util = { version = "0.7", features = ["full"] }
 # ──────────────────────────────────────────────────────────────────────────────
 # Serialization & Data Formats
 # ──────────────────────────────────────────────────────────────────────────────
+base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 toml = "1.1"
