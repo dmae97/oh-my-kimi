@@ -682,7 +682,9 @@ describe("OpenAI-family first-event timeouts", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("OpenAI responses stream closed before response.completed was received");
-		expect(result.content as unknown[]).toEqual([{ type: "text", text: "Hello", textSignature: '{"v":1,"id":"msg_incomplete"}' }]);
+		expect(result.content as unknown[]).toEqual([
+			{ type: "text", text: "Hello", textSignature: '{"v":1,"id":"msg_incomplete"}' },
+		]);
 	});
 
 	it("errors when Azure OpenAI responses stream closes without response.completed", async () => {
@@ -690,7 +692,13 @@ describe("OpenAI-family first-event timeouts", () => {
 			{ type: "response.created", response: { id: "resp_incomplete_azure" } },
 			{
 				type: "response.output_item.added",
-				item: { type: "message", id: "msg_incomplete_azure", role: "assistant", status: "in_progress", content: [] },
+				item: {
+					type: "message",
+					id: "msg_incomplete_azure",
+					role: "assistant",
+					status: "in_progress",
+					content: [],
+				},
 			},
 			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
 			{ type: "response.output_text.delta", delta: "Hello azure" },
@@ -716,7 +724,9 @@ describe("OpenAI-family first-event timeouts", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Azure OpenAI responses stream closed before response.completed was received");
-		expect(result.content as unknown[]).toEqual([{ type: "text", text: "Hello azure", textSignature: '{"v":1,"id":"msg_incomplete_azure"}' }]);
+		expect(result.content as unknown[]).toEqual([
+			{ type: "text", text: "Hello azure", textSignature: '{"v":1,"id":"msg_incomplete_azure"}' },
+		]);
 	});
 
 	it("handles response.incomplete as a valid terminal event (not premature closure)", async () => {
@@ -755,6 +765,8 @@ describe("OpenAI-family first-event timeouts", () => {
 
 		expect(result.stopReason).toBe("length");
 		expect(result.errorMessage).toBeFalsy();
-		expect(result.content as unknown[]).toEqual([{ type: "text", text: "Truncated output", textSignature: '{"v":1,"id":"msg_length_limited"}' }]);
+		expect(result.content as unknown[]).toEqual([
+			{ type: "text", text: "Truncated output", textSignature: '{"v":1,"id":"msg_length_limited"}' },
+		]);
 	});
 });

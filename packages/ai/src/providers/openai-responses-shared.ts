@@ -914,18 +914,6 @@ export async function processResponsesStream<TApi extends Api>(
 				output.stopReason = "toolUse";
 			}
 			options?.onCompleted?.();
-		} else if (event.type === "response.incomplete") {
-			// Terminal event emitted by some providers (e.g. the Responses gateway)
-			// when the turn hits the token limit. Same shape as response.completed
-			// but with status "incomplete" → stopReason "length". Not an error.
-			const response = event.response;
-			if (response?.id) {
-				output.responseId = response.id;
-			}
-			populateResponsesUsageFromResponse(output, response?.usage);
-			calculateCost(model, output.usage);
-			output.stopReason = "length";
-			options?.onCompleted?.();
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}`);
 		} else if (event.type === "response.failed") {
