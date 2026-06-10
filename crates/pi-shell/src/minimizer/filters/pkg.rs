@@ -584,9 +584,23 @@ fn is_ruby_php_brew_noise(program: &str, _line: &str, lower: &str) -> bool {
 	if !matches!(program, "bundle" | "brew" | "composer") {
 		return false;
 	}
+	if program == "bundle" {
+		// Keep 'Bundle complete! … N gems now installed' / 'Bundle updated!' — the
+		// one-line gem-count signal (replaces the defs/bundle-install.toml
+		// short-circuit). Strip the 'Use `bundle info [gemname]`…' follow-up hint.
+		// Using/Fetching/Installing rows are still per-gem progress noise.
+		if lower.starts_with("bundle complete") || lower.starts_with("bundle updated") {
+			return false;
+		}
+		if lower.starts_with("use `bundle info") {
+			return true;
+		}
+	}
 	lower.starts_with("fetching ")
 		|| lower.starts_with("installing ") && !lower.contains("error")
 		|| lower.starts_with("using ")
+		// brew/composer never emit 'Bundle complete'; this strip is preserved for
+		// them but bundle now keeps the line (handled above).
 		|| lower.starts_with("bundle complete")
 		|| lower.starts_with("==> downloading")
 		|| lower.starts_with("==> pouring")
@@ -1126,5 +1140,52 @@ mod tests {
 		assert!(out.text.contains("Uninstalled 1 package in 2ms"));
 		assert!(out.text.contains("- requests==2.31.0"));
 		assert!(!out.text.contains("Resolved 4 packages"));
+	}
+
+	#[test]
+	fn bundle_install_keeps_complete_line_strips_info_hint() {
+		// Replaces defs/bundle-install.toml; keep the 'Bundle complete!' gem-count
+		// signal, strip Using/Fetching/Installing rows and the 'Use `bundle info`'
+		// hint. Scoped to program=bundle.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("install"), "bundle install", &cfg);
+		let input = "Fetching gem metadata from https://rubygems.org/.........\nResolving \
+		             dependencies...\nUsing rake 13.1.0\nFetching rspec 3.13.0\nInstalling rspec \
+		             3.13.0\nBundle complete! 85 Gemfile dependencies, 200 gems now installed.\nUse \
+		             `bundle info [gemname]` to see where a bundled gem is installed.\n";
+		let out = filter(&context, input, 0);
+		assert!(
+			out.text
+				.contains("Bundle complete! 85 Gemfile dependencies, 200 gems now installed.")
+		);
+		assert!(!out.text.contains("Use `bundle info"));
+		assert!(!out.text.contains("Using rake"));
+		assert!(!out.text.contains("Installing rspec"));
+		assert!(!out.text.contains("Fetching"));
+	}
+
+	#[test]
+	fn bundle_update_keeps_updated_line() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("update"), "bundle update", &cfg);
+		let input = "Fetching gem metadata from https://rubygems.org/.........\nResolving \
+		             dependencies...\nUsing rake 13.1.0\nFetching rspec 3.14.0 (was \
+		             3.13.0)\nInstalling rspec 3.14.0 (was 3.13.0)\nBundle updated!\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("Bundle updated!"));
+		assert!(!out.text.contains("Using rake"));
+		assert!(!out.text.contains("Installing rspec"));
+	}
+
+	#[test]
+	fn brew_install_still_strips_pour_and_download_noise() {
+		// Concern 4 scoping guard: brew is unaffected by the bundle-only keep.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("brew", Some("install"), "brew install jq", &cfg);
+		let input =
+			"==> Downloading https://example.com/jq.tar.gz\n==> Pouring jq--1.7.bottle.tar.gz\n";
+		let out = filter(&context, input, 0);
+		assert!(!out.text.contains("==> Downloading"));
+		assert!(!out.text.contains("==> Pouring"));
 	}
 }
