@@ -4061,6 +4061,14 @@ export class AgentSession {
 		return this.#obfuscator.deobfuscate(text);
 	}
 
+	#deobfuscatedProviderTextReadyForDelta(text: string): string {
+		const deobfuscated = this.#deobfuscateFromProvider(text);
+		if (!this.#obfuscator?.hasSecrets()) return deobfuscated;
+		const pendingPlaceholderStart = deobfuscated.match(/#[A-Z0-9]{0,4}$/);
+		if (pendingPlaceholderStart?.index === undefined) return deobfuscated;
+		return deobfuscated.slice(0, pendingPlaceholderStart.index);
+	}
+
 	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
 		return this.#obfuscateForProvider(convertToLlm(messages));
 	}
@@ -9091,17 +9099,27 @@ export class AgentSession {
 			model.provider,
 		);
 
-		let replyText = "";
+		let providerReplyText = "";
+		let emittedReplyText = "";
 		let assistantMessage: AssistantMessage | undefined;
 		const stream = streamSimple(model, obfuscateProviderContext(this.#obfuscator, context), options);
 		for await (const event of stream) {
 			if (event.type === "text_delta") {
-				replyText += event.delta;
-				if (args.onTextDelta) args.onTextDelta(event.delta);
+				providerReplyText += event.delta;
+				if (args.onTextDelta) {
+					const readyText = this.#deobfuscatedProviderTextReadyForDelta(providerReplyText);
+					if (readyText.length > emittedReplyText.length) {
+						const delta = readyText.slice(emittedReplyText.length);
+						emittedReplyText = readyText;
+						args.onTextDelta(delta);
+					}
+				}
 				continue;
 			}
 			if (event.type === "done") {
-				assistantMessage = event.message;
+				assistantMessage = this.#obfuscator?.hasSecrets()
+					? { ...event.message, content: this.#obfuscator.deobfuscateObject(event.message.content) }
+					: event.message;
 				break;
 			}
 			if (event.type === "error") {
@@ -9111,6 +9129,10 @@ export class AgentSession {
 
 		if (!assistantMessage) {
 			throw new Error("Ephemeral turn ended without a final message");
+		}
+		const replyText = this.#deobfuscateFromProvider(providerReplyText);
+		if (args.onTextDelta && replyText.length > emittedReplyText.length) {
+			args.onTextDelta(replyText.slice(emittedReplyText.length));
 		}
 		return {
 			replyText: args.dedupeReply === false ? replyText.trim() : dedupeIrcReply(replyText.trim()),

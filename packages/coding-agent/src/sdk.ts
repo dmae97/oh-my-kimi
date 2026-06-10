@@ -2186,6 +2186,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionId: providerSessionId,
 			promptCacheKey: options.providerPromptCacheKey,
 			transformContext,
+			transformProviderContext: obfuscator ? context => obfuscateProviderContext(obfuscator, context) : undefined,
 			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
 			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
 			interruptMode: settings.get("interruptMode") ?? "immediate",
@@ -2220,7 +2221,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
 				const openrouterVariant =
 					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
-				return streamSimple(streamModel, obfuscator ? obfuscateProviderContext(obfuscator, context) : context, {
+				return streamSimple(streamModel, context, {
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 				});
