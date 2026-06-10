@@ -1,5 +1,5 @@
 /**
- * Bun `--preload` shim for the omp dev launcher (`scripts/dev-launch`).
+ * Bun `--preload` shim for the omp dev launcher (`scripts/omp`).
  *
  * The launcher starts Bun from an empty, bunfig-free directory so a foreign
  * project's `bunfig.toml` `preload` cannot run inside the omp CLI: Bun reads

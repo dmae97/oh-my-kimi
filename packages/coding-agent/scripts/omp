@@ -27,7 +27,7 @@ while [ -L "$self" ]; do
 done
 scripts_dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd -P)
 cli=$scripts_dir/../src/cli.ts
-preload=$scripts_dir/dev-launch-preload.ts
+preload=$scripts_dir/omp.ts
 timing_preload=$scripts_dir/../../utils/src/module-timer.ts
 
 launch_dir=${OMP_DEV_LAUNCH_DIR:-${HOME}/.omp/.dev-cwd}
