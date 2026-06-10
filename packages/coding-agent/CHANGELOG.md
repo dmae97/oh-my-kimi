@@ -34,12 +34,15 @@
 - Changed model-scope display during startup to appear as an in-UI information notification instead of a direct stdout line
 - Changed `async.enabled` to gate async bash commands only — the `task` tool now runs asynchronously regardless of the setting
 - Changed `irc.timeoutMs` to be the default timeout for `irc` `wait` and `send` with `await: true`
+- Moved the grouped path-tree helpers (`buildPathTree`, `walkPathTree`, find's grouped output formatter — now `formatGroupedPaths`) to `@oh-my-pi/pi-utils` so compaction summaries can render file lists with the same prefix-folded tree as find/search; `tools/find` no longer exports `formatFindGroupedOutput`
+- Changed TTSR rule notifications to combine rules into one block: a multi-rule match renders `name: description` rows (collapsed view caps at 4 rules with a `+N more` hint, ctrl+o expands), and consecutive notifications merge into the previous block while it is still the live transcript tail
 
 ### Fixed
 
 - Fixed the `job` tool's TUI preview leaking the model-facing `<task-result>` envelope for settled task jobs — the preview now shows the inner output body
 - Fixed startup Ctrl+C handling in pre-TUI mode so it now clears typed text before exiting on a second press
 - Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
+- Fixed the `resolve` tool's result block turning white after the leading icon: the accent-styled symbol embedded a foreground reset inside the inverse-rendered line, dropping the block color for the rest of the row
 - Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions
 - Added verification of a `<div id="root"></div>` and `index.js` in smoke-test dashboard responses
 - Restored the checkmark glyph on ask-tool custom answers and the multi-select "Done selecting" option, which a status-glyph sweep had swapped for the ask tool icon
