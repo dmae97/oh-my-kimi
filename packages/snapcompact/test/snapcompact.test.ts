@@ -240,9 +240,9 @@ describe("snapcompactCompact", () => {
 		expect(result.summary).toContain("printed twice");
 		expect(result.summary).toContain("plain black ink");
 		expect(result.summary).toContain("snapcompact frame");
-		// File operations are upserted like every other compaction summary.
-		expect(result.summary).toContain("<read-files>");
-		expect(result.summary).toContain("src/login.ts");
+		// File operations are upserted like every other compaction summary:
+		// one grouped <files> tree with per-file access markers.
+		expect(result.summary).toContain("<files>\n# src/\nauth.ts (Read)\nlogin.ts (Write)\n</files>");
 		expect(result.shortSummary).toContain("snapcompact frame");
 
 		const archive = getPreservedSnapcompactArchive(result.preserveData);

@@ -248,18 +248,21 @@ Cumulative behavior:
 
 - Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
 - In split turns, includes turn-prefix file ops too.
-- `readFiles` excludes files also modified.
+- `details.readFiles` excludes files also modified; `details.modifiedFiles` carries the rest (persisted shape is unchanged).
 
-Summary text gets file tags appended via prompt template:
+Summary text gets one `<files>` tag appended via prompt template: a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker — `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `… (N more files omitted)` line.
 
 ```xml
-<read-files>
-...
-</read-files>
-<modified-files>
-...
-</modified-files>
+<files>
+# packages/agent/src/compaction/
+compaction.ts (Read)
+utils.ts (RW)
+## prompts/
+file-operations.md (Write)
+</files>
 ```
+
+Legacy `<read-files>`/`<modified-files>` tags from summaries written by earlier versions are stripped (alongside `<files>`) before re-appending, so old summaries self-heal on the next compaction.
 
 ### Persist and reload
 

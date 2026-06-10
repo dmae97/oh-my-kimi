@@ -33,7 +33,7 @@
 
 import type { Api, ImageContent, Message, Model } from "@oh-my-pi/pi-ai";
 import { renderSnapcompactPng } from "@oh-my-pi/pi-natives";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { type: "text" };
 
@@ -300,31 +300,45 @@ export function computeSnapcompactFileLists(fileOps: SnapcompactFileOperations):
 	return { readFiles, modifiedFiles };
 }
 
+/**
+ * Format file operations as one `<files>` tag: a grouped, prefix-folded
+ * directory tree (find-tool shape) with a ` (Read)` / ` (Write)` / ` (RW)`
+ * marker per file. `readSet` is the cumulative read set (`fileOps.read`),
+ * used to tell modified files that were also read (RW) from blind writes.
+ */
 const FILE_OPERATION_SUMMARY_LIMIT = 20;
 
-function truncateFileList(files: string[]): string[] {
-	if (files.length <= FILE_OPERATION_SUMMARY_LIMIT) return files;
-	const omitted = files.length - FILE_OPERATION_SUMMARY_LIMIT;
-	return [...files.slice(0, FILE_OPERATION_SUMMARY_LIMIT), `… (${omitted} more files omitted)`];
-}
-
 function stripFileOperationTags(summary: string): string {
-	const withoutReadFiles = summary.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "");
-	const withoutModifiedFiles = withoutReadFiles.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "");
-	return withoutModifiedFiles.trimEnd();
+	// Legacy <read-files>/<modified-files> tags are still stripped so summaries
+	// written before the combined <files> tag self-heal on the next compaction.
+	return summary
+		.replace(/<files>[\s\S]*?<\/files>\s*/g, "")
+		.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "")
+		.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "")
+		.trimEnd();
 }
 
-function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
+function formatFileOperations(readFiles: string[], modifiedFiles: string[], readSet?: ReadonlySet<string>): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
-	return prompt.render(fileOperationsTemplate, {
-		readFiles: truncateFileList(readFiles),
-		modifiedFiles: truncateFileList(modifiedFiles),
-	});
+	const mode = new Map<string, "Read" | "Write" | "RW">();
+	for (const file of readFiles) mode.set(file, "Read");
+	for (const file of modifiedFiles) mode.set(file, readSet?.has(file) ? "RW" : "Write");
+	const all = [...mode.keys()].sort();
+	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
+	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
+		files += `\n… (${all.length - FILE_OPERATION_SUMMARY_LIMIT} more files omitted)`;
+	}
+	return prompt.render(fileOperationsTemplate, { files });
 }
 
-export function upsertSnapcompactFileOperations(summary: string, readFiles: string[], modifiedFiles: string[]): string {
+export function upsertSnapcompactFileOperations(
+	summary: string,
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;
@@ -714,7 +728,7 @@ export async function snapcompactCompact<TMessage = Message>(
 		});
 	}
 	const { readFiles, modifiedFiles } = computeSnapcompactFileLists(fileOps);
-	summary = upsertSnapcompactFileOperations(summary, readFiles, modifiedFiles);
+	summary = upsertSnapcompactFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
 
 	// A snapcompact pass replaces any provider-side replacement history; strip the
 	// OpenAI remote-compaction payload like the default summarizer path does.

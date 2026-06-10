@@ -21,6 +21,7 @@
 - Changed truncation in archived tool output to keep both the beginning and end of long text using a configurable head/tail ratio instead of a single hard cut
 - Changed tool-result text rendering so archived tool results are shown in dim gray ink by default and the summary prompt notes that dim text is archived tool output
 - Changed `RenderedFrame` visible-character accounting so `chars` no longer includes invisible dim-control markers
+- Changed the file-operations summary block to a single `<files>` tag: one grouped, prefix-folded directory tree with per-file `(Read)`/`(Write)`/`(RW)` markers, replacing the separate `<read-files>`/`<modified-files>` lists; `upsertSnapcompactFileOperations` takes the cumulative read set to distinguish `(RW)` from blind writes
 
 ### Fixed
 
