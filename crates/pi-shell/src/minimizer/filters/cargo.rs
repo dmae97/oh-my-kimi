@@ -439,11 +439,28 @@ fn extract_lint_rule(line: &str) -> Option<String> {
 		return None;
 	}
 	let after_note = line.strip_prefix("= note:")?.trim();
-	let rest = after_note
+	// Attribute form: `#[warn(rule)]` / `#[deny(rule)]` / `#[allow(rule)]`.
+	if let Some(rest) = after_note
 		.strip_prefix("`#[warn(")
 		.or_else(|| after_note.strip_prefix("`#[deny("))
-		.or_else(|| after_note.strip_prefix("`#[allow("))?;
-	Some(rest.split(")]`").next()?.to_string())
+		.or_else(|| after_note.strip_prefix("`#[allow("))
+	{
+		return Some(rest.split(")]`").next()?.to_string());
+	}
+	// CLI form: `requested on the command line with `-W <rule>`` (also -D).
+	// Lints enabled this way carry no `#[warn(...)]` note, so without this
+	// branch they fall into the ungrouped bucket instead of grouping by rule.
+	let cli = after_note.strip_prefix("requested on the command line with ")?;
+	let flag = cli.strip_prefix('`')?.split('`').next()?.trim();
+	let rule = flag
+		.strip_prefix("-W ")
+		.or_else(|| flag.strip_prefix("-D "))
+		.or_else(|| flag.strip_prefix("-A "))?
+		.trim();
+	if rule.is_empty() {
+		return None;
+	}
+	Some(rule.to_string())
 }
 
 fn format_clippy_grouped(warnings: &[ClippyWarning], exit_code: i32) -> String {
@@ -708,6 +725,56 @@ mod tests {
 		let unused_pos = out.find("unused_variables").unwrap();
 		let clone_pos = out.find("clippy::redundant_clone").unwrap();
 		assert!(unused_pos != clone_pos);
+	}
+
+	#[test]
+	fn clippy_groups_cli_enabled_lint_via_command_line_note() {
+		// A lint enabled on the command line (`-W clippy::needless_return`) emits
+		// a `requested on the command line with` note instead of `#[warn(...)]`.
+		// It must still GROUP under its rule, not fall into the ungrouped bucket.
+		let input = concat!(
+			"warning: unneeded `return` statement\n",
+			" --> src/lib.rs:3:5\n",
+			"  |\n",
+			"3 |     return x;\n",
+			"  |     ^^^^^^^^^\n",
+			"  |\n",
+			"  = note: requested on the command line with `-W clippy::needless_return`\n",
+			"\n",
+			"warning: `foo` (lib) generated 1 warning\n",
+		);
+		let out = filter_clippy(input, 0);
+		// Grouped renderer prefixes rule-grouped lines with `clippy: <rule>`.
+		assert!(
+			out.contains("clippy: clippy::needless_return"),
+			"CLI-enabled lint must group by rule: {out:?}"
+		);
+		// Not emitted via the ungrouped `clippy warning:` path.
+		assert!(!out.contains("clippy warning:"), "CLI-enabled lint must not be ungrouped: {out:?}");
+		assert!(out.contains("src/lib.rs:3:5"), "location must survive: {out:?}");
+	}
+
+	#[test]
+	fn extract_lint_rule_parses_note_forms() {
+		assert_eq!(
+			extract_lint_rule("  = note: `#[warn(unused_variables)]` on by default"),
+			Some("unused_variables".to_string())
+		);
+		assert_eq!(
+			extract_lint_rule(
+				"= note: requested on the command line with `-W clippy::needless_return`"
+			),
+			Some("clippy::needless_return".to_string())
+		);
+		assert_eq!(
+			extract_lint_rule("= note: requested on the command line with `-D warnings`"),
+			Some("warnings".to_string())
+		);
+		assert_eq!(
+			extract_lint_rule("= note: requested on the command line with `-W dead_code`"),
+			Some("dead_code".to_string())
+		);
+		assert_eq!(extract_lint_rule("= note: some other note"), None);
 	}
 
 	#[test]
