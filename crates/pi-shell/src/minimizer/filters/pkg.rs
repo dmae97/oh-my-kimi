@@ -50,6 +50,18 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 
 	let cleaned = primitives::strip_ansi(input);
+
+	// Success no-op short-circuits, moved here from defs/poetry-install.toml and
+	// defs/uv-sync.toml so they fire regardless of overlay ordering. Each is
+	// scoped per (program, subcommand) so unrelated package managers are
+	// untouched. A non-empty message means ensure_success_visible leaves it as-is
+	// (no bare 'OK' rewrite).
+	if exit_code == 0
+		&& let Some(message) = success_up_to_date_short_circuit(ctx, &cleaned)
+	{
+		return MinimizerOutput::transformed(message.to_string(), input.len());
+	}
+
 	let text = if exit_code == 0 && is_package_lock_command(ctx) {
 		compact_package_lock_output(ctx, &cleaned)
 	} else {
@@ -77,6 +89,24 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	} else {
 		MinimizerOutput::transformed(text, input.len())
 	}
+}
+
+/// Per-(program, subcommand) success no-op detection. Returns the one-line
+/// summary to emit when the raw output says nothing changed, replacing the
+/// match_output overlays that previously lived in defs/poetry-install.toml and
+/// defs/uv-sync.toml. Callers must gate on exit_code == 0.
+fn success_up_to_date_short_circuit(ctx: &MinimizerCtx<'_>, cleaned: &str) -> Option<&'static str> {
+	// poetry install/lock/update no-op: 'No dependencies to install or update'
+	// (poetry 1.x) or 'No changes.' (poetry 2.x). Scoped to program=poetry.
+	if ctx.program == "poetry"
+		&& matches!(ctx.subcommand, Some("install" | "lock" | "update"))
+		&& cleaned.lines().any(|line| {
+			let lower = line.trim().to_ascii_lowercase();
+			lower.starts_with("no dependencies to install or update") || lower == "no changes."
+		}) {
+		return Some("ok (up to date)");
+	}
+	None
 }
 
 fn strip_package_noise(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
@@ -472,6 +502,25 @@ fn is_python_package_noise(program: &str, _line: &str, lower: &str) -> bool {
 		// for the wrapped command. Scoped to pip/uv/poetry by the gate above.
 		|| lower.starts_with("[notice]")
 		|| program == "uv" && is_uv_progress_noise(lower)
+		|| program == "poetry" && is_poetry_bullet_progress(lower)
+}
+
+/// poetry prefixes per-package progress with a `- ` or `• ` bullet, e.g.
+/// `  - Downloading requests-2.31.0…` / `  • Installing certifi (2023.11.17)`,
+/// plus virtualenv-setup chatter. These are the strip_lines that previously
+/// lived in defs/poetry-install.toml; the bullet prefix means the bare
+/// `downloading `/`installing ` checks above never reached them. `lower` is the
+/// already-trimmed, lowercased line.
+fn is_poetry_bullet_progress(lower: &str) -> bool {
+	let bullet = lower
+		.strip_prefix("- ")
+		.or_else(|| lower.strip_prefix("• "));
+	if let Some(rest) = bullet
+		&& (rest.starts_with("downloading ") || rest.starts_with("installing ") && rest.contains('('))
+	{
+		return true;
+	}
+	lower.starts_with("creating virtualenv") || lower.starts_with("using virtualenv")
 }
 
 fn is_uv_progress_noise(lower: &str) -> bool {
@@ -904,5 +953,60 @@ mod tests {
 		let out = filter(&context, input, 0);
 		assert!(out.text.contains("Installing dependencies from lock file"));
 		assert!(out.text.contains("Writing lock file"));
+	}
+
+	#[test]
+	fn poetry_install_no_changes_short_circuits_to_up_to_date() {
+		// Carried over from defs/poetry-install.toml's match_output overlay; now
+		// lives in pkg.rs so it fires regardless of overlay ordering. poetry 1.x
+		// prints 'No dependencies to install or update'.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("poetry", Some("install"), "poetry install", &cfg);
+		let input =
+			"Installing dependencies from lock file\n\nNo dependencies to install or update\n";
+		let out = filter(&context, input, 0);
+		assert_eq!(out.text, "ok (up to date)");
+		assert!(out.changed);
+	}
+
+	#[test]
+	fn poetry_update_no_changes_bullet_short_circuits() {
+		// poetry 2.x prints 'No changes.' after bullet rows; still a no-op.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("poetry", Some("update"), "poetry update", &cfg);
+		let input =
+			"• Installing requests (2.31.0)\n• Installing certifi (2023.11.17)\n\nNo changes.\n";
+		let out = filter(&context, input, 0);
+		assert_eq!(out.text, "ok (up to date)");
+	}
+
+	#[test]
+	fn poetry_lock_no_changes_short_circuits() {
+		// The short-circuit covers lock too (the deleted def matched
+		// install|lock|update).
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("poetry", Some("lock"), "poetry lock", &cfg);
+		let input = "Resolving dependencies...\nNo changes.\n";
+		let out = filter(&context, input, 0);
+		assert_eq!(out.text, "ok (up to date)");
+	}
+
+	#[test]
+	fn poetry_install_with_real_work_is_not_short_circuited() {
+		// A genuine install (no 'No changes'/'No dependencies…' no-op marker) must
+		// NOT collapse to 'ok (up to date)'. An actionable warning survives the
+		// progress strip and proves the short-circuit did not fire.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("poetry", Some("install"), "poetry install", &cfg);
+		let input = "Installing dependencies from lock file\n\n  - Downloading \
+		             requests-2.31.0-py3-none-any.whl (62.6 kB)\nWarning: the lock file is not up \
+		             to date\n";
+		let out = filter(&context, input, 0);
+		assert_ne!(out.text, "ok (up to date)");
+		assert!(
+			out.text
+				.contains("Warning: the lock file is not up to date")
+		);
+		assert!(!out.text.contains("Downloading"));
 	}
 }
