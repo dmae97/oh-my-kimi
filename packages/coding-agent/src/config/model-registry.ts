@@ -1052,16 +1052,19 @@ export class ModelRegistry {
 			// so it wins over OAuth tokens from the broker — when the user pins a
 			// bearer in models.yml (e.g. for an auth-gateway baseUrl), that bearer
 			// must authenticate the outbound request.
-			if (resolvedProviderApiKey) {
-				this.#customProviderApiKeys.set(providerName, resolvedProviderApiKey);
-				this.authStorage.setConfigApiKey(providerName, resolvedProviderApiKey);
+			if (providerConfig.apiKey) {
+				this.#customProviderApiKeys.set(providerName, providerConfig.apiKey);
+				if (resolvedProviderApiKey) this.authStorage.setConfigApiKey(providerName, resolvedProviderApiKey);
 			}
 
 			// Parse per-model overrides
 			if (providerConfig.modelOverrides) {
 				const perModel = new Map<string, ModelOverride>();
 				for (const [modelId, override] of Object.entries(providerConfig.modelOverrides)) {
-					perModel.set(modelId, override);
+					perModel.set(
+						modelId,
+						override.headers ? { ...override, headers: resolveConfigHeaders(override.headers) } : override,
+					);
 				}
 				allModelOverrides.set(providerName, perModel);
 			}

@@ -57,4 +57,31 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		}
 		expect(await registry.getApiKey(models[0])).toBe("cmd-api-key");
 	});
+
+	test("modelOverrides headers resolve from command stdout", async () => {
+		fs.writeFileSync(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					"custom-proxy": {
+						baseUrl: "https://custom-proxy.example.com/v1",
+						api: "openai-completions",
+						apiKey: `!${stdoutCommand("cmd-api-key")}`,
+						authHeader: true,
+						models: [{ id: "custom-model", name: "Custom Model" }],
+						modelOverrides: {
+							"custom-model": { headers: { "X-Model-Key": `!${stdoutCommand("cmd-model-header")}` } },
+						},
+					},
+				},
+			}),
+		);
+
+		const registry = new ModelRegistry(authStorage, modelsPath);
+		const model = registry.find("custom-proxy", "custom-model");
+
+		expect(model).toBeDefined();
+		expect(model?.headers?.["X-Model-Key"]).toBe("cmd-model-header");
+		expect(model?.headers?.Authorization).toBe("Bearer cmd-api-key");
+	});
 });
