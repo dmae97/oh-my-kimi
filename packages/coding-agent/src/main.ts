@@ -54,7 +54,6 @@ import type { MCPManager } from "./mcp";
 import { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
-import { StartupInput } from "./modes/startup-input";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import {
@@ -70,7 +69,7 @@ import { resolveResumableSession, type SessionInfo, SessionManager } from "./ses
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
-import { discoverStartupLspServers, type LspStartupServerInfo } from "./tools";
+import type { LspStartupServerInfo } from "./tools";
 import {
 	getChangelogPath,
 	getNewEntries,
@@ -93,35 +92,12 @@ function maybeShowStartupSplash(options: {
 	resuming: boolean;
 	quiet: boolean;
 	version: string;
-	setupPending: boolean;
-	modelName?: string;
-	providerName?: string;
-	lspServers?: LspStartupServerInfo[];
-}): StartupInput | undefined {
-	if (!options.isInteractive) return undefined;
-	if (options.resuming || options.quiet) return undefined;
-	if ($env.PI_TIMING) return undefined;
-	if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined;
-	// First-run launches go straight into the setup wizard, which paints its own
-	// splash — keep the minimal two-line notice there.
-	if (options.setupPending) {
-		process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
-		return undefined;
-	}
-	// Paint the same welcome box the TUI paints first (recent sessions as a
-	// loading placeholder, logo held on the intro animation's first frame) plus
-	// a live editor, and start capturing raw stdin so the user can type — and
-	// even submit — while the session loads in the background. The TUI's first
-	// full paint (clearScrollback) replaces this frame in place; the editor
-	// instance itself is handed to InteractiveMode so nothing typed is lost.
-	const startupInput = new StartupInput({
-		version: options.version,
-		modelName: options.modelName ?? "",
-		providerName: options.providerName ?? "",
-		lspServers: options.lspServers ?? [],
-	});
-	startupInput.start();
-	return startupInput;
+}): void {
+	if (!options.isInteractive) return;
+	if (options.resuming || options.quiet) return;
+	if ($env.PI_TIMING) return;
+	if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+	//process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
 }
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
@@ -370,7 +346,6 @@ async function runInteractiveMode(
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 	titleSystemPrompt?: string,
-	startupInput?: StartupInput,
 ): Promise<void> {
 	const mode = new InteractiveMode(
 		session,
@@ -381,7 +356,6 @@ async function runInteractiveMode(
 		mcpManager,
 		eventBus,
 		titleSystemPrompt,
-		startupInput?.editor,
 	);
 
 	// Cold-launch gate: the full setup wizard (every scene + the overlay and
@@ -399,12 +373,6 @@ async function runInteractiveMode(
 				force: forceSetupWizard,
 			})
 		: [];
-
-	// Hand the terminal over: stop the pre-TUI capture (restoring cooked mode so
-	// ProcessTerminal records the correct prior raw state) right before the TUI
-	// grabs stdin. Keystrokes typed during init's awaits stay OS-buffered and
-	// flow into the TUI once it resumes stdin.
-	startupInput?.detach();
 
 	await mode.init({
 		suppressWelcomeIntro: resuming || setupScenes.length > 0,
@@ -466,19 +434,8 @@ async function runInteractiveMode(
 		}
 	}
 
-	const startupSubmissions = [...(startupInput?.queuedSubmissions ?? [])];
 	while (true) {
-		const inputPromise = mode.getUserInput();
-		const queuedText = startupSubmissions.shift();
-		if (queuedText !== undefined) {
-			// Replay through the real submit pipeline (slash commands, bash/python
-			// modes, title generation) exactly as if Enter were pressed now.
-			await mode.editor.onSubmit?.(queuedText);
-			// Handled inline (e.g. a slash command) without consuming the pending
-			// input wait — replay the next queued item on the next iteration.
-			if (mode.onInputCallback) continue;
-		}
-		const input = await inputPromise;
+		const input = await mode.getUserInput();
 		await submitInteractiveInput(mode, session, input);
 	}
 }
@@ -1256,44 +1213,12 @@ export async function runRootCommand(
 			stdinContent: pipedInput,
 		});
 
-		// Resolve the model the session will most likely start with so the splash
-		// box matches the final welcome screen (the raw role selector, e.g.
-		// "anthropic/claude-fable-5:high", is wider than the left column and would
-		// collapse the box into the single-column layout).
-		let splashModel = sessionOptions.model;
-		if (!splashModel) {
-			const remembered = settingsInstance.getModelRole("default");
-			if (remembered) {
-				splashModel = resolveModelRoleValue(remembered, modelRegistry.getAll(), {
-					settings: settingsInstance,
-					matchPreferences: modelMatchPreferences,
-					modelRegistry,
-				}).model;
-			}
-		}
-		// Mirror createAgentSession's startup LSP discovery (sync and cheap: root
-		// markers + binary lookup) so the splash lists the same servers the live
-		// welcome screen will show.
-		const splashLspServers =
-			(sessionOptions.enableLsp ?? true)
-				? discoverStartupLspServers(
-						sessionOptions.cwd ?? cwd,
-						settingsInstance.get("lsp.lazy") ? "available" : "connecting",
-					)
-				: [];
-		const startupInput = maybeShowStartupSplash({
+		maybeShowStartupSplash({
 			isInteractive,
 			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
 			quiet: settingsInstance.get("startup.quiet"),
 			version: VERSION,
-			setupPending: deps.forceSetupWizard === true || settingsInstance.get("setupVersion") < CURRENT_SETUP_VERSION,
-			modelName: splashModel?.name,
-			providerName: splashModel?.provider,
-			lspServers: splashLspServers,
 		});
-
-		// TEMP-SMOKE: stretch the startup gap for VHS verification. REMOVE.
-		if (process.env.PI_DEBUG_SLOW_START) await Bun.sleep(Number(process.env.PI_DEBUG_SLOW_START));
 
 		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
 			...sessionOptions,
@@ -1373,7 +1298,6 @@ export async function runRootCommand(
 				initialMessage,
 				initialImages,
 				titleSystemPrompt,
-				startupInput,
 			);
 		} else {
 			// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.

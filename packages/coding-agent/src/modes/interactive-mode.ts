@@ -389,7 +389,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		mcpManager?: MCPManager,
 		eventBus?: EventBus,
 		titleSystemPrompt?: string,
-		startupEditor?: CustomEditor,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -424,9 +423,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
 		this.errorBannerContainer = new Container();
-		// Adopt the pre-TUI startup editor when provided: typed text, cursor,
-		// paste buffers, and undo history carry over from the splash phase.
-		this.editor = startupEditor ?? new CustomEditor(getEditorTheme());
+		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
 		this.editor.onAutocompleteCancel = () => {
