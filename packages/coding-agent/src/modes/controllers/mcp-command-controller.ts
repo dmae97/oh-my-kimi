@@ -597,11 +597,13 @@ export class MCPCommandController {
 		const resolvedClientSecret = clientSecret.trim() || undefined;
 
 		const manualInput = this.ctx.oauthManualInput;
-		if (manualInput.hasPending() && manualInput.pendingProviderId !== MCP_MANUAL_INPUT_PROVIDER_ID) {
+		if (manualInput.hasPending()) {
+			const pendingProvider = manualInput.pendingProviderId ?? "another provider";
 			throw new Error(
-				`OAuth login already in progress for ${manualInput.pendingProviderId}. Complete or cancel it before starting MCP OAuth.`,
+				`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
 			);
 		}
+		let manualInputClaim: { promise: Promise<string>; clear: (reason?: string) => void } | undefined;
 		const oauthTimeout = new AbortController();
 		try {
 			// Create OAuth flow
@@ -658,13 +660,16 @@ export class MCPCommandController {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
 					onManualCodeInput: () => {
-						const pendingInput = manualInput.tryWaitForInput(MCP_MANUAL_INPUT_PROVIDER_ID);
+						if (manualInputClaim) return manualInputClaim.promise;
+						const pendingInput = manualInput.tryClaimInput(MCP_MANUAL_INPUT_PROVIDER_ID);
 						if (!pendingInput) {
+							const pendingProvider = manualInput.pendingProviderId ?? "another provider";
 							throw new Error(
-								`OAuth login already in progress for ${manualInput.pendingProviderId}. Complete or cancel it before starting MCP OAuth.`,
+								`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
 							);
 						}
-						return pendingInput;
+						manualInputClaim = pendingInput;
+						return pendingInput.promise;
 					},
 					signal: oauthTimeout.signal,
 				},
@@ -716,7 +721,7 @@ export class MCPCommandController {
 				throw new Error(`OAuth authentication failed: ${errorMsg}`);
 			}
 		} finally {
-			manualInput.clear("Manual MCP OAuth input cleared");
+			manualInputClaim?.clear("Manual MCP OAuth input cleared");
 		}
 	}
 
