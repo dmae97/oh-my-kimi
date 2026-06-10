@@ -1,12 +1,11 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed the `resume` option from the `task` tool API and its resume execution path; continue work on finished subagents by sending follow-up messages via `irc` instead
 - Removed the `irc.enabled` setting: irc availability is now derived — the tool exists exactly when there is someone to message (the session can spawn subagents through `task`, or it is a subagent itself). A stale `irc.enabled` key in config is ignored
-- The `task` tool was reworked to always run spawns in the background as independent, persistent agents: results arrive as async job deliveries (block with `job poll` only when genuinely needed). The batch `tasks[]` array and shared `context` parameter are now gated by the new `task.batch` setting (default on); a flat single-spawn form (top-level `id`/`description`/`assignment`) replaces the old one-element batch, and disabling `task.batch` removes the batch fields from the schema entirely — fan out with parallel `task` calls and share background via a `local://` file instead
+- The `task` tool was reworked to always run spawns in the background as independent, persistent agents: results arrive as async job deliveries (block with `job poll` only when genuinely needed). The wire schema is now shape-swapped by the new `task.batch` setting (default on): `{ agent, context, tasks[] }` — one subagent per task item, per-item `isolated`, and a required shared `context` — or, when disabled, a flat single-spawn shape `{ agent, id?, description?, assignment, isolated? }` with shared background passed via `local://` files instead
 - Removed the `task.simple` setting and the task tool's per-call `schema` parameter outright: structured subagent output now comes only from the agent definition's `output` frontmatter or the inherited session schema, and ad-hoc structured workflows use eval `agent(prompt, schema)`. A stale `task.simple` key in config is migrated away
 - Reworked `irc` to `send`/`wait`/`inbox`/`list` ops over a per-agent mailbox bus: the blocking `awaitReply` auto-reply turn is removed — `send` is fire-and-forget with delivery receipts, and replies are real turns by the recipient observed via `wait` (or the `send` `await: true` sugar)
 - Removed the `context` argument from eval `agent()` in both the JS and Python preludes: pass shared background via a `local://` file referenced in the prompt
@@ -26,10 +25,11 @@
 - Added the `history://` protocol: `history://` lists every registered agent and `history://<agentId>` renders a concise markdown transcript (tool calls collapsed to one line each, thinking elided) for live and parked agents alike
 - Added an IRC mailbox bus with bounded per-agent inboxes: `irc` `wait` blocks until a matching message arrives, `inbox` drains or peeks pending messages, and sending to an idle or parked agent wakes or revives it for a real turn
 - Added a dedicated TUI renderer for the `irc` tool: directional send/receive headers with delivery-outcome coloring, quoted message bodies with expand-aware truncation, per-recipient receipt trees for broadcasts and failures, and status-badged peer listings with unread counts
-- Added the `task.batch` setting (default on): one `task` call may carry a `tasks[]` array — one subagent per item, each spawned as its own independent background job with the normal idle/parked lifecycle — plus an optional shared `context` string rendered into every spawned subagent's system prompt; disabling it strips both fields from the tool schema
+- Added the `task.batch` setting (default on): the task tool's batch shape `{ agent, context, tasks[] }` spawns one subagent per item — each its own independent background job with the normal idle/parked lifecycle and optional per-item isolation — and prepends the required shared `context` to every spawned subagent's system prompt; disabling it restores the flat single-spawn schema
 
 ### Changed
 
+- Changed task-tool sync execution to fan out multiple `tasks[]` items in parallel and return a merged result payload when no async job manager is available
 - Changed the compaction UX so the conversation no longer visually restarts: the TUI renders the full-history display transcript (`buildSessionContext({ transcript: true })`), with each compaction shown as a slim inline divider — `── 📷 compacted · ctrl+o ──` — at the point it fired; expanding (ctrl+o) reveals the summary and snapcompact frame count. Applies to live compaction, `/compact`, `/tree` navigation, and session resume
 - Changed `async.enabled` to gate async bash commands only — the `task` tool now runs asynchronously regardless of the setting
 - Changed `irc.timeoutMs` to be the default timeout for `irc` `wait` and `send` with `await: true`
@@ -42,7 +42,8 @@
 
 ### Fixed
 
-- Fixed the `job` tool's TUI preview leaking the model-facing `<task-result>` envelope for settled task jobs — the preview now shows the inner output body
+- Fixed task-tool runtime compatibility so legacy flat `task` calls (`agent`, `assignment`) still execute under `task.batch` even though the wire schema is batch-first
+- Fixed the `job` tool's TUI preview leaking the model-facing `<task-result>` envelope for settled task jobs — the preview now shows the inner output body, and pretty-printed JSON bodies are flattened onto one line instead of previewing a lone `{`
 - Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
 - Fixed the `resolve` tool's result block turning white after the leading icon: the accent-styled symbol embedded a foreground reset inside the inverse-rendered line, dropping the block color for the rest of the row
 - Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions

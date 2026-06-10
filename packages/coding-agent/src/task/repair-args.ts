@@ -28,7 +28,7 @@
  * tools (write/edit/bash/search), where a backslash or quote is load-bearing
  * and a false-positive unescape would silently corrupt a file or command.
  */
-import type { TaskParams } from "./types";
+import type { TaskItem, TaskParams } from "./types";
 
 /** A backslash that escapes a structural char — `\"`, `\\`, `\/`, or `\uXXXX`. */
 const STRUCTURAL_ESCAPE = /\\(?:["\\/]|u[0-9a-fA-F]{4})/;
@@ -78,11 +78,23 @@ export function repairDoubleEncodedJsonString(value: string): string {
 	return typeof decoded === "string" && decoded !== value ? decoded : value;
 }
 
+/** Repair a single (possibly partial) task item's prose fields. */
+function repairTaskItem(task: TaskItem): TaskItem {
+	if (task === null || typeof task !== "object") return task;
+	const assignment =
+		typeof task.assignment === "string" ? repairDoubleEncodedJsonString(task.assignment) : task.assignment;
+	const description =
+		typeof task.description === "string" ? repairDoubleEncodedJsonString(task.description) : task.description;
+	if (assignment === task.assignment && description === task.description) return task;
+	return { ...task, assignment, description };
+}
+
 /**
- * Repair double-encoded prose in task-tool params (`assignment` and
- * `description`). Returns the same reference when nothing changed so callers
- * can cheaply skip work. Defensive against partially-streamed args
- * (missing/undefined fields) so it is safe on the render path as well as on
+ * Repair double-encoded prose in task-tool params (`assignment`,
+ * `description`, shared `context`, and each batch task item's prose fields).
+ * Returns the same reference when nothing changed so callers can cheaply skip
+ * work. Defensive against partially-streamed args (missing/undefined fields,
+ * partial task arrays) so it is safe on the render path as well as on
  * execution.
  */
 export function repairTaskParams(params: TaskParams): TaskParams {
@@ -92,7 +104,26 @@ export function repairTaskParams(params: TaskParams): TaskParams {
 		typeof params.assignment === "string" ? repairDoubleEncodedJsonString(params.assignment) : params.assignment;
 	const description =
 		typeof params.description === "string" ? repairDoubleEncodedJsonString(params.description) : params.description;
+	const context = typeof params.context === "string" ? repairDoubleEncodedJsonString(params.context) : params.context;
 
-	if (assignment === params.assignment && description === params.description) return params;
-	return { ...params, assignment, description };
+	let tasks = params.tasks;
+	if (Array.isArray(params.tasks)) {
+		let changed = false;
+		const repaired = params.tasks.map(task => {
+			const next = repairTaskItem(task);
+			if (next !== task) changed = true;
+			return next;
+		});
+		if (changed) tasks = repaired;
+	}
+
+	if (
+		assignment === params.assignment &&
+		description === params.description &&
+		context === params.context &&
+		tasks === params.tasks
+	) {
+		return params;
+	}
+	return { ...params, assignment, description, context, tasks };
 }

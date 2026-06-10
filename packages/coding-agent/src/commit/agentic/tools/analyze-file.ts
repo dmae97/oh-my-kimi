@@ -43,6 +43,9 @@ function buildToolSession(
 		settings: options.settings,
 		authStorage: options.authStorage,
 		modelRegistry: options.modelRegistry,
+		// The task tool no longer takes a per-call schema; the inherited session
+		// schema drives structured output for every spawn from this session.
+		outputSchema: analyzeFileOutputSchema,
 	};
 }
 
@@ -67,7 +70,7 @@ export function createAnalyzeFileTool(options: {
 			// The tool's session semaphore bounds the parallel fan-out.
 			const taskTool = await TaskTool.create(toolSession);
 			const numstat = options.state.overview?.numstat ?? [];
-			const schema = JSON.stringify(analyzeFileOutputSchema);
+
 			const analyses = await Promise.all(
 				params.files.map((file, index) => {
 					const relatedFiles = formatRelatedFiles(params.files, file, numstat);
@@ -81,7 +84,6 @@ export function createAnalyzeFileTool(options: {
 						id: `AnalyzeFile${index + 1}`,
 						description: `Analyze ${file}`,
 						assignment,
-						schema,
 					};
 					return taskTool.execute(`${toolCallId}-${index + 1}`, taskParams, signal);
 				}),

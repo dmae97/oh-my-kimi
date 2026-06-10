@@ -81,6 +81,22 @@ describe("job renderer task-result preview", () => {
 		expect(output).not.toContain("<task-result");
 	});
 
+	it("flattens a pretty-printed JSON body instead of previewing a lone brace", () => {
+		const summary = prompt.render(taskSummaryTemplate, {
+			agentName: "quick_task",
+			id: "EchoAlpha",
+			status: "completed",
+			duration: "11.6s",
+			preview: '{\n  "echo": "alpha",\n  "ok": true\n}',
+			truncated: false,
+			mergeSummary: "",
+		});
+
+		const output = Bun.stripANSI(renderLines(summary));
+		expect(output).toContain('{ "echo": "alpha", "ok": true }');
+		expect(output.split("\n").some(line => line.trim() === "{")).toBe(false);
+	});
+
 	it("passes non-envelope result text through unchanged", () => {
 		const output = renderLines("42 pass, 0 fail (18.4s)");
 		expect(output).toContain("42 pass, 0 fail (18.4s)");

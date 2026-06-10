@@ -1,5 +1,4 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
-import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -2752,31 +2751,14 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"task.simple": {
-		type: "enum",
-		values: TASK_SIMPLE_MODES,
-		default: "schema-free",
+	"task.batch": {
+		type: "boolean",
+		default: true,
 		ui: {
 			tab: "tasks",
-			label: "Task Input Mode",
-			description: "How much shared structure the task tool accepts (default, schema-free, or independent)",
-			options: [
-				{
-					value: "default",
-					label: "Default",
-					description: "Shared context and custom task schema are available",
-				},
-				{
-					value: "schema-free",
-					label: "Schema-free",
-					description: "Shared context stays available, but custom task schema is disabled",
-				},
-				{
-					value: "independent",
-					label: "Independent",
-					description: "No shared context or custom task schema; each task must stand alone",
-				},
-			],
+			label: "Batch Task Calls",
+			description:
+				"Switch the task tool to its batch shape: one call carries { agent, context, tasks[] } — one subagent per item (with per-item isolation) and a required shared context prepended to every assignment. Each spawn still runs as an independent background agent with the normal idle/parked lifecycle. Disable to restore the flat single-spawn schema.",
 		},
 	},
 

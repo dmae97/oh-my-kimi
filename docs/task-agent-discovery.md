@@ -141,11 +141,10 @@ In synchronous task execution (`TaskTool.#executeSync`):
 
 Runtime output schema precedence in `TaskTool.execute`:
 
-1. task call `params.schema` when `task.simple` allows custom schemas
-2. agent frontmatter `output`
-3. parent session `outputSchema`
+1. agent frontmatter `output`
+2. parent session `outputSchema`
 
-(`effectiveOutputSchema = outputSchema ?? effectiveAgent.output ?? this.session.outputSchema` when custom task schemas are enabled; otherwise task-call schema is skipped.)
+(`effectiveOutputSchema = effectiveAgent.output ?? this.session.outputSchema` — the task call itself never carries a schema; ad-hoc structured workflows go through the eval bridge's `agent(prompt, schema)`.)
 
 Prompt-time guardrail text in `src/prompts/tools/task.md` warns about mismatch behavior for structured-output agents (`explore`, `reviewer`): output-format instructions in prose can conflict with built-in schema and produce `null` outputs.
 

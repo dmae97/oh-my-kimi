@@ -130,7 +130,7 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"task.isolation.merge",
 	"task.isolation.commits",
 	"task.eager",
-	"task.simple",
+	"task.batch",
 	"task.maxConcurrency",
 	"task.maxRecursionDepth",
 	"task.disabledAgents",
