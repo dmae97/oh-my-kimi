@@ -72,6 +72,13 @@ export function toReasoningEffort(level: ThinkingLevel | undefined): Effort | un
 }
 
 /**
+ * True when a selector explicitly requests provider-side reasoning disablement.
+ */
+export function shouldDisableReasoning(level: ThinkingLevel | undefined): boolean {
+	return level === ThinkingLevel.Off;
+}
+
+/**
  * Resolves a selector against the current model while preserving explicit "off".
  */
 export function resolveThinkingLevelForModel(

@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Fixed Ollama chat turns using the `:off` thinking selector so requests explicitly send reasoning disablement instead of falling back to the provider default ([#2239](https://github.com/can1357/oh-my-pi/issues/2239)).
 - Fixed long-running sessions becoming sluggish because the status line recomputed context usage by walking the full message history on every refresh. Message-token totals are now cached incrementally, and status lines that do not render context segments skip context accounting entirely. ([#2089](https://github.com/can1357/oh-my-pi/issues/2089))
 - Fixed exiting plan mode without confirmation only when neither the default plan file nor slug-named local plan files contain draft content ([#2024](https://github.com/can1357/oh-my-pi/issues/2024)).
 - Fixed `enabledModels` being ignored by the ACP model picker (Zed and other ACP clients) — `AgentSession.getAvailableModels()` now applies the configured allow-list, so only the models listed in `enabledModels` appear in the UI. Also applies consistently to the RPC `get_available_models` endpoint and the `/model` slash command.

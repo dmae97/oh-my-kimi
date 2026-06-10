@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AgentLoopConfig.getDisableReasoning` so callers can override `disableReasoning` per LLM call, mirroring `getReasoning`.
+
+### Fixed
+
+- Fixed `Agent` runs so explicit reasoning disablement is forwarded to provider stream options and re-resolved per continuation, keeping mid-run thinking-off changes in sync with the next provider request.
+
 ## [15.10.11] - 2026-06-10
 
 ### Changed

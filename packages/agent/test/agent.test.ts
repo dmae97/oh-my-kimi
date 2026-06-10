@@ -354,6 +354,69 @@ describe("Agent", () => {
 		expect(reasoningPerCall).toEqual([ThinkingLevel.Low, ThinkingLevel.High]);
 	});
 
+	it("forwards explicit reasoning disablement to the stream", async () => {
+		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
+		const agent = new Agent({
+			initialState: {
+				model: mock.model,
+				messages: [],
+				disableReasoning: true,
+			},
+			streamFn: mock.stream,
+		});
+
+		await agent.prompt("run");
+
+		expect(mock.calls[0]?.options?.disableReasoning).toBe(true);
+	});
+
+	it("re-reads disableReasoning for each model call within a run", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		type Details = { value: string };
+		const alphaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "alpha",
+			label: "Alpha",
+			description: "Alpha tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value } };
+			},
+		};
+
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } }] },
+				{ content: ["done"] },
+			],
+		});
+
+		const agent = new Agent({
+			initialState: {
+				model: mock.model,
+				thinkingLevel: ThinkingLevel.High,
+				disableReasoning: false,
+				tools: [alphaTool],
+				messages: [],
+			},
+			streamFn: mock.stream,
+		});
+
+		// Flip thinking off mid-run after the first assistant turn produces the
+		// tool call but before the continuation request is sent.
+		const unsubscribe = agent.subscribe(event => {
+			if (event.type === "message_end" && event.message.role === "toolResult") {
+				agent.setThinkingLevel(undefined);
+				agent.setDisableReasoning(true);
+			}
+		});
+
+		await agent.prompt("run");
+		unsubscribe();
+
+		const disablePerCall = mock.calls.map(call => call.options?.disableReasoning);
+		expect(disablePerCall).toEqual([false, true]);
+	});
+
 	it("forwards distinct provider session id and prompt cache key to the stream", async () => {
 		const mock = createMockModel({ responses: [{ content: ["ok"] }] });
 		const agent = new Agent({

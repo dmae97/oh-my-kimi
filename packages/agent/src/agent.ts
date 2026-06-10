@@ -265,6 +265,7 @@ export class Agent {
 		systemPrompt: [],
 		model: getBundledModel("google", "gemini-2.5-flash-lite-preview-06-17"),
 		thinkingLevel: undefined,
+		disableReasoning: false,
 		tools: [],
 		messages: [],
 		isStreaming: false,
@@ -658,6 +659,10 @@ export class Agent {
 		this.#state.thinkingLevel = l;
 	}
 
+	setDisableReasoning(disabled: boolean) {
+		this.#state.disableReasoning = disabled;
+	}
+
 	setSteeringMode(mode: "all" | "one-at-a-time") {
 		this.#steeringMode = mode;
 	}
@@ -942,6 +947,7 @@ export class Agent {
 		const config: AgentLoopConfig = {
 			model,
 			reasoning,
+			disableReasoning: this.#state.disableReasoning,
 			temperature: this.#temperature,
 			topP: this.#topP,
 			topK: this.#topK,
@@ -985,6 +991,7 @@ export class Agent {
 			onHarmonyLeak: this.#onHarmonyLeak,
 			getToolChoice,
 			getReasoning: () => this.#state.thinkingLevel,
+			getDisableReasoning: () => this.#state.disableReasoning,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;

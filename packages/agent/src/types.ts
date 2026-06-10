@@ -211,6 +211,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	getReasoning?: () => Effort | undefined;
 
 	/**
+	 * Dynamic reasoning-disable override, resolved per LLM call. When set,
+	 * its return value overrides the static `disableReasoning` from
+	 * `SimpleStreamOptions` for that request. Pair with `getReasoning` so
+	 * mid-run transitions into and out of the explicit `off` state propagate
+	 * to the next provider call.
+	 */
+	getDisableReasoning?: () => boolean | undefined;
+
+	/**
 	 * Called after a tool call has been validated and is about to execute.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool
@@ -358,6 +367,7 @@ export interface AgentState {
 	systemPrompt: string[];
 	model: Model;
 	thinkingLevel?: Effort;
+	disableReasoning?: boolean;
 	tools: AgentTool<any>[];
 	messages: AgentMessage[]; // Can include attachments + custom message types
 	isStreaming: boolean;
