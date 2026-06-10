@@ -87,7 +87,16 @@ fn normalize_program(program: &str) -> Option<String> {
 	if name.is_empty() {
 		return None;
 	}
-	Some(name.to_lowercase())
+	let lowered = name.to_lowercase();
+	// Exact-match allowlist for Windows launcher scripts whose `.bat`/`.cmd`
+	// twin should dispatch identically to the bare wrapper. Kept explicit on
+	// purpose: a generic `.bat`/`.cmd` strip would over-match unrelated scripts
+	// (e.g. `foo.bat`, `deploy.cmd`).
+	Some(match lowered.as_str() {
+		"gradlew.bat" => "gradlew".to_string(),
+		"mvnw.cmd" => "mvnw".to_string(),
+		_ => lowered,
+	})
 }
 
 fn skip_env_options(tokens: &[String], mut index: usize) -> Option<usize> {
@@ -300,6 +309,10 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 			&["--paginate", "--slurp", "--verbose"],
 			&[],
 		),
+		// glab's clap-level globals are `-R`/`--repo` and `-g`/`--group`
+		// (donor rtk/src/cmds/git/glab_cmd.rs + README); both take a value, so
+		// skip them and their argument to reach the real subcommand.
+		"glab" => first_non_global_arg(args, &["-R", "--repo", "-g", "--group"], &[], &[]),
 		"gt" => first_non_global_arg(
 			args,
 			&["--repo", "--cwd", "--config", "--debug-context"],
@@ -596,6 +609,50 @@ mod tests {
 		let command = detect("tsc --project tsconfig.json").expect("tsc command is detected");
 		assert_eq!(command.program, "tsc");
 		assert_eq!(command.subcommand.as_deref(), Some("tsconfig.json"));
+	}
+
+	#[test]
+	fn detects_gradle_and_maven_wrapper_scripts() {
+		let command = detect("./gradlew build").expect("gradlew command is detected");
+		assert_eq!(command.program, "gradlew");
+		assert_eq!(command.subcommand.as_deref(), Some("build"));
+
+		let command = detect("gradlew.bat assembleDebug").expect("gradlew.bat normalizes to gradlew");
+		assert_eq!(command.program, "gradlew");
+		assert_eq!(command.subcommand.as_deref(), Some("assembledebug"));
+
+		let command = detect("mvnw.cmd package").expect("mvnw.cmd normalizes to mvnw");
+		assert_eq!(command.program, "mvnw");
+		assert_eq!(command.subcommand.as_deref(), Some("package"));
+	}
+
+	#[test]
+	fn wrapper_allowlist_does_not_strip_unrelated_bat_or_cmd() {
+		// The allowlist is exact-match only; arbitrary `.bat`/`.cmd` scripts keep
+		// their full basename so unrelated tools are not silently re-dispatched.
+		let command = detect("foo.bat run").expect("foo.bat command is detected");
+		assert_eq!(command.program, "foo.bat");
+		assert_eq!(command.subcommand.as_deref(), Some("run"));
+
+		let command = detect("deploy.cmd go").expect("deploy.cmd command is detected");
+		assert_eq!(command.program, "deploy.cmd");
+		assert_eq!(command.subcommand.as_deref(), Some("go"));
+	}
+
+	#[test]
+	fn detects_glab_subcommand_past_repo_global() {
+		let command = detect("glab -R owner/repo mr list").expect("glab command is detected");
+		assert_eq!(command.program, "glab");
+		assert_eq!(command.subcommand.as_deref(), Some("mr"));
+	}
+
+	#[test]
+	fn default_arm_returns_first_positional_for_unknown_program() {
+		// Regression pin: programs without a dedicated arm fall through to the
+		// default branch, which returns the first non-flag token verbatim.
+		let command = detect("rustc main.rs").expect("rustc command is detected");
+		assert_eq!(command.program, "rustc");
+		assert_eq!(command.subcommand.as_deref(), Some("main.rs"));
 	}
 
 	#[test]
