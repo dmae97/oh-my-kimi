@@ -287,9 +287,19 @@ export function estimateTokens(message: AgentMessage): number {
 					fragments.push(block.text);
 				} else if (block.type === "thinking") {
 					fragments.push(block.thinking);
+					// Providers charge for the opaque signature/reasoning payload that
+					// rides alongside the thinking text (OpenAI Responses encrypted
+					// reasoning items, Anthropic signed thinking blocks, etc.). Without
+					// counting it, this estimator can read ~half of the provider-reported
+					// usage on thinking-heavy turns — see #2275 for the resulting
+					// compaction-trigger / post-check metric divergence.
+					if (block.thinkingSignature) fragments.push(block.thinkingSignature);
 				} else if (block.type === "toolCall") {
 					fragments.push(block.name);
 					fragments.push(JSON.stringify(block.arguments));
+				} else if (block.type === "redactedThinking") {
+					// Encrypted reasoning blob the provider still bills for on replay.
+					fragments.push(block.data);
 				}
 			}
 			break;

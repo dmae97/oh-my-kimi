@@ -22,6 +22,7 @@
 
 - Fixed queued steering messages being drained into an externally aborted run: interrupting mid-tool execution (e.g. Enter with a pending steer) dequeued the steer into the dying run — it landed in history without a response and the post-abort resume saw an empty queue, so the agent stopped instead of continuing. Steering/follow-up/aside queue polls are now skipped once the run's abort signal fires, leaving the queue intact for `Agent.continue()`.
 - Fixed `<read-files>` compaction lists recording the same file once per line-range/raw selector (`src/foo.ts:50-200`, `:raw`, `:1-50:raw`, …): read-tool selectors are now stripped before tracking, so reads dedupe to the base path and match their write/edit path when splitting read-only vs modified lists. Selector-polluted lists stored by earlier compactions self-heal on the next compaction. `readToolSupersedeKey()` now shares the same splitter (`splitReadSelector()`), gaining the `..` range alias and `L`-prefix forms it previously missed.
+- Fixed `estimateTokens()` undercounting thinking-heavy assistant messages on replay: `thinkingSignature` payloads (OpenAI Responses encrypted reasoning items, Anthropic signed thinking blocks, etc.) and `redactedThinking.data` are now charged alongside the visible thinking text, so the local estimate tracks provider-reported usage instead of straddling the threshold on every turn ([#2275](https://github.com/can1357/oh-my-pi/issues/2275)).
 
 ## [15.10.12] - 2026-06-10
 

@@ -51,6 +51,7 @@ import {
 	generateBranchSummary,
 	generateHandoff,
 	prepareCompaction,
+	resolveThresholdTokens,
 	type ShakeConfig,
 	type ShakeRegion,
 	type SummaryOptions,
@@ -302,6 +303,15 @@ export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "la
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 const RETRY_BACKOFF_JITTER_RATIO = 0.25;
+/**
+ * Hysteresis band for the post-shake "did we actually create headroom?" check.
+ * Shake counts as having resolved threshold pressure only when residual context
+ * lands at or below `SHAKE_RECOVERY_BAND × threshold`. Re-checking against the
+ * raw threshold lets shake keep reclaiming a trickle of the previous turn's
+ * output and land just under the line every turn, sustaining the auto-continue
+ * dead loop reported in #2275.
+ */
+const SHAKE_RECOVERY_BAND = 0.8;
 
 function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
 	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
@@ -6749,7 +6759,10 @@ export class AgentSession {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
 				});
-				await this.#runAutoCompaction("incomplete", true, false, allowDefer, { autoContinue });
+				await this.#runAutoCompaction("incomplete", true, false, allowDefer, {
+					autoContinue,
+					triggerContextTokens: calculateContextTokens(assistantMessage.usage),
+				});
 			} else {
 				// Neither promotion nor compaction is available — surface the dead-end so
 				// the user understands why the turn yielded with nothing.
@@ -6782,7 +6795,10 @@ export class AgentSession {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (!promoted) {
-				return await this.#runAutoCompaction("threshold", false, false, allowDefer, { autoContinue });
+				return await this.#runAutoCompaction("threshold", false, false, allowDefer, {
+					autoContinue,
+					triggerContextTokens: contextTokens,
+				});
 			}
 		}
 		return false;
@@ -7627,7 +7643,7 @@ export class AgentSession {
 		willRetry: boolean,
 		deferred = false,
 		allowDefer = true,
-		options: { autoContinue?: boolean } = {},
+		options: { autoContinue?: boolean; triggerContextTokens?: number } = {},
 	): Promise<boolean> {
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return false;
@@ -7638,7 +7654,13 @@ export class AgentSession {
 		// reclaims nothing we fall through to the summary-compaction body below so
 		// the oversized input still gets resolved.
 		if (compactionSettings.strategy === "shake") {
-			const outcome = await this.#runAutoShake(reason, willRetry, generation, shouldAutoContinue);
+			const outcome = await this.#runAutoShake(
+				reason,
+				willRetry,
+				generation,
+				shouldAutoContinue,
+				options.triggerContextTokens,
+			);
 			if (outcome !== "fallback") return false;
 		}
 		// "overflow" and "incomplete" force inline execution because they are recovery
@@ -8071,6 +8093,7 @@ export class AgentSession {
 		willRetry: boolean,
 		generation: number,
 		autoContinue: boolean,
+		triggerContextTokens?: number,
 	): Promise<"handled" | "fallback"> {
 		const action = "shake";
 		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
@@ -8091,8 +8114,8 @@ export class AgentSession {
 				return "handled";
 			}
 			const reclaimed = result.toolResultsDropped + result.blocksDropped > 0;
-			// Detect the dead-loop reported in issue #2119: the threshold check fires,
-			// shake runs, but the resulting context is still above the configured
+			// Detect the dead-loop reported in issues #2119/#2275: the threshold check
+			// fires, shake runs, but residual context is still above the configured
 			// threshold. The next agent_end would re-trigger shake, which has nothing
 			// new to drop on the second pass, so the loop spins until the user kills it.
 			// Same hazard for "incomplete" (the retry would re-hit the length cap) and
@@ -8100,10 +8123,30 @@ export class AgentSession {
 			// reason we hand off to the summarization-driven context-full path so the
 			// situation actually resolves; "idle" is exempt because its 60s+ timer
 			// re-checks usage before re-firing and cannot dead-loop on its own.
+			//
+			// #2275: the post-shake check MUST be anchored on the same metric that
+			// triggered compaction. The local estimator (`#estimatePendingPromptTokens`)
+			// undercounts thinking-signature payloads, so on thinking-heavy sessions it
+			// reads well below the provider-reported usage that fired the threshold.
+			// When that estimate slips under the threshold, the fallback never fires
+			// and the auto-continue prompt re-injects every turn. Prefer the trigger's
+			// own `contextTokens` (provider-anchored) when the caller supplies it, and
+			// add hysteresis (80% recovery band) so we don't oscillate at the boundary
+			// while shake keeps reclaiming a trickle of the previous turn's output.
 			const contextWindow = this.model?.contextWindow ?? 0;
 			const compactionSettings = this.settings.getGroup("compaction");
-			const postShakeTokens = contextWindow > 0 ? this.#estimatePendingPromptTokens([]) : 0;
-			const stillOverThreshold = shouldCompact(postShakeTokens, contextWindow, compactionSettings);
+			let stillOverThreshold = false;
+			if (contextWindow > 0) {
+				if (typeof triggerContextTokens === "number" && Number.isFinite(triggerContextTokens)) {
+					const correctedTokens = Math.max(0, triggerContextTokens - result.tokensFreed);
+					const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
+					const recoveryBand = Math.floor(thresholdTokens * SHAKE_RECOVERY_BAND);
+					stillOverThreshold = correctedTokens > recoveryBand;
+				} else {
+					const postShakeTokens = this.#estimatePendingPromptTokens([]);
+					stillOverThreshold = shouldCompact(postShakeTokens, contextWindow, compactionSettings);
+				}
+			}
 			const shouldFallBack = reason !== "idle" && ((reason === "overflow" && !reclaimed) || stillOverThreshold);
 			if (shouldFallBack) {
 				const errorMessage = reclaimed
