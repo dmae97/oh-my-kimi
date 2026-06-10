@@ -91,4 +91,18 @@ describe("buildAvailableSlashCommands", () => {
 		expect(byName["server:prompt"].source).toBe("mcp_prompt");
 		expect(byName.green.source).toBe("custom");
 	});
+
+	test("keeps legacy custom command fixtures without a path classified as custom", async () => {
+		const commands = await buildAvailableSlashCommands(
+			{
+				customCommands: [{ command: { name: "legacy", description: "Legacy fixture" } }],
+				skills: [],
+				sessionManager: { getCwd: () => process.cwd() },
+				setSlashCommands() {},
+			} as never,
+			async () => [],
+		);
+
+		expect(commands.find(command => command.name === "legacy")?.source).toBe("custom");
+	});
 });

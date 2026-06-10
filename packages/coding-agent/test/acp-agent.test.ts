@@ -477,7 +477,7 @@ async function createHarness(
  * `setTimeout` drift without slowing tests meaningfully.
  */
 async function waitForBootstrapGuard(): Promise<void> {
-	await Bun.sleep(ACP_BOOTSTRAP_RACE_GUARD_MS + 30);
+	await Bun.sleep(ACP_BOOTSTRAP_RACE_GUARD_MS + 150);
 }
 
 describe("ACP agent", () => {

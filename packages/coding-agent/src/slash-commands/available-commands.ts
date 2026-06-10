@@ -78,7 +78,7 @@ export async function buildAvailableSlashCommands(
 	}
 
 	for (const command of session.customCommands) {
-		const source: AvailableSlashCommandSource = command.path.startsWith("mcp:") ? "mcp_prompt" : "custom";
+		const source: AvailableSlashCommandSource = command.path?.startsWith("mcp:") ? "mcp_prompt" : "custom";
 		appendCommand({
 			name: command.command.name,
 			description: command.command.description,
