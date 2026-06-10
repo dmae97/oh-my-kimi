@@ -46,6 +46,7 @@
 ### Fixed
 
 - Fixed the `thinking.autoPending` statusbar indicator using question-mark glyphs (`▣?`, nf-md-help_box, `[?]`) in every symbol preset, which made the auto-thinking pending state indistinguishable from a terminal missing-glyph fallback. Replaced with clear loading indicators (`⟳`, fa-circle-o-notch, `[~]`) ([#2267](https://github.com/can1357/oh-my-pi/issues/2267)).
+- Fixed an infinite `compaction.strategy: shake` auto-continue loop in thinking-heavy sessions: the post-shake check now uses the provider-anchored trigger metric (instead of a local estimate that undercounts `thinkingSignature` payloads) and only treats pressure as resolved when residual context lands inside an 80% recovery band, so shake reliably falls back to context-full compaction when it cannot create real headroom ([#2275](https://github.com/can1357/oh-my-pi/issues/2275)).
 
 ## [15.10.12] - 2026-06-10
 
