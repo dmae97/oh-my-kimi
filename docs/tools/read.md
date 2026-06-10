@@ -10,7 +10,7 @@
   - `packages/coding-agent/src/tools/archive-reader.ts` — detect `archive.ext:inner/path`, index archives, list/read entries.
   - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite targets, parse selectors, render tables.
   - `packages/coding-agent/src/tools/fetch.ts` — URL parsing, fetch/render pipeline, URL cache/artifacts.
-  - `packages/coding-agent/src/internal-urls/router.ts` — resolve `agent://`, `artifact://`, `local://`, `mcp://`, `memory://`, `omp://`, `rule://`, `skill://`.
+  - `packages/coding-agent/src/internal-urls/router.ts` — resolve `agent://`, `artifact://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, `skill://`, and `vault://`.
   - `packages/coding-agent/src/edit/notebook.ts` — convert `.ipynb` to editable `# %% [...] cell:N` text.
   - `packages/coding-agent/src/utils/file-display-mode.ts` — decide hashline vs line-number vs raw display.
   - `packages/coding-agent/src/workspace-tree.ts` — render directory trees.
