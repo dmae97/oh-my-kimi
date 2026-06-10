@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.
+
 ## [15.10.11] - 2026-06-10
 
 ### Added
@@ -15,8 +19,6 @@
 - Added `/stats` to launch the local stats dashboard from an active session, syncing session files first and opening the same browser dashboard as `omp stats`.
 - `/settings` now supports type-to-search filtering on setting labels, paths, descriptions, and values; Escape clears an active search before closing the panel.
 - Added a read-only `view` op to the `todo` tool that echoes the current list without mutating state, so the agent can recover exact task text instead of guessing it from memory.
-- New `omp usage` command: a detailed per-account breakdown of provider usage limits (bars, windows, reset times, plan metadata) covering every stored credential — accounts with no usage endpoint are listed as "no usage data" rows. Each provider section ends with per-window capacity stats ("need: 5h → 3 of 5 accounts"). Flags: `--provider` to filter, `--json` for the broker-shaped report payload, and `--redact` to mask account emails/ids down to a two-char anchor plus a minimal middle-out differentiator (`ca*9*`) for screenshot-safe sharing.
-- Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.
 
 ### Changed
 
@@ -147,7 +149,6 @@
 ### Fixed
 
 - Fixed a turn-ending provider error (e.g. a 502 whose body is the proxy's full HTML page) flooding the transcript: `AnthropicApiError` folds the entire response body into `errorMessage`, and the inline transcript render reprinted it verbatim — every embedded blank line included — leaving a tall mostly-empty block ending in `</html>`. The inline error now drops blank lines, clamps to 8 lines, and width-truncates each line via `getPreviewLines`, matching the pinned error banner.
-- Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.
 
 ## [15.10.7] - 2026-06-08
 
