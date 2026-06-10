@@ -81,6 +81,12 @@ fn failures_only(input: &str, exit_code: i32) -> String {
 		{
 			keep = true;
 		}
+		// Passing test lines carry no failure signal — drop them unconditionally,
+		// even after the keep flag latches, so a later passing suite in a
+		// multi-suite run does not re-emit its `test <name> ... ok` lines.
+		if is_passing_test_line(trimmed) {
+			continue;
+		}
 		if keep || trimmed.starts_with("running ") {
 			out.push_str(line);
 			out.push('\n');
@@ -745,6 +751,41 @@ mod tests {
 		assert!(!out.text.contains("Compiling"), "Compiling noise must be stripped");
 		assert!(!out.text.contains("test ok_one"), "passing test lines must be stripped");
 		assert!(!out.text.contains("test ok_two"), "passing test lines must be stripped");
+	}
+
+	#[test]
+	fn cargo_test_multi_suite_drops_passing_lines_after_keep_latches() {
+		// Suite 1 fails, latching the keep flag.  Suite 2 passes — its
+		// `test <name> ... ok` lines must NOT leak through just because keep
+		// is set.  Only failure evidence survives.
+		let input = concat!(
+			"running 1 tests\n",
+			"test suite1_bad ... FAILED\n",
+			"\n",
+			"failures:\n",
+			"    suite1_bad\n",
+			"\n",
+			"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured\n",
+			"running 2 tests\n",
+			"test suite2_ok_a ... ok\n",
+			"test suite2_ok_b ... ok\n",
+			"test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured\n",
+		);
+
+		let out = failures_only(input, 101);
+
+		// Failure evidence from suite 1 survives.
+		assert!(out.contains("suite1_bad"), "failing test name must survive: {out:?}");
+		assert!(out.contains("test result: FAILED"), "failed summary must survive: {out:?}");
+		// Suite 2's passing lines must be dropped even though keep is latched.
+		assert!(
+			!out.contains("test suite2_ok_a"),
+			"passing line after keep latch must be dropped: {out:?}"
+		);
+		assert!(
+			!out.contains("test suite2_ok_b"),
+			"passing line after keep latch must be dropped: {out:?}"
+		);
 	}
 
 	#[test]
