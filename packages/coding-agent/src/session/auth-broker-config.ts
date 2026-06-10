@@ -66,12 +66,41 @@ async function readConfigYaml(): Promise<ConfigSnapshot> {
 }
 
 /**
+ * Process-lifetime memo for {@link resolveAuthBrokerConfig}. Keyed on the env
+ * inputs (plus agent dir, which decides which config.yml is read) so tests
+ * that flip `OMP_AUTH_BROKER_*` between cases still observe the change, while
+ * repeated resolution within one CLI invocation (startup, subagent sessions)
+ * skips the config.yml read and any `!command` token resolution.
+ */
+let cachedConfigKey: string | null = null;
+let cachedConfigPromise: Promise<AuthBrokerClientConfig | null> | null = null;
+
+/**
  * Read broker configuration. Returns null when the URL is missing
  * (broker disabled — local store is used). Throws when URL is set but no
  * token is available — the caller cannot fall back silently because the
  * user explicitly asked to use the broker.
+ *
+ * Successful resolutions (including "no broker configured") are memoized for
+ * the process lifetime; failures are not, so a missing token can be fixed and
+ * retried. Concurrent callers share one in-flight resolution.
  */
-export async function resolveAuthBrokerConfig(): Promise<AuthBrokerClientConfig | null> {
+export function resolveAuthBrokerConfig(): Promise<AuthBrokerClientConfig | null> {
+	const key = `${process.env.OMP_AUTH_BROKER_URL ?? ""}\u0000${process.env.OMP_AUTH_BROKER_TOKEN ?? ""}\u0000${getAgentDir()}`;
+	if (cachedConfigPromise && cachedConfigKey === key) return cachedConfigPromise;
+	const promise = resolveAuthBrokerConfigUncached();
+	cachedConfigKey = key;
+	cachedConfigPromise = promise;
+	promise.catch(() => {
+		if (cachedConfigPromise === promise) {
+			cachedConfigPromise = null;
+			cachedConfigKey = null;
+		}
+	});
+	return promise;
+}
+
+async function resolveAuthBrokerConfigUncached(): Promise<AuthBrokerClientConfig | null> {
 	const envUrl = process.env.OMP_AUTH_BROKER_URL;
 	const envToken = process.env.OMP_AUTH_BROKER_TOKEN;
 

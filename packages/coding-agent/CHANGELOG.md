@@ -1,12 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - New `omp usage` command: a detailed per-account breakdown of provider usage limits (bars, windows, reset times, plan metadata) covering every stored credential — accounts with no usage endpoint are listed as "no usage data" rows. Each provider section ends with per-window capacity stats ("need: 5h → 3 of 5 accounts"). Flags: `--provider` to filter, `--json` for the broker-shaped report payload, and `--redact` to mask account emails/ids down to a two-char anchor plus a minimal middle-out differentiator (`ca*9*`) for screenshot-safe sharing.
+- Startup hangs are now self-diagnosing (speculative fix for the "zero output, hangs even on `omp -h`" report class): a watchdog prints a stderr line every 10s naming the deepest in-flight startup phase (via `logger.openSpanPath()`) until a mode runner takes over, pausing around legitimate interactive waits (fork/move prompts, the `--resume` session picker); `PI_DEBUG_STARTUP` is restored as streaming synchronous `[startup]` phase markers covering command-module imports and the native addon load, which the post-startup `PI_TIMING` tree structurally cannot show for a hang; and waiting on piped-stdin EOF announces itself after 1s instead of blocking silently.
 
 ### Changed
 
+- Cached custom model alias maps and built them lazily on first custom model reference lookup, avoiding unnecessary startup model-registry initialization
+- Cached resolved auth broker configuration and snapshot reads for the process lifetime so repeated startup paths reuse the same `OMP_AUTH_BROKER_*` resolution instead of re-running config/token discovery
+- Reused task-agent discovery results for repeated `TaskTool.create` calls in the same working directory to avoid repeated plugin scans during subagent startup
 - Tightened the system prompt and tool prompts: deduped restated warnings (bash "catch yourself" list, search/find shell-fallback recaps, read instruction/critical overlap, the AST metavariable primer duplicated across both ast tool descriptions), factored the repeated repo-default clause in the `gh` search ops, dropped a dead `rsed` reference and an internal `tool-timeouts.ts` pointer, and pruned internal mechanism the agent can't act on (screenshot temp-file/downscaling pipeline, browser spawn lifecycle, `gh` "replaces former op" history and run-watch grace period, output-minimizer heuristics, BM25 ranking name, `task.maxConcurrency` pointer)
 - Extended the prompt-efficiency pass to the full prompt surface (subagent/plan-mode/notice/title/commit system prompts, agent definitions, goals, memories, review and autoresearch prompts): RFC-keyed prescriptive prose, fixed garbled grammar and a stale `<PLAN_TITLE>` placeholder in the plan-approval reminder, deduped intra-file restatements, and corrected the `todo` op table's claim that `rm` requires a `task`/`phase` (bare `rm` clears the whole list)
 - Replace tool prompt no longer recommends `sed -i`/`cat`-heredoc commands that the bash interceptor blocks; its bash-alternatives table now only lists non-intercepted commands
@@ -24,6 +29,8 @@
 
 ### Fixed
 
+- Fixed the bundled `explore` agent's `thinking-level: med` frontmatter — not a valid effort (`minimal`/`low`/`medium`/`high`/`xhigh`), so it silently parsed to undefined and the agent ran without its intended thinking level
+- Discovery context-file reads (`~/.claude`, `~/.cursor`, project trees, `@`-imports) now stat-gate to regular files before reading: a FIFO/socket/char device dropped where a context file is expected previously blocked startup forever on a read that can never see EOF.
 - Kept IRC cards from being removed after their TTL once everything above them finalized: their rows may already be committed to native scrollback, and removing them was an interior deletion of the committed prefix that the engine could only repair by recommitting everything below the gap (duplicated blocks). Such cards now stay in the transcript as durable history.
 - Fixed the recommit storm that sprayed stale snapshots of a running task's progress tree into native scrollback. The stable-prefix ratchet promoted any row quiet for one 30-frame window, so slowly ticking rows (per-agent tool/cost counters updating every few seconds) were repeatedly promoted, committed, rewritten, and recommitted by the engine audit for the whole run. The ratchet now floors itself permanently at the first row that mutates after being promoted — settled heads (a task's prompt/context) still reach scrollback, genuine tickers never re-promote.
 - **Fixed the artifact spill dropping the first ~20KB of output**: head-retained bytes were never written to the artifact file, so for every bash/eval/ssh command exceeding the 50KB spill threshold, the `artifact://` advertised as the "full capture" was permanently missing its head — the agent re-reading it got truncated data presented as lossless.
