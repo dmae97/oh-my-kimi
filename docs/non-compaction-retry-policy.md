@@ -63,7 +63,7 @@ Flow (`#handleRetryableError`):
 4. Create `#retryPromise` once (first attempt in a chain).
 5. If attempt exceeded `retry.maxRetries`, emit final failure event and stop.
 6. Compute base delay: `retry.baseDelayMs * 2^(attempt-1)`.
-7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`, otherwise use a larger retry-after/backoff hint when present.
+7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`. Otherwise wait for whichever comes first — the provider's retry-after/backoff hint, or the earliest moment a temporarily blocked sibling credential frees up (`retryAtMs` + 1s buffer) so the next attempt can pick it up.
 8. If no credential switch occurred, suppress the current model selector for cooldown, try configured retry model fallback chains, and force delay to `0` on model switch.
 9. If the final delay exceeds `retry.maxDelayMs` and no credential/model switch happened, emit final failure and do not sleep.
 10. Emit `auto_retry_start`.
