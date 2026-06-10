@@ -135,6 +135,10 @@
 
 - Added `python.interpreter` to pin eval's Python backend to an explicit interpreter and skip automatic runtime discovery ([#1802](https://github.com/can1357/oh-my-pi/issues/1802)).
 
+### Added
+
+- Added `!command` resolution for `models.yml` provider `apiKey` values and provider/model headers ([#1888](https://github.com/can1357/oh-my-pi/issues/1888)).
+
 ## [15.10.9] - 2026-06-09
 
 ### Fixed

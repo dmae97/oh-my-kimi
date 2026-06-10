@@ -137,6 +137,20 @@ Must define at least one of:
 - `id` required
 - `contextWindow` and `maxTokens` must be positive if provided
 
+### Command-resolved secrets
+
+Provider `apiKey` values and provider/model `headers` values may start with `!` to read a secret from command stdout. The command is run with a 10 s timeout, stdout is trimmed, and empty/failing commands are omitted:
+
+```yaml
+providers:
+  openai:
+    apiKey: "!op read op://dev/openai/api-key"
+    headers:
+      X-Team-Key: "!bw get password omp-team-key"
+```
+
+Successful command outputs are cached for the process lifetime so the command is not re-run for every model.
+
 ## Merge and override order
 
 ModelRegistry pipeline (on refresh):
