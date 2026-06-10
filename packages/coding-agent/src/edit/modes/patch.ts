@@ -1668,6 +1668,7 @@ class LspFileSystem implements FileSystem {
 
 	constructor(
 		private readonly session: ToolSession,
+		private readonly requestedPath: string,
 		private readonly writethrough: WritethroughCallback,
 		private readonly signal?: AbortSignal,
 		private readonly batchRequest?: LspBatchRequest,
@@ -1699,9 +1700,8 @@ class LspFileSystem implements FileSystem {
 	async write(path: string, content: string): Promise<void> {
 		const finalContent = await serializeEditFileText(path, path, content);
 
-		// Route through ACP bridge when available; skips internal artifacts.
-		// path is already resolved to an absolute path by executePatchSingle.
-		if (await routeWriteThroughBridge(this.session, path, path, finalContent)) {
+		// Route through ACP bridge when available; skips internal artifacts and local:// paths.
+		if (await routeWriteThroughBridge(this.session, this.requestedPath, path, finalContent)) {
 			return;
 		}
 
@@ -1799,6 +1799,7 @@ export async function executePatchSingle(
 	const input: PatchInput = { path: resolvedPath, op, rename: resolvedRename, diff };
 	const patchFileSystem = new LspFileSystem(
 		session,
+		path, // original user-provided path for bridge guard (may be local://, vault://, etc.)
 		writethrough,
 		signal,
 		batchRequest,

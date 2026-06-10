@@ -43,7 +43,7 @@ function createSession(cwd: string, options: SessionOptions = {}): ToolSession {
 	};
 }
 
-function makeBridge(): { bridge: ClientBridge; spy: ReturnType<typeof spyOn> } {
+function makeBridge() {
 	const bridge: ClientBridge = {
 		capabilities: { writeTextFile: true },
 		// Per ACP spec, writeTextFile writes to disk then notifies the editor buffer.
