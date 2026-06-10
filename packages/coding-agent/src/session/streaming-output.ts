@@ -1009,8 +1009,10 @@ export class OutputSink {
 			this.#fileReady = true;
 
 			// Head-retained bytes precede the rolling tail buffer in the capture.
+			// Route through #emitToSink so they count against the artifact head
+			// budget — a direct sink.write would let them escape the cap.
 			if (this.#head.length > 0) {
-				sink.write(this.#head);
+				this.#emitToSink(this.#head);
 			}
 
 			// Flush existing buffer to file BEFORE it gets trimmed further.
