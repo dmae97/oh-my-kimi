@@ -151,7 +151,7 @@ export type AnyUiMetadata = UiBase & {
 
 interface BooleanDef {
 	type: "boolean";
-	default: boolean;
+	default: boolean | undefined;
 	ui?: UiBoolean;
 }
 
@@ -2080,11 +2080,6 @@ export const SETTINGS_SCHEMA = {
 	"shellMinimizer.legacyFilters": {
 		type: "boolean",
 		default: undefined,
-		ui: {
-			tab: "editing",
-			label: "Shell Minimizer Legacy Filters",
-			description: "Optional rollback switch for conservative legacy filter behavior",
-		},
 	},
 
 	// Eval (per-backend toggles; add more as new backends ship, e.g. eval.ts)
@@ -3286,21 +3281,23 @@ type Schema = typeof SETTINGS_SCHEMA;
 export type SettingPath = keyof Schema;
 
 /** Infer the value type for a setting path */
-export type SettingValue<P extends SettingPath> = Schema[P] extends { type: "boolean" }
-	? boolean
-	: Schema[P] extends { type: "string" }
-		? string | undefined
-		: Schema[P] extends { type: "number" }
-			? number
-			: Schema[P] extends { type: "enum"; values: infer V }
-				? V extends readonly string[]
-					? V[number]
-					: never
-				: Schema[P] extends { type: "array"; default: infer D }
-					? D
-					: Schema[P] extends { type: "record"; default: infer D }
+export type SettingValue<P extends SettingPath> = Schema[P] extends { type: "boolean"; default: undefined }
+	? boolean | undefined
+	: Schema[P] extends { type: "boolean" }
+		? boolean
+		: Schema[P] extends { type: "string" }
+			? string | undefined
+			: Schema[P] extends { type: "number" }
+				? number
+				: Schema[P] extends { type: "enum"; values: infer V }
+					? V extends readonly string[]
+						? V[number]
+						: never
+					: Schema[P] extends { type: "array"; default: infer D }
 						? D
-						: never;
+						: Schema[P] extends { type: "record"; default: infer D }
+							? D
+							: never;
 
 /** Get the default value for a setting path */
 export function getDefault<P extends SettingPath>(path: P): SettingValue<P> {
