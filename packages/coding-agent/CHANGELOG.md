@@ -43,6 +43,7 @@
 
 ### Fixed
 
+- Fixed direct `modelRoles` consumers so comma-separated fallback chains are split before model parsing, preserving explicit thinking selectors instead of treating the comma tail as an invalid suffix.
 - Fixed model-provider detection for append-only mode, authoritative Vertex endpoint checks, and upstream-routing selection by switching from URL substring checks to catalog host-matching helpers
 - Fixed pasting into the ask tool's "Other (type your own)" text box (and hook input/editor dialogs) on terminals with OSC 5522 enhanced paste (kitty protocol): the enhanced-paste focus routing only targets components exposing a `pasteText` hook, and the dialog wrappers had none, so the payload was stuffed into the main prompt editor hidden behind the dialog. `HookEditorComponent` and `HookInputComponent` now forward `pasteText` to their inner editor/input (pasting also resets the input dialog's timeout countdown like any keystroke).
 - Fixed auto-retry giving up after one attempt ("Provider requested Xms wait, exceeds retry.maxDelayMs") on a usage-limit 429 when every sibling account was only momentarily blocked: the retry delay now waits for the earliest sibling unblock when that comes sooner than the provider's multi-hour retry-after, so the next attempt picks up the recovered account instead of failing fast.
