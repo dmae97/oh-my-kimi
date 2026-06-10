@@ -173,6 +173,22 @@ export async function readTextFromClipboard(): Promise<string> {
 		if (process.env.TERMUX_VERSION) {
 			return execSync("termux-clipboard-get", { encoding: "utf8", timeout: 2000 }).toString();
 		}
+		if (isWsl()) {
+			try {
+				// Reach the Windows clipboard through host PowerShell, mirroring
+				// readImageFromClipboard: WSLg's wl-paste only works when
+				// wl-clipboard happens to be installed in the distro, while
+				// powershell.exe is always reachable over WSL interop.
+				return execSync(
+					'powershell.exe -NoProfile -NonInteractive -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::Out.Write([string](Get-Clipboard -Raw))"',
+					{ encoding: "utf8", timeout: 5000 },
+				)
+					.toString()
+					.replaceAll("\r\n", "\n");
+			} catch {
+				// Fall through to the wl-paste/xclip paths below.
+			}
+		}
 		const hasWaylandDisplay = Boolean(process.env.WAYLAND_DISPLAY);
 		const hasX11Display = Boolean(process.env.DISPLAY);
 		if (hasWaylandDisplay) {
