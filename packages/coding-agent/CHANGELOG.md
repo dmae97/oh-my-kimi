@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP sessions now skip the client permission gate for bash/edit/delete/move when the user explicitly opts into yolo approval mode (`--yolo`/`--auto-approve` or a configured `tools.approvalMode: yolo`) and the effective per-tool policy is "allow"; default-config sessions keep the gate ([#2097](https://github.com/can1357/oh-my-pi/pull/2097) by [@Mokto](https://github.com/Mokto))
+
 ## [15.10.11] - 2026-06-10
 
 ### Added

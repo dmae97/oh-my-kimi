@@ -304,6 +304,14 @@ export class Settings {
 	}
 
 	/**
+	 * Whether `path` has an explicitly configured value (global config, project
+	 * config, or runtime override) rather than falling back to the schema default.
+	 */
+	isConfigured(path: SettingPath): boolean {
+		return getByPath(this.#merged, SETTING_PATH_SEGMENTS[path]) !== undefined;
+	}
+
+	/**
 	 * Set a setting value (sync).
 	 * Updates global settings and queues a background save.
 	 * Triggers hooks for settings that have side effects.
