@@ -49,14 +49,14 @@ type WizardStep =
 
 /**
  * Result of the wizard's OAuth callback. `credentialId` is mandatory;
- * `clientId`/`clientSecret` are populated when the OAuth provider performed
- * dynamic client registration (or when the caller pre-supplied them) so the
- * wizard can fold them into the final `mcp.json` entry for refresh.
+ * `clientId` is populated when the OAuth provider performed dynamic client
+ * registration (or when the caller pre-supplied it) so the wizard can fold it
+ * into the final `mcp.json` entry. Refresh material (including any DCR client
+ * secret) is embedded in the stored credential, never written to config files.
  */
 export interface MCPAddWizardOAuthResult {
 	credentialId: string;
 	clientId?: string;
-	clientSecret?: string;
 }
 
 interface WizardState {
@@ -122,6 +122,7 @@ export class MCPAddWizard extends Container {
 				clientId: string,
 				clientSecret: string,
 				scopes: string,
+				serverUrl?: string,
 		  ) => Promise<MCPAddWizardOAuthResult>)
 		| null = null;
 	#onTestConnectionCallback: ((config: MCPServerConfig) => Promise<void>) | null = null;
@@ -136,6 +137,7 @@ export class MCPAddWizard extends Container {
 			clientId: string,
 			clientSecret: string,
 			scopes: string,
+			serverUrl?: string,
 		) => Promise<MCPAddWizardOAuthResult>,
 		onTestConnection?: (config: MCPServerConfig) => Promise<void>,
 		onRender?: () => void,
@@ -1148,13 +1150,13 @@ export class MCPAddWizard extends Container {
 				this.#state.oauthClientId,
 				this.#state.oauthClientSecret,
 				this.#state.oauthScopes,
+				this.#state.url || undefined,
 			);
 
-			// Store credential ID + any dynamically-registered client credentials,
-			// so the final mcp.json entry persists everything needed for refresh.
+			// Store credential ID + any dynamically-registered client id. DCR client
+			// secrets stay embedded in the stored credential, never in mcp.json.
 			this.#state.oauthCredentialId = oauthResult.credentialId;
 			if (oauthResult.clientId) this.#state.oauthClientId = oauthResult.clientId;
-			if (oauthResult.clientSecret) this.#state.oauthClientSecret = oauthResult.clientSecret;
 
 			// Show success message
 			this.#contentContainer.clear();

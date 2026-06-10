@@ -179,6 +179,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 							redirectUri?: string;
 							callbackPort?: number;
 							callbackPath?: string;
+							prompt?: string;
 					  }
 					| undefined,
 				transport: serverConfig.type as "stdio" | "sse" | "http" | undefined,

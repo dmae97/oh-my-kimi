@@ -9,6 +9,42 @@ import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/oauth/callback-se
 import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import type { OAuthCredential } from "../session/auth-storage";
+
+/** Credential-id prefix for OMP-managed MCP OAuth credentials keyed by server URL. */
+const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
+
+/**
+ * Deterministic credential id for an MCP server URL.
+ *
+ * The id is identical across profiles and projects while each profile's
+ * agent.db holds its own row under it, so a server *definition* in a shared
+ * project `mcp.json` resolves to per-profile credentials instead of one
+ * profile's random `mcp_oauth_<ts>_<rand>` pointer clobbering the others.
+ * The URL is used verbatim (query string included) because it can carry
+ * tenant selectors such as `?project_ref=`.
+ */
+export function mcpOAuthCredentialId(serverUrl: string): string {
+	return `${MCP_OAUTH_URL_CREDENTIAL_PREFIX}${serverUrl}`;
+}
+
+/** Whether a credential id was minted by OMP's MCP OAuth flows (either era). */
+export function isManagedMCPOAuthCredentialId(credentialId: string | undefined): credentialId is string {
+	return (
+		!!credentialId &&
+		(credentialId.startsWith("mcp_oauth_") || credentialId.startsWith(MCP_OAUTH_URL_CREDENTIAL_PREFIX))
+	);
+}
+
+/**
+ * Stored MCP OAuth credential. Refresh material is embedded so token refresh
+ * works without any `auth` block persisted in (possibly shared) config files.
+ */
+export interface MCPStoredOAuthCredential extends OAuthCredential {
+	tokenUrl?: string;
+	clientId?: string;
+	clientSecret?: string;
+}
 
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
@@ -109,6 +145,15 @@ export interface MCPOAuthConfig {
 	clientSecret?: string;
 	/** OAuth scopes (space-separated) */
 	scopes?: string;
+	/**
+	 * `prompt` parameter for the authorization request. Defaults to `"consent"`
+	 * so the provider always shows its authorize screen instead of silently
+	 * re-approving the browser's current session — without it, reauthorizing to
+	 * switch accounts/workspaces is impossible once a session cookie exists
+	 * (RFC 6749 §3.1 requires servers to ignore the param when unsupported).
+	 * Set to `""` to omit the parameter entirely.
+	 */
+	prompt?: string;
 	/** Exact redirect URI to advertise to the provider */
 	redirectUri?: string;
 	/** Custom callback port (default: 3000) */
@@ -175,6 +220,10 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		}
 		if (this.config.scopes && !params.get("scope")) {
 			params.set("scope", this.config.scopes);
+		}
+		const prompt = this.config.prompt ?? "consent";
+		if (prompt && !params.get("prompt")) {
+			params.set("prompt", prompt);
 		}
 		params.set("redirect_uri", redirectUri);
 		params.set("state", state);

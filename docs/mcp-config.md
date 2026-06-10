@@ -197,6 +197,31 @@ OMP understands two auth-related objects.
 
 Use this when OMP should remember how to rehydrate credentials for a server.
 
+You normally do not need to write this block: when OMP completes an OAuth flow
+for an `http`/`sse` server it stores the credential in the active profile's
+`agent.db` under a deterministic id derived from the server URL
+(`mcp_oauth:<url>`), with the refresh material embedded. Any config that points
+at the same URL — including a *definition-only* entry in a shared project
+`mcp.json` with no `auth` block at all — resolves the active profile's own
+credential automatically. This is what makes project-scoped servers safe across
+profiles: commit the definition, and each profile authorizes (and stays signed
+in as) its own account via `/mcp reauth <name>`. An explicit `credentialId` is
+still honored when it resolves; if it points at another profile's row, OMP
+falls back to the url-keyed binding.
+
+`/mcp reauth` on a definition-only entry leaves the file untouched — the
+credential (refresh material included) lives entirely in `agent.db`, so a
+committed project config never picks up local auth state. An explicitly
+configured `Authorization` header always wins over the url-keyed binding.
+
+The binding is per profile but not per project: once a profile has authorized
+a URL, *any* checkout whose `mcp.json` defines a server at that URL connects
+with that profile's credential automatically. Committed MCP definitions are
+trusted input — the same already applies to `stdio` entries, which run
+arbitrary commands — so review a repository's `mcp.json` before opening it
+with a profile that holds credentials you care about, or use a dedicated
+profile for untrusted checkouts.
+
 ### `oauth`
 
 ```json
@@ -205,11 +230,14 @@ Use this when OMP should remember how to rehydrate credentials for a server.
   "clientSecret": "...",
   "redirectUri": "...",
   "callbackPort": 3334,
-  "callbackPath": "/oauth/callback"
+  "callbackPath": "/oauth/callback",
+  "prompt": "consent"
 }
 ```
 
 Use this when the MCP server requires explicit OAuth client settings.
+
+`prompt` controls the OAuth `prompt` parameter sent with the authorization request. It defaults to `"consent"` so the provider always shows its consent/account screen — without it, a provider with an active browser session silently re-approves the same account, making it impossible to switch accounts or workspaces when reauthorizing (e.g. to use a different Linear workspace per OMP profile). Set it to `""` to omit the parameter for providers that reject it, or to another value the provider understands (e.g. `"select_account"`).
 
 Slack is the clearest current example. Slack's MCP server is hosted at `https://mcp.slack.com/mcp`, uses Streamable HTTP, and requires confidential OAuth with your Slack app's client credentials.
 

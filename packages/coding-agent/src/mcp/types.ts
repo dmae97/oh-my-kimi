@@ -72,6 +72,8 @@ interface MCPServerConfigBase {
 		redirectUri?: string;
 		callbackPort?: number;
 		callbackPath?: string;
+		/** `prompt` param for the authorization request (default "consent"; "" to omit) */
+		prompt?: string;
 	};
 }
 
