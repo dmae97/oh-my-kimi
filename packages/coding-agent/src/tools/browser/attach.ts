@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
-import type { Browser, Page } from "puppeteer-core";
+import { type Browser, type Page, TargetType } from "puppeteer-core";
 import { ToolError, throwIfAborted } from "../tool-errors";
 
 const ATTACH_TARGET_SKIP_PATTERN =
@@ -126,8 +126,7 @@ export async function findReusableCdp(
 export async function pickElectronTarget(browser: Browser, matcher?: string): Promise<Page> {
 	const discoveredPages = await Promise.all(
 		browser.targets().map(async target => {
-			const targetType = target.type() as string;
-			if (targetType !== "page" && targetType !== "tab") return null;
+			if (target.type() !== TargetType.PAGE) return null;
 			return await target.page().catch(() => null);
 		}),
 	);
