@@ -4045,6 +4045,16 @@ export class AgentSession {
 		return deobfuscateSessionContext(this.sessionManager.buildSessionContext(), this.#obfuscator);
 	}
 
+	/**
+	 * Full-history transcript for TUI display: every path entry in
+	 * chronological order with compactions rendered inline at the point they
+	 * fired (instead of replacing prior history). Display-only — NEVER feed
+	 * the result to `agent.replaceMessages` or a provider.
+	 */
+	buildTranscriptSessionContext(): SessionContext {
+		return deobfuscateSessionContext(this.sessionManager.buildSessionContext({ transcript: true }), this.#obfuscator);
+	}
+
 	#obfuscateForProvider<T>(value: T): T {
 		if (!this.#obfuscator?.hasSecrets()) return value;
 		return this.#obfuscator.obfuscateObject(value);

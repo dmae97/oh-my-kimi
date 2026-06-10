@@ -129,6 +129,8 @@ export type SymbolKey =
 	| "icon.extensionInstruction"
 	// STT
 	| "icon.mic"
+	// Compaction divider
+	| "icon.camera"
 	// Thinking Levels
 	| "thinking.minimal"
 	| "thinking.low"
@@ -220,7 +222,8 @@ export type SymbolKey =
 	| "tool.resolve"
 	| "tool.review"
 	| "tool.inspectImage"
-	| "tool.goal";
+	| "tool.goal"
+	| "tool.irc";
 
 type SymbolMap = Record<SymbolKey, string>;
 
@@ -322,6 +325,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "📘",
 	// STT
 	"icon.mic": "🎤",
+	// Compaction divider
+	"icon.camera": "📷",
 	// Thinking levels
 	"thinking.minimal": "◔ min",
 	"thinking.low": "◑ low",
@@ -414,6 +419,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tool.review": "◉",
 	"tool.inspectImage": "🖼",
 	"tool.goal": "◎",
+	"tool.irc": "✉",
 };
 
 const NERD_SYMBOLS: SymbolMap = {
@@ -599,6 +605,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "\uf02d",
 	// STT - fa-microphone
 	"icon.mic": "\uf130",
+	// Compaction divider - fa-camera-retro
+	"icon.camera": "\uf083",
 	// Thinking Levels - emoji labels
 	// pick: 🤨 min | alt:  min  min
 	"thinking.minimal": "\u{F0E7} min",
@@ -708,6 +716,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tool.review": "\uEA70",
 	"tool.inspectImage": "\uEAEA",
 	"tool.goal": "\uEBF8",
+	"tool.irc": "\uF086",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {
@@ -808,6 +817,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "IN",
 	// STT
 	"icon.mic": "MIC",
+	// Compaction divider
+	"icon.camera": "[o]",
 	// Thinking Levels
 	"thinking.minimal": "[min]",
 	"thinking.low": "[low]",
@@ -898,6 +909,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tool.review": "rev",
 	"tool.inspectImage": "[i]",
 	"tool.goal": "(o)",
+	"tool.irc": "irc",
 };
 
 const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
@@ -1686,6 +1698,7 @@ export class Theme {
 			extensionContextFile: this.#symbols["icon.extensionContextFile"],
 			extensionInstruction: this.#symbols["icon.extensionInstruction"],
 			mic: this.#symbols["icon.mic"],
+			camera: this.#symbols["icon.camera"],
 		};
 	}
 
