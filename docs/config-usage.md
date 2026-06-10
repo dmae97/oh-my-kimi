@@ -244,6 +244,20 @@ Native provider (`id: native`) reads native config from:
 - `Settings.init()` loads global `config.yml` + discovered project settings capability items.
 - Only capability items with `level === "project"` are merged into project layer.
 
+### Session title prompt override
+
+Create `TITLE_SYSTEM.md` in the same config locations as `SYSTEM.md` / `APPEND_SYSTEM.md`:
+
+```text
+# ~/.omp/agent/TITLE_SYSTEM.md
+Generate a session name using lowercase `<type>:<primary-objective>`.
+```
+
+- Missing `TITLE_SYSTEM.md` keeps the bundled title prompts.
+- Discovery uses the same project-then-user config directory pattern as `SYSTEM.md`: project `.omp/TITLE_SYSTEM.md` first, then user `~/.omp/agent/TITLE_SYSTEM.md` and the other supported config bases.
+- The override replaces only the automatic session-title generation system prompt; normal `SYSTEM.md` / `APPEND_SYSTEM.md` prompt customization is unaffected.
+- The online path still forces the `set_title` tool call. The local tiny-title path keeps the `<title>...</title>` prefill/stop wrapper and uses this file as its system turn.
+
 ## Skills subsystem
 
 - `extensibility/skills.ts` loads via `loadCapability(skillCapability.id, { cwd })`.

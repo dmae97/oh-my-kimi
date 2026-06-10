@@ -371,6 +371,7 @@ async function runInteractiveMode(
 	eventBus?: EventBus,
 	initialMessage?: string,
 	initialImages?: ImageContent[],
+	titleSystemPrompt?: string,
 ): Promise<void> {
 	const mode = new InteractiveMode(
 		session,
@@ -380,6 +381,7 @@ async function runInteractiveMode(
 		lspServers,
 		mcpManager,
 		eventBus,
+		titleSystemPrompt,
 	);
 
 	// Cold-launch gate: the full setup wizard (every scene + the overlay and
@@ -719,13 +721,26 @@ function discoverAppendSystemPromptFile(): string | undefined {
 	return undefined;
 }
 
+/** Discover TITLE_SYSTEM.md file for automatic session-title prompt overrides */
+export function discoverTitleSystemPromptFile(cwd?: string): string | undefined {
+	const projectPath = findConfigFile("TITLE_SYSTEM.md", { user: false, cwd });
+	if (projectPath) {
+		return projectPath;
+	}
+	const globalPath = findConfigFile("TITLE_SYSTEM.md", { user: true, cwd });
+	if (globalPath) {
+		return globalPath;
+	}
+	return undefined;
+}
+
 async function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
 	modelRegistry: ModelRegistry,
 	activeSettings: Settings,
-): Promise<{ options: CreateAgentSessionOptions }> {
+): Promise<{ options: CreateAgentSessionOptions; titleSystemPrompt?: string }> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
 		autoApprove: parsed.autoApprove ?? false,
@@ -736,6 +751,8 @@ async function buildSessionOptions(
 	const resolvedSystemPrompt = await resolvePromptInput(systemPromptSource, "system prompt");
 	const appendPromptSource = parsed.appendSystemPrompt ?? discoverAppendSystemPromptFile();
 	const resolvedAppendPrompt = await resolvePromptInput(appendPromptSource, "append system prompt");
+	const titleSystemPromptSource = discoverTitleSystemPromptFile();
+	const titleSystemPrompt = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
 
 	if (sessionManager) {
 		options.sessionManager = sessionManager;
@@ -881,7 +898,7 @@ async function buildSessionOptions(
 		options.additionalExtensionPaths = [];
 	}
 
-	return { options };
+	return { options, titleSystemPrompt };
 }
 
 interface RunRootCommandDependencies {
@@ -1140,7 +1157,7 @@ export async function runRootCommand(
 		clearPluginRootsCache: clearPluginRootsAndCaches,
 	});
 
-	const { options: sessionOptions } = await logger.time(
+	const { options: sessionOptions, titleSystemPrompt } = await logger.time(
 		"buildSessionOptions",
 		buildSessionOptions,
 		parsedArgs,
@@ -1345,6 +1362,7 @@ export async function runRootCommand(
 				eventBus,
 				initialMessage,
 				initialImages,
+				titleSystemPrompt,
 			);
 		} else {
 			// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.

@@ -99,6 +99,7 @@ export interface InteractiveModeContext {
 	historyStorage?: HistoryStorage;
 	mcpManager?: MCPManager;
 	lspServers?: LspStartupServerInfo[];
+	titleSystemPrompt?: string;
 
 	// State
 	isInitialized: boolean;

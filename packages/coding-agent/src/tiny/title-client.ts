@@ -39,12 +39,31 @@ export interface TinyTitleDownloadOptions {
 	onProgress?: (event: TinyTitleProgressEvent) => void;
 }
 
+/**
+ * Per-request controls for {@link TinyTitleClient.generate}.
+ *
+ * Carries the optional abort signal and title-system-prompt override used by
+ * callers that customize automatic session-title generation.
+ */
+export interface TinyTitleGenerateOptions {
+	signal?: AbortSignal;
+	systemPrompt?: string;
+}
+
 // Cold-starting the worker subprocess from a compiled binary (decompress + module
 // graph load) is slow on contended CI runners — the macos-15-intel release smoke
 // blew past 5s while arm64/linux/win passed. The probe only needs to prove the
 // worker spawns and ponges at all (a dead worker never ponges regardless), so a
 // generous bound removes the flake without weakening the check.
 const SMOKE_TEST_TIMEOUT_MS = 30_000;
+
+function normalizeTinyTitleGenerateOptions(
+	options: AbortSignal | TinyTitleGenerateOptions | undefined,
+): TinyTitleGenerateOptions {
+	if (!options) return {};
+	if ("aborted" in options && "addEventListener" in options) return { signal: options };
+	return options;
+}
 
 /**
  * Hidden subcommand on the main CLI that boots the tiny-model worker in the
@@ -295,9 +314,16 @@ export class TinyTitleClient {
 		return () => this.#progressListeners.delete(listener);
 	}
 
-	async generate(modelKey: string, message: string, signal?: AbortSignal): Promise<string | null> {
+	async generate(modelKey: string, message: string, signal?: AbortSignal): Promise<string | null>;
+	async generate(modelKey: string, message: string, options?: TinyTitleGenerateOptions): Promise<string | null>;
+	async generate(
+		modelKey: string,
+		message: string,
+		optionsOrSignal?: AbortSignal | TinyTitleGenerateOptions,
+	): Promise<string | null> {
+		const options = normalizeTinyTitleGenerateOptions(optionsOrSignal);
 		if (!isTinyTitleLocalModelKey(modelKey)) return null;
-		if (signal?.aborted) return null;
+		if (options.signal?.aborted) return null;
 
 		try {
 			const worker = this.#ensureWorker();
@@ -310,12 +336,15 @@ export class TinyTitleClient {
 				this.#pending.delete(id);
 				pending.resolve(null);
 			};
-			signal?.addEventListener("abort", abort, { once: true });
+			options.signal?.addEventListener("abort", abort, { once: true });
 			try {
-				worker.send({ type: "generate", id, modelKey, message });
+				const request: TinyTitleWorkerInbound = options.systemPrompt
+					? { type: "generate", id, modelKey, message, systemPrompt: options.systemPrompt }
+					: { type: "generate", id, modelKey, message };
+				worker.send(request);
 				return await promise;
 			} finally {
-				signal?.removeEventListener("abort", abort);
+				options.signal?.removeEventListener("abort", abort);
 				this.#pending.delete(id);
 			}
 		} catch (error) {

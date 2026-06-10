@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from "bun:test";
-import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { discoverTitleSystemPromptFile, submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
+
+const cleanupDirs: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(cleanupDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
 
 function createInput(overrides: Partial<SubmittedUserInput> = {}): SubmittedUserInput {
 	return {
@@ -11,6 +20,19 @@ function createInput(overrides: Partial<SubmittedUserInput> = {}): SubmittedUser
 		...overrides,
 	};
 }
+
+describe("discoverTitleSystemPromptFile", () => {
+	it("discovers TITLE_SYSTEM.md from the project omp config directory", async () => {
+		const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-title-system-"));
+		cleanupDirs.push(projectDir);
+		const configDir = path.join(projectDir, ".omp");
+		await fs.mkdir(configDir, { recursive: true });
+		const promptPath = path.join(configDir, "TITLE_SYSTEM.md");
+		await fs.writeFile(promptPath, "custom title prompt");
+
+		expect(discoverTitleSystemPromptFile(projectDir)).toBe(promptPath);
+	});
+});
 
 describe("submitInteractiveInput", () => {
 	it("routes already-started synthetic continue submissions to a hidden developer prompt", async () => {
