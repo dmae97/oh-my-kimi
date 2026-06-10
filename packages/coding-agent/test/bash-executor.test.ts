@@ -230,7 +230,8 @@ exit 64
 			expect(result.cancelled).toBe(false);
 			expect(result.exitCode).toBe(0);
 			expect(result.output.trim()).toBe("env-shell-ok");
-			expect(fs.readFileSync(marker, "utf8")).toContain("-l -i -c");
+			expect(fs.readFileSync(marker, "utf8")).toContain("-l -c");
+			expect(fs.readFileSync(marker, "utf8")).not.toContain("-i");
 		} finally {
 			if (originalShell === undefined) {
 				delete Bun.env.SHELL;

@@ -114,7 +114,7 @@ function isBashShell(shell: string): boolean {
 
 function needsInteractiveShellArg(shell: string): boolean {
 	const basename = shellBasename(shell);
-	return basename.includes("zsh") || basename.includes("fish");
+	return basename.includes("zsh");
 }
 
 function supportsAutoUserShell(shell: string): boolean {
