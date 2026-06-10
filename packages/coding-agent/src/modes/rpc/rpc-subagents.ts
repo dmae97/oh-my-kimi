@@ -42,6 +42,29 @@ function isTerminalLifecycleStatus(status: SubagentLifecyclePayload["status"]): 
 	return status !== "started";
 }
 
+function hasSameOwner(
+	payload: Pick<SubagentLifecyclePayload | SubagentProgressPayload, "parentToolCallId" | "sessionFile">,
+	snapshot: RpcSubagentSnapshot,
+): boolean {
+	if (payload.parentToolCallId !== undefined && snapshot.parentToolCallId !== undefined) {
+		return payload.parentToolCallId === snapshot.parentToolCallId;
+	}
+	if (payload.sessionFile !== undefined && snapshot.sessionFile !== undefined) {
+		return payload.sessionFile === snapshot.sessionFile;
+	}
+	return true;
+}
+
+function addPruned(set: Set<string>, value: string, maxSize: number): void {
+	set.delete(value);
+	set.add(value);
+	while (set.size > maxSize) {
+		const oldest = set.keys().next();
+		if (oldest.done) break;
+		set.delete(oldest.value);
+	}
+}
+
 export async function readRpcSubagentTranscript(sessionFile: string, fromByte = 0): Promise<RpcSubagentMessagesResult> {
 	let startByte = Number.isFinite(fromByte) ? Math.max(0, Math.trunc(fromByte)) : 0;
 	const file = Bun.file(sessionFile);
@@ -84,6 +107,7 @@ export async function readRpcSubagentTranscript(sessionFile: string, fromByte = 
 export class RpcSubagentRegistry {
 	#subagents = new Map<string, RpcSubagentSnapshot>();
 	#transcriptSessionFilesBySubagentId = new Map<string, string>();
+	#staleSubagentIds = new Set<string>();
 	#unsubscribers: Array<() => void> = [];
 	#output: RpcSubagentOutput;
 	#subscriptionLevel: RpcSubagentSubscriptionLevel = "off";
@@ -108,9 +132,16 @@ export class RpcSubagentRegistry {
 		this.#unsubscribers = [];
 		this.#subagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
+		this.#staleSubagentIds.clear();
 	}
 
 	clear(): void {
+		for (const subagentId of this.#subagents.keys()) {
+			addPruned(this.#staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
+		}
+		for (const subagentId of this.#transcriptSessionFilesBySubagentId.keys()) {
+			addPruned(this.#staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
+		}
 		this.#subagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
 	}
@@ -150,6 +181,11 @@ export class RpcSubagentRegistry {
 
 	handleLifecycle(payload: SubagentLifecyclePayload): void {
 		const existing = this.#subagents.get(payload.id);
+		if (existing && !hasSameOwner(payload, existing)) return;
+		if (!existing && payload.status !== "started") return;
+		if (payload.status === "started") {
+			this.#staleSubagentIds.delete(payload.id);
+		}
 		const sessionFile = payload.sessionFile ?? existing?.sessionFile;
 		const snapshot: RpcSubagentSnapshot = {
 			id: payload.id,
@@ -178,7 +214,10 @@ export class RpcSubagentRegistry {
 
 	handleProgress(payload: SubagentProgressPayload): void {
 		const progress = payload.progress;
+		if (this.#staleSubagentIds.has(progress.id)) return;
 		const existing = this.#subagents.get(progress.id);
+		if (!existing) return;
+		if (!hasSameOwner(payload, existing)) return;
 		const sessionFile = payload.sessionFile ?? existing?.sessionFile;
 		this.#rememberTranscriptSession(progress.id, sessionFile);
 		this.#subagents.set(progress.id, {
@@ -201,6 +240,7 @@ export class RpcSubagentRegistry {
 	}
 
 	handleEvent(payload: SubagentEventPayload): void {
+		if (this.#staleSubagentIds.has(payload.id)) return;
 		if (this.#subscriptionLevel !== "events") return;
 		this.#output({ type: "subagent_event", payload } satisfies RpcSubagentEventFrame);
 	}
