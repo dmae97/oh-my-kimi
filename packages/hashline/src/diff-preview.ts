@@ -15,11 +15,22 @@ import type { CompactDiffOptions, CompactDiffPreview } from "./types";
 const DEFAULT_ADDED_RUN_CONTEXT_LINES = 2;
 
 const PREVIEW_ELISION_MARKER = "…";
+/** Blank row separating non-contiguous regions of a numbered diff. */
+const PREVIEW_GAP_ROW = "";
 const RAW_ELISION_MARKERS = new Set(["...", PREVIEW_ELISION_MARKER, `+${PREVIEW_ELISION_MARKER}`]);
+
+function isPreviewSeparator(line: string | undefined): boolean {
+	return line === PREVIEW_ELISION_MARKER || line === PREVIEW_GAP_ROW;
+}
 
 function appendPreviewLine(output: string[], line: string): void {
 	const normalized = RAW_ELISION_MARKERS.has(line) ? PREVIEW_ELISION_MARKER : line;
-	if (normalized === PREVIEW_ELISION_MARKER && output[output.length - 1] === PREVIEW_ELISION_MARKER) return;
+	// Separators (elision markers, blank gap rows) never stack: omitted
+	// removed lines between two separators would otherwise leave them
+	// adjacent. A leading separator is dropped outright.
+	if (isPreviewSeparator(normalized) && (output.length === 0 || isPreviewSeparator(output[output.length - 1]))) {
+		return;
+	}
 	output.push(normalized);
 }
 
@@ -107,6 +118,7 @@ export function buildCompactDiffPreview(diff: string, options: CompactDiffOption
 		}
 	}
 	flushAddedRun();
+	while (formatted.length > 0 && isPreviewSeparator(formatted[formatted.length - 1])) formatted.pop();
 
 	return { preview: formatted.join("\n"), addedLines, removedLines };
 }

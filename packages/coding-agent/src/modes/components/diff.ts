@@ -142,7 +142,12 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 
 		if (!parsed) {
 			prevLineNum = "";
-			result.push(theme.fg("toolDiffContext", replaceTabs(line, options.filePath)));
+			// Blank gap rows (and legacy "..." markers from older transcripts)
+			// mark non-contiguous diff regions; display them as a single dim
+			// unicode ellipsis.
+			const trimmed = line.trim();
+			const isGapRow = trimmed.length === 0 || trimmed === "..." || trimmed === "…";
+			result.push(theme.fg("toolDiffContext", isGapRow ? "…" : replaceTabs(line, options.filePath)));
 			i++;
 			continue;
 		}

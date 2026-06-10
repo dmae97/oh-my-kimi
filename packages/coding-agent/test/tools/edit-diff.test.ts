@@ -40,10 +40,93 @@ describe("generateDiffString", () => {
 
 		expect(diffLines).toContain("-1|function outer() {");
 		expect(diffLines).toContain("+1|function renamed() {");
-		expect(diffLines).toContain("...");
+		// Gap between non-contiguous regions is a blank row, not a "..." marker.
+		expect(diffLines).toContain("");
+		expect(diffLines).not.toContain("...");
 		expect(diffLines).toContain(" 7|}");
 		expect(diffLines).not.toContain(" 5|  const four = 4;");
 		expect(diffLines).not.toContain(" 6|  return value + two + three + four;");
+	});
+
+	it("never emits adjacent gap rows when block context lands between hunks", () => {
+		// Hunk 1 covers alpha's opener, so alpha's closer (line 7) is pulled
+		// down into the gap between the hunks; hunk 2 covers beta's closer, so
+		// beta's opener (line 9) is pulled up into the same gap. Each insertion
+		// adds its own gap rows from a snapshot of the diff, which used to
+		// stack two "..." markers back to back.
+		const oldLines = [
+			"function alpha() {",
+			"  const a1 = 1;",
+			"  const a2 = 2;",
+			"  const a3 = 3;",
+			"  const a4 = 4;",
+			"  return a1;",
+			"}",
+			"// spacer",
+			"function beta() {",
+			"  const b1 = 1;",
+			"  const b2 = 2;",
+			"  const b3 = 3;",
+			"  const b4 = 4;",
+			"  return b1;",
+			"}",
+		];
+		const newLines = [...oldLines];
+		newLines[1] = "  const a1 = 100;";
+		newLines[13] = "  return b1 + 1;";
+		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const diffLines = result.diff.split("\n");
+
+		// Every elided region around the boundary rows is marked by exactly
+		// one blank gap row — no "..." markers, no stacked separators.
+		const closer = diffLines.indexOf(" 7|}");
+		const opener = diffLines.indexOf(" 9|function beta() {");
+		expect(closer).toBeGreaterThan(-1);
+		expect(opener).toBeGreaterThan(closer);
+		expect(diffLines[closer - 1]).toBe("");
+		expect(diffLines[closer + 1]).toBe("");
+		expect(diffLines[opener - 1]).toBe("");
+		expect(diffLines[opener + 1]).toBe("");
+		expect(diffLines).not.toContain("...");
+		for (let i = 0; i + 1 < diffLines.length; i++) {
+			expect(diffLines[i] === "" && diffLines[i + 1] === "").toBe(false);
+		}
+		expect(diffLines[0]).not.toBe("");
+		expect(diffLines[diffLines.length - 1]).not.toBe("");
+	});
+
+	it("drops a gap row stranded between contiguous boundary rows", () => {
+		// alpha's closer (7) and beta's opener (8) are contiguous. The first
+		// insertion adds a trailing gap row toward the far hunk; the second
+		// boundary then lands after it, stranding a separator between two
+		// adjacent lines.
+		const oldLines = [
+			"function alpha() {",
+			"  const a1 = 1;",
+			"  const a2 = 2;",
+			"  const a3 = 3;",
+			"  const a4 = 4;",
+			"  return a1;",
+			"}",
+			"function beta() {",
+			"  const b1 = 1;",
+			"  const b2 = 2;",
+			"  const b3 = 3;",
+			"  const b4 = 4;",
+			"  return b1;",
+			"}",
+		];
+		const newLines = [...oldLines];
+		newLines[1] = "  const a1 = 100;";
+		newLines[12] = "  return b1 + 1;";
+		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const diffLines = result.diff.split("\n");
+
+		const closer = diffLines.indexOf(" 7|}");
+		const opener = diffLines.indexOf(" 8|function beta() {");
+		expect(closer).toBeGreaterThan(-1);
+		expect(opener).toBe(closer + 1);
+		expect(diffLines).not.toContain("...");
 	});
 
 	it("emits bracket context under pre-edit numbers when edits shift line offsets", () => {
