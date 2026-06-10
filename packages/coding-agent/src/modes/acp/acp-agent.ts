@@ -122,6 +122,7 @@ type PromptQueueState = {
 	promise: Promise<void>;
 	release: (() => void) | undefined;
 };
+type PromptLifecycleError = Error & { readonly code: "ACP_SESSION_CLOSED" };
 
 type PromptTurnState = {
 	userMessageId: string;
@@ -163,6 +164,9 @@ type ManagedSessionRecord = {
 	// Installed inside `#scheduleBootstrapUpdates` (post-race-guard); released
 	// in `#disposeSessionRecord`. Lives independent of any prompt turn.
 	lifetimeUnsubscribe: (() => void) | undefined;
+	closedError: PromptLifecycleError | undefined;
+	promptEventHandlers: Set<Promise<void>>;
+	extensionUserMessageTasks: Set<Promise<void>>;
 };
 
 type ReplayableMessage = {
@@ -628,6 +632,7 @@ export class AcpAgent implements Agent {
 				await previousTurn.promise.catch(() => undefined);
 				await previousTurn.cleanup;
 			}
+			this.#throwIfRecordClosed(record);
 
 			const converted = this.#convertPromptBlocks(params.prompt);
 			const pendingPrompt = Promise.withResolvers<PromptResponse>();
@@ -644,7 +649,7 @@ export class AcpAgent implements Agent {
 			};
 
 			record.promptTurn.unsubscribe = record.session.subscribe(event => {
-				void this.#handlePromptEvent(record, event);
+				this.#trackPromptEvent(record, event);
 			});
 
 			this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
@@ -664,6 +669,7 @@ export class AcpAgent implements Agent {
 			release: releaseQueue,
 		};
 		await previousQueue.promise;
+		this.#throwIfRecordClosed(record);
 		try {
 			return await run();
 		} finally {
@@ -671,6 +677,55 @@ export class AcpAgent implements Agent {
 			if (record.promptQueue.release === releaseQueue) {
 				record.promptQueue.release = undefined;
 			}
+		}
+	}
+
+	#throwIfRecordClosed(record: ManagedSessionRecord): void {
+		if (record.closedError) {
+			throw record.closedError;
+		}
+	}
+
+	#createPromptLifecycleError(message: string): PromptLifecycleError {
+		return Object.assign(new Error(message), { code: "ACP_SESSION_CLOSED" as const });
+	}
+
+	#trackPromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
+		const handling = this.#handlePromptEvent(record, event).catch((error: unknown) => {
+			logger.warn("ACP prompt event handler failed", { error });
+		});
+		record.promptEventHandlers.add(handling);
+		void handling.finally(() => {
+			record.promptEventHandlers.delete(handling);
+		});
+	}
+
+	async #waitForPromptEventHandlers(record: ManagedSessionRecord): Promise<void> {
+		while (record.promptEventHandlers.size > 0) {
+			await Promise.allSettled(Array.from(record.promptEventHandlers));
+		}
+	}
+
+	#trackExtensionUserMessage(record: ManagedSessionRecord, task: Promise<void>): void {
+		const tracked = task.catch((error: unknown) => {
+			logger.warn("ACP extension sendUserMessage failed", { error });
+		});
+		record.extensionUserMessageTasks.add(tracked);
+		void tracked.finally(() => {
+			record.extensionUserMessageTasks.delete(tracked);
+		});
+	}
+
+	async #waitForExtensionUserMessages(
+		record: ManagedSessionRecord,
+		baseline: ReadonlySet<Promise<void>>,
+	): Promise<void> {
+		while (true) {
+			const pending = Array.from(record.extensionUserMessageTasks).filter(task => !baseline.has(task));
+			if (pending.length === 0) {
+				return;
+			}
+			await Promise.allSettled(pending);
 		}
 	}
 
@@ -720,11 +775,16 @@ export class AcpAgent implements Agent {
 			return;
 		}
 
+		const extensionPromptBaseline = new Set(record.extensionUserMessageTasks);
 		const agentInvoked = await record.session.prompt(text, { images });
-		// Extension and custom-TS commands are handled locally inside session.prompt()
-		// without calling the LLM, so no agent_end event fires and the turn would hang.
-		// Finish it here when the session confirms no agent was invoked.
+		// Extension and custom-TS commands are handled locally inside session.prompt().
+		// An ACP extension command can still call pi.sendUserMessage(), which starts
+		// an async nested prompt through the extension runtime. Keep the ACP turn
+		// subscribed until those scheduled prompts and their event handlers drain;
+		// only then is `false` proof that the slash command was purely local.
 		if (!agentInvoked) {
+			await this.#waitForExtensionUserMessages(record, extensionPromptBaseline);
+			await this.#waitForPromptEventHandlers(record);
 			this.#finishPrompt(record, { stopReason: "end_turn" });
 		}
 	}
@@ -1018,6 +1078,9 @@ export class AcpAgent implements Agent {
 			liveMessageProgress: undefined,
 			toolArgsById: new Map(),
 			extensionsConfigured: false,
+			closedError: undefined,
+			promptEventHandlers: new Set(),
+			extensionUserMessageTasks: new Set(),
 			lifetimeUnsubscribe: undefined,
 		};
 	}
@@ -2112,9 +2175,7 @@ export class AcpAgent implements Agent {
 					});
 				},
 				sendUserMessage: (content, options) => {
-					record.session.sendUserMessage(content, options).catch((error: unknown) => {
-						logger.warn("ACP extension sendUserMessage failed", { error });
-					});
+					this.#trackExtensionUserMessage(record, record.session.sendUserMessage(content, options));
 				},
 				appendEntry: (customType, data) => {
 					record.session.sessionManager.appendCustomEntry(customType, data);
@@ -2267,6 +2328,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #closeManagedSession(sessionId: string, record: ManagedSessionRecord): Promise<void> {
+		record.closedError ??= this.#createPromptLifecycleError("ACP session closed before queued prompt could run");
 		this.#sessions.delete(sessionId);
 		await this.#cancelPromptForClose(record);
 		await this.#disposeSessionRecord(record);
@@ -2322,6 +2384,9 @@ export class AcpAgent implements Agent {
 			await Promise.all(
 				records.map(async ([sessionId, record]) => {
 					try {
+						record.closedError ??= this.#createPromptLifecycleError(
+							"ACP agent disposed before queued prompt could run",
+						);
 						await this.#cancelPromptForClose(record);
 						await this.#disposeSessionRecord(record);
 					} catch (error) {
