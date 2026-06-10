@@ -1,3 +1,4 @@
+import { isZeroCostXaiOAuthReference } from "../identity/reference";
 import { getBundledModels, getBundledProviders } from "../models";
 import type { Api, Model, ModelSpec } from "../types";
 
@@ -29,6 +30,9 @@ export function createReferenceResolver<TApi extends Api>(
 	for (const provider of getBundledProviders()) {
 		for (const model of getBundledModels(provider as Parameters<typeof getBundledModels>[0])) {
 			const candidate = model as Model<Api>;
+			if (isZeroCostXaiOAuthReference(candidate)) {
+				continue;
+			}
 			const existing = globalRefs.get(candidate.id);
 			if (!existing) {
 				globalRefs.set(candidate.id, candidate);
