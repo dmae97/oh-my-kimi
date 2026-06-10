@@ -69,7 +69,13 @@ import { resolvePromptInput } from "./system-prompt";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
-import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
+import {
+	getChangelogPath,
+	getNewEntries,
+	parseChangelog,
+	readLastChangelogVersion,
+	writeLastChangelogVersion,
+} from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
@@ -506,7 +512,7 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 		return undefined;
 	}
 
-	const lastVersion = settings.get("lastChangelogVersion");
+	const lastVersion = await readLastChangelogVersion();
 	if (lastVersion === VERSION) {
 		// Steady state: user already saw the current version's changelog. Skip the file read + parse.
 		return undefined;
@@ -517,28 +523,18 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 
 	if (!lastVersion) {
 		if (entries.length > 0) {
-			settings.set("lastChangelogVersion", VERSION);
-			await flushChangelogVersion();
+			await writeLastChangelogVersion(VERSION);
 			return entries.map(e => e.content).join("\n\n");
 		}
 	} else {
 		const newEntries = getNewEntries(entries, lastVersion);
 		if (newEntries.length > 0) {
-			settings.set("lastChangelogVersion", VERSION);
-			await flushChangelogVersion();
+			await writeLastChangelogVersion(VERSION);
 			return newEntries.map(e => e.content).join("\n\n");
 		}
 	}
 
 	return undefined;
-}
-
-async function flushChangelogVersion(): Promise<void> {
-	try {
-		await settings.flush();
-	} catch (error: unknown) {
-		logger.warn("Failed to persist lastChangelogVersion", { error });
-	}
 }
 
 /** Resolves CLI session flags into an existing, forked, in-memory, or cancelled session manager. */

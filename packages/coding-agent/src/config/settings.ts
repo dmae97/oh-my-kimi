@@ -17,6 +17,7 @@ import * as path from "node:path";
 import {
 	getAgentDbPath,
 	getAgentDir,
+	getLastChangelogVersionPath,
 	getProjectDir,
 	isEnoent,
 	logger,
@@ -205,6 +206,9 @@ export class Settings {
 
 	/** Paths modified during this session (for partial save) */
 	#modified = new Set<string>();
+
+	/** Legacy `lastChangelogVersion` captured from config.yml during migration (now a marker file). */
+	#legacyLastChangelogVersion?: string;
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -549,6 +553,7 @@ export class Settings {
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
 			await this.#migrateFromLegacy();
 			this.#global = await this.#loadYaml(this.#configPath!);
+			await this.#seedLastChangelogVersionMarker();
 		}
 
 		this.#project = await projectPromise;
@@ -641,6 +646,16 @@ export class Settings {
 			raw.steeringMode = raw.queueMode;
 			delete raw.queueMode;
 		}
+
+		// lastChangelogVersion moved out of config.yml into the
+		// <agentDir>/last-changelog-version marker file so version bumps no
+		// longer dirty user-tracked configs. Capture for marker seeding (see
+		// #seedLastChangelogVersionMarker), then strip the key — the next
+		// config save drops it from disk.
+		if (typeof raw.lastChangelogVersion === "string") {
+			this.#legacyLastChangelogVersion ??= raw.lastChangelogVersion;
+		}
+		delete raw.lastChangelogVersion;
 
 		// ask.timeout: ms -> seconds (if value > 1000, it's old ms format)
 		if (raw.ask && typeof (raw.ask as Record<string, unknown>).timeout === "number") {
@@ -801,6 +816,27 @@ export class Settings {
 		}
 
 		return raw;
+	}
+
+	/**
+	 * One-time migration: seed the last-changelog-version marker file from the
+	 * legacy config.yml key. An existing marker always wins — it is the newer
+	 * source of truth.
+	 */
+	async #seedLastChangelogVersionMarker(): Promise<void> {
+		const legacy = this.#legacyLastChangelogVersion;
+		if (!legacy) return;
+		const markerPath = getLastChangelogVersionPath(this.#agentDir);
+		try {
+			if ((await Bun.file(markerPath).text()).trim()) return;
+		} catch (error) {
+			if (!isEnoent(error)) return;
+		}
+		try {
+			await Bun.write(markerPath, legacy);
+		} catch (error) {
+			logger.warn("Settings: failed to seed last-changelog-version marker", { error: String(error) });
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

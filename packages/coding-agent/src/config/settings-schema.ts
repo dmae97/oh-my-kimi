@@ -260,7 +260,6 @@ export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
 	// General settings (no UI)
 	// ────────────────────────────────────────────────────────────────────────
-	lastChangelogVersion: { type: "string", default: undefined },
 	setupVersion: { type: "number", default: 0 },
 
 	// Auth broker — credentials proxied through a remote `omp auth-broker serve`
