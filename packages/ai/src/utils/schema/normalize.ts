@@ -1505,6 +1505,10 @@ function enforceStrictSchemaBody(
 					strictProperties[key] = processed;
 					continue;
 				}
+				if (isJsonObject(processed) && Array.isArray(processed.anyOf)) {
+					strictProperties[key] = { ...processed, anyOf: [...processed.anyOf, { type: "null" }] };
+					continue;
+				}
 				if (isJsonObject(processed) && typeof processed.description === "string") {
 					const { description, ...withoutDescription } = processed;
 					strictProperties[key] = { anyOf: [withoutDescription, { type: "null" }], description };

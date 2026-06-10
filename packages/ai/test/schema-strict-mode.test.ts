@@ -441,6 +441,21 @@ describe("enforceStrictSchema", () => {
 		expect(optionalVariants).toEqual(["number", "null"]);
 	});
 
+	it("flattens optional union schemas instead of nesting anyOf wrappers", () => {
+		const schema = zodToWireSchema(
+			z.object({
+				paths: z.union([z.string(), z.array(z.string())]).optional(),
+			}),
+		);
+
+		const strict = enforceStrictSchema(schema);
+		const properties = strict.properties as Record<string, Record<string, unknown>>;
+		const branches = properties.paths.anyOf as Array<Record<string, unknown>>;
+
+		expect(branches.map(branch => branch.type)).toEqual(["string", "array", "null"]);
+		expect(branches.some(branch => Array.isArray(branch.anyOf))).toBe(false);
+	});
+
 	it("never emits undefined as a schema type", () => {
 		const schema = zodToWireSchema(
 			z.object({
