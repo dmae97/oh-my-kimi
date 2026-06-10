@@ -1226,7 +1226,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			let cachedExpanded: boolean | undefined;
 			let cachedRawOutput: string | undefined;
 			let cachedIsPartial: boolean | undefined;
-			let cachedLines: string[] | undefined;
+			let cachedLines: readonly string[] | undefined;
 
 			return markFramedBlockComponent({
 				render: (width: number): readonly string[] => {
@@ -1339,7 +1339,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
 							width,
-
 						},
 						uiTheme,
 					);
