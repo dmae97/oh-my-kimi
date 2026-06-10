@@ -1572,6 +1572,24 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Get the OAuth account identity for a provider, preferring the credential that
+	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
+	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
+	 */
+	getOAuthAccountIdentity(provider: string, sessionId?: string): { accountId?: string; email?: string } | undefined {
+		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId);
+		if (!preferred) return undefined;
+		const accountId =
+			typeof preferred.accountId === "string" && preferred.accountId.length > 0 ? preferred.accountId : undefined;
+		const email = typeof preferred.email === "string" && preferred.email.length > 0 ? preferred.email : undefined;
+		if (!accountId && !email) return undefined;
+		return {
+			...(accountId ? { accountId } : {}),
+			...(email ? { email } : {}),
+		};
+	}
+
+	/**
 	 * Get all credentials.
 	 */
 	getAll(): AuthStorageData {

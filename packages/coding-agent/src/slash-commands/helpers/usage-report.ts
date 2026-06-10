@@ -31,7 +31,67 @@ function formatUsageReportAccount(report: UsageReport, limit: UsageLimit, index:
 	return `account ${index + 1}`;
 }
 
-function renderUsageReports(reports: UsageReport[], nowMs: number): string {
+type ActiveAccountIdentity = {
+	accountId?: string;
+	email?: string;
+};
+
+type OAuthAccessResolver = {
+	getOAuthAccountId?: (provider: string, sessionId?: string) => string | undefined;
+	getOAuthAccountIdentity?: (provider: string, sessionId?: string) => ActiveAccountIdentity | undefined;
+};
+
+function normalizeIdentityValue(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+}
+
+/** True when the report belongs to the given OAuth account identity. */
+function isReportForAccount(report: UsageReport, activeAccount: ActiveAccountIdentity): boolean {
+	const activeAccountId = normalizeIdentityValue(activeAccount.accountId);
+	const activeEmail = normalizeIdentityValue(activeAccount.email);
+	const metadata = report.metadata ?? {};
+	const reportAccountId =
+		normalizeIdentityValue(metadata.accountId) ?? normalizeIdentityValue(metadata.account_id) ?? undefined;
+	const reportEmail = normalizeIdentityValue(metadata.email);
+	return report.limits.some(limit => {
+		const scopeAccountId = normalizeIdentityValue(limit.scope.accountId);
+		return Boolean(
+			(activeAccountId && (reportAccountId === activeAccountId || scopeAccountId === activeAccountId)) ||
+				(activeEmail && (reportEmail === activeEmail || scopeAccountId === activeEmail)),
+		);
+	});
+}
+
+async function resolveActiveAccountsForReports(
+	sessionValue: unknown,
+	reports: UsageReport[],
+): Promise<Map<string, ActiveAccountIdentity>> {
+	const session = sessionValue as {
+		sessionId?: string;
+		modelRegistry?: { authStorage?: OAuthAccessResolver };
+	};
+	const authStorage = session.modelRegistry?.authStorage;
+	if (!authStorage) return new Map();
+	const providers = [...new Set(reports.map(report => report.provider))];
+	const entries = await Promise.all(
+		providers.map(provider => {
+			const identity = authStorage.getOAuthAccountIdentity?.(provider, session.sessionId);
+			const accountId = identity?.accountId ?? authStorage.getOAuthAccountId?.(provider, session.sessionId);
+			const activeIdentity: ActiveAccountIdentity = {
+				...(accountId ? { accountId } : {}),
+				...(identity?.email ? { email: identity.email } : {}),
+			};
+			return [provider, activeIdentity] as const;
+		}),
+	);
+	return new Map(entries.filter(([, identity]) => identity.accountId || identity.email));
+}
+
+function renderUsageReports(
+	reports: UsageReport[],
+	nowMs: number,
+	resolveActiveAccount?: (provider: string) => ActiveAccountIdentity | undefined,
+): string {
 	const latestFetchedAt = Math.max(...reports.map(report => report.fetchedAt ?? 0));
 	const lines = [`Usage${latestFetchedAt ? ` (${formatDuration(nowMs - latestFetchedAt)} ago)` : ""}`];
 	const grouped = new Map<string, UsageReport[]>();
@@ -45,7 +105,9 @@ function renderUsageReports(reports: UsageReport[], nowMs: number): string {
 		left.localeCompare(right),
 	)) {
 		lines.push("", formatProviderName(provider));
+		const activeAccount = resolveActiveAccount?.(provider);
 		for (const report of providerReports) {
+			const inUse = activeAccount !== undefined && isReportForAccount(report, activeAccount);
 			if (report.limits.length === 0) {
 				const email = typeof report.metadata?.email === "string" ? report.metadata.email : "account";
 				lines.push(`- ${email}: no limits reported`);
@@ -56,7 +118,9 @@ function renderUsageReports(reports: UsageReport[], nowMs: number): string {
 				const window = limit.window?.label ?? limit.scope.windowId;
 				const tier = limit.scope.tier ? ` (${limit.scope.tier})` : "";
 				lines.push(`- ${limit.label}${tier}${window ? ` — ${window}` : ""}`);
-				lines.push(`  ${formatUsageReportAccount(report, limit, index)}: ${formatUsageAmount(limit)}`);
+				lines.push(
+					`  ${formatUsageReportAccount(report, limit, index)}: ${formatUsageAmount(limit)}${inUse ? "  ← in use by this session" : ""}`,
+				);
 				lines.push(`  ${renderAsciiBar(limit.amount.usedFraction)}`);
 				if (limit.window?.resetsAt && limit.window.resetsAt > nowMs) {
 					lines.push(`  resets in ${formatDuration(limit.window.resetsAt - nowMs)}`);
@@ -79,7 +143,13 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 	};
 	if (provider.fetchUsageReports) {
 		const reports = await provider.fetchUsageReports();
-		if (reports && reports.length > 0) return renderUsageReports(reports, Date.now());
+		if (reports && reports.length > 0) {
+			const activeAccounts = await resolveActiveAccountsForReports(runtime.session, reports);
+			const currentProvider = runtime.session.model?.provider;
+			return renderUsageReports(reports, Date.now(), providerId =>
+				providerId === currentProvider ? activeAccounts.get(providerId) : undefined,
+			);
+		}
 	}
 
 	const stats = runtime.session.sessionManager.getUsageStatistics();
