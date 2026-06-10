@@ -9,6 +9,7 @@ import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
+import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
@@ -353,7 +354,7 @@ export class RpcClient {
 	}
 
 	/**
-	 * Subscribe to subagent lifecycle frames emitted by the task tool.
+	 * Subscribe to subagent lifecycle frames after setSubagentSubscription("progress" | "events").
 	 */
 	onSubagentLifecycle(listener: RpcSubagentLifecycleListener): () => void {
 		this.#subagentLifecycleListeners.add(listener);
@@ -361,7 +362,7 @@ export class RpcClient {
 	}
 
 	/**
-	 * Subscribe to aggregated subagent progress frames emitted by the task tool.
+	 * Subscribe to aggregated subagent progress frames after setSubagentSubscription("progress" | "events").
 	 */
 	onSubagentProgress(listener: RpcSubagentProgressListener): () => void {
 		this.#subagentProgressListeners.add(listener);
@@ -449,8 +450,8 @@ export class RpcClient {
 	}
 
 	/**
-	 * Configure subagent frames emitted by the RPC server.
-	 * Progress emits lifecycle/progress frames; events additionally emits raw subagent session events.
+	 * Configure subagent frames emitted by the RPC server. Servers default to "off".
+	 * "progress" emits lifecycle/progress frames; "events" additionally emits raw subagent session events.
 	 */
 	async setSubagentSubscription(level: RpcSubagentSubscriptionLevel): Promise<RpcSubagentSubscriptionLevel> {
 		const response = await this.#send({ type: "set_subagent_subscription", level });
@@ -939,7 +940,7 @@ export class RpcClient {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}
-		const stdin = this.#process.stdin as import("bun").FileSink;
+		const stdin = this.#process.stdin as FileSink;
 		stdin.write(`${JSON.stringify(frame)}\n`);
 		const flushResult = stdin.flush();
 		if (isPromise(flushResult)) {

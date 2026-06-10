@@ -3,6 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import {
+	handleRpcSessionChange,
+	type RpcSessionChangeCommand,
+	type RpcSessionChangeResult,
+	type RpcSessionChangeSession,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents";
 import type { RpcSubagentFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import {
@@ -44,11 +50,86 @@ function createProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 	};
 }
 
+function createRegistryWithSnapshot(): RpcSubagentRegistry {
+	const eventBus = new EventBus();
+	const registry = new RpcSubagentRegistry(eventBus, () => {});
+	eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+		id: "SubagentA",
+		index: 0,
+		agent: "task",
+		agentSource: "bundled",
+		status: "started",
+		sessionFile: "/tmp/subagent.jsonl",
+	} satisfies SubagentLifecyclePayload);
+	expect(registry.getSubagents()).toHaveLength(1);
+	return registry;
+}
+
+type SessionChangeStubOptions = {
+	newSession?: boolean;
+	switchSession?: boolean;
+	branch?: { selectedText: string; cancelled: boolean };
+};
+
+function createSessionChangeSession(options: SessionChangeStubOptions): RpcSessionChangeSession {
+	return {
+		newSession: async (_options?: unknown) => options.newSession ?? true,
+		switchSession: async (_sessionPath: string) => options.switchSession ?? true,
+		branch: async (_entryId: string) => options.branch ?? { selectedText: "branched text", cancelled: false },
+	};
+}
+
 describe("RPC subagent registry", () => {
-	test("emits progress frames and snapshots tracked subagents", () => {
+	test("defaults subagent frame emission to off while tracking snapshots", () => {
 		const eventBus = new EventBus();
 		const frames: RpcSubagentFrame[] = [];
 		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
+		const lifecycle: SubagentLifecyclePayload = {
+			id: "SubagentA",
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			description: "Worker",
+			status: "started",
+			sessionFile: "/tmp/subagent.jsonl",
+			parentToolCallId: "toolu_parent",
+		};
+		const progressPayload: SubagentProgressPayload = {
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			task: "Do work",
+			assignment: "Implement work",
+			parentToolCallId: "toolu_parent",
+			sessionFile: "/tmp/subagent.jsonl",
+			progress: createProgress(),
+		};
+		const eventPayload: SubagentEventPayload = {
+			id: "SubagentA",
+			event: { type: "agent_start" },
+		};
+
+		expect(registry.getSubscriptionLevel()).toBe("off");
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, lifecycle);
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, progressPayload);
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
+
+		expect(frames).toHaveLength(0);
+		expect(registry.getSubagents()).toMatchObject([
+			{
+				id: "SubagentA",
+				status: "running",
+				sessionFile: "/tmp/subagent.jsonl",
+			},
+		]);
+		registry.dispose();
+	});
+
+	test("emits progress frames after explicit progress subscription and snapshots tracked subagents", () => {
+		const eventBus = new EventBus();
+		const frames: RpcSubagentFrame[] = [];
+		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
+		registry.setSubscriptionLevel("progress");
 		const lifecycle: SubagentLifecyclePayload = {
 			id: "SubagentA",
 			index: 0,
@@ -88,19 +169,136 @@ describe("RPC subagent registry", () => {
 		registry.dispose();
 	});
 
+	test("clears stale snapshots when the active RPC session changes", () => {
+		const eventBus = new EventBus();
+		const registry = new RpcSubagentRegistry(eventBus, () => {});
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: "SubagentA",
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			status: "started",
+			sessionFile: "/tmp/subagent.jsonl",
+		} satisfies SubagentLifecyclePayload);
+
+		expect(registry.getSubagents()).toHaveLength(1);
+		registry.clear();
+
+		expect(registry.getSubagents()).toHaveLength(0);
+		registry.dispose();
+	});
+
+	test("clears stale snapshots after successful RPC session changes", async () => {
+		const cases: Array<{
+			command: RpcSessionChangeCommand;
+			session: RpcSessionChangeSession;
+			expected: RpcSessionChangeResult;
+		}> = [
+			{
+				command: { type: "new_session", parentSession: "/tmp/parent.jsonl" },
+				session: createSessionChangeSession({ newSession: true }),
+				expected: { type: "new_session", data: { cancelled: false } },
+			},
+			{
+				command: { type: "switch_session", sessionPath: "/tmp/next.jsonl" },
+				session: createSessionChangeSession({ switchSession: true }),
+				expected: { type: "switch_session", data: { cancelled: false } },
+			},
+			{
+				command: { type: "branch", entryId: "entry-1" },
+				session: createSessionChangeSession({ branch: { selectedText: "Branch text", cancelled: false } }),
+				expected: { type: "branch", data: { text: "Branch text", cancelled: false } },
+			},
+		];
+
+		for (const testCase of cases) {
+			const registry = createRegistryWithSnapshot();
+			try {
+				const result = await handleRpcSessionChange(testCase.session, testCase.command, registry);
+
+				expect(result).toEqual(testCase.expected);
+				expect(registry.getSubagents()).toHaveLength(0);
+				expect(() => registry.resolveSessionFile({ subagentId: "SubagentA" })).toThrow(
+					/Unknown subagent or session file unavailable/,
+				);
+			} finally {
+				registry.dispose();
+			}
+		}
+	});
+
+	test("keeps stale snapshots when RPC session changes are cancelled", async () => {
+		const cases: Array<{
+			command: RpcSessionChangeCommand;
+			session: RpcSessionChangeSession;
+			expected: RpcSessionChangeResult;
+		}> = [
+			{
+				command: { type: "new_session", parentSession: "/tmp/parent.jsonl" },
+				session: createSessionChangeSession({ newSession: false }),
+				expected: { type: "new_session", data: { cancelled: true } },
+			},
+			{
+				command: { type: "switch_session", sessionPath: "/tmp/next.jsonl" },
+				session: createSessionChangeSession({ switchSession: false }),
+				expected: { type: "switch_session", data: { cancelled: true } },
+			},
+			{
+				command: { type: "branch", entryId: "entry-1" },
+				session: createSessionChangeSession({ branch: { selectedText: "", cancelled: true } }),
+				expected: { type: "branch", data: { text: "", cancelled: true } },
+			},
+		];
+
+		for (const testCase of cases) {
+			const registry = createRegistryWithSnapshot();
+			try {
+				const result = await handleRpcSessionChange(testCase.session, testCase.command, registry);
+
+				expect(result).toEqual(testCase.expected);
+				expect(registry.getSubagents()).toMatchObject([{ id: "SubagentA" }]);
+				expect(registry.resolveSessionFile({ subagentId: "SubagentA" })).toBe("/tmp/subagent.jsonl");
+			} finally {
+				registry.dispose();
+			}
+		}
+	});
+
+	test("prunes terminal lifecycle snapshots while retaining transcript selectors", () => {
+		const eventBus = new EventBus();
+		const registry = new RpcSubagentRegistry(eventBus, () => {});
+		const sessionFile = "/tmp/subagent.jsonl";
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: "SubagentA",
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			status: "started",
+			sessionFile,
+		} satisfies SubagentLifecyclePayload);
+
+		expect(registry.getSubagents()).toHaveLength(1);
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: "SubagentA",
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			status: "completed",
+			sessionFile,
+		} satisfies SubagentLifecyclePayload);
+
+		expect(registry.getSubagents()).toHaveLength(0);
+		expect(registry.resolveSessionFile({ subagentId: "SubagentA" })).toBe(sessionFile);
+		expect(registry.resolveSessionFile({ sessionFile })).toBe(sessionFile);
+		registry.dispose();
+	});
+
 	test("gates raw subagent events behind the events subscription level", () => {
 		const eventBus = new EventBus();
 		const frames: RpcSubagentFrame[] = [];
 		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
 		const eventPayload: SubagentEventPayload = {
 			id: "SubagentA",
-			index: 0,
-			agent: "task",
-			agentSource: "bundled",
-			task: "Do work",
-			assignment: "Implement work",
-			parentToolCallId: "toolu_parent",
-			sessionFile: "/tmp/subagent.jsonl",
 			event: { type: "agent_start" },
 		};
 
@@ -111,7 +309,7 @@ describe("RPC subagent registry", () => {
 		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 
 		expect(frames).toHaveLength(1);
-		expect(frames[0]).toMatchObject({ type: "subagent_event", payload: { id: "SubagentA" } });
+		expect(frames[0]).toEqual({ type: "subagent_event", payload: eventPayload });
 		registry.dispose();
 	});
 });
@@ -195,7 +393,7 @@ function handle(frame) {
 		write({ type: "notice", level: "info", message: "subagent test" });
 		write({ type: "subagent_lifecycle", payload: { id: "SubagentA", index: 0, agent: "task", agentSource: "bundled", status: "started", sessionFile: "/tmp/subagent.jsonl" } });
 		write({ type: "subagent_progress", payload: { index: 0, agent: "task", agentSource: "bundled", task: "Do work", assignment: "Implement work", sessionFile: "/tmp/subagent.jsonl", progress } });
-		write({ type: "subagent_event", payload: { id: "SubagentA", index: 0, agent: "task", agentSource: "bundled", task: "Do work", assignment: "Implement work", sessionFile: "/tmp/subagent.jsonl", event: { type: "agent_start" } } });
+		write({ type: "subagent_event", payload: { id: "SubagentA", event: { type: "agent_start" } } });
 		write({ type: "agent_end", messages: [] });
 	}
 }

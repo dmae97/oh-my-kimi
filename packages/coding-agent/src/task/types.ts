@@ -51,13 +51,6 @@ export interface SubagentProgressPayload {
 /** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
 export interface SubagentEventPayload {
 	id: string;
-	index: number;
-	agent: string;
-	agentSource: AgentSource;
-	task: string;
-	parentToolCallId?: string;
-	assignment?: string;
-	sessionFile?: string;
 	event: AgentSessionEvent;
 }
 

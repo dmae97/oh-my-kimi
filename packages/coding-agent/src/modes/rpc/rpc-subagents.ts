@@ -27,12 +27,18 @@ export interface RpcSubagentTranscriptSelector {
 
 type RpcSubagentOutput = (frame: RpcSubagentFrame) => void;
 
+const MAX_RETAINED_TRANSCRIPT_REFERENCES = 256;
+
 function isSessionMessageEntry(entry: FileEntry): entry is SessionMessageEntry {
 	return entry.type === "message";
 }
 
 function statusFromLifecycle(status: SubagentLifecyclePayload["status"]): AgentProgress["status"] {
 	return status === "started" ? "running" : status;
+}
+
+function isTerminalLifecycleStatus(status: SubagentLifecyclePayload["status"]): boolean {
+	return status !== "started";
 }
 
 export async function readRpcSubagentTranscript(sessionFile: string, fromByte = 0): Promise<RpcSubagentMessagesResult> {
@@ -63,9 +69,10 @@ export async function readRpcSubagentTranscript(sessionFile: string, fromByte = 
 
 export class RpcSubagentRegistry {
 	#subagents = new Map<string, RpcSubagentSnapshot>();
+	#transcriptSessionFilesBySubagentId = new Map<string, string>();
 	#unsubscribers: Array<() => void> = [];
 	#output: RpcSubagentOutput;
-	#subscriptionLevel: RpcSubagentSubscriptionLevel = "progress";
+	#subscriptionLevel: RpcSubagentSubscriptionLevel = "off";
 
 	constructor(eventBus: EventBus, output: RpcSubagentOutput) {
 		this.#output = output;
@@ -86,6 +93,12 @@ export class RpcSubagentRegistry {
 		for (const unsubscribe of this.#unsubscribers) unsubscribe();
 		this.#unsubscribers = [];
 		this.#subagents.clear();
+		this.#transcriptSessionFilesBySubagentId.clear();
+	}
+
+	clear(): void {
+		this.#subagents.clear();
+		this.#transcriptSessionFilesBySubagentId.clear();
 	}
 
 	setSubscriptionLevel(level: RpcSubagentSubscriptionLevel): void {
@@ -100,8 +113,30 @@ export class RpcSubagentRegistry {
 		return [...this.#subagents.values()].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
 	}
 
+	#rememberTranscriptSession(subagentId: string, sessionFile: string | undefined): void {
+		if (!sessionFile) return;
+		this.#transcriptSessionFilesBySubagentId.delete(subagentId);
+		this.#transcriptSessionFilesBySubagentId.set(subagentId, sessionFile);
+		while (this.#transcriptSessionFilesBySubagentId.size > MAX_RETAINED_TRANSCRIPT_REFERENCES) {
+			const oldest = this.#transcriptSessionFilesBySubagentId.keys().next();
+			if (oldest.done) break;
+			this.#transcriptSessionFilesBySubagentId.delete(oldest.value);
+		}
+	}
+
+	#hasTranscriptSessionFile(sessionFile: string): boolean {
+		for (const snapshot of this.#subagents.values()) {
+			if (snapshot.sessionFile === sessionFile) return true;
+		}
+		for (const transcriptSessionFile of this.#transcriptSessionFilesBySubagentId.values()) {
+			if (transcriptSessionFile === sessionFile) return true;
+		}
+		return false;
+	}
+
 	handleLifecycle(payload: SubagentLifecyclePayload): void {
 		const existing = this.#subagents.get(payload.id);
+		const sessionFile = payload.sessionFile ?? existing?.sessionFile;
 		const snapshot: RpcSubagentSnapshot = {
 			id: payload.id,
 			index: payload.index,
@@ -111,12 +146,17 @@ export class RpcSubagentRegistry {
 			status: statusFromLifecycle(payload.status),
 			task: existing?.task,
 			assignment: existing?.assignment,
-			sessionFile: payload.sessionFile ?? existing?.sessionFile,
+			sessionFile,
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
 			lastUpdate: Date.now(),
 			progress: existing?.progress,
 		};
-		this.#subagents.set(payload.id, snapshot);
+		this.#rememberTranscriptSession(payload.id, sessionFile);
+		if (isTerminalLifecycleStatus(payload.status)) {
+			this.#subagents.delete(payload.id);
+		} else {
+			this.#subagents.set(payload.id, snapshot);
+		}
 		if (this.#subscriptionLevel !== "off") {
 			this.#output({ type: "subagent_lifecycle", payload });
 		}
@@ -125,6 +165,8 @@ export class RpcSubagentRegistry {
 	handleProgress(payload: SubagentProgressPayload): void {
 		const progress = payload.progress;
 		const existing = this.#subagents.get(progress.id);
+		const sessionFile = payload.sessionFile ?? existing?.sessionFile;
+		this.#rememberTranscriptSession(progress.id, sessionFile);
 		this.#subagents.set(progress.id, {
 			id: progress.id,
 			index: payload.index,
@@ -134,7 +176,7 @@ export class RpcSubagentRegistry {
 			status: progress.status,
 			task: payload.task,
 			assignment: payload.assignment,
-			sessionFile: payload.sessionFile ?? existing?.sessionFile,
+			sessionFile,
 			lastUpdate: Date.now(),
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
 			progress,
@@ -152,16 +194,15 @@ export class RpcSubagentRegistry {
 	resolveSessionFile(selector: RpcSubagentTranscriptSelector): string {
 		if (selector.subagentId) {
 			const snapshot = this.#subagents.get(selector.subagentId);
-			if (!snapshot?.sessionFile) {
+			const sessionFile = snapshot?.sessionFile ?? this.#transcriptSessionFilesBySubagentId.get(selector.subagentId);
+			if (!sessionFile) {
 				throw new Error(`Unknown subagent or session file unavailable: ${selector.subagentId}`);
 			}
-			return snapshot.sessionFile;
+			return sessionFile;
 		}
 
 		if (selector.sessionFile) {
-			for (const snapshot of this.#subagents.values()) {
-				if (snapshot.sessionFile === selector.sessionFile) return selector.sessionFile;
-			}
+			if (this.#hasTranscriptSessionFile(selector.sessionFile)) return selector.sessionFile;
 			throw new Error("Unknown subagent session file");
 		}
 

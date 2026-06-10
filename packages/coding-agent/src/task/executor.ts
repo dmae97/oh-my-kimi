@@ -928,14 +928,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		if (!options.eventBus) return;
 		options.eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
 			id,
-			index,
-			agent: agent.name,
-			agentSource: agent.source,
-			task,
-			assignment,
-			sessionFile: subtaskSessionFile,
 			event,
-			parentToolCallId: options.parentToolCallId,
 		});
 	};
 
