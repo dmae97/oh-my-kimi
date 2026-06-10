@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.12] - 2026-06-10
+
 ### Added
 
 - Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.

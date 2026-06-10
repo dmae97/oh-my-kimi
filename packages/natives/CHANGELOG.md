@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.12] - 2026-06-10
+
 ### Added
 
 - Added deterministic shell-output minimization to the native shell pipeline, including opt-in per-command rewrite telemetry surfaced through `executeShell().minimized` for callers that want compact inline output plus a separately persisted original capture.

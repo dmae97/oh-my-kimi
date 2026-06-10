@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.12] - 2026-06-10
+
 ### Added
 
 - Added `grok-composer-2.5-fast` (Cursor "Composer 2.5 Fast") to the xAI Grok OAuth (SuperGrok) catalog: non-reasoning, text-only, 200K context.
