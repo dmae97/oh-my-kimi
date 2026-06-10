@@ -8,6 +8,7 @@
 - Startup hangs are now self-diagnosing (speculative fix for the "zero output, hangs even on `omp -h`" report class): a watchdog prints a stderr line every 10s naming the deepest in-flight startup phase (via `logger.openSpanPath()`) until a mode runner takes over, pausing around legitimate interactive waits (fork/move prompts, the `--resume` session picker); `PI_DEBUG_STARTUP` is restored as streaming synchronous `[startup]` phase markers covering command-module imports and the native addon load, which the post-startup `PI_TIMING` tree structurally cannot show for a hang; and waiting on piped-stdin EOF announces itself after 1s instead of blocking silently.
 - npm installs now execute a prebundled single-file entry: `bin.omp` points at `dist/cli.js` (built by `scripts/bundle-dist.ts` during `prepack`, ~18MB minified, natives/transformers/mupdf external), cutting npm-install cold start by roughly 3x versus transpiling the raw TypeScript graph per launch; `src/**` stays published for SDK consumers and worker fallbacks
 - Plain interactive TTY launches print a dim two-line startup splash (`omp <version>` / `Initializing session…`) before session construction so first pixels appear immediately; suppressed for resume/fork/continue flows, quiet mode, `PI_TIMING`, and non-TTY stdio
+- Added `/stats` to launch the local stats dashboard from an active session, syncing session files first and opening the same browser dashboard as `omp stats`.
 
 ### Changed
 

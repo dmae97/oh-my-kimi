@@ -30,6 +30,7 @@ import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
 import { handleSshAcp } from "./helpers/ssh";
+import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
@@ -540,6 +541,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleUsageCommand();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "stats",
+		description: "Launch the local stats dashboard",
+		inlineHint: "[--port <port>]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const parsed = parseStatsDashboardArgs(command.args);
+			if ("error" in parsed) return usage(parsed.error, runtime);
+
+			await runtime.output("Syncing session files...");
+			try {
+				const result = await launchStatsDashboard(parsed);
+				await runtime.output(result.message);
+			} catch (error) {
+				await runtime.output(`Stats dashboard failed: ${errorMessage(error)}`);
+			}
+			return commandConsumed();
 		},
 	},
 	{
