@@ -29,6 +29,7 @@ import {
 	type AgentState,
 	type AgentTool,
 	AppendOnlyContextManager,
+	type AsideMessage,
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -163,6 +164,7 @@ import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
+import type { IrcMessage } from "../irc/bus";
 import { resolveMemoryBackend } from "../memory-backend";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
@@ -184,7 +186,6 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
-import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	deobfuscateSessionContext,
 	obfuscateProviderContext,
@@ -413,8 +414,6 @@ export interface AgentSessionConfig {
 	asyncJobManager?: AsyncJobManager;
 	/** Agent identity (registry id like "Main" or "Alice") used for IRC routing. */
 	agentId?: string;
-	/** Shared agent registry (for forwarding IRC observations to the main session UI). */
-	agentRegistry?: AgentRegistry;
 	/**
 	 * Override the provider-facing session ID for all API requests from this session.
 	 * When absent, `sessionManager.getSessionId()` is used. Needed when benchmark or
@@ -557,15 +556,15 @@ function formatRetryFallbackBaseSelector(selector: RetryFallbackSelector): strin
 	return `${selector.provider}/${selector.id}`;
 }
 
-const IRC_REPLY_MAX_BYTES = 4096;
+const EPHEMERAL_REPLY_MAX_BYTES = 4096;
 
 /**
- * Collapse degenerate IRC ephemeral replies before they hit the relay.
+ * Collapse degenerate ephemeral replies (/btw, /omfg side-channel turns).
  * Models occasionally loop on a single line (~16 reports of N-times-repeated
  * replies); compress runs longer than 3 down to one instance + `[…N×]`, then
  * cap at 4 KiB so a runaway reply can't flood the channel.
  */
-function dedupeIrcReply(text: string): string {
+function dedupeEphemeralReply(text: string): string {
 	if (!text) return text;
 	const lines = text.split("\n");
 	const out: string[] = [];
@@ -582,11 +581,11 @@ function dedupeIrcReply(text: string): string {
 		i = j;
 	}
 	let result = out.join("\n");
-	if (Buffer.byteLength(result, "utf8") > IRC_REPLY_MAX_BYTES) {
+	if (Buffer.byteLength(result, "utf8") > EPHEMERAL_REPLY_MAX_BYTES) {
 		// Trim by characters until we're under the byte budget — handles multi-byte
 		// glyphs at the boundary without splitting them.
 		const suffix = "\n[…truncated]";
-		const budget = IRC_REPLY_MAX_BYTES - Buffer.byteLength(suffix, "utf8");
+		const budget = EPHEMERAL_REPLY_MAX_BYTES - Buffer.byteLength(suffix, "utf8");
 		while (Buffer.byteLength(result, "utf8") > budget) {
 			result = result.slice(0, -1);
 		}
@@ -941,13 +940,11 @@ export class AgentSession {
 	#activeEvalExecutions = new Set<Promise<unknown>>();
 	#evalExecutionDisposing = false;
 
-	// Background-channel IRC exchanges queued while the recipient was streaming.
-	// Drained into history (via emitExternalEvent) once the recipient becomes idle.
-	#pendingBackgroundExchanges: CustomMessage[][] = [];
-	#scheduledBackgroundExchangeFlush = false;
-	// Agent identity + registry for IRC relay forwarding to the main session UI.
+	// Incoming IRC messages received while a turn was streaming; drained as
+	// non-interrupting asides at the next step boundary (see the aside provider).
+	#pendingIrcAsides: CustomMessage[] = [];
+	// Agent identity (registry id) used for IRC routing and job ownership.
 	#agentId: string | undefined;
-	#agentRegistry: AgentRegistry | undefined;
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
 	#isDisposed = false;
@@ -1204,7 +1201,13 @@ export class AgentSession {
 		// Background-job completions / late diagnostics are pulled into the run at
 		// each step boundary as non-interrupting asides (see Agent.getAsideMessages),
 		// so they reach the model between requests without waiting for a yield.
-		this.agent.setAsideMessageProvider(() => this.yieldQueue.drainLazy());
+		this.agent.setAsideMessageProvider(() => {
+			const pendingIrc = this.#pendingIrcAsides;
+			this.#pendingIrcAsides = [];
+			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
+			thunks.push(...this.yieldQueue.drainLazy());
+			return thunks;
+		});
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
@@ -1235,7 +1238,6 @@ export class AgentSession {
 		this.#ttsrManager = config.ttsrManager;
 		this.#obfuscator = config.obfuscator;
 		this.#agentId = config.agentId;
-		this.#agentRegistry = config.agentRegistry;
 		this.#providerSessionId = config.providerSessionId;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
@@ -3091,15 +3093,28 @@ export class AgentSession {
 	}
 
 	/**
+	 * Synchronously mark the session as disposing so new work is rejected
+	 * immediately: Python/eval starts throw, queued asides are dropped, and the
+	 * aside provider is detached. Idempotent; `dispose()` runs it first.
+	 *
+	 * Wrappers that await other teardown before delegating to `dispose()` MUST
+	 * call this before their first await — otherwise work started in that async
+	 * gap slips past the disposal guards.
+	 */
+	beginDispose(): void {
+		this.#isDisposed = true;
+		this.#pendingIrcAsides = [];
+		this.yieldQueue.clear();
+		this.agent.setAsideMessageProvider(undefined);
+		this.#evalExecutionDisposing = true;
+	}
+
+	/**
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
 	 */
 	async dispose(): Promise<void> {
-		this.#isDisposed = true;
-		this.#pendingBackgroundExchanges = [];
-		this.yieldQueue.clear();
-		this.agent.setAsideMessageProvider(undefined);
-		this.#evalExecutionDisposing = true;
+		this.beginDispose();
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });
@@ -4634,7 +4649,7 @@ export class AgentSession {
 			// Flush any pending bash messages before the new prompt
 			this.#flushPendingBashMessages();
 			this.#flushPendingPythonMessages();
-			this.#flushPendingBackgroundExchanges();
+			this.#flushPendingIrcAsides();
 
 			// Reset todo reminder count on new user prompt
 			this.#todoReminderCount = 0;
@@ -8926,118 +8941,56 @@ export class AgentSession {
 	}
 
 	// =========================================================================
-	// Background-Channel IRC Exchanges
+	// IRC Delivery
 	// =========================================================================
 
 	/**
-	 * Generate an ephemeral reply to a background message (e.g. an IRC ping from
-	 * another agent) using this session's current model + system prompt + history.
+	 * Deliver an IRC message into this session (recipient side; called by the
+	 * IrcBus). Emits the `irc_message` session event for UI cards and injects
+	 * the rendered message into the model's context as an `irc:incoming`
+	 * custom message:
 	 *
-	 * The incoming message is queued for injection into the recipient's persisted
-	 * history immediately so timeouts/abort still preserve delivery. The reply is
-	 * computed via a side-channel `streamSimple` call (analogous to `/btw`) so it
-	 * never blocks on the recipient's in-flight tool calls. When a reply is
-	 * generated, it is queued separately. Injection happens immediately when the
-	 * session is idle, otherwise it is deferred until streaming ends.
+	 * - mid-turn → queued on the aside channel and folded in at the next step
+	 *   boundary (non-interrupting, like async-result deliveries) → "injected";
+	 * - idle → starts a real turn with the message so the recipient wakes
+	 *   → "woken".
+	 *
+	 * Never blocks on the recipient's turn: the wake turn is fire-and-forget.
 	 */
-	async respondAsBackground(args: {
-		from: string;
-		message: string;
-		awaitReply?: boolean;
-		signal?: AbortSignal;
-	}): Promise<{ replyText: string | null }> {
-		const awaitReply = args.awaitReply !== false;
-		const incomingTimestamp = Date.now();
-		const incomingRecord: CustomMessage = {
+	async deliverIrcMessage(msg: IrcMessage): Promise<"injected" | "woken"> {
+		if (this.#isDisposed) {
+			throw new Error("Recipient session is disposed.");
+		}
+		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
-			content: `[IRC \`${args.from}\` → you]\n\n${args.message}`,
+			content: prompt.render(ircIncomingTemplate, {
+				from: msg.from,
+				message: msg.body,
+				replyTo: msg.replyTo ?? "",
+			}),
 			display: true,
-			details: { from: args.from, message: args.message },
+			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
 			attribution: "agent",
-			timestamp: incomingTimestamp,
+			timestamp: msg.ts,
 		};
-		void this.#emitSessionEvent({ type: "irc_message", message: incomingRecord });
-		this.#forwardIrcRelayToMain({
-			from: args.from,
-			to: this.#agentId ?? "?",
-			body: args.message,
-			kind: "message",
-			timestamp: incomingTimestamp,
-		});
-
-		this.#queueBackgroundExchangeInjection([incomingRecord]);
-		if (!awaitReply) {
-			return { replyText: null };
+		void this.#emitSessionEvent({ type: "irc_message", message: record });
+		if (this.isStreaming) {
+			this.#pendingIrcAsides.push(record);
+			return "injected";
 		}
-
-		const incomingPrompt = prompt.render(ircIncomingTemplate, {
-			from: args.from,
-			message: args.message,
+		// Idle: same wake primitive the yield queue uses for async-result
+		// delivery — prompt the agent directly so a real turn runs.
+		this.agent.prompt(record).catch(error => {
+			logger.warn("IRC wake turn failed", { from: msg.from, to: msg.to, error: String(error) });
 		});
-		const { replyText } = await this.runEphemeralTurn({
-			promptText: incomingPrompt,
-			signal: args.signal,
-		});
-
-		const replyRecord: CustomMessage = {
-			role: "custom",
-			customType: "irc:autoreply",
-			content: `[IRC you → \`${args.from}\` (auto)]\n\n${replyText}`,
-			display: true,
-			details: { to: args.from, reply: replyText },
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		void this.#emitSessionEvent({ type: "irc_message", message: replyRecord });
-		this.#forwardIrcRelayToMain({
-			from: this.#agentId ?? "?",
-			to: args.from,
-			body: replyText,
-			kind: "reply",
-			timestamp: replyRecord.timestamp,
-		});
-		this.#queueBackgroundExchangeInjection([replyRecord]);
-
-		return { replyText };
-	}
-
-	/**
-	 * Forward an IRC exchange observation to the main agent's session UI so the
-	 * user can see every IRC conversation in the main transcript, even when the
-	 * main agent is not a direct participant. The relay record is display-only:
-	 * it is NOT injected into the main agent's persisted history.
-	 */
-	#forwardIrcRelayToMain(args: {
-		from: string;
-		to: string;
-		body: string;
-		kind: "message" | "reply";
-		timestamp: number;
-	}): void {
-		const registry = this.#agentRegistry;
-		if (!registry) return;
-		// If this session is the main agent, the local emit already reached the main UI.
-		if (this.#agentId === MAIN_AGENT_ID) return;
-		const mainRef = registry.get(MAIN_AGENT_ID);
-		const mainSession = mainRef?.session;
-		if (!mainSession || mainSession === this) return;
-		const arrow = args.kind === "reply" ? "→ (auto)" : "→";
-		const relayRecord: CustomMessage = {
-			role: "custom",
-			customType: "irc:relay",
-			content: `[IRC \`${args.from}\` ${arrow} \`${args.to}\`]\n\n${args.body}`,
-			display: true,
-			details: { from: args.from, to: args.to, body: args.body, kind: args.kind },
-			attribution: "agent",
-			timestamp: args.timestamp,
-		};
-		mainSession.emitIrcRelayObservation(relayRecord);
+		return "woken";
 	}
 
 	/**
 	 * Emit an IRC relay observation event on this session for UI rendering only.
-	 * Does not persist the record to history. Public so other sessions can forward.
+	 * Does not persist the record to history. Called by the IrcBus to surface
+	 * agent↔agent traffic on the main session.
 	 */
 	emitIrcRelayObservation(record: CustomMessage): void {
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
@@ -9049,7 +9002,7 @@ export class AgentSession {
 	 * does not block on, or interfere with, any in-flight main turn.  The
 	 * session's history and persisted state are NOT modified by this call.
 	 *
-	 * Used by `respondAsBackground` (IRC) and `BtwController` (`/btw`) to share
+	 * Used by `BtwController` (`/btw`) and `OmfgController` (`/omfg`) to share
 	 * the snapshot + stream pipeline.  The snapshot includes any in-flight
 	 * streaming assistant text so the model sees the half-finished response
 	 * rather than missing context.
@@ -9137,7 +9090,7 @@ export class AgentSession {
 			args.onTextDelta(replyText.slice(emittedReplyText.length));
 		}
 		return {
-			replyText: args.dedupeReply === false ? replyText.trim() : dedupeIrcReply(replyText.trim()),
+			replyText: args.dedupeReply === false ? replyText.trim() : dedupeEphemeralReply(replyText.trim()),
 			assistantMessage,
 		};
 	}
@@ -9188,46 +9141,21 @@ export class AgentSession {
 		return messages;
 	}
 
-	#queueBackgroundExchangeInjection(messages: CustomMessage[]): void {
-		this.#pendingBackgroundExchanges.push(messages);
-		if (!this.isStreaming) {
-			this.#flushPendingBackgroundExchanges();
-			return;
-		}
-		this.#scheduleBackgroundExchangeFlush();
-	}
-
-	#scheduleBackgroundExchangeFlush(): void {
-		if (this.#scheduledBackgroundExchangeFlush) return;
-		this.#scheduledBackgroundExchangeFlush = true;
-		const attempt = (): void => {
-			if (this.#pendingBackgroundExchanges.length === 0 || this.#isDisposed) {
-				this.#pendingBackgroundExchanges = [];
-				this.#scheduledBackgroundExchangeFlush = false;
-				return;
-			}
-			if (this.isStreaming) {
-				setTimeout(attempt, 50);
-				return;
-			}
-			this.#scheduledBackgroundExchangeFlush = false;
-			this.#flushPendingBackgroundExchanges();
-		};
-		setTimeout(attempt, 0);
-	}
-
-	#flushPendingBackgroundExchanges(): void {
-		if (this.#pendingBackgroundExchanges.length === 0) return;
-		const batches = this.#pendingBackgroundExchanges;
-		this.#pendingBackgroundExchanges = [];
-		for (const batch of batches) {
-			for (const msg of batch) {
-				// emitExternalEvent on message_end appends to agent state and dispatches
-				// to all session listeners, which in turn handle TUI rendering and
-				// sessionManager persistence via #handleAgentEvent.
-				this.agent.emitExternalEvent({ type: "message_start", message: msg });
-				this.agent.emitExternalEvent({ type: "message_end", message: msg });
-			}
+	/**
+	 * Persist any IRC asides that missed their step-boundary injection (the
+	 * message landed after the turn's last aside drain). Called at the start
+	 * of the next prompt so the model still sees them.
+	 */
+	#flushPendingIrcAsides(): void {
+		if (this.#pendingIrcAsides.length === 0) return;
+		const records = this.#pendingIrcAsides;
+		this.#pendingIrcAsides = [];
+		for (const record of records) {
+			// emitExternalEvent on message_end appends to agent state and dispatches
+			// to all session listeners, which in turn handle TUI rendering and
+			// sessionManager persistence via #handleAgentEvent.
+			this.agent.emitExternalEvent({ type: "message_start", message: record });
+			this.agent.emitExternalEvent({ type: "message_end", message: record });
 		}
 	}
 

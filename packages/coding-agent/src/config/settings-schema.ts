@@ -2316,8 +2316,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "IRC Timeout",
-			description:
-				"Drop IRC messages whose recipient does not respond within this many milliseconds (0 disables the timeout)",
+			description: "Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "30000", label: "30 seconds" },
