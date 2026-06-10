@@ -264,6 +264,7 @@ export class Settings {
 			},
 			error => {
 				globalInstance = null;
+				globalInstancePromise = null;
 				clearBoundSettingsMethods();
 				throw error;
 			},
