@@ -743,7 +743,13 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 	// text-only, 200K context (mirrors Cursor's composer-* catalog entries).
 	// Off the GROK_EFFORT_CAPABLE_PREFIXES allowlist, so the wire side already
 	// sets omitReasoningEffort=true; reasoning:false also hides the effort dial.
-	{ id: "grok-composer-2.5-fast", contextWindow: 200_000, name: "Grok Composer 2.5 Fast", reasoning: false },
+	{
+		id: "grok-composer-2.5-fast",
+		contextWindow: 200_000,
+		name: "Grok Composer 2.5 Fast",
+		reasoning: false,
+		input: ["text"],
+	},
 ] as const;
 
 // xAI /v1/models returns chat, image, voice, and STT entries. Tool surfaces
