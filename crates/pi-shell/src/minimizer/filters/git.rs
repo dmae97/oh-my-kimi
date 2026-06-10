@@ -266,7 +266,15 @@ fn condense_status(input: &str) -> String {
 			summary.clean = true;
 			continue;
 		}
-		if let Some(detected) = detect_status_state(trimmed) {
+		// Only detect in-progress state headers OUTSIDE the "Untracked files:"
+		// section. Real `git status` prints these blocks before/after the file
+		// listings, never as untracked entries; but several progress phrases
+		// ("Last command done", "Next command to do", "No commands remaining")
+		// are plausible filenames, so an untracked file so named would otherwise
+		// be mis-read as `state: rebasing` and swallowed via the `continue`
+		// below, losing the real untracked count. Gating on `!in_untracked`
+		// lets such filenames fall through to the untracked path handling.
+		if !in_untracked && let Some(detected) = detect_status_state(trimmed) {
 			if state.is_none() {
 				state = Some(detected);
 			}
@@ -320,7 +328,20 @@ fn condense_status(input: &str) -> String {
 	}
 }
 fn detect_status_state(line: &str) -> Option<&str> {
-	if line.starts_with("You are currently rebasing") {
+	if line.starts_with("You are currently rebasing")
+		// Interactive-rebase sub-states all print under the same in-progress
+		// rebase header in default long-format `git status`; collapse them to
+		// the single `rebasing` label so an interactive-rebase edit/split is not
+		// mistaken for a clean tree. "You are currently editing a commit"/"…
+		// splitting the commit" are the rebase-edit/-split phase lines, and the
+		// "Last command done"/"Next command to do"/"No commands remaining"
+		// progress lines accompany them.
+		|| line.starts_with("You are currently editing")
+		|| line.starts_with("You are currently splitting")
+		|| line.starts_with("Last command done")
+		|| line.starts_with("Next command to do")
+		|| line.starts_with("No commands remaining")
+	{
 		Some("rebasing")
 	} else if line.starts_with("You are currently cherry-picking") {
 		Some("cherry-pick")
@@ -332,6 +353,11 @@ fn detect_status_state(line: &str) -> Option<&str> {
 		Some("am")
 	} else if line.starts_with("You are in a sparse checkout") {
 		Some("sparse-checkout")
+	} else if line.starts_with("All conflicts fixed but you are still merging") {
+		// Distinct from `merge-conflict`: the merge is staged and ready to
+		// conclude with `git commit`, so surface a separate "ready to commit"
+		// label rather than implying unresolved conflicts.
+		Some("merge (ready to commit)")
 	} else if line == "You have unmerged paths." {
 		Some("merge-conflict")
 	} else {
@@ -2162,6 +2188,39 @@ hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 	}
 
 	#[test]
+	fn status_detects_interactive_rebase_edit() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("status"), "git status", &cfg);
+		// Realistic default long-format body for an interactive-rebase `edit` stop.
+		let input = "On branch feature\n\ninteractive rebase in progress; onto abc1234\nLast \
+		             command done (1 command done):\n   edit abc123 some message\nNo commands \
+		             remaining.\nYou are currently editing a commit while rebasing branch 'feature' \
+		             on 'abc1234'.\n  (use \"git commit --amend\" to amend the current commit)\n  \
+		             (use \"git rebase --continue\" once you are satisfied with your \
+		             changes)\n\nnothing to commit, working tree clean\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		assert!(out.text.starts_with("state: rebasing\n"), "{:?}", out.text);
+		assert!(out.text.contains("branch feature"));
+	}
+
+	#[test]
+	fn status_detects_merge_all_conflicts_fixed() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("status"), "git status", &cfg);
+		// Realistic default long-format body after all merge conflicts are resolved.
+		let input = "On branch main\n\nAll conflicts fixed but you are still merging.\n  (use \"git \
+		             commit\" to conclude merge)\n\nChanges to be committed:\n  modified:   \
+		             src/main.rs\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		assert!(out.text.starts_with("state: merge (ready to commit)\n"), "{:?}", out.text);
+		// Distinct from the unresolved-conflict label.
+		assert!(!out.text.contains("merge-conflict"));
+		assert!(out.text.contains("M src/main.rs"));
+	}
+
+	#[test]
 	fn status_state_not_emitted_when_no_state() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("status"), "git status", &cfg);
@@ -2171,6 +2230,25 @@ hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 		assert!(out.changed);
 		assert!(!out.text.contains("state:"));
 		assert_eq!(out.text, "branch main\nclean\n");
+	}
+
+	#[test]
+	fn status_untracked_file_named_like_rebase_progress_not_misread_as_state() {
+		// A clean tree whose only untracked file is named like a rebase
+		// progress line must NOT be reported as `state: rebasing`, and the
+		// untracked file must still be counted. Regression for the
+		// detect_status_state false positive inside the untracked section.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("status"), "git status", &cfg);
+		let input = "On branch main\nUntracked files:\n  (use \"git add <file>...\" to include in \
+		             what will be committed)\n\tNext command to do.md\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		// Pre-fix this body was reported as `state: rebasing` with the filename
+		// swallowed; the fix keeps state detection out of the untracked section.
+		assert!(!out.text.contains("state:"), "{:?}", out.text);
+		assert!(out.text.contains("untracked 1"), "{:?}", out.text);
+		assert!(out.text.contains("?? Next command to do.md"), "{:?}", out.text);
 	}
 
 	// --- Pull summaries ---
