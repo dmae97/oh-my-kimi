@@ -595,6 +595,71 @@ only_on_exit = [0]
 		assert_ne!(failed.filter, "pipeline+builtin");
 		assert!(failed.text.contains("file changed"));
 	}
+
+	// Regression guards for the builtin npx catch-all def (defs/npx.toml). Its
+	// `match_subcommand` must exclude every subcommand owned/routed elsewhere so
+	// it cannot shadow `nx-wrapped` (standalone path) or overlay the Rust
+	// lint/test filters (overlay path). These tests fail loudly if that
+	// exclusion set ever desyncs from filters::supports's npx routing.
+	#[test]
+	fn npx_def_does_not_shadow_nx_wrapped() {
+		// `npx nx` is NOT routed by filters::supports, so apply_identity falls to
+		// the standalone resolve_pipeline branch. nx-wrapped (nx.toml) must win
+		// and strip the NX banner; the bare npx def must not claim subcommand
+		// `nx`.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "\n >  NX   Running target build for 3 projects\n\n> nx run app:build\nError: \
+		             build failed\n\n >  NX   Ran target build for 3 projects (2s)\n";
+		let out = apply("npx nx build", input, 0, &cfg);
+		assert!(
+			!out.text.contains("NX   Running target"),
+			"npx def shadowed nx-wrapped; NX banner survived: {:?}",
+			out.text
+		);
+		assert!(out.text.contains("Error: build failed"));
+	}
+	#[test]
+	fn npx_def_does_not_overlay_routed_eslint() {
+		// `npx eslint` IS routed by filters::supports, so the Rust lint filter
+		// runs and apply_pipeline_overlay re-selects a matching pipeline. The npx
+		// def must NOT match subcommand `eslint`, so no overlay re-applies its
+		// max_lines/strip on top of the lint diagnostics. Output must equal the
+		// direct `eslint` invocation (same filter label, not "pipeline+builtin").
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let mut input = String::new();
+		for i in 0..120 {
+			input.push_str(&format!("/src/file{i}.ts:{i}:1  error  Something is wrong  rule/name\n"));
+		}
+		let npx = apply("npx eslint src/", &input, 1, &cfg);
+		let direct = apply("eslint src/", &input, 1, &cfg);
+		// Label differs by program token (npx -> "builtin", eslint -> "eslint"),
+		// but it must NOT be the overlay label and the TEXT must be the un-mutated
+		// lint output — same lines, no max_lines truncation.
+		assert_ne!(
+			npx.filter, "pipeline+builtin",
+			"npx def overlaid the routed eslint filter output"
+		);
+		assert_eq!(
+			npx.text, direct.text,
+			"npx eslint output diverged from direct eslint (overlay mutated it)"
+		);
+	}
+	#[test]
+	fn npx_def_fires_for_unknown_tool() {
+		// The def must still strip the install preamble / npm warn/notice noise
+		// for genuinely UNKNOWN tools (its whole purpose). cowsay is not routed
+		// or owned by any other def, so the npx pipeline claims it.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "Need to install the following packages:\ncowsay@1.6.0\nOk to proceed? \
+		             (y)\n\nnpm warn deprecated foo@1.0.0: use bar instead\n< Hello >\n";
+		let out = apply("npx cowsay hello", input, 0, &cfg);
+		assert!(out.changed);
+		assert!(!out.text.contains("Need to install"));
+		assert!(!out.text.contains("Ok to proceed"));
+		assert!(!out.text.contains("npm warn"));
+		assert!(out.text.contains("< Hello >"));
+	}
+
 	#[test]
 	fn enabled_known_filter_minimizes() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
