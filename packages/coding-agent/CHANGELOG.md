@@ -387,6 +387,10 @@
 
 - Fixed ACP `available_commands_update` to include extension-registered slash commands so clients like Zed surface them in the slash-command palette.
 
+### Fixed
+
+- Fixed ACP cancel button leaving the session in a stuck state — a new prompt sent while a turn is still in-flight (e.g. immediately after pressing Stop in Zed before `session/cancel` is processed) now implicitly cancels the running turn and queues the new message, instead of throwing an error that blocks further interaction.
+
 ## [15.10.1] - 2026-06-07
 
 ### Added
