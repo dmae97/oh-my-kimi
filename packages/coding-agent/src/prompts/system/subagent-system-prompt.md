@@ -3,13 +3,6 @@ ROLE
 
 {{agent}}
 
-{{#if context}}
-CONTEXT
-===================================
-
-{{context}}
-{{/if}}
-
 {{#if planReference}}
 PLAN
 ===================================
@@ -30,11 +23,6 @@ You are operating on a piece of work assigned to you by the main agent.
 # Working Tree
 You are working in an isolated working tree at `{{worktree}}` for this sub-task.
 You NEVER modify files outside this tree or in the original repository.
-{{/if}}
-
-{{#if contextFile}}
-# Conversation Context
-If you need additional information, your conversation with the user is in {{contextFile}} — `read` its tail or `search` it for relevant terms.
 {{/if}}
 
 {{#if ircPeers}}

@@ -178,7 +178,7 @@ describe("runEvalAgent", () => {
 		expect(runSpy).not.toHaveBeenCalled();
 	});
 
-	it("passes the parent execution context and only sets outputSchema when schema is supplied", async () => {
+	it("passes parent execution options and only sets outputSchema when schema is supplied", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		const abortController = new AbortController();
@@ -186,7 +186,7 @@ describe("runEvalAgent", () => {
 		const session = makeSession({ depth: 2, activeModel: "p/current", modelString: "p/fallback" });
 
 		await runEvalAgent(
-			{ prompt: " hello ", context: " context ", label: "My Agent", model: "p/override", schema },
+			{ prompt: " hello ", label: "My Agent", model: "p/override", schema },
 			{ session, signal: abortController.signal },
 		);
 		await runEvalAgent({ prompt: "plain" }, { session });
@@ -199,7 +199,6 @@ describe("runEvalAgent", () => {
 		expect(firstOptions.parentActiveModelPattern).toBe("p/current");
 		expect(firstOptions.outputSchema).toBe(schema);
 		expect(firstOptions.assignment).toBe("hello");
-		expect(firstOptions.context).toBe("context");
 		expect(firstOptions.description).toBe("My Agent");
 		expect(firstOptions.modelOverride).toEqual(["p/override"]);
 		expect(secondOptions.outputSchema).toBeUndefined();

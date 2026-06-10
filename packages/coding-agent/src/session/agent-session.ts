@@ -231,10 +231,8 @@ import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
 	type BashExecutionMessage,
-	type CompactionSummaryMessage,
 	type CustomMessage,
 	convertToLlm,
-	type FileMentionMessage,
 	type PythonExecutionMessage,
 	readPendingDisplayTag,
 	SILENT_ABORT_MARKER,
@@ -9958,69 +9956,6 @@ export class AgentSession {
 			thinkingLevel: this.#thinkingLevel,
 			tools: this.agent.state.tools,
 		});
-	}
-
-	/**
-	 * Format the conversation as compact context for subagents.
-	 * Includes only user messages and assistant text responses.
-	 * Excludes: system prompt, tool definitions, tool calls/results, thinking blocks.
-	 */
-	formatCompactContext(): string {
-		const lines: string[] = [];
-		lines.push("# Conversation Context");
-		lines.push("");
-		lines.push(
-			"This is a summary of the parent conversation. Read this if you need additional context about what was discussed or decided.",
-		);
-		lines.push("");
-
-		for (const msg of this.messages) {
-			if (msg.role === "user" || msg.role === "developer") {
-				lines.push(msg.role === "developer" ? "## Developer" : "## User");
-				lines.push("");
-				if (typeof msg.content === "string") {
-					lines.push(msg.content);
-				} else {
-					for (const c of msg.content) {
-						if (c.type === "text") {
-							lines.push(c.text);
-						} else if (c.type === "image") {
-							lines.push("[Image attached]");
-						}
-					}
-				}
-				lines.push("");
-			} else if (msg.role === "assistant") {
-				const assistantMsg = msg as AssistantMessage;
-				// Only include text content, skip tool calls and thinking
-				const textParts: string[] = [];
-				for (const c of assistantMsg.content) {
-					if (c.type === "text" && c.text.trim()) {
-						textParts.push(c.text);
-					}
-				}
-				if (textParts.length > 0) {
-					lines.push("## Assistant");
-					lines.push("");
-					lines.push(textParts.join("\n\n"));
-					lines.push("");
-				}
-			} else if (msg.role === "fileMention") {
-				const fileMsg = msg as FileMentionMessage;
-				const paths = fileMsg.files.map(f => f.path).join(", ");
-				lines.push(`[Files referenced: ${paths}]`);
-				lines.push("");
-			} else if (msg.role === "compactionSummary") {
-				const compactMsg = msg as CompactionSummaryMessage;
-				lines.push("## Earlier Context (Summarized)");
-				lines.push("");
-				lines.push(compactMsg.summary);
-				lines.push("");
-			}
-			// Skip: toolResult, bashExecution, pythonExecution, branchSummary, custom, hookMessage
-		}
-
-		return lines.join("\n").trim();
 	}
 
 	// =========================================================================
