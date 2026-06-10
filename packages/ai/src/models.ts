@@ -10,28 +10,36 @@ import type { Api, KnownProvider, Model, Usage } from "./types";
  *
  * For runtime-aware resolution, use `createModelManager()` / `resolveProviderModels()`.
  */
-const modelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
-for (const [provider, models] of Object.entries(MODELS)) {
-	const providerModels = new Map<string, Model<Api>>();
-	for (const [id, model] of Object.entries(models)) {
-		providerModels.set(id, enrichModelThinking(model as Model<Api>));
+let modelRegistry: Map<string, Map<string, Model<Api>>> | undefined;
+
+/** Build (once) and return the enriched bundled-model registry. Lazy: enrichment of ~12K models is deferred off module load. */
+function getModelRegistry(): Map<string, Map<string, Model<Api>>> {
+	if (modelRegistry === undefined) {
+		modelRegistry = new Map();
+		for (const [provider, models] of Object.entries(MODELS)) {
+			const providerModels = new Map<string, Model<Api>>();
+			for (const [id, model] of Object.entries(models)) {
+				providerModels.set(id, enrichModelThinking(model as Model<Api>));
+			}
+			modelRegistry.set(provider, providerModels);
+		}
 	}
-	modelRegistry.set(provider, providerModels);
+	return modelRegistry;
 }
 
 export type GeneratedProvider = keyof typeof MODELS;
 
 export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider, modelId: string): Model<TApi> {
-	const providerModels = modelRegistry.get(provider);
+	const providerModels = getModelRegistry().get(provider);
 	return providerModels?.get(modelId) as Model<TApi>;
 }
 
 export function getBundledProviders(): KnownProvider[] {
-	return Array.from(modelRegistry.keys()) as KnownProvider[];
+	return Object.keys(MODELS) as KnownProvider[];
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
-	const models = modelRegistry.get(provider);
+	const models = getModelRegistry().get(provider);
 	return models ? (Array.from(models.values()) as Model<Api>[]) : [];
 }
 

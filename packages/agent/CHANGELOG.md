@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Editorial pass over the compaction prompts: fixed garbled grammar and missing articles, RFC-keyed prohibitions, deduped restated instructions; parsed markers (`<read-files>`/`<modified-files>`/`<previous-summary>`) and all output-format headings left byte-identical
+
 ## [15.10.8] - 2026-06-09
 ### Added
 
