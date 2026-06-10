@@ -1,8 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added pre-TUI startup input capture so users could type while interactive sessions initialize and keep their draft while the application loads
+- Added queued submission replay so Enter presses made before startup completion are submitted automatically once interactive mode begins
+
+### Changed
+
+- Changed interactive startup to carry the startup editor state into the live prompt so text entered during splash is preserved in the editor when the TUI takes over
+- Changed model-scope display during startup to appear as an in-UI information notification instead of a direct stdout line
+
 ### Fixed
 
+- Fixed startup Ctrl+C handling in pre-TUI mode so it now clears typed text before exiting on a second press
 - Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
 - Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions
 - Added verification of a `<div id="root"></div>` and `index.js` in smoke-test dashboard responses
