@@ -240,6 +240,10 @@ export class Image implements Component {
 	#cachedLines?: string[];
 	#cachedWidth?: number;
 	#cachedSuppressed = false;
+	// Tallest graphic placement this image has rendered. The text fallback
+	// pads itself to this height so a budget demotion never shrinks the block
+	// (its rows may already be committed to native scrollback).
+	#renderedGraphicRows = 0;
 
 	constructor(
 		base64Data: string,
@@ -309,18 +313,38 @@ export class Image implements Component {
 				const moveUp = result.rows > 1 ? `\x1b[${result.rows - 1}A` : "";
 				lines.push(moveUp + (result.sequence ?? ""));
 			} else {
-				lines = [
-					this.#theme.fallbackColor(imageFallback(this.#mimeType, this.#dimensions, this.#options.filename)),
-				];
+				lines = this.#fallbackLines();
 			}
+			this.#renderedGraphicRows = Math.max(this.#renderedGraphicRows, lines.length);
 		} else {
-			lines = [this.#theme.fallbackColor(imageFallback(this.#mimeType, this.#dimensions, this.#options.filename))];
+			lines = this.#fallbackLines();
 		}
 
 		this.#cachedLines = lines;
 		this.#cachedWidth = width;
 		this.#cachedSuppressed = suppressed;
 
+		return lines;
+	}
+
+	/**
+	 * Text fallback, height-preserving once a graphic has rendered: a demoted
+	 * image must keep occupying the rows its placement used, because those
+	 * rows may already be committed to native scrollback — shrinking the block
+	 * would shift everything below it and force the renderer's commit-resync
+	 * (stale band + recommit). Reserved rows stay non-plain so blank-edge
+	 * trimming cannot collapse the block either.
+	 */
+	#fallbackLines(): string[] {
+		const fallback = this.#theme.fallbackColor(
+			imageFallback(this.#mimeType, this.#dimensions, this.#options.filename),
+		);
+		if (this.#renderedGraphicRows <= 1) return [fallback];
+		const lines: string[] = [];
+		for (let i = 0; i < this.#renderedGraphicRows - 1; i++) {
+			lines.push(RESERVED_IMAGE_ROW);
+		}
+		lines.push(fallback);
 		return lines;
 	}
 }

@@ -454,21 +454,23 @@ function isMethodNotFoundError(err: unknown): boolean {
 }
 
 async function reloadServer(client: LspClient, serverName: string, signal?: AbortSignal): Promise<string> {
-	let output = `Restarted ${serverName}`;
-	const reloadMethods = ["rust-analyzer/reloadWorkspace", "workspace/didChangeConfiguration"];
-	for (const method of reloadMethods) {
-		try {
-			await sendRequest(client, method, method.includes("Configuration") ? { settings: {} } : null, signal);
-			output = `Reloaded ${serverName}`;
-			break;
-		} catch {
-			// Method not supported, try next
-		}
+	// rust-analyzer exposes a real reload request.
+	try {
+		await sendRequest(client, "rust-analyzer/reloadWorkspace", null, signal);
+		return `Reloaded ${serverName}`;
+	} catch {
+		// Method not supported — fall through.
 	}
-	if (output.startsWith("Restarted")) {
+	// workspace/didChangeConfiguration is a notification per spec; sending it
+	// as a request hangs until the tool deadline on servers that route it to
+	// the notification handler and never respond.
+	try {
+		await sendNotification(client, "workspace/didChangeConfiguration", { settings: {} });
+		return `Reloaded ${serverName}`;
+	} catch {
 		client.proc.kill();
+		return `Restarted ${serverName}`;
 	}
-	return output;
 }
 
 interface WaitForDiagnosticsOptions {
@@ -636,12 +638,13 @@ interface GetDiagnosticsForFileOptions {
 async function captureDiagnosticVersions(
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	initTimeoutMs?: number,
 ): Promise<ServerVersionMap> {
 	const versions = new Map<string, number>();
 	await Promise.allSettled(
 		servers.map(async ([serverName, serverConfig]) => {
 			if (serverConfig.createClient) return;
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, initTimeoutMs);
 			versions.set(serverName, client.diagnosticsVersion);
 		}),
 	);
@@ -1118,7 +1121,9 @@ async function runLspWritethrough(
 	const useCustomFormatter = enableFormat && customLinterServers.length > 0;
 
 	// Capture diagnostic versions BEFORE syncing to detect stale diagnostics
-	const minVersions = enableDiagnostics ? await captureDiagnosticVersions(cwd, servers) : undefined;
+	// Bound client creation by the writethrough budget: a hung/broken server
+	// must not add its full init wait (30s default) to every edit.
+	const minVersions = enableDiagnostics ? await captureDiagnosticVersions(cwd, servers, 5_000) : undefined;
 	let expectedDocumentVersions: ServerVersionMap | undefined;
 
 	let formatter: FileFormatResult | undefined;
@@ -2311,11 +2316,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 							break;
 						}
 						const parsedIndex = /^\d+$/.test(normalizedQuery) ? Number.parseInt(normalizedQuery, 10) : null;
-						const selectedAction = result.find(
-							(actionItem, index) =>
-								(parsedIndex !== null && index === parsedIndex) ||
-								actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
-						);
+						const selectedAction =
+							parsedIndex !== null
+								? result[parsedIndex]
+								: result.find(actionItem =>
+										actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
+									);
 
 						if (!selectedAction) {
 							const actionLines = result.map((actionItem, index) => `  ${formatCodeAction(actionItem, index)}`);

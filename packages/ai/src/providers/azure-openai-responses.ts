@@ -28,9 +28,10 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
+import { getOpenAIResponsesCacheSessionId, supportsDeveloperRole } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
@@ -49,7 +50,7 @@ const DEFAULT_AZURE_API_VERSION = "v1";
 const AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"Azure OpenAI responses stream timed out while waiting for the first event";
 
-function parseDeploymentNameMap(value: string | undefined): Map<string, string> {
+export function parseAzureDeploymentNameMap(value: string | undefined): Map<string, string> {
 	const map = new Map<string, string>();
 	if (!value) return map;
 	for (const entry of value.split(",")) {
@@ -66,7 +67,7 @@ function resolveDeploymentName(model: Model<"azure-openai-responses">, options?:
 	if (options?.azureDeploymentName) {
 		return options.azureDeploymentName;
 	}
-	const mappedDeployment = parseDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id);
+	const mappedDeployment = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id);
 	return mappedDeployment ?? model.id;
 }
 
@@ -156,10 +157,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 			let openaiStream: AsyncIterable<ResponseStreamEvent>;
 			try {
-				const requestOptions =
-					requestTimeoutMs === undefined
-						? { signal: requestSignal }
-						: { signal: requestSignal, timeout: requestTimeoutMs };
+				const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
 				openaiStream = await client.responses.create(params, requestOptions);
 			} catch (error) {
 				if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
@@ -306,7 +304,10 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+		prompt_cache_key: getOpenAIResponsesCacheSessionId(options),
+		// Encrypted reasoning replay (applyResponsesReasoningParams) requires
+		// stateless responses, matching the openai provider.
+		store: false,
 	};
 
 	applyCommonResponsesSamplingParams(params, options, model);
@@ -332,6 +333,7 @@ function convertMessages(
 	const messages: ResponseInput = [];
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
 	const knownCallIds = new Set<string>();
+	const customCallIds = new Set<string>();
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	if (systemPrompts.length > 0) {
@@ -351,11 +353,18 @@ function convertMessages(
 				content: msg.role === "developer" && typeof msg.content === "string" ? msg.content.toWellFormed() : content,
 			});
 		} else if (msg.role === "assistant") {
-			const outputItems = convertResponsesAssistantMessage(msg as AssistantMessage, model, msgIndex, knownCallIds);
+			const outputItems = convertResponsesAssistantMessage(
+				msg as AssistantMessage,
+				model,
+				msgIndex,
+				knownCallIds,
+				true,
+				customCallIds,
+			);
 			if (outputItems.length === 0) continue;
 			messages.push(...outputItems);
 		} else if (msg.role === "toolResult") {
-			appendResponsesToolResultMessages(messages, msg, model, strictResponsesPairing, knownCallIds);
+			appendResponsesToolResultMessages(messages, msg, model, strictResponsesPairing, knownCallIds, customCallIds);
 		}
 		msgIndex++;
 	}

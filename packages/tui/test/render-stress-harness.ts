@@ -3,11 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
-import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	type Component,
 	CURSOR_MARKER,
 	type Focusable,
+	findCommittedPrefixResync,
 	type OverlayAnchor,
 	type OverlayHandle,
 	type OverlayOptions,
@@ -262,15 +262,12 @@ export interface Scenario {
 	strictScrollback: boolean;
 	timeoutMs: number;
 	uniqueContent: boolean;
-	// Models a foreground tool actively streaming output: the agent sets
-	// `setEagerNativeScrollbackRebuild(true)` for the whole turn and re-renders
-	// content frames with a plain (non-forced) `requestRender()`. On an ED3-risk
-	// terminal (ghostty/kitty/…) the eager opt-in is gated off by
-	// `eagerEraseScrollbackRisk`, so `allowUnknownViewportMutation` stays false and
-	// offscreen-edit growth flows through `viewportRepaint` (which advances the
-	// rendered line count without committing the overflow to native history).
-	// The default content-frame path instead forces `allowUnknownViewportMutation`
-	// and never exercises that lagging-high-water state.
+	// Models a foreground tool actively streaming output: content frames are
+	// re-rendered with a plain (non-forced) `requestRender()`, so offscreen-edit
+	// growth flows through `viewportRepaint` (which advances the rendered line
+	// count without committing the overflow to native history). The default
+	// content-frame path instead forces a render and never exercises that
+	// lagging-high-water state.
 	foregroundStream: boolean;
 	// Renders each logical line wrapped to the viewport width, so a width resize
 	// changes the physical line COUNT (reflow), not just per-row truncation —
@@ -307,6 +304,7 @@ interface Snapshot {
 	height: number;
 	frame: string[];
 	atBottom: boolean;
+	shadowTapeLength: number;
 }
 
 interface AppliedOperation {
@@ -327,8 +325,8 @@ interface AppliedOperation {
 	// them. Defaults to the net frame growth when absent.
 	transientFrameGrowth?: number;
 	// The periodic prompt-submit checkpoint pins the viewport to the bottom and
-	// attempts the real reconciliation (`refreshNativeScrollbackIfDirty` outside
-	// `normal`, a `/clear`-style forced rebuild for `normal`). Native scrollback
+	// runs the prompt-submit reconciliation (a `/clear`-style forced rebuild for
+	// `normal`; other hosts get a plain forced render). Native scrollback
 	// must equal the transcript only when that reconciliation actually ran:
 	// ConPTY/Windows and other unobservable host-scrollback paths deliberately
 	// keep dirty history deferred until the renderer gets a positive at-tail probe.
@@ -1123,7 +1121,28 @@ class StressDriver {
 	// the duplicate oracle must allow them cumulatively, not just against the
 	// current frame.
 	#everDuplicatedFrameLines = new Set<string>();
-	#nativeScrollbackAuditBlocked = false;
+	// Shadow commit ledger mirroring the engine's append-only law, fed only by
+	// observed frames (render wrap) and observed bytes (write wrap) — never by
+	// engine internals. `#shadowTape` is what native scrollback must contain;
+	// `#shadowWindowTop` is the frame row mapped to grid row 0. Double-entry
+	// bookkeeping for committedRows/windowTop: the engine and this ledger must
+	// independently arrive at the same terminal state.
+	#shadowTape: string[] = [];
+	#shadowCommitted = 0;
+	// Raw-row mirror of the engine's committed prefix. The resync audit must
+	// run on the same inputs as the engine (raw rows, not normalized ones), or
+	// width-truncation collisions would let the two ledgers disagree about
+	// whether a divergence happened.
+	#shadowRawFrame: string[] = [];
+	#shadowRawPrefix: string[] = [];
+	#shadowWindowTop = 0;
+	#shadowFrame: string[] = [];
+	#shadowFrameHeight = 0;
+	#shadowFrameWidth = 0;
+	#shadowFrameOverlay = false;
+	#shadowFrameGeometryChanged = false;
+	#shadowResizePending = false;
+	#shadowAltActive = false;
 	// Every byte the renderer wrote to the terminal, in order. The sync-output
 	// discipline oracle audits bracket balance incrementally from #writeLogScanned
 	// and carries partial private CSI sequences across write chunks.
@@ -1160,23 +1179,60 @@ class StressDriver {
 		(this.#term as { write: (data: string) => void }).write = (data: string) => {
 			this.#writeLog.push(data);
 			realWrite(data);
+			this.#applyShadowWrite(data);
+		};
+		// Mirror the engine's resize-event signal: a net-unchanged resize still
+		// reflows the terminal, and the engine classifies it as a geometry frame
+		// (audit skipped, commits frozen in multiplexers) — a dimension compare
+		// alone cannot see it.
+		const realResize = this.#term.resize.bind(this.#term);
+		(this.#term as { resize: (columns: number, rows: number) => void }).resize = (columns: number, rows: number) => {
+			this.#shadowResizePending = true;
+			realResize(columns, rows);
 		};
 		this.#tui = new TUI(this.#term, true, { renderScheduler: this.#scheduler });
 		this.#tui.addChild(this.#component);
+		const realRender = this.#tui.render.bind(this.#tui);
+		(this.#tui as { render: (width: number) => string[] }).render = (width: number) => {
+			const lines = realRender(width);
+			this.#shadowFrameGeometryChanged =
+				this.#shadowResizePending ||
+				(this.#shadowFrameWidth > 0 &&
+					(width !== this.#shadowFrameWidth || this.#term.rows !== this.#shadowFrameHeight));
+			this.#shadowResizePending = false;
+			// Markers are engine-internal sentinels; the engine strips them from
+			// this same array immediately after render returns, and its commit
+			// ledger (prefix + audit) only ever sees stripped rows — mirror that
+			// exactly. (Also: stripVTControlCharacters would otherwise swallow
+			// everything after an APC introducer during normalization.)
+			const stripped = lines.map(line => (line.includes(CURSOR_MARKER) ? line.replaceAll(CURSOR_MARKER, "") : line));
+			this.#shadowRawFrame = stripped;
+			this.#shadowFrame = stripped.map(line => expectedTerminalLine(line, width));
+			this.#shadowFrameWidth = width;
+			this.#shadowFrameHeight = this.#term.rows;
+			this.#shadowFrameOverlay = this.#tui.hasOverlay();
+			// Mirror the engine's render-time ledger transitions here: the audit
+			// resync and the shrink-into-prefix re-anchor can both fire on frames
+			// that emit zero bytes, which the write hook would never observe.
+			if (!this.#shadowFrameGeometryChanged && this.#shadowRawPrefix.length > 0) {
+				const resyncTo = findCommittedPrefixResync(stripped, this.#shadowRawPrefix);
+				if (resyncTo >= 0) {
+					this.#shadowCommitted = resyncTo;
+					this.#shadowRawPrefix.length = resyncTo;
+				}
+			}
+			if (stripped.length <= this.#shadowCommitted) {
+				this.#shadowCommitted = Math.max(0, stripped.length - Math.max(1, this.#term.rows));
+				this.#shadowWindowTop = this.#shadowCommitted;
+				this.#shadowRawPrefix = stripped.slice(0, this.#shadowCommitted);
+			}
+			return lines;
+		};
 	}
 
 	async run(): Promise<void> {
-		// Foreground-tool streaming faithfully: pin the ED3-risk trait (independent
-		// of whatever real terminal hosts the worker) and keep the turn-long eager
-		// rebuild opt-in enabled. On an ED3-risk terminal that opt-in is gated off,
-		// so content frames flow through `viewportRepaint`/`diff` rather than a
-		// forced history rebuild — see `#renderContentFrame`.
-		const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
-		const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
-		if (this.#traits.foregroundStreaming) terminalInfo.eagerEraseScrollbackRisk = this.#traits.ed3ScrollbackEraseRisk;
 		try {
 			this.#tui.start();
-			if (this.#traits.foregroundStreaming) this.#tui.setEagerNativeScrollbackRebuild(true);
 			await this.#settle();
 			this.#assertOracles(
 				{
@@ -1209,7 +1265,6 @@ class StressDriver {
 		} finally {
 			this.#tui.stop();
 			await this.#term.flush();
-			terminalInfo.eagerEraseScrollbackRisk = savedRisk;
 		}
 	}
 
@@ -1238,6 +1293,7 @@ class StressDriver {
 			height: this.#term.rows,
 			frame: expected.frame,
 			atBottom: position.viewportY >= position.baseY,
+			shadowTapeLength: this.#shadowTape.length,
 		};
 	}
 
@@ -1475,43 +1531,30 @@ class StressDriver {
 	}
 
 	async #eagerStreamingMutation(): Promise<AppliedOperation> {
-		this.#tui.setEagerNativeScrollbackRebuild(true);
-		let detail: JsonObject = {};
-		try {
-			detail = this.#streams.content.chance(0.5)
-				? this.#model.streamOne()
-				: this.#model.editOffscreenLine(this.#term.rows);
-			this.#renderContentFrame();
-			await this.#settle();
-		} finally {
-			this.#tui.setEagerNativeScrollbackRebuild(false);
-		}
+		const detail: JsonObject = this.#streams.content.chance(0.5)
+			? this.#model.streamOne()
+			: this.#model.editOffscreenLine(this.#term.rows);
+		this.#renderContentFrame();
+		await this.#settle();
 		return contentOperation("eagerStreamingMutation", detail, false);
 	}
 
 	#renderContentFrame(): void {
 		if (this.#traits.foregroundStreaming) {
-			// A foreground tool's own re-render: a plain, non-forced request with the
-			// turn-long eager opt-in already enabled. We deliberately do NOT pass
-			// `allowUnknownViewportMutation` — on an ED3-risk terminal the eager
-			// opt-in is gated off, so the renderer keeps the live tail through
-			// `viewportRepaint`/`diff`. Offscreen-edit growth then flows through
-			// `viewportRepaint`, advancing the rendered line count without committing
-			// the overflow to native history, which is the lagging-high-water state a
-			// later shrink must still re-anchor from.
-			this.#tui.requestRender(false);
+			// A foreground tool's own re-render: a plain, non-forced request. The
+			// renderer keeps the live tail through `viewportRepaint`/`diff`;
+			// offscreen-edit growth advances the rendered line count without
+			// committing the overflow to native history, which is the lagging
+			// high-water state a later shrink must still re-anchor from.
+			this.#tui.requestRender();
 			return;
 		}
 		const position = this.#term.getBufferPosition();
 		const atBottom = position.viewportY >= position.baseY;
 		if (!this.#traits.strictNativeScrollback && atBottom) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		} else {
-			const allowUnknownViewportMutation = this.#traits.viewportProbe === "unknown" && atBottom;
-			this.#tui.requestRender(
-				false,
-				allowUnknownViewportMutation ? { allowUnknownViewportMutation: true } : undefined,
-			);
+			this.#tui.requestRender();
 		}
 	}
 
@@ -1617,8 +1660,8 @@ class StressDriver {
 				this.#term.scrollLines(LARGE_SCROLL);
 				return { amount: LARGE_SCROLL };
 			case "forceRender":
-				this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
-				return { allowUnknownViewportMutation: true };
+				this.#tui.requestRender(true);
+				return {};
 			default:
 				return assertNever(kind);
 		}
@@ -1632,7 +1675,7 @@ class StressDriver {
 			? this.#model.setCursorOffscreen(this.#term.rows, this.#term.columns)
 			: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
 		this.#tui.setFocus(this.#component);
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return this.#viewOperation(kind, { cursor });
 	}
@@ -1692,7 +1735,7 @@ class StressDriver {
 		const entry = this.#pickOverlay();
 		if (entry === undefined) return this.#viewOperation("editOverlay", { skipped: true });
 		const detail = entry.model.mutate(this.#term.columns);
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return this.#viewOperation("editOverlay", { id: entry.id, detail });
 	}
@@ -1702,7 +1745,7 @@ class StressDriver {
 		if (entry === undefined) return this.#viewOperation("moveOverlayCursor", { skipped: true });
 		const cursor = entry.model.setCursor(this.#term.columns);
 		this.#tui.setFocus(entry.component);
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return this.#viewOperation("moveOverlayCursor", { id: entry.id, cursor });
 	}
@@ -1780,9 +1823,9 @@ class StressDriver {
 		this.#term.resize(columns, rows);
 		// foregroundStream models a live tool turn: let the terminal's own resize
 		// callback drive the (non-forced, gated) repaint the real app relies on,
-		// rather than forcing an allowUnknown rebuild the streaming path never uses.
+		// rather than forcing a full rebuild the streaming path never uses.
 		if (!this.#traits.strictNativeScrollback && !this.#traits.foregroundStreaming) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		return viewOperation("resizeBoth", { columns, rows }, { geometryChanged: true, mutatesViewport: true });
@@ -1803,10 +1846,7 @@ class StressDriver {
 
 	async #scrollToBottom(): Promise<AppliedOperation> {
 		this.#term.scrollLines(LARGE_SCROLL);
-		this.#tui.requestRender(true, {
-			allowUnknownViewportMutation: true,
-			clearScrollback: this.#traits.strictNativeScrollback,
-		});
+		this.#tui.requestRender(true, { clearScrollback: this.#traits.strictNativeScrollback });
 		await this.#settle();
 		return forceRenderOperation(
 			"scrollToBottom",
@@ -1826,7 +1866,7 @@ class StressDriver {
 		const columns = this.#pickDifferent(this.#scenario.widthChoices, this.#term.columns);
 		this.#term.resize(columns, this.#term.rows);
 		if (!this.#traits.strictNativeScrollback && !this.#traits.foregroundStreaming) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		return viewOperation("resizeWidth", { columns }, { geometryChanged: true, mutatesViewport: true });
@@ -1836,7 +1876,7 @@ class StressDriver {
 		const rows = this.#pickDifferent(this.#scenario.heightChoices, this.#term.rows);
 		this.#term.resize(this.#term.columns, rows);
 		if (!this.#traits.strictNativeScrollback && !this.#traits.foregroundStreaming) {
-			this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		return viewOperation("resizeHeight", { rows }, { geometryChanged: true, mutatesViewport: true });
@@ -1868,14 +1908,14 @@ class StressDriver {
 	}
 
 	async #forceRenderAllowUnknown(): Promise<AppliedOperation> {
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender(true);
 		await this.#settle();
-		return this.#forceOperation("forceRenderAllowUnknown", { allowUnknownViewportMutation: true });
+		return this.#forceOperation("forceRenderAllowUnknown", {});
 	}
 
 	async #forceRenderClearScrollback(): Promise<AppliedOperation> {
 		this.#term.scrollLines(LARGE_SCROLL);
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
+		this.#tui.requestRender(true, { clearScrollback: true });
 		await this.#settle();
 		return { ...this.#forceOperation("forceRenderClearScrollback", { clearScrollback: true }), checkpoint: true };
 	}
@@ -1889,7 +1929,7 @@ class StressDriver {
 			this.#tui.removeChild(child.component);
 		}
 		const empty = this.#model.clear();
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true, clearScrollback: true });
+		this.#tui.requestRender(true, { clearScrollback: true });
 		await this.#settle();
 		// The clear's own replay frame can itself overflow the viewport (status
 		// header + residual rows), so the transient bound must cover everything
@@ -1897,7 +1937,7 @@ class StressDriver {
 		const clearedFrameLength = this.#expectedFrame().frame.length;
 		const overflowCount = this.#term.rows + this.#streams.geometry.int(1, 4);
 		const overflow = this.#model.appendCount(overflowCount, "overflow");
-		this.#tui.requestRender(true, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender(true);
 		await this.#settle();
 		return {
 			...this.#forceOperation("forceRenderAfterEmptyOverflow", { detachedChildren, empty, overflow }),
@@ -1924,7 +1964,7 @@ class StressDriver {
 				: this.#model.setCursorVisible(this.#term.rows, this.#term.columns);
 			this.#tui.setFocus(this.#component);
 		}
-		this.#tui.requestRender(false, { allowUnknownViewportMutation: true });
+		this.#tui.requestRender();
 		await this.#settle();
 		return viewOperation("toggleFocusInput", { focused: this.#component.focused, cursor });
 	}
@@ -2014,16 +2054,15 @@ class StressDriver {
 			// Normal POSIX uses a /clear-style forced rebuild; tmux keeps its forced
 			// repaint (its pane history cannot be destructively reconciled).
 			this.#tui.requestRender(true, {
-				allowUnknownViewportMutation: true,
 				clearScrollback: this.#traits.strictNativeScrollback,
 			});
 			reconcilesNativeScrollback = this.#traits.strictNativeScrollback;
 		} else {
-			// Unknown-viewport / ED3-risk / Windows hosts take the real prompt-submit
-			// path. `refreshNativeScrollbackIfDirty` returns false for permanently
-			// unobservable hosts such as ConPTY, where a submit key is not proof that
-			// hidden host scrollback is at the tail and ED3 would still yank readers.
-			reconcilesNativeScrollback = this.#tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
+			// Unknown-viewport / ED3-risk / Windows hosts: the deferred
+			// native-scrollback reconciliation no longer exists, so a prompt submit
+			// is a plain forced render that never destructively rewrites native
+			// scrollback.
+			this.#tui.requestRender(true);
 		}
 		await this.#settle();
 		const after = this.#snapshot();
@@ -2072,13 +2111,12 @@ class StressDriver {
 	}
 	#assertOracles(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		this.#assertSyncOutputDiscipline(op, before, after, index);
+		this.#assertTapeScrollParity(op, before, after, index);
 		this.#assertViewportFidelity(op, before, after, index);
 		this.#assertCleanBufferWhenAligned(op, before, after, index);
 		this.#assertNoFrameNeutralScrollbackGrowth(op, before, after, index);
 		this.#assertCursor(op, before, after, index);
 		this.#assertScrolledDeferral(op, before, after, index);
-		this.#assertRowAccounting(op, before, after, index);
-		this.#assertScrollbackGrowthMatchesFrameGrowth(op, before, after, index);
 		this.#assertMultiplexerPaneHistoryGrowth(op, before, after, index);
 		this.#assertHistoryPrefixStability(op, before, after, index);
 		this.#assertNativeScrollbackReplay(op, before, after, index);
@@ -2098,6 +2136,26 @@ class StressDriver {
 			(this.#traits.strictNativeScrollback || op.reconcilesNativeScrollback === true)
 		) {
 			this.#assertCleanBuffer(op, before, after, index);
+		}
+	}
+
+	// The shadow tape and the physical buffer must scroll in lockstep: outside
+	// gesture replays (checkpoints, geometry) the only thing that ever pushes
+	// rows into native scrollback is a commit, and every commit appends to the
+	// tape in the same write. Any disagreement means the ledgers diverged —
+	// catch it at the op where it happens instead of N ops later when the
+	// content mismatch surfaces.
+	#assertTapeScrollParity(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
+		if (!this.#traits.strictNativeScrollback) return;
+		if (op.checkpoint || op.geometryChanged) return;
+		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
+		const physicalDelta = after.position.baseY - before.position.baseY;
+		const tapeDelta = after.shadowTapeLength - before.shadowTapeLength;
+		if (physicalDelta !== tapeDelta) {
+			this.#fail("tape/physical scroll parity", op, before, after, index, {
+				physicalDelta,
+				tapeDelta,
+			});
 		}
 	}
 
@@ -2248,45 +2306,26 @@ class StressDriver {
 	#assertViewportFidelity(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (this.#hasVisibleOverlay()) return;
 		if (!after.atBottom) return;
-		// Multiplexer mode: the buffer snapshot is just the view, so the
-		// buffer-length alignment precondition below can never hold once the frame
-		// overflows. Check fidelity on geometry-changed frames instead — tmux
-		// reflows the pane grid on resize, and the renderer must repaint the whole
-		// visible window at the new geometry (any output anchored to pre-reflow
-		// rows splices phantom rows into the pane). Geometry repaints write every
-		// row, so ghost trailing blanks cannot occur and the comparison is exact.
-		if (this.#traits.preservesPaneHistory) {
-			if (!op.geometryChanged) return;
-			const expectedAfterResize = expectedViewport(after.frame, after.height);
-			if (!sameLines(after.view, expectedAfterResize)) {
-				this.#fail("viewport fidelity", op, before, after, index, { expected: expectedAfterResize });
-			}
-			return;
+		// The grid must show the shadow window slice: the frame tail anchored at
+		// the ledger's window top (which floors at the committed boundary after
+		// a shrink, leaving blank rows below the content instead of re-showing
+		// committed rows). Multiplexer mode only checks geometry frames — tmux
+		// reflows the pane grid on resize and the renderer must repaint the
+		// whole visible window at the new geometry.
+		if (this.#traits.preservesPaneHistory && !op.geometryChanged) return;
+		const expected: string[] = [];
+		for (let r = 0; r < after.height; r++) {
+			expected.push(after.frame[this.#shadowWindowTop + r] ?? "");
 		}
-		// Foreground-tool streaming never legitimately defers: the eager opt-in keeps
-		// the live tail current every frame (a shrink repaints in place rather than
-		// padding and pinning the pre-shrink viewport), so the visible window must be
-		// exactly bottom-anchored even when stale rows still sit in native scrollback
-		// (those reconcile at the next checkpoint). Asserting the visible rows
-		// directly — without the ghost-row buffer-length bail below — is what catches
-		// the "injected chip rendered over the tool render" drift head-on instead of
-		// skipping the frame because the drift left a length mismatch.
-		if (this.#traits.foregroundStreaming) {
-			const expected = expectedViewport(after.frame, after.height);
-			if (!sameLines(after.view, expected)) {
-				this.#fail("foreground-stream viewport fidelity", op, before, after, index, { expected });
-			}
-			return;
-		}
-		// Strict bottom-anchoring only holds when the buffer carries no ghost/stale
-		// extra rows. A trailing shrink clears the bottom row in place (it cannot pull
-		// a scrollback line down without a disruptive full repaint), leaving the
-		// content top-aligned with a ghost blank below — buffer.length then exceeds
-		// the clean expectation until the next forced repaint/checkpoint re-anchors it.
-		if (after.buffer.length !== this.#expectedScrollbackBuffer(after).length) return;
-		const expected = expectedViewport(after.frame, after.height);
-		if (!sameLines(after.view, expected)) {
-			this.#fail("viewport fidelity", op, before, after, index, { expected });
+		if (!sameLinesAllowingMarkDrift(after.view, expected)) {
+			this.#fail(
+				this.#traits.foregroundStreaming ? "foreground-stream viewport fidelity" : "viewport fidelity",
+				op,
+				before,
+				after,
+				index,
+				{ expected, shadowWindowTop: this.#shadowWindowTop },
+			);
 		}
 	}
 
@@ -2296,10 +2335,14 @@ class StressDriver {
 		if (!this.#bufferReflectsFrame(before.buffer, before.frame, before.height)) return;
 		const expected = this.#expectedScrollbackBuffer(after);
 		if (after.buffer.length !== expected.length) return;
-		if (!sameLines(after.buffer, expected)) {
+		if (!sameLinesAllowingMarkDrift(after.buffer, expected)) {
+			const mismatch = firstMismatchIndex(after.buffer, expected);
 			this.#fail("aligned buffer fidelity", op, before, after, index, {
 				expectedLength: expected.length,
 				actualLength: after.buffer.length,
+				firstMismatch: mismatch,
+				expectedWindow: windowAround(expected, mismatch),
+				actualWindow: windowAround(after.buffer, mismatch),
 			});
 		}
 	}
@@ -2328,7 +2371,7 @@ class StressDriver {
 		// Exact cursor parking is only predictable when the buffer is bottom-anchored
 		// (no ghost/stale rows). After a trailing shrink the cursor sits on the
 		// de-anchored last content row, which is checked once a repaint re-anchors.
-		if (after.buffer.length !== this.#expectedScrollbackBuffer(after).length) return;
+		if (!this.#isCleanBuffer(after.buffer, after.frame, after.height)) return;
 		if (after.cursor.row !== expectedCursor.row) {
 			this.#fail("focused cursor row", op, before, after, index, {
 				expectedRow: expectedCursor.row,
@@ -2383,77 +2426,19 @@ class StressDriver {
 		}
 	}
 
-	#assertRowAccounting(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
-		if (!this.#traits.strictNativeScrollback || this.#hasVisibleOverlay()) return;
-		if (!op.mutatesContent || !op.checksRowAccounting || op.geometryChanged || op.forcedRender) return;
-		if (!before.atBottom || !after.atBottom) return;
-		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
-		if (before.redraws !== after.redraws) return;
-		// Row accounting is only meaningful once content overflows the viewport. While
-		// content fits within `height`, xterm pins buffer.length at `height`, so a
-		// content row added inside the viewport grows the buffer by 0 — `ΔB == ΔF`
-		// does not apply until rows are actually being pushed into scrollback.
-		if (before.frame.length < before.height) return;
-		const deltaFrame = after.frame.length - before.frame.length;
-		if (deltaFrame < 0) return;
-		const deltaBuffer = after.buffer.length - before.buffer.length;
-		const incremental = deltaBuffer === deltaFrame;
-		const clean = this.#isCleanBuffer(after.buffer, after.frame, after.height);
-		if (!incremental && !clean) {
-			this.#fail("buffer row accounting", op, before, after, index, {
-				deltaFrame,
-				deltaBuffer,
-				clean,
-				expected: "deltaBuffer === deltaFrame OR clean full reconstruction",
-			});
-		}
-	}
-
-	#assertScrollbackGrowthMatchesFrameGrowth(
-		op: AppliedOperation,
-		before: Snapshot,
-		after: Snapshot,
-		index: number,
-	): void {
-		if (!this.#traits.strictNativeScrollback || this.#hasVisibleOverlay()) return;
-		if (op.checkpoint || op.geometryChanged) return;
-		if (!before.atBottom || !after.atBottom) return;
-		const deltaBuffer = after.buffer.length - before.buffer.length;
-		if (this.#scrollbackCapReached(before) || this.#scrollbackCapReached(after)) return;
-		if (deltaBuffer <= 0) return;
-		const clean = this.#isCleanBuffer(after.buffer, after.frame, after.height);
-		if (clean) return;
-		const deltaFrame = Math.max(0, after.frame.length - before.frame.length);
-		if (deltaBuffer > deltaFrame) {
-			this.#fail("scrollback grew faster than frame", op, before, after, index, {
-				deltaFrame,
-				deltaBuffer,
-				expected: "dirty live scrollback growth must not exceed logical frame growth",
-			});
-		}
-		const expectedTail = after.frame.slice(after.frame.length - deltaBuffer);
-		const actualTail = after.buffer.slice(after.buffer.length - deltaBuffer);
-		if (!sameLines(actualTail, expectedTail)) {
-			this.#fail("scrollback growth tail mismatch", op, before, after, index, {
-				deltaBuffer,
-				expectedTail,
-				actualTail,
-			});
-		}
-	}
-
 	// Multiplexer panes never receive a destructive scrollback clear (the
 	// renderer forces clearScrollback off inside tmux/screen/zellij because pane
 	// history is intentionally preserved), so any full-frame replay during live
 	// rendering appends a complete duplicate copy of the transcript to pane
 	// history. Users see every transcript row twice (or more) when scrolling
-	// back, and the per-frame write cost becomes O(frame). Bound live-frame pane
-	// history growth by the rows the frame actually appended; only explicit
-	// checkpoints may replay the transcript wholesale. Geometry-changed frames
-	// are exempt except for pure height resizes, where xterm/tmux reflow is
+	// back, and the per-frame write cost becomes O(frame). Pane history may grow
+	// exactly by the rows the shadow ledger committed during the op (appends,
+	// plus backfill of a chunk frozen during an overlay or geometry frame);
+	// anything beyond that is a replay leaking into preserved history. Geometry
+	// frames are exempt except pure height resizes, where xterm/tmux reflow is
 	// bounded: a height shrink moves at most (oldHeight - newHeight) rows into
-	// pane history and a height grow moves rows back out — width changes rewrap
-	// pane history with unbounded row deltas and cannot be bounded from here.
+	// pane history — width changes rewrap pane history with unbounded row
+	// deltas and cannot be bounded from here.
 	#assertMultiplexerPaneHistoryGrowth(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (!this.#traits.preservesPaneHistory) return;
 		if (op.checkpoint) return;
@@ -2462,19 +2447,13 @@ class StressDriver {
 		const reflowAllowance = heightOnlyResize ? Math.max(0, before.height - after.height) : 0;
 		const deltaBaseY = after.position.baseY - before.position.baseY;
 		if (deltaBaseY <= 0) return;
-		// Rows appended at any point during the op (including transient preview
-		// expansions that later collapsed) legitimately scroll into pane history
-		// — terminal scrolling is how appends work, and pane history can never be
-		// retracted. The invariant targets full-frame replays, which grow history
-		// by ~frame.length instead of by the number of appended rows.
-		const allowedGrowth =
-			Math.max(Math.max(0, after.frame.length - before.frame.length), op.transientFrameGrowth ?? 0) +
-			reflowAllowance;
+		const committedDelta = Math.max(0, after.shadowTapeLength - before.shadowTapeLength);
+		const allowedGrowth = committedDelta + reflowAllowance;
 		if (deltaBaseY > allowedGrowth) {
-			this.#fail("multiplexer pane history grew faster than frame", op, before, after, index, {
+			this.#fail("multiplexer pane history grew faster than committed rows", op, before, after, index, {
 				deltaBaseY,
 				allowedGrowth,
-				transientFrameGrowth: op.transientFrameGrowth ?? null,
+				committedDelta,
 				expected: "live frames must not replay the transcript into preserved pane history",
 			});
 		}
@@ -2498,16 +2477,11 @@ class StressDriver {
 
 	#assertNativeScrollbackReplay(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (!this.#traits.strictNativeScrollback) return;
-		if (op.geometryChanged) {
-			this.#nativeScrollbackAuditBlocked = true;
-			return;
-		}
 		if (this.#hasVisibleOverlay()) return;
-		if (this.#nativeScrollbackAuditBlocked && !op.checkpoint) return;
 		if (!after.atBottom) return;
-		if (!op.mutatesContent && !op.forcedRender && !op.checkpoint) return;
+		if (!op.mutatesContent && !op.forcedRender && !op.checkpoint && !op.geometryChanged) return;
 		const expected = this.#expectedScrollbackBuffer(after);
-		if (!sameLines(after.buffer, expected)) {
+		if (!sameLinesAllowingMarkDrift(after.buffer, expected)) {
 			const mismatch = firstMismatchIndex(after.buffer, expected);
 			this.#fail("native scrollback buffer fidelity", op, before, after, index, {
 				expectedLength: expected.length,
@@ -2517,7 +2491,6 @@ class StressDriver {
 				actualWindow: windowAround(after.buffer, mismatch),
 			});
 		}
-		this.#nativeScrollbackAuditBlocked = false;
 
 		const probes = scrollbackProbePositions(after.position.baseY, expected.length, after.height);
 		try {
@@ -2526,7 +2499,7 @@ class StressDriver {
 				this.#term.scrollLines(viewportY - current);
 				const actual = normalizeLines(this.#term.getViewport());
 				const expectedView = fixedViewportSlice(expected, viewportY, after.height);
-				if (!sameLines(actual, expectedView)) {
+				if (!sameLinesAllowingMarkDrift(actual, expectedView)) {
 					this.#fail("native scrollback viewport fidelity", op, before, after, index, {
 						viewportY,
 						expected: expectedView,
@@ -2542,7 +2515,7 @@ class StressDriver {
 	#assertCleanBuffer(op: AppliedOperation, before: Snapshot, after: Snapshot, index: number): void {
 		if (this.#hasVisibleOverlay()) return;
 		const expected = this.#expectedScrollbackBuffer(after);
-		if (!sameLines(after.buffer, expected)) {
+		if (!sameLinesAllowingMarkDrift(after.buffer, expected)) {
 			this.#fail("clean checkpoint reconstruction", op, before, after, index, {
 				expectedLength: expected.length,
 				actualLength: after.buffer.length,
@@ -2551,7 +2524,67 @@ class StressDriver {
 	}
 
 	#expectedScrollbackBuffer(snapshot: Snapshot): string[] {
-		return expectedScrollbackBuffer(snapshot.frame, snapshot.height, this.#scenario.scrollback);
+		const height = snapshot.height;
+		const expected = [...this.#shadowTape];
+		for (let r = 0; r < height; r++) {
+			expected.push(this.#shadowFrame[this.#shadowWindowTop + r] ?? "");
+		}
+		const cap = height + this.#scenario.scrollback;
+		return expected.length > cap ? expected.slice(expected.length - cap) : expected;
+	}
+
+	/**
+	 * Advance the shadow commit ledger for one observed write. Classification
+	 * is byte-driven: ED3 = destructive replay, ED2-without-ED3 =
+	 * non-destructive replay (initial paint / multiplexer replace), anything
+	 * else = ordinary update following the engine's append-only law.
+	 */
+	#applyShadowWrite(data: string): void {
+		if (data.includes("\x1b[?1049h")) this.#shadowAltActive = true;
+		if (data.includes("\x1b[?1049l")) {
+			this.#shadowAltActive = false;
+			return;
+		}
+		if (this.#shadowAltActive) return;
+		const frame = this.#shadowFrame;
+		const raw = this.#shadowRawFrame;
+		const height = Math.max(1, this.#shadowFrameHeight);
+		const length = frame.length;
+		if (data.includes("\x1b[3J")) {
+			this.#shadowCommitted = Math.max(0, length - height);
+			this.#shadowWindowTop = this.#shadowCommitted;
+			this.#shadowTape = frame.slice(0, this.#shadowCommitted);
+			this.#shadowRawPrefix = raw.slice(0, this.#shadowCommitted);
+			return;
+		}
+		if (data.includes("\x1b[2J")) {
+			// Grid cleared in place, committed prefix scrolls above it; prior
+			// history rows stay (and are erased only by the ED3 branch above).
+			const chunkTo = Math.max(0, length - height);
+			for (let i = 0; i < chunkTo; i++) this.#shadowTape.push(frame[i] ?? "");
+			this.#shadowCommitted = chunkTo;
+			this.#shadowWindowTop = chunkTo;
+			this.#shadowRawPrefix = raw.slice(0, chunkTo);
+			return;
+		}
+		// Audit and shrink re-anchoring are mirrored at render time (they can
+		// fire on zero-byte frames); the write hook only applies commits.
+		const windowTop = Math.max(this.#shadowCommitted, length - height, 0);
+		this.#shadowWindowTop = windowTop;
+		// Overlays and multiplexer geometry frames freeze commits; a geometry
+		// frame also re-bases the raw prefix at the new width (accepted wrap
+		// drift, mirrored from the engine).
+		if (this.#shadowFrameGeometryChanged) {
+			this.#shadowRawPrefix = raw.slice(0, this.#shadowCommitted);
+			return;
+		}
+		if (this.#shadowFrameOverlay) return;
+		const chunkTo = Math.max(this.#shadowCommitted, Math.min(length, windowTop));
+		for (let i = this.#shadowCommitted; i < chunkTo; i++) {
+			this.#shadowTape.push(frame[i] ?? "");
+			this.#shadowRawPrefix.push(raw[i] ?? "");
+		}
+		this.#shadowCommitted = chunkTo;
 	}
 	#scrollbackCapReached(snapshot: Snapshot): boolean {
 		return Math.max(snapshot.height, snapshot.frame.length) > snapshot.height + this.#scenario.scrollback;
@@ -2594,17 +2627,42 @@ class StressDriver {
 		index: number,
 	): void {
 		if (!this.#scenario.uniqueContent) return;
+		// All comparisons run with non-spacing marks stripped: the virtual
+		// terminal drops them on input (ghostty-web 0.4 margin-cluster crash
+		// workaround), so buffer readback and frame/tape rows would otherwise
+		// never collide on marked rows.
+		const strip = (line: string): string => line.replace(NONSPACING_MARKS, "");
 		// Accumulate even when the check below is skipped (scrolled/overlay): the
 		// frame's legitimate duplicates commit to scrollback regardless of where
-		// the viewport is parked.
+		// the viewport is parked. The shadow tape contributes too: a no-seam
+		// offscreen insert re-indexes committed content, so the shifted rows
+		// legitimately commit a second time (the exact tape-equality oracle has
+		// already proven the buffer matches the ledger row for row).
 		for (const line of duplicateNonblankLines(after.frame)) {
-			this.#everDuplicatedFrameLines.add(line);
+			this.#everDuplicatedFrameLines.add(strip(line));
+		}
+		const tapeSeen = new Set<string>();
+		for (const raw of this.#shadowTape) {
+			if (raw.length === 0) continue;
+			const line = strip(raw);
+			if (tapeSeen.has(line)) this.#everDuplicatedFrameLines.add(line);
+			tapeSeen.add(line);
+		}
+		// A committed row that still sits in the visible window (window floored
+		// at the commit boundary) legitimately appears in both regions of the
+		// whole-tape buffer snapshot.
+		for (let r = 0; r < after.height; r++) {
+			const raw = this.#shadowFrame[this.#shadowWindowTop + r] ?? "";
+			if (raw.length === 0) continue;
+			const line = strip(raw);
+			if (tapeSeen.has(line)) this.#everDuplicatedFrameLines.add(line);
 		}
 		if (this.#hasVisibleOverlay() || !after.atBottom) return;
 		const allowed = this.#everDuplicatedFrameLines;
 		const seen = new Set<string>();
-		for (const line of after.buffer) {
-			if (line.length === 0) continue;
+		for (const raw of after.buffer) {
+			if (raw.length === 0) continue;
+			const line = strip(raw);
 			if (seen.has(line) && !allowed.has(line)) {
 				this.#fail("unexpected duplicate native scrollback line", op, before, after, index, { line });
 			}
@@ -2642,6 +2700,15 @@ class StressDriver {
 			tags: this.#scenario.tags,
 			operationCoverage: Object.fromEntries(this.#operationCoverage.entries()),
 			lastOperations: this.#opLog.slice(-50),
+			shadow: {
+				committed: this.#shadowCommitted,
+				windowTop: this.#shadowWindowTop,
+				tapeLength: this.#shadowTape.length,
+				frameLength: this.#shadowFrame.length,
+				geometryChanged: this.#shadowFrameGeometryChanged,
+				overlayVisible: this.#shadowFrameOverlay,
+			},
+			lastWrites: this.#writeLog.slice(-4).map(write => JSON.stringify(write.slice(-400))),
 			children: this.#children.map(child => ({
 				id: child.id,
 				active: child.active,
@@ -2701,6 +2768,24 @@ function sameLines(left: readonly string[], right: readonly string[]): boolean {
 	if (left.length !== right.length) return false;
 	for (let i = 0; i < left.length; i++) {
 		if (left[i] !== right[i]) return false;
+	}
+	return true;
+}
+
+// ghostty-web's cell-grid text extraction can migrate or merge Unicode
+// non-spacing marks across neighboring cells for combining-heavy scripts
+// (Arabic harakat), so a byte-exact round trip through the virtual terminal is
+// not achievable for those rows (the engine paints them verbatim; see the
+// WIDTH notes in docs/tui-core-renderer.md). Fall back to comparing with
+// non-spacing marks stripped — row count, order, and all spacing content stay
+// exact.
+const NONSPACING_MARKS = /\p{Mn}/gu;
+function sameLinesAllowingMarkDrift(left: readonly string[], right: readonly string[]): boolean {
+	if (sameLines(left, right)) return true;
+	if (left.length !== right.length) return false;
+	for (let i = 0; i < left.length; i++) {
+		if (left[i] === right[i]) continue;
+		if (left[i]!.replace(NONSPACING_MARKS, "") !== right[i]!.replace(NONSPACING_MARKS, "")) return false;
 	}
 	return true;
 }
@@ -3593,18 +3678,15 @@ function coreTemplates(): ScenarioTemplate[] {
 		},
 		{
 			// Foreground tool actively streaming on an ED3-risk terminal whose
-			// viewport position is unobservable (ghostty/kitty/alacritty/VTE/iTerm2;
-			// see `detectTerminalEagerEraseScrollbackRisk`). The agent requests an
-			// eager native-scrollback rebuild for the streaming turn, but that opt-in
-			// is gated off on ED3-risk terminals, so `allowUnknownViewportMutation`
-			// stays false and content frames flow through `viewportRepaint`/`diff`
-			// instead of a forced history rebuild. An offscreen-edit growth then
-			// repaints in place — advancing the rendered line count without committing
-			// the overflow to native history — and the next shrink must still
+			// viewport position is unobservable (ghostty/kitty/alacritty/VTE/iTerm2).
+			// Content frames flow through `viewportRepaint`/`diff` instead of a
+			// forced history rebuild. An offscreen-edit growth then repaints in
+			// place — advancing the rendered line count without committing the
+			// overflow to native history — and the next shrink must still
 			// re-anchor the bottom of the viewport from that lagging high-water mark.
-			// The default content-frame path forces `allowUnknownViewportMutation` and
-			// never reaches this state (a notification chip rendering over the active
-			// tool render: the original report).
+			// The default content-frame path forces a render and never reaches this
+			// state (a notification chip rendering over the active tool render: the
+			// original report).
 			name: "darwin-unknown-ghostty-stream-small",
 			platform: "darwin",
 			terminalMode: "unknown",
@@ -3889,8 +3971,6 @@ function restoreOwnProperty(target: object, key: string, descriptor: PropertyDes
 export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 	await withPatchedEnv("ghostty", async () => {
 		await withPatchedPlatform("darwin", async () => {
-			const terminalInfo = TERMINAL as unknown as { eagerEraseScrollbackRisk: boolean };
-			const savedRisk = terminalInfo.eagerEraseScrollbackRisk;
 			const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 			const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 			const stdoutColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
@@ -3903,7 +3983,6 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 			const processKill = Object.getOwnPropertyDescriptor(process, "kill");
 			const writes: string[] = [];
 
-			terminalInfo.eagerEraseScrollbackRisk = true;
 			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 			Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
@@ -3931,7 +4010,6 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 
 			try {
 				tui.start();
-				tui.setEagerNativeScrollbackRebuild(true);
 				await scheduler.drain(drainTarget);
 
 				const reportOnlyWriteStart = writes.length;
@@ -3944,7 +4022,7 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 				const streamingWriteStart = writes.length;
 				component.setLines([...initialLines, "stream-row-35"]);
 				process.stdin.emit("data", "\x1b[48;30;100;600;1000t");
-				tui.requestRender(false);
+				tui.requestRender();
 				await scheduler.drain(drainTarget);
 
 				const emitted = writes.slice(streamingWriteStart).join("");
@@ -3955,7 +4033,6 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 				}
 			} finally {
 				tui.stop();
-				terminalInfo.eagerEraseScrollbackRisk = savedRisk;
 				restoreOwnProperty(process.stdin, "isTTY", stdinIsTty);
 				restoreOwnProperty(process.stdout, "isTTY", stdoutIsTty);
 				restoreOwnProperty(process.stdout, "columns", stdoutColumns);

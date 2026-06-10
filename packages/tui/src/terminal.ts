@@ -134,6 +134,11 @@ export function emergencyTerminalRestore(): void {
 		const terminal = activeTerminal;
 		if (terminal) {
 			terminal.stop();
+			// stop() never touches the alternate screen — the TUI owns that
+			// state and exits it on the normal shutdown path. A crash while a
+			// fullscreen overlay is up would otherwise strand the shell on the
+			// alt buffer. Safe no-op when the alt screen is not active.
+			terminal.write("\x1b[?1049l");
 			terminal.showCursor();
 		} else if (terminalEverStarted) {
 			// Blind restore only if we know a terminal was started but lost track of it
@@ -147,6 +152,8 @@ export function emergencyTerminalRestore(): void {
 					"\x1b[?5522l" + // Disable enhanced paste notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
+					"\x1b[?1006l\x1b[?1003l\x1b[?1000l" + // Disable mouse tracking (fullscreen overlays)
+					"\x1b[?1049l" + // Leave the alternate screen (fullscreen overlays)
 					"\x1b[?25h", // Show cursor
 			);
 			if (process.stdin.setRawMode) {
@@ -201,44 +208,6 @@ export interface Terminal {
 
 	// Progress indicator (OSC 9;4)
 	setProgress(active: boolean): void;
-
-	/**
-	 * Returns whether the native terminal viewport is at the scrollback tail when
-	 * the host exposes that state. `undefined` means the terminal cannot report it.
-	 *
-	 * `ProcessTerminal` deliberately does not implement this — no real terminal
-	 * can answer it truthfully:
-	 *
-	 * - POSIX terminals expose no scrollback-position API at all.
-	 * - Every modern Windows terminal host (Windows Terminal, VS Code, Tabby,
-	 *   Hyper, Alacritty, WezTerm, JetBrains, …) fronts console apps through
-	 *   ConPTY, where kernel32's `GetConsoleScreenBufferInfo` describes the
-	 *   pseudo-console buffer. That buffer is pinned to the visible grid —
-	 *   scrollback lives in the host UI, invisible to console APIs
-	 *   (microsoft/terminal#10191) — so a probe reads "at bottom" no matter
-	 *   where the user scrolled. Trusting it let streaming-time rebuilds emit
-	 *   `\x1b[3J` and yank scrolled readers: #1635 (Windows Terminal), #1746
-	 *   (Tabby and other ConPTY hosts). No env var distinguishes these hosts
-	 *   (Tabby sets none), so trust cannot be conditional on the environment.
-	 * - Legacy conhost (the only non-ConPTY host) keeps a real scrollback
-	 *   buffer, but its window follows the output cursor: a probe comparing
-	 *   `srWindow.Bottom` against `dwSize.Y - 1` reads "scrolled up" for a user
-	 *   following live output until all ~9001 buffer rows fill, permanently
-	 *   blocking checkpoint scrollback reconciliation.
-	 *
-	 * The renderer treats a missing implementation / `undefined` as "unknown":
-	 * live mutations defer destructive rebuilds and reconcile native scrollback
-	 * at explicit checkpoints (prompt submit), where the user's keystroke has
-	 * already pinned the host viewport to the bottom. Only test terminals
-	 * (xterm.js-backed) implement this with a real answer.
-	 */
-	isNativeViewportAtBottom?(): boolean | undefined;
-
-	/**
-	 * Override the global terminal-profile ED3 risk decision for custom/test
-	 * terminals. `undefined` falls back to the resolved `TERMINAL` profile.
-	 */
-	hasEagerEraseScrollbackRisk?(): boolean | undefined;
 
 	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
@@ -488,7 +457,12 @@ export class ProcessTerminal implements Terminal {
 	 * to handle the case where the response arrives split across multiple events.
 	 */
 	#setupStdinBuffer(): void {
-		this.#stdinBuffer = new StdinBuffer({ timeout: 10 });
+		// 50ms balances two failure modes: a bare ESC keypress on legacy
+		// terminals waits this long before it is delivered, while a CSI key
+		// escape split across stdin reads (laggy ssh/tmux links) leaks as
+		// literal typed text if the flush fires between the fragments. 10ms
+		// proved too tight for split escapes (#1238 covered only probe replies).
+		this.#stdinBuffer = new StdinBuffer({ timeout: 50 });
 
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
@@ -853,6 +827,9 @@ export class ProcessTerminal implements Terminal {
 	/**
 	 * Start periodic OSC 11 re-queries for terminals without Mode 2031 (Warp, Alacritty, WezTerm).
 	 * Self-disables once Mode 2031 fires (push-based is better than polling).
+	 * The interval is deliberately long: each poll's OSC 11 + DA1 write clears
+	 * an active text selection on several terminals, so polling exists only to
+	 * eventually notice a rare OS theme switch, not to track it promptly.
 	 */
 	#startOsc11Poll(): void {
 		this.#stopOsc11Poll();
@@ -862,7 +839,7 @@ export class ProcessTerminal implements Terminal {
 				return;
 			}
 			this.#queryBackgroundColor();
-		}, 2_000);
+		}, 30_000);
 		this.#osc11PollTimer.unref();
 	}
 
@@ -1053,6 +1030,11 @@ export class ProcessTerminal implements Terminal {
 		// Disable bracketed paste mode
 		this.#safeWrite("\x1b[?2004l");
 		this.#safeWrite("\x1b[?5522l");
+
+		// Disable mouse tracking (enabled only by fullscreen overlays; safe
+		// no-ops otherwise). Covers crash paths that reach stop() without the
+		// TUI's own overlay teardown running.
+		this.#safeWrite("\x1b[?1006l\x1b[?1003l\x1b[?1000l");
 
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");

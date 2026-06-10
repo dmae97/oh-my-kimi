@@ -78,11 +78,17 @@ interface RenderedSection {
 }
 
 function formatBlockResolution(resolution: BlockResolution): string {
-	const op = resolution.isDelete ? "delete block" : "replace block";
+	const op =
+		resolution.op === "delete"
+			? "delete block"
+			: resolution.op === "insert_after"
+				? "insert after block"
+				: "replace block";
 	const lines = resolution.end - resolution.start + 1;
 	const span =
 		resolution.start === resolution.end ? `line ${resolution.start}` : `lines ${resolution.start}-${resolution.end}`;
-	return `${op} ${resolution.anchorLine} → resolved ${span} (${lines} line${lines === 1 ? "" : "s"})`;
+	const suffix = resolution.op === "insert_after" ? `; body lands after line ${resolution.end}` : "";
+	return `${op} ${resolution.anchorLine} → resolved ${span} (${lines} line${lines === 1 ? "" : "s"})${suffix}`;
 }
 
 function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsResult | undefined): RenderedSection {

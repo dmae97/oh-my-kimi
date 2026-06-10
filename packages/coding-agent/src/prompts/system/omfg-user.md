@@ -8,10 +8,9 @@ TTSR mechanics:
 - `scope` is a comma-separated allowlist. If present, only listed streams are checked.
 - `text` = assistant prose only. `thinking` = hidden reasoning summaries. `tool` = every tool's arguments.
 - `tool:<name>(<glob>)` = one tool, only when path-like args match the glob. Examples: `tool:write(*.rb)`, `tool:edit(*.ts)`.
-- Prefer file-specific tool scopes for code complaints. Ruby code generated through `write` should use `tool:write(*.rb)`, not bare `tool` or `text`.
-- Tool arguments may be serialized while streaming. Conditions for code containing quotes should tolerate JSON escaping when needed.
+- SHOULD use file-specific tool scopes for code complaints. Ruby code generated through `write` → `tool:write(*.rb)`, not bare `tool` or `text`.
+- Tool arguments may be serialized while streaming. Conditions for code containing quotes SHOULD tolerate JSON escaping.
 - When `condition` matches within `scope`, the stream is interrupted and the markdown body is injected as correction guidance.
-- `description` is a one-line summary.
 
 Output contract:
 - Emit exactly one JSON object and nothing else.
@@ -46,6 +45,6 @@ Failed attempts or requested amendments so far:
 Latest candidate JSON:
 {{previousRule}}
 
-Regenerate one corrected rule. Fix the listed validation failures or user amendment; do not repeat failed scopes or conditions.
+Regenerate one corrected rule. Fix the listed validation failures or user amendment. NEVER repeat failed scopes or conditions.
 {{/if}}
 </omfg>

@@ -25,6 +25,16 @@ import { StreamingRevealController } from "./streaming-reveal";
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
 const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
+/**
+ * Concurrent IRC cards allowed in the transcript's live region. Cards land
+ * below a still-live block (a running task), where they cannot commit to
+ * native scrollback (commits are prefix-only) — every visible card inflates
+ * the live region and pushes the live block's uncommitted rows above the
+ * window top, where they are neither on screen nor in history. A swarm burst
+ * (several agents coordinating at once) must therefore stay bounded: the
+ * oldest live-region card retires as soon as a new one would exceed the cap.
+ */
+const MAX_LIVE_IRC_CARDS = 4;
 
 /**
  * Loader label shown the instant a user interrupt (Esc) is requested, kept until
@@ -35,19 +45,6 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
  * reading as an ignored Esc for the seconds a slow tool takes to tear down.
  */
 export const INTERRUPTING_WORKING_MESSAGE = "Interrupting…";
-
-// Events that change foreground streaming state, or that reset a turn. The TUI
-// eager native-scrollback rebuild mode is recomputed only on these so unrelated
-// IRC/notices/status refreshes do not toggle scrollback replay policy.
-const STREAM_RENDER_MODE_EVENTS: Record<string, true> = {
-	agent_start: true,
-	agent_end: true,
-	message_start: true,
-	message_end: true,
-	tool_execution_start: true,
-	tool_execution_update: true,
-	tool_execution_end: true,
-};
 
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
@@ -65,7 +62,6 @@ export class EventController {
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
-	#assistantMessageStreaming = false;
 	#agentTurnActive = false;
 	#interrupting = false;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
@@ -78,6 +74,9 @@ export class EventController {
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
+	// Insertion-ordered IRC cards not yet retired; values are the transcript
+	// components each card contributed (see #retireIrcCard for the guard).
+	#liveIrcCards = new Map<string, Component[]>();
 	#streamingReveal: StreamingRevealController;
 	#handlers: AgentSessionEventHandlers;
 
@@ -125,6 +124,7 @@ export class EventController {
 			clearTimeout(timer);
 		}
 		this.#ircExpiryTimers.clear();
+		this.#liveIrcCards.clear();
 	}
 
 	#resetReadGroup(): void {
@@ -217,30 +217,6 @@ export class EventController {
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
-		// While an assistant turn is active, visible status chrome and foreground
-		// transcript blocks can re-render after rows have entered native scrollback
-		// (idle Working loader, Markdown fences, wrapping, tool previews). Let the
-		// TUI use its foreground live-region path instead of idle deferral, which
-		// can otherwise leave the loader/status frame frozen until the next input.
-		// Background-running tools after the turn ends are excluded so late async
-		// updates keep the no-yank deferral; agent_start/agent_end bracket the
-		// foreground turn.
-		if (STREAM_RENDER_MODE_EVENTS[event.type]) {
-			this.#refreshToolRenderMode();
-		}
-	}
-
-	#refreshToolRenderMode(): void {
-		let foregroundToolActive = this.#agentTurnActive || this.#assistantMessageStreaming;
-		if (!foregroundToolActive) {
-			for (const toolCallId of this.ctx.pendingTools.keys()) {
-				if (!this.#backgroundToolCallIds.has(toolCallId)) {
-					foregroundToolActive = true;
-					break;
-				}
-			}
-		}
-		this.ctx.ui.setEagerNativeScrollbackRebuild(foregroundToolActive);
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
@@ -250,7 +226,6 @@ export class EventController {
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#resetReadGroup();
-		this.#assistantMessageStreaming = false;
 		this.#lastAssistantComponent = undefined;
 		// Restore the previous turn's inline error in the transcript before dropping
 		// the banner, so the error stays in history once the banner is gone.
@@ -267,7 +242,6 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		this.#cancelIdleCompaction();
-		this.#refreshToolRenderMode();
 		this.ctx.ensureLoadingAnimation();
 		this.ctx.ui.requestRender();
 	}
@@ -340,7 +314,6 @@ export class EventController {
 			this.ctx.addMessageToChat(event.message);
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
-			this.#assistantMessageStreaming = true;
 			this.#lastVisibleBlockCount = 0;
 			this.ctx.streamingComponent = new AssistantMessageComponent(
 				undefined,
@@ -365,6 +338,7 @@ export class EventController {
 		this.#resetReadGroup();
 		const components = this.ctx.addMessageToChat(event.message);
 		this.#scheduleIrcExpiry(signature, components);
+		this.#enforceIrcCardCap(signature);
 		this.ctx.ui.requestRender();
 	}
 
@@ -372,13 +346,47 @@ export class EventController {
 		if (components.length === 0 || this.#ircExpiryTimers.has(signature)) return;
 		const timer = setTimeout(() => {
 			this.#ircExpiryTimers.delete(signature);
-			for (const component of components) {
-				this.ctx.chatContainer.removeChild(component);
-			}
-			this.ctx.ui.requestRender();
+			this.#retireIrcCard(signature);
 		}, IRC_MESSAGE_VISIBLE_TTL_MS);
 		timer.unref?.();
 		this.#ircExpiryTimers.set(signature, timer);
+		this.#liveIrcCards.set(signature, components);
+	}
+
+	/**
+	 * Remove an expired/evicted IRC card — but only while it still sits below a
+	 * live block, where its rows cannot have entered native scrollback. Once
+	 * everything above it has finalized, its rows may already be committed;
+	 * removing them then is an interior deletion of the committed prefix, which
+	 * the engine can only repair by recommitting every row below the gap —
+	 * exactly the duplicated-block artifact this guard exists to prevent. Such
+	 * a card simply stays: it is final history, and the window scrolls past it.
+	 */
+	#retireIrcCard(signature: string): void {
+		const components = this.#liveIrcCards.get(signature);
+		this.#liveIrcCards.delete(signature);
+		if (!components) return;
+		let removed = false;
+		for (const component of components) {
+			if (!this.ctx.chatContainer.isWithinLiveRegion(component)) continue;
+			this.ctx.chatContainer.removeChild(component);
+			removed = true;
+		}
+		if (removed) this.ctx.ui.requestRender();
+	}
+
+	/** Evict oldest live-region cards beyond {@link MAX_LIVE_IRC_CARDS}. */
+	#enforceIrcCardCap(latestSignature: string): void {
+		while (this.#liveIrcCards.size > MAX_LIVE_IRC_CARDS) {
+			const oldest = this.#liveIrcCards.keys().next().value;
+			if (oldest === undefined || oldest === latestSignature) return;
+			const timer = this.#ircExpiryTimers.get(oldest);
+			if (timer) {
+				clearTimeout(timer);
+				this.#ircExpiryTimers.delete(oldest);
+			}
+			this.#retireIrcCard(oldest);
+		}
 	}
 
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
@@ -491,9 +499,6 @@ export class EventController {
 
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		if (event.message.role === "user") return;
-		if (event.message.role === "assistant") {
-			this.#assistantMessageStreaming = false;
-		}
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.stop();
@@ -701,7 +706,6 @@ export class EventController {
 	}
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		this.#agentTurnActive = false;
-		this.#assistantMessageStreaming = false;
 		this.#streamingReveal.stop();
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();

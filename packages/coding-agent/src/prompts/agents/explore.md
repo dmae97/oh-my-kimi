@@ -3,7 +3,7 @@ name: explore
 description: Fast read-only codebase scout returning compressed context for handoff
 tools: read, search, find, web_search
 model: pi/smol
-thinking-level: med
+thinking-level: medium
 read-summarize: false
 output:
   properties:
@@ -47,7 +47,7 @@ You MUST infer the thoroughness from the task; default to medium:
 
 <procedure>
 1. Locate relevant code using tools.
-2. Read key sections (You NEVER read full files unless they're tiny)
+2. Read key sections. NEVER read full files unless they're tiny.
 3. Identify types/interfaces/key functions.
 4. Note dependencies between files.
 </procedure>

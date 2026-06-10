@@ -80,6 +80,5 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 - You MUST use `read` for every file, directory, archive, and URL inspection. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget` are FORBIDDEN — any such bash call is a bug, regardless of how short or convenient it looks.
 - You MUST prefer `read` over a browser/puppeteer tool for URL content; only reach for a browser when `read` cannot deliver reasonable content.
 - For line ranges, append the selector to `path` (`path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`). NEVER substitute `sed -n`, `awk NR`, or `head`/`tail` pipelines.
-- Summary footer says `read <path>:raw …`? Re-issue the exact selector it names. NEVER guess what's inside `..` / `…` markers — they carry no content.
-- You MAY combine selectors with URL reads and internal URIs; both paginate the cached resolved output.
+- Summary footer names ranges to re-read? Re-issue ONLY the ranges you need via the multi-range selector. NEVER guess what's inside `..` / `…` markers — they carry no content.
 </critical>

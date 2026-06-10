@@ -151,6 +151,24 @@ describe("streaming reveal", () => {
 		}
 	});
 
+	it("keeps grapheme counts correct when an append extends the final cluster", () => {
+		vi.useFakeTimers();
+		const { component, controller } = makeController();
+
+		controller.begin(component, makeMessage([{ type: "text", text: "" }]));
+		controller.setTarget(makeMessage([{ type: "text", text: "ab👨" }]));
+		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS);
+		// The appended ZWJ sequence merges into the previous final grapheme:
+		// "👨" + "\u200D👩" becomes a single cluster, so the cached per-block
+		// count must re-segment from that cluster, not just add the suffix.
+		controller.setTarget(makeMessage([{ type: "text", text: "ab👨\u200D👩x" }]));
+		for (let i = 0; i < 6; i++) {
+			vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS);
+		}
+
+		expect(textAt(latestMessage(component), 0)).toBe("ab👨\u200D👩x");
+	});
+
 	it("renders full targets immediately when smoothing is disabled", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();

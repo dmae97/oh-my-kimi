@@ -2,6 +2,7 @@
  * Anthropic OAuth flow (Claude Pro/Max)
  */
 
+import { claudeCodeVersion } from "../../providers/anthropic";
 import type { FetchImpl } from "../../types";
 import { OAuthCallbackFlow } from "./callback-server";
 import { generatePKCE } from "./pkce";
@@ -13,7 +14,7 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const BOOTSTRAP_URL = "https://api.anthropic.com/api/claude_cli/bootstrap";
 const CLAUDE_CODE_BOOTSTRAP_MODEL = "claude-opus-4-8";
-const CLAUDE_CODE_BOOTSTRAP_USER_AGENT = "claude-code/2.1.160";
+const CLAUDE_CODE_BOOTSTRAP_USER_AGENT = `claude-code/${claudeCodeVersion}`;
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
 // Scopes required for direct OAuth-token inference (user:inference) plus account/session management.

@@ -71,17 +71,24 @@ function parseListOptions(url: InternalUrl, scheme: Scheme, repo: string | undef
 	const stateRaw = url.searchParams.get("state");
 	const allowedStates: ParsedList["state"][] =
 		scheme === "pr" ? ["open", "closed", "merged", "all"] : ["open", "closed", "all"];
-	const state = (
-		stateRaw && (allowedStates as string[]).includes(stateRaw) ? stateRaw : "open"
-	) as ParsedList["state"];
+	if (stateRaw !== null && !(allowedStates as string[]).includes(stateRaw)) {
+		// Reject instead of silently falling back to "open": a typo'd state
+		// would otherwise return the open list, indistinguishable from "no
+		// matches for the requested state".
+		throw new Error(`Invalid ${scheme}:// list state '${stateRaw}'. Expected one of: ${allowedStates.join(", ")}.`);
+	}
+	const state = (stateRaw ?? "open") as ParsedList["state"];
 
 	const limitRaw = url.searchParams.get("limit");
 	let limit = LIST_LIMIT_DEFAULT;
 	if (limitRaw !== null) {
 		const parsed = parsePositiveDecimalInt(limitRaw);
-		if (parsed !== undefined) {
-			limit = Math.min(parsed, LIST_LIMIT_MAX);
+		if (parsed === undefined) {
+			throw new Error(
+				`Invalid ${scheme}:// list limit '${limitRaw}'. Expected a positive integer (max ${LIST_LIMIT_MAX}).`,
+			);
 		}
+		limit = Math.min(parsed, LIST_LIMIT_MAX);
 	}
 	return {
 		kind: "list",

@@ -2201,6 +2201,16 @@ describe("openai-codex streaming", () => {
 			send(): void {
 				if (this.#index === 0) {
 					// First attempt: a function call whose arguments are only whitespace.
+					// A completed reasoning item lands in nativeOutputItems before the
+					// degenerate tool call begins; it must not survive the retry.
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "reasoning", id: "rs_stale", summary: [] },
+					});
+					this.sendJson({
+						type: "response.output_item.done",
+						item: { type: "reasoning", id: "rs_stale", summary: [{ type: "summary_text", text: "stale" }] },
+					});
 					this.sendJson({
 						type: "response.output_item.added",
 						item: { type: "function_call", id: "fc_ws", call_id: "call_ws", name: "todo", arguments: "" },
@@ -2269,6 +2279,350 @@ describe("openai-codex streaming", () => {
 		expect(toolCall.name).toBe("todo");
 		expect(toolCall.id).toBe("call_ws|fc_ws");
 		expect(toolCall.arguments).toEqual({ ops: [{ op: "start", task: "x" }] });
+		// Native items from the abandoned first attempt must not leak into the
+		// replayed turn's history payload (stale reasoning would be re-sent as
+		// input on the next request).
+		const payload = result.providerPayload as { items?: Array<{ id?: string }> } | undefined;
+		const payloadIds = (payload?.items ?? []).map(item => item.id);
+		expect(payloadIds).toContain("fc_ws");
+		expect(payloadIds).not.toContain("rs_stale");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("interrupts whitespace-only custom tool input deltas", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run for degenerate custom tool input");
+		});
+
+		let sendCount = 0;
+		class WhitespaceCustomInputWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				sendCount += 1;
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "custom_tool_call", id: "ctc_ws", call_id: "call_ctc_ws", name: "apply_patch", input: "" },
+				});
+				for (let sequence = 1; sequence <= 300; sequence += 1) {
+					this.sendJson({
+						type: "response.custom_tool_call_input.delta",
+						delta: sequence % 2 === 0 ? " ".repeat(64) : "\t",
+						item_id: "ctc_ws",
+						output_index: 0,
+						sequence_number: sequence,
+					});
+				}
+			}
+		}
+		global.WebSocket = WhitespaceCustomInputWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-whitespace-custom-input-session",
+			providerSessionState,
+		}).result();
+
+		// One initial attempt + CODEX_WHITESPACE_LOOP_RETRY_LIMIT (2) bounded retries.
+		expect(sendCount).toBe(3);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("whitespace-only tool-call argument delta");
+		expect(result.errorMessage).toContain("ctc_ws");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("delivers a queued terminal event when the server closes immediately after it", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run when the response completed");
+		});
+
+		let constructorCount = 0;
+		class EagerCloseWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				// Every frame lands in the connection queue synchronously, before the
+				// consumer microtask drains any of them; the close event used to wipe
+				// the queued terminal event and turn success into a transport error.
+				this.emitCodexResponse({ messageId: "msg_eager", responseId: "resp_eager", text: "Hello eager" });
+				this.readyState = MockWebSocket.CLOSED;
+				this.emit("close", { code: 1000 } as unknown as Event);
+			}
+		}
+		global.WebSocket = EagerCloseWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-eager-close-session",
+			providerSessionState,
+		}).result();
+
+		expect(constructorCount).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "Hello eager" })]);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("surfaces a connection-limit error instead of replaying a delivered tool call over SSE", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE replay must not run after a toolcall_end was delivered");
+		});
+
+		let constructorCount = 0;
+		class ConnectionLimitWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "function_call", id: "fc_limit", call_id: "call_limit", name: "todo", arguments: "" },
+				});
+				this.sendJson({
+					type: "response.output_item.done",
+					item: { type: "function_call", id: "fc_limit", call_id: "call_limit", name: "todo", arguments: "{}" },
+				});
+				this.sendJson({
+					type: "error",
+					code: "websocket_connection_limit_reached",
+					message: "connection limit reached",
+				});
+			}
+		}
+		global.WebSocket = ConnectionLimitWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-connection-limit-toolcall-session",
+			providerSessionState,
+		}).result();
+
+		expect(constructorCount).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("connection limit reached");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("joins an in-flight websocket handshake instead of tearing it down", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run when the handshake is joined");
+		});
+
+		let constructorCount = 0;
+		const sockets: DeferredOpenWebSocket[] = [];
+		class DeferredOpenWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				sockets.push(this);
+			}
+
+			open(): void {
+				this.readyState = MockWebSocket.OPEN;
+				this.emit("open", new Event("open"));
+			}
+
+			close(): void {
+				const wasPending = this.readyState === MockWebSocket.CONNECTING;
+				super.close();
+				if (wasPending) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			send(): void {
+				this.emitCodexResponse({ messageId: "msg_join", responseId: "resp_join", text: "Joined" });
+			}
+		}
+		global.WebSocket = DeferredOpenWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		// Prewarm starts the handshake; the stream call races it before the socket
+		// opens. Tearing down the CONNECTING socket would reject the prewarm with a
+		// fatal "websocket closed before open" and disable websockets for the session.
+		const prewarmPromise = prewarmOpenAICodexResponses(model, {
+			apiKey: token,
+			sessionId: "ws-join-session",
+			providerSessionState,
+		});
+		const streamResult = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-join-session",
+			providerSessionState,
+		}).result();
+
+		// Let both callers reach the handshake before the socket opens.
+		await Bun.sleep(5);
+		for (const socket of sockets) socket.open();
+
+		await prewarmPromise;
+		const result = await streamResult;
+
+		expect(constructorCount).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "Joined" })]);
+		const details = getOpenAICodexTransportDetails(model, {
+			sessionId: "ws-join-session",
+			providerSessionState,
+		});
+		expect(details.websocketDisabled).toBe(false);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("bounds connection-limit reconnects and replays over SSE when the budget is exhausted", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "2";
+		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
+		const token = createCodexTestToken();
+
+		const sse = `${[
+			`data: ${JSON.stringify({
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_sse", role: "assistant", status: "in_progress", content: [] },
+			})}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Recovered" })}`,
+			`data: ${JSON.stringify({
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_sse",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Recovered" }],
+				},
+			})}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_sse", status: "completed" } })}`,
+		].join("\n\n")}\n\n`;
+		const fetchMock = vi.fn(
+			async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+		);
+
+		let constructorCount = 0;
+		class AlwaysLimitedWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.sendJson({
+					type: "error",
+					code: "websocket_connection_limit_reached",
+					message: "connection limit reached",
+				});
+			}
+		}
+		global.WebSocket = AlwaysLimitedWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-connection-limit-bounded-session",
+			providerSessionState: new Map<string, ProviderSessionState>(),
+		}).result();
+
+		// 1 initial connection + PI_CODEX_WEBSOCKET_RETRY_BUDGET bounded reconnects,
+		// then a single SSE replay — never an unbounded reconnect loop.
+		expect(constructorCount).toBe(3);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "Recovered" })]);
+	});
+
+	it("surfaces a whitespace flood arriving after a delivered tool call instead of replaying", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE replay must not run after a toolcall_end was delivered");
+		});
+
+		let sendCount = 0;
+		class PostDoneWhitespaceWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				sendCount += 1;
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "function_call", id: "fc_flood", call_id: "call_flood", name: "todo", arguments: "" },
+				});
+				this.sendJson({
+					type: "response.output_item.done",
+					item: { type: "function_call", id: "fc_flood", call_id: "call_flood", name: "todo", arguments: "{}" },
+				});
+				// Degenerate frames keep arriving after the item closed. They count as
+				// progress events, so without the breaker observing them the idle
+				// watchdog never fires and the turn hangs forever.
+				for (let sequence = 1; sequence <= 300; sequence += 1) {
+					this.sendJson({
+						type: "response.function_call_arguments.delta",
+						delta: " ".repeat(64),
+						item_id: "fc_flood",
+						output_index: 0,
+						sequence_number: sequence,
+					});
+				}
+			}
+		}
+		global.WebSocket = PostDoneWhitespaceWebSocket as unknown as typeof WebSocket;
+
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-post-done-whitespace-session",
+			providerSessionState: new Map<string, ProviderSessionState>(),
+		}).result();
+
+		// A toolcall_end already reached the consumer: replay is refused and the
+		// breaker error surfaces on the first attempt.
+		expect(sendCount).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("whitespace-only tool-call argument delta");
+		// The completed tool call is preserved on the error message.
+		expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "todo" })]);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 

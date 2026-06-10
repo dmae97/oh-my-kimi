@@ -36,6 +36,9 @@ export class AssistantMessageComponent extends Container {
 	 * transcript keeps the error in history.
 	 */
 	#errorPinned = false;
+	/** Whether the last updateContent carried an in-flight streaming partial; such
+	 *  renders bypass the markdown module LRU (see Markdown.transientRenderCache). */
+	#lastUpdateTransient = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -59,7 +62,7 @@ export class AssistantMessageComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage);
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
 	}
 
@@ -75,7 +78,7 @@ export class AssistantMessageComponent extends Container {
 		if (this.#errorPinned === pinned) return;
 		this.#errorPinned = pinned;
 		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage);
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
 	}
 
@@ -123,7 +126,7 @@ export class AssistantMessageComponent extends Container {
 			this.#convertToolImagesForKitty(toolCallId, validImages);
 		}
 		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage);
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
 	}
 
@@ -146,7 +149,7 @@ export class AssistantMessageComponent extends Container {
 						mimeType: "image/png",
 					});
 					if (this.#lastMessage) {
-						this.updateContent(this.#lastMessage);
+						this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 					}
 					this.onImageUpdate?.();
 				})
@@ -159,7 +162,7 @@ export class AssistantMessageComponent extends Container {
 	setUsageInfo(usage: Usage): void {
 		this.#usageInfo = usage;
 		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage);
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
 	}
 
@@ -211,8 +214,9 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	updateContent(message: AssistantMessage): void {
+	updateContent(message: AssistantMessage, opts?: { transient?: boolean }): void {
 		this.#lastMessage = message;
+		this.#lastUpdateTransient = opts?.transient === true;
 
 		// Clear content container
 		this.#contentContainer.clear();
@@ -228,7 +232,9 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.#contentContainer.addChild(new Markdown(content.text.trim(), 1, 0, getMarkdownTheme()));
+				const markdown = new Markdown(content.text.trim(), 1, 0, getMarkdownTheme());
+				markdown.transientRenderCache = this.#lastUpdateTransient;
+				this.#contentContainer.addChild(markdown);
 			} else if (content.type === "thinking" && content.thinking.trim()) {
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
@@ -245,12 +251,12 @@ export class AssistantMessageComponent extends Container {
 				} else {
 					const thinkingText = content.thinking.trim();
 					// Thinking traces in thinkingText color, italic
-					this.#contentContainer.addChild(
-						new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						}),
-					);
+					const thinkingMarkdown = new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {
+						color: (text: string) => theme.fg("thinkingText", text),
+						italic: true,
+					});
+					thinkingMarkdown.transientRenderCache = this.#lastUpdateTransient;
+					this.#contentContainer.addChild(thinkingMarkdown);
 					this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
 					thinkingIndex += 1;
 					if (hasVisibleContentAfter) {

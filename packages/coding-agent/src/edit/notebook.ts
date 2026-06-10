@@ -21,6 +21,26 @@ export interface NotebookDocument {
 }
 
 const CELL_MARKER_RE = /^# %% \[(code|markdown|raw)\](?: cell:(\d+))?$/;
+/**
+ * Cell source lines that would themselves parse as (possibly already-escaped)
+ * cell markers gain one extra `%` on render and lose it on parse, so a
+ * notebook that *contains* the literal text `# %% [markdown] cell:3` survives
+ * the editable-text round trip instead of being split into extra cells.
+ */
+const ESCAPABLE_MARKER_RE = /^# %%+ \[(?:code|markdown|raw)\](?: cell:\d+)?$/;
+const ESCAPED_MARKER_RE = /^# %%%+ \[(?:code|markdown|raw)\](?: cell:\d+)?$/;
+
+function escapeMarkerLikeSourceLines(source: string): string {
+	if (!source.includes("# %%")) return source;
+	return source
+		.split("\n")
+		.map(line => (ESCAPABLE_MARKER_RE.test(line) ? line.replace("# %", "# %%") : line))
+		.join("\n");
+}
+
+function unescapeMarkerLikeLine(line: string): string {
+	return ESCAPED_MARKER_RE.test(line) ? line.replace("# %%", "# %") : line;
+}
 
 export function isNotebookPath(filePath: string): boolean {
 	return path.extname(filePath).toLowerCase() === ".ipynb";
@@ -100,7 +120,7 @@ export async function readNotebookDocument(absolutePath: string, displayPath: st
 export function notebookToEditableText(notebook: NotebookDocument): string {
 	return notebook.cells
 		.map((cell, index) => {
-			const source = sourceToText(cell.source);
+			const source = escapeMarkerLikeSourceLines(sourceToText(cell.source));
 			return source.length > 0
 				? `# %% [${cell.cell_type}] cell:${index}\n${source}`
 				: `# %% [${cell.cell_type}] cell:${index}`;
@@ -156,7 +176,7 @@ function parseNotebookEditableText(text: string, displayPath: string): ParsedVir
 				`Invalid notebook editable representation for ${displayPath}: expected first line to be "# %% [code] cell:0", "# %% [markdown] cell:0", or "# %% [raw] cell:0".`,
 			);
 		}
-		current.lines.push(line);
+		current.lines.push(unescapeMarkerLikeLine(line));
 	}
 	flush();
 	return cells;

@@ -4002,8 +4002,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			return;
 		}
 
-		const schemaVersion = this.#readAuthSchemaVersion() ?? this.#inferAuthSchemaVersion();
-		const shouldWriteSchemaVersion = schemaVersion <= AUTH_SCHEMA_VERSION;
+		const recordedVersion = this.#readAuthSchemaVersion();
+		const schemaVersion = recordedVersion ?? this.#inferAuthSchemaVersion();
 		if (schemaVersion > AUTH_SCHEMA_VERSION) {
 			logger.warn("SqliteAuthCredentialStore schema version mismatch", {
 				current: schemaVersion,
@@ -4015,7 +4015,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 		this.#createAuthCredentialIndexes();
 		this.#backfillCredentialIdentityKeys();
-		if (shouldWriteSchemaVersion) {
+		// Rewriting an already-current version row is a no-op write transaction
+		// on every boot; only persist when the recorded version actually changes.
+		if (recordedVersion !== AUTH_SCHEMA_VERSION && schemaVersion <= AUTH_SCHEMA_VERSION) {
 			this.#writeAuthSchemaVersion(AUTH_SCHEMA_VERSION);
 		}
 	}
@@ -4171,9 +4173,13 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			.all() as AuthRow[];
 		if (rows.length === 0) return;
 
-		const updateIdentity = this.#db.prepare("UPDATE auth_credentials SET identity_key = ? WHERE id = ?");
+		let updateIdentity: Statement | null = null;
 		for (const row of rows) {
 			const identityKey = resolveRowCredentialIdentityKey(row.provider, row);
+			// Rows whose identity cannot be derived stay NULL; writing NULL over
+			// NULL would just burn a write transaction on every boot.
+			if (identityKey === null) continue;
+			updateIdentity ??= this.#db.prepare("UPDATE auth_credentials SET identity_key = ? WHERE id = ?");
 			updateIdentity.run(identityKey, row.id);
 		}
 	}

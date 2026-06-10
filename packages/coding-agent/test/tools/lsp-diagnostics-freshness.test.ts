@@ -37,6 +37,7 @@ function createClient(cwd: string, config: ServerConfig): LspClient {
 		pendingRequests: new Map(),
 		messageBuffer: new Uint8Array(),
 		isReading: false,
+		status: "ready",
 		lastActivity: Date.now(),
 		writeQueue: Promise.resolve(),
 		activeProgressTokens: new Set(),

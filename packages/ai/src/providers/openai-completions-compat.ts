@@ -47,6 +47,35 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	);
 }
 
+function getOpenRouterAnthropicReasoningEffortMap(
+	modelId: string,
+): Partial<Record<OpenAIReasoningEffort, string>> | undefined {
+	const match = /(?:^|\/)claude-(opus|fable|mythos)-(\d{1,2})(?:[.-](\d{1,2}))?/.exec(modelId);
+	if (!match) return undefined;
+
+	const kind = match[1];
+	const major = Number(match[2]);
+	const minor = Number(match[3] ?? 0);
+	const isFableOrMythos = kind === "fable" || kind === "mythos";
+	const isOpusAdaptive = kind === "opus" && (major > 4 || (major === 4 && minor >= 6));
+	if (!isFableOrMythos && !isOpusAdaptive) return undefined;
+
+	const hasRealXHigh = isFableOrMythos || major > 4 || (major === 4 && minor >= 7);
+	if (hasRealXHigh) {
+		return {
+			minimal: "low",
+			low: "medium",
+			medium: "high",
+			high: "xhigh",
+			xhigh: "max",
+		};
+	}
+	return {
+		minimal: "low",
+		xhigh: "max",
+	};
+}
+
 /**
  * Detect compatibility settings from provider and baseUrl for known providers.
  * Provider takes precedence over URL-based detection since it's explicitly configured.
@@ -175,6 +204,9 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 			isCopilotHost ||
 			isZenmuxHost);
 
+	const openRouterAnthropicReasoningEffortMap = isOpenRouter
+		? getOpenRouterAnthropicReasoningEffortMap(lowerId)
+		: undefined;
 	const reasoningEffortMap: NonNullable<OpenAICompat["reasoningEffortMap"]> =
 		provider === "groq" && model.id === "qwen/qwen3-32b"
 			? ({
@@ -192,13 +224,15 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 						high: "high",
 						xhigh: "max",
 					} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-				: isFireworks
-					? ({
-							// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
-							// `minimal` literal but accepts `none` for the lowest setting.
-							minimal: "none",
-						} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-					: {};
+				: openRouterAnthropicReasoningEffortMap
+					? openRouterAnthropicReasoningEffortMap
+					: isFireworks
+						? ({
+								// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
+								// `minimal` literal but accepts `none` for the lowest setting.
+								minimal: "none",
+							} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
+						: {};
 
 	return {
 		supportsStore: !isNonStandard,

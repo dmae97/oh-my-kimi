@@ -51,7 +51,7 @@ export interface TodoToolDetails {
 // =============================================================================
 
 const TodoOp = z
-	.enum(["init", "start", "done", "rm", "drop", "append", "note"] as const)
+	.enum(["init", "start", "done", "rm", "drop", "append", "note", "view"] as const)
 	.describe("operation to apply");
 
 const InitListEntry = z.object({
@@ -285,6 +285,22 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 		errors.push("Missing list for init operation");
 		return [];
 	}
+	// Duplicate phase names / task contents would be permanently unaddressable
+	// (every targeting op resolves the first match), so reject them up front.
+	const seenPhases = new Set<string>();
+	const seenTasks = new Set<string>();
+	for (const listEntry of entry.list) {
+		if (seenPhases.has(listEntry.phase)) {
+			errors.push(`Duplicate phase "${listEntry.phase}" in init list`);
+		}
+		seenPhases.add(listEntry.phase);
+		for (const content of listEntry.items) {
+			if (seenTasks.has(content)) {
+				errors.push(`Duplicate task "${content}" in init list`);
+			}
+			seenTasks.add(content);
+		}
+	}
 	return entry.list.map(listEntry => ({
 		name: listEntry.phase,
 		tasks: listEntry.items.map<TodoItem>(content => ({ content, status: "pending" })),
@@ -301,6 +317,19 @@ function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 		return phases;
 	}
 
+	// Validate the whole batch before mutating so a failing op reports every
+	// duplicate and leaves nothing half-applied.
+	const seen = new Set<string>();
+	let hasDuplicate = false;
+	for (const content of entry.items) {
+		if (seen.has(content) || findTaskByContent(phases, content)) {
+			errors.push(`Task "${content}" already exists`);
+			hasDuplicate = true;
+		}
+		seen.add(content);
+	}
+	if (hasDuplicate) return phases;
+
 	let phase = findPhaseByName(phases, entry.phase);
 	if (!phase) {
 		phase = { name: entry.phase, tasks: [] };
@@ -308,10 +337,6 @@ function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 	}
 
 	for (const content of entry.items) {
-		if (findTaskByContent(phases, content)) {
-			errors.push(`Task "${content}" already exists`);
-			return phases;
-		}
 		phase.tasks.push({ content, status: "pending" });
 	}
 	return phases;
@@ -380,6 +405,8 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string
 		}
 		case "append":
 			return appendItems(phases, entry, errors);
+		case "view":
+			return phases;
 	}
 }
 
@@ -523,9 +550,12 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 	return { phases, errors };
 }
 
-function formatSummary(phases: TodoPhase[], errors: string[]): string {
+function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
-	if (tasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
+	if (tasks.length === 0) {
+		if (errors.length > 0) return `Errors: ${errors.join("; ")}`;
+		return readOnly ? "Todo list is empty." : "Todo list cleared.";
+	}
 
 	const remainingByPhase = phases
 		.map(phase => ({
@@ -608,15 +638,24 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoToolDetails>> {
 		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
-		const { phases: updated, errors } = applyParams(clonePhases(previousPhases), params);
-		const completedTasks = getCompletionTransitions(previousPhases, updated);
-		this.session.setTodoPhases?.(updated);
+		// Pure-view calls are reads: no normalization, no state write.
+		const readOnly = params.ops.every(entry => entry.op === "view");
+		const { phases: updated, errors } = readOnly
+			? { phases: previousPhases, errors: [] as string[] }
+			: applyParams(clonePhases(previousPhases), params);
+		// A batch with any error is discarded wholesale: persisting a
+		// half-applied batch makes the natural retry hit "already exists" for
+		// the ops that did land. State and rendered summary stay at previous.
+		const failed = errors.length > 0;
+		const effective = failed ? previousPhases : updated;
+		const completedTasks = readOnly || failed ? [] : getCompletionTransitions(previousPhases, updated);
+		if (!readOnly && !failed) this.session.setTodoPhases?.(updated);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
-		const details: TodoToolDetails = { phases: updated, storage };
+		const details: TodoToolDetails = { phases: effective, storage };
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
 
 		return {
-			content: [{ type: "text", text: formatSummary(updated, errors) }],
+			content: [{ type: "text", text: formatSummary(effective, errors, readOnly) }],
 			details,
 			isError: errors.length > 0 ? true : undefined,
 		};

@@ -1,11 +1,12 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { TextContent, UserMessage } from "@oh-my-pi/pi-ai";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { Container } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 
 beforeAll(() => {
 	initTheme();
@@ -39,7 +40,7 @@ function createContext(options: {
 		isInitialized: true,
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
-		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn() },
+		ui: { requestRender: vi.fn() },
 		editor,
 		addMessageToChat,
 		updatePendingMessagesDisplay,
@@ -156,13 +157,22 @@ function createIrcMessage(timestamp: number): CustomMessage<{ from: string; mess
 		customType: "irc:incoming",
 		content: "Ready",
 		display: true,
-		details: { from: "0-Main", message: "Ready" },
+		details: { from: "0-Main", message: `Ready ${timestamp}` },
 		timestamp,
 	};
 }
 
-function createIrcContext() {
-	const chatContainer = new Container();
+function createIrcContext(options: { liveBlockAbove?: boolean } = {}) {
+	const chatContainer = new TranscriptContainer();
+	if (options.liveBlockAbove) {
+		// A still-running tool above the cards: they sit in the live region,
+		// where their rows cannot have committed to native scrollback.
+		chatContainer.addChild({
+			render: () => ["running tool"],
+			invalidate: () => {},
+			isTranscriptBlockFinalized: () => false,
+		} as Component);
+	}
 	const requestRender = vi.fn();
 	const ctx = {
 		isInitialized: true,
@@ -186,38 +196,70 @@ describe("EventController IRC expiry", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("renders IRC messages immediately and removes their components after the TTL", async () => {
+	it("renders IRC messages immediately and removes live-region cards after the TTL", async () => {
 		vi.useFakeTimers();
 		const message = createIrcMessage(1);
-		const { ctx, chatContainer, requestRender } = createIrcContext();
+		const { ctx, chatContainer, requestRender } = createIrcContext({ liveBlockAbove: true });
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent({ type: "irc_message", message });
 
-		expect(chatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(2);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(9_999);
-		expect(chatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(2);
 
 		vi.advanceTimersByTime(1);
-		expect(chatContainer.children).toHaveLength(0);
+		expect(chatContainer.children).toHaveLength(1);
 		expect(requestRender).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps a card whose rows may already be committed (no live block above)", async () => {
+		vi.useFakeTimers();
+		const message = createIrcMessage(4);
+		const { ctx, chatContainer } = createIrcContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "irc_message", message });
+		expect(chatContainer.children).toHaveLength(1);
+
+		// Everything above the card is finalized, so its rows may already be in
+		// native scrollback. Removing it would be an interior deletion of the
+		// committed prefix — the engine repairs that by recommitting everything
+		// below the gap (the duplicated-block artifact). It must stay.
+		vi.advanceTimersByTime(10_000);
+		expect(chatContainer.children).toHaveLength(1);
+	});
+
+	it("evicts the oldest live-region card beyond the cap", async () => {
+		vi.useFakeTimers();
+		const { ctx, chatContainer } = createIrcContext({ liveBlockAbove: true });
+		const controller = new EventController(ctx);
+
+		for (let i = 0; i < 5; i++) {
+			await controller.handleEvent({ type: "irc_message", message: createIrcMessage(100 + i) });
+		}
+		// live block + MAX_LIVE_IRC_CARDS (4): the 5th card evicted the 1st.
+		expect(chatContainer.children).toHaveLength(5);
+		const rendered = chatContainer.children.map(child => child.render(80).join("\n"));
+		expect(rendered.some(text => text.includes("100"))).toBe(false);
+		expect(rendered.some(text => text.includes("104"))).toBe(true);
 	});
 
 	it("does not schedule duplicate expiry for duplicate IRC events", async () => {
 		vi.useFakeTimers();
 		const message = createIrcMessage(2);
-		const { ctx, chatContainer, addMessageToChat } = createIrcContext();
+		const { ctx, chatContainer, addMessageToChat } = createIrcContext({ liveBlockAbove: true });
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent({ type: "irc_message", message });
 		await controller.handleEvent({ type: "irc_message", message });
 
 		expect(addMessageToChat).toHaveBeenCalledTimes(1);
-		expect(chatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(2);
 		vi.advanceTimersByTime(10_000);
-		expect(chatContainer.children).toHaveLength(0);
+		expect(chatContainer.children).toHaveLength(1);
 	});
 
 	it("clears pending IRC expiry timers on dispose", async () => {

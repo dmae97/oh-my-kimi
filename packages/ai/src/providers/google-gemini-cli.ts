@@ -253,7 +253,10 @@ interface CloudCodeAssistResponseChunk {
 		};
 		modelVersion?: string;
 		responseId?: string;
+		promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
 	};
+	/** In-band stream failure (quota, internal error) delivered as a final JSON event. */
+	error?: { code?: number; message?: string; status?: string };
 	traceId?: string;
 }
 
@@ -362,6 +365,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			const requestUrl = response.url;
 
 			let started = false;
+			let sawFinishReason = false;
 			const ensureStarted = () => {
 				if (!started) {
 					if (!firstTokenTime) firstTokenTime = Date.now();
@@ -384,6 +388,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				output.errorMessage = undefined;
 				output.timestamp = Date.now();
 				started = false;
+				sawFinishReason = false;
 			};
 
 			const streamResponse = async (activeResponse: Response): Promise<boolean> => {
@@ -401,8 +406,21 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					options?.signal,
 					event => options?.onSseEvent?.({ event: event.event, data: event.data, raw: [...event.raw] }, model),
 				)) {
+					if (chunk.error) {
+						const detail = chunk.error.message || chunk.error.status || "unknown error";
+						const err = new Error(`Cloud Code Assist stream error: ${detail}`);
+						throw typeof chunk.error.code === "number" && chunk.error.code >= 400
+							? withHttpStatus(err, chunk.error.code)
+							: err;
+					}
 					const responseData = chunk.response;
 					if (!responseData) continue;
+					if (!responseData.candidates?.length && responseData.promptFeedback?.blockReason) {
+						const detail = responseData.promptFeedback.blockReasonMessage;
+						throw new Error(
+							`Request blocked by Google (${responseData.promptFeedback.blockReason})${detail ? `: ${detail}` : ""}`,
+						);
+					}
 
 					const candidate = responseData.candidates?.[0];
 					if (candidate?.content?.parts) {
@@ -463,7 +481,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 									type: "toolCall",
 									id: toolCallId,
 									name: part.functionCall.name || "",
-									arguments: part.functionCall.args as Record<string, unknown>,
+									arguments: (part.functionCall.args ?? {}) as Record<string, unknown>,
 									...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
 								};
 
@@ -475,9 +493,17 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					}
 
 					if (candidate?.finishReason) {
-						output.stopReason = mapStopReasonString(candidate.finishReason);
-						if (output.content.some(b => b.type === "toolCall")) {
+						sawFinishReason = true;
+						const mapped = mapStopReasonString(candidate.finishReason);
+						// Only let a trailing tool call upgrade benign finishes; error finishes
+						// (SAFETY, MALFORMED_FUNCTION_CALL, ...) must surface even with tool calls present.
+						if ((mapped === "stop" || mapped === "length") && output.content.some(b => b.type === "toolCall")) {
 							output.stopReason = "toolUse";
+						} else {
+							output.stopReason = mapped;
+							if (mapped === "error") {
+								output.errorMessage = `Generation failed with finish reason: ${candidate.finishReason}`;
+							}
 						}
 					}
 
@@ -566,6 +592,12 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!sawFinishReason) {
+				throw new Error(
+					"Cloud Code Assist stream ended without a finish reason (connection dropped or response truncated)",
+				);
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {

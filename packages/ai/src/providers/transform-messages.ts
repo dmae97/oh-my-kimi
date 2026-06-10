@@ -19,9 +19,24 @@ const enum ToolCallStatus {
 const MAX_TOOL_CALL_ID_LENGTH = 64;
 
 function appendDuplicateSuffix(originalId: string, suffix: string, maxLength: number): string {
-	if (originalId.length + suffix.length <= maxLength) return `${originalId}${suffix}`;
+	// Responses-family ids are composites (`callId|itemId`): the wire call_id is
+	// the FIRST segment (normalizeResponsesToolCallId splits on `|`), so the
+	// suffix must land on every segment or the duplicate collapses back onto the
+	// original call_id at encode time. The length budget applies per segment,
+	// matching the per-segment caps of the provider normalizers.
+	if (originalId.includes("|")) {
+		return originalId
+			.split("|")
+			.map(segment => appendSegmentDuplicateSuffix(segment, suffix, maxLength))
+			.join("|");
+	}
+	return appendSegmentDuplicateSuffix(originalId, suffix, maxLength);
+}
+
+function appendSegmentDuplicateSuffix(segment: string, suffix: string, maxLength: number): string {
+	if (segment.length + suffix.length <= maxLength) return `${segment}${suffix}`;
 	const prefixBudget = Math.max(0, maxLength - suffix.length);
-	return `${originalId.slice(0, prefixBudget)}${suffix}`;
+	return `${segment.slice(0, prefixBudget)}${suffix}`;
 }
 
 type PendingToolResultRewrite = { replacementId: string } | undefined;

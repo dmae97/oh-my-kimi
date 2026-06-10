@@ -92,6 +92,29 @@ describe("executeJs", () => {
 		expect(resetResult.output.trim()).toBe("undefined");
 	});
 
+	it("parallel() barriers until every thunk settles and throws the lowest-index error", async () => {
+		const result = await executeJs(
+			[
+				"const settled = [];",
+				"try {",
+				"	await parallel([",
+				"		async () => { await new Promise(r => setTimeout(r, 30)); settled.push('slow'); },",
+				"		async () => { settled.push('bad1'); throw new Error('bad1'); },",
+				"		async () => { settled.push('bad2'); throw new Error('bad2'); },",
+				"	]);",
+				"	return 'no-throw';",
+				"} catch (err) {",
+				"	return JSON.stringify([err.message, settled.sort()]);",
+				"}",
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(0);
+		// Every thunk ran to completion (the slow one was not orphaned by the
+		// early rejections), and the lowest-index error propagated.
+		expect(JSON.parse(result.output.trim())).toEqual(["bad1", ["bad1", "bad2", "slow"]]);
+	});
+
 	it("persists bindings from cells that contain nested returns", async () => {
 		const first = await executeJs(
 			[

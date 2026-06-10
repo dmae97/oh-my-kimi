@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { raceWithSignal } from "../utils/abort";
 import type { AwsCredentials } from "./aws-sigv4";
 
 export interface ResolvedCredentials extends AwsCredentials {
@@ -39,6 +40,17 @@ export interface CredentialResolveOptions {
 }
 
 const REFRESH_SKEW_MS = 60_000;
+/**
+ * TTL for file-sourced credentials that carry a session token but no expiry.
+ * Tools like aws-vault/saml2aws rewrite ~/.aws/credentials with short-lived STS
+ * session keys; caching them forever serves stale creds after rotation.
+ */
+const FILE_SESSION_CREDS_TTL_MS = 5 * 60_000;
+/**
+ * Bound for the detached (signal-free) shared resolution: a hung
+ * credential_process/SSO/IMDS fetch must not pin the inflight slot forever.
+ */
+const SHARED_RESOLVE_TIMEOUT_MS = 30_000;
 
 interface CacheEntry {
 	creds: ResolvedCredentials;
@@ -46,6 +58,7 @@ interface CacheEntry {
 }
 
 const cache: Map<string, CacheEntry> = new Map();
+const inflight: Map<string, Promise<ResolvedCredentials>> = new Map();
 
 export async function resolveAwsCredentials(opts: CredentialResolveOptions = {}): Promise<ResolvedCredentials> {
 	const profile = opts.profile || $env.AWS_PROFILE || "default";
@@ -55,9 +68,24 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 	const hit = cache.get(cacheKey);
 	if (hit && hit.expiresAt - REFRESH_SKEW_MS > Date.now()) return hit.creds;
 
-	const creds = await resolveFresh(profile, region, opts.signal);
-	cache.set(cacheKey, { creds, expiresAt: creds.expiresAt ?? Number.POSITIVE_INFINITY });
-	return creds;
+	// Single-flight: N concurrent cold calls must not each spawn credential_process/SSO/IMDS fetches.
+	// The shared resolution is deliberately detached from any caller's signal — aborting one
+	// request must not fail every waiter — and bounded by its own timeout instead; each caller
+	// races its own signal against the shared promise.
+	const existing = inflight.get(cacheKey);
+	if (existing) return raceWithSignal(existing, opts.signal);
+
+	const promise = (async () => {
+		try {
+			const creds = await resolveFresh(profile, region, AbortSignal.timeout(SHARED_RESOLVE_TIMEOUT_MS));
+			cache.set(cacheKey, { creds, expiresAt: creds.expiresAt ?? Number.POSITIVE_INFINITY });
+			return creds;
+		} finally {
+			inflight.delete(cacheKey);
+		}
+	})();
+	inflight.set(cacheKey, promise);
+	return raceWithSignal(promise, opts.signal);
 }
 
 async function resolveFresh(profile: string, region: string, signal?: AbortSignal): Promise<ResolvedCredentials> {
@@ -157,7 +185,12 @@ async function readProfileCredentials(
 			accessKeyId: merged.aws_access_key_id,
 			secretAccessKey: merged.aws_secret_access_key,
 		};
-		if (merged.aws_session_token) out.sessionToken = merged.aws_session_token;
+		if (merged.aws_session_token) {
+			out.sessionToken = merged.aws_session_token;
+			// Session-token creds in the credentials file are short-lived STS keys that
+			// external tools rotate in place; cap the cache so rotations are picked up.
+			out.expiresAt = Date.now() + FILE_SESSION_CREDS_TTL_MS;
+		}
 		return out;
 	}
 
@@ -498,4 +531,14 @@ async function readImdsCredentials(parentSignal: AbortSignal | undefined): Promi
 /** Test/diagnostic helper — drops cached credentials. */
 export function clearAwsCredentialCache(): void {
 	cache.clear();
+}
+
+/**
+ * Drop the cache entry for one profile/region. Called by the Bedrock provider on
+ * 401/403 responses so stale credentials are re-resolved instead of served until restart.
+ */
+export function invalidateAwsCredentialCache(opts: { profile?: string; region?: string } = {}): void {
+	const profile = opts.profile || $env.AWS_PROFILE || "default";
+	const region = opts.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION || "us-east-1";
+	cache.delete(`${profile}\x00${region}`);
 }

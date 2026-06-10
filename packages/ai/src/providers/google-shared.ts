@@ -160,7 +160,19 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 
 	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
+	// Gemini < 3 image tool results go in a separate user turn, but parallel tool results must
+	// stay a single contiguous functionResponse turn ("number of function response parts is not
+	// equal to number of function call parts"). Buffer image turns and flush them only after the
+	// merged functionResponse turn is complete.
+	let pendingToolImageParts: Part[] = [];
+	const flushPendingToolImages = () => {
+		if (pendingToolImageParts.length === 0) return;
+		contents.push({ role: "user", parts: pendingToolImageParts });
+		pendingToolImageParts = [];
+	};
+
 	for (const msg of transformedMessages) {
+		if (msg.role !== "toolResult") flushPendingToolImages();
 		if (msg.role === "user" || msg.role === "developer") {
 			if (typeof msg.content === "string") {
 				// Skip empty user messages
@@ -314,15 +326,13 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				});
 			}
 
-			// For Gemini < 3, add images in a separate user message
+			// For Gemini < 3, buffer images for a separate user message after the functionResponse turn
 			if (hasImages && !modelSupportsMultimodalFunctionResponse) {
-				contents.push({
-					role: "user",
-					parts: [{ text: "Tool result image:" }, ...imageParts],
-				});
+				pendingToolImageParts.push({ text: "Tool result image:" }, ...imageParts);
 			}
 		}
 	}
+	flushPendingToolImages();
 
 	return contents;
 }
@@ -527,6 +537,7 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 	const blockIndex = () => blocks.length - 1;
 	let currentBlock: TextContent | ThinkingContent | null = null;
 	let firstTokenSeen = false;
+	let sawFinishReason = false;
 
 	const flushCurrent = () => {
 		if (!currentBlock) return;
@@ -534,6 +545,19 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 	};
 
 	for await (const chunk of googleStream) {
+		if (chunk.error) {
+			const detail = chunk.error.message || chunk.error.status || "unknown error";
+			const err = new Error(`Google API stream error: ${detail}`);
+			throw typeof chunk.error.code === "number" && chunk.error.code >= 400
+				? withHttpStatus(err, chunk.error.code)
+				: err;
+		}
+		if (!chunk.candidates?.length && chunk.promptFeedback?.blockReason) {
+			const detail = chunk.promptFeedback.blockReasonMessage;
+			throw new Error(
+				`Request blocked by Google (${chunk.promptFeedback.blockReason})${detail ? `: ${detail}` : ""}`,
+			);
+		}
 		const candidate = chunk.candidates?.[0];
 		if (candidate?.content?.parts) {
 			for (const part of candidate.content.parts) {
@@ -606,9 +630,17 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 		}
 
 		if (candidate?.finishReason) {
-			output.stopReason = mapStopReason(candidate.finishReason);
-			if (output.content.some(b => b.type === "toolCall")) {
+			sawFinishReason = true;
+			const mapped = mapStopReason(candidate.finishReason);
+			// Only let a trailing tool call upgrade benign finishes; SAFETY/MALFORMED_FUNCTION_CALL
+			// and friends must surface as errors even when earlier chunks carried valid tool calls.
+			if ((mapped === "stop" || mapped === "length") && output.content.some(b => b.type === "toolCall")) {
 				output.stopReason = "toolUse";
+			} else {
+				output.stopReason = mapped;
+				if (mapped === "error") {
+					output.errorMessage = `Generation failed with finish reason: ${candidate.finishReason}`;
+				}
 			}
 		}
 
@@ -643,6 +675,10 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 
 	if (options?.signal?.aborted) {
 		throw new Error("Request was aborted");
+	}
+
+	if (!sawFinishReason) {
+		throw new Error("Google API stream ended without a finish reason (connection dropped or response truncated)");
 	}
 
 	if (output.stopReason === "aborted" || output.stopReason === "error") {

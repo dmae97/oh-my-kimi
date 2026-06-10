@@ -4,7 +4,7 @@ You MUST use EXACT format:
 
 ## Goal
 
-[What user trying to accomplish in this branch?]
+[What is the user trying to accomplish in this branch?]
 
 ## Constraints & Preferences
 - [Constraints, preferences, requirements mentioned]

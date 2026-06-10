@@ -83,12 +83,11 @@ export function createHelpers(ctx: HelperContext): HelperBundle {
 		},
 		append: async (rawPath, content) => {
 			const target = resolveHelperPath(ctx, rawPath, "write");
-			await Bun.write(
-				target,
-				`${await Bun.file(target)
-					.text()
-					.catch(() => "")}${content}`,
-			);
+			// O(1) append; read-all+rewrite both raced concurrent writers and went
+			// quadratic when called in a loop. Bun.write creates parent dirs, so
+			// keep that behavior for the append path too.
+			await fs.promises.mkdir(path.dirname(target), { recursive: true });
+			await fs.promises.appendFile(target, content, "utf-8");
 			ctx.emitStatus({
 				op: "append",
 				path: target,

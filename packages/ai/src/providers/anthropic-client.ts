@@ -43,7 +43,9 @@ export interface AnthropicRequestOptions {
 /**
  * Extra `RequestInit` fields merged into every fetch call. Bun extends
  * `RequestInit` with a `tls` option used for the Claude Code TLS profile and
- * Foundry mTLS.
+ * Foundry mTLS. Core request fields (`method`, `headers`, `body`, `signal`)
+ * are owned by the client and cannot be overridden from here — the timeout
+ * controller's signal in particular must always win.
  */
 export type AnthropicFetchOptions = RequestInit & {
 	tls?: {
@@ -121,7 +123,7 @@ function shouldRetryResponse(response: Response): boolean {
 }
 
 /** Server-suggested delay (`retry-after-ms`, then `retry-after` seconds or HTTP date). */
-function retryDelayFromHeaders(headers: Headers | undefined): number | undefined {
+export function retryDelayFromHeaders(headers: Headers | undefined): number | undefined {
 	if (!headers) return undefined;
 	const retryAfterMs = headers.get("retry-after-ms");
 	if (retryAfterMs) {
@@ -288,11 +290,11 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 		callerSignal?.addEventListener("abort", onAbort, { once: true });
 		try {
 			return await fetchFn(url, {
+				...(this.#options.fetchOptions ?? {}),
 				method: "POST",
 				headers,
 				body,
 				signal: controller.signal,
-				...(this.#options.fetchOptions ?? {}),
 			});
 		} catch (error) {
 			if (timedOut && !callerSignal?.aborted) throw new AnthropicConnectionTimeoutError();

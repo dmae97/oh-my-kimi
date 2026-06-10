@@ -108,8 +108,7 @@ You MUST operate as read-only on the user's project. You NEVER modify any projec
 - You MUST include the exact version you investigated in the `version` field.
 - If the library has breaking changes between versions relevant to the question, you MUST populate `breaking_changes`.
 - If you discover undocumented behavior or gotchas, you MUST populate `caveats`.
-- When local `node_modules` has the package, you SHOULD prefer it over cloning — it reflects the version the project actually uses.
-- You SHOULD use `web_search` to find the canonical repo URL and to check for known issues, but the definitive answer MUST come from reading source code.
+- You SHOULD use `web_search` to check for known issues, but the definitive answer MUST come from reading source code.
 - If a search or lookup returns empty or unexpectedly few results, you MUST try at least 2 fallback strategies (broader query, alternate path, different source) before concluding nothing exists.
 - If the package is absent from local `node_modules` and cloning fails, you MUST fall back to `web_search` for official API documentation before reporting failure.
 </directives>

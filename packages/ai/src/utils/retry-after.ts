@@ -28,7 +28,7 @@ export function getRetryAfterMsFromHeaders(headers: HeadersLike): number | undef
 	return Math.max(...candidates);
 }
 
-function getHeadersFromError(error: unknown): HeadersLike {
+export function getHeadersFromError(error: unknown): HeadersLike {
 	if (!error || typeof error !== "object") return undefined;
 	const record = error as { headers?: unknown; response?: { headers?: unknown }; cause?: unknown };
 	const direct = extractHeaders(record.headers) ?? extractHeaders(record.response?.headers);

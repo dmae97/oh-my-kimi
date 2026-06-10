@@ -51,6 +51,44 @@ describe("Anthropic assistant-prefill fallback", () => {
 		expect(params.at(-1)?.content).toBe("Continue.");
 	});
 
+	it("repairs consecutive assistant turns left by dropped empty user messages", () => {
+		const assistant = (text: string): AssistantMessage => ({
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		// An empty nudge submission is dropped by the converter, which would leave
+		// the two assistant turns adjacent — Anthropic 400s on that shape.
+		const emptyNudge: UserMessage = { role: "user", content: [{ type: "text", text: "" }], timestamp: Date.now() };
+
+		const params = convertAnthropicMessages(
+			[
+				{ role: "user", content: "answer me", timestamp: Date.now() },
+				assistant("partial answer"),
+				emptyNudge,
+				assistant("full answer"),
+				{ role: "user", content: "thanks", timestamp: Date.now() },
+			],
+			model,
+			false,
+		);
+
+		expect(params.map(p => p.role)).toEqual(["user", "assistant", "user", "assistant", "user"]);
+		expect(params[2]?.content).toBe("Continue.");
+	});
+
 	it("does not append Continue. when the last turn is already user", () => {
 		const params = convertAnthropicMessages(
 			[

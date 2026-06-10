@@ -70,6 +70,7 @@ function baseContext(): Context {
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
+	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	const fetchMock = createMockFetch(["[DONE]"]);
@@ -78,6 +79,7 @@ async function captureOpenAICompletionsPayload(
 		fetch: fetchMock,
 		signal: createAbortedSignal(),
 		onPayload: payload => resolve(payload),
+		...options,
 	});
 	return promise;
 }
@@ -168,6 +170,84 @@ describe("openai-completions compatibility", () => {
 		}
 		expect(typeof assistant.content).toBe("string");
 		expect(assistant.content).toBe("hello world");
+	});
+
+	it("prepends thinking text to string assistant content when requiresThinkingAsText is set", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "chain of thought" },
+				{ type: "text", text: "final answer" },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(
+			model,
+			{ messages: [assistantMessage] },
+			{
+				...detectCompat(model),
+				requiresThinkingAsText: true,
+			},
+		);
+		const assistant = messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.role !== "assistant") throw new Error("assistant message missing");
+		// Regression: thinking+text replay used to call `.unshift` on the string
+		// content set above (TypeError). Both blocks must survive as one string.
+		expect(typeof assistant.content).toBe("string");
+		expect(assistant.content).toBe("chain of thought\n\nfinal answer");
+	});
+
+	it("emits thinking-only assistant content as a plain string when requiresThinkingAsText is set", () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "only thoughts" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(
+			model,
+			{ messages: [assistantMessage] },
+			{
+				...detectCompat(model),
+				requiresThinkingAsText: true,
+			},
+		);
+		const assistant = messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.role !== "assistant") throw new Error("assistant message missing");
+		expect(assistant.content).toBe("only thoughts");
 	});
 
 	it("preserves multiple system prompts as leading system messages for chat completions", () => {
@@ -645,6 +725,23 @@ describe("kimi model detection via detectCompat", () => {
 			reasoning: true,
 		};
 		expect(detectCompat(openRouterKimi).thinkingFormat).toBe("openrouter");
+	});
+
+	it("maps OpenRouter Anthropic adaptive reasoning efforts to the Anthropic scale", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			id: "anthropic/claude-fable-5",
+			reasoning: true,
+		};
+
+		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
+		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
+
+		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "xhigh" });
+		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "max" });
 	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side

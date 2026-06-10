@@ -33,8 +33,7 @@ async function createSelector(state: ProviderDiscoveryState): Promise<ModelSelec
 		getAvailable: () => [],
 		getAll: () => [],
 		getDiscoverableProviders: () => [state.provider],
-		getCanonicalModels: () => [],
-		resolveCanonicalModel: () => undefined,
+		getCanonicalModelSelections: () => [],
 		getProviderDiscoveryState: () => state,
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn() } as unknown as TUI;

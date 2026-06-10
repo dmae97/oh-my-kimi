@@ -20,13 +20,13 @@ export interface ParallelResult<R> {
  *
  * @param items - Items to process
  * @param concurrency - Maximum concurrent operations
- * @param fn - Async function to execute for each item
+ * @param fn - Async function to execute for each item; receives a worker signal that fires on abort or fail-fast so in-flight siblings can cancel
  * @param signal - Optional abort signal to stop scheduling new work
  */
 export async function mapWithConcurrencyLimit<T, R>(
 	items: T[],
 	concurrency: number,
-	fn: (item: T, index: number) => Promise<R>,
+	fn: (item: T, index: number, signal: AbortSignal) => Promise<R>,
 	signal?: AbortSignal,
 ): Promise<ParallelResult<R>> {
 	const normalizedConcurrency = Number.isFinite(concurrency) ? Math.floor(concurrency) : items.length;
@@ -52,7 +52,7 @@ export async function mapWithConcurrencyLimit<T, R>(
 			const index = nextIndex++;
 			if (index >= items.length) return;
 			try {
-				results[index] = await fn(items[index], index);
+				results[index] = await fn(items[index], index, workerSignal);
 			} catch (error) {
 				// On abort, the fn itself handles it and returns a result
 				// Only propagate non-abort errors

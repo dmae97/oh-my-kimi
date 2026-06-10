@@ -7,7 +7,7 @@ import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { getServersForFile, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
+import { applyTextEditsToString, applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
 	CodeAction,
@@ -31,6 +31,7 @@ import {
 	hasGlobPattern,
 	resolveDiagnosticTargets,
 	resolveSymbolColumn,
+	uriToFile,
 } from "@oh-my-pi/pi-coding-agent/lsp/utils";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -799,6 +800,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1002,6 +1004,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1103,6 +1106,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1163,6 +1167,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1232,6 +1237,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1301,6 +1307,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1358,6 +1365,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1506,6 +1514,67 @@ for await (const chunk of Bun.stdin.stream()) {
 			tempDir.removeSync();
 		}
 	});
+
+	it("applies equal-position inserts in array order", () => {
+		// LSP spec: multiple inserts at the same position land in the order they
+		// appear in the edits array (import + reference insertions rely on this).
+		const result = applyTextEditsToString("abc", [
+			{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } }, newText: "X" },
+			{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } }, newText: "Y" },
+		]);
+		expect(result).toBe("aXYbc");
+	});
+
+	it("validates every file's edits before writing any workspace-edit file", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-atomic-validate-");
+		try {
+			const okPath = path.join(tempDir.path(), "ok.ts");
+			const badPath = path.join(tempDir.path(), "bad.ts");
+			const okContent = "export const ok = 1;\n";
+			await Bun.write(okPath, okContent);
+			await Bun.write(badPath, "export const bad = 2;\n");
+
+			const workspaceEdit: WorkspaceEdit = {
+				changes: {
+					[fileToUri(okPath)]: [
+						{
+							range: { start: { line: 0, character: 13 }, end: { line: 0, character: 15 } },
+							newText: "changed",
+						},
+					],
+					[fileToUri(badPath)]: [
+						// Overlapping edits — must reject the whole workspace edit.
+						{
+							range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+							newText: "x",
+						},
+						{
+							range: { start: { line: 0, character: 5 }, end: { line: 0, character: 12 } },
+							newText: "y",
+						},
+					],
+				},
+			};
+
+			await expect(applyWorkspaceEdit(workspaceEdit, tempDir.path())).rejects.toThrow(/overlapping LSP edits/);
+			// The valid file must be untouched: validation runs before any write.
+			expect(fs.readFileSync(okPath, "utf8")).toBe(okContent);
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("round-trips file URIs containing percent and hash characters", () => {
+		const tricky = path.join("/tmp", "omp uri", "100% #1.ts");
+		const uri = fileToUri(tricky);
+		// Percent-encoded so the server cannot misparse a fragment or escape.
+		expect(uri).not.toContain("#");
+		expect(uri).not.toContain(" ");
+		expect(uriToFile(uri)).toBe(tricky);
+		// Lax servers sending unencoded paths are tolerated.
+		expect(uriToFile("file:///tmp/omp uri/plain.ts")).toBe("/tmp/omp uri/plain.ts");
+	});
+
 	it("resolves $-prefixed identifiers past compound matches", async () => {
 		// Pre-fix, BARE_IDENTIFIER_RE rejected leading `$`, so requireWordBoundary
 		// was false and `resolveSymbolColumn(_, _, "$store")` returned the column
@@ -1645,6 +1714,7 @@ for await (const chunk of Bun.stdin.stream()) {
 			pendingRequests: new Map(),
 			messageBuffer: new Uint8Array(),
 			isReading: false,
+			status: "ready",
 			lastActivity: Date.now(),
 			writeQueue: Promise.resolve(),
 			activeProgressTokens: new Set(),
@@ -1670,6 +1740,7 @@ for await (const chunk of Bun.stdin.stream()) {
 			pendingRequests: new Map(),
 			messageBuffer: new Uint8Array(),
 			isReading: false,
+			status: "ready",
 			lastActivity: Date.now(),
 			writeQueue: Promise.resolve(),
 			activeProgressTokens: new Set(),

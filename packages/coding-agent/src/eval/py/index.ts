@@ -42,8 +42,6 @@ export default {
 			localRoots: resolveEvalUrlRoots(opts.session),
 			kernelOwnerId: opts.kernelOwnerId,
 			reset: opts.reset,
-			artifactPath: opts.artifactPath,
-			artifactId: opts.artifactId,
 			onChunk: opts.onChunk,
 			onStatus: opts.onStatus,
 			toolSession: opts.session,

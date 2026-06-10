@@ -246,7 +246,11 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 		message: "Use the `edit` tool instead of awk -i inplace. It provides diff preview and fuzzy matching.",
 	},
 	{
-		pattern: "^\\s*(echo|printf|cat\\s*<<)\\s+.*[^|]>\\s*\\S",
+		// `>` must sit outside quoted regions (so `echo "a -> b"` passes) and be
+		// followed by a plausible filename — including `$VAR` targets; `>|`
+		// (clobber) counts as a redirect; `>&2`/`2>&1` style fd duplication is
+		// not matched.
+		pattern: "^\\s*(echo|printf|cat\\s*<<)\\s+(?:[^\"'>]|\"[^\"]*\"|'[^']*')*(?<!\\|)>{1,2}\\|?\\s*[$\\w./~\"'-]",
 		tool: "write",
 		message: "Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation.",
 	},
@@ -684,16 +688,6 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined
 		ui: { tab: "appearance", label: "Show Hardware Cursor", description: "Show terminal cursor for IME support" },
-	},
-
-	clearOnShrink: {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "appearance",
-			label: "Clear on Shrink",
-			description: "Clear empty rows when content shrinks (may cause flicker)",
-		},
 	},
 
 	// ────────────────────────────────────────────────────────────────────────

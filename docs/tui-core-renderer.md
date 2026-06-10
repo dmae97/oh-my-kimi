@@ -1,295 +1,264 @@
-# TUI core renderer — invariants & failure modes
+# TUI core renderer — the append-only contract
 
 What you are dealing with before you touch the rendering engine. This is the
 companion to [`tui-runtime-internals.md`](./tui-runtime-internals.md): that doc
-maps the *flow* (input → component tree → render); this doc explains what
-**does not work, why it keeps breaking, and the invariants you must not
+maps the *flow* (input → component tree → render); this doc explains the
+**render contract, why it is shaped this way, and the invariants you must not
 violate**. Scope is the core engine only:
 
-- [`packages/tui/src/tui.ts`](../packages/tui/src/tui.ts) — render planner, intent emitters, native-scrollback bookkeeping, cursor placement.
+- [`packages/tui/src/tui.ts`](../packages/tui/src/tui.ts) — frame pipeline, commit ledger, window math, emitters, cursor placement.
 - [`packages/tui/src/terminal.ts`](../packages/tui/src/terminal.ts) — `ProcessTerminal`, capability probes, private-CSI reassembly.
-- [`packages/tui/src/terminal-capabilities.ts`](../packages/tui/src/terminal-capabilities.ts) — `TERMINAL` profile, ED3 risk / sync-output / DECCARA / image detection.
+- [`packages/tui/src/terminal-capabilities.ts`](../packages/tui/src/terminal-capabilities.ts) — `TERMINAL` profile, sync-output / DECCARA / image detection.
 - [`packages/tui/src/stdin-buffer.ts`](../packages/tui/src/stdin-buffer.ts) — escape-sequence reassembly.
 - [`packages/tui/src/utils.ts`](../packages/tui/src/utils.ts) — width/slice/wrap (the width model).
 - [`packages/tui/src/kitty-graphics.ts`](../packages/tui/src/kitty-graphics.ts) + [`components/image.ts`](../packages/tui/src/components/image.ts) — inline images.
 - [`packages/tui/src/deccara.ts`](../packages/tui/src/deccara.ts) — rectangular-fill optimizer.
 
 Application-layer renderers (transcript, tool calls, session tree, editor,
-widgets) are **out of scope** — they live in `packages/coding-agent`.
+widgets) are **out of scope** — they live in `packages/coding-agent`. The one
+app-layer file that is load-bearing for this contract is
+[`transcript-container.ts`](../packages/coding-agent/src/modes/components/transcript-container.ts),
+which implements the commit-boundary seam described below.
 
 ---
 
 ## 1. The one thing to understand first
 
-> **The renderer cannot observe the terminal's scroll position on most hosts it
-> runs on.** Every decision about rewriting native scrollback is therefore a
-> *guess*, and the guess has two opposite failure modes that cannot both be
-> avoided by a single policy.
+> **The renderer cannot observe the terminal's scroll position** (ConPTY's
+> probe lies; POSIX has no API at all). The previous engine tried to *guess*
+> when it was safe to rewrite native scrollback, and every policy choice over
+> that unobservable variable traded one failure family for another (yank ↔
+> flash ↔ corruption ↔ invisible-until-resize — see the git history of this
+> file for the full war journal). The current engine removes the guess
+> entirely: **native scrollback is append-only.**
 
-We keep our transcript on the **normal screen**. We deliberately have not moved
-the engine to the alternate screen: alt-screen would make the terminal handle
-viewport isolation, but the transcript/resume affordances would disappear with
-the alternate buffer. Keeping the normal screen means
-*we* own native scrollback, which means we must decide, per frame, whether it is
-safe to rebuild it. To rebuild history we emit xterm **ED3** (`CSI 3 J`, erase
-saved lines). Deciding when ED3 is safe requires knowing whether the user has
-scrolled up — and we usually can't:
+We keep the transcript on the **normal screen** (native scrollback, native
+selection, transcript persists after exit). The engine maintains one ledger:
 
-- **ConPTY hosts** (Windows Terminal, Tabby, Hyper, VS Code, conhost): the
-  pseudo-console buffer is pinned to the visible grid, so any "am I at the
-  bottom?" console query answers "yes" even when the reader scrolled up. The
-  probe *lies*.
-- **POSIX terminals**: there is no scroll-position API at all. The probe is
-  *absent*.
+- **`committedRows` (C)** — frame rows `[0, C)` have been physically scrolled
+  into terminal history. They are **immutable**: the engine never rewrites
+  them, and components must never change them.
+- **`windowTopRow` (W)** — the frame row mapped to grid row 0. The visible
+  window is frame rows `[W, W + height)`, repainted in place with relative
+  cursor moves.
+- **commit boundary (B)** — reported by the component tree per frame
+  (`NativeScrollbackLiveRegion`): `B = commitSafeEnd ?? liveRegionStart ??
+  frame.length`. Rows below B may still re-layout and must not enter history.
 
-So `Terminal.isNativeViewportAtBottom()` returns `true` / `false` / **`undefined`**,
-and `undefined` ("unknown") is the common case. The whole renderer is built
-around not trusting `undefined`.
+Per ordinary frame: `W = max(C, L − height)`, `C' = max(C, min(B, W))`, and the
+only bytes that ever touch history are the **chunk** `frame[C, C')` written at
+the scrollback seam. Scrollback therefore equals `frame[0..C)` — every row
+exactly once, in order, with its content at commit time. There is nothing to
+guess, nothing to defer, and nothing to reconcile: the scroll position is
+irrelevant because ordinary updates never rewrite anything a scrolled reader
+could be looking at.
 
-### The two-way bind
+### What this costs (the accepted tradeoffs)
 
-| If you guess… | …and you're wrong | Symptom |
+- A block that has scrolled past the window top cannot reflow in place. Blocks
+  stay in the live region (below B) until they are final; a late mutation of
+  committed content is ignored (the stale committed copy stays in history).
+- A component tree that reports **no seam** gets shell semantics: whatever
+  scrolls off is final. Shrinking such a frame into its committed prefix
+  re-anchors the window and leaves the stale copy in history (§3).
+- Inside multiplexers, a resize leaves the pane history wrapped at the old
+  width (same as any shell output).
+
+---
+
+## 2. The frame pipeline (what you are editing)
+
+`#doRender` per frame:
+
+1. Compose the frame (`render(width)`), collecting `liveRegionStart` /
+   `commitSafeEnd` from the root children (absolute row indices).
+2. **Audit the committed prefix** (`findCommittedPrefixResync`, skipped on
+   geometry frames). Components must never re-layout rows below C, but real
+   flows violate it (a TTSR rewind truncating a streamed block, an image-cap
+   demotion shrinking a committed image) and the violation must not become
+   content loss. The detector samples the prefix *tail* (up to 8 non-blank
+   rows in the last 24, SGR-stripped): an in-place edit or restyle disturbs
+   only the touched rows (≤1 mismatch ⇒ aligned ⇒ ignored — stale styling in
+   history is the accepted artifact), while any insertion/deletion shifts
+   every row below it including the tail (⇒ re-anchor C at the first changed
+   row and recommit from there: history keeps the stale copy and gains a
+   fresh one — **duplication, never loss**).
+3. Classify: **fullPaint** (first paint, `clearScrollback` session replace, or
+   geometry change outside a multiplexer — all user gestures) or **update**.
+4. Window math as in §1. Two special rules:
+   - **Overlays freeze commits** (`C' = C`): composited rows must never enter
+     history; the hidden gap backfills via the chunk after the overlay closes.
+   - **Shrink into the committed prefix** (`L ≤ C`): re-anchor
+     `W = max(0, L − height)`, reset `C = min(B, W)`, keep the stale history
+     above (no gesture, no erase).
+5. Extract the cursor marker (strip-first: markers never reach the terminal,
+   the prefix ledger, or the audit), prepare lines (width fitting), slice the
+   window, composite overlays **into the window slice only** (screen
+   coordinates — an overlay never touches the frame or the ledger).
+6. Emit:
+
+| Emitter | Bytes | When |
 |---|---|---|
-| **Eager** (rebuild now → emit `CSI 3 J`) | reader was scrolled up | **YANK** to top + **FLASH** on terminals that snap scroll on ED3 |
-| **Defer** (emit nothing, reconcile later) | viewport really was at the bottom | **CORRUPTION** (stale/duplicated rows) + **invisible-until-resize** |
+| `#emitFullPaint` | clears + `frame[0, C')` + window rows | gestures only. `clearScrollback` ⇒ `\x1b[2J\x1b[H\x1b[3J`; otherwise ED22 (when supported) + `\x1b[2J\x1b[H` |
+| `#emitUpdate` scroll-append | `\r\n` + new bottom rows + changed-row range | the rows leaving the screen are exactly the chunk, content untouched since painted |
+| `#emitUpdate` in-window diff | relative move + changed-row range rewrite | nothing scrolls, nothing commits (cursor-only when nothing changed) |
+| `#emitUpdate` seam rewrite | chunk rows + full window rewrite | commit advance, window re-anchor, hidden-gap backfill, mux resize |
 
-Yank, flash, and buffer corruption are **the same bug wearing three masks.**
-Historically, every fix that suppressed one mask for one terminal class
-re-enabled the opposite mask for a neighbouring class, and the follow-on
-complaint landed within a day. If you "fix flashing" by making rebuilds more
-eager, you will reintroduce yank. If you "fix yank" by deferring more, you will
-reintroduce corruption / invisibility. **Do not move this lever without the
-fidelity harness (§9) green.**
+**ED3 (`CSI 3 J`) is emitted in exactly one place** — `#emitFullPaint` with
+`clearScrollback: true` — and is reached only by user gestures: session
+replace/branch/resume (`requestRender(true, { clearScrollback: true })`),
+resize outside a multiplexer, `resetDisplay()` (Ctrl+L). A gesture pins the
+user to the tail, so the snap is acceptable; multiplexers never get ED3 (it is
+a no-op there and a replay would duplicate pane history).
 
----
+The ordinary update path never emits ED2/ED3 or an absolute cursor home —
+several terminal families snap a scrolled reader to the bottom on those.
 
-## 2. The render-intent planner (what you are editing)
+### The commit-boundary seam (the load-bearing app contract)
 
-`#doRender` is split into a **planner** (`#planRender`) that classifies a frame
-into exactly one `RenderIntent`, and one `#emit*` method per intent that owns
-the bytes written and the state update. All state flows through a single
-`#commit` checkpoint at the end of every emitter. The intent union
-(`tui.ts`, search `type RenderIntent`):
+`NativeScrollbackLiveRegion` (tui.ts) is how a component keeps mutable rows out
+of history:
 
-| Intent | Emits | When |
-|---|---|---|
-| `noop` | cursor only | nothing visible changed |
-| `initial` | clear viewport, paint transcript, **keep** prior shell scrollback | first paint after `start()` |
-| `sessionReplace` | clear viewport **+ ED3** (outside multiplexers) | caller forced `{ clearScrollback: true }` (switch/branch/reload/resume) |
-| `historyRebuild` | clear viewport **+ ED3** (outside multiplexers) | geometry change rewrapped history, or a proven-at-tail rebuild |
-| `overlayRebuild` | rebuild viewport with overlay composite | overlay visibility changed |
-| `liveRegionPinned` | relative moves + per-row rewrite/suffix-clear + `\r\n` | foreground streaming on an ED3-risk host, commit-as-you-go |
-| `viewportRepaint` | rewrite the visible viewport in place (optional `appendFrom` tail first) | safe non-destructive repaint |
-| `deferredShrink` | padded viewport repaint, history left dirty | bottom-anchored shrink, viewport unobservable |
-| `deferredMutation` | **zero bytes**, history left dirty | row-reindexing edit while possibly scrolled |
-| `shrink` / `diff` | trailing-row clear / changed-line diff | ordinary in-place updates |
+- `getNativeScrollbackLiveRegionStart()` — first row that may still mutate
+  (everything below it, including root chrome rendered after it, stays in the
+  window).
+- `getNativeScrollbackCommitSafeEnd()` — optional deeper boundary: the
+  append-only prefix of the live region (a streaming assistant message's
+  settled rows). Without it, a single live block taller than the window would
+  hold its head out of history until it finalizes.
 
-**ED3 (`CSI 3 J`) is emitted in exactly one place** — `#emitFullPaint` when
-`clearScrollback: true` (`\x1b[2J\x1b[H\x1b[3J`). The ordinary clear is
-**non-destructive**: `\x1b[22J` (copy-screen-to-scrollback, only when
-`TERMINAL.supportsScreenToScrollback`) then `\x1b[2J\x1b[H`, **no `3J`**. ED3 is
-reached only by `sessionReplace`/`historyRebuild`/`overlayRebuild`, and those
-suppress the scrollback clear inside multiplexers (`isMultiplexerSession()` =
-`TMUX || STY || ZELLIJ`).
+`TranscriptContainer` implements this for the coding agent: finalized blocks
+freeze (their render is snapshotted, so their content can never drift after
+the engine may have committed it), still-mutating blocks
+(`isTranscriptBlockFinalized?.() === false`) anchor the live region, and
+`deriveLiveCommitState` derives the commit-safe end of the first live block
+from two independent signals:
 
-### The predicate gates
+- **append-only detection** — a block observed growing without visibly
+  rewriting an interior row commits its full body; a rewrite suspends this
+  for `VOLATILE_REARM_FRAMES` clean frames.
+- **stable-prefix ratchet** — rows that stayed visibly identical for a full
+  `STABLE_PREFIX_COMMIT_FRAMES` window commit even while the block's tail
+  keeps rewriting (a task tool's static prompt above a ticking progress
+  tree). Without it, one perpetually animating row holds the whole block out
+  of history, so a block taller than the window reads as cut off (head
+  neither committed nor on screen) for the entire run. The ratchet tracks the
+  window-minimum common prefix; a rewrite above the promoted run retreats it
+  to the divergence, and rows that already committed are the engine audit's
+  problem (recommit → duplication, never loss). That retreat also arms a
+  permanent **rewrite floor** at the divergence: a row that mutates *after*
+  surviving a full promotion window is a slow ticker (an agent row's tool/cost
+  counter updating every few seconds), not settling content — without the
+  floor, every quiet stretch re-promoted it and every later tick forced an
+  audit recommit, spraying stale snapshots of the block into scrollback for
+  the whole run. Rows at/after the floor never re-promote while the block
+  lives (the floor index travels with append-shaped insertions above it);
+  one-off re-layouts before any promotion never arm it, and the append-only
+  path commits the full block regardless.
 
-Three private predicates encode the guessing policy. Do not "simplify" them —
-each branch is load-bearing:
-
-- `#canReplayNativeScrollbackAtCheckpoint(atBottom)` → `atBottom === true`. A
-  rebuild at a **keystroke checkpoint** (prompt submit) is allowed only with a
-  *positive* at-tail proof. A prompt submit is **no longer** treated as implicit
-  proof for an unobservable host.
-- `#canRebuildNativeScrollbackLive(atBottom, allowUnknown)` → `true` iff
-  `atBottom === true`, **or** (`atBottom === undefined && allowUnknown &&
-  platform !== "win32"`). i.e. live ED3 during streaming requires either proof
-  or an explicit direct-user-input opt-in, and **never** on win32.
-- `#nativeViewportIsScrolled(atBottom, allowUnknown)` → `true` if
-  `atBottom === false`, or (`undefined && win32 && !allowUnknown`). Used to
-  decide deferral.
-
-`allowUnknownViewportMutation` is the **direct-user-input opt-in** (autocomplete
-/ IME / a keystroke the user just typed). A keystroke pins the host viewport to
-the bottom, so it is safe to repaint live then. It is **not** set by passive
-streaming. `setEagerNativeScrollbackRebuild(true)` is the streaming opt-in; on
-ED3-risk hosts it is downgraded so it never promotes to a live ED3 clear.
-
-### Deferral + checkpoint discipline
-
-When the viewport is unobservable during **passive streaming**, the planner
-defers (`deferredMutation`/`deferredShrink`/`viewportRepaint`) and marks native
-scrollback dirty (`#markNativeScrollbackDirty()`). Reconciliation happens later
-at a checkpoint via `refreshNativeScrollbackIfDirty()` — and only if
-`#canReplayNativeScrollbackAtCheckpoint` proves at-tail. The streaming-defer +
-live-region-pin seam (`NativeScrollbackLiveRegion`,
-`getNativeScrollbackLiveRegionStart` / `getNativeScrollbackCommitSafeEnd`) is the
-**actively-churning** part of the engine; if you change how transient rows are
-committed, every structural-mutation branch (shrink **and** grow/offscreen-edit)
-must defer **symmetrically**, or you reopen the corruption family.
+Freezing is unconditional — it is the engine's required guarantee, not a
+per-terminal optimization.
 
 ---
 
-## 3. The five fault families
+## 3. Invariants — MUST / NEVER
 
-### YANK — viewport snapped to top — NOT fully converged
-- **Mechanism:** a live `historyRebuild` fires `CSI 3 J` while the reader is
-  scrolled up; ED3-snap terminals reset the visible viewport to the top of the
-  (now-erased) scrollback.
-- **Trigger to avoid:** treating an unobservable probe as "at bottom" during
-  *passive* streaming, or OR-ing an eager-streaming flag into the live ED3 path.
-- **Current stance:** never emit ED3 on an unobservable host during passive
-  streaming; defer and reconcile at a keystroke checkpoint. ConPTY/win32 never
-  trust the probe at all.
-
-### CORRUPTION — duplicated / stale rows — NOT fully converged
-- **Mechanism:** the flip side of the yank fix. A deferred/repainted frame
-  leaves rows already committed to native scrollback out of sync with the live
-  viewport; the scrollback↔viewport seam duplicates (e.g. a 2-row dup, a
-  streaming-tail dup, or an async-expansion dup).
-- **Trigger to avoid:** repainting the viewport over scrollback that still holds
-  the old copy; a frozen/deferred block whose snapshot no longer matches after
-  the region above it reflowed; one mutation branch deferring while its mirror
-  branch repaints.
-- **Current stance:** commit only the **stable prefix** line-count to native
-  history; keep unstable rows out; reconcile drift at the checkpoint; park the
-  hardware cursor at real content bottom, not padded bottom.
-
-### FLASH (and invisible-until-resize) — NOT fully converged
-- **Two distinct causes, one symptom:**
-  - *Flash* = eager ED3 rebuild wrapped in DEC 2026 BSU/ESU fired per streaming
-    frame on a terminal that clamps scroll on ED3 (VTE/GNOME family).
-  - *Invisible-until-resize* = the defer fix over-firing, so a structural frame
-    emits **zero bytes** (`deferredMutation` returns nothing) until a resize
-    forces a repaint.
-- **Trigger to avoid:** env-detection that misses a flashing terminal (SSH
-  strips `VTE_VERSION`; some hosts set no distinguishing var); collapsing an
-  `undefined` probe into a definite scrolled/at-bottom verdict.
-- **Current stance:** confine ED3 to the destructive path; auto-disable DEC 2026
-  at runtime when the terminal reports it unsupported (DECRQM), with
-  `PI_NO_SYNC_OUTPUT` as a manual hatch; keep autowrap discipline regardless.
-
-### WIDTH — measurement crashes / fidelity — crash class dead, accuracy unproven
-- **Mechanism:** the measured column width of a line disagreed with the
-  terminal's painted cells (emoji, wide graphemes, combining marks, Hangul
-  jamo), and the old render loop **threw** on any mismatch — a 1-cell cosmetic
-  error became a fatal whole-agent crash.
-- **Current stance:** **never throw in the render hot path — clamp.** The loop
-  truncates over-wide lines with `truncateToWidth`/`sliceByColumn` and logs
-  (under debug) instead of dying. Width is owned end-to-end by one native UAX#11
-  engine shared by measure/slice/wrap (see §6). Accuracy across all scripts
-  (e.g. RTL/combining marks) is still not proven by a green gate.
-
-### PROBE — stray bytes injected as keystrokes — RESOLVED
-- **Mechanism:** a private-CSI probe reply (DA1 / kitty / mode 2031) split
-  across a stdin flush; the unmatched prefix was dropped and the continuation
-  bytes were forwarded as keystrokes.
-- **Current stance:** buffer-and-reassemble partial CSI responses; give each
-  probe a typed sentinel owner. This is the **one cleanly-closed family** —
-  because its contract is *bounded and observable* (bytes in = bytes out),
-  unlike the unobservable-viewport families. See §7.
-
----
-
-## 4. Invariants — MUST / NEVER
-
-These are the rules the recurrence taught us. Treat them as load-bearing.
-
-1. **NEVER add a new `CSI 3 J` (ED3) callsite.** ED3 must flow only through
-   `#emitFullPaint({ clearScrollback: true })`, for the existing destructive
-   intents (`sessionReplace`, proven/safe `historyRebuild`, `overlayRebuild`).
-   Ordinary redraws use the non-destructive `\x1b[22J` + `\x1b[2J\x1b[H` clear.
-2. **NEVER trust an unobservable viewport probe (`undefined`) for *passive*
-   streaming.** Only a positive at-tail proof, or a direct-user-input opt-in
-   (`allowUnknownViewportMutation`), authorizes a live rebuild — and never on
-   win32/ConPTY.
-3. **NEVER throw in the render hot path.** Clamp over-wide lines; a width
-   mismatch is cosmetic, not fatal.
-4. **NEVER let a defer path emit a structurally-changed frame as zero bytes
-   while at the bottom** — that is invisible-until-resize. `deferredMutation`/
-   `deferredShrink` are only safe when the viewport is (or may be) scrolled.
-5. **Defer symmetrically.** If one structural-mutation branch (shrink) defers on
-   an unobservable ED3-risk host, the mirror branch (grow / offscreen-edit) must
-   too. Asymmetry reopens corruption.
-6. **Commit only the stable prefix to native history.** Transient/unsettled rows
-   stay out of scrollback until a checkpoint; reconcile drift at the checkpoint.
-7. **Park the hardware cursor at real content bottom**, not the padded viewport
-   bottom, or height shrinks scroll live rows into scrollback and duplicate them
+1. **NEVER add a new `CSI 3 J` (ED3) callsite.** ED3 flows only through
+   `#emitFullPaint({ clearScrollback: true })`, only for gestures, never inside
+   multiplexers.
+2. **NEVER rewrite a committed row.** No emitter may touch frame rows `< C`,
+   and `W ≥ C` always (re-showing a committed row on the grid duplicates it
+   for a scrolling reader — the historical corruption family). When a
+   *component* violates immutability, the audit (§2) degrades to duplication —
+   never silently skip rows, never erase history.
+3. **Commits are exactly the chunk.** Any byte shape that scrolls the screen
+   must scroll *only* rows accounted for by `C' − C` — that is what makes
+   scrollback provably `frame[0..C)`.
+4. **NEVER probe the viewport position or fork on platform in the update
+   path.** win32 behaves like POSIX. The probe APIs are gone; do not
+   reintroduce them.
+5. **Mutable content stays below the commit boundary.** App-layer renderers
+   must finalize-before-commit; the engine trusts B and clamps, it does not
+   verify content.
+6. **Park the hardware cursor at real content bottom**, not the padded window
+   bottom, or height shrinks scroll live rows into history and duplicate them
    per resize step.
-8. **Cursor writes live *inside* the synchronized-output frame**, before ESU —
-   never as a second frame after it (that teleports/blinks the caret).
-9. **Detect terminal *risk*, not terminal *brand*, and default unknown to
-   risky.** Env sniffing is necessarily incomplete (see §5); never assume an
-   un-enumerated host is safe.
-10. **Multiplexers (tmux/screen/zellij) get no destructive scrollback clear and
-    no viewport probe.** ED3 is a no-op there and a full replay duplicates the
-    transcript; repaint in place and rely on the pinned/commit-as-you-go path.
-11. **Any change to the eager/defer lever, the predicates, or the live-region
-    seam must be validated by the render-stress fidelity harness (§9)** across
-    `{win32, POSIX} × {unknown, scrolled, at-bottom}`, not by a single-terminal
-    smoke test.
+7. **Cursor writes live inside the synchronized-output frame**, before ESU —
+   never as a second frame after it.
+8. **NEVER throw in the render hot path.** Clamp over-wide lines
+   (`truncateToWidth`); a width mismatch is cosmetic, not fatal.
+9. **Multiplexers get no destructive clear and no history rewrap on resize** —
+   repaint the window in place; pane history keeps its old wrap.
+10. **Any change to the ledger math, the emitters, or the seam must be
+    validated by the stress harness (§6)** across its full scenario matrix,
+    not by a single-terminal smoke test.
 
 ---
 
-## 5. Terminal capability detection (and why it is fragile)
+## 4. Terminal capability detection
 
 `TERMINAL` (`terminal-capabilities.ts`) is resolved once at import from
-`TERMINAL_ID` plus environment sniffing. The detection helpers are pure and
-parameterized over `(env, platform)` so they are unit-testable:
+`TERMINAL_ID` plus environment sniffing; detection helpers are pure over
+`(env, platform)` and unit-testable.
 
-- `detectTerminalEagerEraseScrollbackRisk(env, platform)` → is a live ED3
-  rebuild unsafe here? Current policy: `false` on win32 (dedicated ConPTY
-  deferral paths handle it) and when `PI_TUI_ED3_SAFE=1`; otherwise **`true`**
-  for `WT_SESSION` (WT fronting WSL), SSH/tmux/screen/zellij, known
-  ED3-snap/scrollback-clearing terminals (WezTerm, kitty, ghostty, alacritty,
-  VTE, iTerm2, Apple Terminal, GNOME Terminal, Ptyxis, xfce4-terminal), Linux
-  truecolor, **and every other unknown POSIX terminal**. The default is *risky*
-  on purpose.
-- `shouldEnableSynchronizedOutputByDefault(env, id)` → DEC 2026 default. Precedence:
-  user opt-out (`PI_NO_SYNC_OUTPUT`/`PI_TUI_SYNC_OUTPUT=0`) → user force-on
-  (`PI_FORCE_SYNC_OUTPUT=1`/`PI_TUI_SYNC_OUTPUT=1`) → `TERM_FEATURES` advertises
-  `Sy` → `WT_SESSION` (WT/WSL) → known direct terminals
-  (kitty/ghostty/wezterm/iterm2/alacritty/vscode; SSH passes through) → off for
-  risky multiplexers and everything else (VTE-family, GNU screen, Apple Terminal,
-  legacy conhost, unknown). Reconciled at runtime by the DECRQM mode-2026 report:
-  a positive report **enables** sync (upgrading default-off muxes like
-  zellij/tmux-master), a negative one disables it; a user override still wins.
-  `synchronizedOutputUserOverride(env)` is the shared opt-out/force resolver.
-- `detectRectangularSgrSupport(id, env)` → DECCARA fills: **kitty only**
-  (ghostty does not implement the SGR-background extension), off in multiplexers
-  and under `PI_NO_DECCARA`.
+- `shouldEnableSynchronizedOutputByDefault(env, id)` → DEC 2026 default.
+  Precedence: user opt-out (`PI_NO_SYNC_OUTPUT`/`PI_TUI_SYNC_OUTPUT=0`) → user
+  force-on (`PI_FORCE_SYNC_OUTPUT=1`/`PI_TUI_SYNC_OUTPUT=1`) → `TERM_FEATURES`
+  advertises `Sy` → `WT_SESSION` → known direct terminals → off for risky
+  multiplexers and unknowns. Reconciled at runtime by the DECRQM mode-2026
+  report; a user override still wins.
+- `detectRectangularSgrSupport(id, env)` → DECCARA fills: kitty only, off in
+  multiplexers and under `PI_NO_DECCARA`.
+- `supportsScreenToScrollback` → kitty's ED22 (used once, on the initial
+  paint, to preserve the pre-existing shell screen).
 
-**Why this keeps leaking:** terminal class is inferred from env vars that are
-**not durable**. `VTE_VERSION` is stripped by `sshd` (default `AcceptEnv`);
-`COLORTERM` is also not in default `AcceptEnv`; some hosts (Tabby) set no
-distinguishing var; WSL-fronting-WT is neither pure win32 nor pure POSIX. Every
-missed env var is a missed terminal class is a new complaint. The mitigations
-are: (a) **default unknown to risky** rather than safe, and (b) detect by
-*behavior/handshake* (DECRQM) where possible rather than a host allow-list. When
-you add a terminal, add it to the pure detector and add the **SSH-stripped env
-shape** to the test, not just the env-present shape.
+The old ED3-risk classifier (`eagerEraseScrollbackRisk`, `PI_TUI_ED3_SAFE`,
+`submitPinsViewportToTail`) is gone: behavior no longer depends on which
+terminal is rendering, so there is no risk class to detect. Env sniffing now
+only selects *optimizations* (sync output, DECCARA, images), where a miss is
+cosmetic, not corrupting.
 
 ---
 
-## 6. Width model
+## 5. Width model
 
 `visibleWidth` / `truncateToWidth` / `sliceByColumn` / `wrapTextWithAnsi`
-(`utils.ts`) all route through **one native UAX#11 engine** (`@oh-my-pi/pi-natives`,
-Rust `unicode-width`). We deliberately dropped `Bun.stringWidth` because it
-disagreed with the engine on combining marks and jamo, and mixing two width
-models in measure-vs-slice produced the crashes.
+(`utils.ts`) all route through **one native UAX#11 engine**
+(`@oh-my-pi/pi-natives`, Rust `unicode-width`). `Bun.stringWidth` was dropped
+deliberately — mixing two width models in measure-vs-slice produced crashes.
 
 - Fast path: printable ASCII is one cell per code unit.
-- ZWJ pictographic emoji take the `visibleWidthByGrapheme` override (ANSI spans
-  excised first, then `Intl.Segmenter`), because the native scanner double-counts
-  SGR bytes when a sequence is split by the segmenter.
-- OSC 66 sized text (`\x1b]66;…`) takes the native path.
+- ZWJ pictographic emoji take the `visibleWidthByGrapheme` override.
+- OSC 66 sized text takes the native path.
 
-**Rule:** if you add a code path that measures width, route it through these
-helpers. Never reintroduce `Bun.stringWidth` or a parallel width table — the
-measure model and the slice/wrap model must agree, or you get over-wide lines
-that the hot-path clamp silently truncates (cosmetic loss) or, worse, seam
-duplication.
+**Rule:** any new measuring code routes through these helpers, and the hot
+path clamps instead of throwing. Known residual: combining-heavy scripts
+(Arabic harakat) survive painting verbatim, but ghostty-web's cell readback can
+migrate non-spacing marks across cells — the stress harness compares those rows
+with marks stripped (`sameLinesAllowingMarkDrift`).
+
+---
+
+## 6. The fidelity gate (use it)
+
+`packages/tui/test/render-stress-harness.ts` drives the renderer's **real
+emitted ANSI** into a ghostty-web `VirtualTerminal` across randomized op
+sequences and parameterized terminal shapes, and validates the contract with a
+**shadow commit ledger**: an independent reimplementation of §1's math, fed
+only by observed frames (a `render` wrap) and observed bytes (a `write` wrap).
+Per op it asserts:
+
+- the whole tape (scrollback + grid) equals `shadowTape + window slice`, row
+  for row, including across resizes;
+- scrolled readers stay pinned and visible history rows are never rewritten;
+- multiplexer pane history grows by exactly the committed chunk;
+- sync-output/autowrap bracket discipline, cursor parking, background columns,
+  duplicate accounting.
+
+Run it — plus `render-regressions.test.ts`,
+`streaming-scrollback-defer.test.ts`, and the `issue-*-repro.test.ts` files —
+before changing ledger math, emitters, or the seam. A change that passes one
+terminal and one seed is not verified.
 
 ---
 
@@ -300,90 +269,71 @@ a non-answering terminal is detected when DA1 returns first. Replies can arrive
 **split across a stdin flush**, so:
 
 - `#privateCsiResponseBuffer` accumulates `\x1b[?…` partials while a sentinel is
-  outstanding, rejoins on the terminator byte (0x40–0x7e), then runs the
-  DA1/kitty/mode-2031 handlers on the **complete** reply. A new `\x1b`
-  mid-reassembly or >256 bytes abandons the partial so real keys (e.g. arrow
-  `\x1b[A`) still reach input.
-- `#da1SentinelOwners` is a **typed FIFO** discriminated by `kind` (`keyboard`,
-  `osc11`, `privateMode`, `kittyGraphicsProbe`, `osc99Probe`) so a keyboard DA1
-  cannot be mistaken for an OSC 11 / DECRQM / graphics-probe sentinel.
-- DECRQM probes (`#queryPrivateMode(2026/2048/2031)`) record support via DECRPM
-  and drive runtime feature gating (e.g. auto-disabling DEC 2026 sync output).
+  outstanding, rejoins on the terminator byte, then runs the handlers on the
+  **complete** reply. A new `\x1b` mid-reassembly or >256 bytes abandons the
+  partial so real keys still reach input.
+- `#da1SentinelOwners` is a **typed FIFO** discriminated by `kind` so a
+  keyboard DA1 cannot be mistaken for an OSC 11 / DECRQM / graphics-probe
+  sentinel.
+- DECRQM probes (2026/2048/2031) drive runtime feature gating.
 
-**Rule:** any new probe must own a typed sentinel and survive a split reply. The
-contract is bytes-in = bytes-out; it is testable, so test it (feed the reply
-byte-by-byte and assert nothing leaks to the input handler).
+**Rule:** any new probe must own a typed sentinel and survive a split reply
+(feed the reply byte-by-byte in a test and assert nothing leaks to input).
 
 ---
 
 ## 8. Inline images & memory
 
-Kitty images are **transmit-once, place-many** (`kitty-graphics.ts`):
-`encodeKittyTransmit` (`a=t`, keyed by a stable `i=`) writes the base64 a single
-time; repaints emit only `encodeKittyPlacement` (`a=p`). Text clears
-(`CSI 2 J` / `CSI 3 J`) do **not** purge the terminal's image store — only
-`encodeKittyDeleteImage` (`a=d,d=I`) does. `ImageBudget` (`components/image.ts`)
-keeps only the most-recent N images live; demoted images render their text
-fallback and are explicitly purged.
+Kitty images are **transmit-once, place-many** (`kitty-graphics.ts`).
+`ImageBudget` keeps only the most-recent N images live; when the cap is
+exceeded the demoted image's pixels are deleted by id (`a=d,d=I`) and its
+visible rows re-render as the text fallback through the ordinary window diff —
+**no destructive replay**. A demoted placement already committed to history
+simply loses its pixels (committed rows are immutable), and the text fallback
+is **height-preserving** once a graphic has rendered (reserved rows + fallback
+line), so demotion never shrinks the block and never shifts committed content
+below it.
 
-**Rule:** never re-emit full base64 per frame (it pegged RAM and pinned the UI
-thread). Kitty Unicode placeholders are default-on only for kitty/ghostty
-(`PI_NO_KITTY_PLACEHOLDERS` / `PI_KITTY_PLACEHOLDERS`); other Kitty-protocol
-hosts render placeholder cells as literal PUA glyphs, so they fall back to
-direct `a=p` placement.
-
----
-
-## 9. The fidelity gate (use it)
-
-`packages/tui/test/render-stress-harness.ts` renders the renderer's **real emitted ANSI** into
-a ghostty-web `VirtualTerminal` and asserts viewport fidelity (a scrolled reader
-stays put), background-column fidelity, and scrollback-buffer fidelity, across
-parameterized terminal shapes and randomized op sequences.
-
-This harness is the structural fix for the whole recurrence: every guess-flip and
-sniffing-gap regression historically **shipped blind and was caught by a user**,
-because no automated "a scrolled-up reader stays pinned across kitty/WT/WSL/
-ConPTY" assertion gated CI. **Before you change the eager/defer lever, a
-predicate, the live-region seam, or width math, run the stress harness and the
-targeted repro tests** (`packages/tui/test/render-regressions.test.ts`,
-`packages/tui/test/streaming-scrollback-defer.test.ts`, the `issue-*-repro.test.ts` files).
-A change that passes one terminal and one seed is not verified.
+**Rule:** never re-emit full base64 per frame. Kitty Unicode placeholders are
+default-on only for kitty/ghostty (`PI_NO_KITTY_PLACEHOLDERS` /
+`PI_KITTY_PLACEHOLDERS`).
 
 ---
 
-## 10. Escape hatches (env vars)
+## 9. Escape hatches (env vars)
 
 | Var | Effect |
 |---|---|
-| `PI_NO_SYNC_OUTPUT=1` | Disable DEC 2026 BSU/ESU wrappers (autowrap discipline stays on). For terminals that advertise but mishandle mode 2026. |
+| `PI_NO_SYNC_OUTPUT=1` | Disable DEC 2026 BSU/ESU wrappers (autowrap discipline stays on). |
 | `PI_TUI_SYNC_OUTPUT=0\|1` / `PI_FORCE_SYNC_OUTPUT=1` | Force sync output off / on. |
-| `PI_TUI_ED3_SAFE=1` | Declare the terminal safe for live ED3 (disables `eagerEraseScrollbackRisk`). |
-| `PI_NO_DECCARA` | Disable Kitty DECCARA rectangular-fill optimization (force padded-string fills). |
+| `PI_NO_DECCARA` | Disable Kitty DECCARA rectangular-fill optimization. |
 | `PI_FORCE_IMAGE_PROTOCOL=kitty\|iterm2\|sixel\|off` | Override image protocol detection. |
 | `PI_NO_KITTY_PLACEHOLDERS=1` / `PI_KITTY_PLACEHOLDERS=1` | Force Kitty Unicode placeholders off / on. |
-| `PI_CLEAR_ON_SHRINK=1` | Clear empty rows when content shrinks (default off). |
 | `PI_HARDWARE_CURSOR=1` | Show the real hardware cursor instead of a rendered one. |
 | `PI_NOTIFICATIONS=off\|0\|false` | Suppress terminal notifications. |
-| `PI_DEBUG_REDRAW=1` | Log the chosen render intent per frame to the debug log. |
-| `PI_TUI_DEBUG=1` | Dump per-render diff state under `/tmp/tui`. |
+| `PI_DEBUG_REDRAW=1` | Log the chosen render intent + ledger state per frame to the debug log. |
+
+Removed with the old engine: `PI_TUI_ED3_SAFE` (no ED3-risk lever exists),
+`PI_CLEAR_ON_SHRINK` (shrinks always clear exactly), `PI_TUI_DEBUG` (per-render
+dump superseded by `PI_DEBUG_REDRAW` ledger logging and the stress harness
+replay/reduce tooling).
 
 ---
 
-## 11. Before you touch the render core — checklist
+## 10. Before you touch the render core — checklist
 
-- [ ] Are you about to emit `CSI 3 J` anywhere other than the destructive
-      `clearScrollback` path? **Stop.**
-- [ ] Does your change trust `isNativeViewportAtBottom() === undefined` as
-      "at bottom" during passive streaming? **Stop.**
-- [ ] Did you change one structural-mutation branch without mirroring its
-      sibling (shrink ↔ grow)? **Defer symmetrically.**
-- [ ] Could any frame now emit zero bytes while the viewport is at the bottom?
-      That's invisible-until-resize.
-- [ ] Did you add a terminal by brand instead of by behavior, or skip the
-      SSH-stripped env shape in the test?
-- [ ] Did you run `packages/tui/test/render-stress-harness.ts` + the repro suite across
-      win32/POSIX × unknown/scrolled/at-bottom — not just one terminal?
+- [ ] Are you about to emit `CSI 3 J` anywhere other than the gesture-driven
+      `clearScrollback` full paint? **Stop.**
+- [ ] Could any code path rewrite, or re-show on the grid, a frame row below
+      `committedRows`? **Stop.**
+- [ ] Does your byte shape scroll rows that are not the commit chunk? That
+      breaks `scrollback == frame[0..C)`.
+- [ ] Are you adding a viewport probe, a platform fork, or a terminal-brand
+      branch to the update path? The contract exists so none are needed.
+- [ ] New mutable UI above the editor? It must report (or live inside) the
+      live-region seam, or it will freeze at first commit.
+- [ ] Did you run the stress harness and the repro suite across the full
+      scenario matrix — not just one terminal and one seed?
 - [ ] New probe? Typed sentinel owner + split-reply test.
 - [ ] New width path? Routed through the shared native engine, clamped (never
       thrown) in the hot path.

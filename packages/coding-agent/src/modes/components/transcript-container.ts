@@ -1,8 +1,14 @@
-import { type Component, Container, type NativeScrollbackLiveRegion, TERMINAL } from "@oh-my-pi/pi-tui";
+import { type Component, Container, type NativeScrollbackLiveRegion } from "@oh-my-pi/pi-tui";
 
-const kSnapshot = Symbol("transcript.frozenRender");
+const kSnapshot = Symbol("transcript.liveDiffSnapshot");
 
-interface FrozenRender {
+/**
+ * Per-block diff cache: the block's previous stripped contribution plus the
+ * derived append-only state. Purely an input to {@link deriveLiveCommitState}
+ * for still-live blocks — it is never replayed as render output. Every block
+ * renders its current content on every frame.
+ */
+interface LiveDiffSnapshot {
 	width: number;
 	lines: string[];
 	generation: number;
@@ -12,10 +18,25 @@ interface FrozenRender {
 	 * append-only status. `0` means the block is not under rewrite suspicion.
 	 */
 	volatileCooldown: number;
+	/**
+	 * Stable-prefix ratchet (see {@link deriveLiveCommitState}): leading rows
+	 * promoted as commit-safe because they stayed visibly identical for
+	 * {@link STABLE_PREFIX_COMMIT_FRAMES} consecutive frames, plus the in-flight
+	 * candidate run and its age.
+	 */
+	stablePrefixLength: number;
+	candidatePrefixLength: number;
+	candidatePrefixAge: number;
+	/**
+	 * Topmost row index ever observed rewritten in place (see
+	 * {@link deriveLiveCommitState}): the stable-prefix ratchet never promotes
+	 * rows at/after it. `Infinity` until the first rewrite.
+	 */
+	rewriteFloor: number;
 }
 
 interface SnapshotCarrier {
-	[kSnapshot]?: FrozenRender;
+	[kSnapshot]?: LiveDiffSnapshot;
 }
 
 /**
@@ -56,6 +77,10 @@ function stripPlainBlankEdges(lines: string[]): string[] {
 interface LiveCommitState {
 	appendOnly: boolean;
 	volatileCooldown: number;
+	stablePrefixLength: number;
+	candidatePrefixLength: number;
+	candidatePrefixAge: number;
+	rewriteFloor: number;
 	safeLength: number;
 }
 
@@ -71,6 +96,22 @@ interface LiveCommitState {
  * TUI's 30 Hz render cadence, so 30 frames ≈ 1s of clean streaming.
  */
 const VOLATILE_REARM_FRAMES = 30;
+
+/**
+ * Consecutive frames a leading row run must stay visibly identical before it
+ * is promoted as commit-safe even though the block's tail keeps rewriting.
+ * Append-only detection alone is all-or-nothing per block: one perpetually
+ * ticking row (a task tool's progress tree, per-agent cost/tool counters, a
+ * log line spinner) suspends commits for the WHOLE block forever, so once the
+ * block outgrows the viewport its static head — e.g. a task's prompt/context
+ * markdown — is neither committed to native scrollback nor on screen: the
+ * transcript reads as cut off for the entire (possibly minutes-long) run.
+ * The ratchet commits the settled head while only the genuinely volatile tail
+ * stays deferred. If a promoted row is later rewritten (a collapsing
+ * preview), the engine's committed-prefix audit re-anchors and recommits —
+ * duplication, never loss — and the ratchet retreats to the divergence.
+ */
+const STABLE_PREFIX_COMMIT_FRAMES = 30;
 
 /**
  * Visible-content form of a row: SGR/OSC bytes and trailing pad spaces are
@@ -91,10 +132,10 @@ function rowsVisiblyEqual(prev: string, cur: string): boolean {
 }
 
 function hasValidSnapshot(
-	snapshot: FrozenRender | undefined,
+	snapshot: LiveDiffSnapshot | undefined,
 	width: number,
 	generation: number,
-): snapshot is FrozenRender {
+): snapshot is LiveDiffSnapshot {
 	return snapshot !== undefined && snapshot.generation === generation && snapshot.width === width;
 }
 
@@ -113,16 +154,24 @@ function commonSuffixLength(prev: string[], cur: string[], prefixLength: number)
 }
 
 function deriveLiveCommitState(
-	previous: FrozenRender | undefined,
+	previous: LiveDiffSnapshot | undefined,
 	current: string[],
 	width: number,
 	generation: number,
 ): LiveCommitState {
 	let appendOnly = false;
 	let volatileCooldown = 0;
+	let stablePrefixLength = 0;
+	let candidatePrefixLength = 0;
+	let candidatePrefixAge = 0;
+	let rewriteFloor = Number.POSITIVE_INFINITY;
 	if (hasValidSnapshot(previous, width, generation)) {
 		appendOnly = previous.appendOnly;
 		volatileCooldown = previous.volatileCooldown;
+		stablePrefixLength = previous.stablePrefixLength;
+		candidatePrefixLength = previous.candidatePrefixLength;
+		candidatePrefixAge = previous.candidatePrefixAge;
+		rewriteFloor = previous.rewriteFloor;
 
 		const prefixLength = commonPrefixLength(previous.lines, current);
 		const staticRender = prefixLength === previous.lines.length && prefixLength === current.length;
@@ -156,6 +205,15 @@ function deriveLiveCommitState(
 			}
 			if ((preservedEveryRow || tailExtendedInPlace) && current.length >= previous.lines.length) {
 				if (volatileCooldown === 0) appendOnly = true;
+				// Clean growth inserts rows at the divergence; rows the floor
+				// points at travel down with the preserved suffix. (On a tail
+				// extension the divergent row itself stays put — only rows
+				// strictly below it shift.)
+				const delta = current.length - previous.lines.length;
+				if (delta > 0 && Number.isFinite(rewriteFloor)) {
+					const floorShifts = preservedEveryRow ? rewriteFloor >= prefixLength : rewriteFloor > prefixLength;
+					if (floorShifts) rewriteFloor += delta;
+				}
 			} else {
 				cleanFrame = false;
 				appendOnly = false;
@@ -163,65 +221,93 @@ function deriveLiveCommitState(
 			}
 		}
 		if (cleanFrame && volatileCooldown > 0) volatileCooldown--;
+
+		// Stable-prefix ratchet, independent of append-only. `prefixLength` is
+		// this frame's visibly-unchanged leading run; the candidate accumulates
+		// the MINIMUM prefix across a STABLE_PREFIX_COMMIT_FRAMES window, so
+		// promotion means every promoted row stayed identical for the whole
+		// window (row r is inside frame i's common prefix iff r < p_i, so
+		// r < min(p) holds for every frame of the window). A row settling
+		// mid-window promotes at most two windows later. The engine audit owns
+		// any promoted rows that already committed (recommit, never loss).
+		if (prefixLength < stablePrefixLength) {
+			// A divergence inside the promoted run is the ratchet's proof of
+			// over-promotion: this row was visibly stable for a full window,
+			// got promoted (and likely committed), and then mutated anyway — a
+			// slow ticker (an agent row's tool/cost counter, a growing progress
+			// tree), not settling content. It will mutate again, and every
+			// promote→mutate cycle makes the engine audit recommit, spraying a
+			// stale snapshot of the block into native scrollback. Floor the
+			// ratchet at the divergence permanently: rows above it may still
+			// promote, rows at/below it never re-promote while the block lives.
+			// One-off re-layouts before any promotion (a call→result frame
+			// transition, a codespan finalizing) never hit this branch, and the
+			// append-only re-arm path commits the full block regardless of the
+			// floor.
+			rewriteFloor = Math.min(rewriteFloor, prefixLength);
+			stablePrefixLength = prefixLength;
+			candidatePrefixLength = prefixLength;
+			candidatePrefixAge = 0;
+		} else {
+			candidatePrefixLength =
+				candidatePrefixAge === 0 ? prefixLength : Math.min(candidatePrefixLength, prefixLength);
+			candidatePrefixAge++;
+			if (candidatePrefixAge >= STABLE_PREFIX_COMMIT_FRAMES) {
+				stablePrefixLength = Math.min(candidatePrefixLength, rewriteFloor);
+				candidatePrefixLength = prefixLength;
+				candidatePrefixAge = 0;
+			}
+		}
 	}
 
 	return {
 		appendOnly,
 		volatileCooldown,
-		safeLength: appendOnly ? current.length : 0,
+		stablePrefixLength,
+		candidatePrefixLength,
+		candidatePrefixAge,
+		rewriteFloor,
+		// An append-only block's whole body is committable; otherwise the
+		// settled head still is — only the volatile tail stays deferred.
+		safeLength: appendOnly ? current.length : stablePrefixLength,
 	};
 }
 
 /**
- * Transcript container that freezes the rendered output of every block except
- * the bottom-most (live) one on terminals where committed native scrollback is
- * immutable.
+ * Transcript container that always renders every block's current content and
+ * reports the live-region seam (`NativeScrollbackLiveRegion`) that gates the
+ * engine's append-only scrollback commits.
  *
- * On ED3-risk terminals with an unobservable viewport (ghostty/kitty/iTerm2/…)
- * the renderer cannot clear saved lines (`\x1b[3J` may yank a reader) or query
- * whether the user has scrolled, so any block that re-lays-out *after* it has
- * scrolled past the viewport leaves a stale duplicate above the live region
- * (a finalized assistant message re-wrapping, a tool preview collapsing to its
- * compact result, a late async tool completion). The renderer's only safe move
- * for such an offscreen edit is to not repaint — which is correct only if the
- * committed region never changes underneath it.
- *
- * This container provides that guarantee: a block's render is snapshotted while
- * it is the live (bottom-most) block, and once a newer block is appended it
- * replays the snapshot instead of recomputing. Mutations after a block leaves
- * live are intentionally deferred until the next checkpoint {@link thaw} (prompt
- * submit → native-scrollback rebuild), where the whole transcript is replayed
- * and any drift reconciles safely. On terminals that can rebuild history this
- * freezing is unnecessary, so it renders every block live for full fidelity.
+ * The engine never rewrites committed history: rows above the seam that have
+ * entered the tape keep whatever bytes they were committed with ("let the
+ * history be"), while the visible window always repaints from each block's
+ * latest render — a late tool result, a post-finalize error pin, or an expand
+ * toggle is always reflected on screen. Blocks that are still mutating (an
+ * unfinalized tool, a streaming assistant message) stay below the seam so
+ * their rows do not enter history while they can still change; a streaming
+ * block whose render grows append-only deepens the seam through its settled
+ * head so a long reply's scrolled-off rows still reach scrollback mid-stream.
  */
 export class TranscriptContainer extends Container implements NativeScrollbackLiveRegion {
-	// Bumped to invalidate every block's snapshot at once; a snapshot is only
-	// honored when its stored generation still matches.
+	// Bumped to retire every block's diff snapshot at once (theme change /
+	// clear); a snapshot is only honored when its stored generation matches.
 	#generation = 0;
-	// Line index where the live (repaintable) region began on the previous
-	// render — the start of the earliest still-mutating block, or the bottom
-	// block when everything is finalized. A block leaves the live region only
-	// once it has finalized AND a finalized block sits below it; the frame it
-	// crosses out is recomputed so it freezes at its true final content, not the
-	// mid-stream snapshot it last rendered while live (TUI render coalescing can
-	// advance a block's content in the very frame it stops being live).
-	#prevLiveStartIndex = 0;
 	// Local line index where the current live region begins in the most recent
-	// render. TUI extends the native-scrollback pinned region from this point
-	// through the live blocks and the root chrome rendered below them.
+	// render. TUI commits rows to native scrollback only above this seam (or
+	// the deeper commit-safe end below).
 	#nativeScrollbackLiveRegionStart: number | undefined;
 	// Local line index up to which the leading run of live blocks is safe to
-	// commit. Finalized blocks contribute their full frozen body; still-live
-	// blocks contribute only while their render has been observed growing
-	// without visibly rewriting a previously rendered interior row (escape
-	// placement and pad drift are ignored). A rewrite suspends the block's
-	// contribution until it re-earns append-only via VOLATILE_REARM_FRAMES
-	// clean frames; the pinned emitter then backfills the stalled gap.
+	// commit. Finalized blocks contribute their full body; still-live blocks
+	// contribute only while their render has been observed growing without
+	// visibly rewriting a previously rendered interior row (escape placement
+	// and pad drift are ignored). A rewrite suspends the block's contribution
+	// until it re-earns append-only via VOLATILE_REARM_FRAMES clean frames;
+	// the engine then backfills the stalled gap.
 	#nativeScrollbackCommitSafeEnd: number | undefined;
 
 	override invalidate(): void {
-		// A theme/global invalidation forces a full recompute on the rebuild that
-		// follows; retire every snapshot.
+		// Theme/global invalidation: retire every diff snapshot so stale styling
+		// is not diffed against the recolored render.
 		this.#generation++;
 		super.invalidate();
 	}
@@ -240,13 +326,21 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	}
 
 	/**
-	 * Retire all frozen snapshots so the next render reflects each block's current
-	 * state. Call at reconciliation checkpoints (prompt submit) where the whole
-	 * transcript is replayed into native scrollback and any drift a frozen block
-	 * accumulated is reconciled.
+	 * Whether `component` sits below a still-mutating block — i.e. inside the
+	 * live region, where its rows cannot have been committed to native
+	 * scrollback yet (commits are prefix-only and stop at the first
+	 * still-live block). Callers that retract ephemeral blocks (IRC cards)
+	 * must check this: removing a block whose rows may already be in history
+	 * is an interior deletion of the committed prefix, which the engine can
+	 * only repair by recommitting everything below it — duplication.
 	 */
-	thaw(): void {
-		this.#generation++;
+	isWithinLiveRegion(component: Component): boolean {
+		const index = this.children.indexOf(component);
+		if (index < 0) return false;
+		for (let i = 0; i < index; i++) {
+			if (!isBlockFinalized(this.children[i]!)) return true;
+		}
+		return false;
 	}
 
 	override render(width: number): string[] {
@@ -254,17 +348,14 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
 
-		// Freezing/snapshotting only applies on ED3-risk terminals; elsewhere every
-		// block renders live. Inter-block spacing applies on BOTH paths so the gap
-		// between blocks is identical regardless of terminal.
-		const risk = TERMINAL.eagerEraseScrollbackRisk;
 		const count = this.children.length;
 
 		// The live region spans from the earliest still-mutating block through the
-		// bottom. A block that has not finalized must stay repaintable: out-of-band
-		// inserts (TTSR/todo cards) can append a finalized block *below* a tool that
-		// is still awaiting its result, and freezing the tool there would strand its
-		// committed rows on the mid-stream preview the late result never reaches.
+		// bottom. A block that has not finalized must stay below the seam: out-of-
+		// band inserts (TTSR/todo cards) can append a finalized block *below* a
+		// tool that is still awaiting its result, and committing the tool there
+		// would strand its history rows on the mid-stream preview the late result
+		// never reaches.
 		let liveStartIndex = count - 1;
 		for (let i = 0; i < count; i++) {
 			if (!isBlockFinalized(this.children[i]!)) {
@@ -272,62 +363,49 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 				break;
 			}
 		}
-		// Blocks at [prevLiveStart, liveStart) just crossed out of the live region;
-		// recompute them so they freeze at their final content. Everything below
-		// the lower of the two cutoffs was already frozen last frame and replays.
-		const replayCutoff = Math.min(liveStartIndex, this.#prevLiveStartIndex);
-		if (risk) this.#prevLiveStartIndex = liveStartIndex;
 
 		const lines: string[] = [];
 		// Tracks whether we are still inside the leading run of commit-safe live
 		// blocks. The first still-live volatile block closes it, but rendering
 		// continues so lower blocks remain visible.
 		let commitSafeOpen = true;
-		// The live-region start is recorded at the first visible row at/after the
-		// cutoff; empty leading blocks (or a separator) must not claim it early.
+		// The live-region start is recorded at the first visible row at/after
+		// liveStartIndex; empty leading blocks (or a separator) must not claim it
+		// early.
 		let liveRecorded = false;
 		for (let i = 0; i < count; i++) {
 			const child = this.children[i]! as Component & SnapshotCarrier;
 
-			// Resolve this child's contribution — its visible body with plain-blank
-			// top/bottom edges stripped (the container owns inter-block gaps). On
-			// ED3-risk terminals a frozen, scrolled-off block replays its snapshot
-			// instead of recomputing; a stale generation (post-thaw) or width
-			// mismatch (resize) recomputes, as does a block still live last frame.
-			let contribution: string[] | undefined;
-			const previousSnapshot = risk ? child[kSnapshot] : undefined;
-			if (risk && i < liveStartIndex && i < replayCutoff) {
-				if (hasValidSnapshot(previousSnapshot, width, this.#generation)) {
-					contribution = previousSnapshot.lines;
-				}
-			}
+			// This child's contribution: its current render with plain-blank
+			// top/bottom edges stripped (the container owns inter-block gaps).
+			// Always the latest content — committed history keeps whatever bytes
+			// it was written with, but the window must reflect the present state
+			// (late tool results, post-finalize re-layouts, expand toggles).
+			const previousSnapshot = child[kSnapshot];
+			const contribution = stripPlainBlankEdges(child.render(width));
 			let liveCommitState: LiveCommitState | undefined;
-			if (contribution === undefined) {
-				const rendered = child.render(width);
-				contribution = stripPlainBlankEdges(rendered);
-				if (risk && i >= liveStartIndex && !isBlockFinalized(child)) {
-					liveCommitState = deriveLiveCommitState(previousSnapshot, contribution, width, this.#generation);
-				}
-				// Cache every block's latest contribution. While a block is in the
-				// live region this keeps its snapshot current; on the frame it crosses
-				// out, the recompute above refreshes it before it freezes.
-				if (risk) {
-					child[kSnapshot] = {
-						width,
-						lines: contribution,
-						generation: this.#generation,
-						appendOnly: liveCommitState?.appendOnly ?? false,
-						volatileCooldown: liveCommitState?.volatileCooldown ?? 0,
-					};
-				}
+			if (i >= liveStartIndex && !isBlockFinalized(child)) {
+				liveCommitState = deriveLiveCommitState(previousSnapshot, contribution, width, this.#generation);
 			}
+			// Cache the latest contribution as the next frame's diff input.
+			child[kSnapshot] = {
+				width,
+				lines: contribution,
+				generation: this.#generation,
+				appendOnly: liveCommitState?.appendOnly ?? false,
+				volatileCooldown: liveCommitState?.volatileCooldown ?? 0,
+				stablePrefixLength: liveCommitState?.stablePrefixLength ?? 0,
+				candidatePrefixLength: liveCommitState?.candidatePrefixLength ?? 0,
+				candidatePrefixAge: liveCommitState?.candidatePrefixAge ?? 0,
+				rewriteFloor: liveCommitState?.rewriteFloor ?? Number.POSITIVE_INFINITY,
+			};
 
 			// Empty (or stripped-to-nothing) children contribute nothing and never
 			// affect spacing or the live-region offsets. An empty still-live child
 			// still closes the commit-safe run: if it later gains rows, it pushes
 			// everything below it.
 			if (contribution.length === 0) {
-				if (risk && i >= liveStartIndex && commitSafeOpen && !isBlockFinalized(child)) commitSafeOpen = false;
+				if (i >= liveStartIndex && commitSafeOpen && !isBlockFinalized(child)) commitSafeOpen = false;
 				continue;
 			}
 
@@ -336,10 +414,10 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			// already a plain blank (a fragment's own trailing pad), never doubling.
 			const sep = lines.length > 0 && !isPlainBlank(lines[lines.length - 1]!) ? 1 : 0;
 
-			// The separator before the first live block stays in the committed prefix
-			// (it is deterministic and never changes once the prior block is frozen),
+			// The separator before the first live block stays in the committed
+			// prefix (it is deterministic once the prior block's body is settled),
 			// so the live region begins at the block's first content row.
-			if (risk && !liveRecorded && i >= liveStartIndex) {
+			if (!liveRecorded && i >= liveStartIndex) {
 				this.#nativeScrollbackLiveRegionStart = lines.length + sep;
 				liveRecorded = true;
 			}
@@ -348,7 +426,7 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 			const blockStart = lines.length;
 			for (let j = 0; j < contribution.length; j++) lines.push(contribution[j]!);
 
-			if (risk && i >= liveStartIndex && commitSafeOpen) {
+			if (i >= liveStartIndex && commitSafeOpen) {
 				const finalized = isBlockFinalized(child);
 				const safeLength = finalized ? contribution.length : (liveCommitState?.safeLength ?? 0);
 				if (safeLength > 0) {

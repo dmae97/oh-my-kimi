@@ -188,6 +188,34 @@ describe("boundary-balance repair", () => {
 		expect(warnings).toHaveLength(0);
 	});
 
+	// An echo whose dropped edges shift delimiter balance without explaining a
+	// payload/range delta is intentional structural content, not a boundary
+	// mistake: stripping the edges would corrupt the brace structure.
+	it("preserves balance-shifting boundary echoes that do not explain the delta", () => {
+		const file = ["}", "old();", "}"].join("\n");
+		// Payload deliberately opens with the same bare `}` that sits above the
+		// range and closes with the same `}` that sits below it; the payload is
+		// internally balanced (delta 0) while the dropped edges sum to -2 braces.
+		const diff = ["replace 2..2:", "+}", "+if (a) {", "+if (b) {", "+x();", "+}"].join("\n");
+
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["}", "}", "if (a) {", "if (b) {", "x();", "}", "}"].join("\n"));
+		expect(warnings).toHaveLength(0);
+	});
+
+	// The common wrapper-echo mistake stays repaired: balance-neutral edges
+	// (opener + closer) that duplicate the surviving neighbors are dropped.
+	it("still drops a balance-neutral wrapper echo", () => {
+		const file = ["function f() {", "old();", "}"].join("\n");
+		const diff = ["replace 2..2:", "+function f() {", "+fresh();", "+}"].join("\n");
+
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["function f() {", "fresh();", "}"].join("\n"));
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
 	// Balance-preserving edits are never touched, even when the payload's last
 	// line coincidentally equals the line just below the range.
 	it("leaves a balance-preserving replacement alone (no false positive)", () => {

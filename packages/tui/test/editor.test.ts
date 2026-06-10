@@ -2178,4 +2178,105 @@ describe("Editor component", () => {
 			expect(rendered).not.toMatch(/[\u1100-\u1112]/);
 		});
 	});
+
+	describe("Grapheme-aware vertical movement", () => {
+		it("snaps vertical movement to grapheme boundaries instead of splitting surrogate pairs", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("ab\n😀😀");
+
+			editor.handleInput("\x1b[A"); // Up to line 0
+			editor.handleInput("\x01"); // Ctrl+A
+			editor.handleInput("\x1b[C"); // Right → col 1
+			expect(editor.getCursor()).toEqual({ line: 0, col: 1 });
+
+			// Down: visual col 1 is inside the first 😀 (2 cells, surrogate pair).
+			// The cursor must snap to a grapheme boundary, never land mid-pair.
+			editor.handleInput("\x1b[B");
+			expect(editor.getCursor()).toEqual({ line: 1, col: 0 });
+
+			// Typing here must not corrupt the emoji buffer
+			editor.handleInput("X");
+			expect(editor.getText()).toBe("ab\nX😀😀");
+		});
+
+		it("preserves the visual column across lines of different glyph widths", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("ああああ\nabcdefgh");
+
+			editor.handleInput("\x01"); // Ctrl+A on line 1
+			for (let i = 0; i < 4; i++) editor.handleInput("\x1b[C"); // Right ×4 → col 4
+			expect(editor.getCursor()).toEqual({ line: 1, col: 4 });
+
+			// Up: visual col 4 on the CJK line is two double-width glyphs → logical col 2,
+			// not col 4 (which would be visual col 8 / end of line).
+			editor.handleInput("\x1b[A");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 2 });
+		});
+	});
+
+	describe("Whitespace trimmed at wrap points", () => {
+		it("maps cursor positions inside wrap-trimmed whitespace to a layout line", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setText("aaaa bbbb\nzzzz");
+			editor.render(10); // layoutWidth 4 → "aaaa bbbb" wraps at the space
+
+			// Up from "zzzz" lands on the second visual segment of line 0
+			editor.handleInput("\x1b[A");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 9 });
+
+			// Place the cursor on the trimmed space (line 0, col 4)
+			editor.handleInput("\x01"); // Ctrl+A
+			for (let i = 0; i < 4; i++) editor.handleInput("\x1b[C");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 4 });
+
+			// Down must move within line 0's wrapped segments. Before the fix the
+			// position was unmapped: the cursor fell through to the buffer's last
+			// visual line and Down became a no-op.
+			editor.handleInput("\x1b[B");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 9 });
+		});
+	});
+
+	describe("Atomic tokens in kill operations", () => {
+		it("extends word-delete backwards over an intersected atomic token", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.atomicTokenPattern = /\[(?:Image|Paste) #\d+(?:,[^\]\n]*)?\]/g;
+			editor.setText("a [Paste #1, +12 lines]");
+
+			// Ctrl+W from the end must consume the whole marker, not leave "[Paste #1, +12 " behind
+			editor.handleInput("\x17");
+			expect(editor.getText()).toBe("a ");
+		});
+
+		it("extends kill-to-end-of-line over an atomic token the cursor sits inside", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.atomicTokenPattern = /\[(?:Image|Paste) #\d+(?:,[^\]\n]*)?\]/g;
+			editor.setText("a [Paste #1, +12 lines] b");
+
+			editor.handleInput("\x01"); // Ctrl+A
+			for (let i = 0; i < 4; i++) editor.handleInput("\x1b[C"); // into the marker
+			editor.handleInput("\x0b"); // Ctrl+K
+			expect(editor.getText()).toBe("a ");
+			expect(editor.getCursor()).toEqual({ line: 0, col: 2 });
+		});
+	});
+
+	describe("Undo coalescing", () => {
+		it("coalesces consecutive word typing into a single undo unit", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.handleInput("h");
+			editor.handleInput("i");
+			editor.handleInput(" ");
+			editor.handleInput("y");
+			editor.handleInput("o");
+			expect(editor.getText()).toBe("hi yo");
+
+			editor.handleInput("\x1b[45;5u"); // undo → removes "yo"
+			expect(editor.getText()).toBe("hi ");
+			editor.handleInput("\x1b[45;5u"); // undo → removes the space
+			expect(editor.getText()).toBe("hi");
+			editor.handleInput("\x1b[45;5u"); // undo → removes "hi"
+			expect(editor.getText()).toBe("");
+		});
+	});
 });

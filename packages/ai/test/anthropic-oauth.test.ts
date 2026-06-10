@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { claudeCodeVersion } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicOAuthFlow, refreshAnthropicToken } from "@oh-my-pi/pi-ai/registry/oauth/anthropic";
 import {
 	buildAnthropicAuthConfig,
@@ -201,7 +202,7 @@ describe("anthropic oauth alignment", () => {
 			expect(init?.method).toBe("GET");
 			const headers = init?.headers as Record<string, string> | undefined;
 			expect(headers?.Authorization).toBe("Bearer access-token");
-			expect(headers?.["User-Agent"]).toBe("claude-code/2.1.160");
+			expect(headers?.["User-Agent"]).toBe(`claude-code/${claudeCodeVersion}`);
 			expect(headers?.["anthropic-beta"]).toBe("oauth-2025-04-20");
 			return new Response(
 				JSON.stringify({

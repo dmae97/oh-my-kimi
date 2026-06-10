@@ -65,7 +65,7 @@ function createFixture(streamingMessage?: AssistantMessage) {
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
-		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn() },
+		ui: { requestRender: vi.fn() },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),

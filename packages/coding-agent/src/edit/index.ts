@@ -238,8 +238,23 @@ async function executeSinglePathEntries(
 			if (text) contentTexts.push(text);
 		} catch (err) {
 			const errorText = err instanceof Error ? err.message : String(err);
-			contentTexts.push(`Error editing ${path}: ${errorText}`);
+			contentTexts.push(`Error editing ${path} (entry ${i + 1} of ${runs.length}): ${errorText}`);
+			if (i > 0) {
+				contentTexts.push(i === 1 ? `Entry 1 was already applied.` : `Entries 1-${i} were already applied.`);
+			}
+			if (i + 1 < runs.length) {
+				contentTexts.push(
+					(i + 2 === runs.length
+						? `Entry ${runs.length} was NOT applied`
+						: `Entries ${i + 2}-${runs.length} were NOT applied`) +
+						`; re-read the file and re-issue only the failed and unapplied entries.`,
+				);
+			}
 			errorCount++;
+			// Stop at the first failure: later entries were authored against
+			// line numbers/content that assumed this entry succeeded, and
+			// applying them after a failure compounds the damage.
+			break;
 		}
 
 		if (!isLast && onUpdate) {

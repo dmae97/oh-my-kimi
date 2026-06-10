@@ -45,4 +45,42 @@ describe("generateDiffString", () => {
 		expect(diffLines).not.toContain(" 5|  const four = 4;");
 		expect(diffLines).not.toContain(" 6|  return value + two + three + four;");
 	});
+
+	it("emits bracket context under pre-edit numbers when edits shift line offsets", () => {
+		// Two change runs around an unchanged line, net +2 lines before the
+		// closing brace. The closer is discovered via the NEW file's block
+		// boundaries, so it must be translated back to its pre-edit number
+		// (compact-preview renumbering contract). Regression: it used to be
+		// either dropped (broken new-file visibility window) or re-inserted
+		// under its post-edit number — duplicated and out of order.
+		const oldLines = [
+			"function outer() {",
+			"  const a = 1;",
+			"  const keep = 2;",
+			"  const b = 3;",
+			"  return a + keep + b;",
+			"}",
+		];
+		const newLines = [
+			"function outer() {",
+			"  const a = 10;",
+			"  const a2 = 11;",
+			"  const keep = 2;",
+			"  const b = 30;",
+			"  const b2 = 31;",
+			"  return a + keep + b;",
+			"}",
+		];
+		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const diffLines = result.diff.split("\n");
+
+		expect(diffLines.filter(line => line.endsWith("|}"))).toEqual([" 6|}"]);
+		// Context rows must stay in pre-edit order — no duplicate of the
+		// shifted unchanged line under another number.
+		const contextNumbers = diffLines
+			.filter(line => line.startsWith(" "))
+			.map(line => Number.parseInt(line.slice(1), 10));
+		expect(contextNumbers).toEqual([...contextNumbers].sort((a, b) => a - b));
+		expect(diffLines.filter(line => line.includes("|  const keep = 2;"))).toEqual([" 3|  const keep = 2;"]);
+	});
 });

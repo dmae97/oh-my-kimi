@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { type Component, type Focusable, TERMINAL, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type Focusable, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -36,17 +36,6 @@ class ArrowSelectorComponent implements Component, Focusable {
 	}
 }
 
-class UnknownViewportTerminal extends VirtualTerminal {
-	isNativeViewportAtBottom(): undefined {
-		return undefined;
-	}
-}
-
-type MutableTerminalInfo = {
-	eagerEraseScrollbackRisk: boolean;
-};
-
-const mutableTerminalInfo = TERMINAL as unknown as MutableTerminalInfo;
 const ERASE_SCROLLBACK = /\x1b\[3J/g;
 
 async function settle(term: VirtualTerminal): Promise<void> {
@@ -67,102 +56,80 @@ function captureWrites(term: VirtualTerminal): string[] {
 	return writes;
 }
 
-async function withTerminalRisk<T>(risk: boolean, run: () => T | Promise<T>): Promise<T> {
-	const saved = TERMINAL.eagerEraseScrollbackRisk;
-	mutableTerminalInfo.eagerEraseScrollbackRisk = risk;
-	try {
-		return await run();
-	} finally {
-		mutableTerminalInfo.eagerEraseScrollbackRisk = saved;
-	}
-}
-
 describe("issue #1962: arrow navigation after dirty scrollback", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
 	it("does not clear and replay the whole transcript for a focused arrow-key frame", async () => {
-		await withTerminalRisk(true, async () => {
-			const term = new UnknownViewportTerminal(40, 6);
-			const tui = new TUI(term);
-			const transcript = new MutableLinesComponent(
-				Array.from({ length: 12 }, (_value, index) => `history-${index}`),
-			);
-			const selector = new ArrowSelectorComponent();
-			tui.addChild(transcript);
-			tui.addChild(selector);
-			tui.setFocus(selector);
+		const term = new VirtualTerminal(40, 6);
+		const tui = new TUI(term);
+		const transcript = new MutableLinesComponent(Array.from({ length: 12 }, (_value, index) => `history-${index}`));
+		const selector = new ArrowSelectorComponent();
+		tui.addChild(transcript);
+		tui.addChild(selector);
+		tui.setFocus(selector);
 
-			try {
-				tui.start();
-				await settle(term);
+		try {
+			tui.start();
+			await settle(term);
 
-				tui.setEagerNativeScrollbackRebuild(true);
-				transcript.setLines([
-					"history-0 updated",
-					...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
-				]);
-				tui.requestRender();
-				await settle(term);
-				tui.setEagerNativeScrollbackRebuild(false);
+			transcript.setLines([
+				"history-0 updated",
+				...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
+			]);
+			tui.requestRender();
+			await settle(term);
 
-				const writes = captureWrites(term);
-				term.sendInput("\x1b[B");
-				await settle(term);
+			const writes = captureWrites(term);
+			term.sendInput("\x1b[B");
+			await settle(term);
 
-				const output = writes.join("");
-				expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
-				expect(output).not.toContain("history-0 updated");
-				expect(term.getViewport().map(line => line.trimEnd())).toEqual([
-					"history-8",
-					"history-9",
-					"history-10",
-					"history-11",
-					"  first",
-					"> second",
-				]);
-			} finally {
-				tui.stop();
-			}
-		});
+			const output = writes.join("");
+			expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
+			expect(output).not.toContain("history-0 updated");
+			expect(term.getViewport().map(line => line.trimEnd())).toEqual([
+				"history-8",
+				"history-9",
+				"history-10",
+				"history-11",
+				"  first",
+				"> second",
+			]);
+		} finally {
+			tui.stop();
+		}
 	});
 
 	it("does not clear and replay the whole transcript for a focused arrow-key frame inside an overlay", async () => {
-		await withTerminalRisk(true, async () => {
-			const term = new UnknownViewportTerminal(40, 6);
-			const tui = new TUI(term);
-			const transcript = new MutableLinesComponent(
-				Array.from({ length: 12 }, (_value, index) => `history-${index}`),
-			);
-			tui.addChild(transcript);
-			const selector = new ArrowSelectorComponent();
-			tui.showOverlay(selector);
+		const term = new VirtualTerminal(40, 6);
+		const tui = new TUI(term);
+		const transcript = new MutableLinesComponent(Array.from({ length: 12 }, (_value, index) => `history-${index}`));
+		tui.addChild(transcript);
+		const selector = new ArrowSelectorComponent();
+		tui.showOverlay(selector);
 
-			try {
-				tui.start();
-				await settle(term);
+		try {
+			tui.start();
+			await settle(term);
 
-				tui.setEagerNativeScrollbackRebuild(true);
-				transcript.setLines([
-					"history-0 updated",
-					...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
-				]);
-				tui.requestRender();
-				await settle(term);
-				tui.setEagerNativeScrollbackRebuild(false);
+			transcript.setLines([
+				"history-0 updated",
+				...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
+			]);
+			tui.requestRender();
+			await settle(term);
 
-				const writes = captureWrites(term);
-				term.sendInput("\x1b[B");
-				await settle(term);
+			const writes = captureWrites(term);
+			term.sendInput("\x1b[B");
+			await settle(term);
 
-				const output = writes.join("");
-				expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
-				expect(output).not.toContain("history-0 updated");
-				expect(term.getViewport().map(line => line.trimEnd())).toContain("> second");
-			} finally {
-				tui.stop();
-			}
-		});
+			const output = writes.join("");
+			expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
+			expect(output).not.toContain("history-0 updated");
+			expect(term.getViewport().map(line => line.trimEnd())).toContain("> second");
+		} finally {
+			tui.stop();
+		}
 	});
 });

@@ -2,6 +2,8 @@ import { $env } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 100_000;
+/** Re-mint persistent race promises every N iterations (see hoisted-racer comment). */
+const RACER_REMINT_INTERVAL = 1024;
 
 function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {
 	if (value === undefined) return fallback;
@@ -164,109 +166,184 @@ export async function* iterateWithIdleTimeout<T>(
 		(firstItemTimeoutMs === undefined || firstItemTimeoutMs <= 0) &&
 		(options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0);
 
-	while (true) {
-		let activeTimeoutMs: number | undefined;
-		if (awaitingFirstItem) {
-			if (firstItemDeadlineMs !== undefined) {
-				activeTimeoutMs = firstItemDeadlineMs - Date.now();
-				if (activeTimeoutMs <= 0) {
-					options.onFirstItemTimeout?.();
-					closeIterator();
-					throw new Error(options.firstItemErrorMessage ?? options.errorMessage);
-				}
-			}
-		} else if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
-			activeTimeoutMs = options.idleTimeoutMs - (Date.now() - lastProgressAt);
-			if (activeTimeoutMs <= 0) {
-				options.onIdle?.();
-				closeIterator();
-				throw new Error(options.errorMessage);
-			}
+	// Persistent racers, hoisted out of the per-item loop. The abort promise can
+	// only ever resolve once (abort latches), and a timeout resolution always
+	// precedes a throw — so neither needs per-item re-creation. This keeps the
+	// token hot path free of timer create/destroy and listener churn.
+	//
+	// Each Promise.race() call still attaches a reaction record to every pending
+	// racer, and those records live until the racer settles — so a never-firing
+	// abort/timeout promise would accumulate one record per streamed item for
+	// the stream's whole life. The loop re-mints both promises every
+	// RACER_REMINT_INTERVAL iterations to keep that retention bounded; the
+	// listener and timer callbacks resolve through late-bound variables so a
+	// re-mint never strands them.
+	let abortPromise: Promise<{ kind: "abort" }> | undefined;
+	let abortListener: (() => void) | undefined;
+	let resolveAbort: ((value: { kind: "abort" }) => void) | undefined;
+	if (abortSignal) {
+		const { promise, resolve } = Promise.withResolvers<{ kind: "abort" }>();
+		resolveAbort = resolve;
+		abortListener = () => resolveAbort?.({ kind: "abort" });
+		abortSignal.addEventListener("abort", abortListener, { once: true });
+		abortPromise = promise;
+	}
+
+	let timeoutPromise: Promise<{ kind: "timeout" }> | undefined;
+	let resolveTimeout: ((value: { kind: "timeout" }) => void) | undefined;
+	let timeoutFired = false;
+	let timer: NodeJS.Timeout | undefined;
+	let timerFireAtMs = Infinity;
+
+	const currentDeadlineMs = (): number | undefined => {
+		if (awaitingFirstItem) return firstItemDeadlineMs;
+		if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
+			return lastProgressAt + options.idleTimeoutMs;
 		}
-
-		const nextResultPromise = withRacy(iterator.next());
-
-		const racers: Array<
-			Promise<
-				| { kind: "next"; result: IteratorResult<T> }
-				| { kind: "error"; error: unknown }
-				| { kind: "timeout" }
-				| { kind: "abort" }
-			>
-		> = [nextResultPromise];
-
-		let timer: NodeJS.Timeout | undefined;
-		let resolveTimeout: ((value: { kind: "timeout" }) => void) | undefined;
-		const enforceTimeout = !noTimeoutEnforced && activeTimeoutMs !== undefined && activeTimeoutMs > 0;
-		if (enforceTimeout) {
+		return undefined;
+	};
+	const onTimerFire = (): void => {
+		timer = undefined;
+		timerFireAtMs = Infinity;
+		const deadlineMs = currentDeadlineMs();
+		if (deadlineMs === undefined) return;
+		const remainingMs = deadlineMs - Date.now();
+		if (remainingMs > 0) {
+			// Progress moved the deadline since this timer was armed — re-arm for
+			// the remainder. One stale wake per idle period, not one per item.
+			timerFireAtMs = deadlineMs;
+			timer = setTimeout(onTimerFire, remainingMs);
+			return;
+		}
+		timeoutFired = true;
+		resolveTimeout?.({ kind: "timeout" });
+	};
+	const armTimer = (deadlineMs: number): void => {
+		if (timeoutPromise === undefined || timeoutFired) {
+			// A fired-but-unconsumed resolution (the item won the same race) is
+			// stale — racing it again would fake a timeout, so mint a fresh one.
 			const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
+			timeoutPromise = promise;
 			resolveTimeout = resolve;
-			timer = setTimeout(() => resolve({ kind: "timeout" }), activeTimeoutMs);
-			racers.push(promise);
+			timeoutFired = false;
 		}
-
-		let abortListener: (() => void) | undefined;
-		let resolveAbort: ((value: { kind: "abort" }) => void) | undefined;
-		if (abortSignal) {
-			const { promise, resolve } = Promise.withResolvers<{ kind: "abort" }>();
-			resolveAbort = resolve;
-			abortListener = () => resolve({ kind: "abort" });
-			abortSignal.addEventListener("abort", abortListener, { once: true });
-			racers.push(promise);
+		if (timer !== undefined) {
+			// An armed timer firing at or before the new deadline re-arms itself.
+			if (timerFireAtMs <= deadlineMs) return;
+			clearTimeout(timer);
 		}
+		timerFireAtMs = deadlineMs;
+		timer = setTimeout(onTimerFire, Math.max(0, deadlineMs - Date.now()));
+	};
 
-		// Tracks whether this iteration handed an item to the consumer and resumed
-		// normally. Any other exit — internal throw, `done` return, or the consumer
-		// abandoning us via `.return()`/`.throw()` at the `yield` below — must close
-		// the upstream iterator so the underlying SSE body / SDK stream (and its
-		// socket) is released instead of being left suspended.
-		let continuing = false;
-		try {
-			const outcome = await Promise.race(racers);
-			if (outcome.kind === "abort") {
-				closeIterator();
-				throw abortReason(abortSignal!);
-			}
-			if (outcome.kind === "timeout") {
-				if (!awaitingFirstItem) {
-					options.onIdle?.();
-				} else {
-					options.onFirstItemTimeout?.();
+	try {
+		let raceCount = 0;
+		while (true) {
+			if (++raceCount % RACER_REMINT_INTERVAL === 0) {
+				if (abortPromise !== undefined && !abortSignal!.aborted) {
+					const { promise, resolve } = Promise.withResolvers<{ kind: "abort" }>();
+					resolveAbort = resolve;
+					abortPromise = promise;
 				}
-				closeIterator();
-				throw new Error(
-					!awaitingFirstItem ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage),
-				);
+				if (timeoutPromise !== undefined && !timeoutFired) {
+					const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
+					resolveTimeout = resolve;
+					timeoutPromise = promise;
+				}
 			}
-			if (outcome.kind === "error") {
-				throw outcome.error;
+			let activeTimeoutMs: number | undefined;
+			if (awaitingFirstItem) {
+				if (firstItemDeadlineMs !== undefined) {
+					activeTimeoutMs = firstItemDeadlineMs - Date.now();
+					if (activeTimeoutMs <= 0) {
+						options.onFirstItemTimeout?.();
+						closeIterator();
+						throw new Error(options.firstItemErrorMessage ?? options.errorMessage);
+					}
+				}
+			} else if (options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0) {
+				activeTimeoutMs = options.idleTimeoutMs - (Date.now() - lastProgressAt);
+				if (activeTimeoutMs <= 0) {
+					options.onIdle?.();
+					closeIterator();
+					throw new Error(options.errorMessage);
+				}
 			}
-			if (outcome.result.done) {
-				markFirstItemReceived();
-				return;
+
+			const nextResultPromise = withRacy(iterator.next());
+
+			const racers: Array<
+				Promise<
+					| { kind: "next"; result: IteratorResult<T> }
+					| { kind: "error"; error: unknown }
+					| { kind: "timeout" }
+					| { kind: "abort" }
+				>
+			> = [nextResultPromise];
+
+			const enforceTimeout = !noTimeoutEnforced && activeTimeoutMs !== undefined && activeTimeoutMs > 0;
+			if (enforceTimeout) {
+				armTimer(Date.now() + activeTimeoutMs!);
+				racers.push(timeoutPromise!);
 			}
-			const item = outcome.result.value;
-			// Non-progress items (e.g. provider keepalives, synthetic `start` events that
-			// arrive before the model has produced any tokens) MUST NOT flip us out of
-			// `awaitingFirstItem`. Otherwise the next iteration switches from the (longer)
-			// first-item watchdog to the (shorter) idle watchdog while we're still waiting
-			// on the model's first real output.
-			if (isProgressItem(item)) {
-				markFirstItemReceived();
-				lastProgressAt = Date.now();
+			if (abortPromise) {
+				racers.push(abortPromise);
 			}
-			yield item;
-			continuing = true;
-		} finally {
-			if (!continuing) closeIterator();
-			if (timer !== undefined) clearTimeout(timer);
-			// Resolve dangling promises so the racers don't leak (Promise.race is one-shot).
-			resolveTimeout?.({ kind: "timeout" });
-			if (abortListener && abortSignal) {
-				abortSignal.removeEventListener("abort", abortListener);
+
+			// Tracks whether this iteration handed an item to the consumer and resumed
+			// normally. Any other exit — internal throw, `done` return, or the consumer
+			// abandoning us via `.return()`/`.throw()` at the `yield` below — must close
+			// the upstream iterator so the underlying SSE body / SDK stream (and its
+			// socket) is released instead of being left suspended.
+			let continuing = false;
+			try {
+				const outcome = await Promise.race(racers);
+				if (outcome.kind === "abort") {
+					closeIterator();
+					throw abortReason(abortSignal!);
+				}
+				if (outcome.kind === "timeout") {
+					if (!awaitingFirstItem) {
+						options.onIdle?.();
+					} else {
+						options.onFirstItemTimeout?.();
+					}
+					closeIterator();
+					throw new Error(
+						!awaitingFirstItem ? options.errorMessage : (options.firstItemErrorMessage ?? options.errorMessage),
+					);
+				}
+				if (outcome.kind === "error") {
+					throw outcome.error;
+				}
+				if (outcome.result.done) {
+					markFirstItemReceived();
+					return;
+				}
+				const item = outcome.result.value;
+				// Non-progress items (e.g. provider keepalives, synthetic `start` events that
+				// arrive before the model has produced any tokens) MUST NOT flip us out of
+				// `awaitingFirstItem`. Otherwise the next iteration switches from the (longer)
+				// first-item watchdog to the (shorter) idle watchdog while we're still waiting
+				// on the model's first real output.
+				if (isProgressItem(item)) {
+					markFirstItemReceived();
+					lastProgressAt = Date.now();
+				}
+				yield item;
+				continuing = true;
+			} finally {
+				if (!continuing) closeIterator();
 			}
-			resolveAbort?.({ kind: "abort" });
 		}
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		// Settle the persistent racers so the final Promise.race releases them.
+		resolveTimeout?.({ kind: "timeout" });
+		if (abortListener && abortSignal) {
+			abortSignal.removeEventListener("abort", abortListener);
+		}
+		resolveAbort?.({ kind: "abort" });
 	}
 }
 

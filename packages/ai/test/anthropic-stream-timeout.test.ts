@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import { AnthropicApiError, type AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { waitForDelayOrAbort } from "./helpers";
 
@@ -136,6 +136,14 @@ function createAnthropicMockStream({
 	};
 }
 
+function createRejectedAnthropicRequest(error: Error): MockAnthropicRequest {
+	return {
+		async withResponse() {
+			throw error;
+		},
+	};
+}
+
 type PromiseOutcome<T> = { kind: "fulfilled"; value: T } | { kind: "rejected"; error: unknown };
 
 async function drainMicrotasksUntil(predicate: () => boolean, errorMessage: string): Promise<void> {
@@ -223,6 +231,54 @@ describe("anthropic first-event timeout retries", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
 		expect(result.responseId).toBe("msg_retry_success");
+	});
+
+	it("keeps the first-event watchdog armed when only pings arrive before message_start", async () => {
+		vi.useFakeTimers();
+		let attempt = 0;
+		let firstAttemptIteratorStarted = false;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: attempt === 1 ? [{ type: "ping" }] : createSuccessfulAnthropicEvents("retry recovered"),
+				hangAfterEvents: attempt === 1,
+				onIteratorStart:
+					attempt === 1
+						? () => {
+								firstAttemptIteratorStarted = true;
+							}
+						: undefined,
+			}) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async () => {});
+
+		const resultPromise = streamAnthropic(model, context, {
+			client,
+			streamFirstEventTimeoutMs: 1,
+			streamIdleTimeoutMs: 60_000,
+			providerRetryWait,
+		}).result();
+
+		await drainMicrotasksUntil(
+			() => firstAttemptIteratorStarted,
+			"Anthropic mock stream did not enter the ping-then-hang first attempt",
+		);
+		await drainMicrotasksUntil(() => vi.getTimerCount() > 0, "Anthropic watchdog timer was not armed");
+
+		// A keepalive must not consume the first-event watchdog: if it did, the
+		// stall would be classified as a (non-retryable) 60s idle timeout and
+		// advancing 1ms would never settle the stream.
+		vi.advanceTimersByTime(1);
+		const result = await resolveAfterMicrotasks(
+			resultPromise,
+			"Anthropic ping-then-stall did not retry via the first-event watchdog",
+		);
+
+		expect(attempt).toBe(2);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
 	});
 
 	it("does not arm the Anthropic first-event watchdog before the stream connects", async () => {
@@ -363,5 +419,37 @@ describe("anthropic first-event timeout retries", () => {
 				arguments: {},
 			},
 		]);
+	});
+});
+
+describe("anthropic provider retry delays", () => {
+	it("waits at least the server-suggested retry-after before retrying a retryable API error", async () => {
+		let attempt = 0;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			if (attempt === 1) {
+				return createRejectedAnthropicRequest(
+					new AnthropicApiError(
+						529,
+						'529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+						new Headers({ "retry-after": "30" }),
+					),
+				) as never;
+			}
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: createSuccessfulAnthropicEvents("after backoff"),
+			}) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async () => {});
+
+		const result = await streamAnthropic(model, context, { client, providerRetryWait }).result();
+
+		// Header says 30s; the 2s exponential backoff must not undercut it.
+		expect(attempt).toBe(2);
+		expect(providerRetryWait).toHaveBeenCalledWith(30_000, undefined);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "after backoff" }]);
 	});
 });

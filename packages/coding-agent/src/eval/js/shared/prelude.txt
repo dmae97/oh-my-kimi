@@ -90,15 +90,25 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		const limit = await __concurrencyLimit();
 		const concurrency = limit > 0 ? Math.min(limit, list.length) : list.length;
 		const results = new Array(list.length);
+		// Barrier semantics (mirrors the Python _pool_map): every item settles
+		// before we return or throw, then the lowest-index error propagates.
+		// Early-rejecting would orphan in-flight thunks (e.g. live agent()
+		// subagents) whose worker-side promises would never be observed.
+		const errors = new Map();
 		let next = 0;
 		const worker = async () => {
 			while (true) {
 				const index = next++;
 				if (index >= list.length) return;
-				results[index] = await fn(list[index], index);
+				try {
+					results[index] = await fn(list[index], index);
+				} catch (error) {
+					errors.set(index, error);
+				}
 			}
 		};
 		await Promise.all(Array.from({ length: concurrency }, () => worker()));
+		if (errors.size > 0) throw errors.get(Math.min(...errors.keys()));
 		return results;
 	};
 
@@ -148,6 +158,8 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 
 	const formatArgs = args => args.map(arg => (typeof arg === "string" ? arg : arg));
 
+	const consoleTimers = new Map();
+	const consoleCounts = new Map();
 	const consoleBridge = {
 		log: (...args) => globalThis.__omp_log__("log", ...formatArgs(args)),
 		info: (...args) => globalThis.__omp_log__("info", ...formatArgs(args)),
@@ -158,6 +170,55 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 			columns === undefined
 				? globalThis.__omp_table__(data)
 				: globalThis.__omp_table__(data, columns),
+		dir: (value, _options) => globalThis.__omp_log__("log", value),
+		dirxml: (...args) => globalThis.__omp_log__("log", ...formatArgs(args)),
+		trace: (...args) => {
+			const stack = (new Error().stack ?? "").split("\n").slice(2).join("\n");
+			globalThis.__omp_log__("log", args.length > 0 ? `Trace: ${formatArgs(args).join(" ")}` : "Trace", `\n${stack}`);
+		},
+		assert: (condition, ...args) => {
+			if (condition) return;
+			if (args.length > 0) globalThis.__omp_log__("error", "Assertion failed:", ...formatArgs(args));
+			else globalThis.__omp_log__("error", "Assertion failed");
+		},
+		group: (...args) => {
+			if (args.length > 0) globalThis.__omp_log__("log", ...formatArgs(args));
+		},
+		groupCollapsed: (...args) => {
+			if (args.length > 0) globalThis.__omp_log__("log", ...formatArgs(args));
+		},
+		groupEnd: () => {},
+		time: label => {
+			consoleTimers.set(String(label ?? "default"), Date.now());
+		},
+		timeLog: (label, ...args) => {
+			const key = String(label ?? "default");
+			const start = consoleTimers.get(key);
+			if (start === undefined) {
+				globalThis.__omp_log__("warn", `Timer '${key}' does not exist`);
+				return;
+			}
+			globalThis.__omp_log__("log", `${key}: ${Date.now() - start}ms`, ...formatArgs(args));
+		},
+		timeEnd: label => {
+			const key = String(label ?? "default");
+			const start = consoleTimers.get(key);
+			if (start === undefined) {
+				globalThis.__omp_log__("warn", `Timer '${key}' does not exist`);
+				return;
+			}
+			consoleTimers.delete(key);
+			globalThis.__omp_log__("log", `${key}: ${Date.now() - start}ms`);
+		},
+		count: label => {
+			const key = String(label ?? "default");
+			const next = (consoleCounts.get(key) ?? 0) + 1;
+			consoleCounts.set(key, next);
+			globalThis.__omp_log__("log", `${key}: ${next}`);
+		},
+		countReset: label => {
+			consoleCounts.delete(String(label ?? "default"));
+		},
 	};
 
 	globalThis.console = consoleBridge;

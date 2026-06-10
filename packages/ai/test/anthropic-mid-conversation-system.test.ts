@@ -73,6 +73,22 @@ describe("Anthropic mid-conversation system messages", () => {
 		expect(params.at(-1)?.role).toBe("system");
 	});
 
+	it("keeps developer turns carrying image content as user messages", () => {
+		const model = makeModel({ input: ["text", "image"] });
+		const visualDeveloper: DeveloperMessage = {
+			role: "developer",
+			content: [
+				{ type: "text", text: "Match this reference design." },
+				{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+			],
+			timestamp: Date.now(),
+		};
+		const params = convertAnthropicMessages([user("hi"), visualDeveloper], model, false);
+		// Placement qualifies (follows user, last entry), but system content is
+		// text-only on the wire — the image-bearing turn must stay role: user.
+		expect(params.map(p => p.role)).toEqual(["user", "user"]);
+	});
+
 	it("maps developer messages to system on Claude Mythos 5", () => {
 		const model = makeModel({ id: "claude-mythos-5", name: "Claude Mythos 5" });
 		const params = convertAnthropicMessages([user("hi"), developer("Use project rules.")], model, false);

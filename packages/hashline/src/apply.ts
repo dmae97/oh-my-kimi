@@ -7,7 +7,7 @@
  * which absorbs common model mistakes where a payload restates unchanged range
  * boundaries or duplicates/drops structural closers.
  */
-import { UNRESOLVED_BLOCK_INTERNAL } from "./messages";
+import { afterInsertLandingShiftWarning, UNRESOLVED_BLOCK_INTERNAL } from "./messages";
 import { cloneCursor } from "./tokenizer";
 import type { Anchor, ApplyResult, Cursor, Edit } from "./types";
 
@@ -40,10 +40,20 @@ function getEditAnchors(edit: AppliedEdit): Anchor[] {
  * checked once per section via the header hash before this function runs.
  */
 function validateLineBounds(edits: AppliedEdit[], fileLines: string[]): void {
+	// `split("\n")` on a newline-terminated file yields a trailing "" sentinel.
+	// It is addressable for inserts (append-past-end), but deleting it would
+	// silently strip the file's final newline — an off-by-one that must error.
+	const phantomLine = fileLines.length > 1 && fileLines[fileLines.length - 1] === "" ? fileLines.length : 0;
 	for (const edit of edits) {
 		for (const anchor of getEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
 				throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
+			}
+			if (edit.kind === "delete" && anchor.line === phantomLine) {
+				throw new Error(
+					`Line ${anchor.line} is the trailing blank sentinel of a newline-terminated file and has no content to delete. ` +
+						`End the range at line ${anchor.line - 1}, or use \`insert tail:\` to append.`,
+				);
 			}
 		}
 	}
@@ -383,6 +393,21 @@ function findBoundaryEcho(group: ReplacementGroup, fileLines: readonly string[])
 	// repair would strip explicit replacement content with no signal that the
 	// payload was a mistake rather than an intentional duplication.
 	if (leadingMax + trailingMax >= group.payload.length) return undefined;
+	// Balance-neutrality guard (see header comment): the dropped echo lines must
+	// either be delimiter-neutral on their own or exactly cancel the payload/range
+	// balance delta. In brace-heavy code where bare closer lines repeat, an
+	// "echo" that shifts delimiter balance is structural content the payload
+	// placed intentionally — stripping it would corrupt the result.
+	const leadingBalance = computeDelimiterBalance(group.payload.slice(0, leadingMax));
+	const trailingBalance = computeDelimiterBalance(group.payload.slice(group.payload.length - trailingMax));
+	const droppedBalance = balanceDelta(leadingBalance, balanceNegate(trailingBalance));
+	if (!balanceIsZero(droppedBalance)) {
+		const delta = balanceDelta(
+			computeDelimiterBalance(group.payload),
+			computeDelimiterBalance(fileLines.slice(group.startLine - 1, group.endLine)),
+		);
+		if (!balanceEqual(droppedBalance, delta)) return undefined;
+	}
 	return { leading: leadingMax, trailing: trailingMax };
 }
 
@@ -481,6 +506,150 @@ function repairReplacementBoundaries(
 	return { edits: out, warnings };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// After-insert landing correction
+//
+// The body rows of an `insert after N:` hunk carry an implicit depth claim:
+// their leading indentation says how deep the author expects the new lines
+// to sit. When that depth is shallower than line N itself, the hunk is
+// inserting a sibling of some enclosing construct while anchored inside it —
+// the common shape is anchoring on the last statement of a block and writing
+// the body at the parent's depth. Sliding the landing point forward across
+// the structural closer lines that follow (and nothing else — content lines
+// are never crossed) places the body at the depth its indentation names.
+//
+// The shift is deliberately conservative: it fires only when the body and
+// anchor indentation are comparable (one is a prefix of the other), crosses
+// only pure closing-delimiter lines indented at or deeper than the body,
+// stops as soon as depth returns to the body's level, and is abandoned when
+// any other edit in the patch targets a crossed line. Every shift is
+// reported as a warning so the author can re-issue with deeper indentation
+// when the original landing was intended.
+
+/** Leading run of tabs and spaces. */
+function leadingIndent(line: string): string {
+	let end = 0;
+	while (end < line.length) {
+		const code = line.charCodeAt(end);
+		if (code !== 9 && code !== 32) break;
+		end++;
+	}
+	return line.slice(0, end);
+}
+
+/** `deeper` strictly extends `shallower` (same indent style, more depth). */
+function isIndentDeeper(deeper: string, shallower: string): boolean {
+	return deeper.length > shallower.length && deeper.startsWith(shallower);
+}
+
+interface AfterInsertGroup {
+	/** Anchor line shared by every insert row of the hunk. */
+	anchor: number;
+	/** Indices into the edit list, in patch order. */
+	members: number[];
+}
+
+/**
+ * Depth of an after-insert hunk's body: the shallowest indentation across its
+ * non-blank rows. Returns `undefined` when no depth claim can be made — an
+ * all-blank or all-closer body, or rows whose indentation styles are not
+ * mutually comparable (tabs vs spaces).
+ */
+function bodyTargetIndent(rows: readonly string[]): string | undefined {
+	const nonBlank = rows.filter(hasNonWhitespace);
+	if (nonBlank.length === 0) return undefined;
+	// A body of pure closers re-balances delimiters; it claims no depth.
+	if (nonBlank.every(row => STRUCTURAL_CLOSER_RE.test(row))) return undefined;
+	let target = leadingIndent(nonBlank[0] ?? "");
+	for (const row of nonBlank) {
+		const indent = leadingIndent(row);
+		if (indent.startsWith(target)) continue;
+		if (target.startsWith(indent)) target = indent;
+		else return undefined;
+	}
+	return target;
+}
+
+/**
+ * Resolve where an after-insert hunk anchored on `group.anchor` should land
+ * given its body depth `target`: the last structural closer line in the run
+ * directly below the anchor whose indentation still covers `target`. Returns
+ * `undefined` when the landing stays put.
+ */
+function resolveShiftedLanding(
+	group: AfterInsertGroup,
+	target: string,
+	fileLines: readonly string[],
+	targetedLines: ReadonlySet<number>,
+): { line: number; crossed: number } | undefined {
+	const anchorText = fileLines[group.anchor - 1];
+	if (anchorText === undefined || !hasNonWhitespace(anchorText)) return undefined;
+	if (!isIndentDeeper(leadingIndent(anchorText), target)) return undefined;
+
+	let landing = group.anchor;
+	let crossed = 0;
+	for (let line = group.anchor + 1; line <= fileLines.length; line++) {
+		const text = fileLines[line - 1] ?? "";
+		if (!hasNonWhitespace(text)) continue; // look past blanks, never land on them
+		if (!STRUCTURAL_CLOSER_RE.test(text)) break; // content is never crossed
+		const indent = leadingIndent(text);
+		if (!indent.startsWith(target)) break; // shallower than the body — crossing would over-escape
+		if (targetedLines.has(line)) return undefined; // another hunk owns this closer
+		landing = line;
+		crossed++;
+		if (indent.length === target.length) break; // depth returned to the body's level
+	}
+	return landing === group.anchor ? undefined : { line: landing, crossed };
+}
+
+/**
+ * Slide mis-anchored `insert after N:` hunks past the structural closer lines
+ * that directly follow their anchor when the body's indentation says the new
+ * lines belong at a shallower depth. Returns the corrected edit list plus one
+ * warning per shifted hunk.
+ */
+function repairAfterInsertLandings(
+	edits: readonly AppliedEdit[],
+	fileLines: readonly string[],
+): { edits: readonly AppliedEdit[]; warnings: string[] } {
+	// Group plain (non-replacement) after-anchor inserts per authored hunk:
+	// rows of one hunk share the anchor line and the patch header line.
+	const groups = new Map<string, AfterInsertGroup>();
+	edits.forEach((edit, idx) => {
+		if (edit.kind !== "insert" || edit.mode === "replacement") return;
+		if (edit.cursor.kind !== "after_anchor") return;
+		const key = `${edit.cursor.anchor.line}:${edit.lineNum}`;
+		const group = groups.get(key);
+		if (group === undefined) groups.set(key, { anchor: edit.cursor.anchor.line, members: [idx] });
+		else group.members.push(idx);
+	});
+	if (groups.size === 0) return { edits, warnings: [] };
+
+	// Lines explicitly targeted by any edit; a shift never crosses them.
+	const targetedLines = new Set<number>();
+	for (const edit of edits) {
+		if (edit.kind === "delete") targetedLines.add(edit.anchor.line);
+		else if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor")
+			targetedLines.add(edit.cursor.anchor.line);
+	}
+
+	let out: AppliedEdit[] | undefined;
+	const warnings: string[] = [];
+	for (const group of groups.values()) {
+		const target = bodyTargetIndent(group.members.map(idx => (edits[idx] as InsertEdit).text));
+		if (target === undefined) continue;
+		const landing = resolveShiftedLanding(group, target, fileLines, targetedLines);
+		if (landing === undefined) continue;
+		out ??= [...edits];
+		for (const idx of group.members) {
+			const edit = out[idx] as InsertEdit;
+			out[idx] = { ...edit, cursor: { kind: "after_anchor", anchor: { line: landing.line } } };
+		}
+		warnings.push(afterInsertLandingShiftWarning(group.anchor, landing.line, landing.crossed));
+	}
+	return { edits: out ?? edits, warnings };
+}
+
 /**
  * Apply a parsed list of edits to a text body. Pure function — no I/O.
  *
@@ -508,13 +677,15 @@ export function applyEdits(text: string, edits: readonly Edit[]): ApplyResult {
 
 	const targetEdits = appliedEdits.map((edit, index) => cloneAppliedEdit(edit, index));
 	validateLineBounds(targetEdits, fileLines);
-	const { edits: repaired, warnings } = repairReplacementBoundaries(targetEdits, fileLines);
+	const { edits: repaired, warnings: boundaryWarnings } = repairReplacementBoundaries(targetEdits, fileLines);
+	const { edits: landed, warnings: landingWarnings } = repairAfterInsertLandings(repaired, fileLines);
+	const warnings = [...boundaryWarnings, ...landingWarnings];
 
 	// Partition edits into bof, eof, and anchor-targeted buckets.
 	const bofLines: string[] = [];
 	const eofLines: string[] = [];
 	const anchorEdits: IndexedEdit[] = [];
-	repaired.forEach((edit, idx) => {
+	landed.forEach((edit, idx) => {
 		if (edit.kind === "insert" && edit.cursor.kind === "bof") {
 			bofLines.push(edit.text);
 		} else if (edit.kind === "insert" && edit.cursor.kind === "eof") {
