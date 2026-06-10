@@ -8,6 +8,7 @@
  */
 
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { supportsAdaptiveThinkingDisplay } from "@oh-my-pi/pi-catalog/identity";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { $env, $flag, extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
@@ -850,22 +851,6 @@ function buildAdditionalModelRequestFields(
 	}
 
 	return result;
-}
-
-/**
- * Adaptive thinking `display` is supported starting with Claude Opus 4.7 and
- * Claude Fable/Mythos 5. Older adaptive-thinking models (Opus 4.6, Sonnet
- * 4.6+) reject the field. Bedrock model ids are prefixed with region/inference-
- * profile slugs (e.g. `eu.anthropic.claude-opus-4-7-...`); the regex matches
- * the Claude model fragment regardless of prefix.
- */
-function supportsAdaptiveThinkingDisplay(modelId: string): boolean {
-	if (/claude-(?:fable|mythos)-5\b/.test(modelId)) return true;
-	const match = /claude-opus-(\d+)-(\d+)/.exec(modelId);
-	if (!match) return false;
-	const major = Number(match[1]);
-	const minor = Number(match[2]);
-	return major > 4 || (major === 4 && minor >= 7);
 }
 
 /**

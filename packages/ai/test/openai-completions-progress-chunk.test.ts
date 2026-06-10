@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
-	getOpenAICompletionsStreamIdleTimeoutFallbackMs,
 	isOpenAICompletionsProgressChunk,
 	streamOpenAICompletions,
 } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { resolveOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const openAICompletionsModel = {
@@ -78,7 +78,7 @@ function createKeepaliveOnlyCompletionsResponse(modelId: string, signal: AbortSi
 	});
 }
 
-describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
+describe("resolveOpenAICompat stream idle timeout", () => {
 	it("widens GLM 5.1 coding-plan stream watchdogs", () => {
 		const model = {
 			...openAICompletionsModel,
@@ -88,7 +88,7 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
 		} satisfies Model<"openai-completions">;
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
+		expect(resolveOpenAICompat(model).streamIdleTimeoutMs).toBe(600_000);
 	});
 
 	it("also widens custom Z.AI OpenAI-compatible GLM 5.1 endpoints", () => {
@@ -100,7 +100,7 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			baseUrl: "https://api.z.ai/api/coding/paas/v4",
 		} satisfies Model<"openai-completions">;
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
+		expect(resolveOpenAICompat(model).streamIdleTimeoutMs).toBe(600_000);
 	});
 
 	it("widens DeepSeek V4 reasoning streams on the official DeepSeek API", () => {
@@ -113,7 +113,7 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			reasoning: true,
 		} satisfies Model<"openai-completions">;
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(300_000);
+		expect(resolveOpenAICompat(model).streamIdleTimeoutMs).toBe(300_000);
 	});
 
 	it("widens DeepSeek reasoning streams routed through an aliased OpenAI-compatible provider id", () => {
@@ -126,7 +126,7 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			reasoning: true,
 		} satisfies Model<"openai-completions">;
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(300_000);
+		expect(resolveOpenAICompat(model).streamIdleTimeoutMs).toBe(300_000);
 	});
 
 	it("leaves non-reasoning DeepSeek-hosted models on the global timeout", () => {
@@ -139,7 +139,7 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			reasoning: false,
 		} satisfies Model<"openai-completions">;
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBeUndefined();
+		expect(resolveOpenAICompat(model).streamIdleTimeoutMs).toBeUndefined();
 	});
 
 	it("does not widen DeepSeek V4 reasoning models hosted on third-party OpenAI-compatible proxies", () => {
@@ -152,11 +152,11 @@ describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
 			reasoning: true,
 		} satisfies Model<"openai-completions">;
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBeUndefined();
+		expect(resolveOpenAICompat(model).streamIdleTimeoutMs).toBeUndefined();
 	});
 
 	it("keeps ordinary OpenAI-compatible models on the global timeout", () => {
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(openAICompletionsModel)).toBeUndefined();
+		expect(resolveOpenAICompat(openAICompletionsModel).streamIdleTimeoutMs).toBeUndefined();
 	});
 });
 

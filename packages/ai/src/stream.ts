@@ -1,4 +1,5 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
@@ -65,8 +66,8 @@ import { withRequestDebugFetch } from "./utils/request-debug";
 function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
-		((model.api === "openai-completions" && model.baseUrl.includes("/endpoints/openapi")) ||
-			(model.api === "anthropic-messages" && model.baseUrl.includes(":streamRawPredict")))
+		((model.api === "openai-completions" && isVertexExpressOpenAIUrl(model.baseUrl)) ||
+			(model.api === "anthropic-messages" && isVertexRawPredictUrl(model.baseUrl)))
 	);
 }
 
@@ -78,7 +79,7 @@ function createVertexAuthenticatedFetch(options: StreamOptions | undefined): Fet
 		headers.set("Authorization", `Bearer ${token}`);
 		const rewritten = resolveVertexRequest(input);
 		const url = rewritten instanceof Request ? rewritten.url : rewritten.toString();
-		if (isVertexAnthropicRawPredict(url)) {
+		if (isVertexRawPredictUrl(url)) {
 			const bodyText = await readVertexRequestBody(rewritten, init);
 			const transformed = transformVertexAnthropicBody(bodyText);
 			return baseFetch(url, {
@@ -91,10 +92,6 @@ function createVertexAuthenticatedFetch(options: StreamOptions | undefined): Fet
 		return baseFetch(rewritten, { ...init, headers });
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
-}
-
-function isVertexAnthropicRawPredict(url: string): boolean {
-	return url.includes(":streamRawPredict") || url.includes(":rawPredict");
 }
 
 async function readVertexRequestBody(input: string | URL | Request, init: RequestInit | undefined): Promise<string> {

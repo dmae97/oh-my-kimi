@@ -1,6 +1,8 @@
 import { detectOpenAICompat, type ResolvedOpenAICompat, resolveOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
+import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
+import { isDeepseekModelIdOrName, isKimiModelId } from "@oh-my-pi/pi-catalog/identity";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
@@ -390,44 +392,6 @@ function getTrailingPartialDeepseekToken(text: string): string {
 const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI completions stream timed out while waiting for the first event";
 
-const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
-const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
-
-// DeepSeek V4 reasoning models on the official api.deepseek.com emit no SSE
-// bytes while the model finishes its private chain-of-thought, which routinely
-// takes longer than the generic 100s first-event floor under load (issue
-// #2177). Mirror the GLM coding-plan widening: a 5-minute idle floor lifts the
-// first-event watchdog (it floors at idle) without changing the runtime
-// streaming behavior, so reasoning warm-ups stop aborting and retrying.
-const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
-
-function isDirectDeepseekReasoningModel(model: Model<"openai-completions">): boolean {
-	if (!model.reasoning) return false;
-	if (model.provider === "deepseek") return true;
-	return model.baseUrl.toLowerCase().includes("api.deepseek.com");
-}
-
-/** Returns the widened OpenAI stream watchdog floor for slow reasoning models hosted on OpenAI-compatible endpoints. */
-export function getOpenAICompletionsStreamIdleTimeoutFallbackMs(
-	model: Model<"openai-completions">,
-): number | undefined {
-	if (GLM_CODING_PLAN_MODEL_PATTERN.test(model.id)) {
-		if (model.provider === "zhipu-coding-plan" || model.provider === "zai")
-			return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
-
-		const baseUrl = model.baseUrl.toLowerCase();
-		if (baseUrl.includes("open.bigmodel.cn") || baseUrl.includes("api.z.ai")) {
-			return GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS;
-		}
-	}
-
-	if (isDirectDeepseekReasoningModel(model)) {
-		return DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS;
-	}
-
-	return undefined;
-}
-
 async function* observeDecodedOpenAICompletionChunks(
 	chunks: AsyncIterable<ChatCompletionChunk>,
 	observer: (event: RawSseEvent) => void,
@@ -468,7 +432,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const idleTimeoutFallbackMs = getOpenAICompletionsStreamIdleTimeoutFallbackMs(model);
+			const idleTimeoutFallbackMs = resolveOpenAICompat(model).streamIdleTimeoutMs;
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
@@ -576,7 +540,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// though tool calls are also surfaced structurally. Strip the leaked markers
 			// so users don't see raw `<｜...｜>` tokens.
 			const stripDeepseekChatTemplateTokens =
-				/deepseek/i.test(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
+				isDeepseekModelIdOrName(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
 			type ToolCallStreamBlock = ToolCall & {
 				partialArgs?: string | Record<string, unknown>;
 				streamIndex?: number;
@@ -1252,8 +1216,8 @@ function buildParams(
 		compat.allowsSyntheticReasoningContentForToolCalls = false;
 		compat.reasoningContentField = "reasoning_content";
 	}
-	const isKimiModelId = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
-	const isOpenRouter = model.baseUrl.includes("openrouter.ai");
+	const isKimiFamilyModel = isKimiModelId(model.id);
+	const isOpenRouter = modelMatchesHost(model, "openrouter");
 	const messages = convertMessages(model, context, compat);
 	maybeAddAnthropicCacheControl(compat, messages);
 	const supportsReasoningParams = model.provider !== "github-copilot";
@@ -1266,14 +1230,14 @@ function buildParams(
 	// before the final answer. Always send max_tokens — match the same
 	// Kimi-family regex used by the compat detector.
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
-	const requestedMaxTokens = options?.maxTokens ?? (isKimiModelId ? model.maxTokens : undefined);
+	const requestedMaxTokens = options?.maxTokens ?? (isKimiFamilyModel ? model.maxTokens : undefined);
 	// OpenRouter fans out to upstreams whose output caps differ from the catalog
 	// value (which tracks the highest-cap provider). A max_tokens above the routed
 	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
 	// GLM-4.7, ~40k) for a higher-cap one, defeating `provider.order`/`only`. Omit
 	// it for OpenRouter so each upstream self-caps and routing is honored. Kimi is
 	// exempt — it derives TPM rate limits from max_tokens (see above).
-	const omitMaxTokensForRouting = isOpenRouter && !isKimiModelId;
+	const omitMaxTokensForRouting = isOpenRouter && !isKimiFamilyModel;
 	const effectiveMaxTokens =
 		requestedMaxTokens === undefined || omitMaxTokensForRouting
 			? undefined
@@ -1442,12 +1406,12 @@ function buildParams(
 	}
 
 	// OpenRouter provider routing preferences
-	if (model.baseUrl.includes("openrouter.ai") && compat.openRouterRouting) {
+	if (modelMatchesHost(model, "openrouter") && compat.openRouterRouting) {
 		params.provider = compat.openRouterRouting;
 	}
 
 	// Vercel AI Gateway provider routing preferences
-	if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
+	if (modelMatchesHost(model, "vercelAIGateway") && model.compat?.vercelGatewayRouting) {
 		const routing = model.compat.vercelGatewayRouting;
 		if (routing.only || routing.order) {
 			const gatewayOptions: Record<string, string[]> = {};

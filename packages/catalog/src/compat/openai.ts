@@ -1,3 +1,13 @@
+import { hostMatchesUrl, modelMatchesHost } from "../hosts";
+import {
+	isAnthropicNamespacedModelId,
+	isClaudeModelId,
+	isDeepseekModelIdOrName,
+	isKimiK26ModelId,
+	isKimiModelId,
+	isMimoModelIdOrName,
+	isQwenModelId,
+} from "../identity/family";
 import type { Model, OpenAICompat } from "../types";
 
 type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -10,6 +20,8 @@ export type ResolvedOpenAICompat = Required<
 		| "vercelGatewayRouting"
 		| "extraBody"
 		| "toolStrictMode"
+		| "streamIdleTimeoutMs"
+		| "supportsLongPromptCacheRetention"
 		| "cacheControlFormat"
 		| "thinkingKeep"
 	>
@@ -19,8 +31,15 @@ export type ResolvedOpenAICompat = Required<
 	extraBody?: OpenAICompat["extraBody"];
 	cacheControlFormat?: OpenAICompat["cacheControlFormat"];
 	thinkingKeep?: OpenAICompat["thinkingKeep"];
+	streamIdleTimeoutMs?: number;
 	toolStrictMode: ResolvedToolStrictMode;
 };
+
+/** GLM coding-plan SKUs idle for minutes mid-reasoning; see `streamIdleTimeoutMs`. */
+const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
+const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
+/** Direct DeepSeek reasoning models stall between thinking and answer phases. */
+const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 
 function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	if (
@@ -33,17 +52,13 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	) {
 		return true;
 	}
-
-	const normalizedBaseUrl = baseUrl.toLowerCase();
 	return (
-		normalizedBaseUrl.includes("api.openai.com") ||
-		normalizedBaseUrl.includes(".openai.azure.com") ||
-		normalizedBaseUrl.includes("models.inference.ai.azure.com") ||
-		normalizedBaseUrl.includes("api.cerebras.ai") ||
-		normalizedBaseUrl.includes("api.together.xyz") ||
-		normalizedBaseUrl.includes("openrouter.ai") ||
-		normalizedBaseUrl.includes("api.deepseek.com") ||
-		normalizedBaseUrl.includes("deepseek.com")
+		hostMatchesUrl(baseUrl, "openai") ||
+		hostMatchesUrl(baseUrl, "azureOpenAI") ||
+		hostMatchesUrl(baseUrl, "cerebras") ||
+		hostMatchesUrl(baseUrl, "together") ||
+		hostMatchesUrl(baseUrl, "openrouter") ||
+		hostMatchesUrl(baseUrl, "deepseekFamily")
 	);
 }
 
@@ -87,23 +102,19 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	const provider = model.provider;
 	// Use resolvedBaseUrl if provided (e.g., after GitHub Copilot proxy-ep resolution)
 	const baseUrl = resolvedBaseUrl ?? model.baseUrl;
+	const hostModel = { provider, baseUrl };
 
-	const isCerebras = provider === "cerebras" || baseUrl.includes("cerebras.ai");
-	const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
-	const isZhipu = provider === "zhipu-coding-plan" || baseUrl.includes("open.bigmodel.cn");
-	const isKilo = provider === "kilo" || baseUrl.includes("api.kilo.ai");
-	const isKimiModel = model.id.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(model.id);
-	const isMoonshotNativeHost =
-		provider === "moonshot" || provider === "kimi-code" || /api\.moonshot\.ai|api\.kimi\.com/i.test(baseUrl);
-	const isMoonshotKimi = isKimiModel && isMoonshotNativeHost;
-	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && /(^|\/)kimi-k2\.6(?:[-:]|$)/i.test(model.id);
+	const isCerebras = modelMatchesHost(hostModel, "cerebras");
+	const isZai = modelMatchesHost(hostModel, "zai");
+	const isZhipu = modelMatchesHost(hostModel, "zhipu");
+	const isKilo = modelMatchesHost(hostModel, "kilo");
+	const isKimiModel = isKimiModelId(model.id);
+	const isMoonshotKimi = isKimiModel && modelMatchesHost(hostModel, "moonshotNative");
+	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && isKimiK26ModelId(model.id);
 	const isAnthropicModel =
-		provider === "anthropic" ||
-		baseUrl.includes("api.anthropic.com") ||
-		/(^|\/)claude[-.]/i.test(model.id) ||
-		/(^|\/)anthropic\//i.test(model.id);
-	const isAlibaba = provider === "alibaba-coding-plan" || baseUrl.includes("dashscope");
-	const isQwen = model.id.toLowerCase().includes("qwen");
+		modelMatchesHost(hostModel, "anthropic") || isClaudeModelId(model.id) || isAnthropicNamespacedModelId(model.id);
+	const isAlibaba = modelMatchesHost(hostModel, "alibabaDashscope");
+	const isQwen = isQwenModelId(model.id);
 	// DeepSeek V4 (and other reasoning-capable DeepSeek models) reject follow-up requests in
 	// thinking mode unless prior assistant tool-call turns include `reasoning_content`. The
 	// upstream model is reachable through many OpenAI-compat hosts (api.deepseek.com, Deepinfra,
@@ -112,66 +123,52 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	// applies when thinking mode is actually engaged.
 	const lowerId = model.id.toLowerCase();
 	const lowerName = (model.name ?? "").toLowerCase();
-	const isXiaomiHost =
-		provider === "xiaomi" || provider.startsWith("xiaomi-token-plan-") || baseUrl.includes("xiaomimimo.com");
-	const isMimoModel = lowerId.includes("mimo") || lowerName.includes("mimo");
-	const isXiaomiMimo = isXiaomiHost && isMimoModel;
+	const isXiaomiHost = modelMatchesHost(hostModel, "xiaomi");
+	const isXiaomiMimo = isXiaomiHost && (isMimoModelIdOrName(model.id) || isMimoModelIdOrName(model.name ?? ""));
 	// OpenCode Zen's `big-pickle` is a DeepSeek reasoning alias; the upstream
 	// 400s come from DeepSeek and require exact reasoning_content replay.
 	const isOpenCodeDeepseekAlias =
 		provider === "opencode-zen" && (lowerId === "big-pickle" || lowerName === "big pickle");
 	const isDeepseekFamily =
-		provider === "deepseek" ||
-		baseUrl.includes("deepseek.com") ||
-		lowerId.includes("deepseek") ||
-		lowerName.includes("deepseek") ||
+		modelMatchesHost(hostModel, "deepseekFamily") ||
+		isDeepseekModelIdOrName(model.id) ||
+		isDeepseekModelIdOrName(model.name ?? "") ||
 		isOpenCodeDeepseekAlias;
-	const isDirectDeepseekApi = provider === "deepseek" || baseUrl.includes("api.deepseek.com");
+	const isDirectDeepseekApi = modelMatchesHost(hostModel, "deepseekDirect");
 	const isDirectDeepseekReasoning = isDirectDeepseekApi && isDeepseekFamily && Boolean(model.reasoning);
+	const isGrok = modelMatchesHost(hostModel, "xai");
+	const isMistral = modelMatchesHost(hostModel, "mistral");
+	const isOpenCodeHost = modelMatchesHost(hostModel, "opencode");
 	const isNonStandard =
 		isCerebras ||
-		provider === "xai" ||
-		baseUrl.includes("api.x.ai") ||
-		provider === "mistral" ||
-		baseUrl.includes("mistral.ai") ||
-		baseUrl.includes("chutes.ai") ||
-		baseUrl.includes("deepseek.com") ||
-		baseUrl.includes("fireworks.ai") ||
+		isGrok ||
+		isMistral ||
+		hostMatchesUrl(baseUrl, "chutes") ||
+		hostMatchesUrl(baseUrl, "deepseekFamily") ||
+		hostMatchesUrl(baseUrl, "fireworks") ||
 		isAlibaba ||
 		isZai ||
 		isZhipu ||
 		isKilo ||
 		isQwen ||
 		isXiaomiHost ||
-		provider === "opencode-zen" ||
-		provider === "opencode-go" ||
-		baseUrl.includes("opencode.ai");
+		isOpenCodeHost;
 	const isOpenCodeProvider = provider === "opencode-go" || provider === "opencode-zen";
 
 	const useMaxTokens =
-		provider === "mistral" ||
-		baseUrl.includes("mistral.ai") ||
-		baseUrl.includes("chutes.ai") ||
-		baseUrl.includes("fireworks.ai") ||
-		isDirectDeepseekApi;
-	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-	const isMistral = provider === "mistral" || baseUrl.includes("mistral.ai");
+		isMistral || hostMatchesUrl(baseUrl, "chutes") || hostMatchesUrl(baseUrl, "fireworks") || isDirectDeepseekApi;
 
 	// Hosts whose chat-completions endpoints are known to accept multiple
 	// leading `system`/`developer` messages (preferred for KV-cache reuse).
 	// Anything outside this allowlist defaults to coalescing because
 	// strict chat templates (Qwen 3.5+ via vLLM, MiniMax, etc.) reject
 	// follow-up system messages with a 400.
-	const isOpenAIHost = provider === "openai" || baseUrl.includes("api.openai.com");
-	const isAzureHost =
-		provider === "azure" ||
-		baseUrl.includes(".openai.azure.com") ||
-		baseUrl.includes("models.inference.ai.azure.com") ||
-		baseUrl.includes("azure.com/openai");
-	const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
-	const isTogether = provider === "together" || baseUrl.includes("api.together.xyz");
-	const isFireworks = baseUrl.includes("fireworks.ai");
-	const isGroqHost = provider === "groq" || baseUrl.includes("api.groq.com");
+	const isOpenAIHost = modelMatchesHost(hostModel, "openai");
+	const isAzureHost = modelMatchesHost(hostModel, "azureOpenAI");
+	const isOpenRouter = modelMatchesHost(hostModel, "openrouter");
+	const isTogether = modelMatchesHost(hostModel, "together");
+	const isFireworks = hostMatchesUrl(baseUrl, "fireworks");
+	const isGroqHost = modelMatchesHost(hostModel, "groq");
 	const isCopilotHost = provider === "github-copilot";
 	const isZenmuxHost = provider === "zenmux";
 	// Endpoints that MUST receive a single system block. MiniMax's OpenAI
@@ -179,12 +176,8 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 	// Dashscope and Qwen Portal serve Qwen models whose chat template
 	// raises "System message must be at the beginning" if any system
 	// message appears past index 0.
-	const isMiniMaxHost =
-		provider === "minimax-code" ||
-		provider === "minimax-code-cn" ||
-		baseUrl.includes("api.minimax.io") ||
-		baseUrl.includes("api.minimaxi.com");
-	const isQwenPortal = provider === "qwen-portal" || baseUrl.includes("portal.qwen.ai");
+	const isMiniMaxHost = modelMatchesHost(hostModel, "minimax");
+	const isQwenPortal = modelMatchesHost(hostModel, "qwenPortal");
 	const supportsMultipleSystemMessagesDefault =
 		!isMiniMaxHost &&
 		!isAlibaba &&
@@ -234,6 +227,16 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 							} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
 						: {};
 
+	// Stream-watchdog floor: GLM coding-plan SKUs and direct DeepSeek reasoning
+	// models idle for minutes mid-reasoning; widen the idle timeout so warm-ups
+	// stop aborting and retrying.
+	const streamIdleTimeoutMs =
+		GLM_CODING_PLAN_MODEL_PATTERN.test(model.id) && (isZai || isZhipu)
+			? GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
+			: model.reasoning && isDirectDeepseekApi
+				? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
+				: undefined;
+
 	return {
 		supportsStore: !isNonStandard,
 		// `developer` is an OpenAI-Responses-era extension to the chat-completions schema. Almost
@@ -263,7 +266,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		thinkingFormat:
 			isZai || isZhipu || isMoonshotKimi || isXiaomiMimo
 				? "zai"
-				: provider === "openrouter" || baseUrl.includes("openrouter.ai")
+				: isOpenRouter
 					? "openrouter"
 					: isAlibaba || isQwen
 						? "qwen"
@@ -286,7 +289,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 			(isKimiModel && !isOpenCodeProvider) ||
 			(isDeepseekFamily && Boolean(model.reasoning)) ||
 			isXiaomiMimo ||
-			((provider === "openrouter" || baseUrl.includes("openrouter.ai")) && Boolean(model.reasoning)),
+			(isOpenRouter && Boolean(model.reasoning)),
 		// DeepSeek V4 and Xiaomi MiMo reject synthetic reasoning_content placeholders (".") on tool-call turns.
 		// Kimi and OpenRouter accept them when actual reasoning is unavailable.
 		allowsSyntheticReasoningContentForToolCalls: (!isDeepseekFamily || !model.reasoning) && !isXiaomiMimo,
@@ -297,6 +300,7 @@ export function detectOpenAICompat(model: Model<"openai-completions">, resolvedB
 		supportsStrictMode: detectStrictModeSupport(provider, baseUrl),
 		extraBody: isDirectDeepseekReasoning ? { thinking: { type: "enabled" } } : undefined,
 		toolStrictMode: isCerebras ? "all_strict" : "mixed",
+		streamIdleTimeoutMs,
 	};
 }
 
@@ -350,5 +354,62 @@ export function resolveOpenAICompat(
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
 		extraBody: model.compat.extraBody ?? detected.extraBody,
 		toolStrictMode: model.compat.toolStrictMode ?? detected.toolStrictMode,
+		streamIdleTimeoutMs: model.compat.streamIdleTimeoutMs ?? detected.streamIdleTimeoutMs,
+	};
+}
+
+/** Resolved Responses-API compatibility view (see `detectOpenAIResponsesCompat`). */
+export interface ResolvedOpenAIResponsesCompat {
+	supportsDeveloperRole: boolean;
+	supportsStrictMode: boolean;
+	supportsLongPromptCacheRetention: boolean;
+}
+
+/**
+ * Detect Responses-API compatibility from provider/baseUrl. The Responses
+ * flavor deliberately differs from chat-completions: GitHub Copilot's
+ * responses endpoint accepts the `developer` role, while strict tool mode is
+ * scoped to first-party OpenAI/Azure/Copilot providers. Developer-role and
+ * prompt-cache detection are URL-only on purpose — the historical call sites
+ * never consulted the provider id for them.
+ */
+export function detectOpenAIResponsesCompat(
+	model: { provider: string; baseUrl: string },
+	resolvedBaseUrl?: string,
+): ResolvedOpenAIResponsesCompat {
+	const baseUrl = resolvedBaseUrl ?? model.baseUrl ?? "";
+	return {
+		supportsDeveloperRole:
+			hostMatchesUrl(baseUrl, "openai") ||
+			hostMatchesUrl(baseUrl, "azureOpenAI") ||
+			hostMatchesUrl(baseUrl, "githubCopilot"),
+		supportsStrictMode:
+			model.provider === "openai" ||
+			model.provider === "azure" ||
+			model.provider === "github-copilot" ||
+			hostMatchesUrl(baseUrl, "openai") ||
+			hostMatchesUrl(baseUrl, "azureOpenAI"),
+		supportsLongPromptCacheRetention: hostMatchesUrl(baseUrl, "openai"),
+	};
+}
+
+/**
+ * Resolve Responses-API compatibility by layering explicit `model.compat`
+ * overrides onto the detected defaults — the Responses-side analogue of
+ * `resolveOpenAICompat`. Models bundled with `supportsDeveloperRole: false`
+ * (codex-mini-style SKUs) take effect here.
+ */
+export function resolveOpenAIResponsesCompat(
+	model: { provider: string; baseUrl: string; compat?: OpenAICompat },
+	resolvedBaseUrl?: string,
+): ResolvedOpenAIResponsesCompat {
+	const detected = detectOpenAIResponsesCompat(model, resolvedBaseUrl);
+	const compat = model.compat;
+	if (!compat) return detected;
+	return {
+		supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
+		supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+		supportsLongPromptCacheRetention:
+			compat.supportsLongPromptCacheRetention ?? detected.supportsLongPromptCacheRetention,
 	};
 }

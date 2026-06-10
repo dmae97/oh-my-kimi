@@ -1,3 +1,5 @@
+import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
+
 /** Provider metadata needed to resolve append-only context mode. */
 export interface AppendOnlyContextModel {
 	provider: string;
@@ -5,19 +7,10 @@ export interface AppendOnlyContextModel {
 	compat?: object;
 }
 
-function isXiaomiHost(baseUrl: string): boolean {
-	try {
-		const host = new URL(baseUrl).hostname;
-		return host === "xiaomimimo.com" || host.endsWith(".xiaomimimo.com");
-	} catch {
-		return false;
-	}
-}
-
 function shouldAutoEnableAppendOnlyContext(model: AppendOnlyContextModel | null | undefined): boolean {
 	if (!model) return false;
 	if (model.provider === "deepseek") return true;
-	if (isXiaomiHost(model.baseUrl)) return true;
+	if (hostMatchesUrl(model.baseUrl, "xiaomi")) return true;
 	return !!model.compat && "supportsStore" in model.compat && model.compat.supportsStore === true;
 }
 

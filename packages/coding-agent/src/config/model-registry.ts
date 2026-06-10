@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import type { Api, Context, Model, SimpleStreamOptions, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { isVertexExpressOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import {
 	createModelManager,
@@ -136,7 +137,7 @@ function isAuthoritativeProjectCatalogModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
 		model.api === "openai-completions" &&
-		model.baseUrl.includes("/endpoints/openapi")
+		isVertexExpressOpenAIUrl(model.baseUrl)
 	);
 }
 

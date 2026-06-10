@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	$env,
 	$flag,
@@ -155,7 +156,7 @@ export function isApiModel(modelName: string): boolean {
 	}
 	const active = activeEmbeddingOptions();
 	const baseUrl = active?.apiUrl ?? ($env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
-	if (baseUrl !== undefined && baseUrl !== "" && !baseUrl.includes("openrouter.ai")) {
+	if (baseUrl !== undefined && baseUrl !== "" && !hostMatchesUrl(baseUrl, "openrouter")) {
 		return true;
 	}
 	return $flag("MNEMOPI_EMBEDDINGS_VIA_API");
@@ -246,7 +247,7 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 
 async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
 	const baseUrl = embeddingBaseUrl();
-	const isCustom = !baseUrl.includes("openrouter.ai");
+	const isCustom = !hostMatchesUrl(baseUrl, "openrouter");
 	const apiKey = embeddingApiKey();
 	if (!isCustom && apiKey === "") {
 		return null;
@@ -335,7 +336,7 @@ export async function available(): Promise<boolean> {
 	}
 	if (isApiModel(defaultModel())) {
 		const baseUrl = active?.apiUrl ?? ($env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
-		if (baseUrl !== undefined && baseUrl !== "" && !baseUrl.includes("openrouter.ai")) {
+		if (baseUrl !== undefined && baseUrl !== "" && !hostMatchesUrl(baseUrl, "openrouter")) {
 			return true;
 		}
 		return embeddingApiKey() !== "";

@@ -182,6 +182,13 @@ export interface OpenAICompat {
 	cacheControlFormat?: "anthropic" | undefined;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: auto-detected per provider/baseUrl (conservative for unknown providers). */
 	supportsStrictMode?: boolean;
+	/**
+	 * Stream-watchdog idle-timeout floor in ms for slow reasoning hosts.
+	 * Default: auto-detected (GLM coding-plan hosts, direct DeepSeek reasoning).
+	 */
+	streamIdleTimeoutMs?: number;
+	/** Whether the host honors `prompt_cache_retention: "24h"` on the Responses API. Default: auto-detected (api.openai.com). */
+	supportsLongPromptCacheRetention?: boolean;
 	/** Whether tool schemas must be sent either all strict or all non-strict. Undefined keeps the existing per-tool mixed behavior. */
 	toolStrictMode?: "all_strict" | "none";
 }
@@ -225,6 +232,22 @@ export interface AnthropicCompat {
 	 * When unset, auto-detected from the model id. Default: true.
 	 */
 	supportsForcedToolChoice?: boolean;
+	/**
+	 * Include a non-standard `id` field (aliasing `tool_use_id`) on
+	 * `tool_result` blocks. Z.AI's Anthropic-compatible proxy deserializes
+	 * tool results into a class that reads `.id` (issue #814). Default:
+	 * auto-detected (Z.AI hosts).
+	 */
+	requiresToolResultId?: boolean;
+	/**
+	 * Replay unsigned `thinking` blocks from prior assistant turns as native
+	 * thinking instead of demoting them to text. Official Anthropic enforces
+	 * signature-based thinking-chain integrity, so unsigned blocks must stay
+	 * text there; compatible reasoning endpoints (Z.AI, DeepSeek, …) emit
+	 * unsigned blocks and expect them back as `type: "thinking"` (#2005).
+	 * Default: auto-detected from provider/baseUrl and `model.reasoning`.
+	 */
+	replayUnsignedThinking?: boolean;
 }
 
 /**

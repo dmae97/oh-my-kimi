@@ -1,3 +1,4 @@
+import { resolveOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { AzureOpenAI, APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
@@ -31,7 +32,7 @@ import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schem
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { getOpenAIResponsesCacheSessionId, supportsDeveloperRole } from "./openai-responses";
+import { getOpenAIResponsesCacheSessionId } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
@@ -337,7 +338,10 @@ function convertMessages(
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	if (systemPrompts.length > 0) {
-		const role = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model) ? "developer" : "system";
+		const role =
+			model.reasoning && resolveOpenAIResponsesCompat(model, resolvedBaseUrl).supportsDeveloperRole
+				? "developer"
+				: "system";
 		for (const systemPrompt of systemPrompts) {
 			messages.push({ role, content: systemPrompt });
 		}

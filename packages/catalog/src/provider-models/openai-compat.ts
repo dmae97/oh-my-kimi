@@ -2349,11 +2349,15 @@ export interface GithubCopilotModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus)-4([.-]|$)/;
+const isCopilotResponsesModelId = (modelId: string): boolean =>
+	modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+
 function inferCopilotApi(modelId: string): Api {
-	if (/^claude-(haiku|sonnet|opus)-4([.-]|$)/.test(modelId)) {
+	if (COPILOT_ANTHROPIC_MODEL_PATTERN.test(modelId)) {
 		return "anthropic-messages";
 	}
-	if (modelId.startsWith("gpt-5") || modelId.startsWith("oswe")) {
+	if (isCopilotResponsesModelId(modelId)) {
 		return "openai-responses";
 	}
 	return "openai-completions";
@@ -2776,11 +2780,11 @@ const COPILOT_DEFAULT_RESOLUTION = {
 
 const COPILOT_API_RESOLUTION_RULES: readonly ApiResolutionRule[] = [
 	{
-		matches: modelId => /^claude-(haiku|sonnet|opus)-4([.-]|$)/.test(modelId),
+		matches: modelId => COPILOT_ANTHROPIC_MODEL_PATTERN.test(modelId),
 		resolved: { api: "anthropic-messages", baseUrl: COPILOT_BASE_URL },
 	},
 	{
-		matches: modelId => modelId.startsWith("gpt-5") || modelId.startsWith("oswe"),
+		matches: isCopilotResponsesModelId,
 		resolved: { api: "openai-responses", baseUrl: COPILOT_BASE_URL },
 	},
 ];

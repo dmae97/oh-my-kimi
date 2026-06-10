@@ -161,7 +161,7 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 	});
 
 	it("treats a missing baseUrl as official Anthropic (resolveAnthropicBaseUrl default)", () => {
-		// `isAnthropicApiBaseUrl(undefined) === true` because the actual HTTP
+		// `isOfficialAnthropicApiUrl(undefined) === true` because the actual HTTP
 		// dispatch falls back to https://api.anthropic.com. Same-id custom
 		// overrides that only tweak model metadata (no baseUrl override) must
 		// not regress to native-thinking replay against the first-party API.

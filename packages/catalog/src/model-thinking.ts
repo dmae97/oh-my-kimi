@@ -1,5 +1,6 @@
 import { resolveOpenAICompat } from "./compat/openai";
 import { Effort, THINKING_EFFORTS } from "./effort";
+import { modelMatchesHost } from "./hosts";
 import {
 	type AnthropicModel,
 	bareModelId,
@@ -353,7 +354,7 @@ function isOpenRouterAnthropicAdaptiveReasoningModel<TApi extends Api>(
 	model: ApiModel<TApi>,
 ): boolean {
 	if (model.api !== "openai-completions") return false;
-	if (model.provider !== "openrouter" && !model.baseUrl.includes("openrouter.ai")) return false;
+	if (!modelMatchesHost(model, "openrouter")) return false;
 	return isFableOrMythos(parsedModel.kind) || (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.6"));
 }
 

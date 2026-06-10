@@ -16,6 +16,7 @@
 
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Effort, KnownProvider, Model } from "@oh-my-pi/pi-ai";
+import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -169,14 +170,14 @@ function splitUpstreamRouting(pattern: string): { base: string; upstream: string
 
 /** OpenRouter and Vercel AI Gateway are the aggregators that honor per-request upstream routing. */
 function supportsUpstreamRouting(model: Model<Api>): boolean {
-	return model.baseUrl.includes("openrouter.ai") || model.baseUrl.includes("ai-gateway.vercel.sh");
+	return modelMatchesHost(model, "openrouter") || modelMatchesHost(model, "vercelAIGateway");
 }
 
 /** Pin a resolved aggregator model to a single upstream provider via its compat routing block. */
 function applyUpstreamRouting(model: Model<Api>, upstream: string): Model<Api> {
 	const aggregatorModel = model as Model<"openai-completions">;
 	const routing = { only: [upstream] };
-	const compat = model.baseUrl.includes("ai-gateway.vercel.sh")
+	const compat = modelMatchesHost(model, "vercelAIGateway")
 		? { ...aggregatorModel.compat, vercelGatewayRouting: routing }
 		: { ...aggregatorModel.compat, openRouterRouting: routing };
 	return { ...model, compat } as Model<Api>;

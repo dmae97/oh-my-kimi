@@ -44,6 +44,11 @@ export const OpenAICompatSchema = z.object({
 	cacheControlFormat: z.enum(["anthropic"]).optional(),
 	supportsStrictMode: z.boolean().optional(),
 	toolStrictMode: z.enum(["all_strict", "none"]).optional(),
+	streamIdleTimeoutMs: z.number().positive().optional(),
+	supportsLongPromptCacheRetention: z.boolean().optional(),
+	// anthropic-messages compat flags (same `compat` slot, per-api interpretation)
+	requiresToolResultId: z.boolean().optional(),
+	replayUnsignedThinking: z.boolean().optional(),
 });
 
 const EffortSchema = z.enum(["minimal", "low", "medium", "high", "xhigh"]);

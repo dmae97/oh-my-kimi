@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed embedding provider detection to match `openrouter` by URL host, so custom embedding endpoints are now recognized correctly instead of being misclassified by substring matching
+- Fixed the check for OpenRouter base URLs so only true `openrouter` hosts are treated as non-custom
 
 ## [15.10.8] - 2026-06-09
 ### Added
