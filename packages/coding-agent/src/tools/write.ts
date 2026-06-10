@@ -20,6 +20,7 @@ import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import { fileHyperlink, framedBlock, renderStatusLine } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
+import { routeWriteThroughBridge } from "./acp-bridge";
 import { truncateForPrompt } from "./approval";
 import { parseArchivePathCandidates } from "./archive-reader";
 import { assertEditableFile } from "./auto-generated-guard";
@@ -35,7 +36,6 @@ import {
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
-import { routeWriteThroughBridge } from "./acp-bridge";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
@@ -139,7 +139,6 @@ function maybeWriteSnapshotHeader(session: ToolSession, absolutePath: string, co
 	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return formatHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag);
 }
-
 
 /**
  * Append a trailing note line to the first text block of a tool result.
@@ -829,7 +828,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			isError: failedFiles.length > 0 ? true : undefined,
 		};
 	}
-
 
 	async execute(
 		_toolCallId: string,
