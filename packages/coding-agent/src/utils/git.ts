@@ -477,6 +477,31 @@ async function resolveCommonDir(gitDir: string): Promise<string> {
 	if (!relative) return gitDir;
 	return path.resolve(gitDir, relative);
 }
+function isLinkedWorktree(repository: GitRepository): boolean {
+	return (
+		repository.gitDir !== repository.commonDir &&
+		getEntryTypeSync(path.join(repository.gitDir, "commondir")) === "file"
+	);
+}
+
+async function isLinkedWorktreeAsync(repository: GitRepository): Promise<boolean> {
+	return (
+		repository.gitDir !== repository.commonDir &&
+		(await getEntryType(path.join(repository.gitDir, "commondir"))) === "file"
+	);
+}
+
+function primaryRootFromRepositorySync(repository: GitRepository): string {
+	if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
+	if (isLinkedWorktree(repository)) return repository.commonDir;
+	return repository.repoRoot;
+}
+
+async function primaryRootFromRepository(repository: GitRepository): Promise<string> {
+	if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
+	if (await isLinkedWorktreeAsync(repository)) return repository.commonDir;
+	return repository.repoRoot;
+}
 
 function resolveRepoFromEntrySync(repoRoot: string, gitEntryPath: string, entryType: EntryType): GitRepository | null {
 	const gitDir = resolveGitDirSync(gitEntryPath, entryType);
@@ -1656,10 +1681,7 @@ export const repo = {
 	/** Resolve the primary checkout root, or the shared common dir for bare-repo worktrees. */
 	async primaryRoot(cwd: string, signal?: AbortSignal): Promise<string | null> {
 		const repository = await resolveRepository(cwd);
-		if (repository) {
-			if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
-			return repository.commonDir;
-		}
+		if (repository) return primaryRootFromRepository(repository);
 		const repoRoot = await repo.root(cwd, signal);
 		if (!repoRoot) return null;
 		const commonDir = await runText(repoRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
@@ -1667,7 +1689,7 @@ export const repo = {
 			signal,
 		});
 		if (path.basename(commonDir.trim()) === ".git") return path.dirname(commonDir.trim());
-		return commonDir.trim();
+		return repoRoot;
 	},
 
 	/**
@@ -1680,8 +1702,7 @@ export const repo = {
 	primaryRootSync(cwd: string): string | null {
 		const repository = resolveRepositorySync(cwd);
 		if (!repository) return null;
-		if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
-		return repository.commonDir;
+		return primaryRootFromRepositorySync(repository);
 	},
 
 	/** Full GitRepository metadata (sync). */
