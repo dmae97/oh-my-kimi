@@ -82,6 +82,9 @@ export class EventController {
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
 	// and sealed in place the moment anything else lands below it.
 	#displaceablePollComponent: ToolExecutionComponent | undefined = undefined;
+	// Most recent TTSR notification block. A new ttsr_triggered event merges its
+	// rules into this block while it is still the (live-region) transcript tail.
+	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
 	#handlers: AgentSessionEventHandlers;
 
@@ -953,9 +956,26 @@ export class EventController {
 	}
 
 	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
+		// Consecutive notifications (e.g. per-tool matches from one assistant
+		// message) merge into the previous block instead of stacking. Mutating an
+		// existing block is only safe while it sits inside the live region — a
+		// still-mutating block above it means none of its rows have been committed
+		// to native scrollback yet (commits are prefix-only and stop at the first
+		// live block), so the grown block still repaints.
+		const previous = this.#lastTtsrNotification;
+		if (
+			previous &&
+			this.ctx.chatContainer.children.at(-1) === previous &&
+			this.ctx.chatContainer.isWithinLiveRegion(previous)
+		) {
+			previous.addRules(event.rules);
+			this.ctx.ui.requestRender();
+			return;
+		}
 		const component = new TtsrNotificationComponent(event.rules);
 		component.setExpanded(this.ctx.toolOutputExpanded);
 		this.ctx.present(component);
+		this.#lastTtsrNotification = component;
 	}
 
 	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
