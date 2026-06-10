@@ -69,7 +69,9 @@ export function resolveBlockEdits(
 		if (span === null) {
 			if (onUnresolved === "drop") continue;
 			throw new Error(
-				`line ${edit.lineNum}: ${resolver ? blockUnresolvedMessage(edit.anchor.line, op) : BLOCK_RESOLVER_UNAVAILABLE}`,
+				`line ${edit.lineNum}: ${
+					resolver ? blockUnresolvedMessage(edit.anchor.line, op, text.split("\n")) : BLOCK_RESOLVER_UNAVAILABLE
+				}`,
 			);
 		}
 		options.onResolved?.({
