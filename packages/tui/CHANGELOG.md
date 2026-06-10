@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Added
 
 - `SettingsList` now supports type-to-search filtering with Escape clearing an active query before canceling.
@@ -43,8 +45,6 @@
 
 - Removed the probe/defer API surface: `TUI.setEagerNativeScrollbackRebuild()`, `TUI.refreshNativeScrollbackIfDirty()`, `TUI.setClearOnShrink()`/`getClearOnShrink()`, `RenderRequestOptions.allowUnknownViewportMutation`, `NativeScrollbackRefreshOptions`, `Terminal.isNativeViewportAtBottom()`, `Terminal.hasEagerEraseScrollbackRisk()`, and the `eagerEraseScrollbackRisk`/`submitPinsViewportToTail` capability fields with their detectors.
 - Removed the `PI_TUI_ED3_SAFE`, `PI_CLEAR_ON_SHRINK`, and `PI_TUI_DEBUG` environment variables (the levers they tuned no longer exist; `PI_DEBUG_REDRAW` now logs the commit-ledger state per frame).
-
-## [15.10.10] - 2026-06-09
 
 ## [15.10.9] - 2026-06-09
 

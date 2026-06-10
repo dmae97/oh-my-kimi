@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Added
 
 - Added `hostMatchesUrl`, `modelMatchesHost`, and endpoint-shape helpers in the new `hosts` module for consistent provider/baseUrl matching

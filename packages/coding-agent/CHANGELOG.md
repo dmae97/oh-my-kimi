@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Added
 
 - Added `supportsReasoningParams`, `alwaysSendMaxTokens`, `strictResponsesPairing`, and a recursive `whenThinking` overlay (alongside `streamIdleTimeoutMs`/`supportsLongPromptCacheRetention`/`requiresToolResultId`/`replayUnsignedThinking`) to the OpenAI/Anthropic `compat` schema so custom model entries can configure those provider-specific capabilities
@@ -116,8 +118,6 @@
 
 - Removed the `clearOnShrink` setting and its `PI_CLEAR_ON_SHRINK` environment variable: the rewritten renderer always clears shrunken rows exactly, so the flicker/perf tradeoff the setting controlled no longer exists. Existing config entries are ignored.
 - Removed the prompt-submit native-scrollback reconciliation checkpoint and the eager streaming render mode from the interactive controllers — the renderer's append-only contract made both obsolete.
-
-## [15.10.10] - 2026-06-09
 
 ## [15.10.9] - 2026-06-09
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Changed
 
 - Bundled-model lookups (`getBundledModel`, `GeneratedProvider`) now import from the new `@oh-my-pi/pi-catalog` package instead of the `@oh-my-pi/pi-ai` barrel, which no longer re-exports catalog values

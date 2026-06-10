@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Added
 
 - Added a `maxCountPerFile` option to `grep` that caps how many matches a single file may contribute, so one hot file can no longer exhaust the global `maxCount` budget in path order and starve every file sorted after it out of the result set entirely.

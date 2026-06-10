@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.11] - 2026-06-10
+
 ### Breaking Changes
 
 - Changed `BlockResolution.isDelete` to `BlockResolution.op` (`"replace" | "delete" | "insert_after"`) so resolutions can describe every block-anchored op
