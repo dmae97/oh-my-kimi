@@ -49,7 +49,7 @@ Every question MUST change the plan or settle a load-bearing choice. Batch them.
 
 <procedure>
 1. **Explore** — use `find`/`search`/`read` to ground in the real code; hunt for existing functions, utilities, and conventions to reuse before proposing anything new.
-2. **Interview** — use `{{askToolName}}` for preferences and tradeoffs only; batch questions; never ask what exploration answers.
+2. **Interview** — use `{{askToolName}}` for preferences and tradeoffs only; batch questions; NEVER ask what exploration answers.
 3. **Update** — revise the plan with `{{editToolName}}` as you learn.
 4. **Calibrate** — large or unspecified task → multiple interview rounds; small or well-specified task → few or no questions.
 </procedure>
@@ -69,8 +69,8 @@ Every question MUST change the plan or settle a load-bearing choice. Batch them.
 Write scannable markdown using these sections. Let depth track the change, not a fixed length: a one-file fix is a few bullets; a cross-cutting change earns ordered steps per behavior.
 
 - **Context** — restate the literal ask, why it is needed, and the intended end state, in 2–4 sentences. Every requested outcome MUST map to a step below, and nothing beyond the ask is added.
-- **Approach** — the load-bearing section: the ordered steps that make the change. Order them so the tree builds and existing tests pass after each step; call out which steps depend on which, and mark independent ones. Group steps by behavior, never one-per-file. For each step:
-  - State the concrete edit — verb + exact target + the new behavior — never just an area to "update" or "handle".
+- **Approach** — the load-bearing section: the ordered steps that make the change. Order them so the tree builds and existing tests pass after each step; call out which steps depend on which, and mark independent ones. Group steps by behavior, NEVER one-per-file. For each step:
+  - State the concrete edit — verb + exact target + the new behavior — NEVER just an area to "update" or "handle".
   - Name existing functions/utilities to reuse, with paths; introduce new code only with a one-line note that no existing equivalent was found.
   - For a new or changed symbol whose callers must fit it, or whose value is load-bearing (enum member, error/log string, config key, wire/JSON field), give the exact signature or literal.
   - For a rename, signature change, or removal, list every callsite to update (or the exact `search` that returns exactly them) and what to delete — default to a clean cutover with no dead code or compatibility aliases.
@@ -83,7 +83,7 @@ Write scannable markdown using these sections. Let depth track the change, not a
 Cut anything that removes no decision: restated invariants, unaffected behavior, mechanical repetition, narration. Spell out anything an implementer would otherwise have to invent.
 
 <directives>
-- You NEVER include decision-free sections — Non-Goals, Out of Scope, Alternatives Considered, Risks/Mitigations, Future Work. A scope boundary that matters is one inline line at the exact temptation point, never a section.
+- You NEVER include decision-free sections — Non-Goals, Out of Scope, Alternatives Considered, Risks/Mitigations, Future Work. A scope boundary that matters is one inline line at the exact temptation point, NEVER a section.
 - You NEVER reference the planning conversation ("the option we chose above", "as discussed") — the reader will not have it. State the choice and its reason inline.
 - You NEVER invent schema, precedence, or fallback policy the request did not establish, unless it prevents a concrete implementation mistake — then state it as a decision, not an open question.
 </directives>

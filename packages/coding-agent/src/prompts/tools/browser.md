@@ -3,13 +3,13 @@ Drives real Chromium tab; full puppeteer access via JS execution.
 <instruction>
 - For static web content (articles, docs, issues/PRs, JSON, PDFs, feeds), prefer `read` tool with URL — reader-mode text without spinning up browser. Use this tool when you need JS execution, authentication, or interactive actions.
 - Three actions only:
-  - `open` — acquire or reuse named tab. `name` defaults `"main"`. Optional `url` navigates after tab ready. Optional `viewport` sets dimensions. Optional `dialogs: "accept" | "dismiss"` auto-handles `alert`/`confirm`/`beforeunload` so navigation/clicks don't hang (default: leave dialogs unhandled — page hangs until caller wires `page.on('dialog', …)`).
+  - `open` — acquire or reuse named tab. `name` defaults `"main"`. Optional `url` navigates after tab ready. Optional `viewport` sets dimensions. Optional `dialogs: "accept" | "dismiss"` auto-handles `alert`/`confirm`/`beforeunload` so navigation/clicks don't hang; by default dialogs are unhandled and the page hangs until you wire `page.on('dialog', …)`.
   - `close` — release tab by `name`, or every tab with `all: true`. For spawned-app browsers, set `kill: true` to terminate process tree (default leaves running).
   - `run` — execute JS against existing tab. `code` is body of async function with `page`, `browser`, `tab`, `display`, `assert`, `wait` in scope. Function's return value JSON-stringified into tool result; multiple `display(value)` calls accumulate text/images.
 - Tabs survive across `run` calls and across in-process subagents. Open once, reuse many times.
 - Browser kinds, selected by `app` field on `open`:
   - default (no `app`) → headless Chromium with stealth patches.
-  - `app.path` → spawn absolute binary (Electron/CDP). If running instance already exposes CDP port, reused; otherwise stale instances killed, fresh one spawned. No stealth patches — NEVER tamper with real desktop app.
+  - `app.path` → spawn absolute binary (Electron/CDP); a running instance with an open CDP port is reused. No stealth patches — NEVER tamper with real desktop app.
   - `app.cdp_url` → connect to existing CDP endpoint (e.g. `http://127.0.0.1:9222`).
   - `app.target` (with `path`/`cdp_url`) — substring matched against url+title to pick BrowserWindow when app exposes several.
 - Inside `run`, `tab` exposes high-level helpers; reach for `page` (raw puppeteer Page) when you need anything they don't cover.
@@ -25,7 +25,7 @@ Drives real Chromium tab; full puppeteer access via JS execution.
   - `tab.waitForUrl(pattern, { timeout? })` — pattern substring or `RegExp`. Polls `location.href` so works for SPA pushState navigations, not just real navigations. Returns matched URL.
   - `tab.waitForResponse(pattern, { timeout? })` — pattern substring, `RegExp`, or `(response) => boolean`. Returns raw puppeteer `HTTPResponse` (call `.text()` / `.json()` / `.status()` / `.headers()` on it).
   - `tab.evaluate(fn, …args)` — sugar for `page.evaluate` with abort signal already wired. Use this instead of dropping to `page.evaluate` for ad-hoc DOM reads.
-  - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — captures screenshot and **auto-attaches to tool output for you to view** (unless `silent: true`). `save` is **strictly optional**: OMIT when you just want to look at page — downscaled image shown regardless, full-res capture written to temp file automatically. Pass `save` (a path) ONLY when deliberately need to keep full-res copy on disk for later use; `browser.screenshotDir` does same for every shot. NEVER invent `save` path for throwaway/temporal screenshot.
+  - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — captures a screenshot and attaches it for you to view (`silent: true` skips attaching). Pass `save` (a path) only when a later step needs the file; never just to look.
   - `tab.extract(format = "markdown")` — returns Readability-extracted page content as a string (`"markdown"` or `"text"`). Throws if the page yields no readable content.
 - Selectors accept CSS plus puppeteer query handlers: `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`. Playwright-style `p-aria/[name="…"]`, `p-text/…` normalized.
 - Default `tab.observe()` over `tab.screenshot()` for page state. Screenshot only when visual appearance matters.
@@ -46,10 +46,10 @@ Drives real Chromium tab; full puppeteer access via JS execution.
 # Click an observed element by id
 `{"action":"run","name":"docs","code":"const obs = await tab.observe(); const link = obs.elements.find(e => e.role === 'link' && e.name === 'Sign in'); assert(link, 'Sign in link missing'); await (await tab.id(link.id)).click();"}`
 
-# Take a transient screenshot just to look at the page — NO save path needed; the image is shown to you
+# Screenshot to look at the page — no save path
 `{"action":"run","name":"docs","code":"await tab.screenshot();"}`
 
-# Persist a full-page screenshot to disk (only when you deliberately need to keep the file)
+# Keep a full-page screenshot on disk for a later step
 `{"action":"run","name":"docs","code":"await tab.screenshot({ fullPage: true, save: 'screenshot.png' });"}`
 
 # Fill and submit a form via selectors

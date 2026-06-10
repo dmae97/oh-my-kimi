@@ -12,7 +12,7 @@ Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, `n
 |`start`|`task`|Mark in progress|
 |`done`|`task` or `phase`|Mark completed|
 |`drop`|`task` or `phase`|Mark abandoned|
-|`rm`|`task` or `phase`|Remove|
+|`rm`|`task` or `phase` (optional)|Remove task or phase's tasks; omit both to clear the entire list|
 |`append`|`phase`, `items: string[]`|Append tasks to `phase`; lazily creates phase|
 |`note`|`task`, `text`|Append a note to a task. Reminders for future-you only.|
 |`view`|—|Read-only: echo the current list without modifying it|
