@@ -103,6 +103,19 @@ describe("delimited path expansion", () => {
 			}),
 		).toEqual(["apps/**/*.txt", "packages/**/*.txt"]);
 	});
+
+	it("normalizes Windows path separators before parsing find globs", async () => {
+		expect(await expandDelimitedPathEntries(["apps\\**\\*.txt"], tempDir, { splitter: parseFindPattern })).toEqual([
+			"apps/**/*.txt",
+		]);
+
+		const parsed = parseFindPattern("C:\\work\\repo\\src\\**\\*.ts");
+		expect(parsed).toEqual({
+			basePath: "C:/work/repo/src",
+			globPattern: "**/*.ts",
+			hasGlob: true,
+		});
+	});
 });
 
 describe("findToolRenderer", () => {

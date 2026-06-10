@@ -398,9 +398,14 @@ export function formatPathRelativeToCwd(
 export function stripOuterDoubleQuotes(input: string): string {
 	return input.startsWith('"') && input.endsWith('"') && input.length > 1 ? input.slice(1, -1) : input;
 }
+function normalizePathSeparators(input: string): string {
+	if (isInternalUrlPath(input)) return input;
+	if (!input.includes("\\")) return input;
+	return input.replace(/\\/g, "/");
+}
 
 export function normalizePathLikeInput(input: string): string {
-	return stripOuterDoubleQuotes(input.trim());
+	return normalizePathSeparators(stripOuterDoubleQuotes(input.trim()));
 }
 
 const GLOB_PATH_CHARS = ["*", "?", "[", "{"] as const;
@@ -582,19 +587,20 @@ export interface ResolvedMultiFindPattern {
 	targets: ResolvedFindTarget[];
 	scopePath: string;
 }
-
-/**
- * Split a user path into a base path + glob pattern for tools that delegate to
- * APIs accepting separate `path` and `glob` arguments.
- */
 export function parseSearchPath(filePath: string): ParsedSearchPath {
-	const normalizedPath = filePath.replace(/\\/g, "/");
-	if (!hasGlobPathChars(normalizedPath)) {
-		return { basePath: filePath };
+	const normalizedPath = normalizePathSeparators(filePath);
+	const segments = normalizedPath.split("/");
+	let firstGlobIndex = -1;
+	for (let i = 0; i < segments.length; i++) {
+		if (hasGlobPathChars(segments[i])) {
+			firstGlobIndex = i;
+			break;
+		}
 	}
 
-	const segments = normalizedPath.split("/");
-	const firstGlobIndex = segments.findIndex(segment => hasGlobPathChars(segment));
+	if (firstGlobIndex === -1) {
+		return { basePath: normalizedPath };
+	}
 
 	if (firstGlobIndex <= 0) {
 		return { basePath: ".", glob: normalizedPath };
@@ -617,7 +623,7 @@ export async function parseSearchPathPreferringLiteral(filePath: string, cwd: st
 	if (!hasGlobPathChars(filePath) || isInternalUrlPath(filePath)) return parseSearchPath(filePath);
 	try {
 		await fs.promises.stat(resolveToCwd(filePath, cwd));
-		return { basePath: filePath };
+		return { basePath: normalizePathSeparators(filePath) };
 	} catch {
 		return parseSearchPath(filePath);
 	}
@@ -632,7 +638,8 @@ export async function parseSearchPathPreferringLiteral(filePath: string, cwd: st
 //   /abs/path/**/\*.ts -> { basePath: "/abs/path", globPattern: "**/*.ts", hasGlob: true }
 //   src/app -> { basePath: "src/app", globPattern: "**/*", hasGlob: false }
 export function parseFindPattern(pattern: string): ParsedFindPattern {
-	const segments = pattern.split("/");
+	const normalizedPattern = normalizePathSeparators(pattern);
+	const segments = normalizedPattern.split("/");
 	let firstGlobIndex = -1;
 	for (let i = 0; i < segments.length; i++) {
 		if (hasGlobPathChars(segments[i])) {
@@ -642,14 +649,14 @@ export function parseFindPattern(pattern: string): ParsedFindPattern {
 	}
 
 	if (firstGlobIndex === -1) {
-		return { basePath: pattern, globPattern: "**/*", hasGlob: false };
+		return { basePath: normalizedPattern, globPattern: "**/*", hasGlob: false };
 	}
 
 	if (firstGlobIndex === 0) {
-		const needsRecursive = !pattern.startsWith("**/");
+		const needsRecursive = !normalizedPattern.startsWith("**/");
 		return {
 			basePath: ".",
-			globPattern: needsRecursive ? `**/${pattern}` : pattern,
+			globPattern: needsRecursive ? `**/${normalizedPattern}` : normalizedPattern,
 			hasGlob: true,
 		};
 	}
