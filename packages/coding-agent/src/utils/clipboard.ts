@@ -137,15 +137,18 @@ $ErrorActionPreference = 'Stop'
 `;
 
 /**
- * Read clipboard text through the Windows host's PowerShell.
+ * Read clipboard text through Windows PowerShell — native win32 or the WSL
+ * host over interop.
  *
- * Same rationale as `readImageViaPowerShell`: WSLg's Wayland clipboard only
- * works when `wl-clipboard` happens to be installed in the distro, while
- * `powershell.exe` is always reachable over WSL interop. Spawned async so a
- * cold PowerShell start cannot block the TUI event loop.
+ * Same rationale as `readImageViaPowerShell`: under WSL, the WSLg Wayland
+ * clipboard only works when `wl-clipboard` happens to be installed in the
+ * distro, while `powershell.exe` is always reachable. Forcing UTF-8 output
+ * encoding keeps non-ASCII text intact regardless of the console codepage
+ * (the legacy win32 `Get-Clipboard` shell-out mangled it), and `Bun.spawn`
+ * keeps a cold PowerShell start off the TUI event loop.
  *
- * Returns null when the bridge fails (caller falls through to wl-paste/xclip);
- * an empty string is a successful "no text on the clipboard" read.
+ * Returns null when the bridge fails (WSL callers fall through to
+ * wl-paste/xclip); an empty string is a successful "no text" read.
  */
 async function readTextViaPowerShell(): Promise<string | null> {
 	try {
@@ -212,10 +215,7 @@ export async function readTextFromClipboard(): Promise<string> {
 			return execSync("pbpaste", { encoding: "utf8", timeout: 2000 }).toString();
 		}
 		if (p === "win32") {
-			return execSync('powershell.exe -NoProfile -Command "Get-Clipboard"', {
-				encoding: "utf8",
-				timeout: 2000,
-			}).toString();
+			return (await readTextViaPowerShell()) ?? "";
 		}
 		if (process.env.TERMUX_VERSION) {
 			return execSync("termux-clipboard-get", { encoding: "utf8", timeout: 2000 }).toString();
