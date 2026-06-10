@@ -279,6 +279,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			stream.push({ type: "start", partial: output });
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
+			let sawCompleted = false;
 			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
 				idleTimeoutMs,
 				firstItemTimeoutMs: firstEventTimeoutMs,
@@ -301,6 +302,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					// second deep copy needed (reasoning items carry multi-KB blobs).
 					nativeOutputItems.push(item as unknown as Record<string, unknown>);
 				},
+				onCompleted: () => {
+					sawCompleted = true;
+				},
 			});
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
@@ -309,6 +313,14 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			}
 			if (abortTracker.wasCallerAbort()) {
 				throw new Error("Request was aborted");
+			}
+
+			// Detect premature stream closure: the HTTP stream ended without the
+			// provider sending `response.completed`. Custom/proxy providers may
+			// drop the connection mid-stream; without this guard the incomplete
+			// output is silently surfaced as a successful "stop".
+			if (!sawCompleted) {
+				throw new Error("OpenAI responses stream closed before response.completed was received");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {

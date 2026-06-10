@@ -459,6 +459,14 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 export interface ProcessResponsesStreamOptions {
 	onFirstToken?: () => void;
 	onOutputItemDone?: (item: ResponseOutputItem) => void;
+	/**
+	 * Called when a terminal `response.completed` or `response.incomplete` event
+	 * is successfully processed. Only invoked on the successful-completion path;
+	 * thrown failure (`response.failed`) and cancellation paths never call this.
+	 * Used by callers to detect premature stream closure (i.e. the stream ended
+	 * without a recognized terminal event).
+	 */
+	onCompleted?: () => void;
 }
 
 export async function processResponsesStream<TApi extends Api>(
@@ -905,6 +913,7 @@ export async function processResponsesStream<TApi extends Api>(
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
+			options?.onCompleted?.();
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}`);
 		} else if (event.type === "response.failed") {

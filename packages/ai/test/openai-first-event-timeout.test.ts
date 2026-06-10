@@ -652,4 +652,121 @@ describe("OpenAI-family first-event timeouts", () => {
 			createOpenAIResponsesSuccessResponse,
 		);
 	});
+
+	it("errors when OpenAI responses stream closes without response.completed", async () => {
+		const incompleteResponse = createSseResponse([
+			{ type: "response.created", response: { id: "resp_incomplete" } },
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_incomplete", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hello" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_incomplete",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			},
+			// Intentionally no response.completed — simulates premature provider disconnect.
+		]);
+		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
+		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("OpenAI responses stream closed before response.completed was received");
+		expect(result.content as unknown[]).toEqual([
+			{ type: "text", text: "Hello", textSignature: '{"v":1,"id":"msg_incomplete"}' },
+		]);
+	});
+
+	it("errors when Azure OpenAI responses stream closes without response.completed", async () => {
+		const incompleteResponse = createSseResponse([
+			{ type: "response.created", response: { id: "resp_incomplete_azure" } },
+			{
+				type: "response.output_item.added",
+				item: {
+					type: "message",
+					id: "msg_incomplete_azure",
+					role: "assistant",
+					status: "in_progress",
+					content: [],
+				},
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hello azure" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_incomplete_azure",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello azure" }],
+				},
+			},
+			// Intentionally no response.completed — simulates premature provider disconnect.
+		]);
+		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
+		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+			apiKey: "test-key",
+			azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
+			azureApiVersion: "v1",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Azure OpenAI responses stream closed before response.completed was received");
+		expect(result.content as unknown[]).toEqual([
+			{ type: "text", text: "Hello azure", textSignature: '{"v":1,"id":"msg_incomplete_azure"}' },
+		]);
+	});
+
+	it("handles response.incomplete as a valid terminal event (not premature closure)", async () => {
+		const incompleteResponse = createSseResponse([
+			{ type: "response.created", response: { id: "resp_length_limited" } },
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_length_limited", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Truncated output" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_length_limited",
+					role: "assistant",
+					status: "incomplete",
+					content: [{ type: "output_text", text: "Truncated output" }],
+				},
+			},
+			{
+				type: "response.incomplete",
+				response: {
+					id: "resp_length_limited",
+					status: "incomplete",
+					incomplete_details: { reason: "max_output_tokens" },
+				},
+			},
+		]);
+		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
+		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("length");
+		expect(result.errorMessage).toBeFalsy();
+		expect(result.content as unknown[]).toEqual([
+			{ type: "text", text: "Truncated output", textSignature: '{"v":1,"id":"msg_length_limited"}' },
+		]);
+	});
 });
