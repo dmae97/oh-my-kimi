@@ -75,6 +75,7 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../slash-commands/builtin-registry";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import type { LspStartupServerInfo } from "../tools";
@@ -452,9 +453,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
 
-		const builtinCommandNames = new Set(BUILTIN_SLASH_COMMANDS.map(c => c.name));
 		const hookCommands: SlashCommand[] = (
-			this.session.extensionRunner?.getRegisteredCommands(builtinCommandNames) ?? []
+			this.session.extensionRunner?.getRegisteredCommands(BUILTIN_SLASH_COMMAND_RESERVED_NAMES) ?? []
 		).map(cmd => ({
 			name: cmd.name,
 			description: cmd.description ?? "(hook command)",
