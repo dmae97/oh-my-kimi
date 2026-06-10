@@ -15,9 +15,9 @@
 //! - Backtraces are captured via [`Backtrace::force_capture`], so they work
 //!   regardless of `RUST_BACKTRACE`.
 //! - The crash log path mirrors the JS side (`packages/utils/src/dirs.ts`):
-//!   `$XDG_STATE_HOME/omp/logs/` on Linux / macOS when the user has migrated
-//!   to XDG (i.e. that directory already exists and `PI_CODING_AGENT_DIR`
-//!   isn't pointed somewhere custom), otherwise `<home>/<PI_CONFIG_DIR>/logs/`
+//!   `$XDG_STATE_HOME/omp/logs/` on Linux / macOS when the user has migrated to
+//!   XDG (i.e. that directory already exists and `PI_CODING_AGENT_DIR` isn't
+//!   pointed somewhere custom), otherwise `<home>/<PI_CONFIG_DIR>/logs/`
 //!   (defaulting to `~/.omp/logs/`).
 //! - Hook installation is idempotent across repeated module loads.
 
@@ -31,8 +31,8 @@ use std::{
 	path::{Path, PathBuf},
 	process,
 	sync::{
-		atomic::{AtomicBool, Ordering},
 		Once,
+		atomic::{AtomicBool, Ordering},
 	},
 	thread,
 	time::{SystemTime, UNIX_EPOCH},
@@ -92,9 +92,10 @@ impl CrashKind {
 
 fn format_panic_report(info: &std::panic::PanicHookInfo<'_>) -> String {
 	let bt = Backtrace::force_capture();
-	let location = info
-		.location()
-		.map_or_else(|| String::from("<unknown>"), |l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+	let location = info.location().map_or_else(
+		|| String::from("<unknown>"),
+		|l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+	);
 	let mut out = report_header(CrashKind::Panic);
 	let _ = writeln!(out, "location: {location}");
 	let _ = writeln!(out, "message:  {}", panic_payload(info.payload()));
@@ -120,10 +121,8 @@ fn report_header(kind: CrashKind) -> String {
 	let thread_name = thread::current().name().unwrap_or("<unnamed>").to_owned();
 	let now_ms = unix_millis();
 	format!(
-		"pi-natives {kind} crash\n\
-		 pid:       {pid}\n\
-		 thread:    {thread_name}\n\
-		 timestamp: {now_ms} (unix ms)\n",
+		"pi-natives {kind} crash\npid:       {pid}\nthread:    {thread_name}\ntimestamp: {now_ms} \
+		 (unix ms)\n",
 		kind = kind.as_str(),
 		pid = process::id(),
 	)
@@ -202,11 +201,16 @@ fn resolve_logs_dir(
 	if let Some(p) = xdg_state_logs {
 		return p;
 	}
-	let config_dir =
-		config_dir_override.filter(|s| !s.is_empty()).unwrap_or_else(|| OsStr::new(DEFAULT_CONFIG_DIR));
+	let config_dir = config_dir_override
+		.filter(|s| !s.is_empty())
+		.unwrap_or_else(|| OsStr::new(DEFAULT_CONFIG_DIR));
 	// Honor an absolute PI_CONFIG_DIR if the user set one; otherwise treat
 	// the value as a child of `$HOME` (matches `getConfigDirName()`).
-	let base = if Path::new(config_dir).is_absolute() { PathBuf::from(config_dir) } else { home.join(config_dir) };
+	let base = if Path::new(config_dir).is_absolute() {
+		PathBuf::from(config_dir)
+	} else {
+		home.join(config_dir)
+	};
 	base.join("logs")
 }
 
@@ -219,7 +223,12 @@ fn xdg_state_logs_from_env(home: &Path, config_dir_override: Option<&OsStr>) -> 
 	let default_agent_dir = default_agent_dir(home, config_dir_override);
 	let agent_override = std::env::var_os("PI_CODING_AGENT_DIR");
 	let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
-	xdg_state_logs(xdg_state_home.as_deref(), agent_override.as_deref(), &default_agent_dir, Path::exists)
+	xdg_state_logs(
+		xdg_state_home.as_deref(),
+		agent_override.as_deref(),
+		&default_agent_dir,
+		Path::exists,
+	)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -255,9 +264,14 @@ fn xdg_state_logs(
 }
 
 fn default_agent_dir(home: &Path, config_dir_override: Option<&OsStr>) -> PathBuf {
-	let config_dir =
-		config_dir_override.filter(|s| !s.is_empty()).unwrap_or_else(|| OsStr::new(DEFAULT_CONFIG_DIR));
-	let base = if Path::new(config_dir).is_absolute() { PathBuf::from(config_dir) } else { home.join(config_dir) };
+	let config_dir = config_dir_override
+		.filter(|s| !s.is_empty())
+		.unwrap_or_else(|| OsStr::new(DEFAULT_CONFIG_DIR));
+	let base = if Path::new(config_dir).is_absolute() {
+		PathBuf::from(config_dir)
+	} else {
+		home.join(config_dir)
+	};
 	base.join("agent")
 }
 
@@ -280,7 +294,9 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn unix_millis() -> u128 {
-	SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map_or(0, |d| d.as_millis())
 }
 
 #[cfg(test)]
@@ -295,7 +311,10 @@ mod tests {
 		assert!(report.contains("size:      7714 bytes"), "report missing size: {report}");
 		assert!(report.contains("alignment: 8 bytes"), "report missing alignment: {report}");
 		assert!(report.contains("backtrace:"), "report missing backtrace section: {report}");
-		assert!(report.contains(&format!("pid:       {}", process::id())), "report missing pid: {report}");
+		assert!(
+			report.contains(&format!("pid:       {}", process::id())),
+			"report missing pid: {report}"
+		);
 		assert!(report.contains("thread:"), "report missing thread: {report}");
 	}
 
@@ -329,7 +348,11 @@ mod tests {
 
 	#[test]
 	fn resolve_logs_dir_honors_relative_pi_config_dir() {
-		let dir = resolve_logs_dir(Path::new("/tmp/pi-natives-test-home"), Some(OsStr::new(".omp-dev")), None);
+		let dir = resolve_logs_dir(
+			Path::new("/tmp/pi-natives-test-home"),
+			Some(OsStr::new(".omp-dev")),
+			None,
+		);
 		assert_eq!(dir, PathBuf::from("/tmp/pi-natives-test-home/.omp-dev/logs"));
 	}
 
@@ -345,7 +368,8 @@ mod tests {
 
 	#[test]
 	fn resolve_logs_dir_ignores_empty_pi_config_dir() {
-		let dir = resolve_logs_dir(Path::new("/tmp/pi-natives-test-home"), Some(OsStr::new("")), None);
+		let dir =
+			resolve_logs_dir(Path::new("/tmp/pi-natives-test-home"), Some(OsStr::new("")), None);
 		assert_eq!(dir, PathBuf::from("/tmp/pi-natives-test-home/.omp/logs"));
 	}
 
@@ -421,7 +445,8 @@ mod tests {
 
 	#[test]
 	fn default_agent_dir_respects_pi_config_dir() {
-		let dir = default_agent_dir(Path::new("/tmp/pi-natives-test-home"), Some(OsStr::new(".omp-dev")));
+		let dir =
+			default_agent_dir(Path::new("/tmp/pi-natives-test-home"), Some(OsStr::new(".omp-dev")));
 		assert_eq!(dir, PathBuf::from("/tmp/pi-natives-test-home/.omp-dev/agent"));
 	}
 
@@ -429,8 +454,14 @@ mod tests {
 	fn build_crash_log_path_tags_kind_and_pid() {
 		let dir = Path::new("/tmp/pi-natives-test-home/.omp/logs");
 		let panic_log = build_crash_log_path(dir, CrashKind::Panic, 4242, 1_700_000_000_000);
-		assert_eq!(panic_log, PathBuf::from("/tmp/pi-natives-test-home/.omp/logs/native-panic-4242-1700000000000.log"));
+		assert_eq!(
+			panic_log,
+			PathBuf::from("/tmp/pi-natives-test-home/.omp/logs/native-panic-4242-1700000000000.log")
+		);
 		let alloc_log = build_crash_log_path(dir, CrashKind::Alloc, 99, 1);
-		assert_eq!(alloc_log, PathBuf::from("/tmp/pi-natives-test-home/.omp/logs/native-alloc-99-1.log"));
+		assert_eq!(
+			alloc_log,
+			PathBuf::from("/tmp/pi-natives-test-home/.omp/logs/native-alloc-99-1.log")
+		);
 	}
 }
