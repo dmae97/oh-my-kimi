@@ -3,6 +3,7 @@ import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	expandRoleAlias,
+	filterAvailableModelsByEnabledPatterns,
 	parseModelPattern,
 	parseModelString,
 	resolveAgentModelPatterns,
@@ -12,6 +13,7 @@ import {
 	resolveModelRoleValue,
 	resolveModelScope,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 // Mock models for testing
@@ -1013,5 +1015,97 @@ describe("provider routing selector (@upstream)", () => {
 		expect(result.model?.id).toBe("z-ai/glm-4.7");
 		expect(result.selector).toBe("openrouter/z-ai/glm-4.7@cerebras");
 		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+});
+
+describe("filterAvailableModelsByEnabledPatterns", () => {
+	const models = mockModels as Model[];
+	const registry = {
+		getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
+	};
+
+	test("returns all models when patterns is empty", () => {
+		expect(filterAvailableModelsByEnabledPatterns(models, [], registry)).toEqual(models);
+	});
+
+	test("filters by exact provider/modelId", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/claude-sonnet-4-5"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("filters by bare model id matching across providers", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-sonnet-4-5"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("anthropic");
+	});
+
+	test("expands canonical id via registry", () => {
+		const canonicalRegistry = {
+			getCanonicalVariants: (id: string, _opts?: unknown): CanonicalModelVariant[] =>
+				id === "claude-sonnet-4-5"
+					? [
+							{
+								canonicalId: "claude-sonnet-4-5",
+								selector: "anthropic/claude-sonnet-4-5",
+								model: models[0],
+								source: "bundled",
+							},
+						]
+					: [],
+		};
+		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-sonnet-4-5"], canonicalRegistry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("strips :thinkingLevel suffix before matching", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/claude-sonnet-4-5:high"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("preserves colon-bearing OpenRouter ids (suffix is not a thinking level)", () => {
+		const openRouterModels = mockOpenRouterModels as Model[];
+		const result = filterAvailableModelsByEnabledPatterns(
+			openRouterModels,
+			["openrouter/qwen/qwen3-coder:exacto"],
+			registry,
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
+	});
+
+	test("matches bare OpenRouter-style model id with slash but no provider prefix", () => {
+		const openRouterModels = mockOpenRouterModels as Model[];
+		const result = filterAvailableModelsByEnabledPatterns(openRouterModels, ["qwen/qwen3-coder:exacto"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
+		expect(result[0].provider).toBe("openrouter");
+	});
+
+	test("returns all models when ALL patterns are globs (cannot evaluate)", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*"], registry);
+		expect(result).toEqual(models);
+	});
+
+	test("applies exact patterns when mixed with globs", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*", "openai/gpt-4o"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("gpt-4o");
+	});
+
+	test("returns empty list when no pattern matches (misconfiguration)", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["nonexistent-model"], registry);
+		expect(result).toHaveLength(0);
+	});
+
+	test("includes multiple patterns from different providers", () => {
+		const result = filterAvailableModelsByEnabledPatterns(
+			models,
+			["anthropic/claude-sonnet-4-5", "openai/gpt-4o"],
+			registry,
+		);
+		expect(result).toHaveLength(2);
 	});
 });

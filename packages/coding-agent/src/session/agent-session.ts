@@ -108,6 +108,7 @@ import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mod
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	extractExplicitThinkingSelector,
+	filterAvailableModelsByEnabledPatterns,
 	formatModelSelectorValue,
 	formatModelString,
 	getModelMatchPreferences,
@@ -5740,10 +5741,14 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get all available models with valid API keys.
+	 * Get all available models with valid API keys, filtered by `enabledModels` when configured.
+	 * See {@link filterAvailableModelsByEnabledPatterns} for supported pattern forms and limitations.
 	 */
 	getAvailableModels(): Model[] {
-		return this.#modelRegistry.getAvailable();
+		const all = this.#modelRegistry.getAvailable();
+		const patterns = this.settings.get("enabledModels");
+		if (!patterns || patterns.length === 0) return all;
+		return filterAvailableModelsByEnabledPatterns(all, patterns, this.#modelRegistry);
 	}
 
 	// =========================================================================
