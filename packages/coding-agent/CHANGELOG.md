@@ -6,6 +6,10 @@
 
 - Fixed long-running sessions becoming sluggish because the status line recomputed context usage by walking the full message history on every refresh. Message-token totals are now cached incrementally, and status lines that do not render context segments skip context accounting entirely. ([#2089](https://github.com/can1357/oh-my-pi/issues/2089))
 
+### Fixed
+
+- Fixed exiting plan mode without confirmation only when neither the default plan file nor slug-named local plan files contain draft content ([#2024](https://github.com/can1357/oh-my-pi/issues/2024)).
+
 ## [15.10.11] - 2026-06-10
 
 ### Added
