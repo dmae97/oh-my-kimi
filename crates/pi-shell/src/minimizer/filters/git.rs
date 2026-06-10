@@ -554,19 +554,32 @@ struct LogEntry {
 	hash:    String,
 	subject: String,
 	body:    Vec<String>,
+	/// Body lines dropped past the per-commit body cap, surfaced as an explicit
+	/// `[+N lines omitted]` marker instead of being silently lost.
+	omitted: usize,
 }
+
+/// Soft cap on rendered subject/body line width. Long commit subjects and body
+/// lines are truncated through `truncate_line`, which appends a `…[+N]`
+/// dropped-char marker so the elision is visible rather than silent.
+const LOG_LINE_WIDTH: usize = 160;
 
 fn push_log_entry(out: &mut String, entry: &LogEntry) {
 	out.push_str(&entry.hash);
 	if !entry.subject.is_empty() {
 		out.push(' ');
-		out.push_str(&entry.subject);
+		out.push_str(&primitives::truncate_line(&entry.subject, LOG_LINE_WIDTH));
 	}
 	out.push('\n');
 	for line in &entry.body {
 		out.push_str("  ");
-		out.push_str(line);
+		out.push_str(&primitives::truncate_line(line, LOG_LINE_WIDTH));
 		out.push('\n');
+	}
+	if entry.omitted > 0 {
+		out.push_str("  [+");
+		out.push_str(&entry.omitted.to_string());
+		out.push_str(" lines omitted]\n");
 	}
 }
 
@@ -587,6 +600,7 @@ fn parse_log_entries(input: &str) -> Vec<LogEntry> {
 				hash:    short_hash(hash),
 				subject: subject.to_string(),
 				body:    Vec::new(),
+				omitted: 0,
 			});
 			continue;
 		}
@@ -600,8 +614,15 @@ fn parse_log_entries(input: &str) -> Vec<LogEntry> {
 		}
 		if entry.subject.is_empty() {
 			entry.subject = trimmed.to_string();
-		} else if entry.body.len() < 3 && !is_git_trailer(trimmed) {
-			entry.body.push(trimmed.to_string());
+		} else if !is_git_trailer(trimmed) {
+			// Real (non-trailer) body lines past the 3-line cap are tallied so
+			// `push_log_entry` can emit an explicit `[+N lines omitted]` marker
+			// rather than dropping them silently.
+			if entry.body.len() < 3 {
+				entry.body.push(trimmed.to_string());
+			} else {
+				entry.omitted += 1;
+			}
 		}
 	}
 
@@ -1820,6 +1841,41 @@ mod tests {
 		assert!(out.text.contains("Fixes #123"));
 		assert!(!out.text.contains("Signed-off-by"));
 		assert!(!out.text.contains("Co-authored-by"));
+	}
+
+	#[test]
+	fn log_long_subject_is_truncated_with_dropped_marker() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("log"), "git log", &cfg);
+		let long_subject = "x".repeat(200);
+		let input = format!(
+			"commit abcdef1234567890\nAuthor: A <a@x.com>\nDate: today\n\n    {long_subject}\n"
+		);
+		let out = filter(&ctx, &input, 0);
+		// 200 chars → first 160 kept, 40 dropped, surfaced by truncate_line's marker.
+		assert!(
+			out.text
+				.contains(&format!("abcdef1 {}…[+40]", "x".repeat(160))),
+			"{:?}",
+			out.text
+		);
+		assert!(!out.text.contains(&long_subject), "full subject must not survive");
+	}
+
+	#[test]
+	fn log_body_over_cap_shows_omitted_marker() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("log"), "git log", &cfg);
+		// Subject + 5 body lines: 3 kept, 2 past the cap surfaced as a marker.
+		let input = "commit abcdef1234567890\nAuthor: A <a@x.com>\nDate: today\n\n    feat: add \
+		             API\n\n    body line one\n    body line two\n    body line three\n    body \
+		             line four\n    body line five\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.text.contains("abcdef1 feat: add API"), "{:?}", out.text);
+		assert!(out.text.contains("body line one"));
+		assert!(out.text.contains("body line three"));
+		assert!(!out.text.contains("body line four"), "{:?}", out.text);
+		assert!(out.text.contains("[+2 lines omitted]"), "{:?}", out.text);
 	}
 
 	#[test]
