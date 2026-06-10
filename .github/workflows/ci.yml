@@ -525,7 +525,7 @@ jobs:
          needs.release_binary.result == 'success' &&
          needs.release_github_verify.result == 'success' &&
          !inputs.skip_npm }}
-      needs: [release_metadata, release_binary, release_github_verify]
+      needs: [release_metadata, release_binary, release_github_verify, native_artifact_lookup]
       runs-on: ubuntu-22.04
       # `id-token: write` lets npm mint the GitHub OIDC token it exchanges for a
       # short-lived publish token (trusted publishing + provenance). When a
@@ -552,6 +552,17 @@ jobs:
               path: ~/.bun/install/cache
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - run: bun install --frozen-lockfile
+         # The pi-coding-agent prepack executes workspace code (bundle-dist
+         # imports the pi-utils barrel, which loads the pi-natives addon), so
+         # this job needs the linux x64 native addons just like `test` does.
+         # Release runs always rebuild natives in this same run, so the
+         # default run-id resolves the artifacts.
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-linux-x64-*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
+              path: packages/natives/native
+              merge-multiple: true
          - name: Publish to npm
            env:
               # Fallback auth: setup-node wrote an .npmrc referencing
