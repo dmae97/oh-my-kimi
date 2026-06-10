@@ -619,7 +619,8 @@ function parseGitConfigHasReftable(content: string): boolean {
 					if (value.startsWith('"') && value.endsWith('"')) {
 						value = value.slice(1, -1).trim();
 					}
-					if (value.toLowerCase() === "reftable") {
+					const lowerValue = value.toLowerCase();
+					if (lowerValue === "reftable" || lowerValue.startsWith("reftable:")) {
 						return true;
 					}
 				}
