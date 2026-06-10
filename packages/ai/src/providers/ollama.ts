@@ -16,7 +16,12 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import {
+	type CapturedHttpErrorResponse,
+	finalizeErrorMessage,
+	type RawHttpRequestDump,
+	withHttpStatus,
+} from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import {
@@ -29,6 +34,7 @@ import { transformMessages } from "./transform-messages";
 
 export interface OllamaChatOptions extends StreamOptions {
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	disableReasoning?: boolean;
 	toolChoice?: ToolChoice;
 }
 
@@ -91,7 +97,14 @@ function normalizeBaseUrl(baseUrl?: string): string {
 	return trimmed.endsWith("/api") ? trimmed.slice(0, -4) : trimmed;
 }
 
-function mapReasoning(reasoning: OllamaChatOptions["reasoning"]): boolean | "low" | "medium" | "high" | undefined {
+function mapReasoning(
+	reasoning: OllamaChatOptions["reasoning"],
+	disableReasoning: boolean | undefined,
+	modelReasoning: boolean,
+): boolean | "low" | "medium" | "high" | undefined {
+	if (disableReasoning && modelReasoning) {
+		return false;
+	}
 	switch (reasoning) {
 		case "minimal":
 		case "low":
@@ -258,7 +271,7 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 }
 
 function createChatBody(model: Model<"ollama-chat">, context: Context, options: OllamaChatOptions | undefined) {
-	const think = mapReasoning(options?.reasoning);
+	const think = mapReasoning(options?.reasoning, options?.disableReasoning, model.reasoning);
 	const toolChoice = mapToolChoice(options?.toolChoice);
 	const selectedTools = selectToolsForToolChoice(context.tools, options?.toolChoice);
 	const tools = convertTools(selectedTools);
@@ -268,8 +281,29 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 		...(tools ? { tools } : {}),
 		...(think !== undefined ? { think } : {}),
 		...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
-		...(options?.maxTokens !== undefined ? { options: { num_predict: options.maxTokens } } : {}),
+		...(options?.maxTokens !== undefined && !model.omitMaxOutputTokens
+			? { options: { num_predict: options.maxTokens } }
+			: {}),
 		stream: true,
+	};
+}
+
+async function captureHttpErrorResponse(response: Response): Promise<CapturedHttpErrorResponse> {
+	let bodyText: string | undefined;
+	let bodyJson: unknown;
+	try {
+		bodyText = await response.text();
+		if (bodyText.trim()) {
+			try {
+				bodyJson = JSON.parse(bodyText) as unknown;
+			} catch {}
+		}
+	} catch {}
+	return {
+		status: response.status,
+		headers: response.headers,
+		bodyText,
+		bodyJson,
 	};
 }
 
@@ -376,6 +410,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 		let firstTokenTime: number | undefined;
 		const output = createEmptyOutput(model);
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		let capturedErrorResponse: CapturedHttpErrorResponse | undefined;
 		let activeThinkingIndex: number | undefined;
 		let activeTextIndex: number | undefined;
 		const activeToolIndices = new Set<number>();
@@ -503,7 +538,8 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				fetch: options.fetch,
 			});
 			if (!response.ok) {
-				throw new Error(`HTTP ${response.status} from ${baseUrl}/api/chat`);
+				capturedErrorResponse = await captureHttpErrorResponse(response);
+				throw withHttpStatus(new Error(`HTTP ${response.status} from ${baseUrl}/api/chat`), response.status);
 			}
 			if (!response.body) {
 				throw new Error("Ollama returned an empty response body");
@@ -631,7 +667,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
+			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse);
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) {
 				output.ttft = firstTokenTime - startTime;
