@@ -133,6 +133,11 @@ fn is_package_tree_command(ctx: &MinimizerCtx<'_>) -> bool {
 				|| matches!(ctx.subcommand, Some("pip"))
 					&& command_contains_any(ctx.command, &["list", "ls", "tree"])
 		},
+		// Default tabular `pip list` / `pip list --outdated` are inventory dumps
+		// like `uv pip list`; give them the same tree/list compaction. `--json`
+		// already passes through earlier in filter(), so only text output lands.
+		// `pip3` is not normalized to `pip`, so claim both spellings.
+		"pip" | "pip3" => matches!(ctx.subcommand, Some("list")),
 		"poetry" => {
 			matches!(ctx.subcommand, Some("tree"))
 				|| matches!(ctx.subcommand, Some("show"))
@@ -451,7 +456,7 @@ fn is_js_package_noise(program: &str, line: &str, lower: &str) -> bool {
 }
 
 fn is_python_package_noise(program: &str, _line: &str, lower: &str) -> bool {
-	if !matches!(program, "pip" | "uv" | "poetry") {
+	if !matches!(program, "pip" | "pip3" | "uv" | "poetry") {
 		return false;
 	}
 	lower.starts_with("collecting ")
@@ -462,6 +467,10 @@ fn is_python_package_noise(program: &str, _line: &str, lower: &str) -> bool {
 		|| lower.starts_with("resolving dependencies")
 		|| lower.starts_with("writing lock file")
 		|| lower.starts_with("package operations:")
+		// pip prints an upgrade nag as '[notice] A new release of pip is
+		// available' plus a '[notice] To update, run: …' follow-up — non-actionable
+		// for the wrapped command. Scoped to pip/uv/poetry by the gate above.
+		|| lower.starts_with("[notice]")
 		|| program == "uv" && is_uv_progress_noise(lower)
 }
 
@@ -842,6 +851,36 @@ mod tests {
 		assert!(out.text.starts_with("package tree/list: 91 entries\n"));
 		assert!(out.text.contains("dep000==2.0.0"));
 		assert!(out.text.contains("… 11 package entries omitted …"));
+	}
+
+	#[test]
+	fn pip_install_strips_upgrade_notice_nag() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("pip", Some("install"), "pip install requests", &cfg);
+		let input = "Collecting requests\n  Downloading requests-2.31.0-py3-none-any.whl (62 \
+		             kB)\nInstalling collected packages: requests\nSuccessfully installed \
+		             requests-2.31.0\n[notice] A new release of pip is available: 23.0 -> \
+		             24.0\n[notice] To update, run: pip install --upgrade pip\n";
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("Successfully installed requests-2.31.0"));
+		assert!(!out.text.contains("[notice]"));
+		assert!(!out.text.contains("new release of pip"));
+		assert!(!out.text.contains("Downloading requests"));
+	}
+
+	#[test]
+	fn compacts_pip_list_output() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("pip", Some("list"), "pip list", &cfg);
+		let mut input = String::from("Package    Version\n---------- -------\n");
+		for idx in 0..90 {
+			input.push_str(&format!("pkg{idx:03}     1.0.{idx}\n"));
+		}
+
+		let out = filter(&context, &input, 0);
+		assert!(out.text.starts_with("package tree/list: 92 entries\n"));
+		assert!(out.text.contains("pkg000"));
+		assert!(out.text.contains("… 12 package entries omitted …"));
 	}
 
 	#[test]
