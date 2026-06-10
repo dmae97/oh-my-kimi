@@ -2,13 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reworked the in-memory fallback vector search to build a normalized exact vector index per query, matching the shape needed for future quantized or TurboVec-style backends without adding a new dependency yet.
+
 ## [15.10.11] - 2026-06-10
+
 ### Fixed
 
 - Fixed embedding provider detection to match `openrouter` by URL host, so custom embedding endpoints are now recognized correctly instead of being misclassified by substring matching
 - Fixed the check for OpenRouter base URLs so only true `openrouter` hosts are treated as non-custom
-
-- Reworked the in-memory fallback vector search to build a normalized exact vector index per query, matching the shape needed for future quantized or TurboVec-style backends without adding a new dependency yet.
 
 ## [15.10.8] - 2026-06-09
 
@@ -17,10 +20,6 @@
 - Added a `fetch` option to `ExtractionClient` to inject a custom fetch implementation for remote LLM requests
 - Added an optional `fetch` option to `extractFacts` to control the transport used for remote extraction calls
 - Added support for passing a custom `fetch` implementation through `complete` and `summarizeMemories` via remote LLM options
-
-### Changed
-
-- Reworked the in-memory fallback vector search to build a normalized exact vector index per query, matching the shape needed for future quantized or TurboVec-style backends without adding a new dependency yet.
 
 ## [15.9.1] - 2026-06-04
 
@@ -44,6 +43,7 @@
 - Fixed the `darwin-x64` release build failing in `bun build --compile` because the Windows ORT 1.24 preload pulled `onnxruntime-node` into the static graph and there is no `darwin/x64` prebuilt for that line. The preload is now guarded behind a `process.platform === "win32"` literal that Bun dead-code-eliminates on non-Windows targets; macOS/Linux load fastembed's bundled ORT 1.21 binding as before.
 
 ## [15.7.3] - 2026-05-31
+
 ### Changed
 
 - Changed embedding result normalization to return `Float32Array` vectors so `embed` and `embedQuery` now cache and emit float32 rows

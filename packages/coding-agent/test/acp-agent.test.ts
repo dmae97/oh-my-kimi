@@ -1379,7 +1379,7 @@ describe("ACP agent", () => {
 		};
 
 		const blockers: Array<() => void> = [];
-		session.prompt = async (text: string): Promise<void> => {
+		session.prompt = async (text: string): Promise<boolean> => {
 			session.promptCalls.push(text);
 			session.isStreaming = true;
 			const { promise, resolve } = Promise.withResolvers<void>();
@@ -1391,6 +1391,7 @@ describe("ACP agent", () => {
 				listener({ type: "agent_end", messages: [assistantMessage] } as AgentSessionEvent);
 			}
 			session.isStreaming = false;
+			return true;
 		};
 
 		const firstPrompt = harness.agent.prompt({

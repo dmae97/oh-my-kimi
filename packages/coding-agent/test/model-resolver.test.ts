@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
 	expandRoleAlias,
 	filterAvailableModelsByEnabledPatterns,
@@ -13,7 +14,6 @@ import {
 	resolveModelRoleValue,
 	resolveModelScope,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 // Mock models for testing

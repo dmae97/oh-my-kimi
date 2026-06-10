@@ -2,37 +2,40 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed long-running sessions becoming sluggish because the status line recomputed context usage by walking the full message history on every refresh. Message-token totals are now cached incrementally, and status lines that do not render context segments skip context accounting entirely. ([#2089](https://github.com/can1357/oh-my-pi/issues/2089))
-
-### Fixed
-
-- Fixed exiting plan mode without confirmation only when neither the default plan file nor slug-named local plan files contain draft content ([#2024](https://github.com/can1357/oh-my-pi/issues/2024)).
-
 ### Added
 
 - Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.
-
-### Fixed
-
-- Fixed `enabledModels` being ignored by the ACP model picker (Zed and other ACP clients) — `AgentSession.getAvailableModels()` now applies the configured allow-list, so only the models listed in `enabledModels` appear in the UI. Also applies consistently to the RPC `get_available_models` endpoint and the `/model` slash command.
-
-### Fixed
-
-- ACP sessions now skip the client permission gate for bash/edit/delete/move when the user explicitly opts into yolo approval mode (`--yolo`/`--auto-approve` or a configured `tools.approvalMode: yolo`) and the effective per-tool policy is "allow"; default-config sessions keep the gate ([#2097](https://github.com/can1357/oh-my-pi/pull/2097) by [@Mokto](https://github.com/Mokto))
-
-### Fixed
-
-- Fixed hidden thinking blocks leaving placeholder `Thinking...` lines in the transcript ([#2068](https://github.com/can1357/oh-my-pi/issues/2068)).
-
-### Added
-
 - Added opt-in `shellMinimizer.sourceOutlineLevel` and `shellMinimizer.legacyFilters` settings so shell minimization can tune source outlining and selectively fall back to conservative legacy routing.
+- Added repeatable `--config <path>` CLI overlays for temporary `config.yml`-style settings without editing the persistent global config ([#1733](https://github.com/can1357/oh-my-pi/issues/1733)).
+- Added `python.interpreter` to pin eval's Python backend to an explicit interpreter and skip automatic runtime discovery ([#1802](https://github.com/can1357/oh-my-pi/issues/1802)).
+- Added `!command` resolution for `models.yml` provider `apiKey` values and provider/model headers ([#1888](https://github.com/can1357/oh-my-pi/issues/1888)).
+- Documented the oMLX setup path through existing OpenAI-compatible local discovery ([#1957](https://github.com/can1357/oh-my-pi/issues/1957)).
+- Added `TITLE_SYSTEM.md` discovery so users can override the automatic session-title generation prompt for online and local tiny title models without patching installed prompt files.
+- Added a structured memory runtime surface for extensions and UI integrations to query backend status, search memories, and save explicit memories across the configured memory backend.
+- Added support for Git repositories using the `reftable` storage format by detecting `extensions.refStorage = reftable` in the repository configuration and falling back to shelling out to Git commands (`git symbolic-ref`, `git rev-parse`) for reference and HEAD resolution.
+- Added `/setup providers` (also available as `/setup` or `/providers`) to reopen the interactive provider setup scene from an active TUI session, letting users sign in and choose a web search provider without rerunning the full onboarding flow.
 
 ### Changed
 
 - Bash execution now preserves minimized shell output inline while saving the untouched capture as an `artifact://…` footer when shell minimization rewrites a command's output.
+
+### Fixed
+
+- Fixed long-running sessions becoming sluggish because the status line recomputed context usage by walking the full message history on every refresh. Message-token totals are now cached incrementally, and status lines that do not render context segments skip context accounting entirely. ([#2089](https://github.com/can1357/oh-my-pi/issues/2089))
+- Fixed exiting plan mode without confirmation only when neither the default plan file nor slug-named local plan files contain draft content ([#2024](https://github.com/can1357/oh-my-pi/issues/2024)).
+- Fixed `enabledModels` being ignored by the ACP model picker (Zed and other ACP clients) — `AgentSession.getAvailableModels()` now applies the configured allow-list, so only the models listed in `enabledModels` appear in the UI. Also applies consistently to the RPC `get_available_models` endpoint and the `/model` slash command.
+- ACP sessions now skip the client permission gate for bash/edit/delete/move when the user explicitly opts into yolo approval mode (`--yolo`/`--auto-approve` or a configured `tools.approvalMode: yolo`) and the effective per-tool policy is "allow"; default-config sessions keep the gate ([#2097](https://github.com/can1357/oh-my-pi/pull/2097) by [@Mokto](https://github.com/Mokto))
+- Fixed hidden thinking blocks leaving placeholder `Thinking...` lines in the transcript ([#2068](https://github.com/can1357/oh-my-pi/issues/2068)).
+- Fixed Hindsight `per-project-tagged` scoping siloing retains/recalls per linked git worktree: `projectLabel()` now resolves the primary checkout root (or shared bare-repo common dir) via the new sync `git.repo.primaryRootSync` helper, so every worktree of one repo shares the same `project:<name>` tag and `per-project` bank id ([#2232](https://github.com/can1357/oh-my-pi/issues/2232)).
+- Fixed MCP OAuth flows accepting pasted redirect URLs or authorization codes through `/login` in headless environments ([#2122](https://github.com/can1357/oh-my-pi/issues/2122)).
+- Forwarded model ids through `ModelRegistry` API-key resolvers and Antigravity usage-limit rotation so `pi-ai` can apply model-family-scoped OAuth quota backoff instead of treating all `google-antigravity` counters as credential-wide. ([#2198](https://github.com/can1357/oh-my-pi/issues/2198))
+- Fixed bare `omp extensions` being treated as a chat prompt instead of returning an actionable plugin-command error ([#2089](https://github.com/can1357/oh-my-pi/issues/2089)).
+- Fixed hide-secrets redaction so configured secrets are scrubbed from provider-facing system prompts, tool definitions, developer/system-reminder messages, and assistant tool-call arguments before model requests ([#2146](https://github.com/can1357/oh-my-pi/issues/2146)).
+- Fixed subagents looping indefinitely on byte-identical no-op `edit` calls. The hashline executor previously surfaced a soft "your body row(s) are byte-identical to the file" hint that some models ignored; one captured session emitted 182 such repeats in 205 calls over 16 minutes before the user aborted. A new per-`ToolSession` `noopLoopGuard` now tracks consecutive identical no-op payloads per canonical path and escalates to a thrown `ToolError` after `NOOP_HARD_LIMIT` (3) repeats, so the agent loop sees a tool *failure* and breaks the cycle ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
+- Fixed the bash tool's `~/.omp/agent/artifacts/<id>.bash.log` growing unbounded when a command (e.g. `Get-Content | ConvertTo-Json` spraying rich PowerShell `PSObject` metadata) emitted multi-MB output; one capture reached 7.6MB on disk. `OutputSink` now defaults `artifactMaxBytes` to 4 MiB (3 MiB head + 1 MiB rolling tail) and replays the tail behind a single `[ARTIFACT TRUNCATED: kept first … + last … of …; … elided from the middle]` notice on close. Set `artifactMaxBytes: 0` to restore unbounded streaming ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
+- Fixed the bash result renderer recomputing styled output (`split` / `replaceTabs` / `truncateToVisualLines`) on every TUI repaint, which scaled with both transcript length and per-row output size. With a long captured session every keystroke walked hundreds of bash rows; the reporter on issue #2081 observed Ctrl+X/Ctrl+C feeling unresponsive because the main thread was pinned re-styling scrollback. The result renderer now caches its produced lines keyed by `(width, previewLines, expanded, rawOutput, isPartial)`, mirroring the existing eval-renderer cache; `invalidate()` clears the cache as before. Hot-path repaints with unchanged inputs are now O(1) ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
+- Fixed ACP `available_commands_update` to include extension-registered slash commands so clients like Zed surface them in the slash-command palette.
+- Fixed ACP cancel button leaving the session in a stuck state — a new prompt sent while a turn is still in-flight (e.g. immediately after pressing Stop in Zed before `session/cancel` is processed) now implicitly cancels the running turn and queues the new message, instead of throwing an error that blocks further interaction.
 
 ## [15.10.11] - 2026-06-10
 
@@ -94,7 +97,6 @@
 - Fixed pasting into the ask tool's "Other (type your own)" text box (and hook input/editor dialogs) on terminals with OSC 5522 enhanced paste (kitty protocol): the enhanced-paste focus routing only targets components exposing a `pasteText` hook, and the dialog wrappers had none, so the payload was stuffed into the main prompt editor hidden behind the dialog. `HookEditorComponent` and `HookInputComponent` now forward `pasteText` to their inner editor/input (pasting also resets the input dialog's timeout countdown like any keystroke).
 - Fixed auto-retry giving up after one attempt ("Provider requested Xms wait, exceeds retry.maxDelayMs") on a usage-limit 429 when every sibling account was only momentarily blocked: the retry delay now waits for the earliest sibling unblock when that comes sooner than the provider's multi-hour retry-after, so the next attempt picks up the recovered account instead of failing fast.
 - Fixed Hindsight `per-project-tagged` mental-model seeding so each project gets its own conventions/decisions models and session context only injects active-project or untagged models ([#2218](https://github.com/can1357/oh-my-pi/issues/2218)).
-- Fixed Hindsight `per-project-tagged` scoping siloing retains/recalls per linked git worktree: `projectLabel()` now resolves the primary checkout root (or shared bare-repo common dir) via the new sync `git.repo.primaryRootSync` helper, so every worktree of one repo shares the same `project:<name>` tag and `per-project` bank id ([#2232](https://github.com/can1357/oh-my-pi/issues/2232)).
 - Fixed Windows stdio MCP `.cmd` commands by wrapping batch shims with `cmd.exe /d /s /c` using the outer command quotes required by `cmd /s`, while preserving literal `%` and quoted JSON arguments for Codegraph MCP ([#2220](https://github.com/can1357/oh-my-pi/issues/2220)).
 - Fixed the bundled `explore` agent's `thinking-level: med` frontmatter — not a valid effort (`minimal`/`low`/`medium`/`high`/`xhigh`), so it silently parsed to undefined and the agent ran without its intended thinking level
 - Discovery context-file reads (`~/.claude`, `~/.cursor`, project trees, `@`-imports) now stat-gate to regular files before reading: a FIFO/socket/char device dropped where a context file is expected previously blocked startup forever on a read that can never see EOF.
@@ -152,18 +154,6 @@
 - Removed the `clearOnShrink` setting and its `PI_CLEAR_ON_SHRINK` environment variable: the rewritten renderer always clears shrunken rows exactly, so the flicker/perf tradeoff the setting controlled no longer exists. Existing config entries are ignored.
 - Removed the prompt-submit native-scrollback reconciliation checkpoint and the eager streaming render mode from the interactive controllers — the renderer's append-only contract made both obsolete.
 
-### Added
-
-- Added repeatable `--config <path>` CLI overlays for temporary `config.yml`-style settings without editing the persistent global config ([#1733](https://github.com/can1357/oh-my-pi/issues/1733)).
-
-### Added
-
-- Added `python.interpreter` to pin eval's Python backend to an explicit interpreter and skip automatic runtime discovery ([#1802](https://github.com/can1357/oh-my-pi/issues/1802)).
-
-### Added
-
-- Added `!command` resolution for `models.yml` provider `apiKey` values and provider/model headers ([#1888](https://github.com/can1357/oh-my-pi/issues/1888)).
-
 ## [15.10.9] - 2026-06-09
 
 ### Fixed
@@ -177,28 +167,6 @@
 - Fixed SSH tool cancellation hanging behind OpenSSH ControlMaster streams that stayed open after an Esc/user interrupt ([#2180](https://github.com/can1357/oh-my-pi/issues/2180)).
 - Fixed Windows stdio MCP servers launched through PATH shims such as `codegraph.cmd` so bare commands like `codegraph` resolve via `PATHEXT` before spawn ([#2174](https://github.com/can1357/oh-my-pi/issues/2174)).
 - Fixed compiled-binary extensions failing to load `@oh-my-pi/pi-*` packages when `bun --compile` quietly dropped one of the extra entrypoints (observed on macOS arm64 release builds): the legacy-pi compat shim's package-root override branch returned the bunfs path without checking the target was present, so the rewrite emitted a `file://` URL to a missing module and the #1216 fallback (scoped to the throwing `getResolvedSpecifier` path) never ran. Override targets are now validated against the on-disk filesystem at module init, missing entries are dropped, and resolution falls through to canonical lookup so Bun resolves the import from the extension's own `node_modules` ([#2168](https://github.com/can1357/oh-my-pi/issues/2168)).
-
-### Fixed
-
-- Fixed MCP OAuth flows accepting pasted redirect URLs or authorization codes through `/login` in headless environments ([#2122](https://github.com/can1357/oh-my-pi/issues/2122)).
-
-### Added
-
-- Documented the oMLX setup path through existing OpenAI-compatible local discovery ([#1957](https://github.com/can1357/oh-my-pi/issues/1957)).
-
-### Fixed
-
-- Forwarded model ids through `ModelRegistry` API-key resolvers and Antigravity usage-limit rotation so `pi-ai` can apply model-family-scoped OAuth quota backoff instead of treating all `google-antigravity` counters as credential-wide. ([#2198](https://github.com/can1357/oh-my-pi/issues/2198))
-
-- Added a structured memory runtime surface for extensions and UI integrations to query backend status, search memories, and save explicit memories across the configured memory backend.
-
-### Fixed
-
-- Fixed bare `omp extensions` being treated as a chat prompt instead of returning an actionable plugin-command error ([#2089](https://github.com/can1357/oh-my-pi/issues/2089)).
-
-### Added
-
-- Added `TITLE_SYSTEM.md` discovery so users can override the automatic session-title generation prompt for online and local tiny title models without patching installed prompt files.
 
 ## [15.10.8] - 2026-06-09
 
@@ -219,10 +187,6 @@
 
 - Fixed MCP OAuth fallback rendering to show a short terminal hyperlink and keep the raw authorization URL on one unwrapped copy line ([#2121](https://github.com/can1357/oh-my-pi/issues/2121)).
 - Fixed `omp` startup blocking 25–30 s on a single unresponsive MCP server when no cached tools were available for it. `MCPManager.connectServers` used to fall through to an unbounded `Promise.allSettled` over every still-pending server without a cached tool list, so one server stuck waiting on the per-request MCP timeout (`OMP_MCP_TIMEOUT_MS`, default 30 000 ms) gated the entire UI ready signal. Pending-without-cache servers are now left in flight: their tools surface via the existing background `#onToolsChanged` → `refreshMCPTools` path the moment the connect completes, and failures continue to log through the background catch handler ([#2100](https://github.com/can1357/oh-my-pi/issues/2100)).
-
-### Fixed
-
-- Fixed hide-secrets redaction so configured secrets are scrubbed from provider-facing system prompts, tool definitions, developer/system-reminder messages, and assistant tool-call arguments before model requests ([#2146](https://github.com/can1357/oh-my-pi/issues/2146)).
 
 ## [15.10.6] - 2026-06-08
 
@@ -297,10 +261,6 @@
 ### Removed
 
 - Removed the special Anthropic `claude-opus-4-8` tool-call batch cap; sessions no longer abort an in-flight provider stream after a fixed number of completed tool calls.
-
-### Added
-
-- Added a structured memory runtime surface for extensions and UI integrations to query backend status, search memories, and save explicit memories across the configured memory backend.
 
 ## [15.10.4] - 2026-06-08
 
@@ -390,9 +350,6 @@
 ### Fixed
 
 - Fixed working-message loader session accents so spinner/message color math is cached per session name, session-accent setting, and theme luminance while still updating immediately on renames, setting toggles, and theme changes.
-- Fixed subagents looping indefinitely on byte-identical no-op `edit` calls. The hashline executor previously surfaced a soft "your body row(s) are byte-identical to the file" hint that some models ignored; one captured session emitted 182 such repeats in 205 calls over 16 minutes before the user aborted. A new per-`ToolSession` `noopLoopGuard` now tracks consecutive identical no-op payloads per canonical path and escalates to a thrown `ToolError` after `NOOP_HARD_LIMIT` (3) repeats, so the agent loop sees a tool *failure* and breaks the cycle ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
-- Fixed the bash tool's `~/.omp/agent/artifacts/<id>.bash.log` growing unbounded when a command (e.g. `Get-Content | ConvertTo-Json` spraying rich PowerShell `PSObject` metadata) emitted multi-MB output; one capture reached 7.6MB on disk. `OutputSink` now defaults `artifactMaxBytes` to 4 MiB (3 MiB head + 1 MiB rolling tail) and replays the tail behind a single `[ARTIFACT TRUNCATED: kept first … + last … of …; … elided from the middle]` notice on close. Set `artifactMaxBytes: 0` to restore unbounded streaming ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
-- Fixed the bash result renderer recomputing styled output (`split` / `replaceTabs` / `truncateToVisualLines`) on every TUI repaint, which scaled with both transcript length and per-row output size. With a long captured session every keystroke walked hundreds of bash rows; the reporter on issue #2081 observed Ctrl+X/Ctrl+C feeling unresponsive because the main thread was pinned re-styling scrollback. The result renderer now caches its produced lines keyed by `(width, previewLines, expanded, rawOutput, isPartial)`, mirroring the existing eval-renderer cache; `invalidate()` clears the cache as before. Hot-path repaints with unchanged inputs are now O(1) ([#2081](https://github.com/can1357/oh-my-pi/issues/2081)).
 - Fixed startup model fallback selection so sessions now prefer each provider’s configured default model before choosing the first available authenticated model
 - Fixed implicit model selection path for tools and sessions by honoring persisted model-provider order when no explicit pattern is provided
 - Fixed the working spinner appearing to ignore Esc for 2-3 seconds when an interrupt lands mid-tool. Esc fires the abort synchronously, but the agent loop only stops the loader at `agent_end`, which it cannot reach until every in-flight tool settles in `executeToolCalls`' `await Promise.allSettled(...)` — and process/subagent/kernel-owning tools tear down gracefully (SIGTERM, 2-3s grace, SIGKILL), so the loader kept showing the unchanged "Working…/<intent>" line and read as a dropped keypress. The loader now switches to "Interrupting…" the instant Esc requests the abort and freezes intent-driven label updates until the turn unwinds (`EventController.notifyInterrupting`), so the interrupt is acknowledged immediately even while teardown completes.
@@ -436,14 +393,6 @@
 - Fixed `lsp config` accepting `fileTypes` entries with or without a leading dot inconsistently across actions; both `.ts` and `ts` are now normalized so a missing-dot entry no longer silently excludes a server from extension-based routing.
 - Fixed `lsp request` error path swallowing the params that were sent, making shape/coercion bugs on raw LSP calls impossible to diagnose in one round-trip; the error now echoes a truncated copy of the request params.
 - Fixed `find` with a single-star segment like `dir/*` recursing into subdirectories and returning nested matches. `parseFindPattern` already prepends `**/` for top-level globs (`*.ts` → `**/*.ts`), so anything reaching native without `**/` was deliberately scoped by the user; `recursive: false` is now passed to `natives.glob` to honor that scope.
-
-### Fixed
-
-- Fixed ACP `available_commands_update` to include extension-registered slash commands so clients like Zed surface them in the slash-command palette.
-
-### Fixed
-
-- Fixed ACP cancel button leaving the session in a stuck state — a new prompt sent while a turn is still in-flight (e.g. immediately after pressing Stop in Zed before `session/cancel` is processed) now implicitly cancels the running turn and queues the new message, instead of throwing an error that blocks further interaction.
 
 ## [15.10.1] - 2026-06-07
 
@@ -518,14 +467,6 @@
 - Fixed the `edit`/`apply_patch` tool dropping its outlined frame while streaming/in-progress (only the final result was framed); the in-progress diff preview now renders inside the same muted frame as the completed result.
 - Fixed the `todo` and `job` tools rendering a success icon and success styling on a failed/error result; error results now show the error icon and a red frame border.
 - Fixed `debug` tool refusing every `dlv` launch on Go modules. The launch handler ran `validateLaunchProgram` before adapter selection and rejected any directory program with `launch program resolves to a directory`, while dlv's default `mode=debug` requires a Go package path (a directory or `.go` source file). Adapter resolution now precedes validation, directory programs prefer adapters that advertise `acceptsDirectoryProgram` before falling back to native extensionless debuggers, the rejection only fires when the resolved adapter does not advertise that flag (set on `dlv` in `dap/defaults.json`), and dlv's `mode` is derived from the program shape — directories and `.go` files launch as `mode=debug`, other files as `mode=exec` — so `omp` can debug both Go packages and pre-built binaries ([#2020](https://github.com/can1357/oh-my-pi/issues/2020)).
-
-### Added
-
-- Added support for Git repositories using the `reftable` storage format by detecting `extensions.refStorage = reftable` in the repository configuration and falling back to shelling out to Git commands (`git symbolic-ref`, `git rev-parse`) for reference and HEAD resolution.
-
-### Added
-
-- Added `/setup providers` (also available as `/setup` or `/providers`) to reopen the interactive provider setup scene from an active TUI session, letting users sign in and choose a web search provider without rerunning the full onboarding flow.
 
 ## [15.10.0] - 2026-06-06
 

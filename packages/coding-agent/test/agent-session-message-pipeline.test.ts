@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
 	type Api,
-	clearCustomApis,
 	type Context,
+	clearCustomApis,
 	type Message,
 	type Model,
 	type ModelSpec,
