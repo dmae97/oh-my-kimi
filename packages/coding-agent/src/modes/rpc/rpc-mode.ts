@@ -21,9 +21,11 @@ import {
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
+import { buildSkillPromptMessage } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import type { EventBus } from "../../utils/event-bus";
@@ -75,6 +77,28 @@ export type RpcSessionChangeResult =
 	| { type: "branch"; data: { text: string; cancelled: boolean } };
 
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
+
+export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
+
+export async function tryRunRpcSkillCommand(session: RpcSkillCommandSession, text: string): Promise<boolean> {
+	if (!text.startsWith("/skill:")) return false;
+	if (!session.skillsSettings?.enableSkillCommands) return false;
+	const spaceIndex = text.indexOf(" ");
+	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+	const skillName = commandName.slice("skill:".length);
+	const skill = session.skills.find(candidate => candidate.name === skillName);
+	if (!skill) return false;
+	const built = await buildSkillPromptMessage(skill, args);
+	await session.promptCustomMessage({
+		customType: SKILL_PROMPT_MESSAGE_TYPE,
+		content: built.message,
+		display: true,
+		details: built.details,
+		attribution: "user",
+	});
+	return true;
+}
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
 
 export async function handleRpcSessionChange(
@@ -529,6 +553,9 @@ export async function runRpcMode(
 	const emitAvailableCommandsUpdate = async () => {
 		output({ type: "available_commands_update", commands: await getAvailableCommands() });
 	};
+	session.subscribeCommandMetadataChanged(() => {
+		void emitAvailableCommandsUpdate();
+	});
 	await emitAvailableCommandsUpdate();
 
 	// Handle a single command
@@ -541,6 +568,9 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
+				if (await tryRunRpcSkillCommand(session, command.message)) {
+					return success(id, "prompt");
+				}
 				const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
 					session,
 					sessionManager: session.sessionManager,
@@ -549,8 +579,12 @@ export async function runRpcMode(
 					output: text => output({ type: "command_output", text }),
 					refreshCommands: emitAvailableCommandsUpdate,
 					reloadPlugins: reloadPluginState,
-					notifyTitleChanged: async () => {},
-					notifyConfigChanged: async () => {},
+					notifyTitleChanged: async () => {
+						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+					},
+					notifyConfigChanged: async () => {
+						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					},
 				});
 				if (builtinResult !== false) {
 					if ("prompt" in builtinResult) {
@@ -596,8 +630,11 @@ export async function runRpcMode(
 				return success(id, "abort_and_prompt");
 			}
 
-			case "new_session": {
+			case "new_session":
+			case "switch_session":
+			case "branch": {
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
+				if (!result.data.cancelled) await emitAvailableCommandsUpdate();
 				return success(id, result.type, result.data);
 			}
 
@@ -812,12 +849,6 @@ export async function runRpcMode(
 			case "export_html": {
 				const path = await session.exportToHtml(command.outputPath);
 				return success(id, "export_html", { path });
-			}
-
-			case "switch_session":
-			case "branch": {
-				const result = await handleRpcSessionChange(session, command, subagentRegistry);
-				return success(id, result.type, result.data);
 			}
 
 			case "get_branch_messages": {

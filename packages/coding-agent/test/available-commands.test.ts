@@ -42,4 +42,53 @@ describe("buildAvailableSlashCommands", () => {
 		expect(byName["custom:hello"].source).toBe("custom");
 		expect(byName.notes.source).toBe("file");
 	});
+
+	test("loads file commands into the session before advertising them", async () => {
+		const fileCommands = [{ name: "notes", description: "Open notes", content: "body", source: "test" }];
+		let loadedCommands: typeof fileCommands | undefined;
+
+		const commands = await buildAvailableSlashCommands(
+			{
+				customCommands: [],
+				skills: [],
+				sessionManager: { getCwd: () => process.cwd() },
+				setSlashCommands(commands: typeof fileCommands) {
+					loadedCommands = commands;
+				},
+			} as never,
+			async () => fileCommands,
+		);
+
+		expect(loadedCommands).toEqual(fileCommands);
+		expect(commands.find(command => command.name === "notes")?.source).toBe("file");
+	});
+
+	test("classifies MCP prompts by path and bundled custom commands as custom", async () => {
+		const commands = await buildAvailableSlashCommands(
+			{
+				customCommands: [
+					{
+						path: "mcp:server/prompt",
+						resolvedPath: "mcp:server/prompt",
+						source: "project",
+						command: { name: "server:prompt", description: "MCP prompt" },
+					},
+					{
+						path: "green.md",
+						resolvedPath: "green.md",
+						source: "bundled",
+						command: { name: "green", description: "Bundled custom command" },
+					},
+				],
+				skills: [],
+				sessionManager: { getCwd: () => process.cwd() },
+				setSlashCommands() {},
+			} as never,
+			async () => [],
+		);
+
+		const byName = Object.fromEntries(commands.map(command => [command.name, command]));
+		expect(byName["server:prompt"].source).toBe("mcp_prompt");
+		expect(byName.green.source).toBe("custom");
+	});
 });

@@ -77,13 +77,8 @@ export async function buildAvailableSlashCommands(
 		}
 	}
 
-	const mcpPromptCommands = new Set(session.mcpPromptCommands ?? []);
 	for (const command of session.customCommands) {
-		const source: AvailableSlashCommandSource = mcpPromptCommands.has(command)
-			? "mcp_prompt"
-			: command.source === "bundled"
-				? "builtin"
-				: "custom";
+		const source: AvailableSlashCommandSource = command.path.startsWith("mcp:") ? "mcp_prompt" : "custom";
 		appendCommand({
 			name: command.command.name,
 			description: command.command.description,
@@ -93,6 +88,7 @@ export async function buildAvailableSlashCommands(
 	}
 
 	const fileCommands = await loadFileCommands(session.sessionManager.getCwd());
+	session.setSlashCommands(fileCommands);
 	for (const command of fileCommands) {
 		appendCommand({ name: command.name, description: command.description, source: "file" });
 	}
