@@ -13,6 +13,7 @@ import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
+	RpcAvailableCommandsUpdateFrame,
 	RpcAvailableSlashCommand,
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -64,6 +65,7 @@ export type RpcSessionEventListener = (event: AgentSessionEvent) => void;
 export type RpcSubagentLifecycleListener = (payload: RpcSubagentLifecycleFrame["payload"]) => void;
 export type RpcSubagentProgressListener = (payload: RpcSubagentProgressFrame["payload"]) => void;
 export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"]) => void;
+export type RpcAvailableCommandsUpdateListener = (commands: RpcAvailableSlashCommand[]) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -162,6 +164,11 @@ function isRpcSubagentEventFrame(value: unknown): value is RpcSubagentEventFrame
 	return value.type === "subagent_event" && isRecord(value.payload);
 }
 
+function isRpcAvailableCommandsUpdateFrame(value: unknown): value is RpcAvailableCommandsUpdateFrame {
+	if (!isRecord(value)) return false;
+	return value.type === "available_commands_update" && Array.isArray(value.commands);
+}
+
 function isRpcHostToolCallRequest(value: unknown): value is RpcHostToolCallRequest {
 	if (!isRecord(value)) return false;
 	return (
@@ -203,6 +210,7 @@ export class RpcClient {
 	#subagentLifecycleListeners = new Set<RpcSubagentLifecycleListener>();
 	#subagentProgressListeners = new Set<RpcSubagentProgressListener>();
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
+	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
 	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	#customTools: RpcClientCustomTool[] = [];
@@ -376,6 +384,14 @@ export class RpcClient {
 	onSubagentEvent(listener: RpcSubagentEventListener): () => void {
 		this.#subagentEventListeners.add(listener);
 		return () => this.#subagentEventListeners.delete(listener);
+	}
+
+	/**
+	 * Subscribe to slash-command availability updates emitted by the RPC server.
+	 */
+	onAvailableCommandsUpdate(listener: RpcAvailableCommandsUpdateListener): () => void {
+		this.#availableCommandsUpdateListeners.add(listener);
+		return () => this.#availableCommandsUpdateListeners.delete(listener);
 	}
 
 	/**
@@ -830,6 +846,13 @@ export class RpcClient {
 		if (isRpcSubagentEventFrame(data)) {
 			for (const listener of this.#subagentEventListeners) {
 				listener(data.payload);
+			}
+			return;
+		}
+
+		if (isRpcAvailableCommandsUpdateFrame(data)) {
+			for (const listener of this.#availableCommandsUpdateListeners) {
+				listener(data.commands);
 			}
 			return;
 		}

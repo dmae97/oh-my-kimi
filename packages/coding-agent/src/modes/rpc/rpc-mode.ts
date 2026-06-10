@@ -12,6 +12,8 @@
  */
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { $env, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
+import { reset as resetCapabilities } from "../../capability";
+import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
@@ -19,6 +21,7 @@ import {
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
+import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
@@ -514,6 +517,15 @@ export async function runRpcMode(
 	});
 
 	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
+	const reloadPluginState = async () => {
+		const cwd = session.sessionManager.getCwd();
+		const projectPath = await resolveActiveProjectRegistryPath(cwd);
+		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+		resetCapabilities();
+		session.setSlashCommands(await loadSlashCommands({ cwd }));
+		await session.refreshSshTool({ activateIfAvailable: true });
+		await emitAvailableCommandsUpdate();
+	};
 	const emitAvailableCommandsUpdate = async () => {
 		output({ type: "available_commands_update", commands: await getAvailableCommands() });
 	};
@@ -536,7 +548,7 @@ export async function runRpcMode(
 					cwd: session.sessionManager.getCwd(),
 					output: text => output({ type: "command_output", text }),
 					refreshCommands: emitAvailableCommandsUpdate,
-					reloadPlugins: async () => {},
+					reloadPlugins: reloadPluginState,
 					notifyTitleChanged: async () => {},
 					notifyConfigChanged: async () => {},
 				});

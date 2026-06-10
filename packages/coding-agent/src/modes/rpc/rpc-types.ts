@@ -121,6 +121,11 @@ export interface RpcAvailableSlashCommand {
 	source: AvailableSlashCommandSource;
 }
 
+export interface RpcAvailableCommandsUpdateFrame {
+	type: "available_commands_update";
+	commands: RpcAvailableSlashCommand[];
+}
+
 export interface RpcHandoffResult {
 	savedPath?: string;
 }
