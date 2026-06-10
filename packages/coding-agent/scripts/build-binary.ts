@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 
 const packageDir = path.join(import.meta.dir, "..");
+const repoRoot = path.join(packageDir, "..", "..");
 const outputPath = path.join(packageDir, "dist", "omp");
 
 // Transformers.js is an optional, native-heavy dependency that is never bundled
@@ -19,9 +20,13 @@ function shouldAdhocSignDarwinBinary(): boolean {
 	return process.platform === "darwin";
 }
 
-async function runCommand(command: string[], env: NodeJS.ProcessEnv = Bun.env): Promise<void> {
+async function runCommand(
+	command: string[],
+	env: NodeJS.ProcessEnv = Bun.env,
+	cwd: string = packageDir,
+): Promise<void> {
 	const proc = Bun.spawn(command, {
-		cwd: packageDir,
+		cwd,
 		env,
 		stdout: "inherit",
 		stderr: "inherit",
@@ -55,19 +60,8 @@ async function main(): Promise<void> {
 					"--external",
 					"mupdf",
 					"--root",
-					"../..",
-					"./src/cli.ts",
-					// Worker entrypoints. Bun's `--compile` discovers the literal in
-					// `new Worker("…", …)` at each spawn site, but only actually
-					// emits the worker into the bunfs root when it is listed here as
-					// an explicit additional entry. Paths are relative to this
-					// script's cwd (packages/coding-agent) and the `--root` above
-					// (../..) makes them appear inside the binary at
-					// `/$bunfs/root/packages/<pkg>/src/<worker>.js`, which is
-					// exactly what the literals at the spawn sites resolve to.
-					"../stats/src/sync-worker.ts",
-					"./src/tools/browser/tab-worker-entry.ts",
-					"./src/eval/js/worker-entry.ts",
+					".",
+					"./packages/coding-agent/src/cli.ts",
 					// Legacy pi-* extension compat entrypoints served by
 					// `legacy-pi-compat.ts`. These are reached via computed bunfs paths
 					// (which `--compile`'s static analyzer cannot trace), so each must be
@@ -77,17 +71,18 @@ async function main(): Promise<void> {
 					// breaks the CLI entry when the same package's barrel appears as an
 					// extra entrypoint (issue #1474), so legacy `pi-coding-agent` imports
 					// resolve through `legacy-pi-coding-agent-shim.ts` instead.
-					"../agent/src/index.ts",
-					"../natives/native/index.js",
-					"../tui/src/index.ts",
-					"../utils/src/index.ts",
-					"./src/extensibility/typebox.ts",
-					"./src/extensibility/legacy-pi-ai-shim.ts",
-					"./src/extensibility/legacy-pi-coding-agent-shim.ts",
+					"./packages/agent/src/index.ts",
+					"./packages/natives/native/index.js",
+					"./packages/tui/src/index.ts",
+					"./packages/utils/src/index.ts",
+					"./packages/coding-agent/src/extensibility/typebox.ts",
+					"./packages/coding-agent/src/extensibility/legacy-pi-ai-shim.ts",
+					"./packages/coding-agent/src/extensibility/legacy-pi-coding-agent-shim.ts",
 					"--outfile",
-					"dist/omp",
+					"packages/coding-agent/dist/omp",
 				],
 				buildEnv,
+				repoRoot,
 			);
 
 			// Bun 1.3.12 emits a truncated Mach-O signature on darwin builds.

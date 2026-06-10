@@ -29,16 +29,17 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - **Class privacy**: use ES `#private` fields; leave externally accessible members bare. **No `private`/`protected`/`public` keyword on fields or methods**, except on **constructor parameter properties** where TypeScript requires it (e.g. `constructor(private readonly session: ToolSession)`).
 - **Promises**: use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
 - **Prompts**: never build prompts in code (no inline strings, template literals, or concatenation). Prompts live in static `.md` files; use Handlebars for dynamic content. Import them via `import content from "./prompt.md" with { type: "text" }` — not `readFile`.
-- **Worker scripts**: spawn workers with the dev/compile-safe hybrid pattern. `with { type: "file" }` only copies the entry as a raw asset and does **not** bundle its imports — workers crashed silently in compiled binaries on every prior incarnation of that pattern (issues #1011, #1027). Use this shape instead:
+- **Worker scripts**: workers re-enter the CLI entrypoint; never spawn separate worker entry modules. `cli.ts` declares itself as the worker host at startup (`declareWorkerHostEntry()` from `@oh-my-pi/pi-utils/env`) and dispatches hidden argv selectors (`__omp_stats_sync_worker`, `__omp_tab_worker`, `__omp_js_eval_worker`, `--tiny-worker`) before loading the command registry. Spawn sites use:
   ```ts
-  import { isCompiledBinary } from "@oh-my-pi/pi-utils";
-  const worker = isCompiledBinary()
-  	? new Worker("./packages/<pkg>/src/<worker>.ts", { type: "module" })
+  import { workerHostEntry } from "@oh-my-pi/pi-utils";
+  const hostEntry = workerHostEntry();
+  const worker = hostEntry
+  	? new Worker(hostEntry, { type: "module", argv: ["__omp_<name>_worker"] })
   	: new Worker(new URL("./<worker>.ts", import.meta.url).href, { type: "module" });
   ```
-  The literal in the compiled branch is what Bun's `--compile` static analyzer needs to discover the worker — its path is **`--root`-relative** (repo root, since `build-binary.ts` passes `--root ../..`), so it must start with `./packages/...`. The `new URL` form in the dev branch keeps spawns portable across cwds.
-  In addition, every worker entry **MUST** be listed as an extra `--compile` entrypoint in `packages/coding-agent/scripts/build-binary.ts`. Without that the analyzer sees the literal but the worker never gets emitted into bunfs. The three current entries (`sync-worker.ts`, `tab-worker-entry.ts`, `worker-entry.ts`) live there as the working reference.
-  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker, pings it, and exits — it's wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh` so binary, source-link, and tarball installs all exercise it. Add a sibling smoke if the new worker is on a different module graph.
+  When the process was started from the omp CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
+  History: `with { type: "file" }` only copied the entry as a raw asset (workers crashed silently in compiled binaries — issues #1011, #1027), and the later literal-path + extra-entrypoint pattern required keeping spawn literals and two build scripts in sync (issue #1150). The repro tests for those issues now pin the worker-host contract instead.
+  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker and the tiny-model subprocess, pings them, and exits — it's wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh` so binary, source-link, and tarball installs all exercise it. Add a sibling smoke if the new worker is on a different module graph.
 
 ## Bun Over Node
 

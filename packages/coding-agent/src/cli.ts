@@ -14,9 +14,9 @@ try {
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
-import { type CliConfig, run } from "@oh-my-pi/pi-utils/cli";
+import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { APP_NAME, MIN_BUN_VERSION, VERSION } from "@oh-my-pi/pi-utils/dirs";
-import { commands, isSubcommand } from "./cli-commands";
+import { declareWorkerHostEntry } from "@oh-my-pi/pi-utils/env";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -26,6 +26,12 @@ if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 }
 
 process.title = APP_NAME;
+
+// Declare this module as the worker-host entry: Worker threads and worker
+// subprocesses re-enter `Bun.main` with a hidden argv selector instead of
+// loading separate worker entrypoints (single-entry contract across source,
+// npm bundle, and compiled binary).
+declareWorkerHostEntry();
 
 async function showHelp(config: CliConfig): Promise<void> {
 	const { renderRootHelp } = await import("@oh-my-pi/pi-utils/cli");
@@ -52,6 +58,45 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestSyncWorker();
 	await smokeTestTinyTitleWorker();
 	process.stdout.write("smoke-test: ok\n");
+}
+
+const TINY_WORKER_ARGS = new Set(["--tiny-worker", "__tiny_worker"]);
+const STATS_SYNC_WORKER_ARG = "__omp_stats_sync_worker";
+const TAB_WORKER_ARG = "__omp_tab_worker";
+const JS_EVAL_WORKER_ARG = "__omp_js_eval_worker";
+
+async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
+	if (arg === STATS_SYNC_WORKER_ARG) {
+		// The sync worker handles messages via `self.onmessage`, assigned during
+		// this *async* dynamic import. Bun flushes the worker's initial message
+		// buffer when the entry module's top-level evaluation finishes — before
+		// this dispatch completes — so anything the parent posted right after
+		// spawning (the smoke ping, the first parse request) would be dropped.
+		// Park early events and replay them once the module's handler is live.
+		// (The tab/eval workers are immune: `parentPort.on("message")` queues
+		// until a listener attaches.)
+		const scope = globalThis as unknown as { onmessage: ((event: MessageEvent) => void) | null };
+		const pending: MessageEvent[] = [];
+		const buffer = (event: MessageEvent): void => {
+			pending.push(event);
+		};
+		scope.onmessage = buffer;
+		await import("@oh-my-pi/omp-stats/sync-worker");
+		const handler = scope.onmessage;
+		if (handler && handler !== buffer) {
+			for (const event of pending) handler.call(scope, event);
+		}
+		return true;
+	}
+	if (arg === TAB_WORKER_ARG) {
+		await import("./tools/browser/tab-worker-entry");
+		return true;
+	}
+	if (arg === JS_EVAL_WORKER_ARG) {
+		await import("./eval/js/worker-entry");
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -90,11 +135,16 @@ async function runTinyWorker(): Promise<void> {
 			};
 		},
 	});
+	const keepalive = setInterval(() => {}, 2 ** 30);
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
 	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical
 	// with the parent's hard-kill on shutdown: skip every JS/native finalizer.
 	process.on("disconnect", () => shutdown());
-	await shuttingDown;
+	try {
+		await shuttingDown;
+	} finally {
+		clearInterval(keepalive);
+	}
 	process.kill(process.pid, "SIGKILL");
 }
 
@@ -104,10 +154,17 @@ export async function runCli(argv: string[]): Promise<void> {
 		await runSmokeTest();
 		return;
 	}
-	if (argv[0] === "--tiny-worker") {
+	if (TINY_WORKER_ARGS.has(argv[0] ?? "")) {
 		await runTinyWorker();
 		return;
 	}
+	if (await runWorkerEntrypoint(argv[0])) {
+		return;
+	}
+	const [{ run }, { commands, isSubcommand }] = await Promise.all([
+		import("@oh-my-pi/pi-utils/cli"),
+		import("./cli-commands"),
+	]);
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
 	const first = argv[0];
@@ -120,4 +177,11 @@ export async function runCli(argv: string[]): Promise<void> {
 	return run({ bin: APP_NAME, version: VERSION, argv: runArgv, commands, help: showHelp });
 }
 
-await runCli(process.argv.slice(2));
+// Floating call instead of top-level await: TLA forces `--bytecode` (CJS
+// lowering) builds to fail, and the entrypoint needs nothing after this.
+// The catch mirrors what an unhandled TLA rejection produced: error dump to
+// stderr, exit code 1. Success paths resolve without touching the exit code.
+runCli(process.argv.slice(2)).catch((err: unknown) => {
+	process.stderr.write(`${Bun.inspect(err, { colors: process.stderr.isTTY === true })}\n`);
+	process.exit(1);
+});

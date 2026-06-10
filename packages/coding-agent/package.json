@@ -28,7 +28,7 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"bin": {
-		"omp": "src/cli.ts"
+		"omp": "dist/cli.js"
 	},
 	"scripts": {
 		"build": "bun scripts/build-binary.ts",
@@ -40,7 +40,7 @@
 		"fmt": "biome format --write . && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",
 		"generate-docs-index": "bun scripts/generate-docs-index.ts",
-		"prepack": "bun scripts/generate-docs-index.ts",
+		"prepack": "bun scripts/generate-docs-index.ts && bun scripts/bundle-dist.ts",
 		"generate-template": "bun scripts/generate-template.ts"
 	},
 	"dependencies": {
@@ -87,6 +87,8 @@
 	},
 	"files": [
 		"src",
+		"dist/cli.js",
+		"dist/*.node",
 		"scripts",
 		"examples",
 		"README.md",

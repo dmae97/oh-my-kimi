@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { $env, isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
 import { tinyModelDeviceSettingToEnv } from "./device";
@@ -108,17 +108,28 @@ function tinyWorkerEnv(): Record<string, string> {
 	for (const key in overlay) merged[key] = overlay[key];
 	return merged;
 }
+interface TinyWorkerSpawnCommand {
+	cmd: string[];
+	cwd?: string;
+}
 
 /**
- * Resolve the argv used to relaunch the agent CLI into tiny-worker mode. In a
- * compiled binary the entry point is the binary itself; in dev/source the
- * spawned `bun` needs the absolute path to `cli.ts` so it can resolve module
- * imports against the on-disk source tree.
+ * Resolve the command used to relaunch the agent CLI into tiny-worker mode.
+ * In a compiled binary the entry point is the binary itself (no script arg).
+ * Otherwise re-enter the declared worker-host entry (source cli.ts or
+ * npm-bundle cli.js) with a cwd-relative script path — Bun's subprocess IPC
+ * is more reliable that way than with an absolute `.ts` entry under
+ * `bun test` — and fall back to this package's own `src/cli.ts` when no host
+ * entry is declared (bun test, SDK embedding).
  */
-function tinyWorkerSpawnCmd(): string[] {
-	if (isCompiledBinary()) return [process.execPath, TINY_WORKER_ARG];
-	const cliPath = path.resolve(import.meta.dir, "..", "cli.ts");
-	return [process.execPath, cliPath, TINY_WORKER_ARG];
+function tinyWorkerSpawnCmd(): TinyWorkerSpawnCommand {
+	if (isCompiledBinary()) return { cmd: [process.execPath, TINY_WORKER_ARG] };
+	const hostEntry = workerHostEntry();
+	if (hostEntry) {
+		return { cmd: [process.execPath, path.basename(hostEntry), TINY_WORKER_ARG], cwd: path.dirname(hostEntry) };
+	}
+	const packageRoot = path.resolve(import.meta.dir, "..", "..");
+	return { cmd: [process.execPath, "src/cli.ts", TINY_WORKER_ARG], cwd: packageRoot };
 }
 
 interface SpawnedSubprocess {
@@ -143,8 +154,10 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 	const inbound = new Set<(message: TinyTitleWorkerOutbound) => void>();
 	const errors = new Set<(error: Error) => void>();
 	const intentionalExit = { value: false };
+	const spawnCommand = tinyWorkerSpawnCmd();
 	const proc = Bun.spawn({
-		cmd: tinyWorkerSpawnCmd(),
+		cmd: spawnCommand.cmd,
+		cwd: spawnCommand.cwd,
 		env: tinyWorkerEnv(),
 		stdin: "ignore",
 		stdout: "ignore",
@@ -175,7 +188,9 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 	});
 	// Don't keep the parent event loop alive on account of an idle worker; the
 	// agent dispose path calls `terminate()` explicitly when shutting down.
-	proc.unref();
+	// Bun's test runner can starve IPC delivery for unref'd subprocesses, so
+	// keep it referenced only under tests that assert the ping/pong contract.
+	if (!isBunTestRuntime()) proc.unref();
 	return { proc, inbound, errors, intentionalExit };
 }
 

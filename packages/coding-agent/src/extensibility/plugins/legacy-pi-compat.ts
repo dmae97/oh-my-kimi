@@ -110,9 +110,26 @@ function bunfsPath(...segments: string[]): string {
 	return path.join(BUNFS_PACKAGE_ROOT, ...segments);
 }
 
+function resolveBundledSelfPackageRoot(): string | undefined {
+	if (!process.env.PI_BUNDLED) return undefined;
+	try {
+		return path.dirname(Bun.resolveSync("@oh-my-pi/pi-coding-agent/package.json", import.meta.dir));
+	} catch {
+		return undefined;
+	}
+}
+
+const BUNDLED_SELF_PACKAGE_ROOT = resolveBundledSelfPackageRoot();
+
+function sourceShimPath(file: string): string {
+	return BUNDLED_SELF_PACKAGE_ROOT
+		? path.join(BUNDLED_SELF_PACKAGE_ROOT, "src", "extensibility", file)
+		: path.resolve(import.meta.dir, "..", file);
+}
+
 const TYPEBOX_SHIM_PATH = BUNFS_PACKAGE_ROOT
 	? bunfsPath("coding-agent", "src", "extensibility", "typebox.js")
-	: path.resolve(import.meta.dir, "../typebox.ts");
+	: sourceShimPath("typebox.ts");
 
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
 // the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
@@ -124,7 +141,7 @@ const TYPEBOX_SHIM_PATH = BUNFS_PACKAGE_ROOT
 // against the bundled pi-ai package.
 const LEGACY_PI_AI_SHIM_PATH = BUNFS_PACKAGE_ROOT
 	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-ai-shim.js")
-	: path.resolve(import.meta.dir, "../legacy-pi-ai-shim.ts");
+	: sourceShimPath("legacy-pi-ai-shim.ts");
 
 // The coding-agent's own `./src/index.ts` cannot be listed as an extra
 // `bun --compile` entrypoint alongside the CLI entry without breaking binary
@@ -133,7 +150,7 @@ const LEGACY_PI_AI_SHIM_PATH = BUNFS_PACKAGE_ROOT
 // avoids that collision while re-exporting the canonical package surface.
 const LEGACY_PI_CODING_AGENT_SHIM_PATH = BUNFS_PACKAGE_ROOT
 	? bunfsPath("coding-agent", "src", "extensibility", "legacy-pi-coding-agent-shim.js")
-	: path.resolve(import.meta.dir, "../legacy-pi-coding-agent-shim.ts");
+	: sourceShimPath("legacy-pi-coding-agent-shim.ts");
 
 // Package-root overrides. Shim entries are always applied because they replace
 // (or augment) the canonical surface even in non-compiled installs. The bunfs
