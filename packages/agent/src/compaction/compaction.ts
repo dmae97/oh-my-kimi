@@ -37,6 +37,7 @@ import compactionSummaryPrompt from "./prompts/compaction-summary.md" with { typ
 import compactionTurnPrefixPrompt from "./prompts/compaction-turn-prefix.md" with { type: "text" };
 import compactionUpdateSummaryPrompt from "./prompts/compaction-update-summary.md" with { type: "text" };
 import handoffDocumentPrompt from "./prompts/handoff-document.md" with { type: "text" };
+import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "./snapcompact";
 
 import {
 	computeFileLists,
@@ -138,7 +139,7 @@ export interface CompactionResult<T = unknown> {
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy?: "context-full" | "handoff" | "shake" | "off";
+	strategy?: "context-full" | "handoff" | "shake" | "snapcompact" | "off";
 	thresholdPercent?: number;
 	thresholdTokens?: number;
 	reserveTokens: number;
@@ -311,6 +312,10 @@ export function estimateTokens(message: AgentMessage): number {
 		case "branchSummary":
 		case "compactionSummary": {
 			fragments.push(message.summary);
+			if (message.role === "compactionSummary" && message.images) {
+				// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
+				extra += message.images.length * SNAPCOMPACT_FRAME_TOKEN_ESTIMATE;
+			}
 			break;
 		}
 		default:
