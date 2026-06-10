@@ -1,7 +1,8 @@
 import { dirname } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { Mnemopi, type RecallResult } from "@oh-my-pi/pi-mnemopi";
-import { BankManager } from "@oh-my-pi/pi-mnemopi/core";
+import type * as MnemopiNs from "@oh-my-pi/pi-mnemopi";
+import type { Mnemopi, RecallResult } from "@oh-my-pi/pi-mnemopi";
+import type * as MnemopiCoreNs from "@oh-my-pi/pi-mnemopi/core";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	composeRecallQuery,
@@ -12,6 +13,33 @@ import {
 import { extractMessages } from "../hindsight/transcript";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { MnemopiBackendConfig, MnemopiScoping } from "./config";
+
+// The mnemopi package pulls the embeddings stack; keep it off the CLI startup
+// module graph by loading it lazily at the async boundaries that need it.
+let mnemopiMod: typeof MnemopiNs | undefined;
+let mnemopiCoreMod: typeof MnemopiCoreNs | undefined;
+
+/** Lazily load `@oh-my-pi/pi-mnemopi` (memoized). */
+export async function loadMnemopi(): Promise<typeof MnemopiNs> {
+	return (mnemopiMod ??= await import("@oh-my-pi/pi-mnemopi"));
+}
+
+/** Lazily load `@oh-my-pi/pi-mnemopi/core` (memoized). */
+export async function loadMnemopiCore(): Promise<typeof MnemopiCoreNs> {
+	return (mnemopiCoreMod ??= await import("@oh-my-pi/pi-mnemopi/core"));
+}
+
+/** Sync access for code below an async boundary that already awaited {@link loadMnemopi}. */
+export function requireMnemopi(): typeof MnemopiNs {
+	if (!mnemopiMod) throw new Error("Mnemopi module not loaded; await loadMnemopi() first.");
+	return mnemopiMod;
+}
+
+/** Sync access for code below an async boundary that already awaited {@link loadMnemopiCore}. */
+export function requireMnemopiCore(): typeof MnemopiCoreNs {
+	if (!mnemopiCoreMod) throw new Error("Mnemopi core module not loaded; await loadMnemopiCore() first.");
+	return mnemopiCoreMod;
+}
 
 const kMnemopiSessionState = Symbol("mnemopi.sessionState");
 
@@ -460,6 +488,7 @@ function escapeRegExp(text: string): string {
 }
 function createMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
 	const providerOptions = config.providerOptions as Record<string, unknown>;
+	const { Mnemopi } = requireMnemopi();
 	return new Mnemopi({
 		dbPath: resolveBankDbPath(config, bank),
 		bank,
@@ -474,6 +503,7 @@ function createMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
 function resolveBankDbPath(config: MnemopiBackendConfig, bank: string): string {
 	const sharedBank = config.globalBank ?? config.baseBank ?? "default";
 	if (bank === sharedBank) return config.dbPath;
+	const { BankManager } = requireMnemopiCore();
 	return new BankManager(dirname(config.dbPath)).getBankDbPath(bank);
 }
 

@@ -1,4 +1,4 @@
-import { type HTMLElement, parseHTML } from "linkedom";
+import type { HTMLElement } from "linkedom";
 import { ToolAbortError } from "../../tools/tool-errors";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, loadPage } from "./types";
@@ -33,6 +33,7 @@ export const handleTwitter: SpecialHandler = async (
 
 			if (result.ok && result.content.length > 500) {
 				// Parse the Nitter HTML
+				const { parseHTML } = await import("linkedom");
 				const doc = parseHTML(result.content).document;
 
 				// Extract tweet content

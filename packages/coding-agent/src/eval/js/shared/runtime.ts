@@ -181,7 +181,7 @@ export class JsRuntime {
 			finalExpressionValue: undefined,
 		};
 		return await this.#als.run(context, async () => {
-			const wrapped = wrapCode(code);
+			const wrapped = await wrapCode(code);
 			const value = indirectEval(wrapped.source, filename);
 			if (wrapped.finalExpressionReturned) {
 				const awaited = await awaitMaybePromise(value);

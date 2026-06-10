@@ -1,4 +1,4 @@
-import { parse as babelParse } from "@babel/parser";
+import type * as BabelParser from "@babel/parser";
 
 // Static ESM `import` declarations are not valid inside vm.runInContext (script-mode parsing),
 // and dynamic `import(...)` would otherwise resolve specifiers against the worker module's URL
@@ -64,9 +64,19 @@ type BabelModuleSourceDeclaration = {
 
 type BabelNode = { type: string; start: number; end: number; [key: string]: unknown };
 
-function parseProgram(code: string): { program: { body: ReadonlyArray<BabelProgramNode> } } | null {
+// @babel/parser sits on the CLI launch graph (tools → eval backend → worker-core →
+// runtime → this module) but only runs when an eval cell executes, so it is loaded
+// lazily and memoized.
+let babelParser: typeof BabelParser | undefined;
+
+async function loadBabelParser(): Promise<typeof BabelParser> {
+	return (babelParser ??= await import("@babel/parser"));
+}
+
+async function parseProgram(code: string): Promise<{ program: { body: ReadonlyArray<BabelProgramNode> } } | null> {
+	const { parse } = await loadBabelParser();
 	try {
-		return babelParse(code, {
+		return parse(code, {
 			sourceType: "module",
 			allowAwaitOutsideFunction: true,
 			allowReturnOutsideFunction: true,
@@ -162,10 +172,10 @@ function rewriteImportNode(node: BabelImportDeclaration): string {
 	return `await ${importCall};`;
 }
 
-export function rewriteImports(code: string): string {
+export async function rewriteImports(code: string): Promise<string> {
 	if (!code.includes("import")) return code;
 
-	const ast = parseProgram(code);
+	const ast = await parseProgram(code);
 	if (!ast) {
 		// Parser bailed entirely — let the VM surface the real syntax error.
 		return code;
@@ -201,8 +211,8 @@ export function rewriteImports(code: string): string {
 	}
 	return result;
 }
-export function collectModuleSourceSpecifiers(code: string): string[] {
-	const ast = parseProgram(code);
+export async function collectModuleSourceSpecifiers(code: string): Promise<string[]> {
+	const ast = await parseProgram(code);
 	if (!ast) return [];
 	const sources: string[] = [];
 	for (const node of ast.program.body) {
@@ -218,8 +228,11 @@ export function collectModuleSourceSpecifiers(code: string): string[] {
 	return sources;
 }
 
-export function rewriteModuleSourceSpecifiers(code: string, replacer: (source: string) => string): string {
-	const ast = parseProgram(code);
+export async function rewriteModuleSourceSpecifiers(
+	code: string,
+	replacer: (source: string) => string,
+): Promise<string> {
+	const ast = await parseProgram(code);
 	if (!ast) return code;
 
 	type Edit = { start: number; end: number; text: string };
@@ -249,9 +262,9 @@ export function rewriteModuleSourceSpecifiers(code: string, replacer: (source: s
 	return result;
 }
 
-export function rewriteDynamicImports(code: string, callee = "__omp_import__"): string {
+export async function rewriteDynamicImports(code: string, callee = "__omp_import__"): Promise<string> {
 	if (!code.includes("import")) return code;
-	const ast = parseProgram(code);
+	const ast = await parseProgram(code);
 	if (!ast) return code;
 
 	type Edit = { start: number; end: number; text: string };
@@ -339,10 +352,10 @@ function appendGlobalBindingPublish(source: string, names: readonly string[]): s
  * Nested declarations (inside functions, blocks, classes) are left alone \u2014 they're
  * scoped to their enclosing function/block regardless of `var` vs `let`/`const`.
  */
-function demoteTopLevelLexicals(code: string, options: { publishGlobals?: boolean } = {}): string {
+async function demoteTopLevelLexicals(code: string, options: { publishGlobals?: boolean } = {}): Promise<string> {
 	if (!/\b(?:const|let|class)\b/.test(code)) return code;
 
-	const ast = parseProgram(code);
+	const ast = await parseProgram(code);
 	if (!ast) {
 		return code;
 	}
@@ -381,8 +394,8 @@ function demoteTopLevelLexicals(code: string, options: { publishGlobals?: boolea
 	return result;
 }
 
-function returnFinalExpression(code: string): { source: string; returned: boolean } {
-	const ast = parseProgram(code);
+async function returnFinalExpression(code: string): Promise<{ source: string; returned: boolean }> {
+	const ast = await parseProgram(code);
 	const body = ast?.program.body;
 	if (!body) return { source: code, returned: false };
 	let lastIndex = body.length - 1;
@@ -446,8 +459,8 @@ function containsAsyncWrapperSyntax(value: unknown): boolean {
 	return false;
 }
 
-function requiresAsyncWrapper(code: string): boolean {
-	const ast = parseProgram(code);
+async function requiresAsyncWrapper(code: string): Promise<boolean> {
+	const ast = await parseProgram(code);
 	if (!ast) return false;
 	for (const node of ast.program.body) {
 		if (containsAsyncWrapperSyntax(node)) return true;
@@ -494,13 +507,15 @@ export function stripTypeScriptSyntax(
 const LOOKS_LIKE_TS =
 	/(?:\bimport\s+type\b|\bexport\s+type\b|\b(?:import|export)\s*\{[^}\n]*\btype\s+\w|\binterface\s+\w|\btype\s+\w+\s*=|\b(?:as|satisfies)\s+(?:[A-Z]|\bconst\b)|:\s*(?:string|number|boolean|any|unknown|void|never|object|[A-Z]\w*)\b|<\s*[A-Z]\w*\s*[,>])/;
 
-export function wrapCode(code: string): { source: string; asyncWrapped: boolean; finalExpressionReturned: boolean } {
-	const finalExpression = returnFinalExpression(code);
+export async function wrapCode(
+	code: string,
+): Promise<{ source: string; asyncWrapped: boolean; finalExpressionReturned: boolean }> {
+	const finalExpression = await returnFinalExpression(code);
 	const stripped = stripTypeScript(finalExpression.source);
-	const importsRewritten = rewriteImports(stripped);
-	const needsAsyncWrapper = requiresAsyncWrapper(importsRewritten);
+	const importsRewritten = await rewriteImports(stripped);
+	const needsAsyncWrapper = await requiresAsyncWrapper(importsRewritten);
 	const rewritten = {
-		source: demoteTopLevelLexicals(importsRewritten, { publishGlobals: needsAsyncWrapper }),
+		source: await demoteTopLevelLexicals(importsRewritten, { publishGlobals: needsAsyncWrapper }),
 		returned: finalExpression.returned,
 	};
 	if (!needsAsyncWrapper) {

@@ -2,9 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $which, getPuppeteerDir, logger } from "@oh-my-pi/pi-utils";
-import * as browsers from "@puppeteer/browsers";
+import type * as BrowsersNs from "@puppeteer/browsers";
 import type { Browser, CDPSession, Page, default as Puppeteer, Target } from "puppeteer-core";
-import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import stealthTamperingScript from "../puppeteer/00_stealth_tampering.txt" with { type: "text" };
 import stealthActivityScript from "../puppeteer/01_stealth_activity.txt" with { type: "text" };
 import stealthHairlineScript from "../puppeteer/02_stealth_hairline.txt" with { type: "text" };
@@ -78,6 +77,11 @@ export async function loadPuppeteerInWorker(safeDir: string): Promise<typeof Pup
 	}
 }
 
+let browsersModule: typeof BrowsersNs | undefined;
+async function loadBrowsers(): Promise<typeof BrowsersNs> {
+	return (browsersModule ??= await import("@puppeteer/browsers"));
+}
+
 /**
  * Lazily download Chromium on first browser launch via @puppeteer/browsers.
  * Skipped when a system Chromium (NixOS) or PUPPETEER_EXECUTABLE_PATH is set.
@@ -92,12 +96,14 @@ async function ensureChromiumExecutable(): Promise<string | undefined> {
 	if (chromiumExecutablePromise) return chromiumExecutablePromise;
 
 	chromiumExecutablePromise = (async () => {
+		const browsers = await loadBrowsers();
 		const platform = browsers.detectBrowserPlatform();
 		if (!platform) {
 			logger.warn("Could not detect browser platform; relying on puppeteer default resolution");
 			return undefined;
 		}
 		const cacheDir = getPuppeteerDir();
+		const { PUPPETEER_REVISIONS } = await import("puppeteer-core/internal/revisions.js");
 		const buildId = await browsers.resolveBuildId(browsers.Browser.CHROME, platform, PUPPETEER_REVISIONS.chrome);
 		const executablePath = browsers.computeExecutablePath({
 			browser: browsers.Browser.CHROME,

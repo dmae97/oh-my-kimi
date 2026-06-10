@@ -1,4 +1,3 @@
-import { parseHTML } from "linkedom";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, loadPage } from "./types";
 import { convertWithMarkit, fetchBinary } from "./utils";
@@ -31,6 +30,7 @@ export const handleArxiv: SpecialHandler = async (
 		if (!result.ok) return null;
 
 		// Parse the Atom feed response
+		const { parseHTML } = await import("linkedom");
 		const doc = parseHTML(result.content).document;
 		const entry = doc.querySelector("entry");
 
