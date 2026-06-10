@@ -41,6 +41,7 @@ function createHangingSession(): HangingSessionHandle {
 		subscribe: (_listener: (event: AgentSessionEvent) => void) => () => {},
 		prompt: async (_text: string, _options?: PromptOptions) => {
 			await hang;
+			return true;
 		},
 		waitForIdle: async () => {
 			await hang;
@@ -140,7 +141,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 				});
 				return () => {};
 			},
-			prompt: async () => {},
+			prompt: async () => true,
 			waitForIdle: async () => {},
 			getLastAssistantMessage: () => undefined,
 			abort: async () => {},
@@ -218,6 +219,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			},
 			prompt: async (_text: string, _options?: PromptOptions) => {
 				await hang;
+				return true;
 			},
 			waitForIdle: async () => {
 				await hang;
@@ -294,7 +296,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 				});
 				return () => {};
 			},
-			prompt: async () => {},
+			prompt: async () => true,
 			waitForIdle: async () => {},
 			getLastAssistantMessage: () => undefined,
 			abort: async () => {},

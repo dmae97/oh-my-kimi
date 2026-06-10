@@ -179,7 +179,7 @@ class FakeAgentSession {
 		return [...this.#listeners];
 	}
 
-	async prompt(text: string): Promise<void> {
+	async prompt(text: string): Promise<boolean> {
 		this.promptCalls.push(text);
 		this.isStreaming = true;
 		this.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
@@ -199,6 +199,7 @@ class FakeAgentSession {
 			} as AgentSessionEvent);
 		}
 		this.isStreaming = false;
+		return true;
 	}
 
 	async waitForIdle(): Promise<void> {
@@ -347,7 +348,7 @@ class FakeAgentSession {
 
 function holdPromptStreaming(session: FakeAgentSession): () => void {
 	let finishPrompt!: () => void;
-	session.prompt = async (text: string): Promise<void> => {
+	session.prompt = async (text: string): Promise<boolean> => {
 		session.promptCalls.push(text);
 		session.isStreaming = true;
 		const blocker = Promise.withResolvers<void>();
@@ -369,6 +370,7 @@ function holdPromptStreaming(session: FakeAgentSession): () => void {
 			} as AgentSessionEvent);
 		}
 		session.isStreaming = false;
+		return true;
 	};
 	return () => finishPrompt();
 }
@@ -1127,7 +1129,7 @@ describe("ACP agent", () => {
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 
-		session.prompt = async (text: string): Promise<void> => {
+		session.prompt = async (text: string): Promise<boolean> => {
 			session.promptCalls.push(text);
 			session.isStreaming = true;
 			for (const listener of session.listeners()) {
@@ -1164,6 +1166,7 @@ describe("ACP agent", () => {
 				listener({ type: "agent_end", messages: [] } as AgentSessionEvent);
 			}
 			session.isStreaming = false;
+			return true;
 		};
 
 		await harness.agent.prompt({
@@ -1269,6 +1272,55 @@ describe("ACP agent", () => {
 		expect(names).not.toContain("agents");
 		expect(names).not.toContain("extensions");
 		expect(names).not.toContain("hotkeys");
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("includes extension-registered commands in available_commands_update and excludes ACP-builtin collisions", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+
+		// Extension command colliding with a custom TS command; extension wins (dispatch order).
+		(session as unknown as { customCommands: unknown[] }).customCommands = [
+			{ command: { name: "my-ext-cmd", description: "Custom TS version" } },
+		];
+		// Extension runner: unique command + one colliding with an ACP builtin
+		// ("fast") + a colon-namespaced one whose prefix is a builtin
+		// ("model:foo" parses as builtin `/model` with args `foo` at dispatch).
+		(session as unknown as { extensionRunner: unknown }).extensionRunner = {
+			getRegisteredCommands(reserved?: Set<string>) {
+				return [
+					{ name: "my-ext-cmd", description: "Extension command", handler: async () => {} },
+					{ name: "fast", description: "Would shadow builtin", handler: async () => {} },
+					{ name: "model:foo", description: "Colon-shadowed by /model", handler: async () => {} },
+				].filter(cmd => !reserved?.has(cmd.name));
+			},
+		};
+
+		await waitForBootstrapGuard();
+
+		const commandUpdates = harness.updates.filter(
+			update =>
+				update.sessionId === created.sessionId && update.update.sessionUpdate === "available_commands_update",
+		);
+		// Flatten all advertised commands from all updates for this session.
+		const allCommands = commandUpdates.flatMap(update =>
+			update.update.sessionUpdate === "available_commands_update" ? update.update.availableCommands : [],
+		);
+		const names = allCommands.map(c => c.name);
+
+		// Extension command must surface.
+		expect(names).toContain("my-ext-cmd");
+		// Extension wins the name collision: advertised description is the extension's, not the custom TS one.
+		const extCmdEntry = allCommands.find(c => c.name === "my-ext-cmd");
+		expect(extCmdEntry?.description).toBe("Extension command");
+		// ACP builtin "fast" appears exactly once (reserved-set exclusion, no duplicate from extension).
+		expect(names.filter(n => n === "fast").length).toBe(1);
+		// Colon-namespaced collision with a builtin prefix is not advertised:
+		// ACP would dispatch `/model:foo` to the `/model` builtin, not the extension.
+		expect(names).not.toContain("model:foo");
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

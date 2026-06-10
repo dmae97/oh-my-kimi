@@ -427,7 +427,7 @@ export class ExtensionRunner {
 		return this.extensions.flatMap(ext => ext.assistantThinkingRenderers);
 	}
 
-	getRegisteredCommands(reserved?: Set<string>): RegisteredCommand[] {
+	getRegisteredCommands(reserved?: ReadonlySet<string>): RegisteredCommand[] {
 		this.#commandDiagnostics = [];
 
 		const commands = new Map<string, RegisteredCommand>();

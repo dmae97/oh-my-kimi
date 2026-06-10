@@ -71,7 +71,12 @@ import {
 	type SessionInfo as StoredSessionInfo,
 	type UsageStatistics,
 } from "../../session/session-manager";
-import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import {
+	ACP_BUILTIN_RESERVED_NAMES,
+	ACP_BUILTIN_SLASH_COMMANDS,
+	executeAcpBuiltinSlashCommand,
+	isAcpBuiltinShadowedName,
+} from "../../slash-commands/acp-builtins";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { runResolveInvocation } from "../../tools/resolve";
@@ -699,7 +704,13 @@ export class AcpAgent implements Agent {
 			return;
 		}
 
-		await record.session.prompt(text, { images });
+		const agentInvoked = await record.session.prompt(text, { images });
+		// Extension and custom-TS commands are handled locally inside session.prompt()
+		// without calling the LLM, so no agent_end event fires and the turn would hang.
+		// Finish it here when the session confirms no agent was invoked.
+		if (!agentInvoked) {
+			this.#finishPrompt(record, { stopReason: "end_turn" });
+		}
 	}
 
 	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
@@ -1582,10 +1593,12 @@ export class AcpAgent implements Agent {
 			commands.push(command);
 		};
 
-		// Advertise in the order dispatch resolves them: ACP builtins first
-		// (so core commands like `/model`, `/mcp`, `/todo` cannot be shadowed),
-		// then skills, then custom/user commands, then file-based slash
-		// commands. `appendCommand` dedupes by name so earlier entries win.
+		// Advertise in the order dispatch resolves them (mirrors AgentSession
+		// dispatch: builtins → skills → extensions → custom TS → file-based).
+		// `appendCommand` dedupes by name so earlier entries win; extension
+		// commands therefore correctly shadow custom TS commands of the same
+		// name, matching the runtime behaviour of #tryExecuteExtensionCommand
+		// running before #tryExecuteCustomCommand.
 		for (const command of ACP_BUILTIN_SLASH_COMMANDS) {
 			appendCommand(command);
 		}
@@ -1598,6 +1611,20 @@ export class AcpAgent implements Agent {
 					input: { hint: "arguments" },
 				});
 			}
+		}
+
+		for (const command of session.extensionRunner?.getRegisteredCommands(ACP_BUILTIN_RESERVED_NAMES) ?? []) {
+			// Reserved-set filtering in getRegisteredCommands only covers exact
+			// names; colon-namespaced names whose prefix is a builtin (e.g.
+			// `model:foo`) would still dispatch to the builtin in ACP.
+			if (isAcpBuiltinShadowedName(command.name)) {
+				continue;
+			}
+			appendCommand({
+				name: command.name,
+				description: command.description ?? "(extension command)",
+				input: { hint: "arguments" },
+			});
 		}
 
 		for (const command of session.customCommands) {

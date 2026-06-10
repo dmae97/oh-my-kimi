@@ -359,6 +359,10 @@
 - Fixed `lsp request` error path swallowing the params that were sent, making shape/coercion bugs on raw LSP calls impossible to diagnose in one round-trip; the error now echoes a truncated copy of the request params.
 - Fixed `find` with a single-star segment like `dir/*` recursing into subdirectories and returning nested matches. `parseFindPattern` already prepends `**/` for top-level globs (`*.ts` → `**/*.ts`), so anything reaching native without `**/` was deliberately scoped by the user; `recursive: false` is now passed to `natives.glob` to honor that scope.
 
+### Fixed
+
+- Fixed ACP `available_commands_update` to include extension-registered slash commands so clients like Zed surface them in the slash-command palette.
+
 ## [15.10.1] - 2026-06-07
 
 ### Added

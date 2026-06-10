@@ -4398,21 +4398,28 @@ export class AgentSession {
 	 * @throws Error if streaming and no streamingBehavior specified
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
-	async prompt(text: string, options?: PromptOptions): Promise<void> {
+	/**
+	 * Returns `false` when the command was fully handled locally (extension or
+	 * custom-TS command consumed without calling the LLM). Returns `true` when
+	 * the prompt was forwarded to the agent — either directly or queued as a
+	 * steer/follow-up. Callers that render a UI or manage turn lifecycle (e.g.
+	 * the ACP agent) use this to know whether to expect an `agent_end` event.
+	 */
+	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			const handled = await this.#tryExecuteExtensionCommand(text);
 			if (handled) {
-				return;
+				return false;
 			}
 
 			// Try custom commands (TypeScript slash commands)
 			const customResult = await this.#tryExecuteCustomCommand(text);
 			if (customResult !== null) {
 				if (customResult === "") {
-					return;
+					return false;
 				}
 				text = customResult;
 			}
@@ -4446,7 +4453,7 @@ export class AgentSession {
 			for (const notice of keywordNotices) {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
-			return;
+			return true;
 		}
 
 		// Skip eager todo prelude when the user has already queued a directive
@@ -4486,6 +4493,7 @@ export class AgentSession {
 		if (!options?.synthetic) {
 			await this.#enforcePlanModeToolDecision();
 		}
+		return true;
 	}
 
 	async promptCustomMessage<T = unknown>(

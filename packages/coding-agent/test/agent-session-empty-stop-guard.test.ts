@@ -136,7 +136,7 @@ function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
 	});
 }
 
-async function expectPromptCompletes(prompt: Promise<void>): Promise<void> {
+async function expectPromptCompletes(prompt: Promise<boolean>): Promise<void> {
 	await Promise.race([
 		prompt,
 		Bun.sleep(1_000).then(() => {

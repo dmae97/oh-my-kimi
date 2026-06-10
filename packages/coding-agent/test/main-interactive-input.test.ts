@@ -21,7 +21,7 @@ describe("submitInteractiveInput", () => {
 			checkShutdownRequested: vi.fn(async () => {}),
 		};
 		const session = {
-			prompt: vi.fn(async () => {}),
+			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => {}),
 		};
 		const input = createInput({ text: "resume now", started: true, synthetic: true });
@@ -42,7 +42,7 @@ describe("submitInteractiveInput", () => {
 			checkShutdownRequested: vi.fn(async () => {}),
 		};
 		const session = {
-			prompt: vi.fn(async () => {}),
+			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => {}),
 		};
 		const input = createInput();
@@ -63,7 +63,7 @@ describe("submitInteractiveInput", () => {
 			checkShutdownRequested: vi.fn(async () => {}),
 		};
 		const session = {
-			prompt: vi.fn(async () => {}),
+			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => {}),
 		};
 		const input = createInput({ text: "continue goal", customType: "goal-continuation" });
