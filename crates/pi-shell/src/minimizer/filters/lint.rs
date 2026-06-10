@@ -17,6 +17,10 @@ pub fn supports_program(program: &str, subcommand: Option<&str>) -> bool {
 }
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	if preserves_machine_readable_output(ctx) {
+		return MinimizerOutput::passthrough(input);
+	}
+
 	let text = condense_lint_output(ctx.program, input, exit_code);
 	if text == input {
 		MinimizerOutput::passthrough(input)
@@ -43,6 +47,14 @@ fn strip_lint_noise(program: &str, input: &str, exit_code: i32) -> String {
 		out.push('\n');
 	}
 	out
+}
+
+fn preserves_machine_readable_output(ctx: &MinimizerCtx<'_>) -> bool {
+	matches!(ctx.program, "pyright" | "basedpyright")
+		&& ctx
+			.command
+			.split_whitespace()
+			.any(|part| part == "--outputjson" || part.starts_with("--outputjson="))
 }
 
 fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
@@ -220,6 +232,33 @@ fn contains_diagnostic_signal(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::minimizer::MinimizerConfig;
+
+	#[test]
+	fn pyright_outputjson_passes_through_untouched() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let json = "{\"version\": \"1.1.0\", \"generalDiagnostics\": []}\n";
+		for command in ["pyright --outputjson src", "basedpyright --outputjson=true src"] {
+			let ctx = MinimizerCtx {
+				program: command.split_whitespace().next().unwrap(),
+				subcommand: None,
+				command,
+				config: &cfg,
+			};
+			let out = filter(&ctx, json, 1);
+			assert!(!out.changed, "{command} output must not be rewritten");
+			assert_eq!(out.text, json);
+		}
+		// Plain (non-JSON) runs still condense.
+		let ctx = MinimizerCtx {
+			program:    "pyright",
+			subcommand: None,
+			command:    "pyright src",
+			config:     &cfg,
+		};
+		let plain = "src/app.py:4:7 - error: bad\nsrc/app.py:9:3 - error: worse\n";
+		assert!(filter(&ctx, plain, 1).changed);
+	}
 
 	#[test]
 	fn supports_common_lint_subcommands_for_future_dispatch() {
