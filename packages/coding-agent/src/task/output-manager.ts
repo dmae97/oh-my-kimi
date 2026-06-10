@@ -85,15 +85,4 @@ export class AgentOutputManager {
 		await this.#ensureInitialized();
 		return this.#allocateUnique(id);
 	}
-
-	/**
-	 * Allocate unique IDs for a batch of tasks.
-	 *
-	 * @param ids Array of requested IDs
-	 * @returns Array of unique IDs in same order
-	 */
-	async allocateBatch(ids: string[]): Promise<string[]> {
-		await this.#ensureInitialized();
-		return ids.map(id => this.#allocateUnique(id));
-	}
 }

@@ -43,6 +43,7 @@ function createProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 		recentTools: [],
 		recentOutput: [],
 		toolCount: 0,
+		requests: 0,
 		tokens: 0,
 		cost: 0,
 		durationMs: 0,

@@ -69,7 +69,7 @@ function fakeToolFor(name: string, fixture: GalleryFixture | undefined): AgentTo
 	if (!fixture?.label && !fixture?.editMode && !fixture?.customRendered) return undefined;
 	const tool: Record<string, unknown> = { name, label: fixture.label ?? name, mode: fixture.editMode };
 	if (fixture.customRendered) {
-		const renderer = toolRenderers[name] as
+		const renderer = toolRenderers[fixture.renderer ?? name] as
 			| { renderCall?: unknown; renderResult?: unknown; mergeCallAndResult?: unknown; inline?: unknown }
 			| undefined;
 		if (renderer) {

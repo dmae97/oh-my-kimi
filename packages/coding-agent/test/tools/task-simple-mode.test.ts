@@ -16,6 +16,8 @@ const TEST_AGENTS = [
 	},
 ];
 
+const ALL_MODES = ["default", "schema-free", "independent"] as const;
+
 function createSession(overrides: Partial<Record<string, unknown>> = {}): ToolSession {
 	return {
 		cwd: "/tmp",
@@ -36,87 +38,86 @@ function getFirstText(result: { content: Array<{ type: string; text?: string }> 
 	return content?.type === "text" ? (content.text ?? "") : "";
 }
 
+function mockDiscovery(): void {
+	vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+		agents: TEST_AGENTS,
+		projectAgentsDir: null,
+	});
+}
+
 describe("task.simple", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it("removes only the custom schema input in schema-free mode", async () => {
-		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
-			agents: TEST_AGENTS,
-			projectAgentsDir: null,
-		});
+	it("exposes the custom schema input only in default mode", async () => {
+		mockDiscovery();
 
-		const tool = await TaskTool.create(createSession({ "task.simple": "schema-free" }));
-		const properties = getSchemaProperties(tool);
+		const defaultTool = await TaskTool.create(createSession({ "task.simple": "default" }));
+		expect(getSchemaProperties(defaultTool).schema).toBeDefined();
+		expect(defaultTool.description).toContain("- `schema`:");
 
-		expect(properties.context).toBeDefined();
-		expect(properties.schema).toBeUndefined();
-		expect(tool.description).toContain("`context` or `assignment`");
-		expect(tool.description).toContain("- `context`:");
-		expect(tool.description).not.toContain("- `schema`:");
+		for (const mode of ["schema-free", "independent"] as const) {
+			const tool = await TaskTool.create(createSession({ "task.simple": mode }));
+			expect(getSchemaProperties(tool).schema).toBeUndefined();
+			expect(tool.description).not.toContain("- `schema`:");
+		}
 	});
 
-	it("removes both context and schema inputs in independent mode", async () => {
-		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
-			agents: TEST_AGENTS,
-			projectAgentsDir: null,
-		});
+	it("never exposes batch tasks or shared context inputs in any mode", async () => {
+		mockDiscovery();
 
-		const tool = await TaskTool.create(createSession({ "task.simple": "independent" }));
-		const properties = getSchemaProperties(tool);
-
-		expect(properties.context).toBeUndefined();
-		expect(properties.schema).toBeUndefined();
-		expect(tool.description).toContain("each `assignment`");
-		expect(tool.description).not.toContain("- `context`:");
-		expect(tool.description).not.toContain("- `schema`:");
+		for (const mode of ALL_MODES) {
+			const tool = await TaskTool.create(createSession({ "task.simple": mode }));
+			const properties = getSchemaProperties(tool);
+			expect(properties.tasks).toBeUndefined();
+			expect(properties.context).toBeUndefined();
+			// The flat single-spawn contract is what replaced them.
+			expect(properties.assignment).toBeDefined();
+			expect(properties.resume).toBeDefined();
+		}
 	});
 
-	it("rejects direct schema and context fields when the mode disables them", async () => {
-		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
-			agents: TEST_AGENTS,
-			projectAgentsDir: null,
-		});
+	it("describes the non-blocking spawn and resume contract", async () => {
+		mockDiscovery();
 
-		const schemaFreeTool = await TaskTool.create(createSession({ "task.simple": "schema-free" }));
-		const schemaFreeResult = await schemaFreeTool.execute("tool-1", {
-			agent: "task",
-			schema: '{"properties":{"ok":{"type":"boolean"}}}',
-			tasks: [{ id: "One", description: "label", assignment: "Do the thing." }],
-		} as TaskParams);
-		expect(getFirstText(schemaFreeResult)).toContain("does not accept `schema`");
-		const validatedSchemaFreeParams = validateToolArguments(schemaFreeTool, {
-			type: "toolCall",
-			id: "tool-1-validated",
-			name: schemaFreeTool.name,
-			arguments: {
+		const tool = await TaskTool.create(createSession({ "task.simple": "default" }));
+		expect(tool.description).toContain("Spawning is non-blocking");
+		expect(tool.description).toContain("revives an idle/parked agent");
+	});
+
+	it("rejects a direct schema input when the mode disables it", async () => {
+		mockDiscovery();
+
+		for (const mode of ["schema-free", "independent"] as const) {
+			const tool = await TaskTool.create(createSession({ "task.simple": mode }));
+
+			// Execution-time guard: raw params carrying `schema` are refused.
+			const result = await tool.execute(`tool-${mode}`, {
 				agent: "task",
+				id: "One",
+				description: "label",
+				assignment: "Do the thing.",
 				schema: '{"properties":{"ok":{"type":"boolean"}}}',
-				tasks: [{ id: "One", description: "label", assignment: "Do the thing." }],
-			},
-		});
-		const validatedSchemaFreeResult = await schemaFreeTool.execute("tool-1-validated", validatedSchemaFreeParams);
-		expect(getFirstText(validatedSchemaFreeResult)).toContain("does not accept `schema`");
+			} as TaskParams);
+			expect(getFirstText(result)).toContain("does not accept `schema`");
 
-		const independentTool = await TaskTool.create(createSession({ "task.simple": "independent" }));
-		const independentResult = await independentTool.execute("tool-2", {
-			agent: "task",
-			context: "Shared background",
-			tasks: [{ id: "Two", description: "label", assignment: "Do the independent thing." }],
-		} as TaskParams);
-		expect(getFirstText(independentResult)).toContain("does not accept `context`");
-		const validatedIndependentParams = validateToolArguments(independentTool, {
-			type: "toolCall",
-			id: "tool-2-validated",
-			name: independentTool.name,
-			arguments: {
-				agent: "task",
-				context: "Shared background",
-				tasks: [{ id: "Two", description: "label", assignment: "Do the independent thing." }],
-			},
-		});
-		const validatedIndependentResult = await independentTool.execute("tool-2-validated", validatedIndependentParams);
-		expect(getFirstText(validatedIndependentResult)).toContain("does not accept `context`");
+			// Round-trip guard: wire validation passes the extraneous `schema`
+			// through, so the execution-time check must still refuse it.
+			const validated = validateToolArguments(tool, {
+				type: "toolCall",
+				id: `tool-${mode}-validated`,
+				name: tool.name,
+				arguments: {
+					agent: "task",
+					id: "One",
+					description: "label",
+					assignment: "Do the thing.",
+					schema: '{"properties":{"ok":{"type":"boolean"}}}',
+				},
+			}) as TaskParams;
+			const validatedResult = await tool.execute(`tool-${mode}-validated`, validated);
+			expect(getFirstText(validatedResult)).toContain("does not accept `schema`");
+		}
 	});
 });

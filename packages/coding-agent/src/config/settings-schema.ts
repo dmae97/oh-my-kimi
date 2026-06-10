@@ -2856,6 +2856,34 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.agentIdleTtlMs": {
+		type: "number",
+		default: 420_000,
+		ui: {
+			tab: "tasks",
+			label: "Agent Idle TTL",
+			description:
+				"How long an idle subagent stays live in memory before being parked to disk (ms). Parked agents are revived automatically when messaged or resumed. 0 keeps idle agents live until exit.",
+		},
+	},
+
+	"task.softRequestBudget": {
+		type: "number",
+		default: 90,
+		ui: {
+			tab: "tasks",
+			label: "Soft Subagent Request Budget",
+			description:
+				"Soft per-subagent request budget (assistant requests per run). Crossing it injects one steering notice asking the subagent to wrap up; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/quick_task agents use a lower built-in budget.",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "40", label: "40 requests" },
+				{ value: "90", label: "90 requests", description: "Default" },
+				{ value: "150", label: "150 requests" },
+			],
+		},
+	},
+
 	"task.disabledAgents": {
 		type: "array",
 		default: [] as string[],

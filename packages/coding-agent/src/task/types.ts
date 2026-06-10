@@ -66,34 +66,16 @@ export interface SubagentLifecyclePayload {
 	index: number;
 }
 
-const assignmentDescription = "per-task instructions; self-contained";
-
-const createTaskItemSchema = (_contextEnabled: boolean) =>
-	z.object({
-		id: z.string().max(48).describe("camelcase identifier"),
-		description: z.string().describe("ui label, not seen by subagent"),
-		assignment: z.string().describe(assignmentDescription),
-	});
-
-/** Single task item for parallel execution (default shape with context enabled). */
-export const taskItemSchema = createTaskItemSchema(true);
-export type TaskItem = z.infer<typeof taskItemSchema>;
-
-const createTaskSchema = (options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }) => {
-	const { contextEnabled, customSchemaEnabled } = getTaskSimpleModeCapabilities(options.simpleMode);
-	const itemSchema = createTaskItemSchema(contextEnabled);
-
+const createTaskSchema = (options: { isolationEnabled: boolean; customSchemaEnabled: boolean }) => {
 	let schema = z.object({
-		agent: z.string().describe("agent type"),
-		tasks: z.array(itemSchema).describe("tasks to execute in parallel"),
+		agent: z.string().optional().describe("agent type; omit when resume is set"),
+		id: z.string().max(48).optional().describe("stable agent id; default generated"),
+		description: z.string().optional().describe("ui label, not seen by subagent"),
+		assignment: z.string().describe("the work; self-contained instructions"),
+		resume: z.string().optional().describe("existing agent id: revive and continue instead of spawning"),
 	});
-	if (contextEnabled) {
-		schema = schema.extend({
-			context: z.string().optional().describe("shared background prepended to each assignment"),
-		});
-	}
 
-	if (customSchemaEnabled) {
+	if (options.customSchemaEnabled) {
 		schema = schema.extend({
 			schema: z.string().optional().describe("jtd schema for expected response shape"),
 		});
@@ -108,19 +90,15 @@ const createTaskSchema = (options: { isolationEnabled: boolean; simpleMode: Task
 	return schema;
 };
 
-export const taskSchema = createTaskSchema({ isolationEnabled: true, simpleMode: "default" });
-export const taskSchemaNoIsolation = createTaskSchema({ isolationEnabled: false, simpleMode: "default" });
-const taskSchemaSchemaFree = createTaskSchema({ isolationEnabled: true, simpleMode: "schema-free" });
-const taskSchemaSchemaFreeNoIsolation = createTaskSchema({ isolationEnabled: false, simpleMode: "schema-free" });
-const taskSchemaIndependent = createTaskSchema({ isolationEnabled: true, simpleMode: "independent" });
-const taskSchemaIndependentNoIsolation = createTaskSchema({ isolationEnabled: false, simpleMode: "independent" });
+export const taskSchema = createTaskSchema({ isolationEnabled: true, customSchemaEnabled: true });
+const taskSchemaNoIsolation = createTaskSchema({ isolationEnabled: false, customSchemaEnabled: true });
+const taskSchemaSchemaFree = createTaskSchema({ isolationEnabled: true, customSchemaEnabled: false });
+const taskSchemaSchemaFreeNoIsolation = createTaskSchema({ isolationEnabled: false, customSchemaEnabled: false });
 const ALL_TASK_SCHEMAS = [
 	taskSchema,
 	taskSchemaNoIsolation,
 	taskSchemaSchemaFree,
 	taskSchemaSchemaFreeNoIsolation,
-	taskSchemaIndependent,
-	taskSchemaIndependentNoIsolation,
 ] as const;
 
 type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
@@ -129,22 +107,28 @@ export type TaskSchema = typeof taskSchema;
 export type TaskToolSchemaInstance = DynamicTaskSchema;
 
 export function getTaskSchema(options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }): DynamicTaskSchema {
-	switch (options.simpleMode) {
-		case "schema-free":
-			return options.isolationEnabled ? taskSchemaSchemaFree : taskSchemaSchemaFreeNoIsolation;
-		case "independent":
-			return options.isolationEnabled ? taskSchemaIndependent : taskSchemaIndependentNoIsolation;
-		default:
-			return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
+	const { customSchemaEnabled } = getTaskSimpleModeCapabilities(options.simpleMode);
+	if (customSchemaEnabled) {
+		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 	}
+	return options.isolationEnabled ? taskSchemaSchemaFree : taskSchemaSchemaFreeNoIsolation;
 }
 
 export interface TaskParams {
-	agent: string;
-	context?: string;
+	/** Agent type; required unless `resume` is set. */
+	agent?: string;
+	/** Stable agent id; default = generated AdjectiveNoun. */
+	id?: string;
+	/** UI label, not seen by the subagent. */
+	description?: string;
+	/** The work; required. */
+	assignment?: string;
+	/** JTD schema for the expected yield shape; unchanged semantics. */
 	schema?: string;
-	tasks: TaskItem[];
+	/** Run in an isolated worktree; isolated agents are NOT resumable. */
 	isolated?: boolean;
+	/** Existing agent id: revive + follow-up instead of spawn. */
+	resume?: string;
 }
 
 /** A code review finding reported by the reviewer agent */
@@ -206,6 +190,8 @@ export interface AgentProgress {
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
 	toolCount: number;
+	/** Count of assistant requests (assistant message_end events) across the run. Drives the soft request budget guard. */
+	requests: number;
 	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;
 	/**
@@ -276,6 +262,8 @@ export interface SingleResult {
 	durationMs: number;
 	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;
+	/** Count of assistant requests (assistant message_end events) across the run. */
+	requests: number;
 	/** Latest per-turn context size at task completion. See `AgentProgress.contextTokens`. */
 	contextTokens?: number;
 	/** Model's context window in tokens, when known. */

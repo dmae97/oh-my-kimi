@@ -99,6 +99,7 @@ function singleResult(options: ExecutorOptions, overrides: Partial<SingleResult>
 		truncated: false,
 		durationMs: 1,
 		tokens: 0,
+		requests: 0,
 		...overrides,
 	};
 }
@@ -541,6 +542,7 @@ describe("agent() through eval runtimes", () => {
 			recentOutput: [],
 			toolCount: 0,
 			tokens: 0,
+			requests: 0,
 			cost: 0,
 			durationMs: 0,
 			...overrides,
@@ -673,6 +675,7 @@ describe("agent() through eval runtimes", () => {
 					recentOutput: [],
 					toolCount: i,
 					tokens: 0,
+					requests: 0,
 					cost: 0,
 					durationMs: i * 10,
 				});
