@@ -128,6 +128,162 @@ describe("executeBash", () => {
 		expect(result.output.trim()).toBe("0:hello");
 	});
 
+	it("runs non-bash shellPath commands through the configured shell", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-shellpath-"));
+		const marker = path.join(shellDir, "fake-shell-ran");
+		const markerEscaped = marker.replace(/'/g, "'\\''");
+		const fakeShell = path.join(shellDir, "fake-shell");
+		fs.writeFileSync(
+			fakeShell,
+			`#!/bin/sh
+printf '%s\\n' "$*" > '${markerEscaped}'
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-c" ]; then
+		shift
+		exec /bin/sh -c "$1"
+	fi
+	shift
+done
+exit 64
+`,
+		);
+		fs.chmodSync(fakeShell, 0o755);
+		Settings.instance.set("shellPath", fakeShell);
+
+		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+			shell: fakeShell,
+			args: ["-l", "-c"],
+			env: {
+				PATH: Bun.env.PATH ?? "",
+				HOME: tempDir,
+			},
+			prefix: undefined,
+		});
+
+		try {
+			const result = await executeBash("printf 'shell-ok\\n'", {
+				cwd: tempDir,
+				timeout: 5000,
+				sessionKey: "custom-shell-path",
+				useUserShell: true,
+			});
+
+			expect(result.cancelled).toBe(false);
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("shell-ok");
+			expect(fs.readFileSync(marker, "utf8")).toContain("-l -c");
+		} finally {
+			fs.rmSync(shellDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses executable SHELL for user-shell shortcut commands", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const originalShell = Bun.env.SHELL;
+		const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-env-shell-"));
+		const marker = path.join(shellDir, "env-shell-ran");
+		const markerEscaped = marker.replace(/'/g, "'\\''");
+		const fakeShell = path.join(shellDir, "fish");
+		fs.writeFileSync(
+			fakeShell,
+			`#!/bin/sh
+printf '%s\\n' "$*" > '${markerEscaped}'
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-c" ]; then
+		shift
+		exec /bin/sh -c "$1"
+	fi
+	shift
+done
+exit 64
+`,
+		);
+		fs.chmodSync(fakeShell, 0o755);
+		Bun.env.SHELL = fakeShell;
+
+		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+			shell: "/bin/bash",
+			args: ["-l", "-c"],
+			env: {
+				PATH: Bun.env.PATH ?? "",
+				HOME: tempDir,
+				SHELL: "/bin/bash",
+			},
+			prefix: undefined,
+		});
+
+		try {
+			const result = await executeBash("printf 'env-shell-ok\\n'", {
+				cwd: tempDir,
+				timeout: 5000,
+				sessionKey: "env-user-shell",
+				useUserShell: true,
+			});
+
+			expect(result.cancelled).toBe(false);
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("env-shell-ok");
+			expect(fs.readFileSync(marker, "utf8")).toContain("-l -c");
+			expect(fs.readFileSync(marker, "utf8")).not.toContain("-i");
+		} finally {
+			if (originalShell === undefined) {
+				delete Bun.env.SHELL;
+			} else {
+				Bun.env.SHELL = originalShell;
+			}
+			fs.rmSync(shellDir, { recursive: true, force: true });
+		}
+	});
+
+	it("loads zshrc aliases for user-shell shortcut commands", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+
+		const zshPath = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh", "/opt/homebrew/bin/zsh"].find(candidate =>
+			fs.existsSync(candidate),
+		);
+		if (!zshPath) {
+			return;
+		}
+
+		const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-zsh-shellpath-"));
+		fs.writeFileSync(path.join(shellDir, ".zshrc"), "alias pi_shell_alias='printf zsh-alias-ok\\\\n'\n");
+		Settings.instance.set("shellPath", zshPath);
+
+		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+			shell: zshPath,
+			args: ["-l", "-c"],
+			env: {
+				PATH: Bun.env.PATH ?? "",
+				HOME: shellDir,
+			},
+			prefix: undefined,
+		});
+
+		try {
+			const result = await executeBash("pi_shell_alias", {
+				cwd: tempDir,
+				timeout: 5000,
+				sessionKey: "zsh-shell-path",
+				useUserShell: true,
+			});
+
+			expect(result.cancelled).toBe(false);
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("zsh-alias-ok");
+		} finally {
+			fs.rmSync(shellDir, { recursive: true, force: true });
+		}
+	});
+
 	it("invokes onChunk with command output", async () => {
 		let seenChunk: string | null = null;
 		const result = await executeBash("echo hello", {

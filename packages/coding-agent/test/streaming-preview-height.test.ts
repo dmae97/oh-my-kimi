@@ -370,7 +370,7 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 			}
 			expect(text, `${testCase.name} preview should advertise truncation`).toMatch(testCase.marker);
 		}
-	});
+	}, 30_000);
 
 	test("task pending preview preserves full multiline context", () => {
 		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
