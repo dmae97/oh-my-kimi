@@ -12,20 +12,12 @@ export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 export const DEFAULT_MAX_COLUMN = 512; // Max chars per grep match line
 
 /**
- * Default upper bound on bytes the {@link OutputSink} will write to the
- * artifact-on-disk file (`~/.omp/agent/artifacts/<id>.<tool>.log`). When a
- * stream exceeds this, the sink keeps a head window verbatim, drops the
- * middle, and replays the most recent {@link ARTIFACT_DEFAULT_TAIL_BYTES} on
- * close behind a `[ARTIFACT TRUNCATED: …]` notice.
+ * Default artifact-on-disk cap for {@link OutputSink}.
  *
- * Sized to comfortably bracket any tool output a model would reasonably
- * scroll through via `artifact://<id>` while preventing a single runaway
- * command (e.g. `Get-Content | ConvertTo-Json` spraying multi-MB rich-object
- * metadata — issue #2081) from sitting on disk indefinitely. Callers can
- * override via {@link OutputSinkOptions.artifactMaxBytes}; pass `0` to
- * disable the cap and restore unbounded streaming.
+ * `0` means unbounded: by default, `artifact://<id>` references preserve the
+ * complete raw stream instead of a capped head/tail sample.
  */
-export const ARTIFACT_DEFAULT_MAX_BYTES = 4 * 1024 * 1024; // 4 MiB
+export const ARTIFACT_DEFAULT_MAX_BYTES = 0;
 /** Default head budget; the remainder becomes the rolling tail window. */
 export const ARTIFACT_DEFAULT_HEAD_BYTES = 3 * 1024 * 1024; // 3 MiB
 
@@ -77,12 +69,11 @@ export interface OutputSinkOptions {
 	/** Minimum ms between onChunk calls. 0 = every chunk (default). */
 	chunkThrottleMs?: number;
 	/**
-	 * Cap on bytes written to the artifact-on-disk file. When the cap is hit,
-	 * the head window is preserved verbatim and the tail window is filled with
-	 * the most recent {@link artifactTailBytes} of subsequent output; on
-	 * close, the sink writes a single `[ARTIFACT TRUNCATED: …]` notice
-	 * between them. Default {@link ARTIFACT_DEFAULT_MAX_BYTES}. Pass `0` to
-	 * disable the cap and restore unbounded streaming.
+	 * Optional cap on bytes written to the artifact-on-disk file. When the cap
+	 * is hit, the head window is preserved verbatim and subsequent output feeds
+	 * a rolling tail window; on close, the sink writes a single
+	 * `[ARTIFACT TRUNCATED: …]` notice between them. Default
+	 * {@link ARTIFACT_DEFAULT_MAX_BYTES} (unbounded).
 	 */
 	artifactMaxBytes?: number;
 	/**
@@ -709,17 +700,17 @@ export class OutputSink {
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
 
-	// Artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink owns a
-	// head budget + a rolling tail buffer; once the head is full, subsequent
-	// chunks are diverted into `#artifactTailRing` (bounded by
+	// Optional artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink
+	// owns a head budget + a rolling tail buffer; once the head is closed,
+	// subsequent chunks are diverted into `#artifactTailRing` (bounded by
 	// `#artifactTailBudget`). On `dump()` the tail is flushed back to the sink
-	// behind a `[ARTIFACT TRUNCATED: …]` notice. Sized to bracket reasonable
-	// `artifact://<id>` scrollback while preventing the runaway captures seen
-	// in issue #2081 (a 7.6MB PowerShell rich-object spray).
+	// behind a `[ARTIFACT TRUNCATED: …]` notice. The default cap is disabled so
+	// advertised `artifact://<id>` captures are lossless.
 	readonly #artifactMaxBytes: number;
 	readonly #artifactHeadBudget: number;
 	readonly #artifactTailBudget: number;
 	#artifactHeadBytesWritten = 0;
+	#artifactHeadClosed = false;
 	#artifactTailRing = "";
 	#artifactTailRingBytes = 0;
 	#artifactTailIncomingBytes = 0;
@@ -956,7 +947,7 @@ export class OutputSink {
 			return;
 		}
 		const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-		const room = this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
+		const room = this.#artifactHeadClosed ? 0 : this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
 		if (room >= chunkBytes) {
 			this.#file.sink.write(chunk);
 			this.#artifactHeadBytesWritten += chunkBytes;
@@ -969,6 +960,10 @@ export class OutputSink {
 				this.#file.sink.write(headSlice.text);
 				this.#artifactHeadBytesWritten += headSlice.bytes;
 			}
+			// Even when UTF-8 boundary safety leaves a few bytes of nominal room,
+			// this chunk has already overflowed the head window. Close it now so a
+			// later small ASCII chunk cannot be written before this overflow tail.
+			this.#artifactHeadClosed = true;
 			overflow = chunk.substring(headSlice.text.length);
 		}
 		if (overflow.length === 0 || this.#artifactTailBudget === 0) {
