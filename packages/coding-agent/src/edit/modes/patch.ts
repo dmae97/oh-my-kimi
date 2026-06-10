@@ -23,6 +23,7 @@ import {
 	invalidateFsScanAfterRename,
 	invalidateFsScanAfterWrite,
 } from "../../tools/fs-cache-invalidation";
+import { routeWriteThroughBridge } from "../../tools/acp-bridge";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
@@ -1698,13 +1699,9 @@ class LspFileSystem implements FileSystem {
 	async write(path: string, content: string): Promise<void> {
 		const finalContent = await serializeEditFileText(path, path, content);
 
-		// When an ACP client (e.g. Zed) advertises writeTextFile, route through it
-		// so the editor's open buffer is updated immediately. This keeps the editor's
-		// native diagnostics panel in sync without requiring a workspace reload.
-		const bridge = this.session.getClientBridge?.();
-		if (bridge?.capabilities.writeTextFile && bridge.writeTextFile) {
-			await bridge.writeTextFile({ path, content: finalContent });
-			invalidateFsScanAfterWrite(path);
+		// Route through ACP bridge when available; skips internal artifacts.
+		// path is already resolved to an absolute path by executePatchSingle.
+		if (await routeWriteThroughBridge(this.session, path, path, finalContent)) {
 			return;
 		}
 

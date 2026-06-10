@@ -35,6 +35,7 @@ import {
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
+import { routeWriteThroughBridge } from "./acp-bridge";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
@@ -139,14 +140,6 @@ function maybeWriteSnapshotHeader(session: ToolSession, absolutePath: string, co
 	return formatHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag);
 }
 
-function shouldRouteWriteThroughBridge(session: ToolSession, requestedPath: string, absolutePath: string): boolean {
-	if (isInternalUrlPath(requestedPath)) return false;
-
-	const state = session.getPlanModeState?.();
-	if (!state?.enabled || !isInternalUrlPath(state.planFilePath)) return true;
-
-	return absolutePath !== resolvePlanPath(session, state.planFilePath);
-}
 
 /**
  * Append a trailing note line to the first text block of a tool result.
@@ -837,11 +830,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		};
 	}
 
-	#routeWriteThroughBridge(absolutePath: string, content: string): Promise<void> | undefined {
-		const bridge = this.session.getClientBridge?.();
-		if (!bridge?.capabilities.writeTextFile || !bridge.writeTextFile) return undefined;
-		return bridge.writeTextFile({ path: absolutePath, content });
-	}
+
 	async execute(
 		_toolCallId: string,
 		{ path, content }: WriteParams,
@@ -939,17 +928,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			// Try ACP bridge first for editor-visible filesystem paths. Internal
 			// artifacts such as local:// plans are owned by OMP, not the editor.
-			const bridgePromise = shouldRouteWriteThroughBridge(this.session, path, absolutePath)
-				? this.#routeWriteThroughBridge(absolutePath, cleanContent)
-				: undefined;
-			if (bridgePromise !== undefined) {
-				try {
-					await bridgePromise;
-				} catch (error) {
-					throw new ToolError(error instanceof Error ? error.message : String(error));
-				}
-				invalidateFsScanAfterWrite(absolutePath);
-				this.session.bumpFileMutationVersion?.(absolutePath);
+			if (await routeWriteThroughBridge(this.session, path, absolutePath, cleanContent)) {
 				const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 				const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
 				const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);

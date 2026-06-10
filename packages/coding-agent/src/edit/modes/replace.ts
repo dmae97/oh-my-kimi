@@ -9,6 +9,7 @@ import * as z from "zod/v4";
 import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
+import { routeWriteThroughBridge } from "../../tools/acp-bridge";
 import { outputMeta } from "../../tools/output-meta";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { generateDiffString, replaceText } from "../diff";
@@ -1103,14 +1104,10 @@ export async function executeReplaceSingle(
 		bom + restoreLineEndings(result.content, originalEnding),
 	);
 
-	// When an ACP client (e.g. Zed) advertises writeTextFile, route through it
-	// so the editor's open buffer is updated immediately. This keeps the editor's
-	// native diagnostics panel in sync without requiring a workspace reload.
-	const bridge = session.getClientBridge?.();
+	// Route through ACP bridge when available; skips internal artifacts.
 	let diagnostics: FileDiagnosticsResult | undefined;
-	if (bridge?.capabilities.writeTextFile && bridge.writeTextFile) {
-		await bridge.writeTextFile({ path: absolutePath, content: finalContent });
-		invalidateFsScanAfterWrite(absolutePath);
+	if (await routeWriteThroughBridge(session, path, absolutePath, finalContent)) {
+		// bridge handled the write; diagnostics not available via writethrough
 	} else {
 		diagnostics = await writethrough(absolutePath, finalContent, signal, Bun.file(absolutePath), batchRequest, dst =>
 			dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined,

@@ -22,6 +22,7 @@ import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredH
 import type { ToolSession } from "../../tools";
 import { assertEditableFileContent } from "../../tools/auto-generated-guard";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
+import { routeWriteThroughBridge } from "../../tools/acp-bridge";
 import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
 import { canonicalSnapshotKey } from "../file-snapshot-store";
 import { readEditFileText, serializeEditFileText } from "../read-file";
@@ -111,13 +112,8 @@ export class HashlineFilesystem extends Filesystem {
 		const absolutePath = this.resolveAbsolute(relativePath);
 		const finalContent = await serializeEditFileText(absolutePath, relativePath, content);
 
-		// When an ACP client (e.g. Zed) advertises writeTextFile, route through it
-		// so the editor's open buffer is updated immediately. This keeps the editor's
-		// native diagnostics panel in sync without requiring a workspace reload.
-		const bridge = this.session.getClientBridge?.();
-		if (bridge?.capabilities.writeTextFile && bridge.writeTextFile) {
-			await bridge.writeTextFile({ path: absolutePath, content: finalContent });
-			invalidateFsScanAfterWrite(absolutePath);
+		// Route through ACP bridge when available; skips internal artifacts.
+		if (await routeWriteThroughBridge(this.session, relativePath, absolutePath, finalContent)) {
 			this.#diagnosticsByPath.set(relativePath, undefined);
 			return { text: finalContent };
 		}
