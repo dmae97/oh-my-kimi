@@ -55,6 +55,18 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 pub fn condense_lint_output(program: &str, input: &str, exit_code: i32) -> String {
 	let cleaned = primitives::strip_ansi(input);
 	let stripped = strip_lint_noise(program, &cleaned, exit_code);
+	if program == "eslint" {
+		// eslint's default "stylish" output puts the file path on its own
+		// non-indented header line and the diagnostics on the following indented
+		// `L:C  severity  message  rule-id` rows. group_diagnostics expects the
+		// file on the SAME line as the location, so reshape stylish into
+		// per-diagnostic `file:line:col: …` lines first, then derive a Top-rules
+		// summary from the trailing rule-id column (rtk's idea, re-derived from
+		// DEFAULT text output, not JSON).
+		if let Some(rendered) = render_eslint_stylish(&stripped) {
+			return primitives::head_tail_lines(&rendered, 180, 100);
+		}
+	}
 	let grouped = group_diagnostics(&stripped);
 	primitives::head_tail_lines(&grouped, 180, 100)
 }
@@ -81,6 +93,14 @@ fn preserves_machine_readable_output(ctx: &MinimizerCtx<'_>) -> bool {
 }
 
 fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
+	// eslint's `N error(s) … potentially fixable with the --fix option.` hint is
+	// actionable chatter, not a diagnostic; drop it while keeping the
+	// `✖ N problems (…)` summary line. Checked ahead of the diagnostic-signal
+	// guard below because the hint itself contains the word "error".
+	// (snip strips on `potentially fixable`.)
+	if program == "eslint" && line.contains("potentially fixable") {
+		return true;
+	}
 	// Code-frame / underline / box-drawing / progress chatter is stripped even at
 	// exit!=0: these rows carry no diagnostic of their own, and oxlint's
 	// `Found N warning…` / biome's `Fixed N file…` summaries match the
@@ -106,6 +126,192 @@ fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
 			&& (lower.starts_with("inspecting ")
 				|| lower == "offenses:"
 				|| lower.ends_with(" files inspected, no offenses detected"))
+}
+
+/// Reshape eslint "stylish" output and render it through the shared grouped
+/// renderer plus an eslint-specific Top-rules summary.
+///
+/// Returns `None` when no stylish diagnostic rows were recognized, so the
+/// caller falls back to the generic grouped renderer (e.g. when eslint emitted
+/// an already-flat or non-stylish shape). The reshape attributes each indented
+/// `L:C  severity  message  rule-id` row to the most recent non-indented file
+/// header, synthesizing a `file:line:col: severity message` line that
+/// `group_diagnostics` can parse. Ungrouped lines (notably the
+/// `✖ N problems (…)` summary) flow through `group_diagnostics` untouched.
+fn render_eslint_stylish(stripped: &str) -> Option<String> {
+	let mut current_header: Option<&str> = None;
+	let mut synthesized = String::new();
+	let mut passthrough = String::new();
+	let mut rule_counts: BTreeMap<String, usize> = BTreeMap::new();
+	let mut matched_any = false;
+
+	for raw in stripped.lines() {
+		if raw.trim().is_empty() {
+			continue;
+		}
+		let indented = raw.starts_with(' ') || raw.starts_with('\t');
+		if !indented {
+			let trimmed = raw.trim_end();
+			if looks_like_eslint_header(trimmed) {
+				current_header = Some(trimmed);
+			} else {
+				// Summary lines (`✖ 3 problems (…)`) and any other non-indented,
+				// non-path text are preserved verbatim for the renderer.
+				passthrough.push_str(trimmed);
+				passthrough.push('\n');
+			}
+			continue;
+		}
+		if let Some((loc, severity, message, rule)) = parse_eslint_row(raw.trim()) {
+			matched_any = true;
+			let header = current_header.unwrap_or("<unknown>");
+			synthesized.push_str(header);
+			synthesized.push(':');
+			synthesized.push_str(loc);
+			synthesized.push_str(": ");
+			synthesized.push_str(severity);
+			synthesized.push(' ');
+			synthesized.push_str(message);
+			synthesized.push('\n');
+			if let Some(rule) = rule {
+				*rule_counts.entry(rule.to_string()).or_default() += 1;
+			}
+		} else {
+			passthrough.push_str(raw.trim_end());
+			passthrough.push('\n');
+		}
+	}
+
+	if !matched_any {
+		return None;
+	}
+
+	let mut combined = synthesized;
+	combined.push_str(&passthrough);
+	let grouped = group_diagnostics(&combined);
+
+	let rule_summary = format_code_summary(&rule_counts);
+	if rule_summary.is_empty() {
+		return Some(grouped);
+	}
+	let mut out = String::with_capacity(grouped.len() + rule_summary.len() + 12);
+	// group_diagnostics prints `N diagnostics in M files` as the first line;
+	// keep that header, then splice the eslint Top-rules summary right after it.
+	let mut lines = grouped.splitn(2, '\n');
+	if let Some(first) = lines.next() {
+		out.push_str(first);
+		out.push('\n');
+		out.push_str("Top rules: ");
+		out.push_str(&rule_summary);
+		out.push('\n');
+		if let Some(rest) = lines.next() {
+			out.push_str(rest);
+		}
+	} else {
+		out.push_str(&grouped);
+	}
+	Some(out)
+}
+
+/// A non-indented eslint stylish header is the file path preceding its
+/// diagnostic rows. Reject summary/keyword lines so they are not mistaken for
+/// file headers.
+fn looks_like_eslint_header(line: &str) -> bool {
+	if line.is_empty() || !looks_like_path(line) {
+		return false;
+	}
+	let lower = line.to_ascii_lowercase();
+	// Drop summary noise that also "looks like a path" (contains a dot) such as
+	// `✖ 3 problems (2 errors, 1 warning)`.
+	!line.starts_with('✖')
+		&& !line.starts_with('×')
+		&& !lower.contains("problem")
+		&& !lower.contains(" error")
+		&& !lower.contains(" warning")
+}
+
+/// Parse an eslint stylish diagnostic row (already trimmed of indentation):
+/// `1:10  error    Unexpected var, use let or const instead  no-var`.
+///
+/// Returns `(location, severity, message, rule_id)`. The rule-id is the final
+/// whitespace-separated token when it is a plain rule slug (`no-var`,
+/// `@typescript-eslint/no-unused-vars`); rows without a trailing rule (e.g.
+/// `Parsing error: Unexpected token`) yield `rule_id == None` and fold the
+/// trailing text into the message.
+fn parse_eslint_row(row: &str) -> Option<(&str, &str, &str, Option<&str>)> {
+	let (loc, after_loc) = row.split_once(char::is_whitespace)?;
+	if !is_line_col(loc) {
+		return None;
+	}
+	let after_loc = after_loc.trim_start();
+	let (severity, after_sev) = after_loc.split_once(char::is_whitespace)?;
+	if !matches!(severity, "error" | "warning") {
+		return None;
+	}
+	let body = after_sev.trim_start();
+	if body.is_empty() {
+		return None;
+	}
+	// eslint stylish separates the message from the trailing rule-id with a run of
+	// >=2 spaces (`message␣␣rule-id`). Recognize the rule-id by that STRUCTURAL
+	// position — the token after the last >=2-space gap — not by requiring a
+	// hyphen, so hyphenless core rules (`semi`, `eqeqeq`, `camelcase`, `curly`,
+	// `radix`, `complexity`) are counted and not glued onto the message text.
+	// Rows with no >=2-space gap (`Parsing error: Unexpected token`) yield no
+	// rule-id and keep their whole body as the message.
+	if let Some((message, candidate)) = split_message_and_rule(body) {
+		if is_eslint_rule_id(candidate) {
+			return Some((loc, severity, message.trim_end(), Some(candidate)));
+		}
+	}
+	Some((loc, severity, body, None))
+}
+
+/// Split an eslint stylish body into `(message, rule-candidate)` at the LAST
+/// run of two-or-more spaces. The rule-id column is right-aligned/space-padded
+/// by eslint, so the final >=2-space gap precedes the rule slug. Returns `None`
+/// when the body contains no such gap (the row carries no rule-id column).
+fn split_message_and_rule(body: &str) -> Option<(&str, &str)> {
+	let bytes = body.as_bytes();
+	let mut idx = bytes.len();
+	// Walk back to the last `"  "` (>=2 spaces) boundary; the tail after it is the
+	// rule-candidate, which itself contains no internal space.
+	while idx >= 2 {
+		if bytes[idx - 1] == b' ' && bytes[idx - 2] == b' ' {
+			let candidate = body[idx..].trim_start();
+			if candidate.is_empty() || candidate.contains(' ') {
+				return None;
+			}
+			return Some((&body[..idx - 2], candidate));
+		}
+		idx -= 1;
+	}
+	None
+}
+
+/// `line:col` location token: digits, a colon, digits.
+fn is_line_col(token: &str) -> bool {
+	let Some((line, col)) = token.split_once(':') else {
+		return false;
+	};
+	!line.is_empty()
+		&& !col.is_empty()
+		&& line.chars().all(|ch| ch.is_ascii_digit())
+		&& col.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// An eslint rule slug: lowercase letters/digits, hyphens, optional `@scope/`
+/// prefix and `/` separators (`no-var`, `@typescript-eslint/no-unused-vars`,
+/// and hyphenless core rules `semi`, `eqeqeq`, `camelcase`, `curly`, `radix`,
+/// `complexity`). NO hyphen is required — recognition relies on the structural
+/// >=2-space column split in `parse_eslint_row` plus this character-class. A
+/// leading lowercase letter excludes prose tokens that survived the split
+/// (uppercase-initial words, punctuation, trailing periods).
+fn is_eslint_rule_id(token: &str) -> bool {
+	let mut chars = token.chars();
+	matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase())
+		&& chars
+			.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '/' | '@'))
 }
 
 /// Code-frame / underline / tool-chatter noise specific to the JS lint family.
@@ -492,6 +698,58 @@ mod tests {
 	}
 
 	// -----------------------------------------------------------------
+	// CONCERN 2: eslint stylish-block parsing
+	// (ported from snip/filters/eslint.yaml inline tests)
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn eslint_stylish_groups_rows_under_headers_with_top_rules() {
+		// snip's "errors with summary" fixture (incl. a Parsing error row and the
+		// fixable hint). Codepoints normalized: × is U+00D7-free here — eslint's
+		// summary marker is the heavy ballot ✖ (U+2716), kept verbatim.
+		let input = "/home/user/project/src/file.js\n  1:10  error    Unexpected var, use let or \
+		             const instead  no-var\n  2:5   warning  Missing semicolon                     \
+		             semi\n\n/home/user/project/src/other.js\n  3:1   error    Parsing error: \
+		             Unexpected token\n\n✖ 3 problems (2 errors, 1 warning)\n  1 error and 0 \
+		             warnings potentially fixable with the `--fix` option.\n";
+		let out = condense_lint_output("eslint", input, 1);
+		// Grouped per-file rendering with the shared diagnostics header.
+		assert!(out.contains("3 diagnostics in 2 files"), "got: {out}");
+		assert!(out.contains("file.js"));
+		assert!(out.contains("other.js"));
+		// Top-rules summary derived from the trailing rule-id column.
+		assert!(out.contains("Top rules:"), "got: {out}");
+		assert!(out.contains("no-var"));
+		assert!(out.contains("semi"));
+		// The Parsing error row (no rule-id) is preserved as a diagnostic.
+		assert!(out.contains("Parsing error: Unexpected token"), "got: {out}");
+		// Summary kept, fixable hint stripped.
+		assert!(out.contains("✖ 3 problems (2 errors, 1 warning)"), "got: {out}");
+		assert!(!out.contains("potentially fixable"), "fixable hint must be stripped: {out}");
+	}
+
+	#[test]
+	fn eslint_stylish_single_file_keeps_summary() {
+		// snip's "single file error" fixture.
+		let input = "/app/src/index.js\n  5:3  error  'x' is defined but never used  \
+		             no-unused-vars\n\n✖ 1 problem (1 error, 0 warnings)\n";
+		let out = condense_lint_output("eslint", input, 1);
+		assert!(out.contains("1 diagnostics in 1 files"), "got: {out}");
+		assert!(out.contains("index.js"));
+		assert!(out.contains("no-unused-vars"));
+		assert!(out.contains("Top rules:"));
+		assert!(out.contains("✖ 1 problem (1 error, 0 warnings)"), "got: {out}");
+	}
+
+	#[test]
+	fn eslint_clean_run_condenses_to_clean() {
+		// snip's "no errors produces ok": empty eslint output renders as empty
+		// (the minimizer's clean signal). Reshape finds no rows and falls back to
+		// the empty grouped output.
+		assert_eq!(condense_lint_output("eslint", "", 0), "");
+	}
+
+	// -----------------------------------------------------------------
 	// Regression: blocking-issue fixes
 	// -----------------------------------------------------------------
 
@@ -519,5 +777,33 @@ mod tests {
 		assert!(!is_gutter_bar_line("10 errors found"), "bare numeric is not a bar gutter");
 		assert!(is_gutter_bar_line("3 \u{2502} interface Props {"), "biome bar gutter strips");
 		assert!(is_gutter_bar_line("12 \u{2502} items.forEach(...)"), "oxlint bar gutter strips");
+	}
+
+	#[test]
+	fn eslint_hyphenless_rules_counted_under_top_rules_and_unglued() {
+		// BLOCKING 2 regression: hyphenless core rules (`semi`, `eqeqeq`) are
+		// recognized by their structural >=2-space column position, counted under
+		// `Top rules:`, and NOT glued onto the message body.
+		assert!(is_eslint_rule_id("semi"));
+		assert!(is_eslint_rule_id("eqeqeq"));
+		assert!(is_eslint_rule_id("camelcase"));
+		assert!(is_eslint_rule_id("curly"));
+		assert!(is_eslint_rule_id("radix"));
+		assert!(is_eslint_rule_id("complexity"));
+		// Prose tokens (uppercase-initial / punctuation) are still rejected.
+		assert!(!is_eslint_rule_id("Unexpected"));
+		assert!(!is_eslint_rule_id("token."));
+
+		let input = "/app/x.js\n  1:1  error  Missing semicolon  semi\n  2:1  error  Expected ===  \
+		             eqeqeq\n\n\u{2716} 2 problems (2 errors, 0 warnings)\n";
+		let out = condense_lint_output("eslint", input, 1);
+		assert!(out.contains("Top rules:"), "hyphenless rules must produce a Top rules line: {out}");
+		assert!(out.contains("semi (1x)"), "semi must be counted: {out}");
+		assert!(out.contains("eqeqeq (1x)"), "eqeqeq must be counted: {out}");
+		// The rule slug must NOT be glued onto the diagnostic message body.
+		assert!(
+			!out.contains("Missing semicolon  semi") && !out.contains("Missing semicolon semi"),
+			"rule slug must be split from the message, not glued: {out}"
+		);
 	}
 }
