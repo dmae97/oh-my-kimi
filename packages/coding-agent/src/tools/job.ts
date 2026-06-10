@@ -386,6 +386,18 @@ function statusToColor(status: JobSnapshot["status"]): ToolUIColor {
 	}
 }
 
+/**
+ * Task job results are delivered in the model-facing `<task-result>` envelope
+ * (prompts/tools/task-summary.md) so the parent agent can parse status and the
+ * `agent://` pointer. The wrapper markup is noise to a human — preview the
+ * inner <output>/<preview> body instead.
+ */
+function stripTaskResultEnvelope(text: string): string {
+	if (!text.startsWith("<task-result")) return text;
+	const body = /<(output|preview)(?:\s[^>]*)?>\n?([\s\S]*?)\n?<\/\1>/.exec(text)?.[2];
+	return body?.trim() || text;
+}
+
 function describeTarget(args: JobRenderArgs | undefined): string {
 	const poll = args?.poll ?? [];
 	const cancel = args?.cancel ?? [];
@@ -502,7 +514,7 @@ export const jobToolRenderer = {
 								lines.push(`  ${uiTheme.fg("toolOutput", visibleLabelLines[i]!)}`);
 							}
 
-							const preview = job.errorText?.trim() || job.resultText?.trim();
+							const preview = stripTaskResultEnvelope(job.errorText?.trim() || job.resultText?.trim() || "");
 							if (preview) {
 								const maxLines = expanded ? PREVIEW_LINES_EXPANDED : PREVIEW_LINES_COLLAPSED;
 								const previewLines = getPreviewLines(preview, maxLines, PREVIEW_LINE_WIDTH, Ellipsis.Unicode);

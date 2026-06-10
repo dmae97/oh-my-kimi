@@ -37,6 +37,7 @@
 
 ### Fixed
 
+- Fixed the `job` tool's TUI preview leaking the model-facing `<task-result>` envelope for settled task jobs — the preview now shows the inner output body
 - Fixed startup Ctrl+C handling in pre-TUI mode so it now clears typed text before exiting on a second press
 - Fixed npm CLI distribution bundles by embedding the stats dashboard client bundle so dashboard assets are served in prebuilt installs
 - Fixed the CLI smoke-test command to start the stats server and verify dashboard HTML is served, catching bundled-asset regressions
