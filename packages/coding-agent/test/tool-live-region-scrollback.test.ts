@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
@@ -563,19 +563,21 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
-	it("commits the scrolled-off head of an over-tall pending task context to scrollback", async () => {
+	it("commits the scrolled-off head of an over-tall pending eval cell to scrollback", async () => {
 		if (process.platform === "win32") return;
 
+		// The single-spawn task renderer bounds its pending preview (the old
+		// uncapped multi-task `context` field is gone), so the eval tool —
+		// whose pending code preview is intentionally never capped — now
+		// carries the over-tall pending content.
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
-		const context = (n: number) => Array.from({ length: n }, (_unused, i) => `- CTX-${i}`).join("\n");
+		const code = (n: number) => Array.from({ length: n }, (_unused, i) => `// - CTX-${i}`).join("\n");
 		const args = (n: number) => ({
-			agent: "task",
-			context: context(n),
-			tasks: [{ id: "alpha", description: "probe", assignment: "Inspect the task context." }],
+			cells: [{ language: "js", title: "probe", code: code(n) }],
 		});
-		const component = new ToolExecutionComponent("task", args(4), {}, undefined, tui, process.cwd());
+		const component = new ToolExecutionComponent("eval", args(4), {}, undefined, tui, process.cwd());
 
 		try {
 			chat.addChild(component);
@@ -603,35 +605,39 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
-	it("keeps the static task context reachable in scrollback while progress ticks below it", async () => {
+	it("keeps the static task assignment reachable in scrollback while progress ticks below it", async () => {
 		if (process.platform === "win32") return;
 
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
-		const context = Array.from({ length: 40 }, (_unused, i) => `- CTX-${i}`).join("\n");
-		const args = {
-			agent: "explore",
-			context,
-			tasks: [{ id: "alpha", description: "probe", assignment: "Inspect the repo." }],
-		};
+		const assignment = Array.from({ length: 40 }, (_unused, i) => `- CTX-${i}`).join("\n");
+		const args = { agent: "explore", id: "alpha", description: "probe", assignment };
 		const component = new ToolExecutionComponent("task", args, {}, undefined, tui, process.cwd());
-		const progressAt = (toolCount: number) => ({
+		// The multi-line assignment section only renders expanded; shimmer
+		// would repaint the status line above it every frame, capping the
+		// stable prefix above the assignment, so pin it off for the run.
+		component.setExpanded(true);
+		settings.override("display.shimmer", "disabled");
+		const progressAt = (tick: number) => ({
 			index: 0,
 			id: "alpha",
 			agent: "explore",
 			agentSource: "bundled" as const,
 			status: "running" as const,
-			task: "probe",
+			task: assignment,
 			description: "probe",
+			currentTool: "read",
+			currentToolArgs: `probe-step-${tick}`,
 			recentTools: [],
 			recentOutput: [],
-			toolCount,
+			toolCount: 5,
+			requests: 0,
 			tokens: 0,
 			cost: 0,
-			durationMs: toolCount * 250,
+			durationMs: 1000,
 		});
-		const partial = (toolCount: number) =>
+		const partial = (tick: number) =>
 			component.updateResult(
 				{
 					content: [{ type: "text", text: "" }],
@@ -639,7 +645,7 @@ describe("tool live-region scrollback", () => {
 						projectAgentsDir: null,
 						results: [],
 						totalDurationMs: 0,
-						progress: [progressAt(toolCount)],
+						progress: [progressAt(tick)],
 					},
 				},
 				true,
@@ -651,13 +657,14 @@ describe("tool live-region scrollback", () => {
 			tui.start();
 			await term.waitForRender();
 
-			// A running task rewrites its progress line (tool counts, spinner)
-			// below the static context for the whole run. The context head that
-			// scrolled above the viewport must still reach native scrollback —
-			// previously the ticking tail suspended commits for the entire
-			// block, leaving the context neither in history nor on screen.
-			// Two full promotion windows: the call→result transition frame
-			// poisons the first window's minimum, the second promotes the head.
+			// A running task rewrites its current-tool line (the ticking tail)
+			// below the static assignment section for the whole run. The
+			// assignment head that scrolled above the viewport must still reach
+			// native scrollback — previously the ticking tail suspended commits
+			// for the entire block, leaving the assignment neither in history
+			// nor on screen. Two full promotion windows: the call→result
+			// transition frame poisons the first window's minimum, the second
+			// promotes the head.
 			for (let i = 1; i <= 70; i++) {
 				partial(i);
 				tui.requestRender();
@@ -669,8 +676,9 @@ describe("tool live-region scrollback", () => {
 
 			expect(viewportText).not.toContain("CTX-0");
 			expect(scrollText).toContain("CTX-0");
-			expect(scrollText).toContain("CTX-20");
+			expect(scrollText).toContain("CTX-5");
 		} finally {
+			settings.clearOverride("display.shimmer");
 			component.stopAnimation();
 			tui.stop();
 			await term.flush();

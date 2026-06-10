@@ -1177,13 +1177,13 @@ export const SETTINGS_SCHEMA = {
 
 	"compaction.strategy": {
 		type: "enum",
-		values: ["context-full", "handoff", "shake", "off"] as const,
+		values: ["context-full", "handoff", "shake", "snapcompact", "off"] as const,
 		default: "context-full",
 		ui: {
 			tab: "context",
 			label: "Compaction Strategy",
 			description:
-				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), or disable auto maintenance (off)",
+				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), snapcompact (archive history as dense images), or disable auto maintenance (off)",
 			options: [
 				{
 					value: "context-full",
@@ -1195,6 +1195,11 @@ export const SETTINGS_SCHEMA = {
 					value: "shake",
 					label: "Shake",
 					description: "Drop heavy content (tool results + large blocks) in place; recover via artifact",
+				},
+				{
+					value: "snapcompact",
+					label: "Snapcompact",
+					description: "Archive history onto dense bitmap images the model reads back; no LLM call",
 				},
 				{
 					value: "off",
@@ -1326,6 +1331,17 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+
+	"compaction.supersedeReads": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			label: "Supersede Stale Reads",
+			description: "Prune older read results when the same file is read again (cache-aware, runs every turn)",
+		},
+	},
+
 	// Branch summaries
 	"branchSummary.enabled": {
 		type: "boolean",
@@ -2305,8 +2321,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "IRC Timeout",
-			description:
-				"Drop IRC messages whose recipient does not respond within this many milliseconds (0 disables the timeout)",
+			description: "Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "30000", label: "30 seconds" },
@@ -2501,7 +2516,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "Async Execution",
-			description: "Enable async bash commands and background task execution",
+			description: "Enable async bash commands",
 		},
 	},
 
@@ -2837,6 +2852,34 @@ export const SETTINGS_SCHEMA = {
 				{ value: "900000", label: "15 minutes" },
 				{ value: "1800000", label: "30 minutes" },
 				{ value: "3600000", label: "1 hour" },
+			],
+		},
+	},
+
+	"task.agentIdleTtlMs": {
+		type: "number",
+		default: 420_000,
+		ui: {
+			tab: "tasks",
+			label: "Agent Idle TTL",
+			description:
+				"How long an idle subagent stays live in memory before being parked to disk (ms). Parked agents are revived automatically when messaged or resumed. 0 keeps idle agents live until exit.",
+		},
+	},
+
+	"task.softRequestBudget": {
+		type: "number",
+		default: 90,
+		ui: {
+			tab: "tasks",
+			label: "Soft Subagent Request Budget",
+			description:
+				"Soft per-subagent request budget (assistant requests per run). Crossing it injects one steering notice asking the subagent to wrap up; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/quick_task agents use a lower built-in budget.",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "40", label: "40 requests" },
+				{ value: "90", label: "90 requests", description: "Default" },
+				{ value: "150", label: "150 requests" },
 			],
 		},
 	},
@@ -3353,7 +3396,7 @@ export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy: "context-full" | "handoff" | "shake" | "off";
+	strategy: "context-full" | "handoff" | "shake" | "snapcompact" | "off";
 	thresholdPercent: number;
 	thresholdTokens: number;
 	reserveTokens: number;
@@ -3365,6 +3408,7 @@ export interface CompactionSettings {
 	idleEnabled: boolean;
 	idleThresholdTokens: number;
 	idleTimeoutSeconds: number;
+	supersedeReads: boolean;
 }
 
 export interface ContextPromotionSettings {

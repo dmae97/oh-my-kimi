@@ -1,6 +1,7 @@
 {
 	"name": "pi-extension-with-deps",
 	"version": "1.0.0",
+	"homepage": "https://omp.sh",
 	"type": "module",
 	"omp": {
 		"extensions": [

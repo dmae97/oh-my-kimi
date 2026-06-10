@@ -409,6 +409,12 @@ export interface ImageContent {
 	type: "image";
 	data: string; // base64 encoded image data
 	mimeType: string; // e.g., "image/jpeg", "image/png"
+	/**
+	 * OpenAI-only resolution hint. `"original"` preserves native resolution
+	 * (required for snapcompact frames, whose glyphs do not survive the
+	 * default `auto` downscale). Providers without a detail knob ignore it.
+	 */
+	detail?: "auto" | "low" | "high" | "original";
 }
 
 export interface ToolCall {

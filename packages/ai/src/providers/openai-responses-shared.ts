@@ -289,7 +289,7 @@ export function convertResponsesInputContent(
 	for (const item of imageBlocks) {
 		normalizedContent.push({
 			type: "input_image",
-			detail: "auto",
+			detail: item.detail ?? "auto",
 			image_url: `data:${item.mimeType};base64,${item.data}`,
 		} satisfies ResponseInputImage);
 	}
@@ -448,7 +448,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		if (block.type === "image") {
 			contentParts.push({
 				type: "input_image",
-				detail: "auto",
+				detail: block.detail ?? "auto",
 				image_url: `data:${block.mimeType};base64,${block.data}`,
 			} satisfies ResponseInputImage);
 		}

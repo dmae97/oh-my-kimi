@@ -3,21 +3,17 @@ export const TASK_SIMPLE_MODES = ["default", "schema-free", "independent"] as co
 export type TaskSimpleMode = (typeof TASK_SIMPLE_MODES)[number];
 
 interface TaskSimpleModeCapabilities {
-	contextEnabled: boolean;
 	customSchemaEnabled: boolean;
 }
 
 const TASK_SIMPLE_MODE_CAPABILITIES: Record<TaskSimpleMode, TaskSimpleModeCapabilities> = {
 	default: {
-		contextEnabled: true,
 		customSchemaEnabled: true,
 	},
 	"schema-free": {
-		contextEnabled: true,
 		customSchemaEnabled: false,
 	},
 	independent: {
-		contextEnabled: false,
 		customSchemaEnabled: false,
 	},
 };

@@ -172,7 +172,7 @@ delete 20
   - `line N: \`insert\` needs at least one \`+TEXT\` body row.`
   - `line N: \`replace block N:\` needs at least one \`+TEXT\` body row. To delete a block, use \`delete N..M\` with the block's line range.`
 - Unresolvable `replace block N:` (apply / final-preview path only):
-  - `line N: \`replace block X:\` could not resolve a syntactic block beginning on line X. The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. Use \`replace X..M:\` with the block's explicit end line instead.`
+  - `line N: \`replace block X:\` could not resolve a syntactic block beginning on line X. The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. Use \`replace X..M:\` with the block's explicit end line instead.` — followed by a blank line and numbered `*`-marked context rows around line X (same shape as the mismatch preview).
 - Delete with body:
   - `line N: \`delete N..M\` does not take body rows. Remove the body, or use \`replace N..M:\`.`
   - `line N: \`delete block N\` does not take body rows. Remove the body, or use \`replace block N:\` to replace the block.`

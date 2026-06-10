@@ -1,8 +1,7 @@
 <irc>
-You received an IRC message from agent `{{from}}`.
+Incoming IRC message from agent `{{from}}`{{#if replyTo}} (replying to {{replyTo}}){{/if}}:
 
-Reply briefly and directly using the conversation context already available to you. NEVER call tools. The reply you write is delivered back to `{{from}}` as your answer.
-
-Message:
 {{message}}
+
+If a response is expected, reply with the `irc` tool (`op: "send"`, `to: "{{from}}"`) — you may finish your current step first. Nobody replies on your behalf.
 </irc>

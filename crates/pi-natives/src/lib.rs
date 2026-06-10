@@ -36,6 +36,7 @@ pub mod highlight;
 pub mod html;
 pub mod keys;
 pub mod sixel;
+pub mod snapcompact;
 pub use pi_ast::language;
 
 pub mod power;

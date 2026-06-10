@@ -18,11 +18,12 @@ import {
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
 import type { AgentMessage } from "../types";
 import type { CompactionEntry, SessionEntry } from "./entries";
-import { type ConvertToLlm, convertToLlm, createBranchSummaryMessage, createCustomMessage } from "./messages";
+import { type ConvertToLlm, createBranchSummaryMessage, createCustomMessage, defaultConvertToLlm } from "./messages";
 import {
 	buildOpenAiNativeHistory,
 	getPreservedOpenAiRemoteCompactionData,
@@ -45,6 +46,7 @@ import {
 	type FileOperations,
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
+	stripReadSelector,
 	upsertFileOperations,
 } from "./utils";
 
@@ -74,7 +76,7 @@ function extractFileOperations(
 		if (!prevCompaction.fromExtension && prevCompaction.details) {
 			const details = prevCompaction.details as CompactionDetails;
 			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
+				for (const f of details.readFiles) fileOps.read.add(stripReadSelector(f));
 			}
 			if (Array.isArray(details.modifiedFiles)) {
 				for (const f of details.modifiedFiles) fileOps.edited.add(f);
@@ -137,7 +139,7 @@ export interface CompactionResult<T = unknown> {
 
 export interface CompactionSettings {
 	enabled: boolean;
-	strategy?: "context-full" | "handoff" | "shake" | "off";
+	strategy?: "context-full" | "handoff" | "shake" | "snapcompact" | "off";
 	thresholdPercent?: number;
 	thresholdTokens?: number;
 	reserveTokens: number;
@@ -310,6 +312,10 @@ export function estimateTokens(message: AgentMessage): number {
 		case "branchSummary":
 		case "compactionSummary": {
 			fragments.push(message.summary);
+			if (message.role === "compactionSummary" && message.images) {
+				// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
+				extra += message.images.length * SNAPCOMPACT_FRAME_TOKEN_ESTIMATE;
+			}
 			break;
 		}
 		default:
@@ -625,7 +631,7 @@ export async function generateSummary(
 
 	// Serialize conversation to text so model doesn't try to continue it
 	// Convert to LLM messages first (handles custom app messages when caller provides a transformer).
-	const llmMessages = (options?.convertToLlm ?? convertToLlm)(currentMessages);
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(currentMessages);
 	const conversationText = serializeConversation(llmMessages);
 
 	// Build the prompt with conversation wrapped in tags
@@ -724,7 +730,7 @@ export async function generateHandoff(
 	options: HandoffOptions,
 	signal?: AbortSignal,
 ): Promise<string> {
-	const llmMessages = (options.convertToLlm ?? convertToLlm)(messages);
+	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
 	const requestMessages: Message[] = [
 		...llmMessages,
 		{
@@ -773,7 +779,7 @@ async function generateShortSummary(
 	options?: SummaryOptions,
 ): Promise<string> {
 	const maxTokens = Math.min(512, Math.floor(0.2 * reserveTokens));
-	const llmMessages = (options?.convertToLlm ?? convertToLlm)(recentMessages);
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(recentMessages);
 	const conversationText = serializeConversation(llmMessages);
 
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
@@ -1010,7 +1016,7 @@ export async function compact(
 				? previousRemoteCompaction.replacementHistory
 				: undefined;
 		const remoteHistory = buildOpenAiNativeHistory(
-			(summaryOptions.convertToLlm ?? convertToLlm)(remoteMessages),
+			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages),
 			model,
 			previousReplacementHistory,
 		);
@@ -1127,7 +1133,7 @@ async function generateTurnPrefixSummary(
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 
-	const llmMessages = (options?.convertToLlm ?? convertToLlm)(messages);
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
 	const summarizationMessages = [
