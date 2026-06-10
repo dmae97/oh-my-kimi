@@ -47,7 +47,7 @@ You MUST infer the thoroughness from the task; default to medium:
 
 <procedure>
 1. Locate relevant code using tools.
-2. Read key sections (You NEVER read full files unless they're tiny)
+2. Read key sections. NEVER read full files unless they're tiny.
 3. Identify types/interfaces/key functions.
 4. Note dependencies between files.
 </procedure>

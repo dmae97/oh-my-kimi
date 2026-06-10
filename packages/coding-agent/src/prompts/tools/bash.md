@@ -35,14 +35,12 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 
 ## Auto-background
 
-- A foreground (non-`async`) call that has not completed within **{{autoBackgroundThresholdSeconds}}s** is automatically converted into a background job and returns a `Background job <id> started: …` notice with the buffered output so far. The command keeps running; the final result is delivered as a follow-up tool call when it completes.
-- This is NOT a failure or a re-queue. Treat the notice as "still running, will report back" — do not retry the same command, and do not wait synchronously for it.
+- A foreground call still running after **{{autoBackgroundThresholdSeconds}}s** converts to a background job: you get a `Background job <id> started` notice plus the output so far, and the final result arrives as a follow-up tool call. The command keeps running — this is NOT a failure; do not retry it and do not wait synchronously.
 - Auto-backgrounding does NOT extend `timeout`: the job is still killed at the original deadline.
-- If you need the result inline (e.g. piping into another command), raise `timeout` above the expected duration so it finishes before the threshold matters{{#if asyncEnabled}}, or set `async: true` up front so the contract is explicit{{/if}}.
+- Need the result inline (e.g. piping into another command)? Raise `timeout` above the expected duration{{#if asyncEnabled}}, or set `async: true` up front{{/if}}.
 {{/if}}
 
 # Output minimizer
 
-- Bash stdout/stderr may be rewritten before you see it: long output is head/tail truncated, and test/lint runners (e.g. `bun test`, `cargo test`, ESLint) are passed through heuristic filters that drop noise and keep failures.
-- When the minimizer changes the visible text, the tool appends a `[raw output: artifact://<id>]` footer pointing at the **full untouched capture**. If a run looks suspicious (e.g. only a version banner) or you need the exact bytes, read that artifact.
-- If no footer is present, what you see is what the command actually emitted.
+- Long output is truncated and test/lint runner output is filtered down to failures. Whenever the visible text was changed, a `[raw output: artifact://<id>]` footer links the full capture — read it if a run looks suspicious or you need the exact bytes.
+- No footer = what you see is exactly what the command emitted.

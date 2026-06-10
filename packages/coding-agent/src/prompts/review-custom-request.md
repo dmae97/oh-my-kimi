@@ -7,7 +7,7 @@ Custom review instructions
 ### Distribution Guidelines
 
 Use the `task` tool with `agent: "reviewer"` and a `tasks` array.
-Create exactly **1 reviewer task**. Its assignment must include the custom instructions below.
+Create exactly **1 reviewer task**. Its assignment MUST include the custom instructions below.
 
 ### Reviewer Instructions
 

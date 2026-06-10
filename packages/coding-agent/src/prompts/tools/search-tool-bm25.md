@@ -15,7 +15,6 @@ Input:
 - `limit` — optional maximum number of tools to return and activate (default `8`)
 
 Behavior:
-- Searches hidden tool metadata using BM25-style relevance ranking
 - Matches against tool name, label, server name, description/summary, and input schema keys
 - Activates the top matching tools for the rest of the current session
 - Repeated searches add to the active tool set; they do not remove earlier selections

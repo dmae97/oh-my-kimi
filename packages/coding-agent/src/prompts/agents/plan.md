@@ -35,11 +35,11 @@ You MUST write a plan executable without re-exploration.
 
 <structure>
 - **Summary**: What to build and why (one paragraph).
-- **Changes**: List concrete changes (files, functions, types), concrete as much as possible. Exact file paths/line ranges where relevant.
-- **Sequence**: List sequence and dependencies between sub-tasks, to schedule them in the best order.
-- **Edge Cases**: List edge cases and error conditions, to be aware of.
-- **Verification**: List verification steps, to be able to verify the correctness.
-- **Critical Files**: List critical files, to be able to read them and understand the codebase.
+- **Changes**: Concrete changes (files, functions, types). Exact file paths/line ranges where relevant.
+- **Sequence**: Ordering and dependencies between sub-tasks.
+- **Edge Cases**: Edge cases and error conditions to watch.
+- **Verification**: Steps to verify correctness.
+- **Critical Files**: Files the implementer must read to understand the codebase.
 </structure>
 
 <critical>
