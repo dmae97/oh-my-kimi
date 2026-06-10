@@ -1073,6 +1073,20 @@ function renderAgentResult(
 }
 
 /**
+ * Order live progress entries so finished agents render first and unfinished
+ * (pending/running) ones stay pinned at the bottom as tasks complete. Stable
+ * within each group, so agents keep their dispatch order.
+ */
+function orderProgressForDisplay(progress: readonly AgentProgress[]): AgentProgress[] {
+	const finished: AgentProgress[] = [];
+	const unfinished: AgentProgress[] = [];
+	for (const p of progress) {
+		(p.status === "pending" || p.status === "running" ? unfinished : finished).push(p);
+	}
+	return finished.concat(unfinished);
+}
+
+/**
  * Render the tool result.
  */
 export function renderResult(
@@ -1140,7 +1154,7 @@ export function renderResult(
 		const shouldRenderProgress =
 			Boolean(details.progress && details.progress.length > 0) && (isPartial || details.results.length === 0);
 		if (shouldRenderProgress && details.progress) {
-			details.progress.forEach(progress => {
+			orderProgressForDisplay(details.progress).forEach(progress => {
 				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame));
 			});
 		} else if (details.results && details.results.length > 0) {
@@ -1269,8 +1283,9 @@ function renderNestedTaskTree(
 		}
 		const inflight = details.progress;
 		if (inflight && inflight.length > 0) {
-			inflight.forEach((prog, index) => {
-				const { prefix, continuePrefix } = nestedMarkers(index === inflight.length - 1, theme);
+			const ordered = orderProgressForDisplay(inflight);
+			ordered.forEach((prog, index) => {
+				const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
 				lines.push(...renderAgentProgress(prog, prefix, continuePrefix, expanded, theme, spinnerFrame));
 			});
 		}

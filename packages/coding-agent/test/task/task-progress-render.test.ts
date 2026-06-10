@@ -101,6 +101,34 @@ describe("task progress rendering", () => {
 		expect(strippedRow).not.toContain(theme.status.running);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
+
+	it("pins unfinished tasks below finished ones in the live view", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [
+				runningProgress({ index: 0, id: "FirstRunning", status: "running" }),
+				runningProgress({ index: 1, id: "DoneEarly", status: "completed" }),
+				runningProgress({ index: 2, id: "StillPending", status: "pending" }),
+				runningProgress({ index: 3, id: "FailedFast", status: "failed" }),
+			],
+		};
+
+		const rendered = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult({ content: [{ type: "text", text: "" }], details }, options, theme)
+				.render(120)
+				.join("\n"),
+		);
+
+		// Finished agents (in dispatch order) come first; pending/running stay at the bottom.
+		const positions = ["DoneEarly", "FailedFast", "FirstRunning", "StillPending"].map(id => rendered.indexOf(id));
+		expect(positions.every(p => p >= 0)).toBe(true);
+		expect(positions).toEqual([...positions].sort((a, b) => a - b));
+	});
 });
 
 describe("task result detail-less state", () => {
