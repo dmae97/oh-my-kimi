@@ -10,7 +10,12 @@ function makeNode(role: "user" | "assistant", text: string, parentId: string | n
 	const message: AgentMessage =
 		role === "user"
 			? { role: "user", content: text, timestamp: counter }
-			: ({ role: "assistant", content: [{ type: "text", text }], timestamp: counter, stopReason: "stop" } as AgentMessage);
+			: ({
+					role: "assistant",
+					content: [{ type: "text", text }],
+					timestamp: counter,
+					stopReason: "stop",
+				} as AgentMessage);
 	const entry: SessionEntry = {
 		type: "message",
 		id,
