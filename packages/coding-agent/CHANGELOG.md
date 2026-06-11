@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed `/settings` Escape handling so an open submenu receives Esc and returns to the settings list before a second Esc closes the panel ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
+- Fixed Escape not closing `/settings` on the Plugins tab while the async plugin list is still loading: `PluginSettingsComponent` now closes on Esc while no child view is mounted, and an npm plugin registry listing failure is caught (like marketplace failures) so a bad registry no longer leaves the tab permanently blank ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
 - Fixed unconfigured `pi/smol`, `pi/slow`, and `pi/designer` agent model roles using cloud-priority defaults before the user's configured `modelRoles.default`, which could route local-default setups to authenticated paid providers ([#2336](https://github.com/can1357/oh-my-pi/issues/2336)).
 
 ### Fixed

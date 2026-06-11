@@ -629,11 +629,18 @@ export class PluginSettingsComponent extends Container {
 		this.#currentMarketplacePlugin = null;
 		this.clear();
 
-		// Surface marketplace failures without taking the npm path down with it —
-		// the registry can fail to load (corrupt JSON, missing project root) and
-		// the user still benefits from seeing their npm plugins.
+		// Surface registry failures without taking the whole tab down — either
+		// registry can fail to load (corrupt JSON, missing project root) and the
+		// user still benefits from the other half. An uncaught rejection here
+		// would also leave the tab permanently blank: this method is invoked
+		// fire-and-forget from the constructor, so nothing awaits it.
 		const [npmPlugins, marketplacePlugins] = await Promise.all([
-			this.#manager.list(),
+			this.#manager.list().catch(err => {
+				logger.error("Settings → Plugins: failed to list npm plugins", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+				return [] as InstalledPlugin[];
+			}),
 			this.#buildMarketplaceManager()
 				.then(mgr => mgr.listInstalledPlugins())
 				.catch(err => {
