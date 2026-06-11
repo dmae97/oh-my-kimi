@@ -82,6 +82,7 @@ function buildSystemBlocks(
  * @param auth - Authentication configuration (API key or OAuth)
  * @param model - Model identifier to use
  * @param query - Search query from the user
+ * @param sessionId - Optional session id forwarded as Anthropic metadata.user_id
  * @param systemPrompt - Optional system prompt for guiding response style
  * @returns Raw API response from Anthropic
  * @throws {SearchProviderError} If the API request fails
@@ -90,6 +91,7 @@ async function callSearch(
 	auth: AnthropicAuthConfig,
 	model: string,
 	query: string,
+	sessionId?: string,
 	systemPrompt?: string,
 	maxTokens?: number,
 	temperature?: number,
@@ -112,6 +114,10 @@ async function callSearch(
 			},
 		],
 	};
+
+	if (sessionId) {
+		body.metadata = { user_id: sessionId };
+	}
 
 	if (temperature !== undefined) {
 		body.temperature = temperature;
@@ -280,6 +286,7 @@ export async function searchAnthropic(
 				buildAnthropicAuthConfig(key, searchBaseUrl),
 				model,
 				params.query,
+				"authStorage" in params ? params.sessionId : undefined,
 				systemPrompt,
 				maxTokens,
 				params.temperature,
