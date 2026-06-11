@@ -27,17 +27,57 @@ fn filter_build_like(label: &str, input: &str, exit_code: i32) -> String {
 	let mut diagnostics = String::new();
 	let mut summaries = String::new();
 
+	if exit_code == 0 && matches!(label, "dotnet build" | "dotnet restore") {
+		let lines: Vec<&str> = input.lines().collect();
+		// Find the LAST occurrence of "0 Warning(s)" followed by indented "0 Error(s)".
+		let mut last_match = None;
+		for i in 0..lines.len().saturating_sub(1) {
+			if lines[i].trim() == "0 Warning(s)"
+				&& lines[i + 1].trim() == "0 Error(s)"
+				&& lines[i + 1].starts_with(char::is_whitespace)
+			{
+				last_match = Some(i);
+			}
+		}
+		if let Some(i) = last_match {
+			// Only short-circuit if no warnings or errors appear after this pair.
+			let has_later_issues = lines[i + 2..].iter().any(|line| {
+				let trimmed = line.trim();
+				let lower = trimmed.to_ascii_lowercase();
+				let is_count_summary = (lower.ends_with("warning(s)") || lower.ends_with("error(s)"))
+					&& trimmed
+						.split_whitespace()
+						.next()
+						.map_or(false, |first| first.chars().all(|c| c.is_ascii_digit()));
+				let is_later_failure = lower.starts_with("failed! ")
+					|| lower.starts_with("failed ")
+					|| lower.starts_with("error ")
+					|| lower.starts_with("warning ");
+				is_count_summary || is_msbuild_diagnostic(trimmed) || is_later_failure
+			});
+			if !has_later_issues {
+				let noun = if label == "dotnet restore" {
+					"restore"
+				} else {
+					"build"
+				};
+				return format!("ok ({} succeeded)\n", noun);
+			}
+		}
+	}
+
 	for line in input.lines() {
 		let trimmed = line.trim();
 		if trimmed.is_empty() || is_dotnet_boilerplate(trimmed) {
 			continue;
 		}
-		if is_msbuild_diagnostic(trimmed) || is_failure_line(trimmed) {
-			diagnostics.push_str(trimmed);
-			diagnostics.push('\n');
-		} else if is_dotnet_summary(trimmed) {
-			summaries.push_str(trimmed);
+		let truncated = primitives::truncate_line(trimmed, primitives::CapClass::Errors.lines());
+		if is_dotnet_summary(trimmed) {
+			summaries.push_str(&truncated);
 			summaries.push('\n');
+		} else if is_msbuild_diagnostic(trimmed) || is_failure_line(trimmed) {
+			diagnostics.push_str(&truncated);
+			diagnostics.push('\n');
 		}
 	}
 
@@ -65,10 +105,11 @@ fn filter_test(input: &str, exit_code: i32) -> String {
 		if trimmed.is_empty() || is_dotnet_boilerplate(trimmed) {
 			continue;
 		}
+		let truncated = primitives::truncate_line(trimmed, primitives::CapClass::Errors.lines());
 
 		if is_failed_test_start(trimmed) {
 			in_failed_test = true;
-			out.push_str(trimmed);
+			out.push_str(&truncated);
 			out.push('\n');
 			continue;
 		}
@@ -77,14 +118,14 @@ fn filter_test(input: &str, exit_code: i32) -> String {
 			if is_test_section_boundary(trimmed) {
 				in_failed_test = false;
 			} else {
-				out.push_str(trimmed);
+				out.push_str(&truncated);
 				out.push('\n');
 				continue;
 			}
 		}
 
 		if is_msbuild_diagnostic(trimmed) || is_failure_line(trimmed) || is_test_summary(trimmed) {
-			out.push_str(trimmed);
+			out.push_str(&truncated);
 			out.push('\n');
 		}
 	}
@@ -110,11 +151,12 @@ fn filter_format(input: &str) -> String {
 		if trimmed.is_empty() || is_dotnet_format_noise(trimmed) {
 			continue;
 		}
+		let truncated = primitives::truncate_line(trimmed, primitives::CapClass::Errors.lines());
 		if is_msbuild_diagnostic(trimmed)
 			|| looks_like_path(trimmed)
 			|| contains_format_signal(trimmed)
 		{
-			out.push_str(trimmed);
+			out.push_str(&truncated);
 			out.push('\n');
 		}
 	}
@@ -136,7 +178,7 @@ fn compact_format_json(input: &str) -> Option<String> {
 
 	let mut out = format!("dotnet format: {} diagnostics\n", rows.len());
 	for row in rows.iter().take(40) {
-		out.push_str(row);
+		out.push_str(&primitives::truncate_line(row, primitives::CapClass::Errors.lines()));
 		out.push('\n');
 	}
 	if rows.len() > 40 {
@@ -229,9 +271,7 @@ fn is_dotnet_boilerplate(line: &str) -> bool {
 	lower.starts_with("determining projects to restore")
 		|| lower.starts_with("all projects are up-to-date for restore")
 		|| lower.starts_with("restored ") && !contains_diagnostic_signal(&lower)
-		|| lower.starts_with("  ") && lower.contains(" -> ")
 		|| lower.starts_with("build started")
-		|| lower.starts_with("build succeeded")
 		|| lower.starts_with("test run for ")
 		|| lower.starts_with("starting test execution")
 		|| lower.starts_with("a total of ") && lower.contains("test files matched")
@@ -282,9 +322,12 @@ fn is_dotnet_summary(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
 	lower.starts_with("build failed")
 		|| lower.starts_with("restore failed")
+		|| lower.starts_with("build succeeded")
+		|| lower.starts_with("restore succeeded")
 		|| lower.starts_with("time elapsed")
 		|| lower.contains(" error(s)")
 		|| lower.contains(" warning(s)")
+		|| lower.contains(" -> ")
 }
 
 fn is_test_summary(line: &str) -> bool {
@@ -356,5 +399,182 @@ mod tests {
 		assert!(out.contains("dotnet format: 1 diagnostics"));
 		assert!(out.contains("src/App.cs:4:9"));
 		assert!(out.contains("IDE0055"));
+	}
+
+	#[test]
+	fn dotnet_build_success_short_circuits() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("build"),
+			command:    "dotnet build",
+			config:     &cfg,
+		};
+		let input = "Microsoft (R) Build Engine version 17.8.3+195e7f5a3\nCopyright (C) Microsoft \
+		             Corporation. All rights reserved.\n\nDetermining projects to restore...\nAll \
+		             projects are up-to-date for restore.\nMyApp -> \
+		             /home/user/MyApp/bin/Debug/net8.0/MyApp.dll\n\nBuild succeeded.\n    0 \
+		             Warning(s)\n    0 Error(s)\n\nTime Elapsed 00:00:02.34\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "ok (build succeeded)\n");
+	}
+
+	#[test]
+	fn dotnet_restore_success_short_circuits() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("restore"),
+			command:    "dotnet restore",
+			config:     &cfg,
+		};
+		let input = "Microsoft (R) Build Engine version 17.8.3+195e7f5a3\nCopyright (C) Microsoft \
+		             Corporation. All rights reserved.\n\n  Determining projects to restore...\n  \
+		             All projects are up-to-date for restore.\n\n  0 Warning(s)\n  0 \
+		             Error(s)\n\nTime Elapsed 00:00:01.23\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "ok (restore succeeded)\n");
+	}
+
+	#[test]
+	fn dotnet_build_unindented_summary_not_short_circuited() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("build"),
+			command:    "dotnet build",
+			config:     &cfg,
+		};
+		// Real warnings appear after an early unindented "0 Warning(s)" line;
+		// the def's regex required consecutive lines with the second indented.
+		let input = "pre-build validation: 0 Warning(s)\nSome other line\nsrc/Program.cs(1,1): \
+		             warning CS8600: Converting null literal or possible null value to non-nullable \
+		             type\nBuild succeeded.\n    1 Warning(s)\n    0 Error(s)\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.text.contains("ok (build succeeded)"));
+		assert!(out.text.contains("1 Warning(s)"));
+	}
+
+	#[test]
+	fn dotnet_build_consecutive_unindented_summary_not_short_circuited() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("build"),
+			command:    "dotnet build",
+			config:     &cfg,
+		};
+		// The def's regex required the second line to be indented (\s+);
+		// consecutive unindented lines must not short-circuit.
+		let input = "Build succeeded.\n0 Warning(s)\n0 Error(s)\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.text.contains("ok (build succeeded)"));
+		assert!(out.text.contains("0 Warning(s)"));
+	}
+
+	#[test]
+	fn dotnet_build_with_warnings_not_short_circuited() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("build"),
+			command:    "dotnet build",
+			config:     &cfg,
+		};
+		let input = "Microsoft (R) Build Engine version 17.8.3+195e7f5a3\nCopyright (C) Microsoft \
+		             Corporation. All rights reserved.\n\nDetermining projects to restore...\nMyApp \
+		             -> /home/user/MyApp/bin/Debug/net8.0/MyApp.dll\n\nBuild succeeded.\n3 \
+		             Warning(s)\n0 Error(s)\n\nTime Elapsed 00:00:01.87\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(
+			out.text,
+			"MyApp -> /home/user/MyApp/bin/Debug/net8.0/MyApp.dll\nBuild succeeded.\n3 Warning(s)\n0 \
+			 Error(s)\nTime Elapsed 00:00:01.87\n"
+		);
+	}
+
+	#[test]
+	fn dotnet_build_errors_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("build"),
+			command:    "dotnet build",
+			config:     &cfg,
+		};
+		let input = "Microsoft (R) Build Engine version 17.8.3+195e7f5a3\nCopyright (C) Microsoft \
+		             Corporation. All rights reserved.\n\nDetermining projects to \
+		             restore...\nsrc/Program.cs(10,5): error CS1002: ; expected \
+		             [/home/user/MyApp/MyApp.csproj]\n\nBuild FAILED.\n0 Warning(s)\n1 Error(s)\n";
+		let out = filter(&ctx, input, 1);
+		assert_eq!(
+			out.text,
+			"dotnet build: failed\nsrc/Program.cs(10,5): error CS1002: ; expected \
+			 [/home/user/MyApp/MyApp.csproj]\nBuild FAILED.\n0 Warning(s)\n1 Error(s)\n"
+		);
+	}
+
+	#[test]
+	fn truncates_long_lines_in_build_output() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "dotnet",
+			subcommand: Some("build"),
+			command:    "dotnet build",
+			config:     &cfg,
+		};
+		let long_tail = "x".repeat(200);
+		let input = format!(
+			"src/Program.cs(1,1): error CS0000: {long_tail}\nBuild FAILED.\n    0 Warning(s)\n    1 \
+			 Error(s)\n"
+		);
+		let out = filter(&ctx, &input, 1);
+		let line = out
+			.text
+			.lines()
+			.find(|l| l.starts_with("src/Program.cs"))
+			.unwrap();
+		let prefix_len = "src/Program.cs(1,1): error CS0000: ".chars().count();
+		let dropped = (prefix_len + long_tail.chars().count())
+			.saturating_sub(primitives::CapClass::Errors.lines());
+		assert!(line.ends_with(&format!("…[+{dropped}]")));
+	}
+
+	#[test]
+	fn truncates_long_lines_in_test_output() {
+		let long_tail = "x".repeat(200);
+		let input = format!("Failed TestMethod\n  Stack trace: {long_tail}\nTotal tests: 1\n");
+		let out = filter_test(&input, 1);
+		let line = out.lines().find(|l| l.starts_with("Stack trace:")).unwrap();
+		let prefix_len = "Stack trace: ".chars().count();
+		let dropped = (prefix_len + long_tail.chars().count())
+			.saturating_sub(primitives::CapClass::Errors.lines());
+		assert!(line.ends_with(&format!("…[+{dropped}]")));
+	}
+
+	#[test]
+	fn truncates_long_lines_in_format_text_output() {
+		let long_tail = "x".repeat(200);
+		let input = format!("src/Program.cs(1,1): warning CS8600: {long_tail}\n");
+		let out = filter_format(&input);
+		let line = out.lines().next().unwrap();
+		let prefix_len = "src/Program.cs(1,1): warning CS8600: ".chars().count();
+		let dropped = (prefix_len + long_tail.chars().count())
+			.saturating_sub(primitives::CapClass::Errors.lines());
+		assert!(line.ends_with(&format!("…[+{dropped}]")));
+	}
+
+	#[test]
+	fn truncates_long_lines_in_format_json_output() {
+		let long_tail = "x".repeat(200);
+		let input = format!(
+			r#"{{"FileName":"src/App.cs","Changes":[{{"DiagnosticId":"IDE0055","LineNumber":4,"CharNumber":9,"FormatDescription":"Fix formatting {long_tail}"}}]}}"#
+		);
+		let out = filter_format(&input);
+		let line = out.lines().find(|l| l.starts_with("src/App.cs")).unwrap();
+		let prefix_len = "src/App.cs:4:9: IDE0055 - Fix formatting ".chars().count();
+		let dropped = (prefix_len + long_tail.chars().count())
+			.saturating_sub(primitives::CapClass::Errors.lines());
+		assert!(line.ends_with(&format!("…[+{dropped}]")));
 	}
 }
