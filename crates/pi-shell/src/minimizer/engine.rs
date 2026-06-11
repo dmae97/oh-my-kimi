@@ -1018,6 +1018,145 @@ strip_lines_matching = [".*"]
 		assert_eq!(out.text, "hi\n");
 		assert!(!out.changed);
 	}
+
+	// ── Rails def standalone + bundle exec re-dispatch guards ────────
+
+	#[test]
+	fn rails_db_migrate_routes_to_standalone_def() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "== 20240115 CreateUsers: migrating\n-- create_table(:users)\n   -> 0.0234s\n== \
+		             20240115 CreateUsers: migrated\n\n== 20240116 AddIndexToOrders: migrating\n-- \
+		             add_index(:orders)\n   -> 0.0123s\n== 20240116 AddIndexToOrders: migrated\n";
+		let out = apply("rails db:migrate", input, 0, &cfg);
+		assert!(out.changed);
+		assert!(out.text.contains("✓ CreateUsers"));
+		assert!(out.text.contains("✓ AddIndexToOrders"));
+		assert!(!out.text.contains("-- create_table"));
+		assert!(!out.text.contains("-> 0.0234s"));
+		// Must NOT be an overlay label; standalone pipeline gets "pipeline".
+		assert_eq!(out.filter, "pipeline");
+	}
+
+	#[test]
+	fn rails_routes_routes_to_standalone_def() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "                                  Prefix Verb   URI Pattern                                                                                       Controller#Action\n                                    root GET    /                                                                                                 home#index\n";
+		let out = apply("rails routes", input, 0, &cfg);
+		assert!(out.changed);
+		assert!(!out.text.contains("Prefix"));
+		assert!(out.text.contains("root GET"));
+		assert_eq!(out.filter, "pipeline");
+	}
+
+	#[test]
+	fn rake_routes_regression_unminimized() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "                                  Prefix Verb   URI Pattern                                                                                       Controller#Action\n                                    root GET    /                                                                                                 home#index\n";
+		let out = apply("rake routes", input, 0, &cfg);
+		assert!(out.changed, "rake routes should be minimized by the rails-routes def");
+		assert!(!out.text.contains("Prefix"));
+		assert!(out.text.contains("root GET"));
+	}
+
+	#[test]
+	fn bundle_exec_rails_db_migrate_reaches_def() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "== 20240115 CreateUsers: migrating\n-- create_table(:users)\n   -> 0.0234s\n== \
+		             20240115 CreateUsers: migrated\n";
+		let out = apply("bundle exec rails db:migrate", input, 0, &cfg);
+		assert!(out.changed);
+		assert!(out.text.contains("CreateUsers"));
+		assert!(!out.text.contains("-- create_table"));
+	}
+
+	#[test]
+	fn bundle_exec_rails_routes_reaches_def() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "                                  Prefix Verb   URI Pattern                                                                                       Controller#Action\n                                    root GET    /                                                                                                 home#index\n";
+		let out = apply("bundle exec rails routes", input, 0, &cfg);
+		assert!(out.changed);
+		assert!(!out.text.contains("Prefix"));
+		assert!(out.text.contains("root GET"));
+	}
+
+	#[test]
+	fn rails_db_migrate_no_double_truncation() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let mut input = String::new();
+		for i in 0..100 {
+			input.push_str(&format!(
+				"== 20240115 Migration{i}: migrating\n-- step\n   -> 0.0s\n== 20240115 Migration{i}: \
+				 migrated\n\n"
+			));
+		}
+		let out = apply("rails db:migrate", &input, 0, &cfg);
+		assert!(out.changed);
+		// The def's max_lines=40 produces ONE truncation marker.
+		// filter_rake's head_tail marker ("lines omitted") must NOT appear.
+		assert!(!out.text.contains("lines omitted"), "double truncation detected: {:#?}", out.text);
+		assert!(out.text.contains("lines truncated"));
+	}
+
+	#[test]
+	fn rails_db_migrate_keyword_in_name_not_dropped() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "== 20240115 CreateTestResults: migrating\n-- create_table(:test_results)\n   \
+		             -> 0.0234s\n== 20240115 CreateTestResults: migrated\n\n== 20240116 \
+		             AddIndexToOrders: migrating\n-- add_index(:orders)\n   -> 0.0123s\n== 20240116 \
+		             AddIndexToOrders: migrated\n";
+		let out = apply("rails db:migrate", input, 0, &cfg);
+		assert!(out.changed);
+		// Both migrations must survive; the old overlay-on-rake would keep only
+		// lines containing "test" and silently drop AddIndexToOrders.
+		assert!(out.text.contains("CreateTestResults"), "CreateTestResults was dropped");
+		assert!(out.text.contains("AddIndexToOrders"), "AddIndexToOrders was dropped");
+	}
+
+	// Regression guards for the builtin rails defs (rails-migrate.toml,
+	// rails-routes.toml). Their `match_subcommand` scopes are MANDATORY:
+	// unscoped they would overlay the Rust minitest filter output for
+	// `rails test` / `rake test` and strip failure-detail lines
+	// ('Expected: true'). These tests fail loudly if the scope is removed.
+	#[test]
+	fn rails_def_does_not_overlay_routed_minitest() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "Run options: --seed 1\n\n# Running:\n\n.F\n\n  1) Failure:\nUserTest#test_name \
+		             [test/models/user_test.rb:8]:\nExpected: true\n  Actual: false\n\n2 runs, 2 \
+		             assertions, 1 failures, 0 errors, 0 skips\n";
+		let rails = apply("rails test", input, 1, &cfg);
+		let rake = apply("rake test", input, 1, &cfg);
+		// Must NOT be an overlay label; minitest filter gets its own program label.
+		assert_ne!(
+			rails.filter, "pipeline+builtin",
+			"rails-migrate def overlaid the routed minitest filter output"
+		);
+		assert_ne!(
+			rake.filter, "pipeline+builtin",
+			"rails-migrate def overlaid the routed minitest filter output"
+		);
+		// Failure-detail lines must survive — the rails-migrate def's
+		// keep_lines_matching would drop them.
+		assert!(rails.text.contains("Expected: true"), "rails test dropped minitest failure detail");
+		assert!(rails.text.contains("Actual: false"));
+		assert!(rake.text.contains("Expected: true"), "rake test dropped minitest failure detail");
+		assert!(rake.text.contains("Actual: false"));
+	}
+
+	#[test]
+	fn rails_routes_def_does_not_overlay_routed_minitest() {
+		// Same guard for rails-routes.toml: `match_subcommand = "^routes$"`
+		// must not leak to `rails test`.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let input = "Run options: --seed 1\n\n# Running:\n\n.F\n\n  1) Failure:\nUserTest#test_name \
+		             [test/models/user_test.rb:8]:\nExpected: true\n  Actual: false\n\n2 runs, 2 \
+		             assertions, 1 failures, 0 errors, 0 skips\n";
+		let out = apply("rails test", input, 1, &cfg);
+		assert_ne!(
+			out.filter, "pipeline+builtin",
+			"rails-routes def overlaid the routed minitest filter output"
+		);
+		assert!(out.text.contains("Expected: true"), "rails test dropped minitest failure detail");
+	}
 }
 
 #[cfg(test)]
