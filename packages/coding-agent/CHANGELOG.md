@@ -7,6 +7,19 @@
 - Cached stable edit/write preview highlighting inside each tool component so steady-state frame renders do not re-enter the native syntax highlighter.
 
 - Skipped rendering finalized transcript blocks whose rows are already committed to native scrollback, keeping long restored sessions from re-rendering historical tool blocks every frame.
+- Fixed MCP OAuth authorization and token requests to include the required `resource` indicator for the target MCP server.
+### Added
+
+- Added the `statusLine.transparent` appearance setting (default off): when enabled, the status line skips the theme's `statusLineBg` fill and powerline end caps so the bar inherits the terminal's default background — useful in Ghostty and other terminals whose theme background does not match the theme's hardcoded status-line color ([#2306](https://github.com/can1357/oh-my-pi/issues/2306))
+
+### Fixed
+
+- Fixed the `/tree` selector and HTML session export dropping the inherited `│` gutter for chain rows under a last-sibling branch, so the conversation flow under a `└─` branch stays visually anchored to its parent message ([#2298](https://github.com/can1357/oh-my-pi/issues/2298)).
+
+### Fixed
+
+- Fixed Anthropic web search requests to include `metadata.user_id`, matching the main Messages path: API-key requests forward the active session id verbatim, OAuth requests build the Claude-Code-shaped `{session_id, account_uuid?, device_id}` JSON envelope so gateways see consistent attribution ([#2295](https://github.com/can1357/oh-my-pi/issues/2295)).
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes
@@ -50,6 +63,8 @@
 
 ### Fixed
 
+- Fixed Anthropic classifier refusals to switch through configured retry fallback chains without same-model retries, and to keep the fallback pinned for the conversation. ([#2290](https://github.com/can1357/oh-my-pi/issues/2290))
+- Fixed the edit-tool hashline prompt to stop steering agents toward `insert after block N:` on closing delimiter lines; opener-only block anchors now point visible closing-line insertions to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
 - Fixed `irc` live message delivery so successfully handed-off messages are no longer enqueued as mailbox mail, so they do not inflate unread `irc` counts
 - Fixed `irc send` with `await: true` to wait for a fresh reply to the current call instead of consuming previously buffered messages
 - Fixed main-session chat output to stop duplicating outbound `irc` sends from the main agent as relay cards
@@ -168,7 +183,7 @@
 - Fixed pasting into the ask tool's "Other (type your own)" text box (and hook input/editor dialogs) on terminals with OSC 5522 enhanced paste (kitty protocol): the enhanced-paste focus routing only targets components exposing a `pasteText` hook, and the dialog wrappers had none, so the payload was stuffed into the main prompt editor hidden behind the dialog. `HookEditorComponent` and `HookInputComponent` now forward `pasteText` to their inner editor/input (pasting also resets the input dialog's timeout countdown like any keystroke).
 - Fixed auto-retry giving up after one attempt ("Provider requested Xms wait, exceeds retry.maxDelayMs") on a usage-limit 429 when every sibling account was only momentarily blocked: the retry delay now waits for the earliest sibling unblock when that comes sooner than the provider's multi-hour retry-after, so the next attempt picks up the recovered account instead of failing fast.
 - Fixed Hindsight `per-project-tagged` mental-model seeding so each project gets its own conventions/decisions models and session context only injects active-project or untagged models ([#2218](https://github.com/can1357/oh-my-pi/issues/2218)).
-- Fixed Windows stdio MCP `.cmd` commands by wrapping batch shims with `cmd.exe /d /s /c` using the outer command quotes required by `cmd /s`, while preserving literal `%` and quoted JSON arguments for Codegraph MCP ([#2220](https://github.com/can1357/oh-my-pi/issues/2220)).
+- Fixed Windows stdio MCP `.cmd` commands by wrapping batch shims such as `npx.cmd` and `codegraph.cmd` with hidden `cmd.exe /d /s /c` launches using the outer command quotes required by `cmd /s`, while preserving literal `%` and quoted JSON arguments ([#2220](https://github.com/can1357/oh-my-pi/issues/2220), [#2287](https://github.com/can1357/oh-my-pi/issues/2287)).
 - Fixed the bundled `explore` agent's `thinking-level: med` frontmatter — not a valid effort (`minimal`/`low`/`medium`/`high`/`xhigh`), so it silently parsed to undefined and the agent ran without its intended thinking level
 - Discovery context-file reads (`~/.claude`, `~/.cursor`, project trees, `@`-imports) now stat-gate to regular files before reading: a FIFO/socket/char device dropped where a context file is expected previously blocked startup forever on a read that can never see EOF.
 - Fixed the read tool's provider-visible `path` schema and docs so web URLs and internal URI targets (`omp://`, `issue://`, `pr://`, etc.) are advertised alongside local files ([#2215](https://github.com/can1357/oh-my-pi/issues/2215)).

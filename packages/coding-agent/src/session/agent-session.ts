@@ -546,6 +546,7 @@ interface ActiveRetryFallbackState {
 	originalSelector: string;
 	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
 	lastAppliedFallbackThinkingLevel: ConfiguredThinkingLevel | undefined;
+	pinned: boolean;
 }
 
 function parseRetryFallbackSelector(selector: string): RetryFallbackSelector | undefined {
@@ -8257,8 +8258,16 @@ export class AgentSession {
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, contextWindow)) return false;
 
+		if (this.#isClassifierRefusal(message)) return true;
+
 		const err = message.errorMessage;
 		return this.#isTransientErrorMessage(err) || isUsageLimitError(err);
+	}
+
+	#isClassifierRefusal(message: AssistantMessage): boolean {
+		if (message.stopReason !== "error") return false;
+		const stopType = message.stopDetails?.type;
+		return stopType === "refusal" || stopType === "sensitive";
 	}
 
 	#isTransientErrorMessage(errorMessage: string): boolean {
@@ -8404,6 +8413,7 @@ export class AgentSession {
 		role: string,
 		selector: RetryFallbackSelector,
 		currentSelector: string,
+		options?: { pinFallback?: boolean },
 	): Promise<void> {
 		const candidate = this.#modelRegistry.find(selector.provider, selector.id);
 		if (!candidate) {
@@ -8429,9 +8439,11 @@ export class AgentSession {
 				originalSelector: currentSelector,
 				originalThinkingLevel: currentThinkingLevel,
 				lastAppliedFallbackThinkingLevel: nextThinkingLevel,
+				pinned: options?.pinFallback === true,
 			};
 		} else {
 			this.#activeRetryFallback.lastAppliedFallbackThinkingLevel = nextThinkingLevel;
+			this.#activeRetryFallback.pinned = this.#activeRetryFallback.pinned || options?.pinFallback === true;
 		}
 		await this.#emitSessionEvent({
 			type: "retry_fallback_applied",
@@ -8441,7 +8453,7 @@ export class AgentSession {
 		});
 	}
 
-	async #tryRetryModelFallback(currentSelector: string): Promise<boolean> {
+	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
 		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
 		if (!role) return false;
 
@@ -8451,7 +8463,7 @@ export class AgentSession {
 			if (!candidate) continue;
 			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
 			if (!apiKey) continue;
-			await this.#applyRetryFallbackCandidate(role, selector, currentSelector);
+			await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options);
 			return true;
 		}
 
@@ -8460,6 +8472,7 @@ export class AgentSession {
 
 	async #maybeRestoreRetryFallbackPrimary(): Promise<void> {
 		if (!this.#activeRetryFallback) return;
+		if (this.#activeRetryFallback.pinned) return;
 		if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return;
 
 		const {
@@ -8557,6 +8570,7 @@ export class AgentSession {
 	async #handleRetryableError(message: AssistantMessage): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		if (!retrySettings.enabled) return false;
+		const classifierRefusal = this.#isClassifierRefusal(message);
 
 		const generation = this.#promptGeneration;
 		this.#retryAttempt++;
@@ -8630,14 +8644,21 @@ export class AgentSession {
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
 		if (!switchedCredential && currentSelector) {
 			if (retrySettings.modelFallback) {
-				this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
-				switchedModel = await this.#tryRetryModelFallback(currentSelector);
+				if (!classifierRefusal) {
+					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
+				}
+				switchedModel = await this.#tryRetryModelFallback(currentSelector, { pinFallback: classifierRefusal });
 			}
 			if (switchedModel) {
 				delayMs = 0;
 			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
+		}
+		if (classifierRefusal && !switchedModel) {
+			this.#retryAttempt = 0;
+			this.#resolveRetry();
+			return false;
 		}
 
 		// Fail-fast cap: if the provider asks us to wait longer than
