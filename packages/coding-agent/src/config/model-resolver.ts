@@ -634,7 +634,7 @@ function isSessionInheritedAgentPattern(value: string): boolean {
 }
 
 function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
-	return role === "smol" || role === "slow";
+	return role === "smol" || role === "slow" || role === "designer";
 }
 
 function resolveDefaultInheritedPatterns(
