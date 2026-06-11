@@ -294,5 +294,21 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 				terminal.stop();
 			}
 		});
+
+		it("keeps stdout error events handled after stop for delayed write failures (#2284)", () => {
+			captureStdoutWrites();
+			const terminal = new ProcessTerminal();
+			const err = Object.assign(new Error("EIO: i/o error, write"), {
+				code: "EIO",
+				fd: 5,
+				syscall: "write",
+				errno: -5,
+			});
+
+			terminal.write("restore frame");
+			terminal.stop();
+
+			expect(() => process.stdout.emit("error", err)).not.toThrow();
+		});
 	});
 });
