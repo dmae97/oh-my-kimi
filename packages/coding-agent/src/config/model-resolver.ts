@@ -633,6 +633,10 @@ function isSessionInheritedAgentPattern(value: string): boolean {
 	return value === DEFAULT_MODEL_ROLE || value === `${PREFIX_MODEL_ROLE}${DEFAULT_MODEL_ROLE}` || value === "pi/task";
 }
 
+function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
+	return role === "smol" || role === "slow";
+}
+
 function resolveConfiguredRolePattern(value: string, settings?: Settings): string[] | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;
@@ -642,9 +646,13 @@ function resolveConfiguredRolePattern(value: string, settings?: Settings): strin
 	if (!role) return [normalized];
 
 	const configured = settings?.getModelRole(role)?.trim();
+	const configuredDefault = shouldInheritDefaultBeforePriority(role) ? settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim() : undefined;
 	const roleDefaults = normalizeModelPatternList(MODEL_PRIO[role as keyof typeof MODEL_PRIO]);
-	const resolved = configured ? normalizeModelPatternList(configured) : roleDefaults;
-	if (!resolved || resolved.length === 0) {
+	const resolved = configured ? normalizeModelPatternList(configured) : normalizeModelPatternList(configuredDefault);
+	if (resolved.length === 0) {
+		resolved.push(...roleDefaults);
+	}
+	if (resolved.length === 0) {
 		return undefined;
 	}
 

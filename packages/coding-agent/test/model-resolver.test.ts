@@ -545,6 +545,15 @@ describe("resolveAgentModelPatterns", () => {
 		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
 	});
 
+	test("uses default for unconfigured smol and slow agent roles before priority defaults", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "local/llama" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings })).toEqual(["local/llama"]);
+	});
+
 	test("expands pi/designer to priority defaults", () => {
 		const settings = Settings.isolated({
 			modelRoles: {
