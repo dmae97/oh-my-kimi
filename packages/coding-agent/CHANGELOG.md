@@ -46,6 +46,10 @@
 - Fixed Anthropic classifier refusals to switch through configured retry fallback chains without same-model retries, and to keep the fallback pinned for the conversation. ([#2290](https://github.com/can1357/oh-my-pi/issues/2290))
 - Fixed the edit-tool hashline prompt to stop steering agents toward `insert after block N:` on closing delimiter lines; opener-only block anchors now point visible closing-line insertions to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
 
+### Added
+
+- Added `magicKeywords.enabled` and per-keyword `magicKeywords.ultrathink`, `magicKeywords.orchestrate`, and `magicKeywords.workflow` settings to disable hidden magic-keyword notices and ultrathink auto-thinking escalation ([#1796](https://github.com/can1357/oh-my-pi/issues/1796)).
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes
