@@ -91,6 +91,39 @@ describe("model thinking derivation", () => {
 		expect(gptOss.thinking?.effortMap).toBeUndefined();
 	});
 
+	it("normalizes stale explicit MiniMax M2 / GPT-OSS effort metadata from caches", () => {
+		const staleMinimax = createModel({
+			id: "minimax-m2.7",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "none", xhigh: "max" },
+			},
+		});
+		const staleGptOss = createModel({
+			id: "gpt-oss-120b",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		expect(staleMinimax.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+		expect(staleGptOss.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+	});
+
 	it("stores OpenAI-compatible provider effort maps in thinking metadata", () => {
 		const fireworks = createModel({
 			id: "glm-5.1",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -73,6 +74,32 @@ describe("issue #2315 — MiniMax M2 / GPT-OSS catalog excludes unsupported reas
 	it("declares only low/medium/high for fireworks/gpt-oss-120b and disables reasoning with low", async () => {
 		const model = getBundledModel("fireworks", "gpt-oss-120b") as Model<"openai-completions">;
 		expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		const body = await capturePayload(model, { disableReasoning: true });
+		expect(body.reasoning_effort).toBe("low");
+	});
+
+	it("normalizes stale cached MiniMax M2 thinking metadata before disableReasoning sends a request", async () => {
+		const base = getBundledModel("fireworks", "minimax-m2.7") as Model<"openai-completions">;
+		const model = buildModel({
+			id: base.id,
+			name: base.name,
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: base.baseUrl,
+			reasoning: true,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "none", xhigh: "max" },
+			},
+			input: base.input,
+			cost: base.cost,
+			contextWindow: base.contextWindow,
+			maxTokens: base.maxTokens,
+		});
+
+		expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		expect(model.thinking?.effortMap).toBeUndefined();
 		const body = await capturePayload(model, { disableReasoning: true });
 		expect(body.reasoning_effort).toBe("low");
 	});

@@ -134,8 +134,9 @@ export function resolveModelThinking<TApi extends Api>(
 
 /**
  * Backfill identity-derived wire facts onto explicit thinking metadata.
- * Explicit `effortMap` / `supportsDisplay` (including `false`) always win;
- * untouched configs are returned as-is with zero allocation.
+ * Explicit `effortMap` / `supportsDisplay` (including `false`) win, except
+ * model-defined effort restrictions still normalize stale cached capability
+ * surfaces before request-time code can observe them.
  */
 function fillThinkingWireDefaults<TApi extends Api>(
 	spec: ModelSpec<TApi>,
@@ -143,20 +144,32 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	thinking: ThinkingConfig,
 ): ThinkingConfig {
 	const parsed = parseKnownModel(spec.id);
+	const normalizedEfforts = getModelDefinedEfforts(spec) ?? thinking.efforts;
+	const effortsChanged = !sameEffortList(normalizedEfforts, thinking.efforts);
 	const effortMap =
 		thinking.effortMap === undefined
-			? inferEffortMap(spec, compat, parsed, thinking.mode, thinking.efforts)
-			: undefined;
+			? inferEffortMap(spec, compat, parsed, thinking.mode, normalizedEfforts)
+			: effortsChanged
+				? filterEffortMapToSupportedEfforts(thinking.effortMap, normalizedEfforts)
+				: undefined;
+	const shouldReplaceEffortMap = thinking.effortMap === undefined ? effortMap !== undefined : effortsChanged;
 	const needsDisplay =
 		thinking.supportsDisplay === undefined &&
 		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
 		supportsAdaptiveThinkingDisplay(spec.id);
-	if (effortMap === undefined && !needsDisplay) {
+	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay) {
 		return thinking;
 	}
 	const filled: ThinkingConfig = { ...thinking };
-	if (effortMap !== undefined) {
-		filled.effortMap = effortMap;
+	if (effortsChanged) {
+		filled.efforts = normalizedEfforts;
+	}
+	if (shouldReplaceEffortMap) {
+		if (effortMap === undefined) {
+			delete filled.effortMap;
+		} else {
+			filled.effortMap = effortMap;
+		}
 	}
 	if (needsDisplay) {
 		filled.supportsDisplay = true;
@@ -229,6 +242,20 @@ function filterEffortMapToSupportedEfforts(map: EffortMap, efforts: readonly Eff
 	return filtered;
 }
 
+function sameEffortList(left: readonly Effort[], right: readonly Effort[]): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index++) {
+		if (left[index] !== right[index]) return false;
+	}
+	return true;
+}
+
+function getModelDefinedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readonly Effort[] | undefined {
+	return spec.api === "openai-completions" && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
+		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
+		: undefined;
+}
+
 function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
 	if (compat === undefined || !("reasoningEffortMap" in compat)) {
 		return undefined;
@@ -297,8 +324,9 @@ function inferSupportedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] {
-	if (spec.api === "openai-completions" && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))) {
-		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
+	const modelDefinedEfforts = getModelDefinedEfforts(spec);
+	if (modelDefinedEfforts !== undefined) {
+		return modelDefinedEfforts;
 	}
 	switch (parsedModel.family) {
 		case "openai":
