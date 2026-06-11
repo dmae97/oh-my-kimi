@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { Context, Model, OpenAICompat } from "@oh-my-pi/pi-ai/types";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],

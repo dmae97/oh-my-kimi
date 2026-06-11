@@ -144,7 +144,9 @@ function fillThinkingWireDefaults<TApi extends Api>(
 ): ThinkingConfig {
 	const parsed = parseKnownModel(spec.id);
 	const effortMap =
-		thinking.effortMap === undefined ? inferEffortMap(spec, compat, parsed, thinking.mode, thinking.efforts) : undefined;
+		thinking.effortMap === undefined
+			? inferEffortMap(spec, compat, parsed, thinking.mode, thinking.efforts)
+			: undefined;
 	const needsDisplay =
 		thinking.supportsDisplay === undefined &&
 		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
@@ -211,7 +213,8 @@ function inferEffortMap<TApi extends Api>(
 ): EffortMap | undefined {
 	const detected = inferDetectedEffortMap(spec, parsedModel, mode);
 	const configured = readCompatEffortMap(compat);
-	const merged = detected === undefined ? configured : configured === undefined ? detected : { ...detected, ...configured };
+	const merged =
+		detected === undefined ? configured : configured === undefined ? detected : { ...detected, ...configured };
 	return merged === undefined ? undefined : filterEffortMapToSupportedEfforts(merged, efforts);
 }
 

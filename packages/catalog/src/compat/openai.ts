@@ -68,7 +68,6 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	);
 }
 
-
 /**
  * Build the resolved chat-completions compat record for a model spec.
  * Provider takes precedence over URL-based detection since it's explicitly configured.
@@ -179,7 +178,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			isCopilotHost ||
 			isZenmuxHost);
 
-
 	// Stream-watchdog floor: GLM coding-plan SKUs and direct DeepSeek reasoning
 	// models idle for minutes mid-reasoning; widen the idle timeout so warm-ups
 	// stop aborting and retrying.
@@ -275,7 +273,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	};
 
 	applyCompatOverrides(compat, spec.compat);
-
 
 	const whenThinkingPolicy =
 		spec.compat?.whenThinking ?? (isOpenCodeProvider && spec.reasoning ? OPENCODE_WHEN_THINKING : undefined);
