@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The agent loop now re-samples after a non-terminal stop (`stopReason: "stop"` with `stopDetails: { type: "pause_turn" }`, emitted by the Codex providers for `end_turn: false` commentary-only responses): the assistant message is committed to history and the model is called again without ending the turn. Consecutive pause continuations without an intervening tool call are capped at 8 to bound a backend that never stops pausing.
+
 ## [15.11.2] - 2026-06-11
 
 ### Added

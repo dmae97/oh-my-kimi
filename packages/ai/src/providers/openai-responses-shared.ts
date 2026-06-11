@@ -913,6 +913,15 @@ export async function processResponsesStream<TApi extends Api>(
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
+			// Codex-lineage backends/gateways mark an unfinished turn with
+			// `end_turn: false` on the terminal event (the response ended on
+			// commentary only). Not in the SDK types or the platform API today —
+			// inert when absent. Same mapping as openai-codex-responses: surface a
+			// non-terminal stop so the agent loop re-samples instead of ending the
+			// turn.
+			if ((response as { end_turn?: boolean } | undefined)?.end_turn === false && output.stopReason === "stop") {
+				output.stopDetails = { type: "pause_turn" };
+			}
 			options?.onCompleted?.();
 			// `response.completed`/`response.incomplete` is the last event of a
 			// Responses stream. Stop pulling instead of waiting for the server to

@@ -58,6 +58,14 @@ import { yieldIfDue } from "./utils/yield";
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
 
+/**
+ * Cap on consecutive re-samples triggered by a non-terminal stop
+ * (`stopDetails.type === "pause_turn"`) without an intervening tool call. Each
+ * continuation is a full model request, so a backend that never stops pausing
+ * must not spin the loop forever. Resets whenever a turn carries tool calls.
+ */
+const MAX_PAUSED_TURN_CONTINUATIONS = 8;
+
 class HarmonyLeakInterruption extends Error {
 	constructor(
 		readonly detection: HarmonyDetection,
@@ -586,6 +594,7 @@ async function runLoopBody(
 	let pendingMessages: AgentMessage[] = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 	let harmonyRetryAttempt = 0;
 	let harmonyTruncateResumeCount = 0;
+	let pausedTurnContinuations = 0;
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
@@ -757,6 +766,23 @@ async function runLoopBody(
 				if (message.stopReason === "length" && toolResults.length > 0) {
 					hasMoreToolCalls = true;
 				}
+			}
+
+			if (toolCalls.length > 0) {
+				pausedTurnContinuations = 0;
+			} else if (
+				!hasMoreToolCalls &&
+				message.stopReason === "stop" &&
+				message.stopDetails?.type === "pause_turn" &&
+				pausedTurnContinuations < MAX_PAUSED_TURN_CONTINUATIONS
+			) {
+				// Non-terminal stop: the provider ended the response but not the turn
+				// (e.g. Codex `end_turn: false` on a commentary-only progress update).
+				// Re-sample with the assistant message replayed so the model keeps
+				// working; the next round folds steering/asides in like any other
+				// mid-work turn.
+				pausedTurnContinuations++;
+				hasMoreToolCalls = true;
 			}
 
 			stream.push({ type: "turn_end", message, toolResults });

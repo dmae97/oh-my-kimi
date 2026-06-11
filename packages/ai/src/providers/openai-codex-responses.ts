@@ -610,6 +610,7 @@ function resetOutputState(output: AssistantMessage): void {
 	output.content.length = 0;
 	output.usage = createEmptyUsage();
 	output.stopReason = "stop";
+	output.stopDetails = undefined;
 }
 
 function removeTransientBlockIndices(output: AssistantMessage): void {
@@ -1484,6 +1485,7 @@ function handleResponseCompleted(
 				};
 				status?: string;
 				service_tier?: ServiceTier | "default";
+				end_turn?: boolean;
 			};
 		}
 	).response;
@@ -1529,6 +1531,15 @@ function handleResponseCompleted(
 	output.stopReason = mapOpenAIResponsesStopReason(response?.status as OpenAI.Responses.ResponseStatus | undefined);
 	if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 		output.stopReason = "toolUse";
+	}
+	// The Codex backend marks an unfinished turn with `end_turn: false` on the
+	// terminal event: this response ended on commentary only and the model
+	// expects to be sampled again (mirrors codex-rs `needs_follow_up`). Surface
+	// it as a non-terminal stop so the agent loop replays history and
+	// re-samples instead of ending the turn. Gated on "stop": with tool calls
+	// present the loop continues through tool execution anyway.
+	if (response?.end_turn === false && output.stopReason === "stop") {
+		output.stopDetails = { type: "pause_turn" };
 	}
 }
 

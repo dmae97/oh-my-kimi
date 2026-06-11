@@ -281,6 +281,60 @@ describe("openai-codex streaming", () => {
 		]);
 	});
 
+	it("maps end_turn=false on the terminal event to a pause_turn stop", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const completedResponse = {
+			status: "completed",
+			usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } },
+		};
+		const commentaryItem = {
+			type: "message",
+			id: "msg_1",
+			role: "assistant",
+			status: "completed",
+			phase: "commentary",
+			content: [{ type: "output_text", text: "Scanning the repo first." }],
+		};
+		const toolCallItem = {
+			type: "function_call",
+			id: "fc_1",
+			call_id: "call_1",
+			name: "read_file",
+			arguments: '{"path":"README.md"}',
+		};
+		const sseFor = (item: Record<string, unknown>, endTurn: boolean): string =>
+			`${[
+				`data: ${JSON.stringify({ type: "response.output_item.added", item: { ...item, ...(item.type === "message" ? { content: [] } : { arguments: "" }), status: "in_progress" } })}`,
+				`data: ${JSON.stringify({ type: "response.output_item.done", item })}`,
+				`data: ${JSON.stringify({ type: "response.completed", response: { ...completedResponse, end_turn: endTurn } })}`,
+			].join("\n\n")}\n\n`;
+		const streamWith = (sse: string) =>
+			streamOpenAICodexResponses(model, createCodexTestContext(), {
+				apiKey: token,
+				fetch: (async () =>
+					new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl,
+			}).result();
+
+		// Commentary-only response with an unfinished turn -> non-terminal stop.
+		const paused = await streamWith(sseFor(commentaryItem, false));
+		expect(paused.stopReason).toBe("stop");
+		expect(paused.stopDetails).toEqual({ type: "pause_turn" });
+
+		// Finished turn -> plain stop, no pause marker.
+		const finished = await streamWith(sseFor(commentaryItem, true));
+		expect(finished.stopReason).toBe("stop");
+		expect(finished.stopDetails).toBeUndefined();
+
+		// With tool calls the agent loop continues through execution; the pause
+		// marker must not double-trigger continuation.
+		const toolUse = await streamWith(sseFor(toolCallItem, false));
+		expect(toolUse.stopReason).toBe("toolUse");
+		expect(toolUse.stopDetails).toBeUndefined();
+	});
+
 	it("persists final tool-call args when SSE finalizes via output_item.done without an args.done event", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
