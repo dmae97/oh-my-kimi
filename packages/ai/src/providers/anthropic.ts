@@ -2003,6 +2003,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 							if (output.stopReason === "error") {
 								const stopDetails = delta?.stop_details;
+								output.stopDetails = stopDetails ?? (rawStopReason ? { type: rawStopReason } : null);
 								if (stopDetails?.type === "refusal") {
 									const explanation = stopDetails.explanation?.trim();
 									const category = stopDetails.category;
@@ -2162,6 +2163,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					output.content.length = 0;
 					output.responseId = undefined;
 					output.errorMessage = undefined;
+					output.stopDetails = undefined;
 					output.providerPayload = undefined;
 					output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
 					output.stopReason = "stop";
