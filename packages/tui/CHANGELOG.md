@@ -1,9 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `TUI.requestComponentRender(component)` to schedule component-scoped renders for self-contained updates
+
+### Changed
+
+- Changed the render pipeline to reuse only affected root subtrees for component-scoped updates, avoiding full-tree compose when animations or other isolated component changes occur
 
 ### Fixed
 
+- Fixed component-scoped renders to preserve prior live scrollback seam data for skipped root children, preventing duplicate or missing rows during spinner-only updates
 - Reported committed native scrollback row counts to interested child components so immutable history can be skipped without breaking live-region commit bookkeeping.
 - Fixed `ProcessTerminal` treating asynchronous stdout `EIO` errors as uncaught exceptions: stdout `error` events now mark the terminal dead, disable future renders, and keep the active session process alive ([#2284](https://github.com/can1357/oh-my-pi/issues/2284)).
 
