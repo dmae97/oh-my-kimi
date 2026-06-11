@@ -18,7 +18,7 @@ import {
 	semverEqual,
 	semverGte,
 } from "./identity/classify";
-import { supportsAdaptiveThinkingDisplay } from "./identity/family";
+import { isMinimaxM2FamilyModelId, isOpenAIGptOssModelId, supportsAdaptiveThinkingDisplay } from "./identity/family";
 import type {
 	Api,
 	CompatOf,
@@ -47,6 +47,7 @@ const GEMINI_3_PRO_EFFORTS: readonly Effort[] = [Effort.Low, Effort.High];
 const GEMINI_3_FLASH_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
 const GPT_5_2_PLUS_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
 const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.High];
+const LOW_MEDIUM_HIGH_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High];
 
 /**
  * Effort → wire-value map for the 5-tier adaptive scale (Opus 4.7+ and
@@ -176,6 +177,12 @@ function inferSupportedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] {
+	if (
+		spec.api === "openai-completions" &&
+		(isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
+	) {
+		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
+	}
 	switch (parsedModel.family) {
 		case "openai":
 			return inferOpenAISupportedEfforts(parsedModel);

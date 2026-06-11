@@ -16,8 +16,6 @@ import {
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMimoModelIdOrName,
-	isMinimaxM2FamilyModelId,
-	isOpenAIGptOssModelId,
 	isQwenModelId,
 } from "../identity/family";
 import { ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER, ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER } from "../model-thinking";
@@ -203,14 +201,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const openRouterAnthropicReasoningEffortMap = isOpenRouter
 		? getOpenRouterAnthropicReasoningEffortMap(lowerId)
 		: undefined;
-	// MiniMax M2 family (M2/M2.1/M2.5/M2.7 across every host) and the OpenAI
-	// GPT-OSS family (Harmony reasoning) only accept `low|medium|high` for
-	// `reasoning_effort` and 400 on `minimal`, `xhigh`, or `none`. The
-	// auto-thinking classifier's `disableReasoning: true` path picks the
-	// lowest supported effort, so this clamp must run BEFORE the Fireworks
-	// blanket `minimal → none` mapping below (issue #2315).
-	const requiresLowMediumHighOnlyEffort =
-		Boolean(spec.reasoning) && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id));
 	const detectedReasoningEffortMap: NonNullable<OpenAICompat["reasoningEffortMap"]> =
 		provider === "groq" && spec.id === "qwen/qwen3-32b"
 			? ({
@@ -230,20 +220,13 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 					} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
 				: openRouterAnthropicReasoningEffortMap
 					? openRouterAnthropicReasoningEffortMap
-					: requiresLowMediumHighOnlyEffort
+					: isFireworks
 						? ({
-								// MiniMax M2 / GPT-OSS Harmony: clamp the outer tiers to the
-								// nearest server-accepted level instead of `none`/`minimal`/`xhigh`.
-								minimal: "low",
-								xhigh: "high",
+								// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
+								// `minimal` literal but accepts `none` for the lowest setting.
+								minimal: "none",
 							} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-						: isFireworks
-							? ({
-									// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
-									// `minimal` literal but accepts `none` for the lowest setting.
-									minimal: "none",
-								} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-							: {};
+						: {};
 
 	// Stream-watchdog floor: GLM coding-plan SKUs and direct DeepSeek reasoning
 	// models idle for minutes mid-reasoning; widen the idle timeout so warm-ups

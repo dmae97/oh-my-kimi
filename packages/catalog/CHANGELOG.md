@@ -21,7 +21,7 @@
 - Fixed model ID precedence so a real upstream Copilot model id is kept when it conflicts with a synthesized `-1m` variant
 ### Fixed
 
-- Fixed `buildOpenAICompat` sending `reasoning_effort: "none"` for MiniMax M2-family and OpenAI gpt-oss models on Fireworks. Both families only accept `low|medium|high`, so the Fireworks-wide `{ minimal: "none" }` map made the auto-thinking classifier 400 on every turn when configured with a smol model in those families (e.g. `fireworks/minimax-m2.7`). The compat layer now detects these families via new `isMinimaxM2FamilyModelId` / `isOpenAIGptOssModelId` identity predicates and clamps their reasoning effort map to `{ minimal: "low", xhigh: "high" }` instead, leaving GLM-5.x and other Fireworks models on the existing `minimal → none` path ([#2315](https://github.com/can1357/oh-my-pi/issues/2315)).
+- Fixed MiniMax M2-family and OpenAI gpt-oss model metadata so OpenAI-compatible catalog entries declare only `low|medium|high` thinking efforts. Their upstreams reject `minimal`, `xhigh`, and Fireworks' `minimal → none` wire mapping, so `fireworks/minimax-m2.7` as the smol auto-thinking classifier model 400ed on every turn. Regenerated `models.json` now makes `disableReasoning` choose `low` for those families while leaving GLM-5.x and other Fireworks models on the existing `minimal → none` path ([#2315](https://github.com/can1357/oh-my-pi/issues/2315)).
 
 ## [15.11.1] - 2026-06-11
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const testContext: Context = {
@@ -59,27 +60,21 @@ async function capturePayload(
 	return payload;
 }
 
-describe("issue #2315 — MiniMax M2 / GPT-OSS reject Fireworks' `none`/`minimal`/`xhigh` reasoning_effort", () => {
-	it("disableReasoning on fireworks/minimax-m2.7 clamps to the lowest server-accepted effort", async () => {
+describe("issue #2315 — MiniMax M2 / GPT-OSS catalog excludes unsupported reasoning_effort tiers", () => {
+	it("declares only low/medium/high for fireworks/minimax-m2.7 and disables reasoning with low", async () => {
 		const model = getBundledModel("fireworks", "minimax-m2.7") as Model<"openai-completions">;
+		expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
 		const body = await capturePayload(model, { disableReasoning: true });
-		// Pre-fix the wire body carried "none", which MiniMax M2 400'd on every
-		// auto-thinking turn. The lowest accepted effort is "low".
+		// Pre-fix the catalog included `minimal`, so the Fireworks compat map turned
+		// the auto-thinking classifier's disableReasoning request into `"none"`.
 		expect(body.reasoning_effort).toBe("low");
 	});
 
-	it("disableReasoning on fireworks/gpt-oss-120b clamps to the lowest server-accepted effort", async () => {
+	it("declares only low/medium/high for fireworks/gpt-oss-120b and disables reasoning with low", async () => {
 		const model = getBundledModel("fireworks", "gpt-oss-120b") as Model<"openai-completions">;
+		expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
 		const body = await capturePayload(model, { disableReasoning: true });
 		expect(body.reasoning_effort).toBe("low");
-	});
-
-	it("clamps user-requested xhigh on fireworks/minimax-m2.7 to the highest server-accepted effort", async () => {
-		const model = getBundledModel("fireworks", "minimax-m2.7") as Model<"openai-completions">;
-		const body = await capturePayload(model, { reasoning: Effort.XHigh });
-		// xhigh is unsupported upstream; the map clamps to "high" (the ceiling
-		// of the {low, medium, high} set MiniMax M2 actually accepts).
-		expect(body.reasoning_effort).toBe("high");
 	});
 
 	it("preserves low/medium/high passthrough on fireworks/minimax-m2.7", async () => {

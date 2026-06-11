@@ -65,6 +65,30 @@ describe("model thinking derivation", () => {
 		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
 	});
 
+	it("stores MiniMax M2 and GPT-OSS OpenAI-compatible effort limits in model metadata", () => {
+		const minimax = createModel({
+			id: "minimax-m2.7",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const gptOss = createModel({
+			id: "gpt-oss-120b",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+
+		expect(minimax.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+		expect(gptOss.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+	});
+
 	it("encodes the Gemini 3 Pro effort gap directly in efforts", () => {
 		const model = createModel({
 			id: "gemini-3-pro-preview",
