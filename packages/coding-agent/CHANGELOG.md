@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `issue://` reads failing on older GitHub CLI releases that reject the optional `stateReason` issue JSON field; single issue reads now retry without it and issue listings no longer request it ([#2333](https://github.com/can1357/oh-my-pi/issues/2333)).
+
 ## [15.11.3] - 2026-06-11
 
 ### Fixed
