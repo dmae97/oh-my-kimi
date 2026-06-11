@@ -44,6 +44,9 @@ describe("extension loader host runtime binding", () => {
 		expect(projectDir).toBeDefined();
 		const cwd = projectDir!.path();
 
+		// Write every module before any loader runs: Bun's resolver caches
+		// directory entries process-wide, so a file created in `cwd` after the
+		// first module resolution there is invisible to later dynamic imports.
 		const extensionPath = writeModule(
 			"extension.ts",
 			`
@@ -53,11 +56,6 @@ describe("extension loader host runtime binding", () => {
 				}
 			`,
 		);
-		const extensionResult = await loadExtensions([extensionPath], cwd);
-		expect(extensionResult.errors).toEqual([]);
-		expect(extensionResult.extensions).toHaveLength(1);
-		expect(extensionResult.extensions[0].commands.has("identity_extension")).toBe(true);
-
 		const toolPath = writeModule(
 			"tool.ts",
 			`
@@ -73,10 +71,6 @@ describe("extension loader host runtime binding", () => {
 				}
 			`,
 		);
-		const toolResult = await loadCustomTools([{ path: toolPath }], cwd, []);
-		expect(toolResult.errors).toEqual([]);
-		expect(toolResult.tools.map(tool => tool.tool.name)).toEqual(["identity_tool"]);
-
 		const agentDir = path.join(cwd, "agent");
 		const commandPath = writeModule(
 			path.join("agent", "commands", "identity", "index.ts"),
@@ -91,10 +85,6 @@ describe("extension loader host runtime binding", () => {
 				}
 			`,
 		);
-		const commandResult = await loadCustomCommands({ cwd, agentDir });
-		expect(commandResult.errors.filter(error => error.path === commandPath)).toEqual([]);
-		expect(commandResult.commands.some(command => command.command.name === "identity_command")).toBe(true);
-
 		const hookPath = writeModule(
 			"hook.ts",
 			`
@@ -104,6 +94,20 @@ describe("extension loader host runtime binding", () => {
 				}
 			`,
 		);
+
+		const extensionResult = await loadExtensions([extensionPath], cwd);
+		expect(extensionResult.errors).toEqual([]);
+		expect(extensionResult.extensions).toHaveLength(1);
+		expect(extensionResult.extensions[0].commands.has("identity_extension")).toBe(true);
+
+		const toolResult = await loadCustomTools([{ path: toolPath }], cwd, []);
+		expect(toolResult.errors).toEqual([]);
+		expect(toolResult.tools.map(tool => tool.tool.name)).toEqual(["identity_tool"]);
+
+		const commandResult = await loadCustomCommands({ cwd, agentDir });
+		expect(commandResult.errors.filter(error => error.path === commandPath)).toEqual([]);
+		expect(commandResult.commands.some(command => command.command.name === "identity_command")).toBe(true);
+
 		const hookResult = await loadHooks([hookPath], cwd);
 		expect(hookResult.errors).toEqual([]);
 		expect(hookResult.hooks).toHaveLength(1);
