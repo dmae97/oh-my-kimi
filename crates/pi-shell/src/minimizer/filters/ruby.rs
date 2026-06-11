@@ -566,6 +566,14 @@ fn is_rake_keep_line(trimmed: &str) -> bool {
 	if trimmed.is_empty() {
 		return false;
 	}
+	// rake aborted! always surfaces
+	if trimmed.contains("rake aborted") {
+		return true;
+	}
+	// warning: lines from asset compilation, migrations, etc. are signal
+	if trimmed.to_ascii_lowercase().starts_with("warning:") {
+		return true;
+	}
 	let lower = trimmed.to_ascii_lowercase();
 	let words: Vec<&str> = lower.split_whitespace().collect();
 	words.iter().any(|w| {
@@ -579,7 +587,7 @@ fn is_rake_keep_line(trimmed: &str) -> bool {
 				| "assertion"
 				| "test" | "failure"
 		)
-	}) || trimmed.contains("rake aborted")
+	})
 }
 
 fn ruby_test_success(input: &str) -> String {
@@ -1089,6 +1097,14 @@ mod tests {
 		assert!(out.text.contains("Record 4821"));
 		assert!(out.text.contains("Record 4822"));
 		assert!(out.text.contains("Expected positive integer, got -3"));
+	}
+
+	#[test]
+	fn rake_keep_warning_lines() {
+		assert!(is_rake_keep_line("warning: constant Foo::Bar is deprecated"));
+		assert!(is_rake_keep_line("Warning: could not find JAVA_HOME"));
+		// non-warning task chatter still dropped
+		assert!(!is_rake_keep_line("Compiling assets..."));
 	}
 
 	#[test]
