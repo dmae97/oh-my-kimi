@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reported committed native scrollback row counts to interested child components so immutable history can be skipped without breaking live-region commit bookkeeping.
 ## [15.11.0] - 2026-06-10
 ### Added
 

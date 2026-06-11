@@ -191,6 +191,14 @@ export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackCommitSafeEnd?(): number | undefined;
 }
 
+export interface NativeScrollbackCommittedRows {
+	setNativeScrollbackCommittedRows(rows: number): void;
+}
+
+function setNativeScrollbackCommittedRows(component: Component, rows: number): void {
+	(component as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
+}
+
 function getNativeScrollbackLiveRegionStart(component: Component): number | undefined {
 	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackLiveRegionStart?.();
 }
@@ -752,6 +760,7 @@ export class TUI extends Container {
 		let stableRows = 0;
 		for (let index = 0; index < children.length; index++) {
 			const child = children[index]!;
+			setNativeScrollbackCommittedRows(child, Math.max(0, this.#committedRows - offset));
 			const childLines = child.render(width);
 			const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
 			if (liveRegionStart !== undefined) {

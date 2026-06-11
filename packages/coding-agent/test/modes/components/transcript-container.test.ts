@@ -51,6 +51,26 @@ class StreamingBlock implements Component {
 	}
 }
 
+class CountingFinalizedBlock implements Component {
+	renderCount = 0;
+	#lines: string[];
+
+	constructor(lines: string[]) {
+		this.#lines = lines;
+	}
+
+	set(lines: string[]): void {
+		this.#lines = lines;
+	}
+
+	invalidate(): void {}
+
+	render(_width: number): string[] {
+		this.renderCount++;
+		return [...this.#lines];
+	}
+}
+
 beforeAll(() => {
 	initTheme();
 });
@@ -215,6 +235,26 @@ describe("TranscriptContainer", () => {
 		pending.finalize(["pending-final"]);
 		expect(container.render(40)).toEqual(["done-collapsed", "", "pending-final", "", "card"]);
 		expect(container.getNativeScrollbackLiveRegionStart()).toBe(4);
+	});
+	it("does not re-render finalized rows already committed to native scrollback", () => {
+		const container = new TranscriptContainer();
+		const committed = new CountingFinalizedBlock(["committed"]);
+		const liveTail = new CountingFinalizedBlock(["tail"]);
+		container.addChild(committed);
+		container.addChild(liveTail);
+
+		expect(container.render(40)).toEqual(["committed", "", "tail"]);
+		expect(committed.renderCount).toBe(1);
+		expect(liveTail.renderCount).toBe(1);
+
+		container.setNativeScrollbackCommittedRows(1);
+		expect(container.render(40)).toEqual(["committed", "", "tail"]);
+		expect(committed.renderCount).toBe(1);
+		expect(liveTail.renderCount).toBe(2);
+
+		container.invalidate();
+		expect(container.render(40)).toEqual(["committed", "", "tail"]);
+		expect(committed.renderCount).toBe(2);
 	});
 });
 
