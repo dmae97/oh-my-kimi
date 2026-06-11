@@ -120,6 +120,7 @@ export class SelectorController {
 								separator: settings.get("statusLine.separator"),
 								showHookStatus: settings.get("statusLine.showHookStatus"),
 								sessionAccent: settings.get("statusLine.sessionAccent"),
+								transparent: settings.get("statusLine.transparent"),
 								...previewSettings,
 							});
 							this.ctx.updateEditorTopBorder();
@@ -147,6 +148,7 @@ export class SelectorController {
 								separator: settings.get("statusLine.separator"),
 								showHookStatus: settings.get("statusLine.showHookStatus"),
 								sessionAccent: settings.get("statusLine.sessionAccent"),
+								transparent: settings.get("statusLine.transparent"),
 							});
 							this.ctx.updateEditorTopBorder();
 							this.ctx.ui.requestRender();
@@ -351,6 +353,7 @@ export class SelectorController {
 			case "statusLineShowHooks":
 			case "statusLine.showHookStatus":
 			case "statusLine.sessionAccent":
+			case "statusLine.transparent":
 			case "statusLineSegments":
 			case "statusLineModelThinking":
 			case "statusLinePathAbbreviate":
@@ -369,6 +372,7 @@ export class SelectorController {
 					separator: settings.get("statusLine.separator"),
 					showHookStatus: settings.get("statusLine.showHookStatus"),
 					sessionAccent: settings.get("statusLine.sessionAccent"),
+					transparent: settings.get("statusLine.transparent"),
 					segmentOptions: settings.get("statusLine.segmentOptions"),
 				};
 				this.ctx.statusLine.updateSettings(statusLineSettings);
