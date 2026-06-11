@@ -13,7 +13,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
-import { resolvePluginExtensionPaths } from "./loader";
+import { resolvePluginManifestEntries } from "./loader";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import type {
 	DoctorCheck,
@@ -248,27 +248,36 @@ export class PluginManager {
 	}
 
 	async #validateInstalledExtensions(plugin: InstalledPlugin): Promise<void> {
-		const extensionPaths = resolvePluginExtensionPaths(plugin);
-		if (plugin.manifest.extensions && plugin.manifest.extensions.length > 0 && extensionPaths.length === 0) {
-			throw new Error(`Plugin ${plugin.name} declares extension entries but none resolved to loadable files`);
-		}
-		if (extensionPaths.length === 0) {
+		const declaredEntries = resolvePluginManifestEntries(plugin, "extensions");
+		if (declaredEntries.length === 0) {
 			return;
 		}
 
-		installLegacyPiSpecifierShim();
 		const errors: string[] = [];
-		for (const extensionPath of extensionPaths) {
-			try {
-				const module = await loadLegacyPiModule(extensionPath);
-				if (!hasExtensionFactoryExport(module)) {
-					errors.push(`${extensionPath}: extension does not export a valid factory function`);
-				}
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				errors.push(`${extensionPath}: ${message}`);
+		const loadable: string[] = [];
+		for (const { entry, resolvedPath } of declaredEntries) {
+			if (resolvedPath === null) {
+				errors.push(`${entry}: declared extension entry not found on disk`);
+			} else {
+				loadable.push(resolvedPath);
 			}
 		}
+
+		if (loadable.length > 0) {
+			installLegacyPiSpecifierShim();
+			for (const extensionPath of loadable) {
+				try {
+					const module = await loadLegacyPiModule(extensionPath);
+					if (!hasExtensionFactoryExport(module)) {
+						errors.push(`${extensionPath}: extension does not export a valid factory function`);
+					}
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					errors.push(`${extensionPath}: ${message}`);
+				}
+			}
+		}
+
 		if (errors.length > 0) {
 			throw new Error(`Plugin ${plugin.name} extension validation failed:\n${errors.join("\n")}`);
 		}

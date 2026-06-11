@@ -164,4 +164,53 @@ describe("PluginManager.install load validation", () => {
 		const lock = await Bun.file(path.join(tmpRoot, "omp-plugins.lock.json")).json();
 		expect(lock.plugins["broken-plugin"]).toEqual({ version: "1.0.0", enabledFeatures: null, enabled: true });
 	});
+
+	test("rejects an install whose manifest declares a missing extension entry", async () => {
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			expect(cmd).toEqual(["bun", "install", "partial-plugin"]);
+
+			const prepare = (async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{ name: "omp-plugins", private: true, dependencies: { "partial-plugin": "1.0.0" } },
+						null,
+						2,
+					),
+				);
+				const installedDir = path.join(pluginsNodeModules, "partial-plugin");
+				await fs.mkdir(path.join(installedDir, "dist"), { recursive: true });
+				await Bun.write(
+					path.join(installedDir, "package.json"),
+					JSON.stringify(
+						{
+							name: "partial-plugin",
+							version: "1.0.0",
+							omp: { extensions: ["./dist/valid.ts", "./dist/missing.ts"] },
+						},
+						null,
+						2,
+					),
+				);
+				await Bun.write(
+					path.join(installedDir, "dist", "valid.ts"),
+					'export default function(pi) { pi.registerCommand("valid-ext", { handler: async () => {} }); }\n',
+				);
+			})();
+
+			return {
+				pid: 1,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		await expect(new PluginManager(tmpRoot).install("partial-plugin")).rejects.toThrow(/dist\/missing\.ts/);
+
+		const pluginsPackage = await Bun.file(pluginsPkgJson).json();
+		expect(pluginsPackage.dependencies ?? {}).toEqual({});
+		expect(await Bun.file(path.join(pluginsNodeModules, "partial-plugin", "package.json")).exists()).toBe(false);
+		expect(await Bun.file(path.join(tmpRoot, "omp-plugins.lock.json")).exists()).toBe(false);
+	});
 });
