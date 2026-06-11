@@ -85,11 +85,32 @@ fn strip_lint_noise(program: &str, input: &str, exit_code: i32) -> String {
 }
 
 fn preserves_machine_readable_output(ctx: &MinimizerCtx<'_>) -> bool {
-	matches!(ctx.program, "pyright" | "basedpyright")
+	// pyright/basedpyright --outputjson
+	if matches!(ctx.program, "pyright" | "basedpyright")
 		&& ctx
 			.command
 			.split_whitespace()
 			.any(|part| part == "--outputjson" || part.starts_with("--outputjson="))
+	{
+		return true;
+	}
+	// eslint with an explicit non-default formatter (-f / --format with value != stylish)
+	if ctx.program == "eslint" {
+		let tokens: Vec<&str> = ctx.command.split_whitespace().collect();
+		for (i, t) in tokens.iter().enumerate() {
+			if (*t == "-f" || *t == "--format")
+				&& tokens.get(i + 1).map_or(false, |v| *v != "stylish")
+			{
+				return true;
+			}
+			if let Some(val) = t.strip_prefix("--format=") {
+				if val != "stylish" {
+					return true;
+				}
+			}
+		}
+	}
+	false
 }
 
 fn is_lint_noise(program: &str, line: &str, exit_code: i32) -> bool {
@@ -962,6 +983,78 @@ mod tests {
 		assert!(!is_gutter_bar_line("10 errors found"), "bare numeric is not a bar gutter");
 		assert!(is_gutter_bar_line("3 \u{2502} interface Props {"), "biome bar gutter strips");
 		assert!(is_gutter_bar_line("12 \u{2502} items.forEach(...)"), "oxlint bar gutter strips");
+	}
+
+	// -----------------------------------------------------------------
+	// CONCERN: eslint explicit formatter passthrough
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn eslint_json_format_passes_through() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "eslint",
+			subcommand: None,
+			command:    "eslint -f json src/",
+			config:     &cfg,
+		};
+		// should passthrough — preserves_machine_readable_output returns true
+		let dummy = r#"[{"filePath":"src/foo.js","messages":[]}]"#;
+		let out = filter(&ctx, dummy, 0);
+		assert!(!out.changed, "eslint -f json must passthrough unchanged");
+		assert_eq!(out.text, dummy);
+	}
+
+	#[test]
+	fn eslint_format_long_flag_passes_through() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		for command in [
+			"eslint --format json src/",
+			"eslint --format=json src/",
+			"eslint --format compact src/",
+			"eslint -f junit src/",
+		] {
+			let ctx = MinimizerCtx {
+				program:    "eslint",
+				subcommand: None,
+				command,
+				config:     &cfg,
+			};
+			let dummy = r#"[{"filePath":"src/foo.js","messages":[]}]"#;
+			let out = filter(&ctx, dummy, 0);
+			assert!(!out.changed, "{command} must passthrough unchanged");
+			assert_eq!(out.text, dummy);
+		}
+	}
+
+	#[test]
+	fn eslint_stylish_still_condensed() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "eslint",
+			subcommand: None,
+			command:    "eslint --format stylish src/",
+			config:     &cfg,
+		};
+		let dummy = "\nsrc/foo.js\n  1:1  error  bad  no-var\n\n✖ 1 problem\n";
+		let out = filter(&ctx, dummy, 1);
+		// stylish goes through the condenser, result should be changed
+		assert!(out.changed, "eslint --format stylish must go through the condenser");
+	}
+
+	#[test]
+	fn eslint_no_format_flag_still_condensed() {
+		// no -f/--format flag at all → default stylish → condenser runs
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "eslint",
+			subcommand: None,
+			command:    "eslint src/",
+			config:     &cfg,
+		};
+		let dummy = "\nsrc/foo.js\n  1:1  error  bad  no-var\n\n✖ 1 problem\n";
+		let out = filter(&ctx, dummy, 1);
+		assert!(out.changed, "eslint without -f must go through the condenser");
 	}
 
 	#[test]
