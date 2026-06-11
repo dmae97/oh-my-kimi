@@ -229,6 +229,7 @@
         const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
         const connector = showConnector && !isVirtualRootChild ? (isLast ? '└─ ' : '├─ ') : '';
         const connectorPosition = connector ? displayIndent - 1 : -1;
+        const chainGutter = !connector ? gutters[gutters.length - 1] : undefined;
 
         const totalChars = displayIndent * 3;
         const prefixChars = [];
@@ -238,7 +239,11 @@
 
           const gutter = gutters.find(g => g.position === level);
           if (gutter) {
-            prefixChars.push(posInLevel === 0 ? (gutter.show ? '│' : ' ') : ' ');
+            // Chain rows (no connector of their own) extend only their
+            // nearest connector gutter so the flattened conversation flow
+            // stays anchored without reviving unrelated `└─` ancestors (#2298).
+            const showVertical = gutter.show || gutter === chainGutter;
+            prefixChars.push(posInLevel === 0 ? (showVertical ? '│' : ' ') : ' ');
           } else if (connector && level === connectorPosition) {
             if (posInLevel === 0) {
               prefixChars.push(isLast ? '└' : '├');
