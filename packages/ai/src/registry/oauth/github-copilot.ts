@@ -4,6 +4,7 @@
 import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
+	COPILOT_API_HEADERS,
 	getGitHubCopilotBaseUrl,
 	isPublicGitHubHost,
 	normalizeDomain,
@@ -230,7 +231,7 @@ async function enableGitHubCopilotModel(
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${token}`,
-				...OPENCODE_HEADERS,
+				...COPILOT_API_HEADERS,
 				"openai-intent": "chat-policy",
 				"x-interaction-type": "chat-policy",
 			},
@@ -252,14 +253,16 @@ async function enableAllGitHubCopilotModels(
 	fetchImpl: FetchImpl,
 	onProgress?: (model: string, success: boolean) => void,
 ): Promise<void> {
-	const models = getBundledModels("github-copilot");
+	// Synthesized catalog variants (Copilot long-context `-1m` entries) share
+	// the upstream model id; enable each wire id exactly once.
+	const wireModelIds = [...new Set(getBundledModels("github-copilot").map(model => model.requestModelId ?? model.id))];
 	const BATCH_SIZE = 5;
-	for (let i = 0; i < models.length; i += BATCH_SIZE) {
-		const batch = models.slice(i, i + BATCH_SIZE);
+	for (let i = 0; i < wireModelIds.length; i += BATCH_SIZE) {
+		const batch = wireModelIds.slice(i, i + BATCH_SIZE);
 		await Promise.all(
-			batch.map(async model => {
-				const success = await enableGitHubCopilotModel(token, model.id, fetchImpl, enterpriseDomain);
-				onProgress?.(model.id, success);
+			batch.map(async modelId => {
+				const success = await enableGitHubCopilotModel(token, modelId, fetchImpl, enterpriseDomain);
+				onProgress?.(modelId, success);
 			}),
 		);
 	}
