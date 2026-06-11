@@ -16,6 +16,7 @@
 - Marked unsmoothed assistant streaming renders as transient so streamed code blocks can avoid synchronous syntax highlighting until the message finalizes.
 - Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
 - Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
+- Fixed the `job` tool's poll header repeating the running count ("waiting on 19 of 19 19 running"): the title now reads "waiting on N jobs" (or "waiting on N of M jobs" when some settled) and the dim meta lists only settled categories (done/failed/cancelled)
 
 ## [15.11.1] - 2026-06-11
 ### Added
