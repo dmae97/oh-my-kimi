@@ -1219,6 +1219,28 @@ class StressDriver {
 				if (resyncTo >= 0) {
 					this.#shadowCommitted = resyncTo;
 					this.#shadowRawPrefix.length = resyncTo;
+					// Mirror the engine's cursor-tail re-anchor: a resync that
+					// leaves a focused cursor tail shorter than the viewport pulls
+					// the window back down to the frame tail and restarts commit
+					// bookkeeping there. The shrink-into-prefix block below owns
+					// the frame-shorter-than-prefix case with the same formula.
+					const rows = Math.max(1, this.#term.rows);
+					let cursorInTail = false;
+					for (let i = this.#shadowCommitted; i < lines.length; i++) {
+						if (lines[i]!.includes(CURSOR_MARKER)) {
+							cursorInTail = true;
+							break;
+						}
+					}
+					if (
+						cursorInTail &&
+						stripped.length > this.#shadowCommitted &&
+						stripped.length - this.#shadowCommitted < rows
+					) {
+						this.#shadowCommitted = Math.max(0, stripped.length - rows);
+						this.#shadowWindowTop = this.#shadowCommitted;
+						this.#shadowRawPrefix = stripped.slice(0, this.#shadowCommitted);
+					}
 				}
 			}
 			if (stripped.length <= this.#shadowCommitted) {
