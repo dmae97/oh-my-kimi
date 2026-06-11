@@ -75,8 +75,10 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../slash-commands/builtin-registry";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
+import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
@@ -325,6 +327,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#pendingSubmissionDispose: (() => void) | undefined;
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
+	lastLeftTapTime = 0;
 	shutdownRequested = false;
 	#isShuttingDown = false;
 	hookSelector: HookSelectorComponent | undefined = undefined;
@@ -452,9 +455,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
 
-		const builtinCommandNames = new Set(BUILTIN_SLASH_COMMANDS.map(c => c.name));
 		const hookCommands: SlashCommand[] = (
-			this.session.extensionRunner?.getRegisteredCommands(builtinCommandNames) ?? []
+			this.session.extensionRunner?.getRegisteredCommands(BUILTIN_SLASH_COMMAND_RESERVED_NAMES) ?? []
 		).map(cmd => ({
 			name: cmd.name,
 			description: cmd.description ?? "(hook command)",
@@ -494,8 +496,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	playWelcomeIntro(): void {
-		this.#welcomeComponent?.playIntro(() => this.ui.requestRender());
+		const welcome = this.#welcomeComponent;
+		// Component-scoped: the intro only mutates the welcome box's own rows,
+		// so a resumed long transcript is not re-walked per animation frame.
+		welcome?.playIntro(() => this.ui.requestComponentRender(welcome));
 	}
+
 	async init(options: InteractiveModeInitOptions = {}): Promise<void> {
 		if (this.isInitialized) return;
 
@@ -684,6 +690,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.updateEditorTopBorder();
 	}
 
+	/** Reload the title-generation system prompt override for the provided working directory. */
+	async refreshTitleSystemPrompt(cwd?: string): Promise<void> {
+		const basePath = cwd ?? this.sessionManager.getCwd();
+		const titleSystemPromptSource = discoverTitleSystemPromptFile(basePath);
+		this.titleSystemPrompt = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
+	}
+
 	/** Reload slash commands and autocomplete for the provided working directory. */
 	async refreshSlashCommandState(cwd?: string): Promise<void> {
 		const basePath = cwd ?? this.sessionManager.getCwd();
@@ -718,6 +731,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
 		// the next prompt sees everything scoped to the new project directory.
 		clearClaudePluginRootsCache();
+		await this.refreshTitleSystemPrompt(newCwd);
 		resetCapabilities();
 		await this.refreshSlashCommandState(newCwd);
 		await this.session.refreshSshTool({ activateIfAvailable: true });
@@ -1040,6 +1054,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			separator: settings.get("statusLine.separator"),
 			showHookStatus: settings.get("statusLine.showHookStatus"),
 			sessionAccent: settings.get("statusLine.sessionAccent"),
+			transparent: settings.get("statusLine.transparent"),
 			segmentOptions: settings.get("statusLine.segmentOptions"),
 		});
 	}
@@ -1079,7 +1094,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
-		const context = this.session.buildDisplaySessionContext();
+		// Full-history transcript: compactions render as inline dividers instead
+		// of restarting the visible conversation (the LLM context still resets).
+		const context = this.session.buildTranscriptSessionContext();
 		this.renderSessionContext(context);
 	}
 
@@ -2871,11 +2888,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 
-	renderInitialMessages(
-		prebuiltContext?: SessionContext,
-		options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean },
-	): void {
-		this.#uiHelpers.renderInitialMessages(prebuiltContext, options);
+	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void {
+		this.#uiHelpers.renderInitialMessages(options);
 	}
 
 	getUserMessageText(message: Message): string {
@@ -3027,7 +3041,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#voiceAnimationInterval = setInterval(() => {
 			this.#voiceHue = (this.#voiceHue + 8) % 360;
 			this.#updateMicIcon();
-			this.ui.requestRender();
+			// Component-scoped: the hue sweep only recolors the editor's cursor
+			// glyph, so the transcript subtree is reused per animation frame.
+			this.ui.requestComponentRender(this.editor);
 		}, 60);
 	}
 
@@ -3059,13 +3075,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#selectorController.showDebugSelector();
 	}
 
-	showSessionObserver(): void {
-		const sessions = this.#observerRegistry.getSessions();
-		if (sessions.length <= 1) {
-			this.showStatus("No active subagent sessions");
-			return;
-		}
-		this.#selectorController.showSessionObserver(this.#observerRegistry);
+	showAgentHub(): void {
+		this.#selectorController.showAgentHub(this.#observerRegistry);
 	}
 
 	resetObserverRegistry(): void {

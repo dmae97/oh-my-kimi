@@ -6,6 +6,7 @@
 import * as fs from "node:fs/promises";
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
 import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
+import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
@@ -22,6 +23,8 @@ export interface BashExecutorOptions {
 	sessionKey?: string;
 	/** Additional environment variables to inject */
 	env?: Record<string, string>;
+	/** Run through the configured user shell instead of brush parsing directly. */
+	useUserShell?: boolean;
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
@@ -100,10 +103,81 @@ export function buildMinimizerOptions(group: ShellMinimizerSettings): MinimizerO
 	};
 }
 
+function shellBasename(shell: string): string {
+	return shell.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+}
+
+function isBashShell(shell: string): boolean {
+	const basename = shellBasename(shell);
+	return basename.includes("bash");
+}
+
+function needsInteractiveShellArg(shell: string): boolean {
+	const basename = shellBasename(shell);
+	return basename.includes("zsh");
+}
+
+function supportsAutoUserShell(shell: string): boolean {
+	const basename = shellBasename(shell);
+	return basename.includes("bash") || basename.includes("zsh") || basename.includes("fish");
+}
+
+function hasInteractiveShellArg(args: string[]): boolean {
+	return args.some(arg => arg === "--interactive" || /^-[^-]*i/.test(arg));
+}
+
+function ensureInteractiveShellArgs(shell: string, args: string[]): string[] {
+	if (!needsInteractiveShellArg(shell) || hasInteractiveShellArg(args)) return args;
+
+	const commandIndex = args.findIndex(arg => arg === "-c" || arg === "--command");
+	if (commandIndex !== -1) {
+		return [...args.slice(0, commandIndex), "-i", ...args.slice(commandIndex)];
+	}
+
+	const compactCommandIndex = args.findIndex(arg => /^-[^-]*c[^-]*$/.test(arg));
+	if (compactCommandIndex !== -1) {
+		return args.map((arg, index) => (index === compactCommandIndex ? arg.replace("c", "ic") : arg));
+	}
+
+	return [...args, "-i"];
+}
+
+function quoteShellArg(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function buildUserShellCommand(shell: string, args: string[], command: string): string {
+	return [shell, ...ensureInteractiveShellArgs(shell, args), command].map(quoteShellArg).join(" ");
+}
+
+function resolveUserShellConfig(settings: Settings, baseConfig: ShellConfig): ShellConfig {
+	const customShellPath = settings.get("shellPath");
+	const envShell = Bun.env.SHELL;
+	if (customShellPath || process.platform === "win32" || !envShell || envShell === baseConfig.shell) {
+		return baseConfig;
+	}
+	if (!supportsAutoUserShell(envShell) || !isExecutable(envShell)) {
+		return baseConfig;
+	}
+
+	return {
+		...baseConfig,
+		shell: envShell,
+		env: {
+			...baseConfig.env,
+			SHELL: envShell,
+		},
+	};
+}
+
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
 	const settings = await Settings.init();
-	const { shell, env: shellEnv, prefix } = settings.getShellConfig();
-	const snapshotPath = shell.includes("bash") ? await getOrCreateSnapshot(shell, shellEnv) : null;
+	const baseShellConfig = settings.getShellConfig();
+	const shellConfig =
+		options?.useUserShell === true ? resolveUserShellConfig(settings, baseShellConfig) : baseShellConfig;
+	const { shell, args, env: shellEnv, prefix } = shellConfig;
+	const bashShell = isBashShell(shell);
+	const snapshotPath = bashShell ? await getOrCreateSnapshot(shell, shellEnv) : null;
 
 	const minimizer = buildMinimizerOptions(settings.getGroup("shellMinimizer"));
 
@@ -112,7 +186,10 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 	// Apply command prefix if configured
 	const prefixedCommand = prefix ? `${prefix} ${command}` : command;
-	const finalCommand = prefixedCommand;
+	const finalCommand =
+		options?.useUserShell === true && !bashShell
+			? buildUserShellCommand(shell, args, prefixedCommand)
+			: prefixedCommand;
 
 	// Create output sink for truncation and artifact handling
 	const sink = new OutputSink({

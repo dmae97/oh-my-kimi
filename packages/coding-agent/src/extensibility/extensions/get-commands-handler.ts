@@ -15,6 +15,7 @@
  * themselves. Each frontend (interactive-mode, ACP) prepends its own builtins.
  */
 import type { SkillsSettings } from "../../config/settings";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/builtin-registry";
 import type { CustomCommandSource, LoadedCustomCommand } from "../custom-commands";
 import { getSkillSlashCommandName, type Skill } from "../skills";
 import type { SlashCommandInfo, SlashCommandLocation } from "../slash-commands";
@@ -32,7 +33,7 @@ export function getSessionSlashCommands(session: CommandsCapableSession): SlashC
 
 	const runner = session.extensionRunner;
 	if (runner) {
-		for (const cmd of runner.getRegisteredCommands()) {
+		for (const cmd of runner.getRegisteredCommands(BUILTIN_SLASH_COMMAND_RESERVED_NAMES)) {
 			out.push({
 				name: cmd.name,
 				description: cmd.description,

@@ -51,7 +51,6 @@ import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import type { MCPManager } from "./mcp";
-import { WelcomeComponent } from "./modes/components/welcome";
 import { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
@@ -67,10 +66,10 @@ import {
 import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
-import { resolvePromptInput } from "./system-prompt";
+import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
-import { discoverStartupLspServers, type LspStartupServerInfo } from "./tools";
+import type { LspStartupServerInfo } from "./tools";
 import {
 	getChangelogPath,
 	getNewEntries,
@@ -93,37 +92,12 @@ function maybeShowStartupSplash(options: {
 	resuming: boolean;
 	quiet: boolean;
 	version: string;
-	setupPending: boolean;
-	modelName?: string;
-	providerName?: string;
-	lspServers?: LspStartupServerInfo[];
 }): void {
 	if (!options.isInteractive) return;
 	if (options.resuming || options.quiet) return;
 	if ($env.PI_TIMING) return;
 	if (!process.stdin.isTTY || !process.stdout.isTTY) return;
-	// First-run launches go straight into the setup wizard, which paints its own
-	// splash — keep the minimal two-line notice there.
-	if (options.setupPending) {
-		process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
-		return;
-	}
-	// Render the same welcome box the TUI paints first: recent sessions as a
-	// loading placeholder (the fixed slot count keeps the box height stable) and
-	// the logo held on the intro animation's first frame so the in-TUI intro
-	// continues from the frame shown here. Clearing the screen first puts the
-	// box at the same origin the TUI's first full paint (clearScrollback) uses,
-	// so the live welcome replaces this frame in place without shifting.
-	const welcome = new WelcomeComponent(
-		options.version,
-		options.modelName ?? "",
-		options.providerName ?? "",
-		null,
-		options.lspServers ?? [],
-	);
-	welcome.holdIntroFirstFrame();
-	const lines = welcome.render(process.stdout.columns || 80);
-	process.stdout.write(`\x1b[2J\x1b[H\x1b[3J\n${lines.join("\n")}\n`);
+	//process.stdout.write(`${chalk.dim(`omp ${options.version}`)}\n${chalk.dim("Initializing session…")}\n`);
 }
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
@@ -156,7 +130,7 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"task.isolation.merge",
 	"task.isolation.commits",
 	"task.eager",
-	"task.simple",
+	"task.batch",
 	"task.maxConcurrency",
 	"task.maxRecursionDepth",
 	"task.disabledAgents",
@@ -425,7 +399,7 @@ async function runInteractiveMode(
 	// Every in-process session load also uses `clearTerminalHistory`; cold launch
 	// follows the same clean-cutover path instead of preserving a previous run's
 	// transcript above the fresh one.
-	mode.renderInitialMessages(undefined, { preserveExistingChat: true, clearTerminalHistory: true });
+	mode.renderInitialMessages({ preserveExistingChat: true, clearTerminalHistory: true });
 
 	for (const notify of notifs) {
 		if (!notify) {
@@ -715,19 +689,6 @@ function discoverAppendSystemPromptFile(): string | undefined {
 		return projectPath;
 	}
 	const globalPath = findConfigFile("APPEND_SYSTEM.md", { user: true });
-	if (globalPath) {
-		return globalPath;
-	}
-	return undefined;
-}
-
-/** Discover TITLE_SYSTEM.md file for automatic session-title prompt overrides */
-export function discoverTitleSystemPromptFile(cwd?: string): string | undefined {
-	const projectPath = findConfigFile("TITLE_SYSTEM.md", { user: false, cwd });
-	if (projectPath) {
-		return projectPath;
-	}
-	const globalPath = findConfigFile("TITLE_SYSTEM.md", { user: true, cwd });
 	if (globalPath) {
 		return globalPath;
 	}
@@ -1252,40 +1213,11 @@ export async function runRootCommand(
 			stdinContent: pipedInput,
 		});
 
-		// Resolve the model the session will most likely start with so the splash
-		// box matches the final welcome screen (the raw role selector, e.g.
-		// "anthropic/claude-fable-5:high", is wider than the left column and would
-		// collapse the box into the single-column layout).
-		let splashModel = sessionOptions.model;
-		if (!splashModel) {
-			const remembered = settingsInstance.getModelRole("default");
-			if (remembered) {
-				splashModel = resolveModelRoleValue(remembered, modelRegistry.getAll(), {
-					settings: settingsInstance,
-					matchPreferences: modelMatchPreferences,
-					modelRegistry,
-				}).model;
-			}
-		}
-		// Mirror createAgentSession's startup LSP discovery (sync and cheap: root
-		// markers + binary lookup) so the splash lists the same servers the live
-		// welcome screen will show.
-		const splashLspServers =
-			(sessionOptions.enableLsp ?? true)
-				? discoverStartupLspServers(
-						sessionOptions.cwd ?? cwd,
-						settingsInstance.get("lsp.lazy") ? "available" : "connecting",
-					)
-				: [];
 		maybeShowStartupSplash({
 			isInteractive,
 			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
 			quiet: settingsInstance.get("startup.quiet"),
 			version: VERSION,
-			setupPending: deps.forceSetupWizard === true || settingsInstance.get("setupVersion") < CURRENT_SETUP_VERSION,
-			modelName: splashModel?.name,
-			providerName: splashModel?.provider,
-			lspServers: splashLspServers,
 		});
 
 		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
@@ -1335,7 +1267,10 @@ export async function runRootCommand(
 						return `${scopedModel.model.id}${thinkingStr}`;
 					})
 					.join(", ");
-				process.stdout.write(`${chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`)}\n`);
+				// Routed through the TUI (not stdout): the startup capture owns the
+				// terminal in raw mode here, and the TUI's first clearScrollback paint
+				// would wipe a pre-TUI line anyway.
+				notifs.push({ kind: "info", message: `Model scope: ${modelList} (Ctrl+P to cycle)` });
 			}
 
 			if ($env.PI_TIMING) {

@@ -19,10 +19,14 @@ describe("AgentOutputManager", () => {
 		expect(await mgr.allocate("Bob")).toBe("Bob");
 	});
 
-	it("de-duplicates within a batch while preserving order", async () => {
+	it("de-duplicates repeated names while preserving order", async () => {
 		const mgr = new AgentOutputManager(() => null);
 
-		expect(await mgr.allocateBatch(["Auth", "Auth", "Api", "Auth"])).toEqual(["Auth", "Auth-2", "Api", "Auth-3"]);
+		const ids: string[] = [];
+		for (const name of ["Auth", "Auth", "Api", "Auth"]) {
+			ids.push(await mgr.allocate(name));
+		}
+		expect(ids).toEqual(["Auth", "Auth-2", "Api", "Auth-3"]);
 	});
 
 	it("nests ids under a parent prefix and still suffixes repeats", async () => {

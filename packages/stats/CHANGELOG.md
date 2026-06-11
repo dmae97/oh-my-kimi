@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [15.11.0] - 2026-06-10
+### Added
+
+- Added support for prebuilt npm bundle mode via `PI_BUNDLED`, allowing the stats server to use an embedded dashboard bundle in packaged CLI distributions
+
+### Fixed
+
+- Fixed handling of legacy `embedded-client.generated.txt` placeholder content so it is treated as missing archive instead of being decoded into invalid bytes
+- Fixed ENOENT handling while scanning dashboard source/build directories so missing `client/` or `dist/client` trees no longer crash startup
+
 ## [15.10.11] - 2026-06-10
 
 ### Changed

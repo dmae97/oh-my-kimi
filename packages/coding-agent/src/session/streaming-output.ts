@@ -12,20 +12,12 @@ export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 export const DEFAULT_MAX_COLUMN = 512; // Max chars per grep match line
 
 /**
- * Default upper bound on bytes the {@link OutputSink} will write to the
- * artifact-on-disk file (`~/.omp/agent/artifacts/<id>.<tool>.log`). When a
- * stream exceeds this, the sink keeps a head window verbatim, drops the
- * middle, and replays the most recent {@link ARTIFACT_DEFAULT_TAIL_BYTES} on
- * close behind a `[ARTIFACT TRUNCATED: …]` notice.
+ * Default artifact-on-disk cap for {@link OutputSink}.
  *
- * Sized to comfortably bracket any tool output a model would reasonably
- * scroll through via `artifact://<id>` while preventing a single runaway
- * command (e.g. `Get-Content | ConvertTo-Json` spraying multi-MB rich-object
- * metadata — issue #2081) from sitting on disk indefinitely. Callers can
- * override via {@link OutputSinkOptions.artifactMaxBytes}; pass `0` to
- * disable the cap and restore unbounded streaming.
+ * `0` means unbounded: by default, `artifact://<id>` references preserve the
+ * complete raw stream instead of a capped head/tail sample.
  */
-export const ARTIFACT_DEFAULT_MAX_BYTES = 4 * 1024 * 1024; // 4 MiB
+export const ARTIFACT_DEFAULT_MAX_BYTES = 0;
 /** Default head budget; the remainder becomes the rolling tail window. */
 export const ARTIFACT_DEFAULT_HEAD_BYTES = 3 * 1024 * 1024; // 3 MiB
 
@@ -77,12 +69,11 @@ export interface OutputSinkOptions {
 	/** Minimum ms between onChunk calls. 0 = every chunk (default). */
 	chunkThrottleMs?: number;
 	/**
-	 * Cap on bytes written to the artifact-on-disk file. When the cap is hit,
-	 * the head window is preserved verbatim and the tail window is filled with
-	 * the most recent {@link artifactTailBytes} of subsequent output; on
-	 * close, the sink writes a single `[ARTIFACT TRUNCATED: …]` notice
-	 * between them. Default {@link ARTIFACT_DEFAULT_MAX_BYTES}. Pass `0` to
-	 * disable the cap and restore unbounded streaming.
+	 * Optional cap on bytes written to the artifact-on-disk file. When the cap
+	 * is hit, the head window is preserved verbatim and subsequent output feeds
+	 * a rolling tail window; on close, the sink writes a single
+	 * `[ARTIFACT TRUNCATED: …]` notice between them. Default
+	 * {@link ARTIFACT_DEFAULT_MAX_BYTES} (unbounded).
 	 */
 	artifactMaxBytes?: number;
 	/**
@@ -580,6 +571,66 @@ export function truncateMiddle(content: string, options: TruncationOptions = {})
 }
 
 // =============================================================================
+// Inline byte cap — final defense at the tool-result boundary
+// =============================================================================
+
+/** Options for {@link enforceInlineByteCap}. */
+export interface InlineByteCapOptions {
+	/** Inline byte budget. Defaults to {@link DEFAULT_MAX_BYTES}. */
+	maxBytes?: number;
+	/** What the text is, for the elision marker (e.g. "bash output"). */
+	label: string;
+	/**
+	 * Persist the full text as a session artifact. When an artifact id is
+	 * returned, a `[raw output: artifact://<id>]` footer is appended so the
+	 * elided bytes stay recoverable.
+	 */
+	saveArtifact?: (full: string) => string | undefined | Promise<string | undefined>;
+}
+
+/** Drop the partial last line of a head window (keep it if there is no newline at all). */
+function trimHeadToLineBoundary(text: string): string {
+	const idx = text.lastIndexOf(NL);
+	return idx > 0 ? text.substring(0, idx) : text;
+}
+
+/** Drop the partial first line of a tail window (keep it if there is no newline at all). */
+function trimTailToLineBoundary(text: string): string {
+	const idx = text.indexOf(NL);
+	if (idx < 0 || idx === text.length - 1) return text;
+	return text.substring(idx + 1);
+}
+
+/**
+ * Final-defense inline size guard for tool results.
+ *
+ * No-op when `text` fits within `maxBytes` (the common path). Otherwise keeps
+ * ~60% of the budget from the head and ~25% from the tail — cut on line
+ * boundaries, never splitting a multi-byte UTF-8 sequence — with an elision
+ * marker between. The remaining ~15% is slack for the marker and the optional
+ * `[raw output: artifact://<id>]` footer, so the result stays under `maxBytes`.
+ */
+export async function enforceInlineByteCap(text: string, options: InlineByteCapOptions): Promise<string> {
+	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+	if (maxBytes <= 0) return text;
+	const totalBytes = Buffer.byteLength(text, "utf-8");
+	if (totalBytes <= maxBytes) return text;
+
+	const head = trimHeadToLineBoundary(truncateHeadBytes(text, Math.floor(maxBytes * 0.6)).text);
+	const tail = trimTailToLineBoundary(truncateTailBytes(text, Math.floor(maxBytes * 0.25)).text);
+	const elidedBytes = Math.max(0, totalBytes - Buffer.byteLength(head, "utf-8") - Buffer.byteLength(tail, "utf-8"));
+	const marker = `[… elided ${elidedBytes} bytes of ${options.label} …]`;
+	let composed = `${head}\n${marker}\n${tail}`;
+
+	const artifactId = await options.saveArtifact?.(text);
+	if (artifactId) {
+		const sep = composed.endsWith(NL) ? "" : NL;
+		composed += `${sep}[raw output: artifact://${artifactId}]`;
+	}
+	return composed;
+}
+
+// =============================================================================
 // TailBuffer — ring-style tail buffer with lazy joining
 // =============================================================================
 
@@ -709,17 +760,17 @@ export class OutputSink {
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
 
-	// Artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink owns a
-	// head budget + a rolling tail buffer; once the head is full, subsequent
-	// chunks are diverted into `#artifactTailRing` (bounded by
+	// Optional artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink
+	// owns a head budget + a rolling tail buffer; once the head is closed,
+	// subsequent chunks are diverted into `#artifactTailRing` (bounded by
 	// `#artifactTailBudget`). On `dump()` the tail is flushed back to the sink
-	// behind a `[ARTIFACT TRUNCATED: …]` notice. Sized to bracket reasonable
-	// `artifact://<id>` scrollback while preventing the runaway captures seen
-	// in issue #2081 (a 7.6MB PowerShell rich-object spray).
+	// behind a `[ARTIFACT TRUNCATED: …]` notice. The default cap is disabled so
+	// advertised `artifact://<id>` captures are lossless.
 	readonly #artifactMaxBytes: number;
 	readonly #artifactHeadBudget: number;
 	readonly #artifactTailBudget: number;
 	#artifactHeadBytesWritten = 0;
+	#artifactHeadClosed = false;
 	#artifactTailRing = "";
 	#artifactTailRingBytes = 0;
 	#artifactTailIncomingBytes = 0;
@@ -956,7 +1007,7 @@ export class OutputSink {
 			return;
 		}
 		const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-		const room = this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
+		const room = this.#artifactHeadClosed ? 0 : this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
 		if (room >= chunkBytes) {
 			this.#file.sink.write(chunk);
 			this.#artifactHeadBytesWritten += chunkBytes;
@@ -969,6 +1020,10 @@ export class OutputSink {
 				this.#file.sink.write(headSlice.text);
 				this.#artifactHeadBytesWritten += headSlice.bytes;
 			}
+			// Even when UTF-8 boundary safety leaves a few bytes of nominal room,
+			// this chunk has already overflowed the head window. Close it now so a
+			// later small ASCII chunk cannot be written before this overflow tail.
+			this.#artifactHeadClosed = true;
 			overflow = chunk.substring(headSlice.text.length);
 		}
 		if (overflow.length === 0 || this.#artifactTailBudget === 0) {

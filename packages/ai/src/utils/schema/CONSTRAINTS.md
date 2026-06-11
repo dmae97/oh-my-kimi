@@ -37,8 +37,10 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
 3. **Object and tuple strictness is enforced recursively**
    - Every object node gets `additionalProperties: false`.
    - Every property key is included in `required`.
-   - Optional properties are wrapped as nullable unions:
-     - `anyOf: [<original schema>, { "type": "null" }]`.
+   - Optional properties are made nullable:
+     - Pure union nodes (only `anyOf` plus optional `description`) get a `{ "type": "null" }` branch appended in place — never a nested wrapper.
+     - All other nodes are wrapped as `anyOf: [<original schema>, { "type": "null" }]`. Nodes with constraining siblings next to `anyOf` MUST keep the wrapper: sibling keywords are conjunctive with `anyOf`, so appending a null branch would not make the node nullable.
+   - Nested pure unions are spliced into the parent `anyOf` (`(A ∨ B) ∨ C` → `A ∨ B ∨ C`); an inner `description` is hoisted to the parent when the parent has none. Strict output MUST NOT contain an `anyOf` branch that is itself a pure union — some upstream validators (OpenRouter DeepSeek) reject branches without `type`.
    - Tuple entries in `prefixItems` are strictified recursively.
 
 4. **Schema nodes must be representable in strict mode**

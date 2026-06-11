@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.10.12] - 2026-06-10
+
 ### Changed
 
 - Reworked the in-memory fallback vector search to build a normalized exact vector index per query, matching the shape needed for future quantized or TurboVec-style backends without adding a new dependency yet.

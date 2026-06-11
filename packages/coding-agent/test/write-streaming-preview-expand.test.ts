@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, "");
@@ -16,7 +17,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 
 	async function makePendingWrite(lineCount: number) {
 		if (!initialized) {
-			await initTheme();
+			await themeModule.initTheme();
 			initialized = true;
 		}
 		const uiStub = { requestRender() {} } as unknown as TUI;
@@ -55,5 +56,30 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		expect(hasLine(collapsed, 1)).toBe(true);
 		expect(hasLine(collapsed, 4)).toBe(true);
 		expect(stripAnsi(collapsed.join("\n"))).not.toContain("earlier line");
+	});
+	it("reuses the highlighted streaming body across frame renders", async () => {
+		if (!initialized) {
+			await themeModule.initTheme();
+			initialized = true;
+		}
+		const uiTheme = (await themeModule.getThemeByName("dark")) ?? (await themeModule.getThemeByName("light"));
+		expect(uiTheme).toBeDefined();
+		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const highlightSpy = vi
+			.spyOn(themeModule, "highlightCode")
+			.mockImplementation((code: string) => code.split("\n"));
+		const component = writeToolRenderer.renderCall(
+			{ path: "/tmp/cache.ts", content: "const a = 1;\nconst b = 2;" },
+			options,
+			uiTheme!,
+		);
+
+		component.render(80);
+		component.render(120);
+		expect(highlightSpy).toHaveBeenCalledTimes(1);
+
+		options.spinnerFrame = 1;
+		component.render(120);
+		expect(highlightSpy).toHaveBeenCalledTimes(1);
 	});
 });

@@ -318,12 +318,24 @@ function getAntigravityCounterLimits(report: UsageReport, counterKey: string): U
 	return report.limits.filter(limit => limit.id.toLowerCase().startsWith(prefix));
 }
 
-function scopeAntigravityLimits(report: UsageReport, context: CredentialRankingContext | undefined): UsageLimit[] {
+// Exhaustion checks are only safe with a concrete backend counter. A no-model
+// Antigravity credential lookup (for example image-provider discovery) must
+// not turn one exhausted family into a provider-wide block.
+function scopeAntigravityLimitsForModel(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit[] {
 	const counterKey = getAntigravityCounterKeyForModel(context);
-	if (!counterKey) return report.limits;
+	if (!counterKey) return [];
 	const backendLimits = getAntigravityCounterLimits(report, counterKey);
 	if (backendLimits.length > 0) return backendLimits;
 	return getAntigravityCounterLimits(report, "default");
+}
+
+function rankAntigravityLimits(report: UsageReport, context: CredentialRankingContext | undefined): UsageLimit[] {
+	const counterKey = getAntigravityCounterKeyForModel(context);
+	if (!counterKey) return report.limits;
+	return scopeAntigravityLimitsForModel(report, context);
 }
 
 /**
@@ -341,12 +353,14 @@ function scopeAntigravityLimits(report: UsageReport, context: CredentialRankingC
  */
 export const antigravityRankingStrategy: CredentialRankingStrategy = {
 	findWindowLimits(report, context) {
-		return { primary: scopeAntigravityLimits(report, context)[0] };
+		return { primary: rankAntigravityLimits(report, context)[0] };
 	},
-	scopeLimits: scopeAntigravityLimits,
+	scopeLimits: scopeAntigravityLimitsForModel,
+	// Always return a scope for Antigravity so missing/unknown model context
+	// cannot fall through to AuthStorage's provider-wide block bucket.
 	blockScope(context) {
 		const counterKey = getAntigravityCounterKeyForModel(context);
-		return counterKey ? `counter:${counterKey}` : undefined;
+		return `counter:${counterKey ?? "unknown"}`;
 	},
 	// Antigravity windows omit `durationMs`; the endpoint is
 	// `daily-cloudcode-pa.googleapis.com`, so fall back to 24h when computing

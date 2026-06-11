@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -15,6 +16,7 @@ import {
 	type KernelRuntimeEnv,
 	PythonKernel,
 } from "./kernel";
+import { resolveExplicitPythonRuntime } from "./runtime";
 import { ensurePyToolBridge, registerPyToolBridge } from "./tool-bridge";
 
 export type PythonKernelMode = "session" | "per-call";
@@ -121,9 +123,9 @@ export interface PythonResult {
 // ---------------------------------------------------------------------------
 // Session bookkeeping
 //
-// One PythonKernel subprocess per (session id, cwd) tuple. The runner mutates
-// process-global cwd/sys.path during execution, so cross-directory work MUST
-// never share a live kernel. Multiple agent owners can still register against
+// One PythonKernel subprocess per (session id, cwd, interpreter) tuple. The
+// runner mutates process-global cwd/sys.path during execution, so cross-directory
+// work must never share a live kernel. Multiple agent owners can still register against
 // the same tuple; the kernel stays alive until the last owner detaches.
 // ---------------------------------------------------------------------------
 
@@ -144,8 +146,19 @@ function normalizeSessionCwd(cwd: string): string {
 	return path.resolve(cwd);
 }
 
-function buildSessionKey(sessionId: string, cwd: string): string {
-	return `${sessionId}\0${normalizeSessionCwd(cwd)}`;
+function normalizeExplicitInterpreter(cwd: string, interpreter: string | undefined): string {
+	if (interpreter === undefined) return "";
+	const resolved = resolveExplicitPythonRuntime(interpreter, cwd, {}).pythonPath;
+	try {
+		return fs.realpathSync.native(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
+function buildSessionKey(sessionId: string, cwd: string, interpreter: string | undefined): string {
+	const normalizedCwd = normalizeSessionCwd(cwd);
+	return `${sessionId}\0${normalizedCwd}\0${normalizeExplicitInterpreter(normalizedCwd, interpreter)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +640,7 @@ async function executePerCall(code: string, cwd: string, options: PythonExecutor
 
 async function executeOnSession(code: string, cwd: string, options: PythonExecutorOptions): Promise<PythonResult> {
 	const sessionId = options.sessionId ?? `session:${cwd}`;
-	const sessionKey = buildSessionKey(sessionId, cwd);
+	const sessionKey = buildSessionKey(sessionId, cwd, options.interpreter);
 	if (options.bridge && !options.bridgeSessionId) {
 		options.bridgeSessionId = sessionId;
 	}

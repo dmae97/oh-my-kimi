@@ -24,6 +24,7 @@ import type { ZodType, z } from "zod/v4";
 import type { ApiKey } from "./auth-retry";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
+import type { StopDetails } from "./providers/anthropic-wire";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
 import type { CursorOptions } from "./providers/cursor";
 import type { GoogleOptions } from "./providers/google";
@@ -35,6 +36,7 @@ import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
+export type { StopDetails } from "./providers/anthropic-wire";
 export type { AssistantMessageEventStream } from "./utils/event-stream";
 
 /**
@@ -409,6 +411,12 @@ export interface ImageContent {
 	type: "image";
 	data: string; // base64 encoded image data
 	mimeType: string; // e.g., "image/jpeg", "image/png"
+	/**
+	 * OpenAI-only resolution hint. `"original"` preserves native resolution
+	 * (required for snapcompact frames, whose glyphs do not survive the
+	 * default `auto` downscale). Providers without a detail knob ignore it.
+	 */
+	detail?: "auto" | "low" | "high" | "original";
 }
 
 export interface ToolCall {
@@ -480,6 +488,7 @@ export interface AssistantMessage {
 	upstreamProvider?: string;
 	usage: Usage;
 	stopReason: StopReason;
+	stopDetails?: StopDetails | null;
 	errorMessage?: string;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;

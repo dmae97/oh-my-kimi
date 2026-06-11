@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
@@ -563,19 +563,21 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
-	it("commits the scrolled-off head of an over-tall pending task context to scrollback", async () => {
+	it("commits the scrolled-off head of an over-tall pending eval cell to scrollback", async () => {
 		if (process.platform === "win32") return;
 
+		// The single-spawn task renderer bounds its pending preview (the old
+		// uncapped multi-task `context` field is gone), so the eval tool —
+		// whose pending code preview is intentionally never capped — now
+		// carries the over-tall pending content.
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
-		const context = (n: number) => Array.from({ length: n }, (_unused, i) => `- CTX-${i}`).join("\n");
+		const code = (n: number) => Array.from({ length: n }, (_unused, i) => `// - CTX-${i}`).join("\n");
 		const args = (n: number) => ({
-			agent: "task",
-			context: context(n),
-			tasks: [{ id: "alpha", description: "probe", assignment: "Inspect the task context." }],
+			cells: [{ language: "js", title: "probe", code: code(n) }],
 		});
-		const component = new ToolExecutionComponent("task", args(4), {}, undefined, tui, process.cwd());
+		const component = new ToolExecutionComponent("eval", args(4), {}, undefined, tui, process.cwd());
 
 		try {
 			chat.addChild(component);
@@ -603,35 +605,39 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
-	it("keeps the static task context reachable in scrollback while progress ticks below it", async () => {
+	it("keeps the static task assignment reachable in scrollback while progress ticks below it", async () => {
 		if (process.platform === "win32") return;
 
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
-		const context = Array.from({ length: 40 }, (_unused, i) => `- CTX-${i}`).join("\n");
-		const args = {
-			agent: "explore",
-			context,
-			tasks: [{ id: "alpha", description: "probe", assignment: "Inspect the repo." }],
-		};
+		const assignment = Array.from({ length: 40 }, (_unused, i) => `- CTX-${i}`).join("\n");
+		const args = { agent: "explore", id: "alpha", description: "probe", assignment };
 		const component = new ToolExecutionComponent("task", args, {}, undefined, tui, process.cwd());
-		const progressAt = (toolCount: number) => ({
+		// The multi-line assignment section only renders expanded; shimmer
+		// would repaint the status line above it every frame, capping the
+		// stable prefix above the assignment, so pin it off for the run.
+		component.setExpanded(true);
+		settings.override("display.shimmer", "disabled");
+		const progressAt = (tick: number) => ({
 			index: 0,
 			id: "alpha",
 			agent: "explore",
 			agentSource: "bundled" as const,
 			status: "running" as const,
-			task: "probe",
+			task: assignment,
 			description: "probe",
+			currentTool: "read",
+			currentToolArgs: `probe-step-${tick}`,
 			recentTools: [],
 			recentOutput: [],
-			toolCount,
+			toolCount: 5,
+			requests: 0,
 			tokens: 0,
 			cost: 0,
-			durationMs: toolCount * 250,
+			durationMs: 1000,
 		});
-		const partial = (toolCount: number) =>
+		const partial = (tick: number) =>
 			component.updateResult(
 				{
 					content: [{ type: "text", text: "" }],
@@ -639,7 +645,7 @@ describe("tool live-region scrollback", () => {
 						projectAgentsDir: null,
 						results: [],
 						totalDurationMs: 0,
-						progress: [progressAt(toolCount)],
+						progress: [progressAt(tick)],
 					},
 				},
 				true,
@@ -651,13 +657,14 @@ describe("tool live-region scrollback", () => {
 			tui.start();
 			await term.waitForRender();
 
-			// A running task rewrites its progress line (tool counts, spinner)
-			// below the static context for the whole run. The context head that
-			// scrolled above the viewport must still reach native scrollback —
-			// previously the ticking tail suspended commits for the entire
-			// block, leaving the context neither in history nor on screen.
-			// Two full promotion windows: the call→result transition frame
-			// poisons the first window's minimum, the second promotes the head.
+			// A running task rewrites its current-tool line (the ticking tail)
+			// below the static assignment section for the whole run. The
+			// assignment head that scrolled above the viewport must still reach
+			// native scrollback — previously the ticking tail suspended commits
+			// for the entire block, leaving the assignment neither in history
+			// nor on screen. Two full promotion windows: the call→result
+			// transition frame poisons the first window's minimum, the second
+			// promotes the head.
 			for (let i = 1; i <= 70; i++) {
 				partial(i);
 				tui.requestRender();
@@ -669,8 +676,9 @@ describe("tool live-region scrollback", () => {
 
 			expect(viewportText).not.toContain("CTX-0");
 			expect(scrollText).toContain("CTX-0");
-			expect(scrollText).toContain("CTX-20");
+			expect(scrollText).toContain("CTX-5");
 		} finally {
+			settings.clearOverride("display.shimmer");
 			component.stopAnimation();
 			tui.stop();
 			await term.flush();
@@ -865,6 +873,83 @@ describe("tool live-region scrollback", () => {
 			expect(scrollText).toContain("MARK-20");
 			// The streaming tail stays on screen, and nothing went missing between.
 			expect(viewportText).toContain("MARK-39");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("leaves a coherent window when a streaming write is interrupted mid-commit", async () => {
+		if (process.platform === "win32") return;
+
+		// Repro for the interrupt artifact: a streaming tool whose head rows have
+		// already committed to native scrollback is aborted (Esc). The block
+		// flips finalized and collapses to its aborted result in one step; the
+		// window below — including the editor box — must repaint coherently, with
+		// no stale frame fragments or mis-offset border rows left behind.
+		const term = new VirtualTerminal(80, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const fullContent = Array.from({ length: 60 }, (_unused, i) => `const streamed_line_${i} = ${i};`).join("\n");
+		const component = new ToolExecutionComponent(
+			"write",
+			{ file_path: "packages/coding-agent/test/probe.ts", content: "" },
+			{},
+			undefined,
+			tui,
+			process.cwd(),
+		);
+		component.setExpanded(true);
+		const editor = new Text("╭── status ──╮\n│ >          │\n╰────────────╯", 0, 0);
+
+		try {
+			chat.addChild(new Text("prior filler", 0, 0));
+			tui.addChild(chat);
+			tui.addChild(editor);
+			tui.start();
+			await term.waitForRender();
+
+			chat.addChild(component);
+			tui.requestRender();
+			await term.waitForRender();
+
+			// Stream until the preview head scrolls off and commits.
+			const chunk = Math.ceil(fullContent.length / 12);
+			for (let off = chunk; off < fullContent.length; off += chunk) {
+				component.updateArgs({
+					file_path: "packages/coding-agent/test/probe.ts",
+					content: fullContent.slice(0, off),
+				});
+				tui.requestRender();
+				await term.waitForRender();
+			}
+			expect(term.getScrollBuffer().length).toBeGreaterThan(term.rows);
+
+			// Interrupt: agent-loop synthesizes the aborted error result.
+			component.updateResult(
+				{ content: [{ type: "text", text: "Tool execution was aborted: Interrupted by user" }], isError: true },
+				false,
+			);
+			tui.requestRender();
+			await term.waitForRender();
+
+			// Oracle: the settled window must match what a forced full repaint
+			// produces — byte-identical rows. Stale fragments from the collapsed
+			// streaming frame (mis-offset editor borders, orphaned `│`/`╰` rows)
+			// diverge here.
+			const settled = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			tui.requestRender(true);
+			await term.waitForRender();
+			const repainted = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			expect(settled).toEqual(repainted);
+
+			// The aborted state and intact editor box are on screen.
+			const viewportText = settled.join("\n");
+			expect(viewportText).toContain("aborted");
+			expect(viewportText).toContain("╭── status ──╮");
+			expect(viewportText).toContain("╰────────────╯");
+			expect(settled.some(row => row.startsWith("╭── status"))).toBe(true);
 		} finally {
 			component.stopAnimation();
 			tui.stop();

@@ -77,6 +77,13 @@ describe("MCPManager OAuth refresh failure", () => {
 		const prepared = await manager.prepareConfig(serverConfig);
 
 		expect(refreshSpy).toHaveBeenCalledTimes(1);
+		expect(refreshSpy).toHaveBeenCalledWith(
+			TOKEN_URL,
+			STALE_REFRESH,
+			undefined,
+			undefined,
+			"https://logfire.example.com/mcp",
+		);
 		// The poisoned Bearer must not be re-injected — that is the loop the user
 		// reported (#1908).
 		expect(getAuthorizationHeader(prepared)).toBeUndefined();

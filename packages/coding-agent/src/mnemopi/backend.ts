@@ -172,6 +172,18 @@ export const mnemopiBackend: MemoryBackend = {
 	},
 
 	async status({ agentDir, session }): Promise<MemoryBackendStatus> {
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return {
+				backend: "mnemopi",
+				active: false,
+				writable: false,
+				searchable: false,
+				message: "Mnemopi backend is not initialised for this session.",
+			};
+		}
+
 		const { targets, owned } = createStatsTargets(agentDir, session);
 		try {
 			if (targets.length === 0) {

@@ -239,9 +239,11 @@ describe("AgentSession role model thinking behavior", () => {
 
 		expect(session.cycleThinkingLevel()).toBe("off");
 		expect(session.thinkingLevel).toBe("off");
+		expect(agent.state.disableReasoning).toBe(true);
 		expect(session.cycleThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 		expect(session.thinkingLevel).toBe(resolveProvisionalAutoLevel(model));
+		expect(agent.state.disableReasoning).toBe(false);
 		expect(session.cycleThinkingLevel()).toBe(Effort.Minimal);
 		expect(session.thinkingLevel).toBe(Effort.Minimal);
 	});

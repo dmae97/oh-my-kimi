@@ -127,6 +127,7 @@ interface OAuthFlowResult {
 	credentialId: string;
 	clientId?: string;
 	clientSecret?: string;
+	resource?: string;
 }
 
 type MCPAddScope = "user" | "project";
@@ -490,6 +491,7 @@ export class MCPCommandController {
 
 						try {
 							const oauthClientSecret = finalConfig.oauth?.clientSecret ?? "";
+							const oauthResource = oauth.resource ?? finalConfig.url;
 							const oauthResult = await this.#handleOAuthFlow(
 								oauth.authorizationUrl,
 								oauth.tokenUrl,
@@ -499,15 +501,18 @@ export class MCPCommandController {
 								finalConfig.oauth?.callbackPort,
 								finalConfig.oauth?.callbackPath,
 								finalConfig.oauth?.redirectUri,
+								oauthResource,
 							);
 							const persistedClientId = oauthResult.clientId ?? oauth.clientId ?? finalConfig.oauth?.clientId;
 							const persistedClientSecret = oauthResult.clientSecret ?? finalConfig.oauth?.clientSecret;
+							const persistedResource = oauthResult.resource ?? oauthResource;
 							finalConfig = {
 								...finalConfig,
 								auth: {
 									type: "oauth",
 									credentialId: oauthResult.credentialId,
 									tokenUrl: oauth.tokenUrl,
+									resource: persistedResource,
 									clientId: persistedClientId,
 									clientSecret: persistedClientSecret,
 								},
@@ -548,8 +553,25 @@ export class MCPCommandController {
 				done();
 				this.#handleWizardCancel();
 			},
-			async (authUrl: string, tokenUrl: string, clientId: string, clientSecret: string, scopes: string) => {
-				return await this.#handleOAuthFlow(authUrl, tokenUrl, clientId, clientSecret, scopes);
+			async (
+				authUrl: string,
+				tokenUrl: string,
+				clientId: string,
+				clientSecret: string,
+				scopes: string,
+				resource?: string,
+			) => {
+				return await this.#handleOAuthFlow(
+					authUrl,
+					tokenUrl,
+					clientId,
+					clientSecret,
+					scopes,
+					undefined,
+					undefined,
+					undefined,
+					resource,
+				);
 			},
 			async (config: MCPServerConfig) => {
 				return await this.#handleTestConnection(config);
@@ -579,6 +601,7 @@ export class MCPCommandController {
 		callbackPort?: number,
 		callbackPath?: string,
 		redirectUri?: string,
+		resource?: string,
 	): Promise<OAuthFlowResult> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		let parsedAuthUrl: URL;
@@ -597,11 +620,13 @@ export class MCPCommandController {
 		const resolvedClientSecret = clientSecret.trim() || undefined;
 
 		const manualInput = this.ctx.oauthManualInput;
-		if (manualInput.hasPending() && manualInput.pendingProviderId !== MCP_MANUAL_INPUT_PROVIDER_ID) {
+		if (manualInput.hasPending()) {
+			const pendingProvider = manualInput.pendingProviderId ?? "another provider";
 			throw new Error(
-				`OAuth login already in progress for ${manualInput.pendingProviderId}. Complete or cancel it before starting MCP OAuth.`,
+				`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
 			);
 		}
+		let manualInputClaim: { promise: Promise<string>; clear: (reason?: string) => void } | undefined;
 		const oauthTimeout = new AbortController();
 		try {
 			// Create OAuth flow
@@ -615,6 +640,7 @@ export class MCPCommandController {
 					redirectUri,
 					callbackPort,
 					callbackPath,
+					resource,
 				},
 				{
 					onAuth: (info: { url: string; instructions?: string }) => {
@@ -658,13 +684,16 @@ export class MCPCommandController {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);
 					},
 					onManualCodeInput: () => {
-						const pendingInput = manualInput.tryWaitForInput(MCP_MANUAL_INPUT_PROVIDER_ID);
+						if (manualInputClaim) return manualInputClaim.promise;
+						const pendingInput = manualInput.tryClaimInput(MCP_MANUAL_INPUT_PROVIDER_ID);
 						if (!pendingInput) {
+							const pendingProvider = manualInput.pendingProviderId ?? "another provider";
 							throw new Error(
-								`OAuth login already in progress for ${manualInput.pendingProviderId}. Complete or cancel it before starting MCP OAuth.`,
+								`OAuth login already in progress for ${pendingProvider}. Complete or cancel it before starting MCP OAuth.`,
 							);
 						}
-						return pendingInput;
+						manualInputClaim = pendingInput;
+						return pendingInput.promise;
 					},
 					signal: oauthTimeout.signal,
 				},
@@ -699,6 +728,7 @@ export class MCPCommandController {
 				credentialId,
 				clientId: flow.resolvedClientId,
 				clientSecret: flow.registeredClientSecret,
+				resource: flow.resource,
 			};
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
@@ -716,7 +746,7 @@ export class MCPCommandController {
 				throw new Error(`OAuth authentication failed: ${errorMsg}`);
 			}
 		} finally {
-			manualInput.clear("Manual MCP OAuth input cleared");
+			manualInputClaim?.clear("Manual MCP OAuth input cleared");
 		}
 	}
 
@@ -799,6 +829,7 @@ export class MCPCommandController {
 		tokenUrl: string;
 		clientId?: string;
 		scopes?: string;
+		resource?: string;
 	}> {
 		// First test if server actually needs auth by connecting without OAuth
 		let connectionSucceeded = false;
@@ -1410,6 +1441,9 @@ export class MCPCommandController {
 
 			this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 
+			const oauthResource =
+				oauth.resource ?? currentAuth?.resource ?? ("url" in baseConfig ? baseConfig.url : undefined);
+
 			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
@@ -1419,10 +1453,12 @@ export class MCPCommandController {
 				found.config.oauth?.callbackPort,
 				found.config.oauth?.callbackPath,
 				found.config.oauth?.redirectUri,
+				oauthResource,
 			);
 
 			const persistedClientId = oauthResult.clientId ?? oauth.clientId ?? found.config.oauth?.clientId;
 			const persistedClientSecret = oauthResult.clientSecret ?? (oauthClientSecret || undefined);
+			const persistedResource = oauthResult.resource ?? oauthResource;
 
 			const updated: MCPServerConfig = {
 				...baseConfig,
@@ -1430,6 +1466,7 @@ export class MCPCommandController {
 					type: "oauth",
 					credentialId: oauthResult.credentialId,
 					tokenUrl: oauth.tokenUrl,
+					resource: persistedResource,
 					clientId: persistedClientId,
 					clientSecret: persistedClientSecret,
 				},

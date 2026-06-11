@@ -213,6 +213,7 @@ describe("resource_metadata chain", () => {
 				return new Response(
 					JSON.stringify({
 						authorization_servers: ["https://gateway.example.com/my-service"],
+						resource: "https://gateway.example.com/my-service/mcp",
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
@@ -245,9 +246,59 @@ describe("resource_metadata chain", () => {
 		expect(oauth).toEqual({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
 			tokenUrl: "https://gateway.example.com/my-service/token",
+			resource: "https://gateway.example.com/my-service/mcp",
 		});
 		// resource_metadata fetched first
 		expect(calls[0]).toBe("https://gateway.example.com/my-service/.well-known/oauth-protected-resource");
+	});
+
+	it("carries resource from fallback protected-resource discovery", async () => {
+		const calls: string[] = [];
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+			calls.push(url);
+
+			if (url === "https://gateway.example.com/.well-known/oauth-protected-resource") {
+				return new Response("not found", { status: 404 });
+			}
+			if (url === "https://gateway.example.com/my-service/.well-known/oauth-protected-resource") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://auth.example.com/my-service"],
+						resource: "https://gateway.example.com/my-service/custom-resource",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "https://gateway.example.com/.well-known/oauth-authorization-server") {
+				return new Response("not found", { status: 404 });
+			}
+			if (url === "https://gateway.example.com/my-service/.well-known/oauth-authorization-server") {
+				return new Response("not found", { status: 404 });
+			}
+			if (url === "https://auth.example.com/my-service/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						authorization_endpoint: "https://auth.example.com/my-service/oauth",
+						token_endpoint: "https://auth.example.com/my-service/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints("https://gateway.example.com/my-service/mcp", undefined, undefined, {
+			fetch: fetchImpl,
+		});
+
+		expect(oauth).toEqual({
+			authorizationUrl: "https://auth.example.com/my-service/oauth",
+			tokenUrl: "https://auth.example.com/my-service/token",
+			resource: "https://gateway.example.com/my-service/custom-resource",
+		});
+		expect(calls).toContain("https://gateway.example.com/my-service/.well-known/oauth-protected-resource");
 	});
 });
 

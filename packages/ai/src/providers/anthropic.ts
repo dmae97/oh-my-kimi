@@ -677,7 +677,18 @@ function generateClaudeJsonUserId(sessionId?: string, accountId?: string): strin
 	return JSON.stringify(userId);
 }
 
-function resolveAnthropicMetadataUserId(
+/**
+ * Resolve the `metadata.user_id` field for an Anthropic Messages request.
+ *
+ * For API-key tokens, an explicit caller-supplied `userId` is forwarded
+ * verbatim and `undefined` yields no metadata. For OAuth tokens the value
+ * must match the Claude Code attribution shape (`isClaudeCloakingUserId` or
+ * the `{session_id, account_uuid?, device_id?}` JSON envelope) — anything
+ * else is dropped and a fresh Claude-Code-style JSON id is generated from
+ * `sessionId`/`accountId` so attribution stays consistent across the main
+ * streaming path and provider-specific request builders (e.g. web search).
+ */
+export function resolveAnthropicMetadataUserId(
 	userId: unknown,
 	isOAuthToken: boolean,
 	sessionId?: string,
@@ -1994,6 +2005,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							}
 							if (output.stopReason === "error") {
 								const stopDetails = delta?.stop_details;
+								output.stopDetails = stopDetails ?? (rawStopReason ? { type: rawStopReason } : null);
 								if (stopDetails?.type === "refusal") {
 									const explanation = stopDetails.explanation?.trim();
 									const category = stopDetails.category;
@@ -2153,6 +2165,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					output.content.length = 0;
 					output.responseId = undefined;
 					output.errorMessage = undefined;
+					output.stopDetails = undefined;
 					output.providerPayload = undefined;
 					output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
 					output.stopReason = "stop";

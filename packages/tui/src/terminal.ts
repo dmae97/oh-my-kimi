@@ -123,6 +123,24 @@ let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
 
+const stdoutErrorHandlers = new Set<(err: Error) => void>();
+let stdoutErrorListenerInstalled = false;
+
+function onStdoutError(err: Error): void {
+	for (const handler of stdoutErrorHandlers) handler(err);
+}
+
+function registerStdoutErrorHandler(handler: (err: Error) => void): () => void {
+	stdoutErrorHandlers.add(handler);
+	if (!stdoutErrorListenerInstalled) {
+		process.stdout.on("error", onStdoutError);
+		stdoutErrorListenerInstalled = true;
+	}
+	return () => {
+		stdoutErrorHandlers.delete(handler);
+	};
+}
+
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 /** UTF-8 codepage id for SetConsoleCP/SetConsoleOutputCP. */
@@ -344,6 +362,11 @@ export class ProcessTerminal implements Terminal {
 	#stdinDataHandler?: (data: string) => void;
 	#dead = false;
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
+	#stdoutErrorCleanup?: () => void;
+	#stdoutErrorHandler = (err: Error) => {
+		this.#markTerminalWriteFailed(err);
+	};
+
 	#windowsVTInputRestore?: () => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
 	#appearance: TerminalAppearance | undefined;
@@ -1182,6 +1205,18 @@ export class ProcessTerminal implements Terminal {
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(this.#wasRaw);
 		}
+		this.#stdoutErrorCleanup?.();
+		this.#stdoutErrorCleanup = undefined;
+	}
+
+	#ensureStdoutErrorHandler(): void {
+		this.#stdoutErrorCleanup ??= registerStdoutErrorHandler(this.#stdoutErrorHandler);
+	}
+
+	#markTerminalWriteFailed(err: unknown): void {
+		if (this.#dead) return;
+		this.#dead = true;
+		logger.warn("terminal write failed; disabling terminal rendering", { err });
 	}
 
 	write(data: string): void {
@@ -1200,6 +1235,7 @@ export class ProcessTerminal implements Terminal {
 		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
 		// files). They serve no purpose there and would surface as visible noise.
 		if (!process.stdout.isTTY) return;
+		this.#ensureStdoutErrorHandler();
 		// A console-sharing child process may have flipped the console codepage
 		// away from UTF-8; repair it before any bytes hit WriteFile so no frame
 		// is ever translated through an OEM codepage. See ensureWindowsConsoleUtf8.
@@ -1219,15 +1255,14 @@ export class ProcessTerminal implements Terminal {
 			// threshold. See #2034 and #2095.
 			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
 				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
+					if (this.#dead) break;
 					process.stdout.write(chunk);
 				}
 			} else {
 				process.stdout.write(data);
 			}
 		} catch (err) {
-			// Any write failure means terminal is dead - no recovery possible
-			this.#dead = true;
-			logger.warn("terminal is dead - no recovery possible", { error: err, data });
+			this.#markTerminalWriteFailed(err);
 		}
 	}
 

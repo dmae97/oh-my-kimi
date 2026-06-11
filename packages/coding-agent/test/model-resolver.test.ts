@@ -1084,15 +1084,21 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result[0].provider).toBe("openrouter");
 	});
 
-	test("returns all models when ALL patterns are globs (cannot evaluate)", () => {
+	test("evaluates glob patterns against provider/modelId", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*"], registry);
-		expect(result).toEqual(models);
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("anthropic");
 	});
 
-	test("applies exact patterns when mixed with globs", () => {
-		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*", "openai/gpt-4o"], registry);
+	test("evaluates glob patterns against bare model id", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-*"], registry);
 		expect(result).toHaveLength(1);
-		expect(result[0].id).toBe("gpt-4o");
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("applies glob and exact patterns together", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*", "openai/gpt-4o"], registry);
+		expect(result).toHaveLength(2);
 	});
 
 	test("returns empty list when no pattern matches (misconfiguration)", () => {
