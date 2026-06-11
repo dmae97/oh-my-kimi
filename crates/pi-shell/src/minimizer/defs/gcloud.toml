@@ -12,7 +12,6 @@ strip_lines_matching = [
 	"^\\s*\\$ gcloud components update",
 	"^Your current Cloud SDK version is:",
 	"^The latest available version is:",
-	"^WARNING: You do not appear to have access to project",
 	"^\\s*$",
 ]
 truncate_lines_at = 300

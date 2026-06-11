@@ -11,7 +11,7 @@ strip_lines_matching = [
 	"^receiving incremental file list$",
 ]
 match_output = [
-	{ pattern = "total size is", message = "ok (synced)", unless = "error|failed|No such file" },
+	{ pattern = "total size is", message = "ok (synced)", unless = "(?i)(error|failed|no such file)" },
 ]
 truncate_lines_at = 250
 head_lines = 5
@@ -33,3 +33,8 @@ expected = "ok (synced)"
 name = "errors not swallowed when total size present"
 input = "rsync: [sender] error\nerror in rsync protocol data stream (code 12)\nsent 100 bytes  received 200 bytes  60.00 bytes/sec\ntotal size is 1000  speedup is 3.33\n"
 expected = "rsync: [sender] error\nerror in rsync protocol data stream (code 12)\nsent 100 bytes  received 200 bytes  60.00 bytes/sec\ntotal size is 1000  speedup is 3.33\n"
+
+[[tests.rsync]]
+name = "error case-insensitive not swallowed"
+input = "sending incremental file list\nERROR: some error\ntotal size is 1024  speedup is 4.65\n"
+expected = "ERROR: some error\ntotal size is 1024  speedup is 4.65\n"

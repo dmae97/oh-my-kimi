@@ -6,7 +6,7 @@ description = "Strip ssh login banner and motd"
 match_command = "^ssh$"
 strip_ansi = true
 strip_lines_matching = [
-	"^Welcome to ",
+	"^Welcome to .*(LTS|GNU/Linux|UNIX|Fedora|Debian|CentOS|AlmaLinux|Rocky Linux)",
 	"^Last login:",
 	"^Last failed login:",
 	"^ \\* Documentation:",
