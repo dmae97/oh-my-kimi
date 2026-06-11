@@ -5,7 +5,10 @@
  * Unlike markdown commands which expand to prompts, custom commands can execute
  * arbitrary logic with full access to the hook context.
  */
+import type * as Zod from "zod/v4";
 import type { ExecOptions, ExecResult, HookCommandContext } from "../../extensibility/hooks/types";
+import type * as PiCodingAgent from "../../index";
+import type * as TypeBox from "../typebox";
 
 // Re-export for custom commands to use
 export type { ExecOptions, ExecResult, HookCommandContext };
@@ -20,11 +23,11 @@ export interface CustomCommandAPI {
 	/** Execute a shell command */
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 	/** Injected zod-backed typebox shim (legacy/compat). */
-	typebox: typeof import("../typebox");
+	typebox: typeof TypeBox;
 	/** Injected zod module for Zod-authored custom commands. */
-	zod: typeof import("zod/v4");
+	zod: typeof Zod;
 	/** Injected pi-coding-agent exports */
-	pi: typeof import("../..");
+	pi: typeof PiCodingAgent;
 }
 
 /**

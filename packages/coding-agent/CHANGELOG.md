@@ -152,6 +152,7 @@
 - Default API auto-retries now use 10 attempts with a 500ms Anthropic-style exponential backoff capped at 8s with jitter, so transient 502/gateway failures get a longer retry budget without multi-minute local sleeps.
 
 ### Fixed
+- Fixed extension, custom-tool, custom-command, and hook loaders injecting `pi` through bare `@oh-my-pi/pi-coding-agent` self-imports, which could pull a different cached package version into global installs during plugin load and trigger mixed-runtime stack overflows.
 
 - Fixed `ask` question/result renders so option and answer rows are no longer duplicated when the component is re-rendered
 - Fixed streaming `write`/`diff` previews to keep line-number gutter widths stable while content grows, preventing already-rendered preview rows from being reflowed mid-stream
