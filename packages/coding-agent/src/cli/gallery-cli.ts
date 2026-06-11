@@ -111,10 +111,11 @@ export async function renderGalleryState(
 
 	const tool = fakeToolFor(name, fixture);
 	const streamingArgs = state === "streaming" ? (fixture.streamingArgs ?? fixture.args) : fixture.args;
-	// The component only calls `requestRender` during a static render;
-	// `imageBudget` is consulted solely when images render, which the gallery
-	// disables. A cast avoids constructing a real terminal.
-	const ui = { requestRender() {} } as unknown as TUI;
+	// The component only calls `requestRender`/`requestComponentRender` (via
+	// its loader) during a static render; `imageBudget` is consulted solely
+	// when images render, which the gallery disables. A cast avoids
+	// constructing a real terminal.
+	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 	const component = new ToolExecutionComponent(name, streamingArgs, { showImages: false }, tool, ui, getProjectDir());
 	component.setExpanded(expanded);
 

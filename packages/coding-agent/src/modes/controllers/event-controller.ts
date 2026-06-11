@@ -21,6 +21,7 @@ import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../s
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
 import { StreamingRevealController } from "./streaming-reveal";
+import { ToolArgsRevealController } from "./tool-args-reveal";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -86,12 +87,17 @@ export class EventController {
 	// rules into this block while it is still the (live-region) transcript tail.
 	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
+	#toolArgsReveal: ToolArgsRevealController;
 	#handlers: AgentSessionEventHandlers;
 
 	constructor(private ctx: InteractiveModeContext) {
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
 			getHideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
+		this.#toolArgsReveal = new ToolArgsRevealController({
+			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
 			requestRender: () => this.ctx.ui.requestRender(),
 		});
 		this.#handlers = {
@@ -127,6 +133,7 @@ export class EventController {
 
 	dispose(): void {
 		this.#streamingReveal.stop();
+		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -492,10 +499,23 @@ export class EventController {
 
 				// Preserve the raw partial JSON for renderers that need to surface fields before the JSON object closes.
 				// Bash uses this to show inline env assignments during streaming instead of popping them in at completion.
-				const renderArgs =
-					"partialJson" in content
-						? { ...content.arguments, __partialJson: content.partialJson }
-						: content.arguments;
+				// While the JSON is still open, ToolArgsRevealController paces the
+				// reveal (write/edit/bash previews grow smoothly when a slow provider
+				// delivers large batches); once it closes, the final args render
+				// as-is — mirroring how assistant text snaps at message_end.
+				const partialJson = "partialJson" in content ? content.partialJson : undefined;
+				let renderArgs: Record<string, unknown>;
+				if (typeof partialJson === "string") {
+					renderArgs = this.#toolArgsReveal.setTarget(
+						content.id,
+						partialJson,
+						content.customWireName !== undefined,
+						content.arguments,
+					);
+				} else {
+					this.#toolArgsReveal.finish(content.id);
+					renderArgs = content.arguments;
+				}
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resolveDisplaceablePoll(content.name);
 					this.#resetReadGroup();
@@ -517,10 +537,12 @@ export class EventController {
 					component.setExpanded(this.ctx.toolOutputExpanded);
 					this.ctx.chatContainer.addChild(component);
 					this.ctx.pendingTools.set(content.id, component);
+					this.#toolArgsReveal.bind(content.id, component);
 				} else {
 					const component = this.ctx.pendingTools.get(content.id);
 					if (component) {
 						component.updateArgs(renderArgs, content.id);
+						this.#toolArgsReveal.bind(content.id, component);
 					}
 				}
 			}
@@ -555,6 +577,7 @@ export class EventController {
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.stop();
+			this.#toolArgsReveal.flushAll();
 			let errorMessage: string | undefined;
 			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
@@ -772,6 +795,7 @@ export class EventController {
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		this.#agentTurnActive = false;
 		this.#streamingReveal.stop();
+		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;

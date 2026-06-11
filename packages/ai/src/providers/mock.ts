@@ -49,6 +49,7 @@ import type {
 	Context,
 	Model,
 	SimpleStreamOptions,
+	StopDetails,
 	StopReason,
 	TextContent,
 	ThinkingContent,
@@ -81,6 +82,10 @@ export interface MockResponse {
 	content?: ReadonlyArray<MockContent>;
 	/** Stop reason. Defaults to `"toolUse"` when content has tool calls, else `"stop"`. */
 	stopReason?: StopReason;
+	/** Structured terminal stop classification, e.g. Anthropic refusal metadata. */
+	stopDetails?: StopDetails | null;
+	/** Error text paired with an explicit `"error"` stop reason. */
+	errorMessage?: string;
 	/** Usage stats. Missing fields default to 0; missing `cost.total` is recomputed from components. */
 	usage?: Partial<Omit<Usage, "cost">> & { cost?: Partial<Usage["cost"]> };
 	/** Pre-set responseId. */
@@ -389,6 +394,8 @@ async function runMock(
 	const reason: StopReason = response.stopReason ?? (hasToolCall ? ("toolUse" as StopReason) : ("stop" as StopReason));
 
 	partial.stopReason = reason;
+	partial.stopDetails = response.stopDetails;
+	partial.errorMessage = response.errorMessage;
 	partial.usage = mergeUsage(response.usage);
 	partial.duration = Date.now() - startedAt;
 

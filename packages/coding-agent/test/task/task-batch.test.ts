@@ -9,9 +9,10 @@
  * 2. Shape validation rejects `schema` always, `tasks`/`context` while batch
  *    is disabled, top-level `assignment` in batch calls, empty/invalid items,
  *    duplicate ids, and a missing shared `context`.
- * 3. A batch call registers one background job per item; every spawn receives
- *    the shared `context`, and each job delivers its own follow-up hint. The
- *    flat form stays accepted at runtime for internal callers.
+ * 3. With `async.enabled=true`, a batch call registers one background job per
+ *    item; with `async.enabled=false`, it blocks and returns merged results.
+ *    Both modes forward the shared `context`; the flat form stays accepted at
+ *    runtime for internal callers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -133,8 +134,13 @@ describe("task.batch schema gating", () => {
 		mockDiscovery();
 
 		const off = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
-		expect(off.description).toContain("Spawns ONE subagent per call");
+		expect(off.description).toContain("Spawns ONE subagent per call to work in the background");
 		expect(off.description).not.toContain("`context`: shared background");
+
+		const offSync = await TaskTool.create(
+			createSession({ settings: { "async.enabled": false, "task.batch": false } }),
+		);
+		expect(offSync.description).toContain("Runs ONE subagent synchronously per call");
 
 		const on = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
 		expect(on.description).toContain("`tasks`: tasks to spawn");
@@ -244,7 +250,9 @@ describe("task.batch spawning", () => {
 		});
 
 		const manager = createManager();
-		const tool = await TaskTool.create(createSession({ manager, settings: { "task.batch": true } }));
+		const tool = await TaskTool.create(
+			createSession({ manager, settings: { "async.enabled": true, "task.batch": true } }),
+		);
 
 		const result = await tool.execute("tc-batch", {
 			agent: "task",
@@ -290,7 +298,9 @@ describe("task.batch spawning", () => {
 		});
 
 		const manager = createManager();
-		const tool = await TaskTool.create(createSession({ manager, settings: { "task.batch": true } }));
+		const tool = await TaskTool.create(
+			createSession({ manager, settings: { "async.enabled": true, "task.batch": true } }),
+		);
 
 		const result = await tool.execute("tc-single", {
 			agent: "task",
@@ -312,7 +322,9 @@ describe("task.batch spawning", () => {
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makeResult(options.id ?? "?"));
 
 		const manager = createManager();
-		const tool = await TaskTool.create(createSession({ manager, settings: { "task.batch": true } }));
+		const tool = await TaskTool.create(
+			createSession({ manager, settings: { "async.enabled": true, "task.batch": true } }),
+		);
 
 		const result = await tool.execute("tc-flat", {
 			agent: "task",
@@ -324,5 +336,38 @@ describe("task.batch spawning", () => {
 		const job = manager.getJob(result.details!.async!.jobId)!;
 		await job.promise;
 		expect(job.status).toBe("completed");
+	});
+
+	it("blocks batch execution when async.enabled is false even with a job manager", async () => {
+		mockDiscovery();
+		const seen: Array<{ id?: string; context?: string; assignment?: string }> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			seen.push({ id: options.id, context: options.context, assignment: options.assignment });
+			return makeResult(options.id ?? "?");
+		});
+
+		const manager = createManager();
+		const tool = await TaskTool.create(
+			createSession({ manager, settings: { "async.enabled": false, "task.batch": true } }),
+		);
+
+		const result = await tool.execute("tc-sync-batch", {
+			agent: "task",
+			context: "# Goal\nShared synchronous context.",
+			tasks: [
+				{ id: "Alpha", assignment: "Do A." },
+				{ id: "Beta", assignment: "Do B." },
+			],
+		} as TaskParams);
+
+		expect(getFirstText(result)).toContain("All done.");
+		expect(result.details?.async).toBeUndefined();
+		expect(result.details?.results.map(item => item.id).sort()).toEqual(["Alpha", "Beta"]);
+		expect(manager.getJob("Alpha")).toBeUndefined();
+		expect(manager.getJob("Beta")).toBeUndefined();
+		expect(seen.map(spawn => spawn.context)).toEqual([
+			"# Goal\nShared synchronous context.",
+			"# Goal\nShared synchronous context.",
+		]);
 	});
 });
