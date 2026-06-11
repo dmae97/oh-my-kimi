@@ -370,7 +370,7 @@ mod tests {
 
 	#[test]
 	fn ci_trace_strips_section_markers_and_runner_boilerplate() {
-		let input = include_str!("../../../../../rtk/tests/fixtures/glab_ci_trace_raw.txt");
+		let input = include_str!("fixtures/glab/ci-trace.txt");
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("ci"), "glab ci trace 123", &cfg);
 
@@ -451,7 +451,7 @@ section_end:1711234600:build_script[0K
 
 	#[test]
 	fn release_list_compacts_tab_separated() {
-		let input = include_str!("../../../../../rtk/tests/fixtures/glab_release_list_raw.txt");
+		let input = include_str!("fixtures/glab/release-list.txt");
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("release"), "glab release list", &cfg);
 
@@ -483,7 +483,7 @@ section_end:1711234600:build_script[0K
 
 	#[test]
 	fn release_view_strips_sources_and_noise() {
-		let input = include_str!("../../../../../rtk/tests/fixtures/glab_release_view_raw.txt");
+		let input = include_str!("fixtures/glab/release-view.txt");
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("release"), "glab release view v2.0.0", &cfg);
 
@@ -510,7 +510,7 @@ section_end:1711234600:build_script[0K
 
 	#[test]
 	fn release_view_preserves_description() {
-		let input = include_str!("../../../../../rtk/tests/fixtures/glab_release_view_raw.txt");
+		let input = include_str!("fixtures/glab/release-view.txt");
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("release"), "glab release view v2.0.0", &cfg);
 
