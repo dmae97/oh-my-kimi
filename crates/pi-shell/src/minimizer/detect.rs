@@ -22,7 +22,42 @@ pub fn detect_tokens(tokens: &[String]) -> Option<CommandIdentity> {
 	let tokens = strip_launch_prefix(tokens)?;
 	let (program, rest) = tokens.split_first()?;
 	let normalized = normalize_program(program)?;
-	let subcommand = detect_subcommand(&normalized, rest);
+	let is_docker_compose = program
+		.rsplit('/')
+		.next()
+		.is_some_and(|n| n.eq_ignore_ascii_case("docker-compose"));
+	let subcommand = if is_docker_compose {
+		// docker-compose v1 flags that consume a value; skip them so the
+		// real action (up/down/ps/logs/etc.) is found, matching docker compose
+		// routing in docker.rs.
+		first_non_global_arg(
+			rest,
+			&[
+				"-f",
+				"--file",
+				"--profile",
+				"-p",
+				"--project-name",
+				"--env-file",
+				"--parallel",
+				"--progress",
+				"--project-directory",
+				"--workdir",
+				"-w",
+				"--ansi",
+				"--log-level",
+				"-H",
+				"--host",
+				"--tlscacert",
+				"--tlscert",
+				"--tlskey",
+			],
+			&["--compatibility", "--dry-run", "--verbose", "-v", "--no-ansi"],
+			&[],
+		)
+	} else {
+		detect_subcommand(&normalized, rest)
+	};
 	Some(CommandIdentity { program: normalized, subcommand })
 }
 
@@ -95,6 +130,7 @@ fn normalize_program(program: &str) -> Option<String> {
 	Some(match lowered.as_str() {
 		"gradlew.bat" => "gradlew".to_string(),
 		"mvnw.cmd" => "mvnw".to_string(),
+		"docker-compose" => "docker".to_string(),
 		_ => lowered,
 	})
 }
@@ -758,4 +794,88 @@ fn npx_workspace_value_is_skipped_in_subcommand_detection() {
 	let command = detect("npx -w my-workspace vitest").expect("npx with workspace is detected");
 	assert_eq!(command.program, "npx");
 	assert_eq!(command.subcommand.as_deref(), Some("vitest"));
+}
+
+#[test]
+fn normalizes_docker_compose_to_docker() {
+	let command = detect("docker-compose up").expect("docker-compose command is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	let command = detect("/usr/local/bin/docker-compose logs")
+		.expect("path-prefixed docker-compose is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("logs"));
+}
+
+#[test]
+fn docker_composer_is_not_normalized() {
+	let command = detect("docker-composer up").expect("docker-composer command is detected");
+	assert_eq!(command.program, "docker-composer");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+}
+
+#[test]
+fn docker_compose_with_flags_finds_real_subcommand() {
+	// Value-taking compose flags must be skipped so the real action is found.
+	let command =
+		detect("docker-compose -p myproj up").expect("docker-compose with -p flag is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	let command = detect("docker-compose --profile logs up")
+		.expect("docker-compose with --profile flag is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	let command = detect("docker-compose -f docker-compose.yml ps")
+		.expect("docker-compose with -f flag is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("ps"));
+}
+
+#[test]
+fn docker_compose_global_value_flags_skip_correctly() {
+	// --log-level consumes its value; the next token is the subcommand.
+	let command = detect("docker-compose --log-level debug up")
+		.expect("docker-compose --log-level is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	// -H consumes its value.
+	let command =
+		detect("docker-compose -H tcp://host:2376 ps").expect("docker-compose -H is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("ps"));
+
+	// --host=inline also works.
+	let command = detect("docker-compose --host=tcp://host:2376 logs")
+		.expect("docker-compose --host= is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("logs"));
+
+	// --tlscacert consumes its value.
+	let command = detect("docker-compose --tlscacert /path/ca.pem up")
+		.expect("docker-compose --tlscacert is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	// --tlscert consumes its value.
+	let command = detect("docker-compose --tlscert /path/cert.pem ps")
+		.expect("docker-compose --tlscert is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("ps"));
+
+	// --tlskey consumes its value.
+	let command = detect("docker-compose --tlskey /path/key.pem logs")
+		.expect("docker-compose --tlskey is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("logs"));
+}
+
+#[test]
+fn docker_compose_without_flags_still_works() {
+	let command = detect("docker-compose up").expect("docker-compose command is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
 }
