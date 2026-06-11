@@ -2,11 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	detectIndentFromContent,
-	resolveFormatOptions,
-} from "@oh-my-pi/pi-coding-agent/lsp/format-options";
-import { getProjectDir, setProjectDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { detectIndentFromContent, resolveFormatOptions } from "@oh-my-pi/pi-coding-agent/lsp/format-options";
+import { getProjectDir, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 
 /**
  * Regression coverage for issue #2329 — the LSP format-on-write path used to
@@ -48,7 +45,7 @@ describe("detectIndentFromContent", () => {
 	});
 
 	it("reports insertSpaces=false for tab indents and leaves tabSize unset", () => {
-		const go = ["package main", "", "func main() {", "\tprintln(\"hi\")", "}", ""].join("\n");
+		const go = ["package main", "", "func main() {", '\tprintln("hi")', "}", ""].join("\n");
 		expect(detectIndentFromContent(go)).toEqual({ insertSpaces: false });
 	});
 
@@ -105,7 +102,7 @@ describe("resolveFormatOptions", () => {
 
 	it("preserves tab indentation when no .editorconfig is present", () => {
 		const filePath = path.join(tempDir, "main.go");
-		const go = ["package main", "", "func main() {", "\tprintln(\"hi\")", "}", ""].join("\n");
+		const go = ["package main", "", "func main() {", '\tprintln("hi")', "}", ""].join("\n");
 		const opts = resolveFormatOptions(filePath, go);
 		expect(opts.insertSpaces).toBe(false);
 	});

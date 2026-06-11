@@ -362,10 +362,7 @@ export interface EditorConfigFormatting {
  * to caller-provided defaults instead of clobbering the file with the renderer's display
  * `defaultTabWidth` (issue #2329).
  */
-export function getEditorConfigFormatting(
-	file?: string | null,
-	projectDir?: string | null,
-): EditorConfigFormatting {
+export function getEditorConfigFormatting(file?: string | null, projectDir?: string | null): EditorConfigFormatting {
 	if (file === undefined || file === null || file === "") {
 		return {};
 	}
