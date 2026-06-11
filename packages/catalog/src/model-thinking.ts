@@ -177,10 +177,7 @@ function inferSupportedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] {
-	if (
-		spec.api === "openai-completions" &&
-		(isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
-	) {
+	if (spec.api === "openai-completions" && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))) {
 		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
 	}
 	switch (parsedModel.family) {
