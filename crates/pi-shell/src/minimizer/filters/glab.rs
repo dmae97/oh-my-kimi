@@ -29,25 +29,25 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
-		Some("ci") if command_has_ordered_tokens(ctx.command, "ci", "trace") => {
+		Some("ci") if primitives::command_has_ordered_tokens(ctx.command, "ci", "trace") => {
 			filter_ci_trace(&cleaned)
 		},
-		Some("release") if command_has_ordered_tokens(ctx.command, "release", "list") => {
+		Some("release") if primitives::command_has_ordered_tokens(ctx.command, "release", "list") => {
 			match filter_release_list(&cleaned) {
 				Some(summary) => summary,
-				None => head_tail_dedup(&cleaned),
+				None => primitives::head_tail_dedup(&cleaned),
 			}
 		},
-		Some("release") if command_has_ordered_tokens(ctx.command, "release", "view") => {
+		Some("release") if primitives::command_has_ordered_tokens(ctx.command, "release", "view") => {
 			filter_release_view(&cleaned)
 		},
 		Some("mr" | "issue")
-			if command_has_ordered_tokens(ctx.command, "mr", "view")
-				|| command_has_ordered_tokens(ctx.command, "issue", "view") =>
+			if primitives::command_has_ordered_tokens(ctx.command, "mr", "view")
+				|| primitives::command_has_ordered_tokens(ctx.command, "issue", "view") =>
 		{
 			filter_mr_issue_view(&cleaned, exit_code)
 		},
-		_ => head_tail_dedup(&cleaned),
+		_ => primitives::head_tail_dedup(&cleaned),
 	};
 
 	if text == input {
@@ -60,11 +60,11 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 /// Check whether the command should be passed through unmodified.
 fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
 	// -F, --output, --json anywhere -> passthrough (user chose output format)
-	if command_has_any_token(ctx.command, &["-F", "--output", "--json"]) {
+	if primitives::command_has_any_token(ctx.command, &["-F", "--output", "--json"]) {
 		return true;
 	}
 	// --web anywhere -> passthrough (opens browser)
-	if command_has_any_token(ctx.command, &["--web"]) {
+	if primitives::command_has_any_token(ctx.command, &["--web"]) {
 		return true;
 	}
 	// api subcommand -> passthrough (advanced user)
@@ -72,41 +72,13 @@ fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
 		return true;
 	}
 	// --comments for mr view / issue view -> passthrough
-	if command_has_any_token(ctx.command, &["--comments"])
-		&& (command_has_ordered_tokens(ctx.command, "mr", "view")
-			|| command_has_ordered_tokens(ctx.command, "issue", "view"))
+	if primitives::command_has_any_token(ctx.command, &["--comments"])
+		&& (primitives::command_has_ordered_tokens(ctx.command, "mr", "view")
+			|| primitives::command_has_ordered_tokens(ctx.command, "issue", "view"))
 	{
 		return true;
 	}
 	false
-}
-
-fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
-	let mut saw_first = false;
-	for part in command.split_whitespace() {
-		if saw_first && part == second {
-			return true;
-		}
-		if part == first {
-			saw_first = true;
-		}
-	}
-	false
-}
-
-fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
-	command.split_whitespace().any(|part| {
-		tokens.iter().any(|token| {
-			part == *token
-				|| part
-					.strip_prefix(*token)
-					.is_some_and(|suffix| suffix.starts_with('='))
-		})
-	})
-}
-
-fn head_tail_dedup(input: &str) -> String {
-	primitives::head_tail_lines(&primitives::dedup_consecutive_lines(input), 120, 80)
 }
 
 // ── CI trace filter ────────────────────────────────────────────────────
@@ -289,7 +261,7 @@ fn filter_release_view(input: &str) -> String {
 /// On success, apply markdown body noise filtering.
 fn filter_mr_issue_view(input: &str, exit_code: i32) -> String {
 	if exit_code != 0 {
-		return head_tail_dedup(input);
+		return primitives::head_tail_dedup(input);
 	}
 	filter_markdown_body_view(input)
 }
@@ -328,7 +300,8 @@ fn filter_markdown_body_view(input: &str) -> String {
 			}
 			continue;
 		}
-		if is_markdown_badge_or_image(trimmed) || is_horizontal_rule(trimmed) {
+		if primitives::is_markdown_badge_or_image(trimmed) || primitives::is_horizontal_rule(trimmed)
+		{
 			continue;
 		}
 		if trimmed.is_empty() {
@@ -342,15 +315,7 @@ fn filter_markdown_body_view(input: &str) -> String {
 		out.push_str(line.trim_end());
 		out.push('\n');
 	}
-	head_tail_dedup(&out)
-}
-
-fn is_markdown_badge_or_image(line: &str) -> bool {
-	line.starts_with("![") || line.starts_with("[![") || line.contains("img.shields.io")
-}
-
-fn is_horizontal_rule(line: &str) -> bool {
-	line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
+	primitives::head_tail_dedup(&out)
 }
 
 #[cfg(test)]

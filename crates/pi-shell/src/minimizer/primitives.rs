@@ -169,6 +169,43 @@ fn split_file_line(line: &str) -> Option<(&str, &str)> {
 	Some((file, rest))
 }
 
+pub fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
+	let mut saw_first = false;
+	for part in command.split_whitespace() {
+		if saw_first && part == second {
+			return true;
+		}
+		if part == first {
+			saw_first = true;
+		}
+	}
+	false
+}
+
+pub fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
+	command.split_whitespace().any(|part| {
+		tokens.iter().any(|token| {
+			part == *token
+				|| part
+					.strip_prefix(*token)
+					.is_some_and(|suffix| suffix.starts_with('='))
+		})
+	})
+}
+
+/// Dedup consecutive lines then apply a 120-head / 80-tail cap.
+pub fn head_tail_dedup(input: &str) -> String {
+	head_tail_lines(&dedup_consecutive_lines(input), 120, 80)
+}
+
+pub fn is_markdown_badge_or_image(line: &str) -> bool {
+	line.starts_with("![") || line.starts_with("[![") || line.contains("img.shields.io")
+}
+
+pub fn is_horizontal_rule(line: &str) -> bool {
+	line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
+}
+
 /// Compact a long plain listing to head/tail form.
 pub fn compact_listing(input: &str, max_lines: usize) -> String {
 	let lines: Vec<&str> = input

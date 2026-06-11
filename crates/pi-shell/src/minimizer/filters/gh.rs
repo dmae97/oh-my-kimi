@@ -25,7 +25,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
-		Some("pr") if command_has_ordered_tokens(ctx.command, "pr", "checks") => {
+		Some("pr") if primitives::command_has_ordered_tokens(ctx.command, "pr", "checks") => {
 			match filter_pr_checks(&cleaned) {
 				Some(summary) => summary,
 				None => filter_pr_issue(&cleaned, exit_code),
@@ -33,7 +33,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		},
 		Some("pr" | "issue") => filter_pr_issue(&cleaned, exit_code),
 		Some("run" | "workflow") => filter_run(&cleaned, exit_code),
-		_ => head_tail_dedup(&cleaned),
+		_ => primitives::head_tail_dedup(&cleaned),
 	};
 
 	if text == input {
@@ -47,10 +47,10 @@ fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
 	match ctx.subcommand {
 		Some("api") => true,
 		Some("run") => {
-			command_has_ordered_tokens(ctx.command, "run", "view")
-				&& command_has_any_token(ctx.command, &["--log", "--log-failed", "--json"])
+			primitives::command_has_ordered_tokens(ctx.command, "run", "view")
+				&& primitives::command_has_any_token(ctx.command, &["--log", "--log-failed", "--json"])
 		},
-		Some("pr") if command_has_ordered_tokens(ctx.command, "pr", "checks") => {
+		Some("pr") if primitives::command_has_ordered_tokens(ctx.command, "pr", "checks") => {
 			// `--watch` re-renders the whole check table each `--interval`/-i
 			// (default 10s) until checks finish; the captured buffer is then
 			// dozens of concatenated frames. `filter_pr_checks` counts one glyph
@@ -59,7 +59,7 @@ fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
 			// failures. A watch is an explicit live view -- pass it through raw
 			// instead of summarizing a multi-frame buffer. (--json/-w break the
 			// table shape outright.)
-			command_has_any_token(ctx.command, &[
+			primitives::command_has_any_token(ctx.command, &[
 				"--json",
 				"--web",
 				"-w",
@@ -70,48 +70,24 @@ fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
 				"-i",
 			])
 		},
-		Some("pr") if command_has_ordered_tokens(ctx.command, "pr", "diff") => true,
-		Some("pr") if command_has_ordered_tokens(ctx.command, "pr", "status") => {
-			command_has_any_token(ctx.command, &["--web", "--jq", "--template"])
+		Some("pr") if primitives::command_has_ordered_tokens(ctx.command, "pr", "diff") => true,
+		Some("pr") if primitives::command_has_ordered_tokens(ctx.command, "pr", "status") => {
+			primitives::command_has_any_token(ctx.command, &["--web", "--jq", "--template"])
 		},
 		Some(subcommand @ ("pr" | "issue")) => {
-			command_has_ordered_tokens(ctx.command, subcommand, "view")
-				&& command_has_any_token(ctx.command, &["--json", "--jq", "--comments"])
+			primitives::command_has_ordered_tokens(ctx.command, subcommand, "view")
+				&& primitives::command_has_any_token(ctx.command, &["--json", "--jq", "--comments"])
 		},
 		_ => false,
 	}
 }
 
-fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
-	let mut saw_first = false;
-	for part in command.split_whitespace() {
-		if saw_first && part == second {
-			return true;
-		}
-		if part == first {
-			saw_first = true;
-		}
-	}
-	false
-}
-
-fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
-	command.split_whitespace().any(|part| {
-		tokens.iter().any(|token| {
-			part == *token
-				|| part
-					.strip_prefix(*token)
-					.is_some_and(|suffix| suffix.starts_with('='))
-		})
-	})
-}
-
 fn filter_pr_issue(input: &str, exit_code: i32) -> String {
 	if exit_code != 0 {
-		return head_tail_dedup(input);
+		return primitives::head_tail_dedup(input);
 	}
 	let markdown_filtered = filter_markdown_noise(input);
-	head_tail_dedup(&markdown_filtered)
+	primitives::head_tail_dedup(&markdown_filtered)
 }
 
 /// Summarize the DEFAULT (non-JSON) `gh pr checks` table.
@@ -225,7 +201,8 @@ fn filter_markdown_noise(input: &str) -> String {
 			}
 			continue;
 		}
-		if is_markdown_badge_or_image(trimmed) || is_horizontal_rule(trimmed) {
+		if primitives::is_markdown_badge_or_image(trimmed) || primitives::is_horizontal_rule(trimmed)
+		{
 			continue;
 		}
 		if trimmed.is_empty() {
@@ -242,14 +219,6 @@ fn filter_markdown_noise(input: &str) -> String {
 	out
 }
 
-fn is_markdown_badge_or_image(line: &str) -> bool {
-	line.starts_with("![") || line.starts_with("[![") || line.contains("img.shields.io")
-}
-
-fn is_horizontal_rule(line: &str) -> bool {
-	line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
-}
-
 fn contains_failure_signal(input: &str) -> bool {
 	input.lines().any(|line| {
 		let lower = line.to_ascii_lowercase();
@@ -258,10 +227,6 @@ fn contains_failure_signal(input: &str) -> bool {
 			|| lower.contains("failure")
 			|| lower.contains("cancelled")
 	})
-}
-
-fn head_tail_dedup(input: &str) -> String {
-	primitives::head_tail_lines(&primitives::dedup_consecutive_lines(input), 120, 80)
 }
 
 #[cfg(test)]
