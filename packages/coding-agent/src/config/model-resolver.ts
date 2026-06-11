@@ -633,18 +633,72 @@ function isSessionInheritedAgentPattern(value: string): boolean {
 	return value === DEFAULT_MODEL_ROLE || value === `${PREFIX_MODEL_ROLE}${DEFAULT_MODEL_ROLE}` || value === "pi/task";
 }
 
-function resolveConfiguredRolePattern(value: string, settings?: Settings): string[] | undefined {
+function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
+	return role === "smol" || role === "slow" || role === "designer";
+}
+
+function resolveDefaultInheritedPatterns(
+	role: ModelRole,
+	configuredDefault: string | undefined,
+	roleDefaults: string[],
+	settings: Settings | undefined,
+	visited: Set<ModelRole>,
+): string[] {
+	if (!shouldInheritDefaultBeforePriority(role) || !configuredDefault) return [];
+
+	const resolved: string[] = [];
+	for (const pattern of normalizeModelPatternList(configuredDefault)) {
+		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(pattern, PREFIX_MODEL_ROLE.length);
+		const aliasRole = getModelRoleAlias(aliasCandidate);
+		if (aliasRole === role) {
+			// Self-alias (e.g. modelRoles.default = "pi/smol") would loop back to the
+			// same unset role; collapse straight to the built-in priority chain.
+			resolved.push(
+				...(thinkingLevel
+					? roleDefaults.map(defaultPattern => `${defaultPattern}:${thinkingLevel}`)
+					: roleDefaults),
+			);
+			continue;
+		}
+		if (aliasRole && !visited.has(aliasRole)) {
+			// Cross-role alias (e.g. modelRoles.default = "pi/slow"): resolve the
+			// target role's patterns now so downstream one-layer expanders see
+			// concrete model patterns instead of another role alias.
+			const recursed = resolveConfiguredRolePattern(pattern, settings, new Set(visited));
+			if (recursed && recursed.length > 0) {
+				resolved.push(...recursed);
+				continue;
+			}
+		}
+		resolved.push(pattern);
+	}
+	return resolved;
+}
+
+function resolveConfiguredRolePattern(
+	value: string,
+	settings?: Settings,
+	visited: Set<ModelRole> = new Set(),
+): string[] | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;
 
 	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(normalized, PREFIX_MODEL_ROLE.length);
 	const role = getModelRoleAlias(aliasCandidate);
 	if (!role) return [normalized];
+	if (visited.has(role)) return undefined;
+	visited.add(role);
 
 	const configured = settings?.getModelRole(role)?.trim();
+	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
 	const roleDefaults = normalizeModelPatternList(MODEL_PRIO[role as keyof typeof MODEL_PRIO]);
-	const resolved = configured ? normalizeModelPatternList(configured) : roleDefaults;
-	if (!resolved || resolved.length === 0) {
+	const resolved = configured
+		? normalizeModelPatternList(configured)
+		: resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited);
+	if (resolved.length === 0) {
+		resolved.push(...roleDefaults);
+	}
+	if (resolved.length === 0) {
 		return undefined;
 	}
 

@@ -1126,9 +1126,14 @@ export async function commit(cwd: string, message: string, options: CommitOption
 	return runChecked(cwd, args, { signal: options.signal, stdin: message });
 }
 
-/** Push the current branch. */
+/** Push the current branch (branch-scoped: never follows tags). */
 export async function push(cwd: string, options: PushOptions = {}): Promise<void> {
-	const args = ["push"];
+	// `--no-follow-tags` overrides a user's `push.followTags = true`, which
+	// would otherwise ride every reachable annotated tag along with the
+	// branch — rejected refs ("permission denied") on remotes the user
+	// cannot tag (e.g. PR-head forks), failing the call after the branch
+	// itself already updated. Tool pushes push exactly the named refspec.
+	const args = ["push", "--no-follow-tags"];
 	if (options.forceWithLease) args.push("--force-with-lease");
 	if (options.remote) args.push(options.remote);
 	if (options.refspec) args.push(options.refspec);

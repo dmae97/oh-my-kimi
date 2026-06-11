@@ -460,7 +460,7 @@ function buildParams(
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 	const promptCacheKey = getOpenAIResponsesPromptCacheKey(options);
 	const params: OpenAIResponsesSamplingParams = {
-		model: model.id,
+		model: model.requestModelId ?? model.id,
 		input: messages,
 		instructions: systemInstructions,
 		stream: true,

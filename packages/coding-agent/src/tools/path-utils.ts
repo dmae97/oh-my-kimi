@@ -729,6 +729,7 @@ async function resolveSearchPathItems(
 	pathItems: string[],
 	cwd: string,
 	suffixGlob?: string,
+	fanOutFileItems = false,
 ): Promise<ResolvedMultiSearchPath | undefined> {
 	if (pathItems.length < 1) {
 		return undefined;
@@ -760,14 +761,27 @@ async function resolveSearchPathItems(
 		}
 		return relativeBasePath === "." ? path.basename(item.absoluteBasePath) : relativeBasePath;
 	});
-	const rootPath = path.parse(commonBasePath).root;
-	const isDegenerateRoot = commonBasePath === rootPath && parsedItems.length > 1;
-	const targets = isDegenerateRoot
-		? parsedItems.map(item => ({
-				basePath: item.absoluteBasePath,
-				glob: item.parsedPath.glob ? combineSearchGlobs(item.parsedPath.glob, suffixGlob) : suffixGlob,
-			}))
-		: undefined;
+	// A single walk rooted at the common ancestor is only safe when that
+	// ancestor is itself one of the requested scopes (e.g. `.` + `src/foo.ts`):
+	// the walk then covers exactly what the caller asked for. When the common
+	// ancestor is an unrequested parent (`.` + `~/.gitconfig` → `$HOME`, or
+	// disjoint trees → `/`), a collapsed walk traverses every unrelated sibling
+	// under it — fan out into per-item targets so each scan stays bounded to a
+	// requested path.
+	const commonIsRequestedScope = parsedItems.some(item => item.absoluteBasePath === commonBasePath);
+	// Walkers prune `.git` unconditionally and honor gitignore, so a plain-file
+	// item folded into a directory walk's glob union (`.` + `.git/config`) can
+	// silently never match. Callers that dedupe overlapping results opt in via
+	// `fanOutFileItems` to get explicit file targets, which bypass the walker.
+	const demotesFileItem =
+		fanOutFileItems && !allExactFiles && parsedItems.some(item => !item.parsedPath.glob && item.stat.isFile());
+	const targets =
+		parsedItems.length > 1 && (!commonIsRequestedScope || demotesFileItem)
+			? parsedItems.map(item => ({
+					basePath: item.absoluteBasePath,
+					glob: item.parsedPath.glob ? combineSearchGlobs(item.parsedPath.glob, suffixGlob) : suffixGlob,
+				}))
+			: undefined;
 
 	return {
 		basePath: commonBasePath,
@@ -782,8 +796,9 @@ export async function resolveExplicitSearchPaths(
 	pathItems: string[],
 	cwd: string,
 	suffixGlob?: string,
+	fanOutFileItems = false,
 ): Promise<ResolvedMultiSearchPath | undefined> {
-	return resolveSearchPathItems([...new Set(pathItems)], cwd, suffixGlob);
+	return resolveSearchPathItems([...new Set(pathItems)], cwd, suffixGlob, fanOutFileItems);
 }
 
 async function resolveFindPatternItems(
@@ -928,6 +943,10 @@ export interface ToolScopeOptions {
 	trackImmutableSources?: boolean;
 	/** Honor `exactFilePaths` from {@link resolveExplicitSearchPaths} (search-only). */
 	surfaceExactFilePaths?: boolean;
+	/** Fan plain-file entries out into per-target scans instead of folding them
+	 * into a directory walk's glob union (search-only: the caller must dedupe
+	 * matches from overlapping targets). */
+	fanOutFileTargets?: boolean;
 	/** Extra hint appended to "Path not found" when stat fails and the user supplied multiple paths. */
 	multipathStatHint?: string;
 	/** Calling session's settings — forwarded to the internal-URL router so caller-aware handlers (issue://, pr://) honor it. */
@@ -1024,7 +1043,12 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		globFilter = parsedPath.glob;
 		scopePath = formatPathRelativeToCwd(searchPath, cwd);
 	} else {
-		const multiSearchPath = await resolveExplicitSearchPaths(effectivePaths, cwd);
+		const multiSearchPath = await resolveExplicitSearchPaths(
+			effectivePaths,
+			cwd,
+			undefined,
+			opts.fanOutFileTargets === true,
+		);
 		if (!multiSearchPath) {
 			throw new ToolError("`paths` must contain at least one path or glob");
 		}
