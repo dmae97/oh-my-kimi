@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Marked unsmoothed assistant streaming renders as transient so streamed code blocks can avoid synchronous syntax highlighting until the message finalizes.
+
+- Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
+
+- Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes
