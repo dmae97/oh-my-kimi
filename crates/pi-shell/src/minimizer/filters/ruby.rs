@@ -567,16 +567,19 @@ fn is_rake_keep_line(trimmed: &str) -> bool {
 		return false;
 	}
 	let lower = trimmed.to_ascii_lowercase();
-	lower.contains("passed")
-		|| lower.contains("failed")
-		|| lower.contains("error")
-		|| lower.contains("fail")
-		|| lower.contains("ok")
-		|| lower.contains("finished")
-		|| lower.contains("assertion")
-		|| lower.contains("test")
-		|| lower.contains("failure")
-		|| trimmed.contains("rake aborted")
+	let words: Vec<&str> = lower.split_whitespace().collect();
+	words.iter().any(|w| {
+		matches!(
+			*w,
+			"passed"
+				| "failed"
+				| "error"
+				| "fail" | "ok"
+				| "finished"
+				| "assertion"
+				| "test" | "failure"
+		)
+	}) || trimmed.contains("rake aborted")
 }
 
 fn ruby_test_success(input: &str) -> String {

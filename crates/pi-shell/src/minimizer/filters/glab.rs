@@ -302,18 +302,29 @@ fn filter_markdown_body_view(input: &str) -> String {
 	let mut out = String::new();
 	let mut in_html_comment = false;
 	let mut previous_blank = false;
+	let mut comment_lines = 0usize;
 
 	for line in input.lines() {
 		let trimmed = line.trim();
 		if in_html_comment {
 			if trimmed.contains("-->") {
 				in_html_comment = false;
+				comment_lines = 0;
+			} else {
+				comment_lines += 1;
+				// Safety: cap unclosed comment consumption at 50 lines to
+				// prevent data loss from malformed/truncated markdown.
+				if comment_lines > 50 {
+					in_html_comment = false;
+					comment_lines = 0;
+				}
 			}
 			continue;
 		}
 		if trimmed.starts_with("<!--") {
 			if !trimmed.contains("-->") {
 				in_html_comment = true;
+				comment_lines = 0;
 			}
 			continue;
 		}
