@@ -1,6 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
+### Fixed
+
+- Fixed `ProcessTerminal` treating asynchronous stdout `EIO` errors as uncaught exceptions: stdout `error` events now mark the terminal dead, disable future renders, and keep the active session process alive ([#2284](https://github.com/can1357/oh-my-pi/issues/2284)).
+
+## [15.11.0] - 2026-06-10
 ### Added
 
 - Added support for asynchronous `onSubmit` handlers by allowing the callback to return a `Promise<void>`

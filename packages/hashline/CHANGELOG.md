@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `insert after block N:` prompt guidance so it explicitly says N must be the block opener, not the closing delimiter or last visible line, and points visible closing-line edits to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
+
+## [15.11.0] - 2026-06-10
+
 ### Changed
 
 - Block-unresolved errors (`replace block N:` / `delete block N` / `insert after block N:` failing to resolve a syntactic block) now append a numbered preview of the file around the anchor line — same `*`-marked context rows the hash-mismatch error shows — so the offending line is visible without a re-read

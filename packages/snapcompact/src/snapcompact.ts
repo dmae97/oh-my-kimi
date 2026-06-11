@@ -33,7 +33,7 @@
 
 import type { Api, ImageContent, Message, Model } from "@oh-my-pi/pi-ai";
 import { renderSnapcompactPng } from "@oh-my-pi/pi-natives";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { type: "text" };
 
@@ -108,6 +108,30 @@ export const SNAPCOMPACT_SHAPES = {
 		frameTokenEstimate: 3300,
 	},
 } as const satisfies Record<string, SnapcompactShape>;
+
+/** Runtime guard for shape overrides loaded from config or preserve data. */
+export function isSnapcompactShape(value: unknown): value is SnapcompactShape {
+	if (!value || typeof value !== "object") return false;
+	const shape = value as Record<string, unknown>;
+	const font = shape.font;
+	const variant = shape.variant;
+	const detail = shape.imageDetail;
+	return (
+		(font === "5x8" || font === "8x8") &&
+		typeof shape.cellWidth === "number" &&
+		shape.cellWidth > 0 &&
+		typeof shape.cellHeight === "number" &&
+		shape.cellHeight > 0 &&
+		(variant === "sent" || variant === "bw") &&
+		typeof shape.lineRepeat === "number" &&
+		shape.lineRepeat > 0 &&
+		typeof shape.frameSize === "number" &&
+		shape.frameSize > 0 &&
+		typeof shape.frameTokenEstimate === "number" &&
+		shape.frameTokenEstimate > 0 &&
+		(detail === undefined || detail === "auto" || detail === "low" || detail === "high" || detail === "original")
+	);
+}
 
 /** Pick the eval-optimal frame shape for a provider API. */
 export function resolveSnapcompactShape(api?: Api): SnapcompactShape {
@@ -188,7 +212,7 @@ export interface SnapcompactGeometry {
 	capacity: number;
 }
 
-export interface SnapcompactOptions<TMessage = Message> {
+export interface SnapcompactOptions<TMessage = Message> extends SnapcompactSerializeOptions {
 	/** App-level message transformer (same contract as agent-core's `SummaryOptions.convertToLlm`). */
 	convertToLlm?: SnapcompactConvertToLlm<TMessage>;
 	/** Model whose provider API selects the frame shape. */
@@ -201,12 +225,13 @@ export interface SnapcompactOptions<TMessage = Message> {
 	maxFrames?: number;
 }
 
-/** Result of rendering one frame, before base64 packing. */
+/** Result of rendering one frame. */
 export interface RenderedFrame {
-	png: Uint8Array;
+	/** Base64-encoded PNG, as returned by the native renderer. */
+	data: string;
 	cols: number;
 	rows: number;
-	/** Characters printed (input may be shorter than capacity). */
+	/** Characters printed (ink toggles excluded; input may be shorter than capacity). */
 	chars: number;
 }
 
@@ -275,31 +300,45 @@ export function computeSnapcompactFileLists(fileOps: SnapcompactFileOperations):
 	return { readFiles, modifiedFiles };
 }
 
+/**
+ * Format file operations as one `<files>` tag: a grouped, prefix-folded
+ * directory tree (find-tool shape) with a ` (Read)` / ` (Write)` / ` (RW)`
+ * marker per file. `readSet` is the cumulative read set (`fileOps.read`),
+ * used to tell modified files that were also read (RW) from blind writes.
+ */
 const FILE_OPERATION_SUMMARY_LIMIT = 20;
 
-function truncateFileList(files: string[]): string[] {
-	if (files.length <= FILE_OPERATION_SUMMARY_LIMIT) return files;
-	const omitted = files.length - FILE_OPERATION_SUMMARY_LIMIT;
-	return [...files.slice(0, FILE_OPERATION_SUMMARY_LIMIT), `… (${omitted} more files omitted)`];
-}
-
 function stripFileOperationTags(summary: string): string {
-	const withoutReadFiles = summary.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "");
-	const withoutModifiedFiles = withoutReadFiles.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "");
-	return withoutModifiedFiles.trimEnd();
+	// Legacy <read-files>/<modified-files> tags are still stripped so summaries
+	// written before the combined <files> tag self-heal on the next compaction.
+	return summary
+		.replace(/<files>[\s\S]*?<\/files>\s*/g, "")
+		.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "")
+		.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "")
+		.trimEnd();
 }
 
-function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
+function formatFileOperations(readFiles: string[], modifiedFiles: string[], readSet?: ReadonlySet<string>): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
-	return prompt.render(fileOperationsTemplate, {
-		readFiles: truncateFileList(readFiles),
-		modifiedFiles: truncateFileList(modifiedFiles),
-	});
+	const mode = new Map<string, "Read" | "Write" | "RW">();
+	for (const file of readFiles) mode.set(file, "Read");
+	for (const file of modifiedFiles) mode.set(file, readSet?.has(file) ? "RW" : "Write");
+	const all = [...mode.keys()].sort();
+	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
+	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
+		files += `\n… (${all.length - FILE_OPERATION_SUMMARY_LIMIT} more files omitted)`;
+	}
+	return prompt.render(fileOperationsTemplate, { files });
 }
 
-export function upsertSnapcompactFileOperations(summary: string, readFiles: string[], modifiedFiles: string[]): string {
+export function upsertSnapcompactFileOperations(
+	summary: string,
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;
@@ -309,15 +348,65 @@ export function upsertSnapcompactFileOperations(summary: string, readFiles: stri
 // Message serialization
 // ============================================================================
 
-const TOOL_RESULT_MAX_CHARS = 2000;
+/** Default per-tool-result character cap in serialized history. */
+export const SNAPCOMPACT_TOOL_RESULT_MAX_CHARS = 2000;
 
-function truncateForSummary(text: string, maxChars: number): string {
-	if (text.length <= maxChars) return text;
-	const truncatedChars = text.length - maxChars;
-	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+/** Default per-argument-value character cap inside serialized tool calls
+ *  (write/edit bodies otherwise dump whole files into the archive). */
+export const SNAPCOMPACT_TOOL_ARG_MAX_CHARS = 500;
+
+/** Default character cap across one tool call's full serialized argument list. */
+export const SNAPCOMPACT_TOOL_CALL_MAX_CHARS = 2000;
+
+/** Default fraction of a truncation budget spent on the head; the remainder
+ *  keeps the tail, where command errors and test failures usually land. */
+export const SNAPCOMPACT_TRUNCATE_HEAD_RATIO = 0.6;
+
+/** Zero-width ink toggles understood by the native renderer (shift-out/in):
+ *  text between them prints in dim gray ink without occupying a cell. */
+export const SNAPCOMPACT_DIM_ON = "\u000e";
+export const SNAPCOMPACT_DIM_OFF = "\u000f";
+
+/** Character budgets applied while serializing discarded history for frame
+ *  rendering. Pass `Infinity` to disable an individual cap. */
+export interface SnapcompactSerializeOptions {
+	/** Per-tool-result cap. Defaults to {@link SNAPCOMPACT_TOOL_RESULT_MAX_CHARS}. */
+	toolResultMaxChars?: number;
+	/** Per-argument-value cap. Defaults to {@link SNAPCOMPACT_TOOL_ARG_MAX_CHARS}. */
+	toolArgMaxChars?: number;
+	/** Whole-argument-list cap per call. Defaults to {@link SNAPCOMPACT_TOOL_CALL_MAX_CHARS}. */
+	toolCallMaxChars?: number;
+	/** Head share of each budget, clamped to [0, 1]. Defaults to {@link SNAPCOMPACT_TRUNCATE_HEAD_RATIO}. */
+	truncateHeadRatio?: number;
+	/** Print tool-result text in dim gray ink so archived conversation reads
+	 *  louder than archived tool noise. Defaults to `true`. */
+	dimToolResults?: boolean;
 }
 
-export function serializeSnapcompactConversation(messages: Message[]): string {
+/** Keep the head and tail of `text`, eliding the middle beyond `maxChars`. */
+function truncateForSummary(text: string, maxChars: number, headRatio: number): string {
+	if (text.length <= maxChars) return text;
+	const ratio = Math.min(Math.max(headRatio, 0), 1);
+	const headChars = Math.round(maxChars * ratio);
+	const tailChars = maxChars - headChars;
+	const elided = text.length - maxChars;
+	const tail = tailChars > 0 ? text.slice(-tailChars) : "";
+	return `${text.slice(0, headChars)} [... ${elided} chars elided ...] ${tail}`;
+}
+
+const DIM_MARKERS = /[\u000e\u000f]/g;
+
+/** Strip stray ink toggles from raw content so it cannot forge dim spans. */
+function stripDimMarkers(text: string): string {
+	return text.replace(DIM_MARKERS, "");
+}
+
+export function serializeSnapcompactConversation(messages: Message[], options?: SnapcompactSerializeOptions): string {
+	const toolResultMaxChars = options?.toolResultMaxChars ?? SNAPCOMPACT_TOOL_RESULT_MAX_CHARS;
+	const toolArgMaxChars = options?.toolArgMaxChars ?? SNAPCOMPACT_TOOL_ARG_MAX_CHARS;
+	const toolCallMaxChars = options?.toolCallMaxChars ?? SNAPCOMPACT_TOOL_CALL_MAX_CHARS;
+	const headRatio = options?.truncateHeadRatio ?? SNAPCOMPACT_TRUNCATE_HEAD_RATIO;
+	const dimToolResults = options?.dimToolResults !== false;
 	const parts: string[] = [];
 
 	for (const msg of messages) {
@@ -329,7 +418,7 @@ export function serializeSnapcompactConversation(messages: Message[]): string {
 							.filter((content): content is { type: "text"; text: string } => content.type === "text")
 							.map(content => content.text)
 							.join("");
-			if (content) parts.push(`[User]: ${content}`);
+			if (content) parts.push(`[User]: ${stripDimMarkers(content)}`);
 		} else if (msg.role === "assistant") {
 			const textParts: string[] = [];
 			const thinkingParts: string[] = [];
@@ -337,14 +426,21 @@ export function serializeSnapcompactConversation(messages: Message[]): string {
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
-					textParts.push(block.text);
+					textParts.push(stripDimMarkers(block.text));
 				} else if (block.type === "thinking") {
-					thinkingParts.push(block.thinking);
+					thinkingParts.push(stripDimMarkers(block.thinking));
 				} else if (block.type === "toolCall") {
 					const args = block.arguments as Record<string, unknown>;
-					const argsStr = Object.entries(args)
-						.map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-						.join(", ");
+					const argsStr = truncateForSummary(
+						Object.entries(args)
+							.map(
+								([key, value]) =>
+									`${key}=${truncateForSummary(JSON.stringify(value) ?? "undefined", toolArgMaxChars, headRatio)}`,
+							)
+							.join(", "),
+						toolCallMaxChars,
+						headRatio,
+					);
 					toolCalls.push(`${block.name}(${argsStr})`);
 				}
 			}
@@ -364,7 +460,13 @@ export function serializeSnapcompactConversation(messages: Message[]): string {
 				.map(block => block.text)
 				.join("");
 			if (content) {
-				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
+				// Args above are JSON-escaped, so only raw result text can carry toggles.
+				const body = truncateForSummary(stripDimMarkers(content), toolResultMaxChars, headRatio);
+				parts.push(
+					dimToolResults
+						? `[Tool result]: ${SNAPCOMPACT_DIM_ON}${body}${SNAPCOMPACT_DIM_OFF}`
+						: `[Tool result]: ${body}`,
+				);
 			}
 		}
 	}
@@ -464,8 +566,9 @@ export function renderSnapcompactFrame(
 	size: number = shape.frameSize,
 ): RenderedFrame {
 	const { cols, rows, capacity } = snapcompactGeometry(shape, size);
-	const chars = Math.min(text.length, capacity);
-	const png = renderSnapcompactPng(text, {
+	const visible = text.length - (text.match(DIM_MARKERS)?.length ?? 0);
+	const chars = Math.min(visible, capacity);
+	const data = renderSnapcompactPng(text, {
 		size,
 		font: shape.font,
 		cellWidth: shape.cellWidth,
@@ -473,7 +576,7 @@ export function renderSnapcompactFrame(
 		variant: shape.variant,
 		lineRepeat: shape.lineRepeat,
 	});
-	return { png, cols, rows, chars };
+	return { data, cols, rows, chars };
 }
 
 // ============================================================================
@@ -550,7 +653,7 @@ export async function snapcompactCompact<TMessage = Message>(
 
 	const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
-	let archiveText = normalizeForSnapcompact(serializeSnapcompactConversation(llmMessages));
+	let archiveText = normalizeForSnapcompact(serializeSnapcompactConversation(llmMessages, options));
 
 	const previousArchive = getPreservedSnapcompactArchive(previousPreserveData);
 	const includedPreviousSummary = !previousArchive && !!previousSummary;
@@ -562,11 +665,15 @@ export async function snapcompactCompact<TMessage = Message>(
 	let truncatedChars = previousArchive?.truncatedChars ?? 0;
 
 	const newFrames: SnapcompactFrame[] = [];
+	let dimOpen = false;
 	for (let offset = 0; offset < archiveText.length; offset += geometry.capacity) {
-		const chunk = archiveText.slice(offset, offset + geometry.capacity);
+		let chunk = archiveText.slice(offset, offset + geometry.capacity);
+		// Re-open a dim span that the previous frame boundary cut through.
+		if (dimOpen) chunk = SNAPCOMPACT_DIM_ON + chunk;
+		dimOpen = chunk.lastIndexOf(SNAPCOMPACT_DIM_ON) > chunk.lastIndexOf(SNAPCOMPACT_DIM_OFF);
 		const rendered = renderSnapcompactFrame(chunk, shape, frameSize);
 		newFrames.push({
-			data: Buffer.from(rendered.png).toBase64(),
+			data: rendered.data,
 			mimeType: "image/png",
 			cols: rendered.cols,
 			rows: rendered.rows,
@@ -613,6 +720,7 @@ export async function snapcompactCompact<TMessage = Message>(
 			rows: geometry.rows,
 			sentenceInk: shape.variant === "sent",
 			lineRepeated: shape.lineRepeat > 1,
+			dimmedToolResults: options?.dimToolResults !== false,
 			mixedShapes,
 			totalChars,
 			truncatedChars,
@@ -620,7 +728,7 @@ export async function snapcompactCompact<TMessage = Message>(
 		});
 	}
 	const { readFiles, modifiedFiles } = computeSnapcompactFileLists(fileOps);
-	summary = upsertSnapcompactFileOperations(summary, readFiles, modifiedFiles);
+	summary = upsertSnapcompactFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
 
 	// A snapcompact pass replaces any provider-side replacement history; strip the
 	// OpenAI remote-compaction payload like the default summarizer path does.

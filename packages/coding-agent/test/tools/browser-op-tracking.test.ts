@@ -3,6 +3,7 @@ import {
 	describeInflight,
 	describeScreenshot,
 	type InflightOp,
+	imageFormatForPath,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-worker";
 
 describe("browser op tracking — timeout diagnostics", () => {
@@ -34,5 +35,22 @@ describe("browser op tracking — timeout diagnostics", () => {
 
 	it("returns an empty summary when nothing is in flight", () => {
 		expect(describeInflight(new Map())).toBe("");
+	});
+});
+
+describe("imageFormatForPath — explicit save capture format", () => {
+	it("maps the save path's extension to the matching capture format", () => {
+		expect(imageFormatForPath("/tmp/shot.webp")).toBe("webp");
+		expect(imageFormatForPath("/tmp/shot.WEBP")).toBe("webp");
+		expect(imageFormatForPath("/tmp/shot.jpg")).toBe("jpeg");
+		expect(imageFormatForPath("/tmp/shot.jpeg")).toBe("jpeg");
+		expect(imageFormatForPath("/tmp/shot.png")).toBe("png");
+	});
+
+	it("falls back to png for unknown or missing extensions", () => {
+		expect(imageFormatForPath("/tmp/shot")).toBe("png");
+		expect(imageFormatForPath("/tmp/shot.txt")).toBe("png");
+		// A dotted directory must not leak its "extension" into an extensionless basename.
+		expect(imageFormatForPath("/tmp/v1.2/shot")).toBe("png");
 	});
 });

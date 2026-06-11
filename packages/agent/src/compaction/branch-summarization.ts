@@ -330,7 +330,7 @@ export async function generateBranchSummary(
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary = upsertFileOperations(summary, readFiles, modifiedFiles);
+	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
 
 	return {
 		summary: summary || "No summary generated",

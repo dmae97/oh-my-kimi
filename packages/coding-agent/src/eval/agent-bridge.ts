@@ -109,7 +109,7 @@ function assertNotPlanMode(session: ToolSession): void {
 }
 
 function renderSubagentPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim(), independentMode: false });
+	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {

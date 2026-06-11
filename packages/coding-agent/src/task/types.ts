@@ -3,7 +3,6 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { AgentSessionEvent } from "../session/agent-session";
-import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
@@ -66,69 +65,89 @@ export interface SubagentLifecyclePayload {
 	index: number;
 }
 
-const createTaskSchema = (options: { isolationEnabled: boolean; customSchemaEnabled: boolean }) => {
-	let schema = z.object({
-		agent: z.string().optional().describe("agent type; omit when resume is set"),
-		id: z.string().max(48).optional().describe("stable agent id; default generated"),
-		description: z.string().optional().describe("ui label, not seen by subagent"),
-		assignment: z.string().describe("the work; self-contained instructions"),
-		resume: z.string().optional().describe("existing agent id: revive and continue instead of spawning"),
-	});
-
-	if (options.customSchemaEnabled) {
-		schema = schema.extend({
-			schema: z.string().optional().describe("jtd schema for expected response shape"),
-		});
-	}
-
-	if (options.isolationEnabled) {
-		schema = schema.extend({
-			isolated: z.boolean().optional().describe("run in isolated env; returns patches"),
-		});
-	}
-
-	return schema;
+/**
+ * One unit of work. The single-spawn schema is `{ agent, ...taskItemSchema }`;
+ * the batch schema (`task.batch`) is `{ agent, context, tasks: taskItemSchema[] }`.
+ * When task isolation is enabled, `isolated` joins the item shape (per-item in
+ * batch form, top-level in the flat form via the spread).
+ */
+const taskItemShape = {
+	id: z.string().max(48).optional().describe("stable agent id; default generated"),
+	description: z.string().optional().describe("ui label, not seen by subagent"),
+	assignment: z.string().describe("the work; self-contained instructions"),
+};
+const isolatedShape = {
+	isolated: z.boolean().optional().describe("run in isolated env; returns patches"),
+};
+const agentShape = {
+	agent: z.string().describe("agent type to spawn"),
+};
+const contextShape = {
+	context: z.string().describe("shared background prepended to each assignment"),
 };
 
-export const taskSchema = createTaskSchema({ isolationEnabled: true, customSchemaEnabled: true });
-const taskSchemaNoIsolation = createTaskSchema({ isolationEnabled: false, customSchemaEnabled: true });
-const taskSchemaSchemaFree = createTaskSchema({ isolationEnabled: true, customSchemaEnabled: false });
-const taskSchemaSchemaFreeNoIsolation = createTaskSchema({ isolationEnabled: false, customSchemaEnabled: false });
-const ALL_TASK_SCHEMAS = [
-	taskSchema,
-	taskSchemaNoIsolation,
-	taskSchemaSchemaFree,
-	taskSchemaSchemaFreeNoIsolation,
-] as const;
+export const taskItemSchema = z.object(taskItemShape);
+const taskItemSchemaIsolated = z.object({ ...taskItemShape, ...isolatedShape });
 
-type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
-export type TaskSchema = typeof taskSchema;
-/** Active task tool parameter schema for the current simple-mode / isolation flags */
-export type TaskToolSchemaInstance = DynamicTaskSchema;
-
-export function getTaskSchema(options: { isolationEnabled: boolean; simpleMode: TaskSimpleMode }): DynamicTaskSchema {
-	const { customSchemaEnabled } = getTaskSimpleModeCapabilities(options.simpleMode);
-	if (customSchemaEnabled) {
-		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
-	}
-	return options.isolationEnabled ? taskSchemaSchemaFree : taskSchemaSchemaFreeNoIsolation;
-}
-
-export interface TaskParams {
-	/** Agent type; required unless `resume` is set. */
-	agent?: string;
+/** Single task item. Fields are optional defensively: args stream in token by token. */
+export interface TaskItem {
 	/** Stable agent id; default = generated AdjectiveNoun. */
 	id?: string;
 	/** UI label, not seen by the subagent. */
 	description?: string;
-	/** The work; required. */
+	/** The work; required by the schema. */
 	assignment?: string;
-	/** JTD schema for the expected yield shape; unchanged semantics. */
-	schema?: string;
-	/** Run in an isolated worktree; isolated agents are NOT resumable. */
+	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
 	isolated?: boolean;
-	/** Existing agent id: revive + follow-up instead of spawn. */
-	resume?: string;
+}
+
+export const taskSchema = z.object({ ...agentShape, ...taskItemShape, ...isolatedShape });
+const taskSchemaNoIsolation = z.object({ ...agentShape, ...taskItemShape });
+const taskSchemaBatch = z.object({
+	...agentShape,
+	...contextShape,
+	tasks: z.array(taskItemSchemaIsolated).describe("tasks to spawn; one subagent per item"),
+});
+const taskSchemaBatchNoIsolation = z.object({
+	...agentShape,
+	...contextShape,
+	tasks: z.array(taskItemSchema).describe("tasks to spawn; one subagent per item"),
+});
+const ALL_TASK_SCHEMAS = [taskSchema, taskSchemaNoIsolation, taskSchemaBatch, taskSchemaBatchNoIsolation] as const;
+
+type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
+export type TaskSchema = typeof taskSchema;
+/** Active task tool parameter schema for the current isolation / batch flags */
+export type TaskToolSchemaInstance = DynamicTaskSchema;
+
+export function getTaskSchema(options: { isolationEnabled: boolean; batchEnabled: boolean }): DynamicTaskSchema {
+	if (options.batchEnabled) {
+		return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
+	}
+	return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
+}
+
+/**
+ * Runtime params union over both wire shapes. The model sees exactly one shape
+ * (`{ agent, context, tasks[] }` when `task.batch` is on, `{ agent, ...item }`
+ * otherwise); runtime stays permissive so internal callers and stale
+ * transcripts using the flat form keep working under either setting.
+ */
+export interface TaskParams {
+	/** Agent type; required. */
+	agent?: string;
+	/** Stable agent id (flat form); default = generated AdjectiveNoun. */
+	id?: string;
+	/** UI label (flat form), not seen by the subagent. */
+	description?: string;
+	/** The work (flat form). */
+	assignment?: string;
+	/** Batch form (`task.batch`): one subagent per item. */
+	tasks?: TaskItem[];
+	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
+	context?: string;
+	/** Run in an isolated worktree (flat form; per-item in batch form). */
+	isolated?: boolean;
 }
 
 /** A code review finding reported by the reviewer agent */

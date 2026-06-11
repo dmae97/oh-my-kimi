@@ -278,6 +278,8 @@ type ToolStrictModeOverride = Exclude<ResolvedOpenAICompat["toolStrictMode"], "m
 type BuiltOpenAICompletionTools = {
 	tools: OpenAI.Chat.Completions.ChatCompletionTool[];
 	toolStrictMode: AppliedToolStrictMode;
+	/** True when at least one wire tool was sent with `strict: true`. */
+	strictToolsApplied: boolean;
 };
 
 const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
@@ -447,7 +449,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			} = await createClient(model, context, apiKey, options?.headers, options?.initiatorOverride, options?.fetch);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			getCapturedErrorResponse = captureErrorResponse;
-			let appliedToolStrictMode: AppliedToolStrictMode = "mixed";
+			let appliedStrictTools = false;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
 				baseUrl,
@@ -458,8 +460,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			const createCompletionsStream = async (toolStrictModeOverride?: ToolStrictModeOverride) => {
 				clearCapturedErrorResponse();
 				const effectiveToolStrictModeOverride = disableStrictTools ? "none" : toolStrictModeOverride;
-				const { params, toolStrictMode } = buildParams(model, context, options, effectiveToolStrictModeOverride);
-				appliedToolStrictMode = toolStrictMode;
+				const { params, strictToolsApplied } = buildParams(
+					model,
+					context,
+					options,
+					effectiveToolStrictModeOverride,
+				);
+				appliedStrictTools = strictToolsApplied;
 				options?.onPayload?.(params);
 				rawRequestDump = {
 					provider: model.provider,
@@ -517,9 +524,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
 				} else {
-					if (!shouldRetryWithoutStrictTools(error, capturedErrorResponse, appliedToolStrictMode, context.tools)) {
+					if (!shouldRetryWithoutStrictTools(error, capturedErrorResponse, appliedStrictTools, context.tools)) {
 						throw error;
 					}
+					// Remember the rejection for the rest of the session so every
+					// subsequent request doesn't pay a strict-400 + retry round-trip.
+					if (providerSessionState) {
+						providerSessionState.strictToolsDisabled = true;
+					}
+					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
 				}
 			}
@@ -1174,7 +1187,7 @@ function buildParams(
 	context: Context,
 	options: OpenAICompletionsOptions | undefined,
 	toolStrictModeOverride?: ToolStrictModeOverride,
-): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode } {
+): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode; strictToolsApplied: boolean } {
 	let compat = model.compat;
 	const thinkingEnabledForRequest =
 		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
@@ -1211,6 +1224,7 @@ function buildParams(
 		stream: true,
 	};
 	let toolStrictMode: AppliedToolStrictMode = "none";
+	let strictToolsApplied = false;
 
 	if (compat.supportsUsageInStreaming !== false) {
 		params.stream_options = { include_usage: true };
@@ -1264,6 +1278,7 @@ function buildParams(
 		const builtTools = convertTools(context.tools, compat, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
+		strictToolsApplied = builtTools.strictToolsApplied;
 	} else if (context.tools === undefined && hasToolHistory(context.messages)) {
 		// Anthropic (via LiteLLM/proxy) requires the `tools` param when the conversation
 		// contains tool_calls/tool_results, even when no tools are offered this turn.
@@ -1391,7 +1406,7 @@ function buildParams(
 		}
 	}
 
-	return { params, toolStrictMode };
+	return { params, toolStrictMode, strictToolsApplied };
 }
 
 function getOptionalNumberProperty(value: object, key: string): number | undefined {
@@ -2001,16 +2016,19 @@ function convertTools(
 			};
 		}),
 		toolStrictMode,
+		strictToolsApplied:
+			tools.length > 0 &&
+			(toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && adaptedTools.some(tool => tool.strict))),
 	};
 }
 
 function shouldRetryWithoutStrictTools(
 	error: unknown,
 	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
-	toolStrictMode: AppliedToolStrictMode,
+	strictToolsApplied: boolean,
 	tools: Tool[] | undefined,
 ): boolean {
-	if (!tools || tools.length === 0 || toolStrictMode !== "all_strict") {
+	if (!tools || tools.length === 0 || !strictToolsApplied) {
 		return false;
 	}
 	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
@@ -2020,7 +2038,14 @@ function shouldRetryWithoutStrictTools(
 	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
 		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
 		.join("\n");
-	return /wrong_api_format|mixed values for 'strict'|tool[s]?\b.*strict|\bstrict\b.*tool/i.test(messageParts);
+	// Last two alternatives catch upstream tool-schema validators rejecting our
+	// strictified schemas outright (e.g. OpenRouter DeepSeek's "Invalid tool
+	// parameters schema : field `anyOf`: missing field `type`", #2270, and
+	// OpenAI's own "Invalid schema for function 'x'"). Retrying non-strict sends
+	// the unmodified base schemas, which those validators accept.
+	return /wrong_api_format|mixed values for 'strict'|tool[s]?\b.*strict|\bstrict\b.*tool|tool parameters? schema|invalid schema for function/i.test(
+		messageParts,
+	);
 }
 
 function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {

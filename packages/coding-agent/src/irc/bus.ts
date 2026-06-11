@@ -74,6 +74,12 @@ export class IrcBus {
 	 * anything: the receipt reports how the message reached the recipient
 	 * (waiter/aside = "injected", idle wake = "woken", park revival =
 	 * "revived"), not what they did with it.
+	 *
+	 * Mailbox semantics: a successfully delivered message never lingers in
+	 * the recipient's mailbox — injection/wake puts the full body into their
+	 * context, so buffering it too would double-deliver via a later
+	 * `wait`/`inbox` and inflate unread counts. Only a failed live hand-off
+	 * is buffered for the recipient to drain later.
 	 */
 	async send(msg: Omit<IrcMessage, "id" | "ts">): Promise<IrcDeliveryReceipt> {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
@@ -111,12 +117,16 @@ export class IrcBus {
 			return { to: message.to, outcome: "failed", error: `Agent "${message.to}" has no live session.` };
 		}
 
-		this.#enqueue(message);
 		try {
 			const delivery = await session.deliverIrcMessage(message);
 			this.#relayToMainUi(message);
 			return { to: message.to, outcome: revived ? "revived" : delivery };
 		} catch (error) {
+			// Live hand-off failed (e.g. recipient disposed mid-shutdown): buffer
+			// the message so a later `wait`/`inbox` from the recipient can still
+			// pick it up. The receipt stays "failed" — the recipient has not
+			// seen it.
+			this.#enqueue(message);
 			return {
 				to: message.to,
 				outcome: "failed",
@@ -128,21 +138,26 @@ export class IrcBus {
 	/**
 	 * Block until a message for `agentId` (optionally from `filter.from`)
 	 * arrives; consume + return it. Null on timeout (`timeoutMs <= 0` waits
-	 * forever). Rejects when `signal` aborts.
+	 * forever). Rejects when `signal` aborts. By default, already-buffered
+	 * mail satisfies the wait before parking a future waiter; callers that
+	 * need a strictly future reply can disable that drain.
 	 */
 	async wait(
 		agentId: string,
 		filter: { from?: string },
 		timeoutMs: number,
 		signal?: AbortSignal,
+		options?: { drainPending?: boolean },
 	): Promise<IrcMessage | null> {
 		if (signal?.aborted) {
 			throw signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted");
 		}
 
-		// Already-pending mail satisfies the wait without parking a waiter.
-		const pending = this.#takeFromMailbox(agentId, filter.from);
-		if (pending) return pending;
+		if (options?.drainPending !== false) {
+			// Already-pending mail satisfies the wait without parking a waiter.
+			const pending = this.#takeFromMailbox(agentId, filter.from);
+			if (pending) return pending;
+		}
 
 		const { promise, resolve, reject } = Promise.withResolvers<IrcMessage | null>();
 		let timer: NodeJS.Timeout | undefined;
@@ -249,11 +264,13 @@ export class IrcBus {
 
 	/**
 	 * Surface agent↔agent traffic as a display-only card on the main session
-	 * UI. Skipped when the main agent is the recipient — its own
-	 * `deliverIrcMessage` (or `wait` tool result) already shows the message.
+	 * UI. Skipped when the main agent is either endpoint: as recipient its
+	 * own `deliverIrcMessage` (or `wait` tool result) already shows the
+	 * message, and as sender the irc send tool call already rendered the
+	 * outbound body — relaying it again would duplicate it in the transcript.
 	 */
 	#relayToMainUi(message: IrcMessage): void {
-		if (message.to === MAIN_AGENT_ID) return;
+		if (message.to === MAIN_AGENT_ID || message.from === MAIN_AGENT_ID) return;
 		const mainSession = this.#registry.get(MAIN_AGENT_ID)?.session;
 		if (!mainSession) return;
 		const record: CustomMessage = {

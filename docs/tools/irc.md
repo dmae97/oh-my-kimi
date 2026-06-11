@@ -11,7 +11,7 @@
   - `packages/coding-agent/src/registry/agent-lifecycle.ts` — revival of parked recipients on direct send.
   - `packages/coding-agent/src/session/agent-session.ts` — `deliverIrcMessage(...)`: recipient-side injection and wake turns.
   - `packages/coding-agent/src/prompts/system/irc-incoming.md` — incoming-message rendering for the recipient.
-  - `packages/coding-agent/src/config/settings-schema.ts` — `irc.enabled`, `irc.timeoutMs`.
+  - `packages/coding-agent/src/config/settings-schema.ts` — `irc.timeoutMs`.
   - `packages/coding-agent/src/modes/controllers/event-controller.ts` — renders IRC events into chat UI.
 
 ## Inputs
@@ -37,7 +37,7 @@
 - `details: IrcDetails`: `{ op, from?, to?, receipts?, waited?, inbox?, peers? }`. `waited` is `null` when a wait timed out; `receipts` carry `{ to, outcome, error? }`.
 
 ## Flow
-1. `IrcTool.createIf` constructs the tool only when `irc.enabled` is on and the session has both an `AgentRegistry` and `getAgentId`. There is no longer a main-agent gate on `async.enabled` — the main agent is never sync-blocked.
+1. `IrcTool.createIf` constructs the tool only when `isIrcEnabled` passes and the session has both an `AgentRegistry` and `getAgentId`. There is no `irc.enabled` setting: availability is derived — true for every subagent (`taskDepth > 0`; a parent always exists) and for any session that can still spawn subagents through the task tool. Only a top-level session with task spawning unavailable has no peers, hence no irc.
 2. `execute` resolves the registry and sender id; missing either returns a text error result instead of throwing.
 3. `op: "list"`: `registry.list()` minus self and minus `aborted` agents — `parked` peers ARE listed. Each row includes the unread count from `IrcBus.unreadCount(...)` and last activity.
 4. `op: "send"` validates `to`/`message`, rejects self-sends, and rejects `await` with `to: "all"`.
@@ -75,7 +75,7 @@
   - No direct filesystem writes in the tool itself; recipient turns persist to their session JSONL as usual.
 
 ## Limits & Caps
-- Availability gates: `irc.enabled` (default `true`), an `AgentRegistry`, and a caller agent id.
+- Availability gates: `isIrcEnabled` (running as a subagent, or task spawning available — there is no `irc.enabled` setting), an `AgentRegistry`, and a caller agent id.
 - Mailboxes are bounded at 100 messages per agent (`MAILBOX_CAP` in `packages/coding-agent/src/irc/bus.ts`); oldest messages are dropped beyond the cap.
 - `irc.timeoutMs` defaults to `120_000` and is the default `wait` / `send await:true` timeout; `0` disables the timeout, non-finite or negative values fall back to the default, positive values are truncated and clamped to at least `1` ms.
 - Broadcast scope: live peers only (`running`/`idle`) via `listVisibleTo`; direct sends address any non-aborted agent, including parked ones.
@@ -94,6 +94,6 @@
 ## Notes
 - This is IRC-like naming only: no servers, sockets, channels, or join/part state. Addressing is by exact registry agent id.
 - Replies are real turns by the recipient — the old ephemeral no-tools auto-reply (`awaitReply` / `respondAsBackground`) no longer exists. A recipient may keep working before answering; check `inbox` or `wait` again rather than re-sending.
-- Wake-on-message is the revive primitive: messaging a parked agent is equivalent to resuming it (same `ensureLive` path as `task(resume:)` and the Agent Hub).
+- Wake-on-message is the only resume primitive: messaging a parked agent revives it (same `ensureLive` path as the Agent Hub). The task tool has no `resume` parameter.
 - Message ids are Snowflakes; pass them as `replyTo` to thread an answer to a specific message.
 - Persistence is per recipient history: the sender gets receipts in the tool result; the recipient sees the injected `irc:incoming` message in its own transcript (visible via `history://<id>`).

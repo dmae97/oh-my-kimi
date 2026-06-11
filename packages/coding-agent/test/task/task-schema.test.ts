@@ -4,8 +4,11 @@ import { TaskTool, taskSchema } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
-// Contract (rework-contracts.md §3): the task tool spawns ONE agent per call.
-// `tasks[]` and `context` are gone; `resume` continues an existing agent.
+// Contract: the single-spawn schema (`task.batch: false`; the exported
+// `taskSchema` instance) carries no batch fields. The batch shape (`tasks[]` +
+// shared `context`) is gated by the `task.batch` setting (default on, covered
+// by test/task/task-batch.test.ts), and a per-call `schema` input no longer
+// exists at all; follow-ups go through `irc` messaging.
 
 describe("task schema (single-spawn)", () => {
 	it("accepts {agent, assignment}", () => {
@@ -13,9 +16,9 @@ describe("task schema (single-spawn)", () => {
 		expect(parsed.success).toBe(true);
 	});
 
-	it("accepts {resume, assignment}", () => {
-		const parsed = taskSchema.safeParse({ resume: "AuthLoader", assignment: "Also check refresh tokens." });
-		expect(parsed.success).toBe(true);
+	it("requires agent", () => {
+		const parsed = taskSchema.safeParse({ assignment: "Map the auth module." });
+		expect(parsed.success).toBe(false);
 	});
 
 	it("requires assignment", () => {
@@ -23,23 +26,26 @@ describe("task schema (single-spawn)", () => {
 		expect(parsed.success).toBe(false);
 	});
 
-	it("carries no tasks/context fields", () => {
+	it("strips tasks/context/schema from the single-spawn schema", () => {
 		const parsed = taskSchema.safeParse({
 			agent: "explore",
 			assignment: "Map the auth module.",
 			context: "shared background",
 			tasks: [{ id: "A", assignment: "..." }],
+			schema: '{"properties":{}}',
 		});
 		expect(parsed.success).toBe(true);
 		if (parsed.success) {
-			// Unknown keys are stripped: the batch/context shape no longer exists.
+			// Unknown keys are stripped: batch/context exist only on the batch
+			// schema and the per-call schema input was removed outright.
 			expect("tasks" in parsed.data).toBe(false);
 			expect("context" in parsed.data).toBe(false);
+			expect("schema" in parsed.data).toBe(false);
 		}
 	});
 });
 
-describe("task spawn/resume validation", () => {
+describe("task spawn validation", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -48,7 +54,7 @@ describe("task spawn/resume validation", () => {
 		return {
 			cwd: "/tmp",
 			hasUI: false,
-			settings: Settings.isolated({ "task.isolation.mode": "none" }),
+			settings: Settings.isolated({ "task.isolation.mode": "none", "task.batch": false }),
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		} as unknown as ToolSession;
@@ -61,19 +67,9 @@ describe("task spawn/resume validation", () => {
 		return result.content.find(part => part.type === "text")?.text ?? "";
 	}
 
-	it("rejects resume + agent together", async () => {
-		const text = await executeText({ agent: "explore", resume: "AuthLoader", assignment: "..." });
-		expect(text).toContain("not both");
-	});
-
-	it("rejects neither resume nor agent", async () => {
+	it("rejects a missing agent", async () => {
 		const text = await executeText({ assignment: "..." });
 		expect(text).toContain("Missing `agent`");
-	});
-
-	it("rejects resume + isolated", async () => {
-		const text = await executeText({ resume: "AuthLoader", isolated: true, assignment: "..." });
-		expect(text).toContain("not resumable");
 	});
 
 	it("rejects a missing assignment", async () => {

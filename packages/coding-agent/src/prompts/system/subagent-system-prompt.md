@@ -3,6 +3,13 @@ ROLE
 
 {{agent}}
 
+{{#if context}}
+CONTEXT
+===================================
+
+{{context}}
+{{/if}}
+
 {{#if planReference}}
 PLAN
 ===================================

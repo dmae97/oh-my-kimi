@@ -132,6 +132,7 @@ The automatic paths are intentionally different:
 `compaction.strategy: "snapcompact"` replaces the LLM summarization call with a local, deterministic archival pass (`snapcompactCompact` from `@oh-my-pi/snapcompact`):
 
 - The discarded history is serialized, whitespace-collapsed, and printed onto provider-aware square PNG frames using bundled public-domain pixel fonts. Anthropic-family and unknown APIs use repeated black `8x8` cells, Google uses repeated sentence-colored `8x8` cells, and OpenAI uses dense stretched `6x6` cells with `detail: "original"`.
+- Serialization keeps the archive conversation-dense: tool results are truncated head+tail (default 2,000 chars at a 0.6 head ratio), tool-call argument values are capped per value (500) and per call (2,000), and tool output is printed in dim gray ink so conversation reads louder than tool noise. All budgets and the dimming are configurable via `SnapcompactSerializeOptions` (`toolResultMaxChars`, `toolArgMaxChars`, `toolCallMaxChars`, `truncateHeadRatio`, `dimToolResults`).
 - Frames persist under `CompactionEntry.preserveData.snapcompact` and are re-attached to the `compactionSummary` message as image blocks on every context rebuild; the entry's `summary` is a deterministic reading guide (grid geometry, role tags, truncation notes) plus the usual file-operation lists.
 - Later compactions carry earlier frames forward. Beyond an 8-frame budget the archive fades from the middle out: the earliest frame (session head — the original request, or the filmed summary of older history) is pinned, and the oldest *unpinned* frames are evicted, so head and tail both survive. If the previous compaction was text-based, its summary is printed at the head of the frame archive as `[Summary of earlier history]`.
 - No model, API key, or network is involved, so snapcompact is also safe for overflow recovery. It requires a vision-capable current model (`model.input` includes `"image"`); otherwise the run falls back to context-full and emits a warning notice (auto and manual paths). Manual `/compact` honors the strategy unless custom instructions are given (those imply a directed LLM summary).
@@ -248,18 +249,21 @@ Cumulative behavior:
 
 - Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
 - In split turns, includes turn-prefix file ops too.
-- `readFiles` excludes files also modified.
+- `details.readFiles` excludes files also modified; `details.modifiedFiles` carries the rest (persisted shape is unchanged).
 
-Summary text gets file tags appended via prompt template:
+Summary text gets one `<files>` tag appended via prompt template: a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker — `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `… (N more files omitted)` line.
 
 ```xml
-<read-files>
-...
-</read-files>
-<modified-files>
-...
-</modified-files>
+<files>
+# packages/agent/src/compaction/
+compaction.ts (Read)
+utils.ts (RW)
+## prompts/
+file-operations.md (Write)
+</files>
 ```
+
+Legacy `<read-files>`/`<modified-files>` tags from summaries written by earlier versions are stripped (alongside `<files>`) before re-appending, so old summaries self-heal on the next compaction.
 
 ### Persist and reload
 

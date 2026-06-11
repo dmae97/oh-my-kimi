@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.0] - 2026-06-10
 ### Added
 
 - Added support for prebuilt npm bundle mode via `PI_BUNDLED`, allowing the stats server to use an embedded dashboard bundle in packaged CLI distributions

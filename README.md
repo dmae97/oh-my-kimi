@@ -491,7 +491,7 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 | **[@oh-my-pi/pi-utils](packages/utils)**                  | Shared utilities (logging, streams, dirs/env/process helpers)              |
 | **[@oh-my-pi/hashline](packages/hashline)**               | Line-anchored patch language and applier behind the `edit` tool            |
 | **[@oh-my-pi/pi-mnemopi](packages/mnemopi)**              | Local SQLite memory engine for Oh My Pi agents                             |
-| **[@oh-my-pi/pi-snapcompact](packages/snapcompact)**      | SQuAD eval suite for snapcompact bitmap-frame context compression          |
+| **[@oh-my-pi/snapcompact](packages/snapcompact)**         | Bitmap-frame context compression package and SQuAD eval suite              |
 | **[@oh-my-pi/swarm-extension](packages/swarm-extension)** | Swarm orchestration extension package                                      |
 
 ### Rust Crates

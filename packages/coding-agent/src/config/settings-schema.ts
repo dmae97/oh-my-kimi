@@ -1,5 +1,4 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
-import { TASK_SIMPLE_MODES } from "../task/simple-mode";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -451,6 +450,17 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			label: "Session Accent",
 			description: "Use the session name color for the editor border and status line gap",
+		},
+	},
+
+	"statusLine.transparent": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			label: "Transparent Status Line",
+			description:
+				"Use the terminal's default background for the status line instead of the theme's `statusLineBg`. Powerline end caps are dropped because they need a contrasting fill to bridge into the surrounding terminal.",
 		},
 	},
 	"tools.artifactSpillThreshold": {
@@ -2305,16 +2315,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"irc.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "IRC",
-			description: "Enable agent-to-agent IRC messaging via the irc tool",
-		},
-	},
-
 	"irc.timeoutMs": {
 		type: "number",
 		default: 120_000,
@@ -2762,31 +2762,14 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"task.simple": {
-		type: "enum",
-		values: TASK_SIMPLE_MODES,
-		default: "schema-free",
+	"task.batch": {
+		type: "boolean",
+		default: true,
 		ui: {
 			tab: "tasks",
-			label: "Task Input Mode",
-			description: "How much shared structure the task tool accepts (default, schema-free, or independent)",
-			options: [
-				{
-					value: "default",
-					label: "Default",
-					description: "Shared context and custom task schema are available",
-				},
-				{
-					value: "schema-free",
-					label: "Schema-free",
-					description: "Shared context stays available, but custom task schema is disabled",
-				},
-				{
-					value: "independent",
-					label: "Independent",
-					description: "No shared context or custom task schema; each task must stand alone",
-				},
-			],
+			label: "Batch Task Calls",
+			description:
+				"Switch the task tool to its batch shape: one call carries { agent, context, tasks[] } — one subagent per item (with per-item isolation) and a required shared context prepended to every assignment. Each spawn still runs as an independent background agent with the normal idle/parked lifecycle. Disable to restore the flat single-spawn schema.",
 		},
 	},
 

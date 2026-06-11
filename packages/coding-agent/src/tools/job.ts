@@ -386,6 +386,30 @@ function statusToColor(status: JobSnapshot["status"]): ToolUIColor {
 	}
 }
 
+/**
+ * Task job results are delivered in the model-facing `<task-result>` envelope
+ * (prompts/tools/task-summary.md) so the parent agent can parse status and the
+ * `agent://` pointer. The wrapper markup is noise to a human — preview the
+ * inner <output>/<preview> body instead.
+ */
+function stripTaskResultEnvelope(text: string): string {
+	if (!text.startsWith("<task-result")) return text;
+	const body = /<(output|preview)(?:\s[^>]*)?>\n?([\s\S]*?)\n?<\/\1>/.exec(text)?.[2];
+	return body?.trim() || text;
+}
+
+/**
+ * Pretty-printed JSON output wastes the collapsed one-line preview on a lone
+ * "{" — flatten structured-looking bodies onto a single line. Slice first:
+ * downstream truncation keeps at most a few hundred columns, so collapsing
+ * whitespace across a multi-KB body would be pure waste.
+ */
+function flattenStructuredPreview(text: string): string {
+	const first = text[0];
+	if (first !== "{" && first !== "[") return text;
+	return text.slice(0, PREVIEW_LINES_EXPANDED * PREVIEW_LINE_WIDTH * 2).replace(/\s+/g, " ");
+}
+
 function describeTarget(args: JobRenderArgs | undefined): string {
 	const poll = args?.poll ?? [];
 	const cancel = args?.cancel ?? [];
@@ -502,7 +526,9 @@ export const jobToolRenderer = {
 								lines.push(`  ${uiTheme.fg("toolOutput", visibleLabelLines[i]!)}`);
 							}
 
-							const preview = job.errorText?.trim() || job.resultText?.trim();
+							const preview = flattenStructuredPreview(
+								stripTaskResultEnvelope(job.errorText?.trim() || job.resultText?.trim() || ""),
+							);
 							if (preview) {
 								const maxLines = expanded ? PREVIEW_LINES_EXPANDED : PREVIEW_LINES_COLLAPSED;
 								const previewLines = getPreviewLines(preview, maxLines, PREVIEW_LINE_WIDTH, Ellipsis.Unicode);

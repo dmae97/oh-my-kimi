@@ -3,14 +3,18 @@ import type { AssistantMessage, Message, Usage } from "@oh-my-pi/pi-ai";
 import {
 	createSnapcompactFileOps,
 	getPreservedSnapcompactArchive,
+	isSnapcompactShape,
 	normalizeForSnapcompact,
 	renderSnapcompactFrame,
 	resolveSnapcompactShape,
+	SNAPCOMPACT_DIM_OFF,
+	SNAPCOMPACT_DIM_ON,
 	SNAPCOMPACT_PRESERVE_KEY,
 	SNAPCOMPACT_SHAPES,
 	type SnapcompactArchive,
 	type SnapcompactCompactionPreparation,
 	type SnapcompactCompactionResult,
+	serializeSnapcompactConversation,
 	snapcompactCompact,
 	snapcompactGeometry,
 	snapcompactImages,
@@ -48,6 +52,17 @@ function createAssistantMessage(content: AssistantMessage["content"]): Message {
 		model: "mock",
 		usage: ZERO_USAGE,
 		stopReason: "stop",
+		timestamp: 0,
+	};
+}
+
+function createToolResultMessage(text: string): Message {
+	return {
+		role: "toolResult",
+		toolCallId: "call-1",
+		toolName: "bash",
+		content: [{ type: "text", text }],
+		isError: false,
 		timestamp: 0,
 	};
 }
@@ -150,6 +165,13 @@ describe("shape resolution", () => {
 		expect(resolveSnapcompactShape(undefined)).toBe(SNAPCOMPACT_SHAPES.anthropic);
 	});
 
+	it("recognizes complete shape overrides and rejects malformed ones", () => {
+		expect(isSnapcompactShape(SNAPCOMPACT_SHAPES.openaiDense)).toBe(true);
+		expect(isSnapcompactShape({ ...SNAPCOMPACT_SHAPES.openaiDense, cellWidth: 0 })).toBe(false);
+		expect(isSnapcompactShape({ ...SNAPCOMPACT_SHAPES.openaiDense, variant: "color" })).toBe(false);
+		expect(isSnapcompactShape({ ...SNAPCOMPACT_SHAPES.openaiDense, imageDetail: "original" })).toBe(true);
+	});
+
 	it("snapcompactImages forwards the per-frame detail hint", () => {
 		const archive: SnapcompactArchive = {
 			frames: [
@@ -179,7 +201,7 @@ describe("renderSnapcompactFrame", () => {
 		expect(frame.rows).toBe(40);
 		expect(frame.chars).toBe(40);
 
-		const decoded = decodePng(frame.png);
+		const decoded = decodePng(Buffer.from(frame.data, "base64"));
 		expect(decoded.width).toBe(TEST_FRAME_SIZE);
 		expect(decoded.height).toBe(TEST_FRAME_SIZE);
 		expect(decoded.colorType).toBe(3); // indexed color
@@ -196,7 +218,7 @@ describe("renderSnapcompactFrame", () => {
 		expect(geometry).toEqual({ cols: 40, rows: 20, capacity: 800 });
 
 		const frame = renderSnapcompactFrame("Hello world. Again.", SNAPCOMPACT_SHAPES.anthropic, TEST_FRAME_SIZE);
-		const decoded = decodePng(frame.png);
+		const decoded = decodePng(Buffer.from(frame.data, "base64"));
 		expect(decoded.colorType).toBe(3);
 		const used = new Set(decoded.pixels);
 		expect(used.has(7)).toBe(true); // black bw ink
@@ -207,7 +229,7 @@ describe("renderSnapcompactFrame", () => {
 	it("renders the openai stretch shape as truecolor RGB", () => {
 		const frame = renderSnapcompactFrame("Hello world.", SNAPCOMPACT_SHAPES.openaiDense, TEST_FRAME_SIZE);
 		// IHDR color type byte: 2 = truecolor RGB (anti-aliased stretch output).
-		expect(frame.png[25]).toBe(2);
+		expect(Buffer.from(frame.data, "base64")[25]).toBe(2);
 		expect(frame.cols).toBe(Math.floor(TEST_FRAME_SIZE / 6));
 	});
 
@@ -215,6 +237,69 @@ describe("renderSnapcompactFrame", () => {
 		const { capacity } = snapcompactGeometry(SNAPCOMPACT_SHAPES.legacy, TEST_FRAME_SIZE);
 		const frame = renderSnapcompactFrame("x".repeat(capacity + 500), SNAPCOMPACT_SHAPES.legacy, TEST_FRAME_SIZE);
 		expect(frame.chars).toBe(capacity);
+	});
+});
+
+describe("serializeSnapcompactConversation", () => {
+	it("truncates oversized tool results keeping head and tail", () => {
+		const text = `HEAD-${"x".repeat(5000)}-TAIL`;
+		const out = serializeSnapcompactConversation([createToolResultMessage(text)]);
+		// Default cap 2000 at 0.6 head ratio: 1200 head + 800 tail survive.
+		expect(out).toContain("[Tool result]: ");
+		expect(out).toContain("HEAD-");
+		expect(out).toContain("[... 3010 chars elided ...]");
+		expect(out.endsWith(`-TAIL${SNAPCOMPACT_DIM_OFF}`)).toBe(true);
+	});
+
+	it("honors configured budgets; Infinity disables a cap", () => {
+		const text = "a".repeat(100);
+		const tight = serializeSnapcompactConversation([createToolResultMessage(text)], {
+			toolResultMaxChars: 10,
+			truncateHeadRatio: 0.5,
+		});
+		expect(tight).toContain("[... 90 chars elided ...]");
+		const off = serializeSnapcompactConversation([createToolResultMessage(text)], {
+			toolResultMaxChars: Number.POSITIVE_INFINITY,
+		});
+		expect(off).toContain(text);
+	});
+
+	it("caps oversized tool-call argument values without touching small ones", () => {
+		const out = serializeSnapcompactConversation([
+			createAssistantMessage([
+				{ type: "toolCall", id: "c1", name: "write", arguments: { path: "a.ts", content: "y".repeat(3000) } },
+			]),
+		]);
+		// JSON-encoded content is 3002 chars; per-value cap 500 elides 2502.
+		expect(out).toContain('write(path="a.ts", content=');
+		expect(out).toContain("[... 2502 chars elided ...]");
+	});
+
+	it("caps the whole serialized argument list per call", () => {
+		const args: Record<string, unknown> = {};
+		for (let i = 0; i < 10; i++) args[`arg${i}`] = "z".repeat(400);
+		const out = serializeSnapcompactConversation([
+			createAssistantMessage([{ type: "toolCall", id: "c1", name: "tool", arguments: args }]),
+		]);
+		expect(out).toContain("arg0=");
+		expect(out).toContain("chars elided");
+		// 10 values x ~400 chars collapse to the 2000-char call budget plus markers.
+		expect(out.length).toBeLessThan(2200);
+	});
+
+	it("wraps tool results in dim toggles by default and strips stray toggles from content", () => {
+		const out = serializeSnapcompactConversation([
+			createUserMessage(`hello ${SNAPCOMPACT_DIM_ON}world`),
+			createToolResultMessage("ok"),
+		]);
+		expect(out).toContain(`[Tool result]: ${SNAPCOMPACT_DIM_ON}ok${SNAPCOMPACT_DIM_OFF}`);
+		// A stray toggle in user content cannot forge a dim span.
+		expect(out).toContain("[User]: hello world");
+	});
+
+	it("omits dim toggles when dimToolResults is false", () => {
+		const out = serializeSnapcompactConversation([createToolResultMessage("ok")], { dimToolResults: false });
+		expect(out).toBe("[Tool result]: ok");
 	});
 });
 
@@ -232,9 +317,9 @@ describe("snapcompactCompact", () => {
 		expect(result.summary).toContain("printed twice");
 		expect(result.summary).toContain("plain black ink");
 		expect(result.summary).toContain("snapcompact frame");
-		// File operations are upserted like every other compaction summary.
-		expect(result.summary).toContain("<read-files>");
-		expect(result.summary).toContain("src/login.ts");
+		// File operations are upserted like every other compaction summary:
+		// one grouped <files> tree with per-file access markers.
+		expect(result.summary).toContain("<files>\n# src/\nauth.ts (Read)\nlogin.ts (Write)\n</files>");
 		expect(result.shortSummary).toContain("snapcompact frame");
 
 		const archive = getPreservedSnapcompactArchive(result.preserveData);
@@ -249,6 +334,41 @@ describe("snapcompactCompact", () => {
 		// Frame data round-trips as a decodable PNG.
 		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
 		expect(decoded.width).toBe(TEST_FRAME_SIZE);
+	});
+
+	it("prints tool results in dim gray ink, persisting the span across frame boundaries", async () => {
+		// Anthropic shape at 320px holds 800 chars/frame; a 1650-char tool
+		// result spans three frames, so the reopened span must dim in each.
+		const result = await snapcompactCompact(
+			makePreparation({
+				messagesToSummarize: [createUserMessage("Run the suite."), createToolResultMessage("FAIL ".repeat(330))],
+			}),
+			{ frameSize: TEST_FRAME_SIZE },
+		);
+		const archive = getPreservedSnapcompactArchive(result.preserveData);
+		expect(archive?.frames.length).toBeGreaterThanOrEqual(2);
+		for (const frame of archive?.frames ?? []) {
+			const decoded = decodePng(Buffer.from(frame.data, "base64"));
+			// Palette index 9 is the dim tool-output ink.
+			expect(new Set(decoded.pixels).has(9)).toBe(true);
+		}
+		// Conversation text outside the span stays in black bw ink (frame 1).
+		const first = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
+		expect(new Set(first.pixels).has(7)).toBe(true);
+		expect(result.summary).toContain("dim gray ink");
+	});
+
+	it("keeps frames free of dim ink when dimToolResults is false", async () => {
+		const result = await snapcompactCompact(
+			makePreparation({
+				messagesToSummarize: [createUserMessage("Run."), createToolResultMessage("all good")],
+			}),
+			{ frameSize: TEST_FRAME_SIZE, dimToolResults: false },
+		);
+		const archive = getPreservedSnapcompactArchive(result.preserveData);
+		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
+		expect(new Set(decoded.pixels).has(9)).toBe(false);
+		expect(result.summary).not.toContain("dim gray ink");
 	});
 
 	it("splits oversized history across frames and evicts beyond the budget", async () => {

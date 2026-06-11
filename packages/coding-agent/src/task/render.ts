@@ -33,7 +33,7 @@ import {
 import { framedBlock, renderStatusLine } from "../tui";
 import { repairDoubleEncodedJsonString } from "./repair-args";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "./types";
+import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
 /**
  * Get status icon for agent state.
@@ -509,7 +509,7 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 }
 
 /**
- * Render the call preview lines for the single spawned/resumed agent. The
+ * Render the call preview lines for the single spawned agent. The
  * args stream in token by token, so every field access is defensive.
  */
 function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme): string[] {
@@ -517,9 +517,8 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 	const bullet = theme.fg("dim", "•");
 	const lines: string[] = [];
 
-	const resume = typeof args.resume === "string" ? args.resume.trim() : "";
 	const rawId = typeof args.id === "string" ? args.id.trim() : "";
-	const idLabel = resume ? formatTaskId(resume) : rawId ? formatTaskId(rawId) : "";
+	const idLabel = rawId ? formatTaskId(rawId) : "";
 	const desc = typeof args.description === "string" ? args.description.trim() : "";
 	if (idLabel || desc) {
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
@@ -527,6 +526,39 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
 		}
 		lines.push(line);
+	}
+	lines.push(...renderTaskItemLines(args.tasks, theme));
+	return lines;
+}
+
+/**
+ * Render the per-item list (`id` + ui `description`) for a batch call's
+ * streaming preview. The args stream in token by token, so the array grows
+ * over time and trailing entries may be partially parsed — every field access
+ * is defensive.
+ */
+function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): string[] {
+	if (!Array.isArray(tasks) || tasks.length === 0) return [];
+
+	const bullet = theme.fg("dim", "•");
+	const cap = Math.min(tasks.length, 12);
+	const lines: string[] = [];
+	for (let i = 0; i < cap; i++) {
+		const task = tasks[i] as Partial<TaskItem> | undefined;
+		const rawId = typeof task?.id === "string" ? task.id.trim() : "";
+		const idLabel = rawId ? formatTaskId(rawId) : `#${i + 1}`;
+		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel))}`;
+		const desc = typeof task?.description === "string" ? task.description.trim() : "";
+		if (desc) {
+			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
+		}
+		if (task?.isolated === true) {
+			line += theme.fg("dim", " [isolated]");
+		}
+		lines.push(line);
+	}
+	if (cap < tasks.length) {
+		lines.push(`${bullet} ${theme.fg("dim", formatMoreItems(tasks.length - cap, "agent"))}`);
 	}
 	return lines;
 }
@@ -555,9 +587,26 @@ function createAssignmentSectionRenderer(
 	// here too. The repair is idempotent on already-clean text.
 	const assignment = repairDoubleEncodedJsonString(typeof args?.assignment === "string" ? args.assignment : "").trim();
 	if (!assignment) return undefined;
+	return createMarkdownSectionRenderer(assignment, theme);
+}
 
-	const markdown = new Markdown(assignment, 0, 0, getMarkdownTheme(), {
-		color: text => theme.fg("muted", text),
+/**
+ * Build the shared-context section (the `# Goal / # Constraints` background a
+ * batch call hands every subagent). Rendered like the assignment brief so the
+ * shared background stays visible for the whole task lifecycle.
+ */
+function createContextSectionRenderer(
+	args: Partial<TaskParams> | undefined,
+	theme: Theme,
+): AssignmentSectionRenderer | undefined {
+	const context = repairDoubleEncodedJsonString(typeof args?.context === "string" ? args.context : "").trim();
+	if (!context) return undefined;
+	return createMarkdownSectionRenderer(context, theme);
+}
+
+function createMarkdownSectionRenderer(text: string, theme: Theme): AssignmentSectionRenderer {
+	const markdown = new Markdown(text, 0, 0, getMarkdownTheme(), {
+		color: line => theme.fg("muted", line),
 	});
 	return width => ({ lines: markdown.render(Math.max(1, width - ASSIGNMENT_FRAME_INSET)) });
 }
@@ -571,10 +620,9 @@ export function renderCall(
 	theme: Theme,
 ): Component {
 	const showIsolated = "isolated" in args && args.isolated === true;
-	const resume = typeof args.resume === "string" && args.resume.trim() ? args.resume.trim() : undefined;
-	const headerDescription = resume ? `resume ${formatTaskId(resume)}` : args.agent;
-	const header = renderStatusLine({ icon: "pending", title: "Task", description: headerDescription }, theme);
+	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
+	const contextSection = createContextSectionRenderer(args, theme);
 	return framedBlock(theme, width => {
 		const sections: Array<{ label?: string; lines: readonly string[]; separator?: boolean }> = [];
 
@@ -587,6 +635,7 @@ export function renderCall(
 				separator: true,
 				lines: renderTaskCallLines(args, theme),
 			});
+			if (contextSection) sections.push(contextSection(width));
 			if (assignmentSection) sections.push(assignmentSection(width));
 		}
 
@@ -1111,26 +1160,27 @@ export function renderResult(
 ): Component {
 	const fallbackText = result.content.find(c => c.type === "text")?.text ?? "";
 	const details = result.details;
-	const resumeLabel =
-		typeof args?.resume === "string" && args.resume.trim() ? `resume ${formatTaskId(args.resume.trim())}` : undefined;
+	const agentLabel = args?.agent?.trim() || undefined;
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
+	const contextSection = createContextSectionRenderer(args, theme);
 
 	if (!details) {
 		const text = result.content.find(c => c.type === "text")?.text || "";
 		const errored = result.isError === true;
 		const header = errored
-			? renderStatusLine({ icon: "error", title: "Task", description: resumeLabel ?? args?.agent }, theme)
+			? renderStatusLine({ icon: "error", title: "Task", description: agentLabel }, theme)
 			: renderStatusLine(
 					{
 						iconOverride: theme.styledSymbol("status.done", "accent"),
 						title: "Task",
-						description: resumeLabel ?? args?.agent,
+						description: agentLabel,
 					},
 					theme,
 				);
 		return framedBlock(theme, width => ({
 			header,
 			sections: [
+				...(contextSection ? [contextSection(width)] : []),
 				...(assignmentSection ? [assignmentSection(width)] : []),
 				...(text ? [{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] }] : []),
 			],
@@ -1147,11 +1197,10 @@ export function renderResult(
 	const isError = aborted || failed;
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
-	// Surface the dispatched agent type (e.g. `Reviewer`) or the resumed agent
-	// id alongside the count so the header reads `Task 1 agent: Reviewer`.
-	const agentName = resumeLabel ?? args?.agent?.trim();
+	// Surface the dispatched agent type (e.g. `Reviewer`) alongside the count
+	// so the header reads `Task 1 agent: Reviewer`.
 	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
-	const metaLabel = countLabel ? (agentName ? `${countLabel}: ${agentName}` : countLabel) : agentName;
+	const metaLabel = countLabel ? (agentLabel ? `${countLabel}: ${agentLabel}` : countLabel) : agentLabel;
 	const header = renderStatusLine(
 		{
 			icon: icon === "success" ? undefined : icon,
@@ -1206,6 +1255,7 @@ export function renderResult(
 			return {
 				header,
 				sections: [
+					...(contextSection ? [contextSection(width)] : []),
 					...(assignmentSection ? [assignmentSection(width)] : []),
 					{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] },
 				],
@@ -1236,6 +1286,7 @@ export function renderResult(
 		return {
 			header,
 			sections: [
+				...(contextSection ? [contextSection(width)] : []),
 				...(assignmentSection ? [assignmentSection(width)] : []),
 				...(lines.length > 0 ? [{ separator: true, lines }] : []),
 			],

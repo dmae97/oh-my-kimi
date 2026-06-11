@@ -3,7 +3,7 @@
  */
 
 import type { Message } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
@@ -68,8 +68,8 @@ export function splitReadSelector(path: string): { path: string; sel?: string } 
 
 /**
  * Strip a trailing read-tool selector (`:50-200`, `:raw`, `:1-50:raw`, `:conflicts`, …)
- * so the same file read with different line ranges dedupes to one `<read-files>` entry
- * and matches its write/edit path when computing read-only vs modified lists.
+ * so the same file read with different line ranges dedupes to one `<files>` entry
+ * and matches its write/edit path when computing Read/Write/RW markers.
  */
 export function stripReadSelector(path: string): string {
 	return splitReadSelector(path).path;
@@ -119,32 +119,48 @@ export function computeFileLists(fileOps: FileOperations): { readFiles: string[]
 }
 
 /**
- * Format file operations as XML tags for summary.
+ * Format file operations as one `<files>` tag: a grouped, prefix-folded
+ * directory tree (find-tool shape — `# dir/` headers, bare basenames) with a
+ * ` (Read)` / ` (Write)` / ` (RW)` marker per file instead of separate
+ * read/modified lists. `readSet` is the cumulative read set (`fileOps.read`),
+ * used to tell modified files that were also read (RW) from blind writes.
  */
 const FILE_OPERATION_SUMMARY_LIMIT = 20;
 
-function truncateFileList(files: string[]): string[] {
-	if (files.length <= FILE_OPERATION_SUMMARY_LIMIT) return files;
-	const omitted = files.length - FILE_OPERATION_SUMMARY_LIMIT;
-	return [...files.slice(0, FILE_OPERATION_SUMMARY_LIMIT), `… (${omitted} more files omitted)`];
-}
-
 function stripFileOperationTags(summary: string): string {
-	const withoutReadFiles = summary.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "");
-	const withoutModifiedFiles = withoutReadFiles.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "");
-	return withoutModifiedFiles.trimEnd();
+	// Legacy <read-files>/<modified-files> tags are still stripped so summaries
+	// written before the combined <files> tag self-heal on the next compaction.
+	return summary
+		.replace(/<files>[\s\S]*?<\/files>\s*/g, "")
+		.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "")
+		.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "")
+		.trimEnd();
 }
-export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
+export function formatFileOperations(
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
-	return prompt.render(fileOperationsTemplate, {
-		readFiles: truncateFileList(readFiles),
-		modifiedFiles: truncateFileList(modifiedFiles),
-	});
+	const mode = new Map<string, "Read" | "Write" | "RW">();
+	for (const file of readFiles) mode.set(file, "Read");
+	for (const file of modifiedFiles) mode.set(file, readSet?.has(file) ? "RW" : "Write");
+	const all = [...mode.keys()].sort();
+	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
+	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
+		files += `\n… (${all.length - FILE_OPERATION_SUMMARY_LIMIT} more files omitted)`;
+	}
+	return prompt.render(fileOperationsTemplate, { files });
 }
 
-export function upsertFileOperations(summary: string, readFiles: string[], modifiedFiles: string[]): string {
+export function upsertFileOperations(
+	summary: string,
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;

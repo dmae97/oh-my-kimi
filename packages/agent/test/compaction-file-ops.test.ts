@@ -67,10 +67,19 @@ describe("extractFileOpsFromMessage", () => {
 });
 
 describe("formatFileOperations", () => {
-	it("renders one path per line, not literal \\n separators", () => {
-		const rendered = formatFileOperations(["a.ts", "b.ts"], ["c.ts"]);
-		expect(rendered).toContain("<read-files>\na.ts\nb.ts\n</read-files>");
-		expect(rendered).toContain("<modified-files>\nc.ts\n</modified-files>");
-		expect(rendered).not.toContain("\\n");
+	it("renders one grouped <files> tree with Read/Write/RW markers", () => {
+		const rendered = formatFileOperations(
+			["src/a.ts", "src/b.ts"],
+			["src/c.ts", "src/d.ts"],
+			new Set(["src/a.ts", "src/b.ts", "src/c.ts"]),
+		);
+		expect(rendered).toBe(
+			["<files>", "# src/", "a.ts (Read)", "b.ts (Read)", "c.ts (RW)", "d.ts (Write)", "</files>"].join("\n"),
+		);
+	});
+
+	it("marks modified files Write when no read set is provided", () => {
+		const rendered = formatFileOperations([], ["c.ts"]);
+		expect(rendered).toBe(["<files>", "c.ts (Write)", "</files>"].join("\n"));
 	});
 });

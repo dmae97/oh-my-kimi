@@ -13,6 +13,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { formatAge, formatDuration, prompt } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
+import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../irc/bus";
 import type { Theme } from "../modes/theme/theme";
@@ -31,6 +32,19 @@ import {
 } from "./render-utils";
 
 const DEFAULT_IRC_TIMEOUT_MS = 120_000;
+
+/**
+ * IRC availability: there must be someone to chat with. True for every
+ * subagent (it always has a parent, and possibly siblings) and for any
+ * session that can still spawn subagents through the task tool. Only a
+ * top-level session with task spawning unavailable has no peers — no irc.
+ */
+export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
+	if (taskDepth > 0) return true;
+	const maxDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	return maxDepth < 0 || taskDepth < maxDepth;
+}
+
 const ircSchema = z.object({
 	op: z.enum(["send", "wait", "inbox", "list"]).describe("irc operation"),
 	to: z.string().optional().describe('send: recipient agent id or "all"'),
@@ -84,7 +98,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	}
 
 	static createIf(session: ToolSession): IrcTool | null {
-		if (!session.settings.get("irc.enabled")) return null;
+		if (!isIrcEnabled(session.settings, session.taskDepth ?? 0)) return null;
 		if (!session.agentRegistry || !session.getAgentId) return null;
 		return new IrcTool(session);
 	}
@@ -184,58 +198,99 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		}
 
 		const bus = IrcBus.global();
-		// Broadcasts fan out to live peers only (running | idle); reviving every
-		// parked agent on a broadcast would be a stampede. Direct sends go
-		// through the bus unfiltered so parked recipients are revived.
-		const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
-		const receipts = await Promise.all(
-			targets.map(target => bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo })),
-		);
-
-		const lines: string[] = [];
-		const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
-		if (targets.length === 0) {
-			lines.push("No live peers to broadcast to.");
-		} else if (delivered.length === 0) {
-			lines.push("No recipients received the message.");
-		} else {
-			lines.push(`Delivered to ${delivered.length} peer(s):`);
-		}
-		for (const receipt of receipts) {
-			lines.push(
-				receipt.outcome === "failed"
-					? `- ${receipt.to}: failed — ${receipt.error ?? "unknown error"}`
-					: `- ${receipt.to}: ${receipt.outcome}`,
-			);
-		}
-
 		let waited: IrcMessage | null | undefined;
-		if (params.await && delivered.length > 0) {
-			const timeoutMs = this.#resolveTimeoutMs(params);
-			waited = await bus.wait(senderId, { from: to }, timeoutMs, signal);
-			lines.push("");
-			if (waited) {
-				lines.push(`Reply from ${waited.from}:`);
-				lines.push(waited.body);
+		const timeoutMs = params.await ? this.#resolveTimeoutMs(params) : undefined;
+		const awaitAbort = params.await ? new AbortController() : undefined;
+		const awaitCancelled = new Error("IRC await cancelled");
+		let removeAwaitAbortListener: (() => void) | undefined;
+		const waiting = params.await
+			? bus
+					.wait(senderId, { from: to }, timeoutMs ?? DEFAULT_IRC_TIMEOUT_MS, awaitAbort?.signal, {
+						drainPending: false,
+					})
+					.then(
+						message => ({ message, error: null as Error | null }),
+						error => ({
+							message: null,
+							error: error === awaitCancelled ? null : error instanceof Error ? error : new Error(String(error)),
+						}),
+					)
+			: undefined;
+		if (params.await && signal && awaitAbort) {
+			if (signal.aborted) {
+				awaitAbort.abort(signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted"));
 			} else {
-				lines.push(
-					`No reply from ${to} within ${formatDuration(timeoutMs)}. ` +
-						"They may answer later — check `inbox` or `wait` again.",
-				);
+				const onAbort = (): void => {
+					awaitAbort.abort(signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted"));
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				removeAwaitAbortListener = () => signal.removeEventListener("abort", onAbort);
 			}
 		}
 
-		return {
-			content: [{ type: "text", text: lines.join("\n") }],
-			details: {
-				op: "send",
-				from: senderId,
-				to,
-				receipts,
-				...(waited !== undefined ? { waited } : {}),
-			},
-			isError: delivered.length === 0 && targets.length > 0,
-		};
+		try {
+			// Broadcasts fan out to live peers only (running | idle); reviving every
+			// parked agent on a broadcast would be a stampede. Direct sends go
+			// through the bus unfiltered so parked recipients are revived.
+			const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
+			const receipts = await Promise.all(
+				targets.map(target => bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo })),
+			);
+
+			const lines: string[] = [];
+			const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
+			if (targets.length === 0) {
+				lines.push("No live peers to broadcast to.");
+			} else if (delivered.length === 0) {
+				lines.push("No recipients received the message.");
+			} else {
+				lines.push(`Delivered to ${delivered.length} peer(s):`);
+			}
+			for (const receipt of receipts) {
+				lines.push(
+					receipt.outcome === "failed"
+						? `- ${receipt.to}: failed — ${receipt.error ?? "unknown error"}`
+						: `- ${receipt.to}: ${receipt.outcome}`,
+				);
+			}
+
+			if (params.await && waiting && timeoutMs !== undefined) {
+				lines.push("");
+				if (delivered.length > 0) {
+					const reply = await waiting;
+					if (reply.error) throw reply.error;
+					waited = reply.message;
+					if (waited) {
+						lines.push(`Reply from ${waited.from}:`);
+						lines.push(waited.body);
+					} else {
+						lines.push(
+							`No reply from ${to} within ${formatDuration(timeoutMs)}. ` +
+								"They may answer later — check `inbox` or `wait` again.",
+						);
+					}
+				} else {
+					awaitAbort?.abort(awaitCancelled);
+					const reply = await waiting;
+					if (reply.error) throw reply.error;
+				}
+			}
+
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: {
+					op: "send",
+					from: senderId,
+					to,
+					receipts,
+					...(waited !== undefined ? { waited } : {}),
+				},
+				isError: delivered.length === 0 && targets.length > 0,
+			};
+		} finally {
+			awaitAbort?.abort(awaitCancelled);
+			removeAwaitAbortListener?.();
+		}
 	}
 
 	async #executeWait(senderId: string, params: IrcParams, signal?: AbortSignal): Promise<AgentToolResult<IrcDetails>> {
@@ -398,6 +453,47 @@ function callMeta(args: IrcRenderArgs | undefined): string[] {
 	if (args?.op === "wait" && args.timeoutMs) meta.push(`timeout ${formatDuration(args.timeoutMs)}`);
 	if (args?.op === "inbox" && args.peek) meta.push("peek");
 	return meta;
+}
+
+/**
+ * Display-only transcript card for live IRC traffic: `irc:incoming` DMs
+ * delivered to this session and `irc:relay` observations of agent↔agent
+ * traffic. Shares the tool renderer's glyph + quote-border conventions so
+ * cards and `irc` tool output look identical in the transcript.
+ */
+export function createIrcMessageCard(
+	card: {
+		kind: "incoming" | "relay";
+		from?: string;
+		to?: string;
+		body?: string;
+		replyTo?: string;
+		timestamp?: number;
+	},
+	getExpanded: () => boolean,
+	uiTheme: Theme,
+): Component {
+	const from = card.from?.trim() || "?";
+	const title =
+		card.kind === "incoming"
+			? `IRC ${uiTheme.nav.back} ${from}`
+			: `IRC ${from} ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`;
+	const body = card.body ?? "";
+	const meta: string[] = [];
+	if (card.replyTo) meta.push("reply");
+	const age = messageAge(card.timestamp);
+	if (age) meta.push(age);
+	return createCachedComponent(
+		getExpanded,
+		(width, expanded) => {
+			const lines = [renderStatusLine({ iconOverride: ircGlyph(uiTheme), title, meta }, uiTheme)];
+			if (body.trim()) {
+				lines.push(...bodyLines(body, expanded, uiTheme, { indent: "  ", collapsedLines: 3 }));
+			}
+			return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+		},
+		{ paddingX: 1 },
+	);
 }
 
 function renderSendResult(
