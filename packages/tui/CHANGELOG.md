@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.1] - 2026-06-11
 ### Added
 
 - Added `TUI.requestComponentRender(component)` to schedule component-scoped renders for self-contained updates

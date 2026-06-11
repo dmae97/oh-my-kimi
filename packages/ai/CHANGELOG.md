@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.1] - 2026-06-11
+
 ### Changed
 
 - Exported `resolveAnthropicMetadataUserId` so non-streaming Anthropic Messages consumers (e.g. the coding-agent web search provider) can produce the same Claude-Code-shaped `metadata.user_id` as the main streaming path.
