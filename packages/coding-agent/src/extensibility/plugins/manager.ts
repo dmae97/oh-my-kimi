@@ -77,10 +77,13 @@ function gitInstallSpec(original: string, source: GitSource): string {
 	return `${source.repo}#${source.ref}`;
 }
 
-function findExistingGitPackageName(packageInstallSpec: string, deps: Record<string, string>): string | undefined {
-	const needle = packageInstallSpec.replace(/^git\+/i, "");
+function findGitPackageName(source: GitSource, deps: Record<string, string>): string | undefined {
 	for (const [key, value] of Object.entries(deps)) {
-		if (typeof value === "string" && value.includes(needle)) {
+		if (typeof value !== "string") {
+			continue;
+		}
+		const installedSource = parseGitUrl(value);
+		if (installedSource && installedSource.host === source.host && installedSource.path === source.path) {
 			return key;
 		}
 	}
@@ -331,7 +334,7 @@ export class PluginManager {
 		const depsBefore = await this.#readDeps(pkgJsonPath);
 		const packageInstallSpec = gitSource ? gitInstallSpec(spec.packageName, gitSource) : spec.packageName;
 		const existingActualName = gitSource
-			? findExistingGitPackageName(packageInstallSpec, depsBefore)
+			? findGitPackageName(gitSource, depsBefore)
 			: extractPackageName(spec.packageName);
 		const packageSnapshot = await this.#snapshotInstalledPackage(existingActualName);
 
@@ -364,10 +367,10 @@ export class PluginManager {
 				}
 				// Fallback: a force-reinstall of an already-present git plugin will not
 				// add a new key, just rewrite the existing one to the new spec value.
-				// Match by the install value for force-reinstalls where no new key is
-				// added (non-GitHub shorthands are normalized before bun sees them).
+				// Match by repository identity, not by ref, so failed upgrades from
+				// one ref to another still resolve to the original package name.
 				if (!resolved) {
-					resolved = findExistingGitPackageName(packageInstallSpec, depsAfter);
+					resolved = findGitPackageName(gitSource, depsAfter);
 				}
 				if (!resolved) {
 					throw new Error(

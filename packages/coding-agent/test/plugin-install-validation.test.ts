@@ -165,6 +165,71 @@ describe("PluginManager.install load validation", () => {
 		expect(lock.plugins["broken-plugin"]).toEqual({ version: "1.0.0", enabledFeatures: null, enabled: true });
 	});
 
+	test("restores the previous git plugin tree when reinstalling a different ref fails validation", async () => {
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify(
+				{ name: "omp-plugins", private: true, dependencies: { "git-plugin": "github:org/plugin#v1" } },
+				null,
+				2,
+			),
+		);
+		await Bun.write(
+			path.join(tmpRoot, "omp-plugins.lock.json"),
+			JSON.stringify(
+				{ plugins: { "git-plugin": { version: "1.0.0", enabledFeatures: null, enabled: true } }, settings: {} },
+				null,
+				2,
+			),
+		);
+		await writePluginPackage(pluginsNodeModules, "git-plugin", {
+			version: "1.0.0",
+			source: 'export default function(pi) { pi.registerCommand("git-old-ok", { handler: async () => {} }); }\n',
+		});
+
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			expect(cmd).toEqual(["bun", "install", "github:org/plugin#v2"]);
+
+			const prepare = (async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{ name: "omp-plugins", private: true, dependencies: { "git-plugin": "github:org/plugin#v2" } },
+						null,
+						2,
+					),
+				);
+				await writePluginPackage(pluginsNodeModules, "git-plugin", {
+					version: "2.0.0",
+					peerDependencies: { "missing-peer": "^1.0.0" },
+					source:
+						'import { missing } from "missing-peer";\nexport default function(pi) { pi.registerCommand(String(missing), { handler: async () => {} }); }\n',
+				});
+			})();
+
+			return {
+				pid: 1,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		await expect(new PluginManager(tmpRoot).install("github:org/plugin#v2")).rejects.toThrow(/missing-peer/);
+
+		const pluginsPackage = await Bun.file(pluginsPkgJson).json();
+		expect(pluginsPackage.dependencies).toEqual({ "git-plugin": "github:org/plugin#v1" });
+		const restoredPackage = await Bun.file(path.join(pluginsNodeModules, "git-plugin", "package.json")).json();
+		expect(restoredPackage.version).toBe("1.0.0");
+		const restoredExtension = await Bun.file(
+			path.join(pluginsNodeModules, "git-plugin", "dist", "extension.ts"),
+		).text();
+		expect(restoredExtension).toContain("git-old-ok");
+		expect(restoredExtension).not.toContain("missing-peer");
+		const lock = await Bun.file(path.join(tmpRoot, "omp-plugins.lock.json")).json();
+		expect(lock.plugins["git-plugin"]).toEqual({ version: "1.0.0", enabledFeatures: null, enabled: true });
+	});
+
 	test("rejects an install whose manifest declares a missing extension entry", async () => {
 		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
 			expect(cmd).toEqual(["bun", "install", "partial-plugin"]);
