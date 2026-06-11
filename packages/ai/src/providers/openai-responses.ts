@@ -501,10 +501,7 @@ function buildParams(
 		options,
 		messages,
 		effort =>
-			mapReasoningEffort(
-				effort as NonNullable<OpenAIResponsesOptions["reasoning"]>,
-				resolveActiveEffortMap(model),
-			),
+			mapReasoningEffort(effort as NonNullable<OpenAIResponsesOptions["reasoning"]>, resolveActiveEffortMap(model)),
 		options?.includeEncryptedReasoning ?? true,
 		options?.omitReasoningEffort ?? false,
 	);
