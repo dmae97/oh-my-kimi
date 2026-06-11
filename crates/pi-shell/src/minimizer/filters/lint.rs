@@ -94,12 +94,12 @@ fn preserves_machine_readable_output(ctx: &MinimizerCtx<'_>) -> bool {
 	{
 		return true;
 	}
-	// eslint with an explicit non-default formatter (-f / --format with value != stylish)
+	// eslint with an explicit non-default formatter (-f / --format with value !=
+	// stylish)
 	if ctx.program == "eslint" {
 		let tokens: Vec<&str> = ctx.command.split_whitespace().collect();
 		for (i, t) in tokens.iter().enumerate() {
-			if (*t == "-f" || *t == "--format")
-				&& tokens.get(i + 1).map_or(false, |v| *v != "stylish")
+			if (*t == "-f" || *t == "--format") && tokens.get(i + 1).map_or(false, |v| *v != "stylish")
 			{
 				return true;
 			}
@@ -1014,12 +1014,7 @@ mod tests {
 			"eslint --format compact src/",
 			"eslint -f junit src/",
 		] {
-			let ctx = MinimizerCtx {
-				program:    "eslint",
-				subcommand: None,
-				command,
-				config:     &cfg,
-			};
+			let ctx = MinimizerCtx { program: "eslint", subcommand: None, command, config: &cfg };
 			let dummy = r#"[{"filePath":"src/foo.js","messages":[]}]"#;
 			let out = filter(&ctx, dummy, 0);
 			assert!(!out.changed, "{command} must passthrough unchanged");

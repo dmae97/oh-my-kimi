@@ -1502,11 +1502,13 @@ mod tests {
 		let ctx = ctx("df", &cfg);
 		let header = "Filesystem     1K-blocks     Used Available Use% Mounted on\n";
 		let overlay_root = "overlay          52428800 12345678  40083122  24% /\n";
-		let overlay_inner = "overlay          52428800     1234  52427566   0% /var/lib/docker/overlay2/abc/merged\n";
+		let overlay_inner =
+			"overlay          52428800     1234  52427566   0% /var/lib/docker/overlay2/abc/merged\n";
 		let real_fs = "sda1             52428800  5000000  47428800  10% /data\n";
 		let tmpfs_line = "tmpfs              8192000        0   8192000   0% /dev\n";
-		let padding: String =
-			(0..28).map(|i| format!("sda{i}  1000 500 500 50% /mnt/disk{i}\n")).collect();
+		let padding: String = (0..28)
+			.map(|i| format!("sda{i}  1000 500 500 50% /mnt/disk{i}\n"))
+			.collect();
 		let input = format!("{header}{overlay_root}{overlay_inner}{real_fs}{tmpfs_line}{padding}");
 
 		let out = filter(&ctx, &input, 0);

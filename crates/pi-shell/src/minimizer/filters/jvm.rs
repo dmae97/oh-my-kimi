@@ -225,9 +225,18 @@ pub enum MvnPhase {
 fn is_recognized_mvn_goal(a: &str) -> bool {
 	matches!(
 		a,
-		"test" | "integration-test" | "compile" | "test-compile"
-			| "package" | "install" | "verify" | "deploy"
-			| "clean" | "site" | "site-deploy" | "spring-boot:run"
+		"test"
+			| "integration-test"
+			| "compile"
+			| "test-compile"
+			| "package"
+			| "install"
+			| "verify"
+			| "deploy"
+			| "clean"
+			| "site"
+			| "site-deploy"
+			| "spring-boot:run"
 	) || a.ends_with(":spring-boot-maven-plugin:run")
 }
 
@@ -1039,7 +1048,8 @@ pub fn detect_task(command: &str) -> GradleTask {
 	// follow --tests, --rerun, etc. (e.g. "gradle test --tests FooSpec" → Test).
 	// When find returns None we need to distinguish two cases:
 	//   • no non-flag non-clean tokens at all  → only `clean` was given → Build
-	//   • non-flag non-clean tokens existed but none recognized → unrecognized task → Other
+	//   • non-flag non-clean tokens existed but none recognized → unrecognized task
+	// → Other
 	let mut non_clean_tokens = arg_tokens(command)
 		.filter(|a| !a.starts_with('-'))
 		.map(str::to_lowercase)
@@ -2690,7 +2700,9 @@ mod tests {
 			"FooTest > myTest FAILED\n",
 			"    org.opentest4j.AssertionFailedError: expected: <true> but was: <false>\n",
 			"        at FooTest.myTest(FooTest.kt:42)\n",
-			"        at org.junit.platform.engine.discovery.DiscoverySelectors.selectMethod(DiscoverySelectors.java:218)\n",
+			"        at \
+			 org.junit.platform.engine.discovery.DiscoverySelectors.selectMethod(DiscoverySelectors.\
+			 java:218)\n",
 			"\n",
 			"1 test completed, 1 failed\n",
 			"\n",
@@ -2701,18 +2713,9 @@ mod tests {
 			out.contains("AssertionFailedError"),
 			"assertion error class must be kept; got:\n{out}"
 		);
-		assert!(
-			out.contains("expected: <true>"),
-			"assertion message must be kept; got:\n{out}"
-		);
-		assert!(
-			out.contains("FooTest.myTest"),
-			"user frame must be kept; got:\n{out}"
-		);
-		assert!(
-			!out.contains("DiscoverySelectors"),
-			"framework frame must be stripped; got:\n{out}"
-		);
+		assert!(out.contains("expected: <true>"), "assertion message must be kept; got:\n{out}");
+		assert!(out.contains("FooTest.myTest"), "user frame must be kept; got:\n{out}");
+		assert!(!out.contains("DiscoverySelectors"), "framework frame must be stripped; got:\n{out}");
 	}
 
 	// ── Connected test filter (rtk ~864-893) ────────────────────────────────
