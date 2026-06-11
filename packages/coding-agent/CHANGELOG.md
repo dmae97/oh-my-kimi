@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Cached stable edit/write preview highlighting inside each tool component so steady-state frame renders do not re-enter the native syntax highlighter.
+
+- Skipped rendering finalized transcript blocks whose rows are already committed to native scrollback, keeping long restored sessions from re-rendering historical tool blocks every frame.
 - Fixed MCP OAuth authorization and token requests to include the required `resource` indicator for the target MCP server.
 ### Added
 

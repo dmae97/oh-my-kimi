@@ -138,6 +138,38 @@ export interface EditRenderContext {
 }
 
 const EDIT_STREAMING_PREVIEW_LINES = 12;
+
+interface RenderedStringCache {
+	key: string;
+	value: string;
+}
+
+function cachedRenderedString(cache: RenderedStringCache | undefined, key: string, render: () => string): string {
+	if (cache?.key === key) return cache.value;
+	const value = render();
+	if (cache) {
+		cache.key = key;
+		cache.value = value;
+	}
+	return value;
+}
+
+const themeCacheIds = new WeakMap<Theme, number>();
+let nextThemeCacheId = 0;
+
+function themeCacheKey(uiTheme: Theme): number {
+	let id = themeCacheIds.get(uiTheme);
+	if (id === undefined) {
+		id = nextThemeCacheId++;
+		themeCacheIds.set(uiTheme, id);
+	}
+	return id;
+}
+
+function plainDiffRender(diffText: string): string {
+	return diffText;
+}
+
 const CALL_TEXT_PREVIEW_LINES = 6;
 const CALL_TEXT_PREVIEW_WIDTH = 80;
 
@@ -313,7 +345,6 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string)
 	}
 	return preview.trimEnd();
 }
-
 function formatStreamingDiff(
 	diff: string,
 	rawPath: string,
@@ -321,26 +352,31 @@ function formatStreamingDiff(
 	expanded: boolean,
 	label = "streaming",
 	spinnerFrame?: number,
+	cache?: RenderedStringCache,
 ): string {
 	if (!diff) return "";
-	// Collapsed uses a "Cursor" tail window: pin the last
-	// EDIT_STREAMING_PREVIEW_LINES rows to the bottom so freshly streamed changes
-	// stay on screen. The whole-file diff is recomputed on every streamed chunk
-	// and its Myers alignment is not monotonic in payload length, so a hunk-aware
-	// window stutters as rows move between hunks. Expanded deliberately lifts that
-	// cap for the approval-time full view.
-	const allLines = diff.replace(/\n+$/u, "").split("\n");
-	const hiddenLines = expanded ? 0 : Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
-	const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
-	let text = "\n\n";
-	if (hiddenLines > 0) {
-		const hiddenHunks = getDiffStats(allLines.slice(0, hiddenLines).join("\n")).hunks;
-		const remainder: string[] = [];
-		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
-		remainder.push(`${hiddenLines} more lines`);
-		text += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
-	}
-	text += renderDiffColored(visible.join("\n"), { filePath: rawPath });
+	const cacheKey = `stream\0${themeCacheKey(uiTheme)}\0${expanded ? "1" : "0"}\0${rawPath}\0${diff}`;
+	let text = cachedRenderedString(cache, cacheKey, () => {
+		// Collapsed uses a "Cursor" tail window: pin the last
+		// EDIT_STREAMING_PREVIEW_LINES rows to the bottom so freshly streamed changes
+		// stay on screen. The whole-file diff is recomputed on every streamed chunk
+		// and its Myers alignment is not monotonic in payload length, so a hunk-aware
+		// window stutters as rows move between hunks. Expanded deliberately lifts that
+		// cap for the approval-time full view.
+		const allLines = diff.replace(/\n+$/u, "").split("\n");
+		const hiddenLines = expanded ? 0 : Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
+		const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
+		let rendered = "\n\n";
+		if (hiddenLines > 0) {
+			const hiddenHunks = getDiffStats(allLines.slice(0, hiddenLines).join("\n")).hunks;
+			const remainder: string[] = [];
+			if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
+			remainder.push(`${hiddenLines} more lines`);
+			rendered += `${uiTheme.fg("dim", `… (${remainder.join(", ")} above)`)}\n`;
+		}
+		rendered += renderDiffColored(visible.join("\n"), { filePath: rawPath });
+		return rendered;
+	});
 	// The animated glyph rides this trailing line — inside the transcript's
 	// volatile-tail holdback — never the block header: an animating head row
 	// pins the native-scrollback commit boundary at the top of the block, so a
@@ -360,9 +396,11 @@ function formatMultiFileStreamingDiff(
 	uiTheme: Theme,
 	expanded: boolean,
 	spinnerFrame?: number,
+	caches?: RenderedStringCache[],
 ): string {
 	const parts: string[] = [];
-	for (const preview of previews) {
+	for (let index = 0; index < previews.length; index++) {
+		const preview = previews[index]!;
 		if (!preview.diff && !preview.error) continue;
 		const header = uiTheme.fg("dim", `\n\n── ${shortenPath(preview.path)} ──`);
 		if (preview.error) {
@@ -373,9 +411,9 @@ function formatMultiFileStreamingDiff(
 			// Only the last file's preview carries the animated streaming glyph;
 			// earlier files have settled and must stay byte-stable so their rows
 			// can commit to native scrollback mid-stream.
-			const isLast = preview === previews[previews.length - 1];
+			const isLast = index === previews.length - 1;
 			parts.push(
-				`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, expanded, "preview", isLast ? spinnerFrame : undefined)}`,
+				`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, expanded, "preview", isLast ? spinnerFrame : undefined, caches?.[index])}`,
 			);
 		}
 	}
@@ -389,16 +427,17 @@ function getCallPreview(
 	renderContext: EditRenderContext | undefined,
 	expanded: boolean,
 	spinnerFrame?: number,
+	caches?: RenderedStringCache[],
 ): string {
 	const multi = renderContext?.perFileDiffPreview;
 	if (multi && multi.length > 1 && multi.some(p => p.diff || p.error)) {
-		return formatMultiFileStreamingDiff(multi, uiTheme, expanded, spinnerFrame);
+		return formatMultiFileStreamingDiff(multi, uiTheme, expanded, spinnerFrame, caches);
 	}
 	if (args.previewDiff) {
-		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, expanded, "preview", spinnerFrame);
+		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, expanded, "preview", spinnerFrame, caches?.[0]);
 	}
 	if (args.diff && args.op) {
-		return formatStreamingDiff(args.diff, rawPath, uiTheme, expanded, "streaming", spinnerFrame);
+		return formatStreamingDiff(args.diff, rawPath, uiTheme, expanded, "streaming", spinnerFrame, caches?.[0]);
 	}
 	if (args.diff) {
 		return renderPlainTextPreview(args.diff, uiTheme, rawPath);
@@ -492,30 +531,33 @@ function formatDiffStatsSuffix(diff: string, uiTheme: Theme): string {
 	].filter(value => value !== undefined);
 	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats.join(uiTheme.fg("dim", "/"))}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
 }
-
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
 	expanded: boolean,
 	uiTheme: Theme,
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
+	cache?: RenderedStringCache,
 ): string {
-	const {
-		text: truncatedDiff,
-		hiddenHunks,
-		hiddenLines,
-	} = expanded
-		? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
-		: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
+	const cacheKey = `result\0${themeCacheKey(uiTheme)}\0${expanded ? "1" : "0"}\0${rawPath}\0${diff}`;
+	return cachedRenderedString(cache, cacheKey, () => {
+		const {
+			text: truncatedDiff,
+			hiddenHunks,
+			hiddenLines,
+		} = expanded
+			? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
+			: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
 
-	let text = `\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
-	if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
-		const remainder: string[] = [];
-		if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
-		if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
-		text += uiTheme.fg("toolOutput", `\n… (${remainder.join(", ")}) ${formatExpandHint(uiTheme)}`);
-	}
-	return text;
+		let text = `\n${renderDiffFn(truncatedDiff, { filePath: rawPath })}`;
+		if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
+			const remainder: string[] = [];
+			if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
+			if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
+			text += uiTheme.fg("toolOutput", `\n… (${remainder.join(", ")}) ${formatExpandHint(uiTheme)}`);
+		}
+		return text;
+	});
 }
 
 function wrapEditRendererLine(line: string, width: number): string[] {
@@ -574,6 +616,10 @@ export const editToolRenderer = {
 		if (Array.isArray(editArgs.edits)) {
 			fileCount = countEditFiles(editArgs.edits);
 		}
+		const callPreviewCaches: RenderedStringCache[] = Array.from({ length: Math.max(1, fileCount) }, () => ({
+			key: "",
+			value: "",
+		}));
 		return framedBlock(uiTheme, width => {
 			// Static pending icon, never the animated glyph: the header is the
 			// head row of the framed block, and native-scrollback commits are
@@ -588,7 +634,15 @@ export const editToolRenderer = {
 				rename,
 				extraSuffix: fileCount > 1 ? uiTheme.fg("dim", ` (+${fileCount - 1} more)`) : undefined,
 			});
-			let body = getCallPreview(editArgs, rawPath, uiTheme, renderContext, options.expanded, options?.spinnerFrame);
+			let body = getCallPreview(
+				editArgs,
+				rawPath,
+				uiTheme,
+				renderContext,
+				options.expanded,
+				options?.spinnerFrame,
+				callPreviewCaches,
+			);
 			if (applyPatchSummary?.error) {
 				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 2)))}`;
 			}
@@ -652,11 +706,18 @@ function renderSingleFileResult(
 			(result.content?.find(c => c.type === "text")?.text ?? "")
 		: "";
 
+	let diffSectionRenderDiffFn: ((t: string, o?: { filePath?: string }) => string) | undefined;
+	const diffSectionCache: RenderedStringCache = { key: "", value: "" };
+
 	return framedBlock(uiTheme, width => {
 		const { expanded, renderContext } = options;
 		const editDiffPreview = renderContext?.editDiffPreview;
-		const renderDiffFn = renderContext?.renderDiff ?? ((t: string) => t);
+		const renderDiffFn = renderContext?.renderDiff ?? plainDiffRender;
 
+		if (diffSectionRenderDiffFn !== renderDiffFn) {
+			diffSectionRenderDiffFn = renderDiffFn;
+			diffSectionCache.key = "";
+		}
 		const firstChangedLine =
 			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
 			(details && !isError ? details.firstChangedLine : undefined);
@@ -681,11 +742,11 @@ function renderSingleFileResult(
 		if (isError) {
 			if (errorText) body = uiTheme.fg("error", replaceTabs(errorText, rawPath));
 		} else if (details?.diff) {
-			body = renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn);
+			body = renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn, diffSectionCache);
 		} else if (editDiffPreview) {
 			if ("error" in editDiffPreview) body = uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath));
 			else if (editDiffPreview.diff)
-				body = renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn);
+				body = renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn, diffSectionCache);
 		}
 		if (details?.diagnostics) {
 			body += formatDiagnostics(details.diagnostics, expanded, uiTheme, (fp: string) =>
