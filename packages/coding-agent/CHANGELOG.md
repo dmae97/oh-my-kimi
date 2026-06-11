@@ -10,6 +10,7 @@
 - Changed `display.smoothStreaming` to animate streamed tool-call arguments (including write/edit/bash previews) at the smooth streaming cadence so partial tool input now appears progressively instead of in large jumps
 - Changed streamed updates for custom wire tools to render incremental raw input as `{ input }` prefixes for preview
 - `async.enabled` now defaults to `true`, keeping background task execution and async bash available out of the box; disable it to force blocking subtasks ([#2301](https://github.com/can1357/oh-my-pi/issues/2301)).
+- Shortened the status line's background-job indicator to a dedicated gear icon plus count (e.g. `⚙ 1` instead of `👥 1 job running`) and moved it left of the session name in the right segment group
 
 ### Fixed
 

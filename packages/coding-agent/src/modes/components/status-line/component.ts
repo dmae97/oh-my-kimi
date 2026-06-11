@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatCount, getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { settings } from "../../../config/settings";
 import type { AgentSession } from "../../../session/agent-session";
@@ -747,9 +747,7 @@ export class StatusLineComponent implements Component {
 
 		const runningBackgroundJobs = this.session.getAsyncJobSnapshot()?.running.length ?? 0;
 		if (runningBackgroundJobs > 0) {
-			const icon = theme.icon.agents ? `${theme.icon.agents} ` : "";
-			const label = `${formatCount("job", runningBackgroundJobs)} running`;
-			rightParts.push(theme.fg("statusLineSubagents", `${icon}${label}`));
+			rightParts.unshift(theme.fg("statusLineSubagents", `${theme.icon.job} ${runningBackgroundJobs}`));
 		}
 		const topFillWidth = Math.max(0, width);
 		const left = [...leftParts];
