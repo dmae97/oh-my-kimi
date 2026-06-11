@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the Expert Elixir language server (`expert`, invoked as `expert --stdio`) to the built-in LSP server list, auto-detected for Mix projects (`mix.exs`/`mix.lock`). When both are installed, `elixir-ls` remains the primary navigation server (Expert is ordered after it).
 ## [15.11.1] - 2026-06-11
 ### Added
 

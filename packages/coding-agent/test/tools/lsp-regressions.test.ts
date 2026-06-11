@@ -38,6 +38,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
+import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 
 describe("lsp regressions", () => {
 	afterEach(() => {
@@ -1827,5 +1828,15 @@ for await (const chunk of Bun.stdin.stream()) {
 
 		expect(output).toContain("rust-analyzer (configured, not started)");
 		expect(output).toContain("typescript-language-server (ready)");
+	});
+});
+
+describe("expert elixir lsp", () => {
+	it("registers expert for .ex while keeping elixirls primary", () => {
+		const config = { servers: DEFAULTS as unknown as Record<string, ServerConfig> };
+		const names = getServersForFile(config, "lib/app.ex").map(([name]) => name);
+		expect(names).toContain("expert");
+		expect(names).toContain("elixirls");
+		expect(names.indexOf("elixirls")).toBeLessThan(names.indexOf("expert"));
 	});
 });
