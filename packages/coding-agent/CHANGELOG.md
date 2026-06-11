@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Mnemopi memory consolidation never running on session shutdown: `MnemopiSessionState.dispose()` now drains pending fact extractions and runs `sleepAllSessions` on every owned bank before closing handles (and `AgentSession.dispose()` awaits the result), matching the `/memory enqueue` slash command. `mnemopiBackend.clear` opts out via `dispose({ consolidate: false })` so the destructive `/memory clear` path does not spend tokens consolidating memories that are wiped on the next line. `consolidate()` deliberately keeps no `aliasOf` short-circuit so `/memory enqueue` from a subagent still flushes and sleeps the parent's shared banks (the alias guard lives in `dispose` for lifecycle, not in `consolidate` for content). Without this, `episodic_memory`, `gists`, `consolidation_log`, `graph_edges`, and `triples` stayed empty for every deployment because the SHMR/beam pipeline only ran when a user typed `/memory enqueue|rebuild` ([#2320](https://github.com/can1357/oh-my-pi/issues/2320)).
+
 ## [15.11.2] - 2026-06-11
 
 ### Added
