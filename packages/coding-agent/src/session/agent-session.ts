@@ -8583,7 +8583,7 @@ export class AgentSession {
 			this.#retryResolve = resolve;
 		}
 
-		if (!classifierRefusal && this.#retryAttempt > retrySettings.maxRetries) {
+		if (this.#retryAttempt > retrySettings.maxRetries) {
 			// Max retries exceeded, emit final failure and reset
 			await this.#emitSessionEvent({
 				type: "auto_retry_end",
