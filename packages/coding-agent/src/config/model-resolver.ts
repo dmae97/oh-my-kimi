@@ -637,6 +637,29 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
 	return role === "smol" || role === "slow";
 }
 
+function resolveDefaultInheritedPatterns(
+	role: ModelRole,
+	configuredDefault: string | undefined,
+	roleDefaults: string[],
+): string[] {
+	if (!shouldInheritDefaultBeforePriority(role) || !configuredDefault) return [];
+
+	const resolved: string[] = [];
+	for (const pattern of normalizeModelPatternList(configuredDefault)) {
+		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(pattern, PREFIX_MODEL_ROLE.length);
+		if (getModelRoleAlias(aliasCandidate) === role) {
+			resolved.push(
+				...(thinkingLevel
+					? roleDefaults.map(defaultPattern => `${defaultPattern}:${thinkingLevel}`)
+					: roleDefaults),
+			);
+			continue;
+		}
+		resolved.push(pattern);
+	}
+	return resolved;
+}
+
 function resolveConfiguredRolePattern(value: string, settings?: Settings): string[] | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;
@@ -646,11 +669,11 @@ function resolveConfiguredRolePattern(value: string, settings?: Settings): strin
 	if (!role) return [normalized];
 
 	const configured = settings?.getModelRole(role)?.trim();
-	const configuredDefault = shouldInheritDefaultBeforePriority(role)
-		? settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim()
-		: undefined;
+	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
 	const roleDefaults = normalizeModelPatternList(MODEL_PRIO[role as keyof typeof MODEL_PRIO]);
-	const resolved = configured ? normalizeModelPatternList(configured) : normalizeModelPatternList(configuredDefault);
+	const resolved = configured
+		? normalizeModelPatternList(configured)
+		: resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults);
 	if (resolved.length === 0) {
 		resolved.push(...roleDefaults);
 	}

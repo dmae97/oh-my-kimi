@@ -554,6 +554,27 @@ describe("resolveAgentModelPatterns", () => {
 		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings })).toEqual(["local/llama"]);
 	});
 
+	test("keeps built-in priority defaults when default aliases the same unset role", () => {
+		const smolSettings = Settings.isolated({
+			modelRoles: { default: "pi/smol" },
+		});
+		const slowSettings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings: smolSettings })).toEqual([
+			"cerebras/zai-glm-4.7",
+			"cerebras/zai-glm-4.6",
+			"cerebras/zai-glm",
+			"haiku-4-5",
+			"haiku-4.5",
+			"haiku",
+			"flash",
+			"mini",
+		]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings: slowSettings })[0]).toBe("gpt-5.4");
+	});
+
 	test("expands pi/designer to priority defaults", () => {
 		const settings = Settings.isolated({
 			modelRoles: {
