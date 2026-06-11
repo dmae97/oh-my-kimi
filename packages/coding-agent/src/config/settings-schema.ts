@@ -679,7 +679,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "appearance",
 			label: "Smooth Streaming",
-			description: "Reveal assistant text smoothly while streamed chunks arrive",
+			description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
 		},
 	},
 

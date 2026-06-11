@@ -1,17 +1,20 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added the `statusLine.transparent` appearance setting (default off): when enabled, the status line skips the theme's `statusLineBg` fill and powerline end caps so the bar inherits the terminal's default background — useful in Ghostty and other terminals whose theme background does not match the theme's hardcoded status-line color ([#2306](https://github.com/can1357/oh-my-pi/issues/2306))
 
 ### Changed
 
+- Changed `display.smoothStreaming` to animate streamed tool-call arguments (including write/edit/bash previews) at the smooth streaming cadence so partial tool input now appears progressively instead of in large jumps
+- Changed streamed updates for custom wire tools to render incremental raw input as `{ input }` prefixes for preview
 - `async.enabled` now defaults to `true`, keeping background task execution and async bash available out of the box; disable it to force blocking subtasks ([#2301](https://github.com/can1357/oh-my-pi/issues/2301)).
 
 ### Fixed
 
+- Fixed interrupted or ending tool calls to flush streamed argument previews to the full received payload instead of freezing on a partial reveal chunk
+- Fixed tool-argument reveal to avoid splitting UTF-16 surrogate pairs at frame boundaries
 - Fixed input lag in long sessions whenever a spinner was visible: loader ticks forced a full TUI re-compose (re-walking every transcript block) 12.5 times per second. Animations that only change their own rows (status loaders, welcome intro, voice mic glyph, `/btw` streaming panel) now use the new component-scoped render path (`TUI.requestComponentRender`), which reuses every other root subtree's rows; resize, overlays, inline images, forced repaints, root-list changes, or any concurrent full request still compose the full frame
 - Fixed transcript rendering so blocks with rows committed to scrollback while still streaming rerender on the first finalized frame, so the final committed output is visible instead of stale in-flight lines
 - Fixed committed transcript bypass logic to re-render finalized blocks when their version changes, so post-finalization updates like restored inline errors and late tool-result content now appear in scrollback
