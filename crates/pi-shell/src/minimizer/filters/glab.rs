@@ -231,7 +231,18 @@ fn filter_release_view(input: &str) -> String {
 	for line in input.lines() {
 		let trimmed = line.trim();
 
-		// Skip SOURCES section (archive download URLs)
+		// Strip trailing "View this release on GitLab" link
+		if trimmed.starts_with("View this release on GitLab") {
+			continue;
+		}
+
+		// Strip "ASSETS" / "There are no assets..." section
+		if trimmed == "ASSETS" {
+			in_sources = true; // reuse state machine; next non-empty line is "There are no assets..."
+			continue;
+		}
+
+		// Strip SOURCES section (archive download URLs)
 		if trimmed == "SOURCES" {
 			in_sources = true;
 			continue;
@@ -478,6 +489,12 @@ section_end:1711234600:build_script[0K
 		assert!(!out.text.contains("Image:"));
 		// HTML comments stripped
 		assert!(!out.text.contains("<!-- internal"));
+		// Footer stripped (noise)
+		assert!(!out.text.contains("View this release"));
+		// ASSETS/SOURCES sections stripped
+		assert!(!out.text.contains("ASSETS"));
+		assert!(!out.text.contains("SOURCES"));
+		assert!(!out.text.contains("archive/v2.0.0"));
 	}
 
 	#[test]
@@ -493,8 +510,12 @@ section_end:1711234600:build_script[0K
 		assert!(out.text.contains("Added widget support"));
 		assert!(out.text.contains("Fixed authentication bug"));
 		assert!(out.text.contains("@alice_dev @bob_dev"));
-		// Footer preserved
-		assert!(out.text.contains("View this release"));
+		// Footer stripped (noise)
+		assert!(!out.text.contains("View this release"));
+		// ASSETS/SOURCES sections stripped
+		assert!(!out.text.contains("ASSETS"));
+		assert!(!out.text.contains("SOURCES"));
+		assert!(!out.text.contains("archive/v2.0.0"));
 	}
 
 	// ── MR/issue view tests ─────────────────────────────────────────────
