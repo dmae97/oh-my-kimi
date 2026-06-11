@@ -196,6 +196,7 @@ export class StatusLineComponent implements Component {
 			showHookStatus: settings.get("statusLine.showHookStatus"),
 			segmentOptions: settings.getGroup("statusLine").segmentOptions,
 			sessionAccent: settings.get("statusLine.sessionAccent"),
+			transparent: settings.get("statusLine.transparent"),
 		};
 	}
 
@@ -713,7 +714,15 @@ export class StatusLineComponent implements Component {
 		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions, includeContext);
 		const separatorDef = getSeparator(effectiveSettings.separator ?? "powerline-thin", theme);
 
-		const bgAnsi = theme.getBgAnsi("statusLineBg");
+		// `transparent` reuses the empty-string sentinel (`\x1b[49m`) so the bar
+		// inherits the terminal's default background, matching custom themes that
+		// set `statusLineBg: ""`. Powerline end caps need a contrasting fill to
+		// bridge the bar into the surrounding terminal; without one they read as
+		// stray glyphs, so the cap renderer drops them when the fill is empty.
+		const TRANSPARENT_BG_ANSI = "\x1b[49m";
+		const themeBgAnsi = theme.getBgAnsi("statusLineBg");
+		const bgAnsi = effectiveSettings.transparent ? TRANSPARENT_BG_ANSI : themeBgAnsi;
+		const transparentBg = bgAnsi === TRANSPARENT_BG_ANSI;
 		const fgAnsi = theme.getFgAnsi("text");
 		const sepAnsi = theme.getFgAnsi("statusLineSep");
 
@@ -748,8 +757,10 @@ export class StatusLineComponent implements Component {
 
 		const leftSepWidth = visibleWidth(separatorDef.left);
 		const rightSepWidth = visibleWidth(separatorDef.right);
-		const leftCapWidth = separatorDef.endCaps ? visibleWidth(separatorDef.endCaps.right) : 0;
-		const rightCapWidth = separatorDef.endCaps ? visibleWidth(separatorDef.endCaps.left) : 0;
+		// Transparent mode drops powerline caps (they need a bg fill to bridge),
+		// so the width budget excludes them too.
+		const leftCapWidth = separatorDef.endCaps && !transparentBg ? visibleWidth(separatorDef.endCaps.right) : 0;
+		const rightCapWidth = separatorDef.endCaps && !transparentBg ? visibleWidth(separatorDef.endCaps.left) : 0;
 
 		const groupWidth = (parts: string[], capWidth: number, sepWidth: number): number => {
 			if (parts.length === 0) return 0;
@@ -810,11 +821,12 @@ export class StatusLineComponent implements Component {
 		const renderGroup = (parts: string[], direction: "left" | "right"): string => {
 			if (parts.length === 0) return "";
 			const sep = direction === "left" ? separatorDef.left : separatorDef.right;
-			const cap = separatorDef.endCaps
-				? direction === "left"
-					? separatorDef.endCaps.right
-					: separatorDef.endCaps.left
-				: "";
+			const cap =
+				separatorDef.endCaps && !transparentBg
+					? direction === "left"
+						? separatorDef.endCaps.right
+						: separatorDef.endCaps.left
+					: "";
 			const capPrefix = separatorDef.endCaps?.useBgAsFg ? bgAnsi.replace("\x1b[48;", "\x1b[38;") : bgAnsi + sepAnsi;
 			const capText = cap ? `${capPrefix}${cap}\x1b[0m` : "";
 

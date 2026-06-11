@@ -452,6 +452,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Use the session name color for the editor border and status line gap",
 		},
 	},
+
+	"statusLine.transparent": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			label: "Transparent Status Line",
+			description:
+				"Use the terminal's default background for the status line instead of the theme's `statusLineBg`. Powerline end caps are dropped because they need a contrasting fill to bridge into the surrounding terminal.",
+		},
+	},
 	"tools.artifactSpillThreshold": {
 		type: "number",
 		default: 50,
