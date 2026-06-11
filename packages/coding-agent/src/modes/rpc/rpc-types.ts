@@ -11,6 +11,7 @@ import type { BashResult } from "../../exec/bash-executor";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { FileEntry } from "../../session/session-manager";
+import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type {
 	AgentProgress,
 	SubagentEventPayload,
@@ -34,6 +35,7 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
@@ -110,6 +112,20 @@ export interface RpcSessionState {
 	contextUsage?: ContextUsage;
 }
 
+export interface RpcAvailableSlashCommand {
+	name: string;
+	aliases?: string[];
+	description?: string;
+	input?: { hint?: string };
+	subcommands?: Array<{ name: string; description?: string; usage?: string }>;
+	source: AvailableSlashCommandSource;
+}
+
+export interface RpcAvailableCommandsUpdateFrame {
+	type: "available_commands_update";
+	commands: RpcAvailableSlashCommand[];
+}
+
 export interface RpcHandoffResult {
 	savedPath?: string;
 }
@@ -156,6 +172,13 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_available_commands";
+			success: true;
+			data: { commands: RpcAvailableSlashCommand[] };
+	  }
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }

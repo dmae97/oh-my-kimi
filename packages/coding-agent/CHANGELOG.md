@@ -115,6 +115,8 @@
 
 ### Added
 
+- Added plain-RPC slash command discovery with command source metadata and startup/update notifications ([#2261](https://github.com/can1357/oh-my-pi/issues/2261)).
+
 - Added RPC subagent subscription frames, snapshots, and transcript catch-up APIs for desktop clients embedding `omp --mode rpc`.
 - Added opt-in `shellMinimizer.sourceOutlineLevel` and `shellMinimizer.legacyFilters` settings so shell minimization can tune source outlining and selectively fall back to conservative legacy routing.
 - Added repeatable `--config <path>` CLI overlays for temporary `config.yml`-style settings without editing the persistent global config ([#1733](https://github.com/can1357/oh-my-pi/issues/1733)).

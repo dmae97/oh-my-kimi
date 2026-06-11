@@ -298,6 +298,7 @@ export type AgentSessionEvent =
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+export type CommandMetadataChangedListener = () => void | Promise<void>;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
 const EMPTY_STOP_MAX_RETRIES = 3;
@@ -884,6 +885,7 @@ export class AgentSession {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
+	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
 	/** Tracks pending steering messages for UI display. Removed when delivered.
 	 *  Entry shape: `{ text }` for plain-text steers (user-message dequeue
@@ -3034,6 +3036,27 @@ export class AgentSession {
 		};
 	}
 
+	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
+		this.#commandMetadataChangedListeners.push(listener);
+		return () => {
+			const index = this.#commandMetadataChangedListeners.indexOf(listener);
+			if (index !== -1) {
+				this.#commandMetadataChangedListeners.splice(index, 1);
+			}
+		};
+	}
+
+	#notifyCommandMetadataChanged(): void {
+		const listeners = [...this.#commandMetadataChangedListeners];
+		for (const listener of listeners) {
+			try {
+				void listener();
+			} catch (err) {
+				logger.error("Command metadata listener threw", { err });
+			}
+		}
+	}
+
 	/**
 	 * Temporarily disconnect from agent events.
 	 * User listeners are preserved and will receive events again after resubscribe().
@@ -4350,9 +4373,15 @@ export class AgentSession {
 		return [...this.#customCommands, ...this.#mcpPromptCommands];
 	}
 
+	/** MCP prompt commands only, for command-list metadata. */
+	get mcpPromptCommands(): ReadonlyArray<LoadedCustomCommand> {
+		return this.#mcpPromptCommands;
+	}
+
 	/** Update the MCP prompt commands list. Called when server prompts are (re)loaded. */
 	setMCPPromptCommands(commands: LoadedCustomCommand[]): void {
 		this.#mcpPromptCommands = commands;
+		this.#notifyCommandMetadataChanged();
 	}
 
 	// =========================================================================
