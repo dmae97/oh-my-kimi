@@ -2816,7 +2816,7 @@ function buildParams(
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
-		model: model.id,
+		model: model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),

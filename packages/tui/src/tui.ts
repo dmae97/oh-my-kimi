@@ -185,6 +185,10 @@ export interface Component {
  * of history until it finalizes. Volatile live blocks (tool previews that
  * collapse) omit it. Defaults to `liveRegionStart` when absent; a root that
  * reports no seam at all commits everything that scrolls (shell semantics).
+ *
+ * When several root children report a seam in the same frame, the topmost
+ * one (and its commit-safe extension) defines the boundary: commits are
+ * prefix-only, so everything below the first seam is already excluded.
  */
 export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined;
@@ -833,7 +837,13 @@ export class TUI extends Container {
 				// the last render the engine actually observed.
 				reported = getRenderStablePrefixRows(child);
 			}
-			if (liveLocalStart !== undefined) {
+			// Topmost seam wins. Commits are prefix-only: the first child that
+			// reports a live region (plus its own commit-safe extension) already
+			// bounds everything below it, so a lower sibling's seam (e.g. a
+			// status loader under a streaming transcript) must never overwrite
+			// it — moving the boundary down would commit the earlier child's
+			// still-mutable rows as stale history.
+			if (liveLocalStart !== undefined && this.#nativeScrollbackLiveRegionStart === undefined) {
 				this.#nativeScrollbackLiveRegionStart = offset + liveLocalStart;
 				if (commitLocalEnd !== undefined) {
 					this.#nativeScrollbackCommitSafeEnd = offset + commitLocalEnd;
