@@ -1262,18 +1262,18 @@ fn filter_gradle_test(input: &str) -> String {
 		// Stack-trace lines following a failure.
 		if in_failure_block {
 			let trimmed = line.trim();
-			if trimmed.starts_with("java.") || trimmed.starts_with("kotlin.") {
-				// Exception class + message — always keep.
-				result_lines.push(line);
-			} else if trimmed.starts_with("at ") {
-				// Skip framework frames, keep first user-code frame then close.
+			if trimmed.starts_with("at ") {
+				// Stack frame: skip framework frames, keep first user-code frame then close.
 				if !is_gradle_framework_frame(trimmed) {
 					result_lines.push(line);
 					in_failure_block = false;
 				}
 			} else if !trimmed.is_empty() {
-				in_failure_block = false;
+				// Exception class, message line, or assertion detail — keep it.
+				// (Covers java.*, kotlin.*, org.opentest4j.*, and message lines.)
+				result_lines.push(line);
 			}
+			// blank lines in failure block: skip (implicit fall-through)
 		}
 	}
 
@@ -2679,6 +2679,40 @@ mod tests {
 		assert!(!o.contains("Run with --stacktrace"), "try stripped; got:\n{o}");
 		assert!(!o.contains("Get more help at"), "help stripped; got:\n{o}");
 		assert!(o.contains("BUILD FAILED"), "status kept; got:\n{o}");
+	}
+
+	#[test]
+	fn gradle_failure_keeps_opentest4j_assertion() {
+		let input = concat!(
+			"\n",
+			"> Task :test FAILED\n",
+			"\n",
+			"FooTest > myTest FAILED\n",
+			"    org.opentest4j.AssertionFailedError: expected: <true> but was: <false>\n",
+			"        at FooTest.myTest(FooTest.kt:42)\n",
+			"        at org.junit.platform.engine.discovery.DiscoverySelectors.selectMethod(DiscoverySelectors.java:218)\n",
+			"\n",
+			"1 test completed, 1 failed\n",
+			"\n",
+			"BUILD FAILED in 2s\n",
+		);
+		let out = filter_gradle_test(input);
+		assert!(
+			out.contains("AssertionFailedError"),
+			"assertion error class must be kept; got:\n{out}"
+		);
+		assert!(
+			out.contains("expected: <true>"),
+			"assertion message must be kept; got:\n{out}"
+		);
+		assert!(
+			out.contains("FooTest.myTest"),
+			"user frame must be kept; got:\n{out}"
+		);
+		assert!(
+			!out.contains("DiscoverySelectors"),
+			"framework frame must be stripped; got:\n{out}"
+		);
 	}
 
 	// ── Connected test filter (rtk ~864-893) ────────────────────────────────
