@@ -807,6 +807,11 @@ export class TUI extends Container {
 				liveLocalStart = previous.liveLocalStart;
 				commitLocalEnd = previous.commitLocalEnd;
 			} else {
+				// Feed the engine's committed-row claim (from the previous frame's
+				// emit) before rendering so the child can skip re-deriving blocks
+				// that already live in immutable native scrollback. Reused segments
+				// skip this: they never call render(), so the signal is moot.
+				setNativeScrollbackCommittedRows(child, Math.max(0, this.#committedRows - offset));
 				childLines = child.render(width);
 				const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
 				if (liveRegionStart !== undefined) {

@@ -12,12 +12,12 @@
 
 ### Fixed
 
+- Fixed transcript rendering so blocks with rows committed to scrollback while still streaming rerender on the first finalized frame, so the final committed output is visible instead of stale in-flight lines
+- Fixed committed transcript bypass logic to re-render finalized blocks when their version changes, so post-finalization updates like restored inline errors and late tool-result content now appear in scrollback
 - Cached stable edit/write preview highlighting inside each tool component so steady-state frame renders do not re-enter the native syntax highlighter.
-
 - Skipped rendering finalized transcript blocks whose rows are already committed to native scrollback, keeping long restored sessions from re-rendering historical tool blocks every frame.
 - Fixed MCP OAuth authorization and token requests to include the required `resource` indicator for the target MCP server.
 - Restored `async.enabled=false` as the task tool's blocking mode, so subagents no longer become background jobs when async execution is disabled ([#2301](https://github.com/can1357/oh-my-pi/issues/2301)).
-- Fixed MCP OAuth authorization and token requests to include the required `resource` indicator for the target MCP server.
 - Fixed the `/tree` selector and HTML session export dropping the inherited `│` gutter for chain rows under a last-sibling branch, so the conversation flow under a `└─` branch stays visually anchored to its parent message ([#2298](https://github.com/can1357/oh-my-pi/issues/2298)).
 - Fixed Anthropic web search requests to include `metadata.user_id`, matching the main Messages path: API-key requests forward the active session id verbatim, OAuth requests build the Claude-Code-shaped `{session_id, account_uuid?, device_id}` JSON envelope so gateways see consistent attribution ([#2295](https://github.com/can1357/oh-my-pi/issues/2295)).
 - Fixed Anthropic classifier refusals to switch through configured retry fallback chains without same-model retries, and to keep the fallback pinned for the conversation. ([#2290](https://github.com/can1357/oh-my-pi/issues/2290))

@@ -53,11 +53,26 @@ interface SnapshotCarrier {
  */
 interface FinalizableBlock {
 	isTranscriptBlockFinalized?(): boolean;
+	/**
+	 * Monotonic content version for blocks that can still mutate *after*
+	 * reporting finalized (e.g. `AssistantMessageComponent`: the inline error
+	 * restored at the next turn's `agent_start`, late tool-result images). The
+	 * committed-scrollback render bypass only replays a block's previous rows
+	 * when the version is unchanged; without this signal a post-finalize
+	 * mutation would stay invisible until a global invalidation. Blocks that
+	 * never mutate post-finalize simply omit the method.
+	 */
+	getTranscriptBlockVersion?(): number;
 }
 
 function isBlockFinalized(child: Component): boolean {
 	const fn = (child as Component & FinalizableBlock).isTranscriptBlockFinalized;
 	return fn ? fn.call(child) : true;
+}
+
+function getBlockVersion(child: Component): number | undefined {
+	const fn = (child as Component & FinalizableBlock).getTranscriptBlockVersion;
+	return fn ? fn.call(child) : undefined;
 }
 
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
@@ -99,6 +114,10 @@ interface BlockSegment {
 	/** Rows emitted: separator + contribution (0 for empty contributions). */
 	rowCount: number;
 	sep: number;
+	/** Whether the block reported finalized when this segment was rendered. */
+	finalized: boolean;
+	/** Block version observed when this segment was rendered (see {@link FinalizableBlock}). */
+	version: number | undefined;
 }
 
 const EMPTY_SEGMENTS: BlockSegment[] = [];
@@ -523,6 +542,7 @@ export class TranscriptContainer
 			const previousSnapshot = child[kSnapshot];
 			const previous = previousSegments[i];
 			const finalized = isBlockFinalized(child);
+			const version = getBlockVersion(child);
 			const committedReusable =
 				previous !== undefined &&
 				previous.component === child &&
@@ -530,7 +550,18 @@ export class TranscriptContainer
 				previous.generation === this.#generation &&
 				previous.startRow === row &&
 				previous.startRow + previous.rowCount <= this.#committedRows &&
-				finalized;
+				finalized &&
+				// Only replay bytes that were themselves produced by a finalized
+				// render: a block finalizing between frames may have changed content
+				// while its rows were already committed via the append-only live
+				// path, so the first post-transition frame must render. Defense in
+				// depth on the transcript side — the TUI commit policy should keep
+				// that window closed, but the safety must not live there alone.
+				previous.finalized &&
+				// Post-finalize mutations (inline error restore, late tool images)
+				// bump the block version; a mismatch forces a real render so the
+				// committed-prefix audit can observe and re-anchor the change.
+				previous.version === version;
 			const raw = committedReusable ? previous.rawRef : child.render(width);
 			const reusable =
 				committedReusable ||
@@ -577,6 +608,8 @@ export class TranscriptContainer
 					startRow: row,
 					rowCount: 0,
 					sep: 0,
+					finalized,
+					version,
 				};
 				continue;
 			}
@@ -630,6 +663,8 @@ export class TranscriptContainer
 				startRow: row,
 				rowCount,
 				sep,
+				finalized,
+				version,
 			};
 			row += rowCount;
 		}

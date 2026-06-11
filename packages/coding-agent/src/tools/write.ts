@@ -37,12 +37,15 @@ import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
+	cachedRenderedString,
+	createRenderedStringCache,
 	formatDiagnostics,
 	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
 	formatStatusIcon,
 	getLspBatchRequest,
+	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
 } from "./render-utils";
@@ -1042,11 +1045,10 @@ function formatStreamingContent(
 	language: string | undefined,
 	uiTheme: Theme,
 	spinnerFrame?: number,
-	cache?: RenderedTextCache,
+	cache?: RenderedStringCache,
 ): string {
 	if (!content) return "";
-	const cacheKey = `${themeCacheKey(uiTheme)}\0${expanded ? "1" : "0"}\0${language ?? ""}\0${content}`;
-	const bodyText = cachedRenderedText(cache, cacheKey, () => {
+	const bodyText = cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
 		const lines = normalizeDisplayText(content).split("\n");
 		const totalLines = lines.length;
 		// Collapsed: follow the streaming edge with a bounded tail window so the box
@@ -1078,43 +1080,16 @@ function formatStreamingContent(
 	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
 	return `${bodyText}${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
 }
-interface RenderedTextCache {
-	key: string;
-	value: string;
-}
-
-const themeCacheIds = new WeakMap<Theme, number>();
-let nextThemeCacheId = 0;
-
-function themeCacheKey(uiTheme: Theme): number {
-	let id = themeCacheIds.get(uiTheme);
-	if (id === undefined) {
-		id = nextThemeCacheId++;
-		themeCacheIds.set(uiTheme, id);
-	}
-	return id;
-}
-
-function cachedRenderedText(cache: RenderedTextCache | undefined, key: string, render: () => string): string {
-	if (cache?.key === key) return cache.value;
-	const value = render();
-	if (cache) {
-		cache.key = key;
-		cache.value = value;
-	}
-	return value;
-}
 
 function renderContentPreview(
 	content: string,
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
-	cache?: RenderedTextCache,
+	cache?: RenderedStringCache,
 ): string {
 	if (!content) return "";
-	const cacheKey = `${themeCacheKey(uiTheme)}\0${expanded ? "1" : "0"}\0${language ?? ""}\0${content}`;
-	return cachedRenderedText(cache, cacheKey, () => {
+	return cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
 		const rawLines = normalizeDisplayText(content).split("\n");
 		const totalLines = rawLines.length;
 		const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
@@ -1159,7 +1134,7 @@ export const writeToolRenderer = {
 			},
 			uiTheme,
 		);
-		const streamingCache: RenderedTextCache = { key: "", value: "" };
+		const streamingCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
 			const body = args.content
 				? formatStreamingContent(
@@ -1231,7 +1206,7 @@ export const writeToolRenderer = {
 		);
 		const diagnostics = result.details?.diagnostics;
 
-		const previewCache: RenderedTextCache = { key: "", value: "" };
+		const previewCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
 			const { expanded } = options;
 			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);

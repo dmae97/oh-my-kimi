@@ -12,13 +12,17 @@ import { renderDiff as renderDiffColored } from "../modes/components/diff";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import type { OutputMeta } from "../tools/output-meta";
 import {
+	cachedRenderedString,
+	createRenderedStringCache,
 	formatDiagnostics,
 	formatExpandHint,
 	formatStatusIcon,
 	getDiffStats,
 	getLspBatchRequest,
+	invalidateRenderedStringCache,
 	type LspBatchRequest,
 	PREVIEW_LIMITS,
+	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
 	truncateDiffByHunk,
@@ -139,35 +143,23 @@ export interface EditRenderContext {
 
 const EDIT_STREAMING_PREVIEW_LINES = 12;
 
-interface RenderedStringCache {
-	key: string;
-	value: string;
-}
-
-function cachedRenderedString(cache: RenderedStringCache | undefined, key: string, render: () => string): string {
-	if (cache?.key === key) return cache.value;
-	const value = render();
-	if (cache) {
-		cache.key = key;
-		cache.value = value;
-	}
-	return value;
-}
-
-const themeCacheIds = new WeakMap<Theme, number>();
-let nextThemeCacheId = 0;
-
-function themeCacheKey(uiTheme: Theme): number {
-	let id = themeCacheIds.get(uiTheme);
-	if (id === undefined) {
-		id = nextThemeCacheId++;
-		themeCacheIds.set(uiTheme, id);
-	}
-	return id;
-}
-
 function plainDiffRender(diffText: string): string {
 	return diffText;
+}
+
+/**
+ * Lazily grown per-file preview cache slots: the file count of a streaming
+ * multi-file patch is discovered mid-stream, so a fixed-size array would
+ * silently bypass caching for late files.
+ */
+function previewCacheAt(caches: RenderedStringCache[] | undefined, index: number): RenderedStringCache | undefined {
+	if (!caches) return undefined;
+	let cache = caches[index];
+	if (cache === undefined) {
+		cache = createRenderedStringCache();
+		caches[index] = cache;
+	}
+	return cache;
 }
 
 const CALL_TEXT_PREVIEW_LINES = 6;
@@ -355,8 +347,7 @@ function formatStreamingDiff(
 	cache?: RenderedStringCache,
 ): string {
 	if (!diff) return "";
-	const cacheKey = `stream\0${themeCacheKey(uiTheme)}\0${expanded ? "1" : "0"}\0${rawPath}\0${diff}`;
-	let text = cachedRenderedString(cache, cacheKey, () => {
+	let text = cachedRenderedString(cache, uiTheme, expanded, rawPath, diff, () => {
 		// Collapsed uses a "Cursor" tail window: pin the last
 		// EDIT_STREAMING_PREVIEW_LINES rows to the bottom so freshly streamed changes
 		// stay on screen. The whole-file diff is recomputed on every streamed chunk
@@ -412,8 +403,9 @@ function formatMultiFileStreamingDiff(
 			// earlier files have settled and must stay byte-stable so their rows
 			// can commit to native scrollback mid-stream.
 			const isLast = index === previews.length - 1;
+			const cache = previewCacheAt(caches, index);
 			parts.push(
-				`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, expanded, "preview", isLast ? spinnerFrame : undefined, caches?.[index])}`,
+				`${header}${formatStreamingDiff(preview.diff, preview.path, uiTheme, expanded, "preview", isLast ? spinnerFrame : undefined, cache)}`,
 			);
 		}
 	}
@@ -433,11 +425,12 @@ function getCallPreview(
 	if (multi && multi.length > 1 && multi.some(p => p.diff || p.error)) {
 		return formatMultiFileStreamingDiff(multi, uiTheme, expanded, spinnerFrame, caches);
 	}
+	const cache = previewCacheAt(caches, 0);
 	if (args.previewDiff) {
-		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, expanded, "preview", spinnerFrame, caches?.[0]);
+		return formatStreamingDiff(args.previewDiff, rawPath, uiTheme, expanded, "preview", spinnerFrame, cache);
 	}
 	if (args.diff && args.op) {
-		return formatStreamingDiff(args.diff, rawPath, uiTheme, expanded, "streaming", spinnerFrame, caches?.[0]);
+		return formatStreamingDiff(args.diff, rawPath, uiTheme, expanded, "streaming", spinnerFrame, cache);
 	}
 	if (args.diff) {
 		return renderPlainTextPreview(args.diff, uiTheme, rawPath);
@@ -539,8 +532,7 @@ function renderDiffSection(
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
 	cache?: RenderedStringCache,
 ): string {
-	const cacheKey = `result\0${themeCacheKey(uiTheme)}\0${expanded ? "1" : "0"}\0${rawPath}\0${diff}`;
-	return cachedRenderedString(cache, cacheKey, () => {
+	return cachedRenderedString(cache, uiTheme, expanded, rawPath, diff, () => {
 		const {
 			text: truncatedDiff,
 			hiddenHunks,
@@ -616,10 +608,7 @@ export const editToolRenderer = {
 		if (Array.isArray(editArgs.edits)) {
 			fileCount = countEditFiles(editArgs.edits);
 		}
-		const callPreviewCaches: RenderedStringCache[] = Array.from({ length: Math.max(1, fileCount) }, () => ({
-			key: "",
-			value: "",
-		}));
+		const callPreviewCaches: RenderedStringCache[] = [];
 		return framedBlock(uiTheme, width => {
 			// Static pending icon, never the animated glyph: the header is the
 			// head row of the framed block, and native-scrollback commits are
@@ -707,7 +696,7 @@ function renderSingleFileResult(
 		: "";
 
 	let diffSectionRenderDiffFn: ((t: string, o?: { filePath?: string }) => string) | undefined;
-	const diffSectionCache: RenderedStringCache = { key: "", value: "" };
+	const diffSectionCache = createRenderedStringCache();
 
 	return framedBlock(uiTheme, width => {
 		const { expanded, renderContext } = options;
@@ -716,7 +705,7 @@ function renderSingleFileResult(
 
 		if (diffSectionRenderDiffFn !== renderDiffFn) {
 			diffSectionRenderDiffFn = renderDiffFn;
-			diffSectionCache.key = "";
+			invalidateRenderedStringCache(diffSectionCache);
 		}
 		const firstChangedLine =
 			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
